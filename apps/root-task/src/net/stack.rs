@@ -5671,7 +5671,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             if let Some(hot_path) = net_driver_task_hot_path(contract) {
                 let mut root_pointer_context =
                     NetRootPointerRingContext::new(self as *mut Self, hot_path);
-                crate::hal::driver_task::register_driver_task_ring_service(
+                crate::hal::driver_task::register_driver_task_root_context_ring_service(
                     contract,
                     &mut root_pointer_context as *mut NetRootPointerRingContext as usize,
                     net_ring_service_driver_task::<D>,
@@ -5732,7 +5732,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             if let Some(hot_path) = net_driver_task_hot_path(contract) {
                 let mut root_pointer_context =
                     NetRootPointerRingContext::new(self as *mut Self, hot_path);
-                crate::hal::driver_task::register_driver_task_ring_service(
+                crate::hal::driver_task::register_driver_task_root_context_ring_service(
                     contract,
                     &mut root_pointer_context as *mut NetRootPointerRingContext as usize,
                     net_ring_service_driver_task::<D>,

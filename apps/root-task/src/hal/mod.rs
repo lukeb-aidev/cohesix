@@ -1245,6 +1245,12 @@ struct KernelDriverTaskHandle {
     ring_frame: Option<seL4_CPtr>,
     vspace: Option<seL4_CPtr>,
     code_frame: Option<seL4_CPtr>,
+    runtime_image_spec: Option<driver_task::DriverTaskRuntimeImageSpec>,
+    runtime_image_declared_region_mask: u16,
+    runtime_image_mapped_region_mask: u16,
+    runtime_image_acceptance_eligible: bool,
+    runtime_image_non_acceptance_reason: &'static str,
+    code_vaddr: usize,
     ipc_vaddr: usize,
     ring_vaddr: usize,
     stack_top: usize,
@@ -1274,6 +1280,47 @@ fn add_driver_task_handle_to_report(
     if handle.pointer_free_ipc {
         report.pointer_free_ipc_count = report.pointer_free_ipc_count.saturating_add(1);
     }
+    if let Some(spec) = handle.runtime_image_spec {
+        report.runtime_image_declared_count = report.runtime_image_declared_count.saturating_add(1);
+        report.runtime_image_declared_hot_path_mask |= spec.hot_path.owner_state_bit();
+        if handle.runtime_image_mapped_region_mask
+            & driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK
+            == driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK
+        {
+            report.runtime_image_transport_mapped_count = report
+                .runtime_image_transport_mapped_count
+                .saturating_add(1);
+            report.runtime_image_transport_mapped_hot_path_mask |= spec.hot_path.owner_state_bit();
+        }
+        if handle.runtime_image_acceptance_eligible {
+            report.runtime_image_acceptance_count =
+                report.runtime_image_acceptance_count.saturating_add(1);
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_image_non_acceptance_reason(
+    spec: Option<driver_task::DriverTaskRuntimeImageSpec>,
+) -> &'static str {
+    spec.and_then(driver_task::DriverTaskRuntimeImageSpec::non_acceptance_reason)
+        .unwrap_or("qemu-compatibility-or-non-pi-contract")
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_image_declared_region_mask(
+    spec: Option<driver_task::DriverTaskRuntimeImageSpec>,
+) -> u16 {
+    spec.map(driver_task::DriverTaskRuntimeImageSpec::declared_region_mask)
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_image_acceptance_eligible(
+    spec: Option<driver_task::DriverTaskRuntimeImageSpec>,
+) -> bool {
+    spec.map(driver_task::DriverTaskRuntimeImageSpec::acceptance_eligible)
+        .unwrap_or(false)
 }
 
 #[cfg(feature = "kernel")]
@@ -1385,11 +1432,11 @@ impl<'a> KernelHal<'a> {
                         continue;
                     }
                     add_driver_task_handle_to_report(&mut report, &handle);
-                    let mut line = heapless::String::<512>::new();
+                    let mut line = heapless::String::<1024>::new();
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root ipc_abi={}",
+                            "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root ipc_abi={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state=root-owned owner_state_reason={}",
                             handle.contract.name,
                             handle.contract.kind.proof_role(),
                             handle.tcb,
@@ -1402,6 +1449,19 @@ impl<'a> KernelHal<'a> {
                                 None => -1,
                             },
                             driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+                            if handle.runtime_image_spec.is_some() {
+                                "declared-only"
+                            } else {
+                                "none"
+                            },
+                            handle.runtime_image_declared_region_mask,
+                            handle.runtime_image_mapped_region_mask,
+                            if handle.runtime_image_acceptance_eligible {
+                                "yes"
+                            } else {
+                                "no"
+                            },
+                            handle.runtime_image_non_acceptance_reason,
                         ),
                     );
                     crate::bootstrap::log::force_uart_line(line.as_str());
@@ -1504,11 +1564,11 @@ impl<'a> KernelHal<'a> {
 
                     add_driver_task_handle_to_report(&mut report, &handle);
 
-                    let mut line = heapless::String::<512>::new();
+                    let mut line = heapless::String::<1024>::new();
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} proof={}",
+                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} code_vaddr=0x{:08x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} proof={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state=root-owned owner_state_reason={}",
                             handle.contract.name,
                             handle.contract.kind.proof_role(),
                             handle.tcb,
@@ -1522,10 +1582,24 @@ impl<'a> KernelHal<'a> {
                             },
                             if handle.vspace_isolated { "isolated" } else { "shared-root" },
                             handle.vspace.unwrap_or(0),
+                            handle.code_vaddr,
                             handle.ring_vaddr,
                             driver_task::DriverTaskIpcAbi::SharedRingCommand.as_str(),
                             if handle.pointer_free_ipc { "yes" } else { "no" },
                             if handle.pointer_free_ipc { "ring" } else { "partial" },
+                            if handle.runtime_image_spec.is_some() {
+                                "transport-mapped"
+                            } else {
+                                "none"
+                            },
+                            handle.runtime_image_declared_region_mask,
+                            handle.runtime_image_mapped_region_mask,
+                            if handle.runtime_image_acceptance_eligible {
+                                "yes"
+                            } else {
+                                "no"
+                            },
+                            handle.runtime_image_non_acceptance_reason,
                         ),
                     );
                     crate::bootstrap::log::force_uart_line(line.as_str());
@@ -1572,6 +1646,8 @@ impl<'a> KernelHal<'a> {
         }
         let task_key = driver_task::driver_task_contract_key(contract)
             .ok_or(HalError::Unsupported("driver-task-key"))?;
+        let runtime_image_spec =
+            driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract);
 
         let root_cnode = self.env.init_cnode_cap();
         let root_depth = sel4::word_bits() as u8;
@@ -1696,6 +1772,18 @@ impl<'a> KernelHal<'a> {
             ring_frame: Some(ring_frame.cap()),
             vspace: None,
             code_frame: None,
+            runtime_image_spec,
+            runtime_image_declared_region_mask: runtime_image_declared_region_mask(
+                runtime_image_spec,
+            ),
+            runtime_image_mapped_region_mask: 0,
+            runtime_image_acceptance_eligible: runtime_image_acceptance_eligible(
+                runtime_image_spec,
+            ),
+            runtime_image_non_acceptance_reason: runtime_image_non_acceptance_reason(
+                runtime_image_spec,
+            ),
+            code_vaddr: 0,
             ipc_vaddr,
             ring_vaddr: ring_frame.ptr().as_ptr() as usize,
             stack_top,
@@ -1722,6 +1810,8 @@ impl<'a> KernelHal<'a> {
         }
         let task_key = driver_task::driver_task_contract_key(contract)
             .ok_or(HalError::Unsupported("driver-task-key"))?;
+        let runtime_image_spec =
+            driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract);
 
         let trampoline_range = driver_task::isolated_trampoline_range();
         let page_bytes = 1usize << sel4::PAGE_BITS;
@@ -1927,6 +2017,19 @@ impl<'a> KernelHal<'a> {
             ring_frame: Some(ring_frame.cap()),
             vspace: Some(vspace),
             code_frame: Some(code_frame.cap()),
+            runtime_image_spec,
+            runtime_image_declared_region_mask: runtime_image_declared_region_mask(
+                runtime_image_spec,
+            ),
+            runtime_image_mapped_region_mask:
+                driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK,
+            runtime_image_acceptance_eligible: runtime_image_acceptance_eligible(
+                runtime_image_spec,
+            ),
+            runtime_image_non_acceptance_reason: runtime_image_non_acceptance_reason(
+                runtime_image_spec,
+            ),
+            code_vaddr: trampoline_range.start,
             ipc_vaddr: driver_task::DRIVER_TASK_IPC_VADDR,
             ring_vaddr: driver_task::DRIVER_TASK_RING_VADDR,
             stack_top: driver_task::DRIVER_TASK_STACK_TOP_VADDR,
@@ -2306,6 +2409,8 @@ mod tests {
         started: bool,
         affinity_core: Option<u8>,
     ) -> super::KernelDriverTaskHandle {
+        let runtime_image_spec =
+            super::driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract);
         super::KernelDriverTaskHandle {
             contract,
             role_bit: super::driver_task::driver_task_role_bit(contract.kind),
@@ -2319,6 +2424,18 @@ mod tests {
             ring_frame: None,
             vspace: None,
             code_frame: None,
+            runtime_image_spec,
+            runtime_image_declared_region_mask: super::runtime_image_declared_region_mask(
+                runtime_image_spec,
+            ),
+            runtime_image_mapped_region_mask: 0,
+            runtime_image_acceptance_eligible: super::runtime_image_acceptance_eligible(
+                runtime_image_spec,
+            ),
+            runtime_image_non_acceptance_reason: super::runtime_image_non_acceptance_reason(
+                runtime_image_spec,
+            ),
+            code_vaddr: 0,
             ipc_vaddr: 0x4000_0000,
             ring_vaddr: 0,
             stack_top: 0x4000_1000,
@@ -2339,11 +2456,14 @@ mod tests {
         handle.vspace = Some(0x200);
         handle.ring_frame = Some(0x201);
         handle.code_frame = Some(0x202);
+        handle.code_vaddr = 0x8000_0000;
         handle.ring_vaddr = super::driver_task::DRIVER_TASK_RING_VADDR;
         handle.ipc_vaddr = super::driver_task::DRIVER_TASK_IPC_VADDR;
         handle.stack_top = super::driver_task::DRIVER_TASK_STACK_TOP_VADDR;
         handle.vspace_isolated = true;
         handle.pointer_free_ipc = started;
+        handle.runtime_image_mapped_region_mask =
+            super::driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK;
         handle
     }
 
@@ -2403,6 +2523,14 @@ mod tests {
         assert!(!report.vspace_proof);
         assert!(!report.pointer_free_ipc_proof);
         assert!(!report.owner_state_proof);
+        assert_eq!(report.runtime_image_declared_count, 7);
+        assert_eq!(report.runtime_image_transport_mapped_count, 0);
+        assert_eq!(report.runtime_image_acceptance_count, 0);
+        assert_eq!(
+            report.runtime_image_declared_hot_path_mask,
+            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+        );
+        assert_eq!(report.runtime_image_transport_mapped_hot_path_mask, 0);
         assert_eq!(report.broad_caps_leaked, 0);
     }
 
@@ -2427,6 +2555,13 @@ mod tests {
             report.pointer_free_ipc_count,
             super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len()
         );
+        assert_eq!(report.runtime_image_declared_count, 7);
+        assert_eq!(report.runtime_image_transport_mapped_count, 7);
+        assert_eq!(report.runtime_image_acceptance_count, 0);
+        assert_eq!(
+            report.runtime_image_transport_mapped_hot_path_mask,
+            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+        );
         assert!(report.vspace_proof);
         assert!(report.pointer_free_ipc_proof);
         assert!(!report.owner_state_proof);
@@ -2448,6 +2583,80 @@ mod tests {
         assert!(report.vspace_proof);
         assert!(!report.pointer_free_ipc_proof);
         assert!(!report.owner_state_proof);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn isolated_runtime_image_handles_do_not_credit_owner_state_by_declaration() {
+        let pi_contracts = [
+            super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            super::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            super::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+        ];
+
+        for contract in pi_contracts {
+            let handle = fake_isolated_driver_task_handle(contract, true, Some(3));
+            assert!(handle.runtime_image_spec.is_some(), "{}", contract.name);
+            assert_ne!(
+                handle.runtime_image_declared_region_mask, 0,
+                "{}",
+                contract.name
+            );
+            assert_eq!(
+                handle.runtime_image_mapped_region_mask
+                    & super::driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK,
+                super::driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK,
+                "{}",
+                contract.name
+            );
+            assert!(
+                !handle.runtime_image_acceptance_eligible,
+                "{}",
+                contract.name
+            );
+            assert_eq!(
+                handle.runtime_image_non_acceptance_reason, "root-context-required",
+                "{}",
+                contract.name
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn qemu_virtual_contracts_may_lack_pi_runtime_image_specs() {
+        for contract in [
+            super::driver_task::RTL8139_DRIVER_TASK_CONTRACT,
+            super::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+        ] {
+            let handle = fake_isolated_driver_task_handle(contract, true, Some(1));
+            assert!(handle.runtime_image_spec.is_none(), "{}", contract.name);
+            assert_eq!(
+                handle.runtime_image_declared_region_mask, 0,
+                "{}",
+                contract.name
+            );
+            assert_eq!(
+                handle.runtime_image_mapped_region_mask,
+                super::driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK,
+                "{}",
+                contract.name
+            );
+            assert!(
+                !handle.runtime_image_acceptance_eligible,
+                "{}",
+                contract.name
+            );
+            assert_eq!(
+                handle.runtime_image_non_acceptance_reason, "qemu-compatibility-or-non-pi-contract",
+                "{}",
+                contract.name
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]

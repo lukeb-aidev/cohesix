@@ -5124,10 +5124,10 @@ fn bootstrap<P: Platform>(
                 boot_log::force_uart_line(line.as_str());
                 console.writeln_prefixed(line.as_str());
                 let report = hal.bootstrap_qemu_post_net_driver_task_smoke(fault_ep_slot);
-                let mut line = heapless::String::<256>::new();
+                let mut line = heapless::String::<512>::new();
                 let _ = write!(
                     line,
-                    "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured={} failed={} live_tcb_count={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={}",
+                    "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured={} failed={} live_tcb_count={} vspace={} ipc_abi={} pointer_free_ipc={} runtime_image_declared={} runtime_transport_mapped={} runtime_acceptance={} runtime_declared_hot_paths=0x{:x} runtime_mapped_hot_paths=0x{:x} owner_state={}",
                     report.configured_count,
                     report.failed_count,
                     report.live_tcb_count,
@@ -5138,6 +5138,11 @@ fn bootstrap<P: Platform>(
                         crate::hal::driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str()
                     },
                     if report.pointer_free_ipc_proof { "yes" } else { "no" },
+                    report.runtime_image_declared_count,
+                    report.runtime_image_transport_mapped_count,
+                    report.runtime_image_acceptance_count,
+                    report.runtime_image_declared_hot_path_mask,
+                    report.runtime_image_transport_mapped_hot_path_mask,
                     if report.owner_state_proof {
                         "driver-owned"
                     } else {

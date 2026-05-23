@@ -246,7 +246,7 @@ proof shows live TCB ownership.
 Boot logs must expose the distinction with these breadcrumbs:
 
 - `DRIVER_TASK_DEFAULT requested=dedicated required=yes substrate_active=<yes|no> live_hot_paths=<yes|no>`
-- `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=shared-root ipc_abi=<abi>`
+- `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=shared-root ipc_abi=<abi> runtime_image=<declared-only|none> runtime_declared=<mask> runtime_mapped=<mask> runtime_acceptance=<yes|no> owner_state=root-owned owner_state_reason=<reason>`
 - `DRIVER_TASK_BOOT contract=<name> role=<role> status=failed err=<reason>` for any failed creation path
 - `DRIVER_TASK_BOOT status=skipped reason=qemu-virtio-pre-net-resource-guard`
   for QEMU virtio compatibility boots that preserve pre-network resources for
@@ -255,12 +255,13 @@ Boot logs must expose the distinction with these breadcrumbs:
   for each declared contract in the explicit `qemu-driver-task-smoke`
   post-network live-TCB probe. The current smoke path creates isolated VSpaces,
   assigns ASIDs, maps only the one-page driver trampoline plus stack, IPC, and
-  ring frames, and proves a fixed-layout command/completion ring without
-  callback or context pointers. This may update `DRIVER_TASK_SUBSTRATE` to a
-  full-contract QEMU transport report and must still fail full Pi 4
-  dedicated-driver-task acceptance because Pi hardware roles and hardware
-  hot-path ownership are not proved by QEMU.
-- `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured=<n> failed=<n> live_tcb_count=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> owner_state=<driver-owned|root-owned|not-proven>`
+  ring frames, reports the runtime-image declared and mapped region masks plus
+  the actual linked trampoline `code_vaddr`, and proves a fixed-layout
+  command/completion ring without callback or context pointers. This may update
+  `DRIVER_TASK_SUBSTRATE` to a full-contract QEMU transport report and must
+  still fail full Pi 4 dedicated-driver-task acceptance because Pi hardware
+  roles and hardware hot-path ownership are not proved by QEMU.
+- `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured=<n> failed=<n> live_tcb_count=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> runtime_image_declared=<n> runtime_transport_mapped=<n> runtime_acceptance=<n> runtime_declared_hot_paths=<mask> runtime_mapped_hot_paths=<mask> owner_state=<driver-owned|root-owned|not-proven>`
   is also emitted through the root console path during QEMU smoke runs so the
   proof remains visible after the boot logger switches away from early UART.
 - `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> owner_state=<driver-owned|root-owned> live_hot_paths=<yes|no>`
@@ -297,10 +298,18 @@ images. Shared-root ring service roles are now reported separately as
 `shared_ring_roles`; they are useful readiness evidence but do not satisfy
 `hot_path=dedicated` or full acceptance until `owner_state=driver-owned` also
 proves that hardware state no longer lives in root-owned runtime structs.
-Transitional ring commands that still carry a root runtime pointer or root-stack
-context set the common `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit,
-so a shared-ring transport turn cannot later be promoted into owner-state proof
-by accident.
+The HAL now uses separate registration APIs for root-context diagnostic ring
+services and pointer-free selector ring services. Transitional ring commands that
+still carry a root runtime pointer or root-stack context are registered as
+`root-context-diagnostic` and the HAL forces the common
+`DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit, so a shared-ring
+transport turn cannot later be promoted into owner-state proof by accident.
+Runtime-image specs declare the future per-hot-path mapping contract for code,
+stack, IPC, ring, MMIO, DMA, and shared buffers; they remain declaration-only
+while their non-acceptance reason is `root-context-required` or
+`hardware-state-not-migrated`. Standalone SDIO owner-queue records similarly
+remain non-acceptance with reason `root-hal-exec` until SDHCI command/data
+execution moves out of the root HAL.
 Owner-state proof is per-hot-path: an aggregate `owner_state=driver-owned`
 field on `DRIVER_TASK_SUBSTRATE` or `DRIVER_TASK_ACCEPTANCE` is diagnostic until
 all seven `DRIVER_TASK_OWNER_STATE` lines report a present descriptor and

@@ -199,6 +199,16 @@ pub struct DriverTaskBootstrapReport {
     pub isolated_vspace_count: usize,
     /// Driver TCBs that completed a fixed-layout command/completion ring proof.
     pub pointer_free_ipc_count: usize,
+    /// Driver TCBs with a declared Pi 4 runtime-image mapping contract.
+    pub runtime_image_declared_count: usize,
+    /// Declared Pi 4 runtime images whose transport pages were mapped.
+    pub runtime_image_transport_mapped_count: usize,
+    /// Declared Pi 4 runtime images eligible for owner-state acceptance.
+    pub runtime_image_acceptance_count: usize,
+    /// Pi 4 hot-path mask covered by runtime-image declarations.
+    pub runtime_image_declared_hot_path_mask: usize,
+    /// Pi 4 hot-path mask whose isolated transport pages were mapped.
+    pub runtime_image_transport_mapped_hot_path_mask: usize,
     /// Role coverage whose hardware-owned state is registered through
     /// pointer-free owner-state descriptors rather than root pointers.
     pub owner_state_role_mask: usize,
@@ -413,6 +423,58 @@ pub type DriverTaskServiceHandler = unsafe fn(usize) -> usize;
 #[cfg(feature = "kernel")]
 pub type DriverTaskRingServiceHandler =
     unsafe fn(usize, DriverTaskCommandRecord) -> DriverTaskCompletionRecord;
+
+/// Ring-service dispatch class installed for a driver task.
+///
+/// Root-context services keep existing Pi hardware working while the
+/// driver-local runtime image is still being built, but they can never satisfy
+/// owner-state proof. Pointer-free selector services are the only class that can
+/// become acceptance evidence, and only after VSpace, IPC, and owner-state
+/// descriptor proof are also present.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(usize)]
+pub enum DriverTaskRingServiceKind {
+    /// No shared-ring service handler is registered.
+    None = 0,
+    /// Handler receives a root pointer or root stack context.
+    RootContextDiagnostic = 1,
+    /// Handler receives only primitive selector/context values.
+    PointerFreeSelector = 2,
+}
+
+impl DriverTaskRingServiceKind {
+    /// Decode the atomic representation stored in a command slot.
+    #[must_use]
+    pub const fn from_usize(value: usize) -> Self {
+        match value {
+            1 => Self::RootContextDiagnostic,
+            2 => Self::PointerFreeSelector,
+            _ => Self::None,
+        }
+    }
+
+    /// Atomic representation for command-slot storage.
+    #[must_use]
+    pub const fn as_usize(self) -> usize {
+        self as usize
+    }
+
+    /// Stable diagnostic label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::RootContextDiagnostic => "root-context-diagnostic",
+            Self::PointerFreeSelector => "pointer-free-selector",
+        }
+    }
+
+    /// Whether this dispatch class may ever credit owner-state hot paths.
+    #[must_use]
+    pub const fn owner_state_credit_allowed(self) -> bool {
+        matches!(self, Self::PointerFreeSelector)
+    }
+}
 
 /// Service IPC ABI installed for driver-task dispatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -679,6 +741,16 @@ pub const DRIVER_TASK_STACK_BOTTOM_VADDR: usize = 0x7000_2000;
 /// Fixed driver-local virtual address for the top of the trampoline stack.
 pub const DRIVER_TASK_STACK_TOP_VADDR: usize = 0x7000_3000;
 
+/// First fixed driver-local virtual address reserved for explicit MMIO pages.
+pub const DRIVER_TASK_DEVICE_MMIO_VADDR: usize = 0x7000_4000;
+
+/// First fixed driver-local virtual address reserved for explicit DMA pages.
+pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7001_0000;
+
+/// First fixed driver-local virtual address reserved for shared RX/TX/control
+/// buffers outside the command ring page.
+pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x7002_0000;
+
 /// Offset of the first fixed-layout completion record within the ring page.
 pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
 
@@ -709,6 +781,323 @@ pub const DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS: u16 = DRIVER_TASK_OWNER_STATE_
     | DRIVER_TASK_OWNER_STATE_FLAG_DEVICE_MAPPED
     | DRIVER_TASK_OWNER_STATE_FLAG_SHARED_BUFFERS
     | DRIVER_TASK_OWNER_STATE_FLAG_NO_ROOT_POINTERS;
+
+/// Maximum explicitly declared runtime regions per driver-local image.
+pub const DRIVER_TASK_RUNTIME_REGION_CAPACITY: usize = 8;
+
+/// Driver-local runtime mapping region class.
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverTaskRuntimeRegionKind {
+    /// Executable runtime image page.
+    Code = 1,
+    /// Driver-local stack page.
+    Stack = 2,
+    /// seL4 IPC buffer page.
+    Ipc = 3,
+    /// Command/completion ring page.
+    Ring = 4,
+    /// Explicit device MMIO page.
+    Mmio = 5,
+    /// Explicit device-owned DMA buffer page.
+    Dma = 6,
+    /// Root/driver shared RX/TX/control buffer page.
+    SharedBuffer = 7,
+}
+
+impl DriverTaskRuntimeRegionKind {
+    /// Stable diagnostic label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Code => "code",
+            Self::Stack => "stack",
+            Self::Ipc => "ipc",
+            Self::Ring => "ring",
+            Self::Mmio => "mmio",
+            Self::Dma => "dma",
+            Self::SharedBuffer => "shared-buffer",
+        }
+    }
+
+    /// Bit used in compact runtime-image mapping proof masks.
+    #[must_use]
+    pub const fn mask_bit(self) -> u16 {
+        1u16 << ((self as u16) - 1)
+    }
+}
+
+/// Runtime-image regions that must be mapped before the transport substrate can
+/// prove an isolated command/completion turn.
+pub const DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK: u16 = DriverTaskRuntimeRegionKind::Code
+    .mask_bit()
+    | DriverTaskRuntimeRegionKind::Stack.mask_bit()
+    | DriverTaskRuntimeRegionKind::Ipc.mask_bit()
+    | DriverTaskRuntimeRegionKind::Ring.mask_bit();
+
+/// One declared mapping range for a driver-local runtime image.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTaskRuntimeRegion {
+    /// Region kind.
+    pub kind: DriverTaskRuntimeRegionKind,
+    /// Driver-local virtual base address.
+    pub vaddr: usize,
+    /// Number of 4 KiB pages in the range.
+    pub pages: u16,
+    /// Primitive flags reserved for mapping/cache attributes.
+    pub flags: u16,
+}
+
+impl DriverTaskRuntimeRegion {
+    /// Construct one page-aligned runtime mapping range.
+    #[must_use]
+    pub const fn new(
+        kind: DriverTaskRuntimeRegionKind,
+        vaddr: usize,
+        pages: u16,
+        flags: u16,
+    ) -> Option<Self> {
+        if pages == 0 || vaddr & 0xfff != 0 {
+            return None;
+        }
+        Some(Self {
+            kind,
+            vaddr,
+            pages,
+            flags,
+        })
+    }
+
+    /// Region span in bytes.
+    #[must_use]
+    pub const fn bytes(self) -> usize {
+        (self.pages as usize) << 12
+    }
+}
+
+/// Static runtime-image contract for one Pi 4 hardware hot path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTaskRuntimeImageSpec {
+    /// Hot path covered by this image contract.
+    pub hot_path: DriverTaskHotPath,
+    /// Declared driver-local mapping regions.
+    pub regions: [Option<DriverTaskRuntimeRegion>; DRIVER_TASK_RUNTIME_REGION_CAPACITY],
+    /// Whether the live implementation still dereferences root-owned state.
+    pub root_context_required: bool,
+    /// Whether the real hardware state has been moved into this runtime image.
+    pub hardware_state_migrated: bool,
+}
+
+impl DriverTaskRuntimeImageSpec {
+    /// Construct a runtime-image spec with the common code/stack/IPC/ring pages
+    /// plus explicit MMIO, DMA, and shared-buffer ranges.
+    #[must_use]
+    pub const fn new(
+        hot_path: DriverTaskHotPath,
+        mmio_pages: u16,
+        dma_pages: u16,
+        shared_buffer_pages: u16,
+        root_context_required: bool,
+        hardware_state_migrated: bool,
+    ) -> Self {
+        let mut regions = [None; DRIVER_TASK_RUNTIME_REGION_CAPACITY];
+        regions[0] = DriverTaskRuntimeRegion::new(
+            DriverTaskRuntimeRegionKind::Code,
+            isolated_runtime_code_vaddr(),
+            1,
+            0,
+        );
+        regions[1] = DriverTaskRuntimeRegion::new(
+            DriverTaskRuntimeRegionKind::Stack,
+            DRIVER_TASK_STACK_BOTTOM_VADDR,
+            1,
+            0,
+        );
+        regions[2] = DriverTaskRuntimeRegion::new(
+            DriverTaskRuntimeRegionKind::Ipc,
+            DRIVER_TASK_IPC_VADDR,
+            1,
+            0,
+        );
+        regions[3] = DriverTaskRuntimeRegion::new(
+            DriverTaskRuntimeRegionKind::Ring,
+            DRIVER_TASK_RING_VADDR,
+            1,
+            0,
+        );
+        regions[4] = DriverTaskRuntimeRegion::new(
+            DriverTaskRuntimeRegionKind::Mmio,
+            DRIVER_TASK_DEVICE_MMIO_VADDR,
+            mmio_pages,
+            0,
+        );
+        regions[5] = DriverTaskRuntimeRegion::new(
+            DriverTaskRuntimeRegionKind::Dma,
+            DRIVER_TASK_DMA_BUFFER_VADDR,
+            dma_pages,
+            0,
+        );
+        regions[6] = DriverTaskRuntimeRegion::new(
+            DriverTaskRuntimeRegionKind::SharedBuffer,
+            DRIVER_TASK_SHARED_BUFFER_VADDR,
+            shared_buffer_pages,
+            0,
+        );
+        Self {
+            hot_path,
+            regions,
+            root_context_required,
+            hardware_state_migrated,
+        }
+    }
+
+    /// Returns true only when this spec can back owner-state proof.
+    #[must_use]
+    pub const fn acceptance_eligible(self) -> bool {
+        !self.root_context_required
+            && self.hardware_state_migrated
+            && self.region_pages(DriverTaskRuntimeRegionKind::Code) != 0
+            && self.region_pages(DriverTaskRuntimeRegionKind::Stack) != 0
+            && self.region_pages(DriverTaskRuntimeRegionKind::Ipc) != 0
+            && self.region_pages(DriverTaskRuntimeRegionKind::Ring) != 0
+            && self.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer) != 0
+    }
+
+    /// Bitmask of region kinds declared by this runtime-image contract.
+    #[must_use]
+    pub const fn declared_region_mask(self) -> u16 {
+        let mut index = 0;
+        let mut mask = 0u16;
+        while index < DRIVER_TASK_RUNTIME_REGION_CAPACITY {
+            if let Some(region) = self.regions[index] {
+                mask |= region.kind.mask_bit();
+            }
+            index += 1;
+        }
+        mask
+    }
+
+    /// Number of distinct mapping descriptors declared by this image.
+    #[must_use]
+    pub const fn declared_region_count(self) -> u8 {
+        let mut index = 0;
+        let mut count = 0u8;
+        while index < DRIVER_TASK_RUNTIME_REGION_CAPACITY {
+            if self.regions[index].is_some() {
+                count = count.saturating_add(1);
+            }
+            index += 1;
+        }
+        count
+    }
+
+    /// Total 4 KiB pages declared by this image contract.
+    #[must_use]
+    pub const fn declared_page_count(self) -> u16 {
+        let mut index = 0;
+        let mut pages = 0u16;
+        while index < DRIVER_TASK_RUNTIME_REGION_CAPACITY {
+            if let Some(region) = self.regions[index] {
+                pages = pages.saturating_add(region.pages);
+            }
+            index += 1;
+        }
+        pages
+    }
+
+    /// Whether the declared transport pages are present in the mapping list.
+    #[must_use]
+    pub const fn declares_transport_regions(self) -> bool {
+        self.declared_region_mask() & DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK
+            == DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK
+    }
+
+    /// Total pages declared for a region kind.
+    #[must_use]
+    pub const fn region_pages(self, kind: DriverTaskRuntimeRegionKind) -> u16 {
+        let mut index = 0;
+        let mut pages = 0u16;
+        while index < DRIVER_TASK_RUNTIME_REGION_CAPACITY {
+            if let Some(region) = self.regions[index] {
+                if region.kind as u16 == kind as u16 {
+                    pages = pages.saturating_add(region.pages);
+                }
+            }
+            index += 1;
+        }
+        pages
+    }
+
+    /// Stable non-acceptance reason for diagnostics/tests.
+    #[must_use]
+    pub const fn non_acceptance_reason(self) -> Option<&'static str> {
+        if self.root_context_required {
+            Some("root-context-required")
+        } else if !self.hardware_state_migrated {
+            Some("hardware-state-not-migrated")
+        } else if !self.acceptance_eligible() {
+            Some("runtime-region-incomplete")
+        } else {
+            None
+        }
+    }
+}
+
+/// Sentinel used when the executable image is the linker-provided trampoline.
+///
+/// The actual child VSpace mapping address is discovered from
+/// [`isolated_trampoline_range`] by the HAL at boot. A zero value here must not
+/// be logged as a real code mapping address.
+#[must_use]
+pub const fn isolated_runtime_code_vaddr() -> usize {
+    0
+}
+
+/// Runtime-image specs for every Pi 4 hardware hot path.
+///
+/// These are declaration contracts, not proof. They intentionally remain
+/// non-acceptance until the live hardware-owned state is moved out of root
+/// structs and the isolated runtime image executes the relevant service turns.
+pub const PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS: [DriverTaskRuntimeImageSpec; 7] = [
+    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::SerialConsole, 1, 0, 1, true, false),
+    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::UsbKeyboard, 2, 16, 2, true, false),
+    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::HdmiText, 1, 1, 2, true, false),
+    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::GenetNic, 6, 64, 4, true, false),
+    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::Cyw43Wifi, 0, 8, 4, true, false),
+    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::SdioHost, 1, 2, 2, true, false),
+    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::PcieRoot, 4, 0, 1, true, false),
+];
+
+/// Returns the runtime-image spec for a Pi 4 hot path.
+#[must_use]
+pub const fn pi4_driver_task_runtime_image_spec(
+    hot_path: DriverTaskHotPath,
+) -> DriverTaskRuntimeImageSpec {
+    let mut index = 0;
+    while index < PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS.len() {
+        let spec = PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS[index];
+        if spec.hot_path as u16 == hot_path as u16 {
+            return spec;
+        }
+        index += 1;
+    }
+    DriverTaskRuntimeImageSpec::new(hot_path, 0, 0, 0, true, false)
+}
+
+/// Returns the Pi 4 runtime-image spec for a driver-task contract when the
+/// contract owns one of the required hardware hot paths.
+#[must_use]
+pub fn pi4_driver_task_runtime_image_spec_for_contract(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskRuntimeImageSpec> {
+    for spec in PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS {
+        if spec.hot_path.contract() == contract {
+            return Some(spec);
+        }
+    }
+    None
+}
 
 /// Small dedicated CSpace radix for bootstrap driver tasks.
 #[cfg(feature = "kernel")]
@@ -813,6 +1202,7 @@ struct DriverTaskCommandSlot {
     active: AtomicUsize,
     ring_handler: AtomicUsize,
     ring_context: AtomicUsize,
+    ring_service_kind: AtomicUsize,
     #[cfg(any(
         not(target_arch = "aarch64"),
         not(target_os = "none"),
@@ -849,6 +1239,7 @@ impl DriverTaskCommandSlot {
             active: AtomicUsize::new(0),
             ring_handler: AtomicUsize::new(0),
             ring_context: AtomicUsize::new(0),
+            ring_service_kind: AtomicUsize::new(DriverTaskRingServiceKind::None.as_usize()),
             #[cfg(any(
                 not(target_arch = "aarch64"),
                 not(target_os = "none"),
@@ -970,12 +1361,12 @@ pub fn publish_driver_task_ring(contract: DriverTaskContract, ring_root_ptr: usi
     slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
 }
 
-/// Register the driver-owned state machine for fixed shared-ring service turns.
 #[cfg(feature = "kernel")]
-pub fn register_driver_task_ring_service(
+fn register_driver_task_ring_service_with_kind(
     contract: DriverTaskContract,
     context: usize,
     handler: DriverTaskRingServiceHandler,
+    kind: DriverTaskRingServiceKind,
 ) -> bool {
     let Some(task_key) = driver_task_contract_key(contract) else {
         return false;
@@ -986,7 +1377,69 @@ pub fn register_driver_task_ring_service(
     slot.ring_context.store(context, Ordering::Release);
     slot.ring_handler
         .store(handler as *const () as usize, Ordering::Release);
+    slot.ring_service_kind
+        .store(kind.as_usize(), Ordering::Release);
     true
+}
+
+/// Register a transitional shared-ring handler that receives root context.
+///
+/// This keeps the physical Pi 4 service path explicit while the live hardware
+/// state still resides in root-owned structs. Commands submitted through this
+/// registration are forced into root-context non-acceptance and cannot satisfy
+/// owner-state proof.
+#[cfg(feature = "kernel")]
+pub fn register_driver_task_root_context_ring_service(
+    contract: DriverTaskContract,
+    context: usize,
+    handler: DriverTaskRingServiceHandler,
+) -> bool {
+    register_driver_task_ring_service_with_kind(
+        contract,
+        context,
+        handler,
+        DriverTaskRingServiceKind::RootContextDiagnostic,
+    )
+}
+
+/// Register a pointer-free shared-ring handler.
+///
+/// The context word must be a primitive selector, not a root pointer. This
+/// class is necessary but not sufficient for owner-state proof; proof is still
+/// gated by isolated VSpace, pointer-free IPC, and per-hot-path owner-state
+/// descriptors.
+#[cfg(feature = "kernel")]
+pub fn register_driver_task_pointer_free_ring_service(
+    contract: DriverTaskContract,
+    selector: usize,
+    handler: DriverTaskRingServiceHandler,
+) -> bool {
+    register_driver_task_ring_service_with_kind(
+        contract,
+        selector,
+        handler,
+        DriverTaskRingServiceKind::PointerFreeSelector,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_service_kind(contract: DriverTaskContract) -> DriverTaskRingServiceKind {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return DriverTaskRingServiceKind::None;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return DriverTaskRingServiceKind::None;
+    };
+    DriverTaskRingServiceKind::from_usize(slot.ring_service_kind.load(Ordering::Acquire))
+}
+
+/// Returns whether a completed ring service may credit owner-state proof.
+#[must_use]
+pub const fn driver_task_ring_service_owner_state_credit_eligible(
+    kind: DriverTaskRingServiceKind,
+    command: DriverTaskCommandRecord,
+) -> bool {
+    kind.owner_state_credit_allowed() && command.owner_state_credit_eligible()
 }
 
 /// Pointer-free descriptor proving a hardware owner's state boundary.
@@ -1099,7 +1552,7 @@ pub fn register_pi4_bus_ring_service(contract: DriverTaskContract) -> bool {
     } else {
         return false;
     };
-    register_driver_task_ring_service(
+    register_driver_task_pointer_free_ring_service(
         contract,
         hot_path.as_u32() as usize,
         pi4_bus_ring_service_driver_task,
@@ -1234,9 +1687,15 @@ pub fn run_driver_task_ring_command(
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_service(
     contract: DriverTaskContract,
-    command: DriverTaskCommandRecord,
+    mut command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
-    let owner_state_credit_eligible = command.owner_state_credit_eligible();
+    let service_kind = driver_task_ring_service_kind(contract);
+    if service_kind == DriverTaskRingServiceKind::RootContextDiagnostic {
+        command.flags |= DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
+        command.frame.flags |= DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
+    }
+    let owner_state_credit_eligible =
+        driver_task_ring_service_owner_state_credit_eligible(service_kind, command);
     let completion = run_driver_task_ring_command(contract, command)?;
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
         record_driver_task_ring_service(contract, owner_state_credit_eligible);
@@ -1271,9 +1730,9 @@ fn service_pending_driver_task_ring_command(task_key: usize) -> Option<usize> {
         return Some(current.result as usize);
     }
 
-    // SAFETY: `register_driver_task_ring_service` stores only function pointers
-    // with the exact `DriverTaskRingServiceHandler` ABI. The integer round trip
-    // keeps the slot atomically publishable to the service TCB.
+    // SAFETY: Ring-service registration stores only function pointers with the
+    // exact `DriverTaskRingServiceHandler` ABI. The integer round trip keeps the
+    // slot atomically publishable to the service TCB.
     let handler: DriverTaskRingServiceHandler =
         unsafe { core::mem::transmute::<usize, DriverTaskRingServiceHandler>(handler_word) };
     // SAFETY: The registered owner controls the context lifetime. Root submits a
@@ -3355,8 +3814,28 @@ mod tests {
         let mut flush =
             DriverTaskCommandRecord::flush(2, DriverTaskBudgetGrant::from_contract(contract));
         assert!(flush.owner_state_credit_eligible());
+        assert!(driver_task_ring_service_owner_state_credit_eligible(
+            DriverTaskRingServiceKind::PointerFreeSelector,
+            flush
+        ));
+        assert!(!driver_task_ring_service_owner_state_credit_eligible(
+            DriverTaskRingServiceKind::RootContextDiagnostic,
+            flush
+        ));
+        assert!(!driver_task_ring_service_owner_state_credit_eligible(
+            DriverTaskRingServiceKind::None,
+            flush
+        ));
         flush.flags = DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
         assert!(!flush.owner_state_credit_eligible());
+        assert!(!driver_task_ring_service_owner_state_credit_eligible(
+            DriverTaskRingServiceKind::PointerFreeSelector,
+            flush
+        ));
+        assert_eq!(
+            DriverTaskRingServiceKind::RootContextDiagnostic.as_str(),
+            "root-context-diagnostic"
+        );
     }
 
     #[test]
@@ -3426,6 +3905,82 @@ mod tests {
         )
         .unwrap();
         assert!(!scaffolding.has_required_runtime_flags());
+    }
+
+    #[test]
+    fn pi4_runtime_image_specs_cover_all_hot_paths_but_stay_non_acceptance() {
+        assert_eq!(PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS.len(), 7);
+        let mut hot_path_mask = 0usize;
+        for spec in PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS {
+            hot_path_mask |= spec.hot_path.owner_state_bit();
+            assert_ne!(
+                spec.region_pages(DriverTaskRuntimeRegionKind::Code),
+                0,
+                "{:?}",
+                spec.hot_path
+            );
+            assert_ne!(
+                spec.region_pages(DriverTaskRuntimeRegionKind::Stack),
+                0,
+                "{:?}",
+                spec.hot_path
+            );
+            assert_ne!(
+                spec.region_pages(DriverTaskRuntimeRegionKind::Ipc),
+                0,
+                "{:?}",
+                spec.hot_path
+            );
+            assert_ne!(
+                spec.region_pages(DriverTaskRuntimeRegionKind::Ring),
+                0,
+                "{:?}",
+                spec.hot_path
+            );
+            assert_ne!(
+                spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
+                0,
+                "{:?}",
+                spec.hot_path
+            );
+            assert!(spec.declares_transport_regions(), "{:?}", spec.hot_path);
+            assert_ne!(spec.declared_region_count(), 0, "{:?}", spec.hot_path);
+            assert_ne!(spec.declared_page_count(), 0, "{:?}", spec.hot_path);
+            assert!(spec.root_context_required, "{:?}", spec.hot_path);
+            assert!(!spec.hardware_state_migrated, "{:?}", spec.hot_path);
+            assert!(!spec.acceptance_eligible(), "{:?}", spec.hot_path);
+            assert_eq!(
+                spec.non_acceptance_reason(),
+                Some("root-context-required"),
+                "{:?}",
+                spec.hot_path
+            );
+        }
+        assert_eq!(hot_path_mask, REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK);
+        assert_eq!(
+            DriverTaskRuntimeRegionKind::SharedBuffer.as_str(),
+            "shared-buffer"
+        );
+        assert_eq!(
+            DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK,
+            DriverTaskRuntimeRegionKind::Code.mask_bit()
+                | DriverTaskRuntimeRegionKind::Stack.mask_bit()
+                | DriverTaskRuntimeRegionKind::Ipc.mask_bit()
+                | DriverTaskRuntimeRegionKind::Ring.mask_bit()
+        );
+    }
+
+    #[test]
+    fn pi4_runtime_image_spec_lookup_is_hot_path_specific() {
+        let genet = pi4_driver_task_runtime_image_spec(DriverTaskHotPath::GenetNic);
+        let cyw43 = pi4_driver_task_runtime_image_spec(DriverTaskHotPath::Cyw43Wifi);
+        let sdio = pi4_driver_task_runtime_image_spec(DriverTaskHotPath::SdioHost);
+        assert_eq!(genet.hot_path, DriverTaskHotPath::GenetNic);
+        assert_eq!(cyw43.hot_path, DriverTaskHotPath::Cyw43Wifi);
+        assert_eq!(sdio.hot_path, DriverTaskHotPath::SdioHost);
+        assert!(genet.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 6);
+        assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
+        assert_ne!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
     }
 
     #[test]

@@ -452,7 +452,7 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            crate::hal::driver_task::register_driver_task_ring_service(
+            crate::hal::driver_task::register_driver_task_root_context_ring_service(
                 contract,
                 self as *mut Self as usize,
                 serial_ring_service_driver_task::<D, RX, TX, LINE>,
@@ -543,7 +543,7 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            crate::hal::driver_task::register_driver_task_ring_service(
+            crate::hal::driver_task::register_driver_task_root_context_ring_service(
                 contract,
                 self as *mut Self as usize,
                 serial_ring_service_driver_task::<D, RX, TX, LINE>,

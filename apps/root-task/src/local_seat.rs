@@ -510,7 +510,7 @@ impl LocalSeatRuntime {
         #[cfg(feature = "kernel")]
         {
             let contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
-            crate::hal::driver_task::register_driver_task_ring_service(
+            crate::hal::driver_task::register_driver_task_root_context_ring_service(
                 contract,
                 self as *mut Self as usize,
                 display_ring_service_driver_task,
@@ -726,7 +726,7 @@ impl LocalSeatRuntime {
         let contract = driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            crate::hal::driver_task::register_driver_task_ring_service(
+            crate::hal::driver_task::register_driver_task_root_context_ring_service(
                 contract,
                 self as *mut Self as usize,
                 usb_keyboard_ring_service_driver_task,

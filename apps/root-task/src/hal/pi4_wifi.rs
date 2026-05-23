@@ -9371,6 +9371,14 @@ impl SdioBusOwnerQueue {
             }
         }
     }
+
+    const fn acceptance_eligible(&self) -> bool {
+        false
+    }
+
+    const fn non_acceptance_reason(&self) -> &'static str {
+        "root-hal-exec"
+    }
 }
 
 struct SdioHost {
@@ -25302,6 +25310,8 @@ mod tests {
 
         assert_eq!(queue.len as usize, SDIO_BUS_OWNER_QUEUE_CAPACITY);
         assert_eq!(queue.dropped, 1);
+        assert!(!queue.acceptance_eligible());
+        assert_eq!(queue.non_acceptance_reason(), "root-hal-exec");
         queue.complete(last, true);
         assert!(queue.records.iter().any(|record| {
             record.sequence == last
