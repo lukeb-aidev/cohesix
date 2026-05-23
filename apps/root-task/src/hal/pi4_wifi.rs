@@ -9291,6 +9291,8 @@ const SDIO_BUS_OWNER_QUEUE_CAPACITY: usize = 8;
 const SDIO_BUS_OWNER_FLAG_DATA: u16 = 1 << 0;
 const SDIO_BUS_OWNER_FLAG_WRITE: u16 = 1 << 1;
 const SDIO_BUS_OWNER_FLAG_QUIET: u16 = 1 << 2;
+const SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC: u16 =
+    super::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -24346,7 +24348,9 @@ impl SdioHost {
         arg: u32,
         response: ResponseType,
     ) -> Result<[u32; 4], HalError> {
-        let owner_sequence = self.bus_owner_queue.push(cmd, arg, 0, 0);
+        let owner_sequence =
+            self.bus_owner_queue
+                .push(cmd, arg, 0, SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC);
         let result = (|| {
             self.wait_inhibit_clear(matches!(response, ResponseType::ShortBusy))?;
             self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
@@ -24402,6 +24406,7 @@ impl SdioHost {
         quiet_settle: bool,
     ) -> Result<(), HalError> {
         let owner_flags = SDIO_BUS_OWNER_FLAG_DATA
+            | SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC
             | if write { SDIO_BUS_OWNER_FLAG_WRITE } else { 0 }
             | if quiet_settle {
                 SDIO_BUS_OWNER_FLAG_QUIET
@@ -25303,6 +25308,14 @@ mod tests {
                 && record.command == SDIO_CMD53
                 && record.status == 1
                 && record.flags & SDIO_BUS_OWNER_FLAG_DATA != 0
+        }));
+        last = queue.push(SDIO_CMD52, 0x1020, 0, SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC);
+        queue.complete(last, false);
+        assert!(queue.records.iter().any(|record| {
+            record.sequence == last
+                && record.command == SDIO_CMD52
+                && record.status == 2
+                && record.flags & SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC != 0
         }));
     }
 

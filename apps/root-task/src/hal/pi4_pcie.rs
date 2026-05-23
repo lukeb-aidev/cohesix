@@ -206,8 +206,9 @@ const PCIE_OWNER_QUEUE_RECORD_VERSION: u16 = 1;
 const PCIE_OWNER_QUEUE_DEPTH: usize = 32;
 const PCIE_OWNER_QUEUE_FLAG_FIXED_RING_COMMAND: u16 = 1 << 0;
 const PCIE_OWNER_QUEUE_FLAG_ROOT_MMIO_EXEC: u16 = 1 << 1;
-const PCIE_OWNER_QUEUE_FLAGS: u16 =
-    PCIE_OWNER_QUEUE_FLAG_FIXED_RING_COMMAND | PCIE_OWNER_QUEUE_FLAG_ROOT_MMIO_EXEC;
+const PCIE_OWNER_QUEUE_FLAGS: u16 = PCIE_OWNER_QUEUE_FLAG_FIXED_RING_COMMAND
+    | PCIE_OWNER_QUEUE_FLAG_ROOT_MMIO_EXEC
+    | super::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
 const PCIE_OWNER_OP_PORT_READ: u16 = 1;
 const PCIE_OWNER_OP_PORT_WRITE: u16 = 2;
 const PCIE_OWNER_OP_POSTED_WRITE_FLUSH: u16 = 3;
@@ -2644,6 +2645,11 @@ mod tests {
 
         assert_eq!(after.version, PCIE_OWNER_QUEUE_RECORD_VERSION);
         assert_eq!(after.flags, PCIE_OWNER_QUEUE_FLAGS);
+        assert!(
+            after.flags
+                & super::super::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE
+                != 0
+        );
         assert_eq!(after.depth, PCIE_OWNER_QUEUE_DEPTH as u16);
         assert_eq!(after.submitted, before.submitted.saturating_add(1));
         assert_eq!(after.last_op, PCIE_OWNER_OP_PORT_WRITE);
