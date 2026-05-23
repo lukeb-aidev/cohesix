@@ -137,6 +137,12 @@ pub struct DriverTaskRuntimeProof {
     /// Role coverage serviced through pointer-free rings before isolated
     /// driver-owned state is proved.
     pub shared_ring_service_role_mask: usize,
+    /// Role coverage whose hardware-owned state is registered through
+    /// pointer-free owner-state descriptors rather than root pointers.
+    pub owner_state_role_mask: usize,
+    /// Pi 4 hot-path coverage whose hardware-owned state is registered through
+    /// pointer-free owner-state descriptors.
+    pub owner_state_hot_path_mask: usize,
     /// Role coverage still observed on root-task compatibility service turns.
     pub compatibility_service_role_mask: usize,
     /// Whether minted driver CSpaces contain only declared caps.
@@ -157,6 +163,9 @@ pub struct DriverTaskRuntimeProof {
     pub vspace_proof: bool,
     /// Whether driver service turns use pointer-free shared command rings.
     pub pointer_free_ipc_proof: bool,
+    /// Whether hardware-owned driver state lives behind driver-task service
+    /// rings instead of root-owned runtime structs.
+    pub owner_state_proof: bool,
     /// Count of broad authority caps intentionally leaked into driver CSpaces.
     pub broad_caps_leaked: usize,
 }
@@ -190,10 +199,18 @@ pub struct DriverTaskBootstrapReport {
     pub isolated_vspace_count: usize,
     /// Driver TCBs that completed a fixed-layout command/completion ring proof.
     pub pointer_free_ipc_count: usize,
+    /// Role coverage whose hardware-owned state is registered through
+    /// pointer-free owner-state descriptors rather than root pointers.
+    pub owner_state_role_mask: usize,
+    /// Pi 4 hot-path coverage whose hardware-owned state is registered through
+    /// pointer-free owner-state descriptors.
+    pub owner_state_hot_path_mask: usize,
     /// Whether driver TCBs run in isolated driver VSpaces.
     pub vspace_proof: bool,
     /// Whether driver service turns use pointer-free shared command rings.
     pub pointer_free_ipc_proof: bool,
+    /// Whether hardware-owned driver state lives behind driver-task rings.
+    pub owner_state_proof: bool,
     /// Count of broad authority caps intentionally leaked into driver CSpaces.
     pub broad_caps_leaked: usize,
 }
@@ -206,6 +223,9 @@ pub fn publish_driver_task_bootstrap_report(report: DriverTaskBootstrapReport) {
     DRIVER_TASK_FAILED_COUNT.store(report.failed_count, Ordering::Release);
     DRIVER_TASK_LIVE_TCB_COUNT.store(report.live_tcb_count, Ordering::Release);
     DRIVER_TASK_LIVE_TCB_ROLE_MASK.store(report.live_tcb_role_mask, Ordering::Release);
+    DRIVER_TASK_OWNER_STATE_ROLE_MASK.store(report.owner_state_role_mask, Ordering::Release);
+    DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK
+        .store(report.owner_state_hot_path_mask, Ordering::Release);
     DRIVER_TASK_CAPSET_PROOF.store(report.capset_proof as usize, Ordering::Release);
     DRIVER_TASK_FAULT_PROOF.store(report.fault_proof as usize, Ordering::Release);
     DRIVER_TASK_REVOKE_PROOF.store(report.revoke_proof as usize, Ordering::Release);
@@ -217,6 +237,7 @@ pub fn publish_driver_task_bootstrap_report(report: DriverTaskBootstrapReport) {
     DRIVER_TASK_VSPACE_PROOF.store(report.vspace_proof as usize, Ordering::Release);
     DRIVER_TASK_POINTER_FREE_IPC_PROOF
         .store(report.pointer_free_ipc_proof as usize, Ordering::Release);
+    DRIVER_TASK_OWNER_STATE_PROOF.store(report.owner_state_proof as usize, Ordering::Release);
     DRIVER_TASK_BROAD_CAPS_LEAKED.store(report.broad_caps_leaked, Ordering::Release);
 }
 
@@ -234,6 +255,9 @@ pub fn driver_task_runtime_proof() -> DriverTaskRuntimeProof {
             hot_path_role_mask: DRIVER_TASK_HOT_PATH_ROLE_MASK.load(Ordering::Acquire),
             shared_ring_service_role_mask: DRIVER_TASK_SHARED_RING_SERVICE_ROLE_MASK
                 .load(Ordering::Acquire),
+            owner_state_role_mask: DRIVER_TASK_OWNER_STATE_ROLE_MASK.load(Ordering::Acquire),
+            owner_state_hot_path_mask: DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK
+                .load(Ordering::Acquire),
             compatibility_service_role_mask: DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK
                 .load(Ordering::Acquire),
             capset_proof: DRIVER_TASK_CAPSET_PROOF.load(Ordering::Acquire) != 0,
@@ -246,6 +270,7 @@ pub fn driver_task_runtime_proof() -> DriverTaskRuntimeProof {
             affinity_proof: DRIVER_TASK_AFFINITY_PROOF.load(Ordering::Acquire) != 0,
             vspace_proof: DRIVER_TASK_VSPACE_PROOF.load(Ordering::Acquire) != 0,
             pointer_free_ipc_proof: DRIVER_TASK_POINTER_FREE_IPC_PROOF.load(Ordering::Acquire) != 0,
+            owner_state_proof: DRIVER_TASK_OWNER_STATE_PROOF.load(Ordering::Acquire) != 0,
             broad_caps_leaked: DRIVER_TASK_BROAD_CAPS_LEAKED.load(Ordering::Acquire),
         };
     }
@@ -274,20 +299,32 @@ pub fn record_driver_task_service(contract: DriverTaskContract, isolation: Drive
 ///
 /// Shared-ring dispatch is necessary but not sufficient for strongest driver
 /// isolation. It is credited as a dedicated hot path only after the runtime also
-/// proves isolated driver VSpaces and pointer-free IPC; otherwise it remains a
-/// distinct shared-ring diagnostic that does not satisfy acceptance.
+/// proves isolated driver VSpaces, pointer-free IPC, and no root-context
+/// dependency for this specific service turn. Otherwise it remains a distinct
+/// shared-ring diagnostic that does not satisfy acceptance.
 #[cfg(feature = "kernel")]
-pub fn record_driver_task_ring_hot_path(contract: DriverTaskContract) {
+pub fn record_driver_task_ring_service(
+    contract: DriverTaskContract,
+    owner_state_credit_eligible: bool,
+) {
     let role_bit = driver_task_role_bit(contract.kind);
     if role_bit == 0 {
         return;
     }
     DRIVER_TASK_SHARED_RING_SERVICE_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
-    if DRIVER_TASK_VSPACE_PROOF.load(Ordering::Acquire) != 0
+    if owner_state_credit_eligible
+        && DRIVER_TASK_VSPACE_PROOF.load(Ordering::Acquire) != 0
         && DRIVER_TASK_POINTER_FREE_IPC_PROOF.load(Ordering::Acquire) != 0
+        && DRIVER_TASK_OWNER_STATE_PROOF.load(Ordering::Acquire) != 0
     {
         DRIVER_TASK_HOT_PATH_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
     }
+}
+
+/// Records an owner-state-eligible ring service turn.
+#[cfg(feature = "kernel")]
+pub fn record_driver_task_ring_hot_path(contract: DriverTaskContract) {
+    record_driver_task_ring_service(contract, true);
 }
 
 #[must_use]
@@ -578,8 +615,18 @@ pub const MAX_DRIVER_TASK_QUEUE_DEPTH: u16 = 256;
 /// acceptance may claim dedicated driver-task isolation.
 pub const MIN_DEDICATED_PI4_DRIVER_TASKS: usize = 6;
 
+/// Number of concrete Pi 4 hardware hot paths that must own state before the
+/// strongest owner-state proof may pass.
+pub const REQUIRED_PI4_OWNER_STATE_HOT_PATHS: usize = 7;
+
 /// Maximum Ethernet-sized frame admitted through a dedicated driver-task ring.
 pub const MAX_DRIVER_TASK_FRAME_BYTES: usize = 1536;
+
+/// Ring command flag used by transitional handlers that still carry a root
+/// pointer or root-stack context despite using the fixed command/completion
+/// transport. These commands may prove the ring ABI but never owner-state
+/// isolation.
+pub const DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE: u16 = 1 << 15;
 
 /// Current as-built state of the seL4 driver-task creation substrate.
 ///
@@ -641,6 +688,28 @@ pub const DRIVER_TASK_RING_FRAME_OFFSET: usize = 256;
 /// One page is enough for the current smoke command and completion records.
 pub const DRIVER_TASK_RING_PAGE_BYTES: usize = 4096;
 
+/// Offset reserved for owner-state descriptors in the ring page.
+pub const DRIVER_TASK_OWNER_STATE_OFFSET: usize = 128;
+
+/// Bytes reserved for owner-state descriptors in the ring page.
+pub const DRIVER_TASK_OWNER_STATE_BYTES: usize = 128;
+
+/// Owner-state descriptor flag: the hot path runs from a driver-local runtime
+/// image rather than a root-owned callback handler.
+pub const DRIVER_TASK_OWNER_STATE_FLAG_RUNTIME_IMAGE: u16 = 1 << 0;
+/// Owner-state descriptor flag: the runtime owns explicit MMIO/device mappings.
+pub const DRIVER_TASK_OWNER_STATE_FLAG_DEVICE_MAPPED: u16 = 1 << 1;
+/// Owner-state descriptor flag: RX/TX/control work uses shared ring buffers.
+pub const DRIVER_TASK_OWNER_STATE_FLAG_SHARED_BUFFERS: u16 = 1 << 2;
+/// Owner-state descriptor flag: no root pointer or root stack context is used
+/// for steady-state hardware progress.
+pub const DRIVER_TASK_OWNER_STATE_FLAG_NO_ROOT_POINTERS: u16 = 1 << 3;
+/// Required owner-state descriptor flags for strongest Pi 4 hot-path proof.
+pub const DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS: u16 = DRIVER_TASK_OWNER_STATE_FLAG_RUNTIME_IMAGE
+    | DRIVER_TASK_OWNER_STATE_FLAG_DEVICE_MAPPED
+    | DRIVER_TASK_OWNER_STATE_FLAG_SHARED_BUFFERS
+    | DRIVER_TASK_OWNER_STATE_FLAG_NO_ROOT_POINTERS;
+
 /// Small dedicated CSpace radix for bootstrap driver tasks.
 #[cfg(feature = "kernel")]
 pub const DRIVER_TASK_CHILD_CNODE_RADIX_BITS: u8 = 4;
@@ -684,6 +753,10 @@ static DRIVER_TASK_HOT_PATH_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_SHARED_RING_SERVICE_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
+static DRIVER_TASK_OWNER_STATE_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
 static DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_CAPSET_PROOF: AtomicUsize = AtomicUsize::new(0);
@@ -703,6 +776,8 @@ static DRIVER_TASK_AFFINITY_PROOF: AtomicUsize = AtomicUsize::new(0);
 static DRIVER_TASK_VSPACE_PROOF: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_POINTER_FREE_IPC_PROOF: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OWNER_STATE_PROOF: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_BROAD_CAPS_LEAKED: AtomicUsize = AtomicUsize::new(usize::MAX);
 #[cfg(feature = "kernel")]
@@ -914,6 +989,106 @@ pub fn register_driver_task_ring_service(
     true
 }
 
+/// Pointer-free descriptor proving a hardware owner's state boundary.
+///
+/// The descriptor is intentionally primitive-only. It identifies the ring-backed
+/// hardware owner and the bounded shared-buffer region used to exchange work
+/// with root, but it never carries a root pointer or callback context.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTaskOwnerStateDescriptor {
+    /// Hot path owned by the driver task.
+    pub hot_path: DriverTaskHotPath,
+    /// Offset of the command/metadata region within the shared ring page.
+    pub state_offset: u32,
+    /// Bytes reserved for driver-owned state metadata.
+    pub state_len: u16,
+    /// Offset of the shared RX/TX/control buffer region.
+    pub buffer_offset: u32,
+    /// Bytes reserved for shared buffers.
+    pub buffer_len: u16,
+    /// Descriptor flags reserved for future ownership variants.
+    pub flags: u16,
+}
+
+impl DriverTaskOwnerStateDescriptor {
+    /// Construct a bounded owner-state descriptor.
+    #[must_use]
+    pub const fn new(
+        hot_path: DriverTaskHotPath,
+        state_offset: u32,
+        state_len: u16,
+        buffer_offset: u32,
+        buffer_len: u16,
+        flags: u16,
+    ) -> Option<Self> {
+        let state_end = state_offset as usize + state_len as usize;
+        let buffer_end = buffer_offset as usize + buffer_len as usize;
+        let state_in_owner_region = (state_offset as usize) >= DRIVER_TASK_OWNER_STATE_OFFSET
+            && state_end <= DRIVER_TASK_OWNER_STATE_OFFSET + DRIVER_TASK_OWNER_STATE_BYTES;
+        if state_len == 0
+            || buffer_len == 0
+            || state_offset as usize >= DRIVER_TASK_RING_PAGE_BYTES
+            || buffer_offset as usize >= DRIVER_TASK_RING_PAGE_BYTES
+            || state_end > DRIVER_TASK_RING_PAGE_BYTES
+            || buffer_end > DRIVER_TASK_RING_PAGE_BYTES
+            || !state_in_owner_region
+            || (buffer_offset as usize) < DRIVER_TASK_RING_FRAME_OFFSET
+        {
+            return None;
+        }
+        Some(Self {
+            hot_path,
+            state_offset,
+            state_len,
+            buffer_offset,
+            buffer_len,
+            flags,
+        })
+    }
+
+    /// Returns whether this descriptor represents a real isolated runtime
+    /// ownership boundary rather than ring-shape scaffolding.
+    #[must_use]
+    pub const fn has_required_runtime_flags(self) -> bool {
+        self.flags & DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS
+            == DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS
+    }
+}
+
+/// Register pointer-free owner-state proof for one driver-task hot path.
+#[cfg(feature = "kernel")]
+pub fn register_driver_task_owner_state_descriptor(
+    contract: DriverTaskContract,
+    descriptor: DriverTaskOwnerStateDescriptor,
+) -> bool {
+    if descriptor.hot_path.contract() != contract {
+        return false;
+    }
+    if !descriptor.has_required_runtime_flags() {
+        return false;
+    }
+    let role_bit = driver_task_role_bit(contract.kind);
+    if role_bit == 0 {
+        return false;
+    }
+    DRIVER_TASK_OWNER_STATE_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+    DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK
+        .fetch_or(descriptor.hot_path.owner_state_bit(), Ordering::AcqRel);
+    refresh_driver_task_owner_state_proof();
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn refresh_driver_task_owner_state_proof() {
+    let owner_hot_paths = DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire);
+    let ready = owner_hot_paths & REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+        == REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+        && DRIVER_TASK_VSPACE_PROOF.load(Ordering::Acquire) != 0
+        && DRIVER_TASK_POINTER_FREE_IPC_PROOF.load(Ordering::Acquire) != 0;
+    DRIVER_TASK_OWNER_STATE_PROOF.store(ready as usize, Ordering::Release);
+}
+
 /// Register the pointer-free default service handler for Pi 4 bus owner roles.
 #[cfg(feature = "kernel")]
 pub fn register_pi4_bus_ring_service(contract: DriverTaskContract) -> bool {
@@ -1061,9 +1236,10 @@ pub fn run_driver_task_ring_service(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
+    let owner_state_credit_eligible = command.owner_state_credit_eligible();
     let completion = run_driver_task_ring_command(contract, command)?;
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
-        record_driver_task_ring_hot_path(contract);
+        record_driver_task_ring_service(contract, owner_state_credit_eligible);
     }
     Some(completion)
 }
@@ -1769,6 +1945,13 @@ impl DriverFrameDescriptor {
         }
         Ok(Self { offset, len, flags })
     }
+
+    /// Returns whether this frame descriptor explicitly depends on root
+    /// context state for the current service turn.
+    #[must_use]
+    pub const fn root_context_non_acceptance(self) -> bool {
+        self.flags & DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE != 0
+    }
 }
 
 /// Primitive budget grant encoded in the pointer-free shared-ring ABI.
@@ -1904,6 +2087,12 @@ impl DriverTaskHotPath {
     pub const fn role_bit(self) -> usize {
         driver_task_role_bit(self.contract().kind)
     }
+
+    /// Hot-path bit used for concrete owner-state descriptor coverage.
+    #[must_use]
+    pub const fn owner_state_bit(self) -> usize {
+        1usize << ((self as usize) - 1)
+    }
 }
 
 /// Complete Pi 4 hot-path migration catalog.
@@ -1916,6 +2105,16 @@ pub const PI4_DRIVER_TASK_HOT_PATHS: [DriverTaskHotPath; 7] = [
     DriverTaskHotPath::SdioHost,
     DriverTaskHotPath::PcieRoot,
 ];
+
+/// Concrete owner-state hot-path mask required for strongest Pi 4 isolation.
+pub const REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK: usize = DriverTaskHotPath::SerialConsole
+    .owner_state_bit()
+    | DriverTaskHotPath::UsbKeyboard.owner_state_bit()
+    | DriverTaskHotPath::HdmiText.owner_state_bit()
+    | DriverTaskHotPath::GenetNic.owner_state_bit()
+    | DriverTaskHotPath::Cyw43Wifi.owner_state_bit()
+    | DriverTaskHotPath::SdioHost.owner_state_bit()
+    | DriverTaskHotPath::PcieRoot.owner_state_bit();
 
 /// Pointer-free service handler for bus-owner roles whose concrete hardware
 /// queues are not allowed to fall back to root-owned pointer contexts.
@@ -2154,6 +2353,13 @@ impl DriverTaskCommandRecord {
                 flags: 0,
             },
         }
+    }
+
+    /// Returns whether this command may be credited toward owner-state proof.
+    #[must_use]
+    pub const fn owner_state_credit_eligible(self) -> bool {
+        self.flags & DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE == 0
+            && !self.frame.root_context_non_acceptance()
     }
 }
 
@@ -2577,6 +2783,7 @@ pub const fn driver_task_acceptance_ready_for(
         && proof.affinity_proof
         && proof.vspace_proof
         && proof.pointer_free_ipc_proof
+        && proof.owner_state_proof
         && proof.broad_caps_leaked == 0
         && proof.live_tcb_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
             == REQUIRED_DRIVER_TASK_ROLE_MASK
@@ -2628,7 +2835,7 @@ pub fn emit_boot_contract_proof() {
     let mut line = String::<384>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_SUBSTRATE active={} profile=pi4-uboot-aarch64 task_count={} failed_count={} live_tcb_count={} root_authority_retained=yes fault_endpoint_ready={} revoke_ready={} broad_caps_leaked={} sched={} affinity={} affinity_configured={} affinity_applied={} vspace={} ipc_abi={} pointer_free_ipc={} live_hot_paths={}",
+        "DRIVER_TASK_SUBSTRATE active={} profile=pi4-uboot-aarch64 task_count={} failed_count={} live_tcb_count={} root_authority_retained=yes fault_endpoint_ready={} revoke_ready={} broad_caps_leaked={} sched={} affinity={} affinity_configured={} affinity_applied={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} live_hot_paths={}",
         if proof.substrate_active { "yes" } else { "no" },
         proof.configured_count,
         proof.failed_count,
@@ -2643,6 +2850,11 @@ pub fn emit_boot_contract_proof() {
         if proof.vspace_proof { "isolated" } else { "shared-root" },
         proof_ipc_abi.as_str(),
         if proof.pointer_free_ipc_proof { "yes" } else { "no" },
+        if proof.owner_state_proof {
+            "driver-owned"
+        } else {
+            "root-owned"
+        },
         if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
             == REQUIRED_DRIVER_TASK_ROLE_MASK
         {
@@ -2723,10 +2935,10 @@ pub fn emit_boot_contract_proof() {
     }
 
     let summary = builtin_isolation_summary();
-    let mut line = String::<256>::new();
+    let mut line = String::<320>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_SUMMARY contracts={} requested_dedicated={} dedicated={} compatibility={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} shared_ring_roles=0x{:x} compatibility_roles=0x{:x}",
+        "DRIVER_TASK_SUMMARY contracts={} requested_dedicated={} dedicated={} compatibility={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} shared_ring_roles=0x{:x} owner_state_roles=0x{:x} owner_state_hot_paths=0x{:x} compatibility_roles=0x{:x}",
         summary.contracts,
         summary.requested_dedicated_sel4_tasks,
         summary.dedicated_sel4_tasks,
@@ -2734,9 +2946,27 @@ pub fn emit_boot_contract_proof() {
         proof.live_tcb_role_mask,
         proof.hot_path_role_mask,
         proof.shared_ring_service_role_mask,
+        proof.owner_state_role_mask,
+        proof.owner_state_hot_path_mask,
         proof.compatibility_service_role_mask,
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
+
+    for hot_path in PI4_DRIVER_TASK_HOT_PATHS {
+        let contract = hot_path.contract();
+        let present = proof.owner_state_hot_path_mask & hot_path.owner_state_bit() != 0;
+        let mut line = String::<192>::new();
+        let _ = write!(
+            line,
+            "DRIVER_TASK_OWNER_STATE contract={} hot_path={} owner_state={} descriptor={} root_pointer={}",
+            contract.name,
+            hot_path.as_str(),
+            if present { "driver-owned" } else { "missing" },
+            if present { "present" } else { "missing" },
+            if present { "no" } else { "unknown" },
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+    }
 
     let mut line = String::<384>::new();
     let ready = dedicated_driver_task_acceptance_ready();
@@ -2752,6 +2982,8 @@ pub fn emit_boot_contract_proof() {
         "driver-task-vspace-isolation-not-proven"
     } else if !proof.pointer_free_ipc_proof {
         "driver-task-pointer-free-ipc-not-proven"
+    } else if !proof.owner_state_proof {
+        "driver-task-owner-state-not-proven"
     } else if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
         != REQUIRED_DRIVER_TASK_ROLE_MASK
     {
@@ -2763,7 +2995,7 @@ pub fn emit_boot_contract_proof() {
     };
     let _ = write!(
         line,
-        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} ipc_abi={} pointer_free_ipc={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
+        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} owner_state_hot_paths=0x{:x} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
         if ready { "yes" } else { "no" },
         reason,
         MIN_DEDICATED_PI4_DRIVER_TASKS,
@@ -2778,6 +3010,12 @@ pub fn emit_boot_contract_proof() {
         if proof.vspace_proof { "isolated" } else { "shared-root" },
         proof_ipc_abi.as_str(),
         if proof.pointer_free_ipc_proof { "yes" } else { "no" },
+        if proof.owner_state_proof {
+            "driver-owned"
+        } else {
+            "root-owned"
+        },
+        proof.owner_state_hot_path_mask,
         proof.live_tcb_role_mask,
         proof.hot_path_role_mask,
         proof.compatibility_service_role_mask,
@@ -2852,7 +3090,7 @@ mod tests {
     }
 
     #[test]
-    fn isolated_vspace_still_requires_pointer_free_ipc_for_acceptance() {
+    fn isolated_vspace_still_requires_pointer_free_ipc_and_owner_state_for_acceptance() {
         let summary = DriverTaskIsolationSummary {
             contracts: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
             requested_dedicated_sel4_tasks: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
@@ -2867,6 +3105,8 @@ mod tests {
             live_tcb_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
             hot_path_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
             shared_ring_service_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
+            owner_state_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
+            owner_state_hot_path_mask: REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK,
             compatibility_service_role_mask: 0,
             capset_proof: true,
             fault_proof: true,
@@ -2877,12 +3117,19 @@ mod tests {
             affinity_proof: true,
             vspace_proof: true,
             pointer_free_ipc_proof: false,
+            owner_state_proof: false,
             broad_caps_leaked: 0,
         };
         assert!(!driver_task_acceptance_ready_for(summary, proof));
 
         let proof = DriverTaskRuntimeProof {
             pointer_free_ipc_proof: true,
+            ..proof
+        };
+        assert!(!driver_task_acceptance_ready_for(summary, proof));
+
+        let proof = DriverTaskRuntimeProof {
+            owner_state_proof: true,
             ..proof
         };
         assert!(driver_task_acceptance_ready_for(summary, proof));
@@ -2904,6 +3151,8 @@ mod tests {
             live_tcb_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
             hot_path_role_mask: 0,
             shared_ring_service_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
+            owner_state_role_mask: 0,
+            owner_state_hot_path_mask: 0,
             compatibility_service_role_mask: 0,
             capset_proof: true,
             fault_proof: true,
@@ -2914,6 +3163,7 @@ mod tests {
             affinity_proof: true,
             vspace_proof: true,
             pointer_free_ipc_proof: true,
+            owner_state_proof: false,
             broad_caps_leaked: 0,
         };
 
@@ -3013,6 +3263,8 @@ mod tests {
     fn shared_ring_wire_records_are_fixed_pointer_free_layout() {
         assert_eq!(core::mem::size_of::<DriverFrameDescriptor>(), 8);
         assert_eq!(core::mem::align_of::<DriverFrameDescriptor>(), 4);
+        assert_eq!(core::mem::size_of::<DriverTaskOwnerStateDescriptor>(), 20);
+        assert_eq!(core::mem::align_of::<DriverTaskOwnerStateDescriptor>(), 4);
         assert_eq!(core::mem::size_of::<DriverTaskBudgetGrant>(), 8);
         assert_eq!(core::mem::align_of::<DriverTaskBudgetGrant>(), 4);
         assert_eq!(core::mem::size_of::<DriverTaskCommandRecord>(), 40);
@@ -3030,6 +3282,15 @@ mod tests {
             DRIVER_TASK_RING_FRAME_OFFSET
                 >= DRIVER_TASK_RING_COMPLETION_OFFSET
                     + core::mem::size_of::<DriverTaskCompletionRecord>()
+        );
+        assert!(
+            DRIVER_TASK_OWNER_STATE_OFFSET
+                >= DRIVER_TASK_RING_COMPLETION_OFFSET
+                    + core::mem::size_of::<DriverTaskCompletionRecord>()
+        );
+        assert!(
+            DRIVER_TASK_OWNER_STATE_OFFSET + DRIVER_TASK_OWNER_STATE_BYTES
+                <= DRIVER_TASK_RING_FRAME_OFFSET
         );
         assert!(
             DRIVER_TASK_RING_FRAME_OFFSET + MAX_DRIVER_TASK_FRAME_BYTES
@@ -3054,6 +3315,7 @@ mod tests {
         assert_eq!(command.opcode, DriverTaskOpcode::SubmitFrame.as_u16());
         assert_eq!(command.flags, 0x20);
         assert_eq!(command.frame, frame);
+        assert!(command.owner_state_credit_eligible());
 
         let completion = DriverTaskCompletionRecord::frame_ready(7, frame);
         assert_eq!(completion.sequence, 7);
@@ -3071,6 +3333,99 @@ mod tests {
             DriverTaskFaultCode::RejectedCommand.as_str(),
             "rejected-command"
         );
+    }
+
+    #[test]
+    fn root_context_ring_commands_are_non_acceptance() {
+        let contract = SERIAL_DRIVER_TASK_CONTRACT;
+        let frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
+        };
+        let command = DriverTaskCommandRecord::pi4_hot_path(
+            1,
+            DriverTaskHotPath::SerialConsole,
+            DriverTaskBudgetGrant::from_contract(contract),
+            frame,
+        );
+        assert!(command.frame.root_context_non_acceptance());
+        assert!(!command.owner_state_credit_eligible());
+
+        let mut flush =
+            DriverTaskCommandRecord::flush(2, DriverTaskBudgetGrant::from_contract(contract));
+        assert!(flush.owner_state_credit_eligible());
+        flush.flags = DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
+        assert!(!flush.owner_state_credit_eligible());
+    }
+
+    #[test]
+    fn owner_state_descriptors_are_pointer_free_bounded_and_complete() {
+        let mut role_mask = 0usize;
+        let mut hot_path_mask = 0usize;
+        for hot_path in PI4_DRIVER_TASK_HOT_PATHS {
+            let descriptor = DriverTaskOwnerStateDescriptor::new(
+                hot_path,
+                DRIVER_TASK_OWNER_STATE_OFFSET as u32,
+                16,
+                DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                128,
+                DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS,
+            )
+            .unwrap();
+            assert_eq!(descriptor.hot_path, hot_path);
+            assert_eq!(descriptor.hot_path.contract(), hot_path.contract());
+            assert!(descriptor.has_required_runtime_flags());
+            role_mask |= hot_path.role_bit();
+            hot_path_mask |= hot_path.owner_state_bit();
+        }
+
+        assert_eq!(
+            role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK,
+            REQUIRED_DRIVER_TASK_ROLE_MASK
+        );
+        assert_eq!(hot_path_mask, REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK);
+        assert_eq!(
+            REQUIRED_PI4_OWNER_STATE_HOT_PATHS,
+            PI4_DRIVER_TASK_HOT_PATHS.len()
+        );
+        assert!(DriverTaskOwnerStateDescriptor::new(
+            DriverTaskHotPath::SerialConsole,
+            DRIVER_TASK_OWNER_STATE_OFFSET as u32 - 1,
+            16,
+            DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            128,
+            0,
+        )
+        .is_none());
+        assert!(DriverTaskOwnerStateDescriptor::new(
+            DriverTaskHotPath::SerialConsole,
+            DRIVER_TASK_OWNER_STATE_OFFSET as u32,
+            DRIVER_TASK_OWNER_STATE_BYTES as u16 + 1,
+            DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            128,
+            0,
+        )
+        .is_none());
+        assert!(DriverTaskOwnerStateDescriptor::new(
+            DriverTaskHotPath::SerialConsole,
+            DRIVER_TASK_OWNER_STATE_OFFSET as u32,
+            16,
+            64,
+            128,
+            0,
+        )
+        .is_none());
+        let scaffolding = DriverTaskOwnerStateDescriptor::new(
+            DriverTaskHotPath::SerialConsole,
+            DRIVER_TASK_OWNER_STATE_OFFSET as u32,
+            16,
+            DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            128,
+            0,
+        )
+        .unwrap();
+        assert!(!scaffolding.has_required_runtime_flags());
     }
 
     #[test]

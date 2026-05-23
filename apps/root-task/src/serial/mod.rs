@@ -103,6 +103,12 @@ pub const DEFAULT_TX_CAPACITY: usize = 256;
 pub const DEFAULT_LINE_CAPACITY: usize = 256;
 
 const BLOCKING_TX_SPIN_LIMIT: usize = 1_000_000;
+const SERIAL_DRIVER_LOCAL_RECORD_MAGIC: u32 = 0x5344_4c52;
+const SERIAL_DRIVER_LOCAL_RECORD_VERSION: u16 = 1;
+const SERIAL_DRIVER_LOCAL_FLAG_ECHO_ENABLED: u16 = 1 << 0;
+const SERIAL_DRIVER_LOCAL_FLAG_SUPPRESS_LF: u16 = 1 << 1;
+const SERIAL_PENDING_TX_NONE: u16 = u16::MAX;
+const SERIAL_OWNER_DESCRIPTOR_TRANSITIONAL_ROOT_CONTEXT: u16 = 1 << 0;
 
 /// Error type surfaced by the serial subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,6 +181,145 @@ pub struct SerialTelemetry {
     pub driver_task_budget_overruns: u32,
 }
 
+/// Fixed-layout serial owner-state record for the ring-backed migration path.
+///
+/// The record is primitive-only and intentionally stores no Rust/root pointers.
+/// Today it owns the serial line flags and pending TX byte while mirroring queue
+/// depths and telemetry for tests/diagnostics. The live MMIO driver and RX/TX
+/// queues are still reached through [`SerialPort`], so this record is not
+/// registered as `DRIVER_TASK_OWNER_STATE` proof yet.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SerialDriverLocalRuntimeRecord {
+    /// Magic identifying the serial owner-state record.
+    pub magic: u32,
+    /// Schema version for the fixed record.
+    pub version: u16,
+    /// Primitive flags for echo/newline behavior.
+    pub flags: u16,
+    /// Current RX queue depth.
+    pub rx_depth: u16,
+    /// Current TX queue depth.
+    pub tx_depth: u16,
+    /// Current partial command-line byte length.
+    pub line_len: u16,
+    /// Pending byte held after TX backpressure, or [`SERIAL_PENDING_TX_NONE`].
+    pub pending_tx: u16,
+    /// RX backpressure count.
+    pub rx_backpressure: u32,
+    /// TX backpressure count.
+    pub tx_backpressure: u32,
+    /// Sanitizer drop count.
+    pub utf8_dropped: u32,
+    /// Budget-overrun count.
+    pub driver_task_budget_overruns: u32,
+}
+
+impl SerialDriverLocalRuntimeRecord {
+    const fn new() -> Self {
+        Self {
+            magic: SERIAL_DRIVER_LOCAL_RECORD_MAGIC,
+            version: SERIAL_DRIVER_LOCAL_RECORD_VERSION,
+            flags: SERIAL_DRIVER_LOCAL_FLAG_ECHO_ENABLED,
+            rx_depth: 0,
+            tx_depth: 0,
+            line_len: 0,
+            pending_tx: SERIAL_PENDING_TX_NONE,
+            rx_backpressure: 0,
+            tx_backpressure: 0,
+            utf8_dropped: 0,
+            driver_task_budget_overruns: 0,
+        }
+    }
+
+    fn with_observed_state(
+        mut self,
+        rx_depth: usize,
+        tx_depth: usize,
+        line_len: usize,
+        telemetry: SerialTelemetry,
+    ) -> Self {
+        self.rx_depth = saturating_u16(rx_depth);
+        self.tx_depth = saturating_u16(tx_depth);
+        self.line_len = saturating_u16(line_len);
+        self.rx_backpressure = telemetry.rx_backpressure;
+        self.tx_backpressure = telemetry.tx_backpressure;
+        self.utf8_dropped = telemetry.utf8_dropped;
+        self.driver_task_budget_overruns = telemetry.driver_task_budget_overruns;
+        self
+    }
+
+    #[must_use]
+    const fn pending_tx_byte(self) -> Option<u8> {
+        if self.pending_tx <= u8::MAX as u16 {
+            Some(self.pending_tx as u8)
+        } else {
+            None
+        }
+    }
+
+    fn take_pending_tx(&mut self) -> Option<u8> {
+        let byte = self.pending_tx_byte();
+        self.pending_tx = SERIAL_PENDING_TX_NONE;
+        byte
+    }
+
+    fn set_pending_tx(&mut self, byte: Option<u8>) {
+        self.pending_tx = match byte {
+            Some(byte) => u16::from(byte),
+            None => SERIAL_PENDING_TX_NONE,
+        };
+    }
+
+    #[must_use]
+    const fn echo_enabled(self) -> bool {
+        self.flags & SERIAL_DRIVER_LOCAL_FLAG_ECHO_ENABLED != 0
+    }
+
+    #[must_use]
+    const fn suppress_lf(self) -> bool {
+        self.flags & SERIAL_DRIVER_LOCAL_FLAG_SUPPRESS_LF != 0
+    }
+
+    fn set_suppress_lf(&mut self, suppress: bool) {
+        if suppress {
+            self.flags |= SERIAL_DRIVER_LOCAL_FLAG_SUPPRESS_LF;
+        } else {
+            self.flags &= !SERIAL_DRIVER_LOCAL_FLAG_SUPPRESS_LF;
+        }
+    }
+}
+
+const fn saturating_u16(value: usize) -> u16 {
+    if value > u16::MAX as usize {
+        u16::MAX
+    } else {
+        value as u16
+    }
+}
+
+/// Whether serial can be credited as driver-owned owner-state proof.
+///
+/// This remains false because the live ring service still needs a root-owned
+/// [`SerialPort`] pointer to reach the MMIO driver and heapless queues.
+#[must_use]
+pub const fn serial_owner_state_acceptance_ready() -> bool {
+    false
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+const fn serial_owner_state_descriptor(
+) -> Option<crate::hal::driver_task::DriverTaskOwnerStateDescriptor> {
+    crate::hal::driver_task::DriverTaskOwnerStateDescriptor::new(
+        crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+        crate::hal::driver_task::DRIVER_TASK_OWNER_STATE_OFFSET as u32,
+        core::mem::size_of::<SerialDriverLocalRuntimeRecord>() as u16,
+        crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET as u32,
+        crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES as u16,
+        SERIAL_OWNER_DESCRIPTOR_TRANSITIONAL_ROOT_CONTEXT,
+    )
+}
+
 /// Serial console abstraction with bounded RX/TX queues and UTF-8 sanitisation.
 pub struct SerialPort<
     D,
@@ -188,10 +333,8 @@ pub struct SerialPort<
     rx: Queue<u8, RX>,
     tx: Queue<u8, TX>,
     line: HeaplessString<LINE>,
-    pending_tx: Option<u8>,
+    driver_local: SerialDriverLocalRuntimeRecord,
     telemetry: SerialTelemetryCounters,
-    echo: bool,
-    suppress_lf: bool,
 }
 
 impl<D, const RX: usize, const TX: usize, const LINE: usize> SerialPort<D, RX, TX, LINE>
@@ -209,10 +352,8 @@ where
             rx: Queue::new(),
             tx: Queue::new(),
             line: HeaplessString::new(),
-            pending_tx: None,
+            driver_local: SerialDriverLocalRuntimeRecord::new(),
             telemetry: SerialTelemetryCounters::default(),
-            echo: true,
-            suppress_lf: false,
         }
     }
 
@@ -222,10 +363,21 @@ where
         self.telemetry.snapshot()
     }
 
+    /// Snapshot the fixed-layout serial owner-state record.
+    #[must_use]
+    pub fn owner_runtime_record(&self) -> SerialDriverLocalRuntimeRecord {
+        self.driver_local.with_observed_state(
+            self.rx.len(),
+            self.tx.len(),
+            self.line.len(),
+            self.telemetry(),
+        )
+    }
+
     /// Whether bytes remain staged for the serial TX driver.
     #[must_use]
     pub fn tx_pending(&self) -> bool {
-        self.pending_tx.is_some() || !self.tx.is_empty()
+        self.driver_local.pending_tx_byte().is_some() || !self.tx.is_empty()
     }
 
     /// HAL scheduling contract consumed by this port.
@@ -312,7 +464,8 @@ where
                 crate::hal::driver_task::DriverFrameDescriptor {
                     offset: 0,
                     len: 0,
-                    flags: 0,
+                    flags:
+                        crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
                 },
             );
             if let Some(completion) =
@@ -395,10 +548,14 @@ where
                 self as *mut Self as usize,
                 serial_ring_service_driver_task::<D, RX, TX, LINE>,
             );
-            let command = crate::hal::driver_task::DriverTaskCommandRecord::flush(
+            let mut command = crate::hal::driver_task::DriverTaskCommandRecord::flush(
                 0,
                 crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
             );
+            command.flags =
+                crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
+            command.frame.flags =
+                crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
             if crate::hal::driver_task::run_driver_task_ring_service(contract, command).is_some() {
                 return;
             }
@@ -437,10 +594,10 @@ where
 
     fn flush_tx_unlocked(&mut self, budget: &mut DriverServiceBudget) {
         // Flush staged TX bytes to the device until it reports back-pressure.
-        if let Some(byte) = self.pending_tx.take() {
+        if let Some(byte) = self.driver_local.take_pending_tx() {
             if self.serial_byte_budget_available(budget).is_err() {
                 self.telemetry.driver_task_budget_overrun();
-                self.pending_tx = Some(byte);
+                self.driver_local.set_pending_tx(Some(byte));
                 return;
             }
             match self.driver.write_byte(byte) {
@@ -451,7 +608,7 @@ where
                     }
                 }
                 Err(NbError::WouldBlock) => {
-                    self.pending_tx = Some(byte);
+                    self.driver_local.set_pending_tx(Some(byte));
                     return;
                 }
                 Err(NbError::Other(_)) => {
@@ -477,7 +634,7 @@ where
                     }
                 }
                 Err(NbError::WouldBlock) => {
-                    self.pending_tx = Some(byte);
+                    self.driver_local.set_pending_tx(Some(byte));
                     return;
                 }
                 Err(NbError::Other(_)) => {
@@ -515,7 +672,7 @@ where
     }
 
     fn flush_tx_blocking_unlocked(&mut self) {
-        if let Some(byte) = self.pending_tx.take() {
+        if let Some(byte) = self.driver_local.take_pending_tx() {
             self.write_byte_blocking_unlocked(byte);
         }
         while let Some(byte) = self.tx.dequeue() {
@@ -540,13 +697,13 @@ where
     /// Retrieve the next sanitised console line, if available.
     pub fn next_line(&mut self) -> Option<HeaplessString<LINE>> {
         while let Some(byte) = self.rx.dequeue() {
-            if self.suppress_lf && byte == b'\n' {
-                self.suppress_lf = false;
+            if self.driver_local.suppress_lf() && byte == b'\n' {
+                self.driver_local.set_suppress_lf(false);
                 continue;
             }
             match byte {
                 b'\r' => {
-                    self.suppress_lf = true;
+                    self.driver_local.set_suppress_lf(true);
                     self.emit_newline();
                     let mut completed = HeaplessString::new();
                     core::mem::swap(&mut completed, &mut self.line);
@@ -559,7 +716,7 @@ where
                     return Some(completed);
                 }
                 0x08 | 0x7f => {
-                    if self.line.pop().is_some() && self.echo {
+                    if self.line.pop().is_some() && self.driver_local.echo_enabled() {
                         self.enqueue_tx(b"\x08 \x08");
                     }
                 }
@@ -571,7 +728,7 @@ where
                         self.telemetry.utf8_drop();
                         continue;
                     }
-                    if self.echo {
+                    if self.driver_local.echo_enabled() {
                         self.enqueue_tx(&[byte]);
                     }
                 }
@@ -590,7 +747,7 @@ where
     }
 
     fn emit_newline(&mut self) {
-        if self.echo {
+        if self.driver_local.echo_enabled() {
             self.enqueue_tx(b"\r\n");
         }
     }
@@ -611,7 +768,8 @@ where
 {
     // SAFETY: `context` is registered by `SerialPort` before submitting a
     // synchronous ring command, and the root TCB does not mutate the port until
-    // the driver TCB publishes a matching completion sequence.
+    // the driver TCB publishes a matching completion sequence. This root pointer
+    // is transitional service context and is not owner-state acceptance proof.
     let port = unsafe { &mut *(context as *mut SerialPort<D, RX, TX, LINE>) };
     let contract = <D as SerialDriver>::driver_task_contract();
     if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Service.as_u16() {
@@ -640,6 +798,7 @@ where
 {
     // SAFETY: `context` is provided only by `SerialPort::poll_io` while the
     // root TCB is synchronously waiting for the dedicated serial TCB to finish.
+    // The callback-pointer ABI is compatibility-only, not owner-state proof.
     let port = unsafe { &mut *(context as *mut SerialPort<D, RX, TX, LINE>) };
     let contract = <D as SerialDriver>::driver_task_contract();
     port.poll_io_current_tcb(contract) as usize
@@ -654,6 +813,7 @@ where
 {
     // SAFETY: `context` is provided only by `SerialPort::flush_tx_locked` while
     // the root TCB is synchronously waiting for the dedicated serial TCB.
+    // The callback-pointer ABI is compatibility-only, not owner-state proof.
     let port = unsafe { &mut *(context as *mut SerialPort<D, RX, TX, LINE>) };
     let contract = <D as SerialDriver>::driver_task_contract();
     port.flush_tx_current_tcb(contract);
@@ -822,6 +982,52 @@ mod tests {
         assert_eq!(contract.name, "serial");
         assert!(contract.preempts_network_data());
         assert_eq!(contract.validate(), Ok(()));
+    }
+
+    #[test]
+    fn serial_owner_runtime_record_is_fixed_layout_but_not_acceptance_ready() {
+        assert!(
+            core::mem::size_of::<SerialDriverLocalRuntimeRecord>()
+                <= crate::hal::driver_task::DRIVER_TASK_OWNER_STATE_BYTES
+        );
+        let descriptor =
+            serial_owner_state_descriptor().expect("serial owner-state record must fit the ring");
+        assert_eq!(
+            descriptor.hot_path,
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole
+        );
+        assert_eq!(
+            descriptor.state_len as usize,
+            core::mem::size_of::<SerialDriverLocalRuntimeRecord>()
+        );
+        assert_eq!(
+            descriptor.buffer_offset as usize,
+            crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET
+        );
+        assert!(!serial_owner_state_acceptance_ready());
+    }
+
+    #[test]
+    fn serial_owner_runtime_record_tracks_line_and_queue_state() {
+        let driver = LoopbackSerial::<64>::new();
+        let mut port: SerialPort<_, 16, 16, 8> = SerialPort::new(driver);
+
+        port.enqueue_tx(b"abcd");
+        port.driver_mut().push_rx(b"xy");
+        assert!(port.poll_io());
+        let record = port.owner_runtime_record();
+
+        assert_eq!(record.magic, SERIAL_DRIVER_LOCAL_RECORD_MAGIC);
+        assert_eq!(record.version, SERIAL_DRIVER_LOCAL_RECORD_VERSION);
+        assert_eq!(record.rx_depth, 2);
+        assert_eq!(record.tx_depth, 0);
+        assert_eq!(record.line_len, 0);
+        assert_eq!(record.pending_tx_byte(), None);
+
+        assert!(port.next_line().is_none());
+        let record = port.owner_runtime_record();
+        assert_eq!(record.rx_depth, 0);
+        assert_eq!(record.line_len, 2);
     }
 
     #[test]

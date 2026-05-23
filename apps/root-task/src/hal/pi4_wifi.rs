@@ -9287,9 +9287,94 @@ where
     Ok(())
 }
 
+const SDIO_BUS_OWNER_QUEUE_CAPACITY: usize = 8;
+const SDIO_BUS_OWNER_FLAG_DATA: u16 = 1 << 0;
+const SDIO_BUS_OWNER_FLAG_WRITE: u16 = 1 << 1;
+const SDIO_BUS_OWNER_FLAG_QUIET: u16 = 1 << 2;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SdioBusOwnerRecord {
+    sequence: u32,
+    command: u16,
+    flags: u16,
+    arg: u32,
+    len: u16,
+    status: u16,
+}
+
+/// Fixed-layout SDIO command queue for the future bus-owner task.
+///
+/// The current HAL still executes commands synchronously, so this queue is
+/// accounting and ordering state only. It must not be promoted to acceptance
+/// proof until command execution is driven by the SDIO owner.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SdioBusOwnerQueue {
+    records: [SdioBusOwnerRecord; SDIO_BUS_OWNER_QUEUE_CAPACITY],
+    next_sequence: u32,
+    head: u8,
+    len: u8,
+    dropped: u16,
+}
+
+impl SdioBusOwnerQueue {
+    const fn new() -> Self {
+        Self {
+            records: [SdioBusOwnerRecord {
+                sequence: 0,
+                command: 0,
+                flags: 0,
+                arg: 0,
+                len: 0,
+                status: 0,
+            }; SDIO_BUS_OWNER_QUEUE_CAPACITY],
+            next_sequence: 0,
+            head: 0,
+            len: 0,
+            dropped: 0,
+        }
+    }
+
+    fn push(&mut self, command: u16, arg: u32, len: usize, flags: u16) -> u32 {
+        let sequence = self.next_sequence.wrapping_add(1).max(1);
+        self.next_sequence = sequence;
+        let index = if usize::from(self.len) < SDIO_BUS_OWNER_QUEUE_CAPACITY {
+            let index =
+                (usize::from(self.head) + usize::from(self.len)) % SDIO_BUS_OWNER_QUEUE_CAPACITY;
+            self.len += 1;
+            index
+        } else {
+            let index = usize::from(self.head);
+            self.head = ((usize::from(self.head) + 1) % SDIO_BUS_OWNER_QUEUE_CAPACITY) as u8;
+            self.dropped = self.dropped.saturating_add(1);
+            index
+        };
+        self.records[index] = SdioBusOwnerRecord {
+            sequence,
+            command,
+            flags,
+            arg,
+            len: len.min(u16::MAX as usize) as u16,
+            status: 0,
+        };
+        sequence
+    }
+
+    fn complete(&mut self, sequence: u32, ok: bool) {
+        for record in &mut self.records {
+            if record.sequence == sequence {
+                record.status = if ok { 1 } else { 2 };
+                return;
+            }
+        }
+    }
+}
+
 struct SdioHost {
     regs: MappedRegs,
     regs_paddr: usize,
+    bus_owner_queue: SdioBusOwnerQueue,
     sdio_irq_binding: Option<KernelIrqBinding>,
     base_clock_hz: u32,
     current_clock_hz: u32,
@@ -9437,6 +9522,7 @@ impl SdioHost {
         let host = Self {
             regs,
             regs_paddr,
+            bus_owner_queue: SdioBusOwnerQueue::new(),
             sdio_irq_binding,
             base_clock_hz,
             current_clock_hz: 0,
@@ -24260,44 +24346,50 @@ impl SdioHost {
         arg: u32,
         response: ResponseType,
     ) -> Result<[u32; 4], HalError> {
-        self.wait_inhibit_clear(matches!(response, ResponseType::ShortBusy))?;
-        self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-        self.write32(SDHCI_ARGUMENT, arg);
-        self.write16(SDHCI_TRANSFER_MODE, 0);
-        self.write16(SDHCI_COMMAND, make_command(cmd, response, false));
+        let owner_sequence = self.bus_owner_queue.push(cmd, arg, 0, 0);
+        let result = (|| {
+            self.wait_inhibit_clear(matches!(response, ResponseType::ShortBusy))?;
+            self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+            self.write32(SDHCI_ARGUMENT, arg);
+            self.write16(SDHCI_TRANSFER_MODE, 0);
+            self.write16(SDHCI_COMMAND, make_command(cmd, response, false));
 
-        let status = match self.wait_int(SDHCI_INT_CMD_MASK) {
-            Ok(status) => status,
-            Err(err) => {
-                self.remember_last_data_wait_diag(cmd, arg, None);
-                self.log_command_state("wait", cmd, arg, 0);
-                self.recover_command_path("cmd-wait");
-                return Err(err);
+            let status = match self.wait_int(SDHCI_INT_CMD_MASK) {
+                Ok(status) => status,
+                Err(err) => {
+                    self.remember_last_data_wait_diag(cmd, arg, None);
+                    self.log_command_state("wait", cmd, arg, 0);
+                    self.recover_command_path("cmd-wait");
+                    return Err(err);
+                }
+            };
+            if (status & SDHCI_INT_ERROR) != 0 {
+                self.remember_last_data_wait_diag(cmd, arg, Some(status));
+                self.log_command_state("error", cmd, arg, status);
+                self.recover_command_path("cmd-error");
+                return Err(HalError::Unsupported("sdhci-command-error"));
             }
-        };
-        if (status & SDHCI_INT_ERROR) != 0 {
-            self.remember_last_data_wait_diag(cmd, arg, Some(status));
-            self.log_command_state("error", cmd, arg, status);
-            self.recover_command_path("cmd-error");
-            return Err(HalError::Unsupported("sdhci-command-error"));
-        }
 
-        let mut resp = [0u32; 4];
-        match response {
-            ResponseType::None => {}
-            ResponseType::Long => {
-                for (index, slot) in resp.iter_mut().enumerate() {
-                    *slot = self.read32(SDHCI_RESPONSE + index * 4);
+            let mut resp = [0u32; 4];
+            match response {
+                ResponseType::None => {}
+                ResponseType::Long => {
+                    for (index, slot) in resp.iter_mut().enumerate() {
+                        *slot = self.read32(SDHCI_RESPONSE + index * 4);
+                    }
+                }
+                ResponseType::Ocr | ResponseType::Short | ResponseType::ShortBusy => {
+                    resp[0] = self.read32(SDHCI_RESPONSE);
                 }
             }
-            ResponseType::Ocr | ResponseType::Short | ResponseType::ShortBusy => {
-                resp[0] = self.read32(SDHCI_RESPONSE);
+            if matches!(response, ResponseType::ShortBusy) {
+                self.wait_inhibit_clear(true)?;
             }
-        }
-        if matches!(response, ResponseType::ShortBusy) {
-            self.wait_inhibit_clear(true)?;
-        }
-        Ok(resp)
+            Ok(resp)
+        })();
+        self.bus_owner_queue
+            .complete(owner_sequence, result.is_ok());
+        result
     }
 
     fn transfer_command(
@@ -24309,136 +24401,151 @@ impl SdioHost {
         plan: SdioTransferPlan,
         quiet_settle: bool,
     ) -> Result<(), HalError> {
-        self.clear_last_data_wait_diag();
-        self.wait_inhibit_clear(true)?;
-        self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-        self.write16(SDHCI_BLOCK_SIZE, plan.block_size);
-        self.write16(SDHCI_BLOCK_COUNT, plan.block_count);
-        self.write32(SDHCI_ARGUMENT, arg);
-        self.write16(SDHCI_TRANSFER_MODE, plan.transfer_mode);
-        self.write16(SDHCI_COMMAND, make_command(cmd, ResponseType::Short, true));
+        let owner_flags = SDIO_BUS_OWNER_FLAG_DATA
+            | if write { SDIO_BUS_OWNER_FLAG_WRITE } else { 0 }
+            | if quiet_settle {
+                SDIO_BUS_OWNER_FLAG_QUIET
+            } else {
+                0
+            };
+        let owner_sequence = self
+            .bus_owner_queue
+            .push(cmd, arg, buffer.len(), owner_flags);
+        let result = (|| {
+            self.clear_last_data_wait_diag();
+            self.wait_inhibit_clear(true)?;
+            self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+            self.write16(SDHCI_BLOCK_SIZE, plan.block_size);
+            self.write16(SDHCI_BLOCK_COUNT, plan.block_count);
+            self.write32(SDHCI_ARGUMENT, arg);
+            self.write16(SDHCI_TRANSFER_MODE, plan.transfer_mode);
+            self.write16(SDHCI_COMMAND, make_command(cmd, ResponseType::Short, true));
 
-        let cmd_status = match self.wait_int(SDHCI_INT_CMD_MASK) {
-            Ok(status) => status,
-            Err(err) => {
-                self.remember_last_data_wait_diag(cmd, arg, None);
-                log_sdio_cmd53_shape("command-wait", cmd, arg, buffer.len(), plan);
-                emit_breadcrumb(format_args!(
+            let cmd_status = match self.wait_int(SDHCI_INT_CMD_MASK) {
+                Ok(status) => status,
+                Err(err) => {
+                    self.remember_last_data_wait_diag(cmd, arg, None);
+                    log_sdio_cmd53_shape("command-wait", cmd, arg, buffer.len(), plan);
+                    emit_breadcrumb(format_args!(
                     "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=command-wait err={err}",
                     buffer.len(),
                 ));
-                self.log_host_state("xfer-command-wait");
-                self.recover_command_path("cmd-wait");
-                return Err(err);
-            }
-        };
-        if (cmd_status & SDHCI_INT_ERROR) != 0 {
-            self.remember_last_data_wait_diag(cmd, arg, Some(cmd_status));
-            log_sdio_cmd53_shape("command", cmd, arg, buffer.len(), plan);
-            emit_breadcrumb(format_args!(
+                    self.log_host_state("xfer-command-wait");
+                    self.recover_command_path("cmd-wait");
+                    return Err(err);
+                }
+            };
+            if (cmd_status & SDHCI_INT_ERROR) != 0 {
+                self.remember_last_data_wait_diag(cmd, arg, Some(cmd_status));
+                log_sdio_cmd53_shape("command", cmd, arg, buffer.len(), plan);
+                emit_breadcrumb(format_args!(
                 "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=command st=0x{cmd_status:08x} why={}",
                 buffer.len(),
                 sdhci_status_reason(cmd_status)
             ));
-            self.log_host_state("xfer-command-fail");
-            self.recover_command_path("cmd-error");
-            return Err(HalError::Unsupported("sdhci-transfer-command"));
-        }
-        let cmd_response = self.read32(SDHCI_RESPONSE);
-        if let Some(r5) = sdio_cmd53_r5_error(cmd, cmd_response) {
-            self.remember_last_data_wait_diag(cmd, arg, Some(cmd_status));
-            log_sdio_cmd53_shape("command-r5", cmd, arg, buffer.len(), plan);
-            emit_breadcrumb(format_args!(
+                self.log_host_state("xfer-command-fail");
+                self.recover_command_path("cmd-error");
+                return Err(HalError::Unsupported("sdhci-transfer-command"));
+            }
+            let cmd_response = self.read32(SDHCI_RESPONSE);
+            if let Some(r5) = sdio_cmd53_r5_error(cmd, cmd_response) {
+                self.remember_last_data_wait_diag(cmd, arg, Some(cmd_status));
+                log_sdio_cmd53_shape("command-r5", cmd, arg, buffer.len(), plan);
+                emit_breadcrumb(format_args!(
                 "[pi4-wifi] sdio cmd53 r5 fail arg=0x{arg:08x} len={} phase=command-r5 resp=0x{cmd_response:08x} r5=0x{r5:04x} r5_raw=0x{raw:04x} r5_state={state}",
                 buffer.len(),
                 raw = r5_raw(cmd_response),
                 state = r5_current_state(cmd_response),
             ));
-            self.log_host_state("xfer-command-r5");
-            self.recover_command_path("cmd-error");
-            remember_wifi_driver_failure_exact_error("sdio-cmd53-r5-error");
-            return Err(HalError::Unsupported("sdio-cmd53-r5-error"));
-        }
+                self.log_host_state("xfer-command-r5");
+                self.recover_command_path("cmd-error");
+                remember_wifi_driver_failure_exact_error("sdio-cmd53-r5-error");
+                return Err(HalError::Unsupported("sdio-cmd53-r5-error"));
+            }
 
-        let mut offset = 0usize;
-        let wait_mask = sdhci_interrupt_buffer_ready_mask(write);
-        let present_ready_mask = sdhci_present_buffer_ready_mask(write);
-        while offset < buffer.len() {
-            if (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) == 0 {
-                let status = match self.wait_int(wait_mask | SDHCI_INT_ERROR) {
-                    Ok(status) => status,
-                    Err(err) => {
-                        self.remember_last_data_wait_diag(cmd, arg, None);
-                        log_sdio_cmd53_shape("data-wait", cmd, arg, buffer.len(), plan);
-                        emit_breadcrumb(format_args!(
+            let mut offset = 0usize;
+            let wait_mask = sdhci_interrupt_buffer_ready_mask(write);
+            let present_ready_mask = sdhci_present_buffer_ready_mask(write);
+            while offset < buffer.len() {
+                if (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) == 0 {
+                    let status = match self.wait_int(wait_mask | SDHCI_INT_ERROR) {
+                        Ok(status) => status,
+                        Err(err) => {
+                            self.remember_last_data_wait_diag(cmd, arg, None);
+                            log_sdio_cmd53_shape("data-wait", cmd, arg, buffer.len(), plan);
+                            emit_breadcrumb(format_args!(
                             "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data-wait err={err}",
                             buffer.len(),
                         ));
-                        self.log_host_state("xfer-data-wait");
-                        self.recover_command_path("data-wait");
-                        return Err(err);
-                    }
-                };
-                if (status & SDHCI_INT_ERROR) != 0 {
-                    self.remember_last_data_wait_diag(cmd, arg, Some(status));
-                    log_sdio_cmd53_shape("data", cmd, arg, buffer.len(), plan);
-                    emit_breadcrumb(format_args!(
+                            self.log_host_state("xfer-data-wait");
+                            self.recover_command_path("data-wait");
+                            return Err(err);
+                        }
+                    };
+                    if (status & SDHCI_INT_ERROR) != 0 {
+                        self.remember_last_data_wait_diag(cmd, arg, Some(status));
+                        log_sdio_cmd53_shape("data", cmd, arg, buffer.len(), plan);
+                        emit_breadcrumb(format_args!(
                         "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=data st=0x{status:08x} why={}",
                         buffer.len(),
                         sdhci_status_reason(status)
                     ));
-                    self.log_host_state("xfer-data-fail");
-                    self.recover_command_path("data-error");
-                    return Err(HalError::Unsupported("sdhci-transfer-data"));
+                        self.log_host_state("xfer-data-fail");
+                        self.recover_command_path("data-error");
+                        return Err(HalError::Unsupported("sdhci-transfer-data"));
+                    }
+                }
+
+                while offset < buffer.len()
+                    && (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) != 0
+                {
+                    let mut word = [0u8; 4];
+                    let chunk_len = cmp::min(4, buffer.len() - offset);
+                    if write {
+                        word[..chunk_len].copy_from_slice(&buffer[offset..offset + chunk_len]);
+                        self.write32(SDHCI_BUFFER, u32::from_le_bytes(word));
+                    } else {
+                        word = self.read32(SDHCI_BUFFER).to_le_bytes();
+                        buffer[offset..offset + chunk_len].copy_from_slice(&word[..chunk_len]);
+                    }
+                    offset += chunk_len;
                 }
             }
 
-            while offset < buffer.len()
-                && (self.read32(SDHCI_PRESENT_STATE) & present_ready_mask) != 0
-            {
-                let mut word = [0u8; 4];
-                let chunk_len = cmp::min(4, buffer.len() - offset);
-                if write {
-                    word[..chunk_len].copy_from_slice(&buffer[offset..offset + chunk_len]);
-                    self.write32(SDHCI_BUFFER, u32::from_le_bytes(word));
-                } else {
-                    word = self.read32(SDHCI_BUFFER).to_le_bytes();
-                    buffer[offset..offset + chunk_len].copy_from_slice(&word[..chunk_len]);
-                }
-                offset += chunk_len;
-            }
-        }
-
-        self.write32(SDHCI_INT_STATUS, SDHCI_INT_DATA_READY_MASK);
-        let data_status = match self.wait_int(SDHCI_INT_DATA_FINISH_MASK) {
-            Ok(status) => status,
-            Err(err) => {
-                self.remember_last_data_wait_diag(cmd, arg, None);
-                log_sdio_cmd53_shape("finish-wait", cmd, arg, buffer.len(), plan);
-                emit_breadcrumb(format_args!(
+            self.write32(SDHCI_INT_STATUS, SDHCI_INT_DATA_READY_MASK);
+            let data_status = match self.wait_int(SDHCI_INT_DATA_FINISH_MASK) {
+                Ok(status) => status,
+                Err(err) => {
+                    self.remember_last_data_wait_diag(cmd, arg, None);
+                    log_sdio_cmd53_shape("finish-wait", cmd, arg, buffer.len(), plan);
+                    emit_breadcrumb(format_args!(
                     "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=finish-wait err={err}",
                     buffer.len(),
                 ));
-                self.log_host_state("xfer-finish-wait");
-                self.recover_command_path("finish-wait");
-                return Err(err);
-            }
-        };
-        if (data_status & SDHCI_INT_ERROR) != 0 {
-            self.remember_last_data_wait_diag(cmd, arg, Some(data_status));
-            let finish_error = sdhci_transfer_finish_error_label(data_status);
-            log_sdio_cmd53_shape("finish", cmd, arg, buffer.len(), plan);
-            emit_breadcrumb(format_args!(
+                    self.log_host_state("xfer-finish-wait");
+                    self.recover_command_path("finish-wait");
+                    return Err(err);
+                }
+            };
+            if (data_status & SDHCI_INT_ERROR) != 0 {
+                self.remember_last_data_wait_diag(cmd, arg, Some(data_status));
+                let finish_error = sdhci_transfer_finish_error_label(data_status);
+                log_sdio_cmd53_shape("finish", cmd, arg, buffer.len(), plan);
+                emit_breadcrumb(format_args!(
                 "[pi4-wifi] sdhci xfer error cmd={cmd} arg=0x{arg:08x} len={} phase=finish st=0x{data_status:08x} why={} err={finish_error}",
                 buffer.len(),
                 sdhci_status_reason(data_status)
             ));
-            self.log_host_state("xfer-finish-fail");
-            self.recover_command_path("finish-error");
-            return Err(HalError::Unsupported(finish_error));
-        }
-        self.settle_transfer_data_path(cmd, arg, buffer.len(), quiet_settle)?;
-        Ok(())
+                self.log_host_state("xfer-finish-fail");
+                self.recover_command_path("finish-error");
+                return Err(HalError::Unsupported(finish_error));
+            }
+            self.settle_transfer_data_path(cmd, arg, buffer.len(), quiet_settle)?;
+            Ok(())
+        })();
+        self.bus_owner_queue
+            .complete(owner_sequence, result.is_ok());
+        result
     }
 
     fn settle_transfer_data_path(
@@ -25176,6 +25283,28 @@ mod tests {
         SMB_INT_ACK, TAG_GET_CLOCK_RATE, TAG_NOTIFY_XHCI_RESET, TAG_SET_GPIO_CONFIG,
         TAG_SET_POWER_STATE,
     };
+
+    #[test]
+    fn sdio_bus_owner_queue_is_fixed_layout_and_bounded() {
+        assert_eq!(core::mem::size_of::<SdioBusOwnerRecord>(), 16);
+        assert_eq!(core::mem::align_of::<SdioBusOwnerQueue>(), 4);
+
+        let mut queue = SdioBusOwnerQueue::new();
+        let mut last = 0;
+        for index in 0..=SDIO_BUS_OWNER_QUEUE_CAPACITY {
+            last = queue.push(SDIO_CMD53, index as u32, index, SDIO_BUS_OWNER_FLAG_DATA);
+        }
+
+        assert_eq!(queue.len as usize, SDIO_BUS_OWNER_QUEUE_CAPACITY);
+        assert_eq!(queue.dropped, 1);
+        queue.complete(last, true);
+        assert!(queue.records.iter().any(|record| {
+            record.sequence == last
+                && record.command == SDIO_CMD53
+                && record.status == 1
+                && record.flags & SDIO_BUS_OWNER_FLAG_DATA != 0
+        }));
+    }
 
     fn test_wifi_debug_snapshot_exact(exact_error: &'static str) -> WifiDebugSnapshot {
         WifiDebugSnapshot {

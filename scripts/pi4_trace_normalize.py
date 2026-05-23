@@ -273,6 +273,7 @@ class GateSummary:
     driver_task_affinity_applied: int = 0
     driver_task_vspace_proof: bool = False
     driver_task_pointer_free_ipc_proof: bool = False
+    driver_task_owner_state_proof: bool = False
     driver_task_active_net: str = "unknown"
     driver_task_budget_overruns: int = 0
     driver_task_latency_proofs: int = 0
@@ -372,6 +373,9 @@ class GateSummary:
             ),
             "DRIVER_TASK_POINTER_FREE_IPC_PROOF": (
                 "yes" if self.driver_task_pointer_free_ipc_proof else "no"
+            ),
+            "DRIVER_TASK_OWNER_STATE_PROOF": (
+                "yes" if self.driver_task_owner_state_proof else "no"
             ),
             "DRIVER_TASK_ACTIVE_NET": self.driver_task_active_net,
             "DRIVER_TASK_BUDGET_OVERRUNS": self.driver_task_budget_overruns,
@@ -4038,6 +4042,46 @@ def classify_driver_task_role(label: str) -> str | None:
     return None
 
 
+REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS = {
+    "serial-console",
+    "usb-keyboard",
+    "hdmi-text",
+    "genet-nic",
+    "cyw43-wifi",
+    "sdio-host",
+    "pcie-root",
+}
+
+
+def classify_owner_state_hot_path(fields: dict[str, str]) -> str | None:
+    """Classify a DRIVER_TASK_OWNER_STATE line into a concrete Pi 4 hot path."""
+
+    value = fields.get("hot_path")
+    if value:
+        normalized = value.lower().replace("_", "-")
+        if normalized in REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS:
+            return normalized
+    label = fields.get("contract") or fields.get("driver") or fields.get("role")
+    if not label:
+        return None
+    normalized = label.lower().replace("_", "-")
+    if "serial" in normalized or "uart" in normalized:
+        return "serial-console"
+    if "usb" in normalized or "xhci" in normalized or "keyboard" in normalized:
+        return "usb-keyboard"
+    if "hdmi" in normalized or "display" in normalized or "framebuffer" in normalized:
+        return "hdmi-text"
+    if "bcmgenet" in normalized or "genet" in normalized:
+        return "genet-nic"
+    if "cyw" in normalized or "43455" in normalized or "wifi" in normalized:
+        return "cyw43-wifi"
+    if "sdio" in normalized or "sdhci" in normalized or "mmc" in normalized:
+        return "sdio-host"
+    if "pcie" in normalized or "pci-root" in normalized or "vl805" in normalized:
+        return "pcie-root"
+    return None
+
+
 def _pointer_free_ipc_proven(fields: dict[str, str]) -> bool:
     explicit = fields.get("pointer_free_ipc")
     if explicit is not None:
@@ -4046,6 +4090,21 @@ def _pointer_free_ipc_proven(fields: dict[str, str]) -> bool:
         "pointer-free",
         "ring-command",
         "shared-ring-command",
+    }
+
+
+def _owner_state_proven(fields: dict[str, str]) -> bool:
+    explicit = fields.get("owner_state")
+    if explicit is None:
+        return False
+    return explicit.lower() in {
+        "driver-owned",
+        "driver",
+        "owned",
+        "yes",
+        "pass",
+        "true",
+        "1",
     }
 
 
@@ -4075,6 +4134,7 @@ def summarize_driver_task_proofs(
     int,  # affinity_applied
     bool,  # vspace_proof
     bool,  # pointer_free_ipc_proof
+    bool,  # owner_state_proof
     str,  # active_net
     int,  # budget_overruns
     int,  # latency_proofs
@@ -4104,6 +4164,7 @@ def summarize_driver_task_proofs(
     affinity_applied = 0
     vspace_proof = False
     pointer_free_ipc_proof = False
+    owner_state_hot_paths: set[str] = set()
     active_net = "unknown"
     budget_overruns = 0
     latency_proofs = 0
@@ -4122,6 +4183,7 @@ def summarize_driver_task_proofs(
             or "budget overrun" in raw
         )
         if driver_task_line:
+            owner_state_line = "driver_task_owner_state" in raw
             if "driver_task_default" in raw:
                 default_requested |= fields.get("requested", "").lower() in {
                     "dedicated",
@@ -4139,16 +4201,17 @@ def summarize_driver_task_proofs(
                 and "driver_task_summary" not in raw
             )
             contract_names: set[str] = set()
-            for key in ("contract", "name", "task", "driver"):
-                value = fields.get(key)
-                if value:
-                    contracts.add(value)
-                    contract_names.add(value)
-            if not contract_names:
-                value = fields.get("role")
-                if value:
-                    contracts.add(value)
-                    contract_names.add(value)
+            if not owner_state_line:
+                for key in ("contract", "name", "task", "driver"):
+                    value = fields.get(key)
+                    if value:
+                        contracts.add(value)
+                        contract_names.add(value)
+                if not contract_names:
+                    value = fields.get("role")
+                    if value:
+                        contracts.add(value)
+                        contract_names.add(value)
             if contract_declaration_line and not contract_names:
                 contracts.add("unnamed")
                 contract_names.add("unnamed")
@@ -4237,6 +4300,17 @@ def summarize_driver_task_proofs(
                 vspace_proof |= fields.get("vspace", "").lower() in {"isolated", "yes", "pass"}
                 pointer_free_ipc_proof |= _pointer_free_ipc_proven(fields)
                 live_hot_paths |= _truthy_field(fields.get("live_hot_paths"))
+            if "driver_task_owner_state" in raw:
+                hot_path = classify_owner_state_hot_path(fields)
+                root_pointer = fields.get("root_pointer", "").lower()
+                descriptor = fields.get("descriptor", "").lower()
+                if (
+                    hot_path is not None
+                    and _owner_state_proven(fields)
+                    and descriptor not in {"", "missing", "none", "no"}
+                    and root_pointer in {"no", "false", "0"}
+                ):
+                    owner_state_hot_paths.add(hot_path)
             unexpected_caps = parse_hex_int(fields.get("unexpected_caps"))
             if unexpected_caps == 0:
                 capset_proof |= fields.get("capset", "").lower() in {
@@ -4279,6 +4353,7 @@ def summarize_driver_task_proofs(
         if line_has_hdmi_responsiveness(raw, fields):
             hdmi_responsive = True
     required_roles = {"serial", "usb", "display", "net", "sdio", "pcie"}
+    owner_state_proof = REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS.issubset(owner_state_hot_paths)
     compatibility_free = not compatibility_contracts and (
         acceptance_compatibility_count in {None, 0}
     )
@@ -4293,6 +4368,7 @@ def summarize_driver_task_proofs(
         and affinity_proof
         and vspace_proof
         and pointer_free_ipc_proof
+        and owner_state_proof
         and live_hot_paths
         and compatibility_free
         and required_roles.issubset(dedicated_hot_roles)
@@ -4321,6 +4397,7 @@ def summarize_driver_task_proofs(
         affinity_applied,
         vspace_proof,
         pointer_free_ipc_proof,
+        owner_state_proof,
         active_net,
         budget_overruns,
         latency_proofs,
@@ -4470,6 +4547,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_affinity_applied,
         driver_task_vspace_proof,
         driver_task_pointer_free_ipc_proof,
+        driver_task_owner_state_proof,
         driver_task_active_net,
         driver_task_budget_overruns,
         driver_task_latency_proofs,
@@ -4529,6 +4607,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_affinity_applied=driver_task_affinity_applied,
         driver_task_vspace_proof=driver_task_vspace_proof,
         driver_task_pointer_free_ipc_proof=driver_task_pointer_free_ipc_proof,
+        driver_task_owner_state_proof=driver_task_owner_state_proof,
         driver_task_active_net=driver_task_active_net,
         driver_task_budget_overruns=driver_task_budget_overruns,
         driver_task_latency_proofs=driver_task_latency_proofs,

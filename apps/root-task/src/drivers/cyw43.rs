@@ -2886,30 +2886,77 @@ const fn yes_no(value: bool) -> &'static str {
     }
 }
 
+const CYW43_OWNER_FLAG_CONTROL_TX_EXT_HEADER: u16 = 1 << 0;
+const CYW43_OWNER_FLAG_LINK_UP: u16 = 1 << 1;
+const CYW43_OWNER_FLAG_ASSOCIATED: u16 = 1 << 2;
+
+/// Fixed-layout CYW43 runtime state for the future driver-local Wi-Fi owner.
+///
+/// The queues and host-WPA material still live in the root-owned device object,
+/// so this record is deliberately not advertised as acceptance proof.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Cyw43OwnerRuntime {
+    flags: u16,
+    sdpcm_seq: u8,
+    sdpcm_seq_max: u8,
+    ioctl_id: u16,
+    glom_warning_logs: u8,
+    rx_oversize_warning_logs: u8,
+    tx_drops: u32,
+    host_eapol_rx_packets: u32,
+    sdpcm_credit_observations: u32,
+    _pad0: u32,
+    rx_packets: u64,
+    tx_packets: u64,
+}
+
+impl Cyw43OwnerRuntime {
+    const fn control_tx_ext_header(self) -> bool {
+        self.flags & CYW43_OWNER_FLAG_CONTROL_TX_EXT_HEADER != 0
+    }
+
+    const fn link_up(self) -> bool {
+        self.flags & CYW43_OWNER_FLAG_LINK_UP != 0
+    }
+
+    const fn associated(self) -> bool {
+        self.flags & CYW43_OWNER_FLAG_ASSOCIATED != 0
+    }
+
+    fn set_control_tx_ext_header(&mut self, enabled: bool) {
+        self.set_flag(CYW43_OWNER_FLAG_CONTROL_TX_EXT_HEADER, enabled);
+    }
+
+    fn set_link_up(&mut self, enabled: bool) {
+        self.set_flag(CYW43_OWNER_FLAG_LINK_UP, enabled);
+    }
+
+    fn set_associated(&mut self, enabled: bool) {
+        self.set_flag(CYW43_OWNER_FLAG_ASSOCIATED, enabled);
+    }
+
+    fn set_flag(&mut self, flag: u16, enabled: bool) {
+        if enabled {
+            self.flags |= flag;
+        } else {
+            self.flags &= !flag;
+        }
+    }
+}
+
 pub struct Cyw43NetDevice {
     state: Box<Pi4WifiState>,
     probe: ProbeReport,
     mac: EthernetAddress,
-    tx_drops: u32,
-    rx_packets: u64,
-    tx_packets: u64,
-    sdpcm_seq: u8,
-    sdpcm_seq_max: u8,
-    sdpcm_credit_observations: u32,
-    ioctl_id: u16,
-    control_tx_ext_header: bool,
-    link_up: bool,
-    associated: bool,
+    owner: Cyw43OwnerRuntime,
     deferred_join_state: DeferredJoinState,
-    host_eapol_rx_packets: u32,
     host_wpa: HostWpaState,
     rx_frame: Box<[u8; FRAME_BUF_LEN]>,
     tx_frame: Box<[u8; FRAME_BUF_LEN]>,
     control_response: Box<[u8; CONTROL_RESPONSE_BUF_LEN]>,
     glom_subframe_lens: HeaplessVec<u16, RX_GLOM_SUBFRAME_CAP>,
     glom_rx_ready: Box<Deque<HeaplessVec<u8, MAX_FRAME_LEN>, RX_GLOM_QUEUE_CAP>>,
-    glom_warning_logs: u8,
-    rx_oversize_warning_logs: u8,
 }
 
 pub struct RxToken {
@@ -3062,26 +3109,17 @@ impl Cyw43NetDevice {
                 firmware: FirmwareLayout::from_bundle(firmware),
             },
             mac: EthernetAddress(DEFAULT_WIFI_MAC),
-            tx_drops: 0,
-            rx_packets: 0,
-            tx_packets: 0,
-            sdpcm_seq: 0,
-            sdpcm_seq_max: 1,
-            sdpcm_credit_observations: 0,
-            ioctl_id: 0,
-            control_tx_ext_header: false,
-            link_up: false,
-            associated: false,
+            owner: Cyw43OwnerRuntime {
+                sdpcm_seq_max: 1,
+                ..Cyw43OwnerRuntime::default()
+            },
             deferred_join_state: DeferredJoinState::Disabled,
-            host_eapol_rx_packets: 0,
             host_wpa: HostWpaState::empty(),
             rx_frame: Box::new([0; FRAME_BUF_LEN]),
             tx_frame: Box::new([0; FRAME_BUF_LEN]),
             control_response: Box::new([0; CONTROL_RESPONSE_BUF_LEN]),
             glom_subframe_lens: HeaplessVec::new(),
             glom_rx_ready: Box::new(Deque::new()),
-            glom_warning_logs: 0,
-            rx_oversize_warning_logs: 0,
         };
 
         info!("[cyw43] step: init_control_plane");
@@ -3157,23 +3195,23 @@ impl Cyw43NetDevice {
     }
 
     fn reset_control_plane_bootstrap_state(&mut self) {
-        self.sdpcm_seq = 0;
-        self.sdpcm_seq_max = 1;
-        self.sdpcm_credit_observations = 0;
-        self.ioctl_id = 0;
-        self.control_tx_ext_header = false;
-        self.link_up = false;
-        self.associated = false;
+        self.owner.sdpcm_seq = 0;
+        self.owner.sdpcm_seq_max = 1;
+        self.owner.sdpcm_credit_observations = 0;
+        self.owner.ioctl_id = 0;
+        self.owner.set_control_tx_ext_header(false);
+        self.owner.set_link_up(false);
+        self.owner.set_associated(false);
         self.deferred_join_state = DeferredJoinState::Disabled;
         self.host_wpa.reset_for_join();
-        self.host_eapol_rx_packets = 0;
+        self.owner.host_eapol_rx_packets = 0;
         self.rx_frame.fill(0);
         self.tx_frame.fill(0);
         self.control_response.fill(0);
         self.glom_subframe_lens.clear();
         self.glom_rx_ready.clear();
-        self.glom_warning_logs = 0;
-        self.rx_oversize_warning_logs = 0;
+        self.owner.glom_warning_logs = 0;
+        self.owner.rx_oversize_warning_logs = 0;
     }
 
     fn replay_control_plane_bootstrap(
@@ -3691,7 +3729,7 @@ impl Cyw43NetDevice {
     ) -> bool {
         if !host_eapol_post_assoc_rx_admission_due(
             self.deferred_join_state,
-            self.associated,
+            self.owner.associated(),
             self.host_wpa.m1_seen,
             self.host_wpa.rx_admission_refreshed_after_assoc,
             polls,
@@ -3725,7 +3763,7 @@ impl Cyw43NetDevice {
     fn ensure_host_eapol_rx_admission_rescue(&mut self, mode: &'static str, polls: u16) -> bool {
         if !host_eapol_rx_admission_rescue_due(
             self.deferred_join_state,
-            self.associated,
+            self.owner.associated(),
             self.host_wpa.m1_seen,
             self.host_wpa.rx_admission_rescue_after_assoc,
             polls,
@@ -3779,8 +3817,8 @@ impl Cyw43NetDevice {
         let source = self.state.cyw43_host_eapol_rx_source();
         info!(
             "[cyw43] host-eapol rx-source mode={mode} polls={polls} assoc={} eapol_rx={} start_sent={} ap_source={} rframe=0x{:04x}/{} int_status=0x{:08x}/{} frame_ind={} host_int={} sdhci=0x{:08x} card_int={} f2_ready={} action=wait-m1",
-            yes_no(self.associated),
-            self.host_eapol_rx_packets,
+            yes_no(self.owner.associated()),
+            self.owner.host_eapol_rx_packets,
             self.host_wpa.eapol_start_sent,
             self.host_wpa.ap_mac_source,
             source.rframe_len.unwrap_or(0),
@@ -3864,8 +3902,8 @@ impl Cyw43NetDevice {
         let ssid = credentials.ssid().map_err(DriverError::Config)?;
         let psk = credentials.psk().map_err(DriverError::Config)?;
         let secure = !psk.is_empty();
-        self.link_up = false;
-        self.associated = false;
+        self.owner.set_link_up(false);
+        self.owner.set_associated(false);
         self.deferred_join_state = DeferredJoinState::Disabled;
         self.apply_linux_connect_power_policy()?;
         if !secure {
@@ -3977,7 +4015,7 @@ impl Cyw43NetDevice {
             if wait_for_completion {
                 return self.wait_for_join(secure, completion_rule);
             }
-            self.link_up = false;
+            self.owner.set_link_up(false);
             self.deferred_join_state = DeferredJoinState::Pending {
                 completion: JoinCompletionState::default(),
                 polls: 0,
@@ -3997,7 +4035,7 @@ impl Cyw43NetDevice {
         if wait_for_completion {
             self.wait_for_join(secure, JoinCompletionRule::SetSsid)
         } else {
-            self.link_up = false;
+            self.owner.set_link_up(false);
             self.deferred_join_state = DeferredJoinState::Pending {
                 completion: JoinCompletionState::default(),
                 polls: 0,
@@ -4015,8 +4053,8 @@ impl Cyw43NetDevice {
     }
 
     fn arm_host_eapol_proof_window(&mut self, mode: &'static str, ssid_len: usize, psk_len: usize) {
-        self.link_up = false;
-        self.associated = false;
+        self.owner.set_link_up(false);
+        self.owner.set_associated(false);
         self.deferred_join_state = DeferredJoinState::Pending {
             completion: JoinCompletionState::default(),
             polls: 0,
@@ -4033,7 +4071,7 @@ impl Cyw43NetDevice {
     }
 
     fn service_host_eapol_proof_window(&mut self, mode: &'static str, terminal_after_window: bool) {
-        let start_eapol = self.host_eapol_rx_packets;
+        let start_eapol = self.owner.host_eapol_rx_packets;
         let wifi_breadcrumb_guard = crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart();
         let mut total_polls = 0usize;
         let mut event_frames = 0usize;
@@ -4053,7 +4091,7 @@ impl Cyw43NetDevice {
                     event_frames = event_frames.saturating_add(1);
                     if association_event == "none" {
                         if let Some(label) =
-                            host_eapol_post_assoc_event_label(event, self.associated)
+                            host_eapol_post_assoc_event_label(event, self.owner.associated())
                         {
                             association_event = label;
                             association_poll = total_polls;
@@ -4076,8 +4114,8 @@ impl Cyw43NetDevice {
                     {
                         warn!(
                             "[cyw43] host-eapol transient-rx-error mode={mode} phase=join-submit-proof polls={total_polls} assoc={} eapol_rx={} err={err} action=keep-waiting-m1",
-                            yes_no(self.associated),
-                            self.host_eapol_rx_packets,
+                            yes_no(self.owner.associated()),
+                            self.owner.host_eapol_rx_packets,
                         );
                     }
                     last_transient_error = Some(err);
@@ -4091,7 +4129,7 @@ impl Cyw43NetDevice {
             if self.host_eapol_secure_complete() {
                 break;
             }
-            if !self.associated {
+            if !self.owner.associated() {
                 if total_polls >= HOST_EAPOL_JOIN_PRE_ASSOC_PROOF_POLLS {
                     break;
                 }
@@ -4115,7 +4153,7 @@ impl Cyw43NetDevice {
             }
         }
 
-        let eapol_delta = self.host_eapol_rx_packets.saturating_sub(start_eapol);
+        let eapol_delta = self.owner.host_eapol_rx_packets.saturating_sub(start_eapol);
         drop(wifi_breadcrumb_guard);
         let action = host_eapol_proof_after_window_action(terminal_after_window);
         if let Some(err) = error {
@@ -4137,11 +4175,11 @@ impl Cyw43NetDevice {
         match last_transient_error.as_ref() {
             Some(err) => info!(
                 "[cyw43] host-eapol proof counters mode={mode} eapol_rx_delta={eapol_delta} eapol_rx_total={} events={event_frames} control={control_frames} empty_polls={empty_polls} transient_errors={transient_errors} last_transient={err}",
-                self.host_eapol_rx_packets,
+                self.owner.host_eapol_rx_packets,
             ),
             None => info!(
                 "[cyw43] host-eapol proof counters mode={mode} eapol_rx_delta={eapol_delta} eapol_rx_total={} events={event_frames} control={control_frames} empty_polls={empty_polls} transient_errors={transient_errors} last_transient=none",
-                self.host_eapol_rx_packets,
+                self.owner.host_eapol_rx_packets,
             ),
         }
         if eapol_delta == 0 {
@@ -4150,28 +4188,28 @@ impl Cyw43NetDevice {
     }
 
     fn defer_host_eapol_required(&mut self, mode: &'static str, ssid_len: usize, psk_len: usize) {
-        if !self.associated {
-            self.link_up = false;
+        if !self.owner.associated() {
+            self.owner.set_link_up(false);
         }
         self.promote_host_eapol_wait_stage();
         info!(
             "[cyw43] host-eapol pending mode={mode} status=wifi-host-eapol-pending assoc={} rx=eapol-only data=blocked creds={ssid_len}/{psk_len} eapol_rx={} limit={} action=wait-m1",
-            yes_no(self.associated),
-            self.host_eapol_rx_packets,
+            yes_no(self.owner.associated()),
+            self.owner.host_eapol_rx_packets,
             HOST_EAPOL_DEFERRED_POLL_LIMIT,
         );
     }
 
     fn mark_host_eapol_required(&mut self, mode: &'static str, ssid_len: usize, psk_len: usize) {
-        self.link_up = false;
-        self.associated = false;
+        self.owner.set_link_up(false);
+        self.owner.set_associated(false);
         self.deferred_join_state = DeferredJoinState::Failed {
             reason: "host-eapol-required",
         };
         self.promote_host_eapol_wait_stage();
         warn!(
                 "[cyw43] join failed reason=host-eapol-required rx_poll=eapol-only dhcp=blocked tx=blocked mode={mode} ssid_len={ssid_len} psk_len={psk_len} eapol_rx={}",
-                self.host_eapol_rx_packets,
+                self.owner.host_eapol_rx_packets,
             );
     }
 
@@ -4363,7 +4401,7 @@ impl Cyw43NetDevice {
     }
 
     fn maybe_send_host_eapol_start(&mut self, polls: u16, mode: &'static str) {
-        if !self.associated
+        if !self.owner.associated()
             || self.host_wpa.m1_seen
             || self.host_wpa.eapol_start_sent >= HOST_EAPOL_START_MAX
             || !host_eapol_start_due(polls, self.host_wpa.eapol_start_sent)
@@ -4411,8 +4449,8 @@ impl Cyw43NetDevice {
     }
 
     fn host_eapol_secure_complete(&self) -> bool {
-        self.link_up
-            && self.associated
+        self.owner.link_up()
+            && self.owner.associated()
             && self.host_wpa.m1_seen
             && self.host_wpa.m2_sent
             && self.host_wpa.m4_sent
@@ -4421,7 +4459,7 @@ impl Cyw43NetDevice {
     }
 
     fn refresh_host_eapol_bssid(&mut self, reason: &'static str) {
-        if !self.associated
+        if !self.owner.associated()
             || self.host_wpa.m1_seen
             || self.host_wpa.ap_mac_source == "get-bssid"
             || !deferred_join_requires_host_eapol(self.deferred_join_state)
@@ -4535,7 +4573,7 @@ impl Cyw43NetDevice {
             &ap_mac,
             &sta_mac,
             &self.host_wpa.anonce,
-            self.host_eapol_rx_packets,
+            self.owner.host_eapol_rx_packets,
         );
         self.host_wpa.ptk = derive_wpa2_pairwise_ptk(
             &self.host_wpa.pmk,
@@ -4652,8 +4690,8 @@ impl Cyw43NetDevice {
         self.install_wsec_key(0, &pairwise_tk, &ap_mac, Some(&ptk_rsc), false, "ptk")?;
         self.host_wpa.ptk_installed = true;
         let Some(gtk) = gtk else {
-            self.link_up = true;
-            self.associated = true;
+            self.owner.set_link_up(true);
+            self.owner.set_associated(true);
             info!(
                 "[cyw43] host-eapol action=send-m4 result=ok key_install=ptk-only ptk_installed=yes gtk_installed=no replay={} data=blocked dhcp=blocked next=group-key",
                 yes_no(proof.replay_counter_nonzero),
@@ -4672,8 +4710,8 @@ impl Cyw43NetDevice {
         self.reassert_wsec_aes_after_gtk()?;
 
         self.restore_host_eapol_rx_admission_after_secure();
-        self.link_up = true;
-        self.associated = true;
+        self.owner.set_link_up(true);
+        self.owner.set_associated(true);
         self.deferred_join_state = DeferredJoinState::Disabled;
         info!(
             "[cyw43] host-eapol action=send-m4 result=ok key_install=after-m4 ptk_installed={} gtk_installed={} gtk_index={} gtk_len={} replay={} data=allowed dhcp=allowed",
@@ -4756,8 +4794,8 @@ impl Cyw43NetDevice {
         self.host_wpa.group_replay_counter_valid = true;
 
         self.restore_host_eapol_rx_admission_after_secure();
-        self.link_up = true;
-        self.associated = true;
+        self.owner.set_link_up(true);
+        self.owner.set_associated(true);
         self.deferred_join_state = DeferredJoinState::Disabled;
         info!(
             "[cyw43] host-eapol action=send-group-m2 result=ok key_install=group-handshake gtk_installed=yes gtk_index={} gtk_len={} replay={} data=allowed dhcp=allowed",
@@ -4777,14 +4815,17 @@ impl Cyw43NetDevice {
         proof: SdpcmTxProof,
     ) -> Result<(), DriverError> {
         for _ in 0..CREDIT_WAIT_LOOPS {
-            if host_eapol_tx_drain_proved(proof, self.sdpcm_credit_observations, self.sdpcm_seq_max)
-            {
+            if host_eapol_tx_drain_proved(
+                proof,
+                self.owner.sdpcm_credit_observations,
+                self.owner.sdpcm_seq_max,
+            ) {
                 info!(
                     "[cyw43] host-eapol action=wait-pending-8021x-drain stage={stage} result=credit-observed tx_seq={} seq={}/{} credit_obs={}",
                     proof.seq,
-                    self.sdpcm_seq,
-                    self.sdpcm_seq_max,
-                    self.sdpcm_credit_observations,
+                    self.owner.sdpcm_seq,
+                    self.owner.sdpcm_seq_max,
+                    self.owner.sdpcm_credit_observations,
                 );
                 return Ok(());
             }
@@ -4794,17 +4835,17 @@ impl Cyw43NetDevice {
         warn!(
             "[cyw43] host-eapol action=wait-pending-8021x-drain stage={stage} result=timeout tx_seq={} seq={}/{} credit_obs={}",
             proof.seq,
-            self.sdpcm_seq,
-            self.sdpcm_seq_max,
-            self.sdpcm_credit_observations,
+            self.owner.sdpcm_seq,
+            self.owner.sdpcm_seq_max,
+            self.owner.sdpcm_credit_observations,
         );
-        if sdpcm_credit_observation_covers_submitted_seq(self.sdpcm_seq_max, proof.seq) {
+        if sdpcm_credit_observation_covers_submitted_seq(self.owner.sdpcm_seq_max, proof.seq) {
             info!(
                 "[cyw43] host-eapol action=wait-pending-8021x-drain stage={stage} result=submitted-credit-window tx_seq={} seq={}/{} credit_obs={} fresh_status=no",
                 proof.seq,
-                self.sdpcm_seq,
-                self.sdpcm_seq_max,
-                self.sdpcm_credit_observations,
+                self.owner.sdpcm_seq,
+                self.owner.sdpcm_seq_max,
+                self.owner.sdpcm_credit_observations,
             );
             return Ok(());
         }
@@ -4856,8 +4897,8 @@ impl Cyw43NetDevice {
                         join_event_result(event, secure, completion_rule, &mut completion)
                     {
                         result?;
-                        self.link_up = true;
-                        self.associated = true;
+                        self.owner.set_link_up(true);
+                        self.owner.set_associated(true);
                         info!(
                             "[cyw43] join complete mode=blocking secure={} completion_rule={} set_ssid={} fwsup={} psk_sup={} psk_status=0x{:08x} carrier={}",
                             if secure { "yes" } else { "no" },
@@ -4918,8 +4959,8 @@ impl Cyw43NetDevice {
                     {
                         match result {
                             Ok(()) => {
-                                self.link_up = true;
-                                self.associated = true;
+                                self.owner.set_link_up(true);
+                                self.owner.set_associated(true);
                                 self.deferred_join_state = DeferredJoinState::Disabled;
                                 info!(
                                     "[cyw43] join complete mode=deferred polls={polls} secure={} completion_rule={} set_ssid={} fwsup={} psk_sup={} psk_status=0x{:08x} carrier={}",
@@ -4933,8 +4974,8 @@ impl Cyw43NetDevice {
                                 );
                             }
                             Err(DriverError::JoinFailed { status, .. }) => {
-                                self.link_up = false;
-                                self.associated = false;
+                                self.owner.set_link_up(false);
+                                self.owner.set_associated(false);
                                 self.deferred_join_state = DeferredJoinState::Failed {
                                     reason: "join-failed",
                                 };
@@ -4945,8 +4986,8 @@ impl Cyw43NetDevice {
                                 );
                             }
                             Err(err) => {
-                                self.link_up = false;
-                                self.associated = false;
+                                self.owner.set_link_up(false);
+                                self.owner.set_associated(false);
                                 self.deferred_join_state = DeferredJoinState::Failed {
                                     reason: "join-event-error",
                                 };
@@ -4981,15 +5022,15 @@ impl Cyw43NetDevice {
                     if polls <= 1 || host_eapol_deferred_poll_log_due(polls) {
                         warn!(
                             "[cyw43] host-eapol transient-rx-error mode=deferred polls={polls} assoc={} eapol_rx={} err={err} action=keep-waiting-m1",
-                            yes_no(self.associated),
-                            self.host_eapol_rx_packets,
+                            yes_no(self.owner.associated()),
+                            self.owner.host_eapol_rx_packets,
                         );
                     }
                     break;
                 }
                 Err(err) => {
-                    self.link_up = false;
-                    self.associated = false;
+                    self.owner.set_link_up(false);
+                    self.owner.set_associated(false);
                     self.deferred_join_state = DeferredJoinState::Failed {
                         reason: "join-progress-error",
                     };
@@ -5020,8 +5061,8 @@ impl Cyw43NetDevice {
         }
         let poll_limit = deferred_join_poll_limit(completion_rule);
         if polls >= poll_limit {
-            self.link_up = false;
-            self.associated = false;
+            self.owner.set_link_up(false);
+            self.owner.set_associated(false);
             let reason = join_completion_timeout_reason(completion_rule);
             self.deferred_join_state = DeferredJoinState::Failed { reason };
             if matches!(completion_rule, JoinCompletionRule::HostEapolRequired) {
@@ -5032,7 +5073,7 @@ impl Cyw43NetDevice {
                 reason,
                 completion.auth_status,
                 completion_rule.label(),
-                self.host_eapol_rx_packets,
+                self.owner.host_eapol_rx_packets,
                 self.host_wpa.eapol_start_sent,
                 self.host_wpa.ap_mac_source,
             );
@@ -5040,13 +5081,13 @@ impl Cyw43NetDevice {
         }
 
         if host_eapol_required && host_eapol_deferred_poll_log_due(polls) {
-            if self.host_eapol_rx_packets == 0 {
+            if self.owner.host_eapol_rx_packets == 0 {
                 self.log_host_eapol_rx_source("deferred", polls);
             }
             info!(
                 "[cyw43] host-eapol poll mode=deferred polls={polls} limit={poll_limit} assoc={} eapol_rx={} eapol_start_sent={} ap_source={} rx_event={} rx_control={} rx_data={} rx_empty={} rx_transient={} action=wait-m1",
-                yes_no(self.associated),
-                self.host_eapol_rx_packets,
+                yes_no(self.owner.associated()),
+                self.owner.host_eapol_rx_packets,
                 self.host_wpa.eapol_start_sent,
                 self.host_wpa.ap_mac_source,
                 event_frames,
@@ -5360,18 +5401,18 @@ impl Cyw43NetDevice {
             cmd as u32,
             iface,
             payload_len,
-            self.ioctl_id,
+            self.owner.ioctl_id,
             self.probe.effective_clock_hz,
             self.state.cyw43_control_plane_chunk_limit(),
         );
-        match self.wait_for_ioctl_response(cmd as u32, self.ioctl_id) {
+        match self.wait_for_ioctl_response(cmd as u32, self.owner.ioctl_id) {
             Ok(response_len) => {
                 info!(
                     "[cyw43] {retry_label} recovered-original-reply cmd=0x{:08x} iface={} len={} ioctl_id={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
                     cmd as u32,
                     iface,
                     payload_len,
-                    self.ioctl_id,
+                    self.owner.ioctl_id,
                     self.probe.effective_clock_hz,
                     self.state.cyw43_control_plane_chunk_limit(),
                 );
@@ -5456,9 +5497,9 @@ impl Cyw43NetDevice {
             .checked_sub(total_len)
             .ok_or(DriverError::FrameTooLarge)?;
 
-        let sdpcm_seq = self.sdpcm_seq;
-        self.sdpcm_seq = self.sdpcm_seq.wrapping_add(1);
-        self.ioctl_id = self.ioctl_id.wrapping_add(1);
+        let sdpcm_seq = self.owner.sdpcm_seq;
+        self.owner.sdpcm_seq = self.owner.sdpcm_seq.wrapping_add(1);
+        self.owner.ioctl_id = self.owner.ioctl_id.wrapping_add(1);
 
         let packet_len = u16::try_from(request_len).map_err(|_| DriverError::FrameTooLarge)?;
         write_sdpcm_control_tx_header(
@@ -5481,7 +5522,11 @@ impl Cyw43NetDevice {
             8,
             (kind as u16) | (u16::try_from(iface).unwrap_or(0) << 12),
         );
-        put_u16_le(&mut self.tx_frame[control_header_len..], 10, self.ioctl_id);
+        put_u16_le(
+            &mut self.tx_frame[control_header_len..],
+            10,
+            self.owner.ioctl_id,
+        );
         put_u32_le(&mut self.tx_frame[control_header_len..], 12, 0);
 
         self.tx_frame[total_len..request_len].fill(0);
@@ -5510,8 +5555,8 @@ impl Cyw43NetDevice {
                 request_len,
                 tail_pad,
                 sdpcm_seq,
-                self.sdpcm_seq_max,
-                self.ioctl_id,
+                self.owner.sdpcm_seq_max,
+                self.owner.ioctl_id,
                 CHANNEL_CONTROL,
                 self.tx_frame[sw_header_offset + 1] & 0x0f,
                 self.tx_frame[sw_header_offset + 3],
@@ -5534,7 +5579,7 @@ impl Cyw43NetDevice {
                     );
             }
         }
-        self.wait_for_ioctl_response(cmd as u32, self.ioctl_id)
+        self.wait_for_ioctl_response(cmd as u32, self.owner.ioctl_id)
     }
 
     fn wait_for_ioctl_response(
@@ -5563,8 +5608,8 @@ impl Cyw43NetDevice {
                         "[cyw43] ioctl response error cmd=0x{:08x} id={} seq={}/{} credit={} startup_link_stabilized={} startup_link_rescue_cycles={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={} err={err}",
                         cmd,
                         expected_id,
-                        self.sdpcm_seq,
-                        self.sdpcm_seq_max,
+                        self.owner.sdpcm_seq,
+                        self.owner.sdpcm_seq_max,
                         credit_ready,
                         startup_link_stabilized,
                         startup_link_rescue_cycles,
@@ -5643,8 +5688,8 @@ impl Cyw43NetDevice {
             "[cyw43] ioctl timeout cmd=0x{:08x} id={} seq={}/{} credit={} wait_budget={} startup_link_stabilized={} startup_link_rescue_cycles={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={} preserved_exact_error={}",
             cmd,
             expected_id,
-            self.sdpcm_seq,
-            self.sdpcm_seq_max,
+            self.owner.sdpcm_seq,
+            self.owner.sdpcm_seq_max,
             credit_ready,
             wait_budget,
             startup_link_stabilized,
@@ -5736,12 +5781,12 @@ impl Cyw43NetDevice {
         let tx_frame = self.tx_frame.as_ref();
         let packet_len = get_u16_le(tx_frame, 0).unwrap_or(0);
         let len_inv = get_u16_le(tx_frame, 2).unwrap_or(0);
-        let hwext = if self.control_tx_ext_header {
+        let hwext = if self.owner.control_tx_ext_header() {
             get_u32_le(tx_frame, SDPCM_HWHDR_LEN).unwrap_or(0)
         } else {
             0
         };
-        let tail_pad = if self.control_tx_ext_header {
+        let tail_pad = if self.owner.control_tx_ext_header() {
             get_u32_le(tx_frame, SDPCM_HWHDR_LEN + 4).unwrap_or(0) >> 16
         } else {
             0
@@ -5781,23 +5826,23 @@ impl Cyw43NetDevice {
         if let Some(speculative_sdpcm_seq_max) =
             speculative_credit_window_after_promoted_timeout_retry(
                 allow_speculative_retry_credit,
-                self.sdpcm_seq,
-                self.sdpcm_seq_max,
+                self.owner.sdpcm_seq,
+                self.owner.sdpcm_seq_max,
             )
         {
             warn!(
                 "[cyw43] control-plane probe retry forcing speculative credit seq={}/{} -> {}",
-                self.sdpcm_seq, self.sdpcm_seq_max, speculative_sdpcm_seq_max,
+                self.owner.sdpcm_seq, self.owner.sdpcm_seq_max, speculative_sdpcm_seq_max,
             );
-            self.sdpcm_seq_max = speculative_sdpcm_seq_max;
+            self.owner.sdpcm_seq_max = speculative_sdpcm_seq_max;
             return Ok(());
         }
         let (reply_mode, reply_attempts, reply_empty_polls, promoted_probe_pending) =
             self.state.cyw43_control_plane_reply_rearm_diag();
         warn!(
             "[cyw43] sdpcm credit timeout seq={}/{} credit={} reply_mode={} reply_attempts={} reply_empty_polls={} promoted_probe_pending={} no_ht={} write_chunk_limit={} reply_chunk_limit={}",
-            self.sdpcm_seq,
-            self.sdpcm_seq_max,
+            self.owner.sdpcm_seq,
+            self.owner.sdpcm_seq_max,
             self.has_credit(),
             reply_mode,
             reply_attempts,
@@ -5813,7 +5858,7 @@ impl Cyw43NetDevice {
     }
 
     fn has_credit(&self) -> bool {
-        has_sdpcm_credit(self.sdpcm_seq, self.sdpcm_seq_max)
+        has_sdpcm_credit(self.owner.sdpcm_seq, self.owner.sdpcm_seq_max)
     }
 
     fn process_next_frame(&mut self, allow_data: bool) -> Result<RxFrameResult, DriverError> {
@@ -5875,7 +5920,7 @@ impl Cyw43NetDevice {
                 );
             }
             Err(err) => {
-                if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                if glom_warning_budget_allows(&mut self.owner.glom_warning_logs) {
                     warn!(
                         "[cyw43] rx glom descriptor action=drop len={} err={err}",
                         header.packet_len,
@@ -5897,7 +5942,7 @@ impl Cyw43NetDevice {
         allow_data: bool,
     ) -> Result<RxFrameResult, DriverError> {
         if self.glom_subframe_lens.is_empty() {
-            if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+            if glom_warning_budget_allows(&mut self.owner.glom_warning_logs) {
                 warn!(
                     "[cyw43] rx glom superframe action=drop reason=descriptor-missing len={}",
                     header.packet_len,
@@ -5927,7 +5972,7 @@ impl Cyw43NetDevice {
                 glom_descriptor_subframe_len(index, descriptor_len, header.payload_start)
             else {
                 dropped_count = dropped_count.saturating_add(1);
-                if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                if glom_warning_budget_allows(&mut self.owner.glom_warning_logs) {
                     warn!(
                         "[cyw43] rx glom superframe action=drop-tail reason=bad-first-subframe-len index={} descriptor_len={} payload_start={}",
                         index, descriptor_len, header.payload_start,
@@ -5942,7 +5987,7 @@ impl Cyw43NetDevice {
             };
             if subframe_len < SDPCM_HEADER_LEN {
                 dropped_count = dropped_count.saturating_add(1);
-                if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                if glom_warning_budget_allows(&mut self.owner.glom_warning_logs) {
                     warn!(
                         "[cyw43] rx glom superframe action=drop-tail reason=bad-subframe-len index={} descriptor_len={} payload_start={}",
                         index, descriptor_len, header.payload_start,
@@ -5960,7 +6005,7 @@ impl Cyw43NetDevice {
                 Ok(extent) => extent,
                 Err(err) => {
                     dropped_count = dropped_count.saturating_add(1);
-                    if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                    if glom_warning_budget_allows(&mut self.owner.glom_warning_logs) {
                         warn!(
                             "[cyw43] rx glom superframe action=drop-tail reason=truncated index={} subframe_len={} cursor={} packet_len={} err={err}",
                             index,
@@ -5981,7 +6026,7 @@ impl Cyw43NetDevice {
                 }
             };
             if truncated {
-                if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                if glom_warning_budget_allows(&mut self.owner.glom_warning_logs) {
                     warn!(
                         "[cyw43] rx glom superframe action=deaggregate-partial reason=descriptor-overshoot index={} requested_len={} cursor={} packet_len={}",
                         index,
@@ -6025,7 +6070,7 @@ impl Cyw43NetDevice {
                 }
                 Err(err) => {
                     dropped_count = dropped_count.saturating_add(1);
-                    if glom_warning_budget_allows(&mut self.glom_warning_logs) {
+                    if glom_warning_budget_allows(&mut self.owner.glom_warning_logs) {
                         warn!(
                             "[cyw43] rx glom subframe action=drop reason=decode-error index={} len={} err={err}",
                             index,
@@ -6132,8 +6177,8 @@ impl Cyw43NetDevice {
             id,
             response_len,
             copy_len,
-            self.sdpcm_seq,
-            self.sdpcm_seq_max,
+            self.owner.sdpcm_seq,
+            self.owner.sdpcm_seq_max,
         );
         Ok(RxFrameResult::Control {
             cmd: response_cmd,
@@ -6167,7 +6212,7 @@ impl Cyw43NetDevice {
     }
 
     fn process_host_eapol_packet(&mut self, packet: &[u8]) -> Result<(), DriverError> {
-        self.host_eapol_rx_packets = self.host_eapol_rx_packets.saturating_add(1);
+        self.owner.host_eapol_rx_packets = self.owner.host_eapol_rx_packets.saturating_add(1);
         let packet_len = packet.len();
         if packet_len > MAX_FRAME_LEN {
             return Err(DriverError::FrameTooLarge);
@@ -6181,7 +6226,7 @@ impl Cyw43NetDevice {
             Err(err) if secure_before => {
                 warn!(
                     "[cyw43] host-eapol action=drop status=host-eapol-secure err={err} count={} msg={} next_action=ignore-post-secure-frame",
-                    self.host_eapol_rx_packets,
+                    self.owner.host_eapol_rx_packets,
                     proof.message,
                 );
                 "drop-post-secure"
@@ -6190,7 +6235,7 @@ impl Cyw43NetDevice {
                 self.promote_host_eapol_wait_stage();
                 warn!(
                     "[cyw43] host-eapol action=drop status=host-eapol-required err={err} count={} msg={} next_action={}",
-                    self.host_eapol_rx_packets,
+                    self.owner.host_eapol_rx_packets,
                     proof.message,
                     proof.next_action,
                 );
@@ -6199,7 +6244,7 @@ impl Cyw43NetDevice {
         };
         info!(
             "[cyw43] host-eapol proof count={} msg={} len={} eapol_ver={} type={} body_len={} body_ok={} key_desc={} key_info=0x{:04x} key_ver={} pairwise={} ack={} mic={} install={} secure={} encrypted={} nonce={} replay={} kde_len={} next_action={} action={} status={}",
-            self.host_eapol_rx_packets,
+            self.owner.host_eapol_rx_packets,
             proof.message,
             packet_len,
             proof.eapol_version,
@@ -6282,14 +6327,14 @@ impl Cyw43NetDevice {
 
     fn apply_event(&mut self, event: Cyw43Event) {
         if let Some(associated) = event_association_state_update(event) {
-            self.associated = associated;
+            self.owner.set_associated(associated);
         }
         if let Some(link_up) =
             event_link_state_update(event, deferred_join_is_pending(self.deferred_join_state))
         {
-            self.link_up = link_up;
+            self.owner.set_link_up(link_up);
             if link_up {
-                self.associated = true;
+                self.owner.set_associated(true);
             }
         }
         self.maybe_seed_host_eapol_ap_from_event(event);
@@ -6335,11 +6380,12 @@ impl Cyw43NetDevice {
     fn update_credit(&mut self, header: RxSdpcmHeader) {
         let mut sdpcm_seq_max = header.credit;
         if header.channel < 3 {
-            self.sdpcm_credit_observations = self.sdpcm_credit_observations.wrapping_add(1);
-            if sdpcm_seq_max.wrapping_sub(self.sdpcm_seq) > 0x40 {
-                sdpcm_seq_max = self.sdpcm_seq.wrapping_add(2);
+            self.owner.sdpcm_credit_observations =
+                self.owner.sdpcm_credit_observations.wrapping_add(1);
+            if sdpcm_seq_max.wrapping_sub(self.owner.sdpcm_seq) > 0x40 {
+                sdpcm_seq_max = self.owner.sdpcm_seq.wrapping_add(2);
             }
-            self.sdpcm_seq_max = sdpcm_seq_max;
+            self.owner.sdpcm_seq_max = sdpcm_seq_max;
         }
     }
 
@@ -6350,7 +6396,7 @@ impl Cyw43NetDevice {
 
         if matches!(self.deferred_join_state, DeferredJoinState::Pending { .. }) {
             self.service_deferred_join();
-            if !self.link_up {
+            if !self.owner.link_up() {
                 return None;
             }
         }
@@ -6362,7 +6408,7 @@ impl Cyw43NetDevice {
             (!allow_data).then(crate::bootstrap::log::suppress_uart_log_output);
         if allow_data {
             if let Some(frame) = self.glom_rx_ready.pop_front() {
-                self.rx_packets = self.rx_packets.saturating_add(1);
+                self.owner.rx_packets = self.owner.rx_packets.saturating_add(1);
                 return Some(frame);
             }
         } else if !self.glom_rx_ready.is_empty() {
@@ -6374,7 +6420,7 @@ impl Cyw43NetDevice {
         for _ in 0..RX_PUMP_LIMIT {
             match self.process_next_frame(allow_data) {
                 Ok(RxFrameResult::Data(frame)) if allow_data => {
-                    self.rx_packets = self.rx_packets.saturating_add(1);
+                    self.owner.rx_packets = self.owner.rx_packets.saturating_add(1);
                     return Some(frame);
                 }
                 Ok(
@@ -6384,7 +6430,10 @@ impl Cyw43NetDevice {
                     | RxFrameResult::Data(_),
                 ) => {}
                 Err(err) => {
-                    if rx_error_warning_budget_allows(&mut self.rx_oversize_warning_logs, &err) {
+                    if rx_error_warning_budget_allows(
+                        &mut self.owner.rx_oversize_warning_logs,
+                        &err,
+                    ) {
                         warn!("[cyw43] rx error: {err}");
                     } else {
                         trace!("[cyw43] rx error: {err}");
@@ -6408,12 +6457,12 @@ impl Cyw43NetDevice {
             return Err(DriverError::FrameTooLarge);
         }
 
-        let seq = self.sdpcm_seq;
+        let seq = self.owner.sdpcm_seq;
         let proof = SdpcmTxProof {
             seq,
-            credit_observation: self.sdpcm_credit_observations,
+            credit_observation: self.owner.sdpcm_credit_observations,
         };
-        self.sdpcm_seq = self.sdpcm_seq.wrapping_add(1);
+        self.owner.sdpcm_seq = self.owner.sdpcm_seq.wrapping_add(1);
 
         self.tx_frame[..aligned_len].fill(0);
         write_sdpcm_data_tx_header(self.tx_frame.as_mut(), total_len, seq)?;
@@ -6440,7 +6489,7 @@ impl Cyw43NetDevice {
         }
         self.state
             .write_cyw43_frame(&mut self.tx_frame[..aligned_len])?;
-        self.tx_packets = self.tx_packets.saturating_add(1);
+        self.owner.tx_packets = self.owner.tx_packets.saturating_add(1);
         Ok(proof)
     }
 
@@ -6479,12 +6528,12 @@ impl Cyw43NetDevice {
             );
         }
 
-        let seq = self.sdpcm_seq;
+        let seq = self.owner.sdpcm_seq;
         let proof = SdpcmTxProof {
             seq,
-            credit_observation: self.sdpcm_credit_observations,
+            credit_observation: self.owner.sdpcm_credit_observations,
         };
-        self.sdpcm_seq = self.sdpcm_seq.wrapping_add(1);
+        self.owner.sdpcm_seq = self.owner.sdpcm_seq.wrapping_add(1);
 
         if let Err(err) = write_sdpcm_data_tx_header(self.tx_frame.as_mut(), total_len, seq) {
             return (result, Err(err));
@@ -6523,7 +6572,7 @@ impl Cyw43NetDevice {
             .write_cyw43_frame(&mut self.tx_frame[..aligned_len])
         {
             Ok(()) => {
-                self.tx_packets = self.tx_packets.saturating_add(1);
+                self.owner.tx_packets = self.owner.tx_packets.saturating_add(1);
                 (result, Ok(proof))
             }
             Err(err) => (result, Err(DriverError::from(err))),
@@ -6539,7 +6588,7 @@ impl Cyw43NetDevice {
     }
 
     const fn control_tx_header_len(&self) -> usize {
-        if self.control_tx_ext_header {
+        if self.owner.control_tx_ext_header() {
             SDPCM_CONTROL_TX_EXT_HEADER_LEN
         } else {
             SDPCM_CONTROL_TX_HEADER_LEN
@@ -6551,8 +6600,8 @@ impl Cyw43NetDevice {
     }
 
     fn enable_control_tx_extension_header(&mut self, stage: &'static str) {
-        if !self.control_tx_ext_header {
-            self.control_tx_ext_header = true;
+        if !self.owner.control_tx_ext_header() {
+            self.owner.set_control_tx_ext_header(true);
             info!(
                 "[cyw43] control-plane step={stage} action=enable-sdpcm-tx-hwext header_len={}",
                 self.control_tx_header_len()
@@ -6581,7 +6630,7 @@ impl<'a> phy::TxToken for TxToken<'a> {
     {
         let (result, tx_result) = self.device.transmit_runtime_filled(len, f);
         if let Err(err) = tx_result {
-            self.device.tx_drops = self.device.tx_drops.saturating_add(1);
+            self.device.owner.tx_drops = self.device.owner.tx_drops.saturating_add(1);
             warn!("[cyw43] tx error: {err}");
         }
         result
@@ -6605,11 +6654,11 @@ impl Device for Cyw43NetDevice {
 
     fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
         if cyw43_runtime_tx_token_allowed(
-            self.link_up,
+            self.owner.link_up(),
             self.host_eapol_secure_complete(),
             self.deferred_join_state,
-            self.sdpcm_seq,
-            self.sdpcm_seq_max,
+            self.owner.sdpcm_seq,
+            self.owner.sdpcm_seq_max,
         ) {
             Some(TxToken { device: self })
         } else {
@@ -6653,7 +6702,7 @@ impl NetDevice for Cyw43NetDevice {
     }
 
     fn tx_drop_count(&self) -> u32 {
-        self.tx_drops
+        self.owner.tx_drops
     }
 
     fn name() -> &'static str
@@ -6678,7 +6727,7 @@ impl NetDevice for Cyw43NetDevice {
         cyw43_bringup_status_label(
             self.host_eapol_secure_complete(),
             self.deferred_join_state,
-            self.link_up,
+            self.owner.link_up(),
         )
     }
 
@@ -6686,26 +6735,26 @@ impl NetDevice for Cyw43NetDevice {
         debug!(
             "[cyw43] snapshot mac={} seq={}/{} link_up={} assoc={} rx={} tx={} drops={} eapol_rx={} probe={:?}",
             self.mac,
-            self.sdpcm_seq,
-            self.sdpcm_seq_max,
-            self.link_up,
-            self.associated,
-            self.rx_packets,
-            self.tx_packets,
-            self.tx_drops,
-            self.host_eapol_rx_packets,
+            self.owner.sdpcm_seq,
+            self.owner.sdpcm_seq_max,
+            self.owner.link_up(),
+            self.owner.associated(),
+            self.owner.rx_packets,
+            self.owner.tx_packets,
+            self.owner.tx_drops,
+            self.owner.host_eapol_rx_packets,
             self.probe
         );
     }
 
     fn counters(&self) -> NetDeviceCounters {
         NetDeviceCounters {
-            rx_packets: self.rx_packets,
-            tx_packets: self.tx_packets,
-            rx_used_advances: self.rx_packets,
-            tx_used_advances: self.tx_packets,
-            tx_submit: self.tx_packets,
-            tx_complete: self.tx_packets,
+            rx_packets: self.owner.rx_packets,
+            tx_packets: self.owner.tx_packets,
+            rx_used_advances: self.owner.rx_packets,
+            tx_used_advances: self.owner.tx_packets,
+            tx_submit: self.owner.tx_packets,
+            tx_complete: self.owner.tx_packets,
             tx_free: 1,
             tx_in_flight: 0,
             tx_double_submit: 0,
@@ -6715,9 +6764,9 @@ impl NetDevice for Cyw43NetDevice {
             tx_dup_used_ignored: 0,
             tx_invalid_used_state: 0,
             tx_alloc_blocked_inflight: 0,
-            wifi_assoc: if self.associated { 1 } else { 0 },
-            wifi_link_up: if self.link_up { 1 } else { 0 },
-            wifi_host_eapol_rx: u64::from(self.host_eapol_rx_packets),
+            wifi_assoc: if self.owner.associated() { 1 } else { 0 },
+            wifi_link_up: if self.owner.link_up() { 1 } else { 0 },
+            wifi_host_eapol_rx: u64::from(self.owner.host_eapol_rx_packets),
             wifi_host_eapol_start: u64::from(self.host_wpa.eapol_start_sent),
             wifi_host_eapol_secure: if self.host_eapol_secure_complete() {
                 1
@@ -7369,11 +7418,11 @@ mod tests {
         write_sdpcm_control_tx_header, write_sdpcm_data_tx_header, write_wsec_key_payload,
         write_wsec_legacy_hex_pmk_payload, write_wsec_pmk_payload,
         wsec_pmk_error_allows_host_eapol_fallback, wsec_pmk_legacy_hex_fallback_allowed,
-        Cyw43Event, Cyw43NetDevice, DeferredJoinState, DriverError, FirmwareSupplicantPath,
-        HostEapolRxAdmissionMode, HostWpaState, Ioctl, JoinCompletionRule, JoinCompletionState,
-        RxFrameResult, RxSdpcmHeader, SdpcmTxProof, WsecPmkKind, BCME_BADARG, BCME_UNSUPPORTED,
-        BCMILCP_BCM_SUBTYPE_EVENT, BCMILCP_SUBTYPE_VENDOR_LONG, BDC_HEADER_LEN, BDC_VERSION,
-        BDC_VERSION_SHIFT, BRCMF_EVENT_ADDR_OFFSET, BRCMF_EVENT_AUTH_OFFSET,
+        Cyw43Event, Cyw43NetDevice, Cyw43OwnerRuntime, DeferredJoinState, DriverError,
+        FirmwareSupplicantPath, HostEapolRxAdmissionMode, HostWpaState, Ioctl, JoinCompletionRule,
+        JoinCompletionState, RxFrameResult, RxSdpcmHeader, SdpcmTxProof, WsecPmkKind, BCME_BADARG,
+        BCME_UNSUPPORTED, BCMILCP_BCM_SUBTYPE_EVENT, BCMILCP_SUBTYPE_VENDOR_LONG, BDC_HEADER_LEN,
+        BDC_VERSION, BDC_VERSION_SHIFT, BRCMF_EVENT_ADDR_OFFSET, BRCMF_EVENT_AUTH_OFFSET,
         BRCMF_EVENT_FLAGS_OFFSET, BRCMF_EVENT_MIN_PACKET_LEN, BRCMF_EVENT_REASON_OFFSET,
         BRCMF_EVENT_STATUS_OFFSET, BRCMF_EVENT_TYPE_OFFSET, BRCMF_PRIMARY_KEY, BROADCOM_OUI,
         BSSCFG_PRIMARY_INDEX, CDC_HEADER_LEN, CHANNEL_CONTROL, CHANNEL_DATA, CHANNEL_EVENT,
@@ -7415,6 +7464,21 @@ mod tests {
             DriverError::Hal(HalError::Unsupported(reason)) => Some(*reason),
             _ => None,
         }
+    }
+
+    #[test]
+    fn owner_runtime_record_stays_pointer_free_fixed_layout() {
+        assert_eq!(core::mem::align_of::<Cyw43OwnerRuntime>(), 8);
+        assert_eq!(core::mem::size_of::<Cyw43OwnerRuntime>(), 40);
+        let mut runtime = Cyw43OwnerRuntime {
+            sdpcm_seq_max: 1,
+            ..Cyw43OwnerRuntime::default()
+        };
+        assert!(!runtime.link_up());
+        runtime.set_link_up(true);
+        runtime.set_associated(true);
+        assert!(runtime.link_up());
+        assert!(runtime.associated());
     }
 
     #[test]

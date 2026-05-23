@@ -14,6 +14,25 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "pi4_gate_proof.sh"
 
 
+def _driver_task_owner_state_lines() -> list[str]:
+    return [
+        "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+    ]
+
+
 def test_gate_proof_does_not_emit_leading_carriage_return() -> None:
     """Serial proof commands should not manufacture empty console commands."""
 
@@ -300,14 +319,14 @@ def test_gate_proof_rejects_aggregate_dedicated_count_without_required_roles(
         "\n".join(
             [
                 "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
-                "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 mcs=0 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes live_hot_paths=yes",
+                "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 mcs=0 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=driver-owned live_hot_paths=yes",
                 "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=73",
                 "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=91",
                 "SCHED_CONTRACT contract=rtl8139 isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=62",
                 "SCHED_CONTRACT contract=virtio-net isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=64",
                 "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=31",
                 "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=36",
-                "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes required=6 dedicated=6 compatibility=0",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=driver-owned required=6 dedicated=6 compatibility=0",
                 "SERIAL_ECHO p95_us=800 max_gap_us=1200",
                 "USB_BURST bytes=256 drops=0 max_latency_us=900",
                 "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
@@ -357,14 +376,14 @@ def test_gate_proof_rejects_isolated_vspace_without_pointer_free_ipc(
         "\n".join(
             [
                 "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
-                "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=callback-pointer pointer_free_ipc=no live_hot_paths=yes",
+                "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=callback-pointer pointer_free_ipc=no owner_state=driver-owned live_hot_paths=yes",
                 "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=18",
                 "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=22",
                 "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=44",
                 "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=91",
                 "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=31",
                 "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=36",
-                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=driver-task-pointer-free-ipc-not-proven substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=callback-pointer pointer_free_ipc=no required=6 dedicated=6 compatibility=0",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=driver-task-pointer-free-ipc-not-proven substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=callback-pointer pointer_free_ipc=no owner_state=driver-owned required=6 dedicated=6 compatibility=0",
                 "SERIAL_ECHO p95_us=800 max_gap_us=1200",
                 "USB_BURST bytes=256 drops=0 max_latency_us=900",
                 "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
@@ -393,6 +412,130 @@ def test_gate_proof_rejects_isolated_vspace_without_pointer_free_ipc(
     assert "DRIVER_TASK_VSPACE_PROOF=yes" in result.stdout
     assert "DRIVER_TASK_POINTER_FREE_IPC_PROOF=no" in result.stdout
     assert "DRIVER_TASK_POINTER_FREE_IPC_PROOF expected yes got no" in result.stderr
+
+
+def test_gate_proof_rejects_pointer_free_ring_without_owner_state(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Pointer-free rings do not prove driver-owned hardware state by themselves."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+                "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=root-owned live_hot_paths=yes",
+                "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=18",
+                "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=22",
+                "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=44",
+                "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=91",
+                "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=31",
+                "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=36",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=driver-task-owner-state-not-proven substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=root-owned required=6 dedicated=6 compatibility=0",
+                "SERIAL_ECHO p95_us=800 max_gap_us=1200",
+                "USB_BURST bytes=256 drops=0 max_latency_us=900",
+                "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-driver-task-proof",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "DRIVER_TASK_POINTER_FREE_IPC_PROOF=yes" in result.stdout
+    assert "DRIVER_TASK_OWNER_STATE_PROOF=no" in result.stdout
+    assert "DRIVER_TASK_OWNER_STATE_PROOF expected yes got no" in result.stderr
+
+
+def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Strong driver-task proof needs every concrete owner-state descriptor."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "[Cohesix] Root console ready (type 'help' for commands)",
+        "cohesix> driver proof",
+        "usb: runtime_gate proof_gate=10 blocker=none",
+        "OK NETTEST success",
+        "netstats: active=wifi addr_src=dhcp-lease dhcp=bound wifi_assoc=1 "
+        "wifi_link=1 eapol_secure=1 eapol_rx=1 rx_pkts=1 tx_pkts=1",
+        "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+        "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
+        "task_count=9 failed_count=0 live_tcb_count=9 "
+        "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
+        "broad_caps_leaked=0 sched=yes affinity=per-driver "
+        "affinity_configured=9 affinity_applied=9 vspace=isolated "
+        "ipc_abi=shared-ring-command pointer_free_ipc=yes "
+        "owner_state=driver-owned live_hot_paths=yes",
+        *_driver_task_owner_state_lines(),
+        "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=18",
+        "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=22",
+        "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=44",
+        "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated active_net=cyw43 observed_service_us=91",
+        "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=31",
+        "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=36",
+        "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
+        "substrate=active capset=pass fault=pass revoke=pass sched=pass "
+        "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
+        "pointer_free_ipc=yes owner_state=driver-owned required=6 "
+        "dedicated=6 compatibility=0",
+        "SERIAL_ECHO p95_us=800 max_gap_us=1200",
+        "USB_BURST bytes=256 drops=0 max_latency_us=900",
+        "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
+    ]
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-driver-task-proof",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "DRIVER_TASK_OWNER_STATE_PROOF=yes" in result.stdout
+    assert "DRIVER_TASK_DEDICATED_READY=yes" in result.stdout
 
 
 def test_gate_proof_rejects_root_task_panic(tmp_path: pathlib.Path) -> None:

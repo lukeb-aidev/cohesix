@@ -451,6 +451,7 @@ run_normalizer() {
         args+=("--expect-min" "DRIVER_TASK_AFFINITY_APPLIED=9")
         args+=("--expect" "DRIVER_TASK_VSPACE_PROOF=yes")
         args+=("--expect" "DRIVER_TASK_POINTER_FREE_IPC_PROOF=yes")
+        args+=("--expect" "DRIVER_TASK_OWNER_STATE_PROOF=yes")
         args+=("--expect" "DRIVER_TASK_BUDGET_OVERRUNS=0")
         args+=("--expect-min" "DRIVER_TASK_LATENCY_PROOFS=6")
     fi

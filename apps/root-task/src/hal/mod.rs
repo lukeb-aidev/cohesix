@@ -1293,6 +1293,10 @@ fn finalize_driver_task_bootstrap_report(
     report.vspace_proof = all_configured && report.isolated_vspace_count == expected_count;
     report.pointer_free_ipc_proof =
         report.vspace_proof && report.pointer_free_ipc_count == expected_count;
+    report.owner_state_proof = report.vspace_proof
+        && report.pointer_free_ipc_proof
+        && report.owner_state_hot_path_mask & driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+            == driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
 }
 
 #[cfg(feature = "kernel")]
@@ -2398,6 +2402,7 @@ mod tests {
         assert!(report.affinity_proof);
         assert!(!report.vspace_proof);
         assert!(!report.pointer_free_ipc_proof);
+        assert!(!report.owner_state_proof);
         assert_eq!(report.broad_caps_leaked, 0);
     }
 
@@ -2424,14 +2429,25 @@ mod tests {
         );
         assert!(report.vspace_proof);
         assert!(report.pointer_free_ipc_proof);
+        assert!(!report.owner_state_proof);
+
+        report.owner_state_hot_path_mask =
+            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
+        super::finalize_driver_task_bootstrap_report(
+            &mut report,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
+        );
+        assert!(report.owner_state_proof);
 
         report.pointer_free_ipc_count -= 1;
+        report.owner_state_proof = true;
         super::finalize_driver_task_bootstrap_report(
             &mut report,
             super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
         );
         assert!(report.vspace_proof);
         assert!(!report.pointer_free_ipc_proof);
+        assert!(!report.owner_state_proof);
     }
 
     #[cfg(feature = "kernel")]
@@ -2462,6 +2478,7 @@ mod tests {
         assert!(report.affinity_proof);
         assert!(!report.vspace_proof);
         assert!(!report.pointer_free_ipc_proof);
+        assert!(!report.owner_state_proof);
     }
 
     #[cfg(feature = "kernel")]
@@ -2492,6 +2509,7 @@ mod tests {
         assert!(!report.affinity_proof);
         assert!(!report.vspace_proof);
         assert!(!report.pointer_free_ipc_proof);
+        assert!(!report.owner_state_proof);
     }
 
     #[test]

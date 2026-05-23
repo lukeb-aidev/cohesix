@@ -190,6 +190,163 @@ static PCIE_ROOT_INIT_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
 static PCIE_ROOT_INIT_POST_MAILBOX_ATTEMPTED: AtomicUsize = AtomicUsize::new(0);
 static PCIE_LINK_AND_RC_READY_PROVEN: AtomicUsize = AtomicUsize::new(0);
 static PCIE_IRQ_SOURCES_MASKED_PROVEN: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_HEAD: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_TAIL: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_SUBMITTED: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_RING_SERVICED: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_ROOT_FALLBACKS: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_REJECTED: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_LAST_OP_STAGE: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_LAST_OFFSET: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_LAST_VALUE: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_LAST_RESULT: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_NON_ACCEPTANCE_LOGGED: AtomicUsize = AtomicUsize::new(0);
+
+const PCIE_OWNER_QUEUE_RECORD_VERSION: u16 = 1;
+const PCIE_OWNER_QUEUE_DEPTH: usize = 32;
+const PCIE_OWNER_QUEUE_FLAG_FIXED_RING_COMMAND: u16 = 1 << 0;
+const PCIE_OWNER_QUEUE_FLAG_ROOT_MMIO_EXEC: u16 = 1 << 1;
+const PCIE_OWNER_QUEUE_FLAGS: u16 =
+    PCIE_OWNER_QUEUE_FLAG_FIXED_RING_COMMAND | PCIE_OWNER_QUEUE_FLAG_ROOT_MMIO_EXEC;
+const PCIE_OWNER_OP_PORT_READ: u16 = 1;
+const PCIE_OWNER_OP_PORT_WRITE: u16 = 2;
+const PCIE_OWNER_OP_POSTED_WRITE_FLUSH: u16 = 3;
+const PCIE_OWNER_QUEUE_NON_ACCEPTANCE_REASON: &str = "root-mmio-exec";
+
+/// Fixed-layout PCIe/VL805 owner-queue accounting record.
+///
+/// This is a bounded primitive mirror of the bus-owner queue state. It is not
+/// registered as final owner-state proof because the live MMIO read/write still
+/// executes in the root mapping after the pointer-free service turn.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Pi4PcieOwnerQueueRecord {
+    version: u16,
+    flags: u16,
+    depth: u16,
+    non_acceptance_reason: u16,
+    head: u32,
+    tail: u32,
+    submitted: u32,
+    ring_serviced: u32,
+    root_fallbacks: u32,
+    rejected: u32,
+    last_op: u16,
+    last_stage: u16,
+    last_offset: u32,
+    last_value: u32,
+    last_result: u32,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl Pi4PcieOwnerQueueRecord {
+    const fn non_acceptance_reason(self) -> &'static str {
+        let _ = self;
+        PCIE_OWNER_QUEUE_NON_ACCEPTANCE_REASON
+    }
+
+    const fn acceptance_eligible(self) -> bool {
+        false
+    }
+}
+
+fn pcie_owner_queue_result_word(ring_serviced: bool, root_fallback: bool) -> usize {
+    (ring_serviced as usize) | ((root_fallback as usize) << 1)
+}
+
+fn pcie_owner_queue_log_non_acceptance_once() {
+    if PCIE_OWNER_QUEUE_NON_ACCEPTANCE_LOGGED.swap(1, Ordering::AcqRel) == 0 {
+        boot_log::force_uart_line(
+            "[local-seat] pcie owner-state non-acceptance hot_path=pcie-root queue=fixed-ring-record reason=root-mmio-exec action=keep-owner-proof-open",
+        );
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn pcie_owner_queue_ring_service_turn(op: u16, stage: u16, offset: usize) -> bool {
+    let contract = super::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT;
+    let _ = super::driver_task::register_pi4_bus_ring_service(contract);
+    let frame = super::driver_task::DriverFrameDescriptor {
+        offset: 0,
+        len: 0,
+        flags: 0,
+    };
+    let mut command = super::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        super::driver_task::DriverTaskHotPath::PcieRoot,
+        super::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        frame,
+    );
+    command.aux0 = ((op as u32) << 16) | u32::from(stage);
+    command.aux1 = offset as u32;
+    command.flags = PCIE_OWNER_QUEUE_FLAGS;
+    command.frame.flags = PCIE_OWNER_QUEUE_FLAGS;
+    let Some(completion) = super::driver_task::run_driver_task_ring_service(contract, command)
+    else {
+        return false;
+    };
+    completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        && completion.result == 0
+}
+
+#[cfg(not(feature = "kernel"))]
+fn pcie_owner_queue_ring_service_turn(_op: u16, _stage: u16, _offset: usize) -> bool {
+    false
+}
+
+fn pcie_owner_queue_submit(op: u16, stage: u16, offset: usize, value: u32) -> bool {
+    if offset > u32::MAX as usize {
+        PCIE_OWNER_QUEUE_REJECTED.fetch_add(1, Ordering::AcqRel);
+        return false;
+    }
+
+    let submitted = PCIE_OWNER_QUEUE_SUBMITTED
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    PCIE_OWNER_QUEUE_HEAD.store(submitted % PCIE_OWNER_QUEUE_DEPTH, Ordering::Release);
+    PCIE_OWNER_QUEUE_LAST_OP_STAGE.store(
+        ((op as usize) << 16) | usize::from(stage),
+        Ordering::Release,
+    );
+    PCIE_OWNER_QUEUE_LAST_OFFSET.store(offset, Ordering::Release);
+    PCIE_OWNER_QUEUE_LAST_VALUE.store(value as usize, Ordering::Release);
+
+    let ring_serviced = pcie_owner_queue_ring_service_turn(op, stage, offset);
+    if ring_serviced {
+        PCIE_OWNER_QUEUE_RING_SERVICED.fetch_add(1, Ordering::AcqRel);
+        PCIE_OWNER_QUEUE_TAIL.store(submitted % PCIE_OWNER_QUEUE_DEPTH, Ordering::Release);
+        PCIE_OWNER_QUEUE_LAST_RESULT
+            .store(pcie_owner_queue_result_word(true, false), Ordering::Release);
+    } else {
+        PCIE_OWNER_QUEUE_ROOT_FALLBACKS.fetch_add(1, Ordering::AcqRel);
+        PCIE_OWNER_QUEUE_LAST_RESULT
+            .store(pcie_owner_queue_result_word(false, true), Ordering::Release);
+        pcie_owner_queue_log_non_acceptance_once();
+    }
+    ring_serviced
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn pi4_pcie_owner_queue_record() -> Pi4PcieOwnerQueueRecord {
+    let op_stage = PCIE_OWNER_QUEUE_LAST_OP_STAGE.load(Ordering::Acquire);
+    Pi4PcieOwnerQueueRecord {
+        version: PCIE_OWNER_QUEUE_RECORD_VERSION,
+        flags: PCIE_OWNER_QUEUE_FLAGS,
+        depth: PCIE_OWNER_QUEUE_DEPTH as u16,
+        non_acceptance_reason: 1,
+        head: PCIE_OWNER_QUEUE_HEAD.load(Ordering::Acquire) as u32,
+        tail: PCIE_OWNER_QUEUE_TAIL.load(Ordering::Acquire) as u32,
+        submitted: PCIE_OWNER_QUEUE_SUBMITTED.load(Ordering::Acquire) as u32,
+        ring_serviced: PCIE_OWNER_QUEUE_RING_SERVICED.load(Ordering::Acquire) as u32,
+        root_fallbacks: PCIE_OWNER_QUEUE_ROOT_FALLBACKS.load(Ordering::Acquire) as u32,
+        rejected: PCIE_OWNER_QUEUE_REJECTED.load(Ordering::Acquire) as u32,
+        last_op: (op_stage >> 16) as u16,
+        last_stage: (op_stage & 0xffff) as u16,
+        last_offset: PCIE_OWNER_QUEUE_LAST_OFFSET.load(Ordering::Acquire) as u32,
+        last_value: PCIE_OWNER_QUEUE_LAST_VALUE.load(Ordering::Acquire) as u32,
+        last_result: PCIE_OWNER_QUEUE_LAST_RESULT.load(Ordering::Acquire) as u32,
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Pi4PcieProofPhase {
@@ -434,6 +591,7 @@ pub fn vl805_xhci_port_read32(mmio_virt: usize, offset: usize, port: u8, max_por
         boot_log::force_uart_line("[local-seat] vl805 xhci port read rejected reason=no-mmio");
         return 0;
     };
+    let _ = pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_READ, 0, offset, 0);
     fence(Ordering::SeqCst);
     let ptr = addr as *const u32;
     // SAFETY: the caller-installed xHCI hook supplies a live device mapping
@@ -469,6 +627,7 @@ pub fn vl805_xhci_port_write32(
         boot_log::force_uart_line("[local-seat] vl805 xhci port write rejected reason=no-mmio");
         return;
     };
+    let _ = pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_WRITE, 0, offset, value);
     fence(Ordering::SeqCst);
     let ptr = addr as *mut u32;
     // SAFETY: the caller-installed xHCI hook supplies a live device mapping
@@ -600,6 +759,7 @@ pub fn vl805_xhci_flush_posted_write(
     stage: u16,
 ) -> bool {
     let role = vl805_xhci_flush_stage_role(stage, offset);
+    let _ = pcie_owner_queue_submit(PCIE_OWNER_OP_POSTED_WRITE_FLUSH, stage, offset, value);
     let config_page = PCIE_EXT_DATA_PAGE_VIRT.load(Ordering::Acquire);
     let index_page = PCIE_EXT_INDEX_PAGE_VIRT.load(Ordering::Acquire);
     if config_page == 0 || index_page == 0 {
@@ -2467,6 +2627,31 @@ mod tests {
             vl805_xhci_flush_live_proof_failure(true, true, ready_command_status),
             None
         );
+    }
+
+    #[test]
+    fn pcie_owner_queue_record_is_fixed_layout_and_non_acceptance() {
+        assert_eq!(core::mem::size_of::<Pi4PcieOwnerQueueRecord>(), 48);
+        assert_eq!(core::mem::align_of::<Pi4PcieOwnerQueueRecord>(), 4);
+        assert!(
+            core::mem::size_of::<Pi4PcieOwnerQueueRecord>()
+                <= super::super::driver_task::DRIVER_TASK_OWNER_STATE_BYTES
+        );
+
+        let before = pi4_pcie_owner_queue_record();
+        let _ = pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_WRITE, 0x031f, 0x0100, 0x1234_5678);
+        let after = pi4_pcie_owner_queue_record();
+
+        assert_eq!(after.version, PCIE_OWNER_QUEUE_RECORD_VERSION);
+        assert_eq!(after.flags, PCIE_OWNER_QUEUE_FLAGS);
+        assert_eq!(after.depth, PCIE_OWNER_QUEUE_DEPTH as u16);
+        assert_eq!(after.submitted, before.submitted.saturating_add(1));
+        assert_eq!(after.last_op, PCIE_OWNER_OP_PORT_WRITE);
+        assert_eq!(after.last_stage, 0x031f);
+        assert_eq!(after.last_offset, 0x0100);
+        assert_eq!(after.last_value, 0x1234_5678);
+        assert!(!after.acceptance_eligible());
+        assert_eq!(after.non_acceptance_reason(), "root-mmio-exec");
     }
 
     #[test]

@@ -152,6 +152,127 @@ pub struct LocalSeatKeyboardTrace {
     pub driver_task_budget_overruns: u64,
 }
 
+const USB_OWNER_STATE_RECORD_VERSION: u16 = 1;
+const USB_OWNER_STATE_FLAG_FIXED_COMMAND_RECORD: u16 = 1 << 0;
+const USB_OWNER_STATE_FLAG_ROOT_RUNTIME_POINTER: u16 = 1 << 1;
+const USB_OWNER_STATE_FLAGS: u16 =
+    USB_OWNER_STATE_FLAG_FIXED_COMMAND_RECORD | USB_OWNER_STATE_FLAG_ROOT_RUNTIME_POINTER;
+const USB_OWNER_STATE_NON_ACCEPTANCE_REASON: &str = "root-runtime-pointer";
+const HDMI_OWNER_STATE_RECORD_VERSION: u16 = 1;
+const HDMI_OWNER_STATE_FLAG_FIXED_FRAME_RECORD: u16 = 1 << 0;
+const HDMI_OWNER_STATE_FLAG_ROOT_RUNTIME_POINTER: u16 = 1 << 1;
+const HDMI_OWNER_STATE_FLAGS: u16 =
+    HDMI_OWNER_STATE_FLAG_FIXED_FRAME_RECORD | HDMI_OWNER_STATE_FLAG_ROOT_RUNTIME_POINTER;
+const HDMI_OWNER_STATE_NON_ACCEPTANCE_REASON: &str = "root-runtime-pointer";
+
+/// Fixed-layout USB/local-seat runtime accounting record.
+///
+/// This deliberately mirrors the current root-resident keyboard queue and poll
+/// counters without claiming driver-owned state. The live HID/xHCI backend still
+/// hangs off `LocalSeatRuntime`, so this record is migration scaffolding and
+/// must not be registered as owner-state proof.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LocalSeatUsbOwnerRuntimeRecord {
+    version: u16,
+    flags: u16,
+    queue_capacity: u16,
+    poll_chunk_bytes: u16,
+    queued_bytes: u32,
+    backend_poll_calls: u64,
+    backend_read_bytes: u64,
+    accepted_bytes: u64,
+    drained_bytes: u64,
+    dropped_bytes: u64,
+    budget_overruns: u64,
+}
+
+impl LocalSeatUsbOwnerRuntimeRecord {
+    const fn new() -> Self {
+        Self {
+            version: USB_OWNER_STATE_RECORD_VERSION,
+            flags: USB_OWNER_STATE_FLAGS,
+            queue_capacity: KEYBOARD_QUEUE_MAX_BYTES as u16,
+            poll_chunk_bytes: KEYBOARD_POLL_CHUNK_BYTES as u16,
+            queued_bytes: 0,
+            backend_poll_calls: 0,
+            backend_read_bytes: 0,
+            accepted_bytes: 0,
+            drained_bytes: 0,
+            dropped_bytes: 0,
+            budget_overruns: 0,
+        }
+    }
+
+    const fn acceptance_eligible(self) -> bool {
+        false
+    }
+
+    const fn non_acceptance_reason(self) -> &'static str {
+        let _ = self;
+        USB_OWNER_STATE_NON_ACCEPTANCE_REASON
+    }
+}
+
+/// Fixed-layout HDMI/local-seat runtime accounting record.
+///
+/// This record keeps the display-side state primitive-only: manifest display
+/// bounds, mirror-ring depth, echoed-input preview depth, and drop counters. The
+/// framebuffer backend is still reached through a root-owned `LocalSeatRuntime`
+/// pointer, so this is migration scaffolding and must not be registered as
+/// owner-state proof.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LocalSeatHdmiOwnerRuntimeRecord {
+    version: u16,
+    flags: u16,
+    line_bytes: u16,
+    buffer_lines: u16,
+    mirrored_lines: u16,
+    input_echo_bytes: u16,
+    dropped_lines: u64,
+    echoed_bytes: u64,
+    budget_overruns: u64,
+}
+
+impl LocalSeatHdmiOwnerRuntimeRecord {
+    const fn new(status: LocalSeatStatus) -> Self {
+        Self {
+            version: HDMI_OWNER_STATE_RECORD_VERSION,
+            flags: HDMI_OWNER_STATE_FLAGS,
+            line_bytes: status.line_bytes,
+            buffer_lines: status.buffer_lines,
+            mirrored_lines: 0,
+            input_echo_bytes: 0,
+            dropped_lines: 0,
+            echoed_bytes: 0,
+            budget_overruns: 0,
+        }
+    }
+
+    const fn acceptance_eligible(self) -> bool {
+        false
+    }
+
+    const fn non_acceptance_reason(self) -> &'static str {
+        let _ = self;
+        HDMI_OWNER_STATE_NON_ACCEPTANCE_REASON
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+const fn hdmi_owner_state_descriptor(
+) -> Option<crate::hal::driver_task::DriverTaskOwnerStateDescriptor> {
+    crate::hal::driver_task::DriverTaskOwnerStateDescriptor::new(
+        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+        crate::hal::driver_task::DRIVER_TASK_OWNER_STATE_OFFSET as u32,
+        core::mem::size_of::<LocalSeatHdmiOwnerRuntimeRecord>() as u16,
+        crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET as u32,
+        crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES as u16,
+        HDMI_OWNER_STATE_FLAG_ROOT_RUNTIME_POINTER,
+    )
+}
+
 /// Runtime state for local-seat keyboard ingress and mirrored line egress.
 ///
 /// This state is bounded by manifest values (`line_bytes`, `buffer_lines`) and
@@ -173,6 +294,8 @@ pub struct LocalSeatRuntime {
     driver_task_budget_overruns: u64,
     backend_keyboard_polling_enabled: bool,
     backend_keyboard_poll_deferred_logged: bool,
+    usb_owner_record: LocalSeatUsbOwnerRuntimeRecord,
+    hdmi_owner_record: LocalSeatHdmiOwnerRuntimeRecord,
     #[cfg(all(
         feature = "kernel",
         feature = "usb",
@@ -269,6 +392,8 @@ impl LocalSeatRuntime {
             // a platform keyboard backend can still wedge during first probe.
             backend_keyboard_polling_enabled: false,
             backend_keyboard_poll_deferred_logged: false,
+            usb_owner_record: LocalSeatUsbOwnerRuntimeRecord::new(),
+            hdmi_owner_record: LocalSeatHdmiOwnerRuntimeRecord::new(status),
             #[cfg(all(
                 feature = "kernel",
                 feature = "usb",
@@ -277,6 +402,66 @@ impl LocalSeatRuntime {
             ))]
             backend: None,
         }
+    }
+
+    fn refresh_usb_owner_record(&mut self) {
+        self.usb_owner_record.queued_bytes = self.keyboard_queue.len() as u32;
+        self.usb_owner_record.backend_poll_calls = self.backend_keyboard_poll_calls;
+        self.usb_owner_record.backend_read_bytes = self.backend_keyboard_read_bytes;
+        self.usb_owner_record.accepted_bytes = self.accepted_keyboard_bytes;
+        self.usb_owner_record.drained_bytes = self.drained_keyboard_bytes;
+        self.usb_owner_record.dropped_bytes = self.dropped_keyboard_bytes;
+        self.usb_owner_record.budget_overruns = self.driver_task_budget_overruns;
+    }
+
+    fn refresh_hdmi_owner_record(&mut self) {
+        self.hdmi_owner_record.mirrored_lines = self.mirrored_lines.len() as u16;
+        self.hdmi_owner_record.input_echo_bytes = self.input_echo_preview.len() as u16;
+        self.hdmi_owner_record.dropped_lines = self.dropped_mirrored_lines;
+        self.hdmi_owner_record.echoed_bytes = self.echoed_keyboard_bytes;
+        self.hdmi_owner_record.budget_overruns = self.driver_task_budget_overruns;
+    }
+
+    /// Snapshot the fixed-layout USB owner migration record.
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn usb_owner_runtime_record(&self) -> LocalSeatUsbOwnerRuntimeRecord {
+        self.usb_owner_record
+    }
+
+    /// Return whether the current USB owner record may satisfy owner-state proof.
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn usb_owner_state_acceptance_eligible(&self) -> bool {
+        self.usb_owner_record.acceptance_eligible()
+    }
+
+    /// Stable reason the current USB owner record remains non-acceptance.
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn usb_owner_state_non_acceptance_reason(&self) -> &'static str {
+        self.usb_owner_record.non_acceptance_reason()
+    }
+
+    /// Snapshot the fixed-layout HDMI owner migration record.
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn hdmi_owner_runtime_record(&self) -> LocalSeatHdmiOwnerRuntimeRecord {
+        self.hdmi_owner_record
+    }
+
+    /// Return whether the current HDMI owner record may satisfy owner-state proof.
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn hdmi_owner_state_acceptance_eligible(&self) -> bool {
+        self.hdmi_owner_record.acceptance_eligible()
+    }
+
+    /// Stable reason the current HDMI owner record remains non-acceptance.
+    #[must_use]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn hdmi_owner_state_non_acceptance_reason(&self) -> &'static str {
+        self.hdmi_owner_record.non_acceptance_reason()
     }
 
     /// Return manifest-derived runtime limits.
@@ -299,6 +484,7 @@ impl LocalSeatRuntime {
             accepted = accepted.saturating_add(1);
         }
         self.accepted_keyboard_bytes = self.accepted_keyboard_bytes.saturating_add(accepted as u64);
+        self.refresh_usb_owner_record();
         accepted
     }
 
@@ -315,6 +501,7 @@ impl LocalSeatRuntime {
             }
         }
         self.drained_keyboard_bytes = self.drained_keyboard_bytes.saturating_add(written as u64);
+        self.refresh_usb_owner_record();
         written
     }
 
@@ -328,9 +515,11 @@ impl LocalSeatRuntime {
                 self as *mut Self as usize,
                 display_ring_service_driver_task,
             );
-            if let Some(frame) =
-                crate::hal::driver_task::stage_driver_task_ring_frame(contract, line.as_bytes(), 0)
-            {
+            if let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(
+                contract,
+                line.as_bytes(),
+                crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
+            ) {
                 let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
                     0,
                     crate::hal::driver_task::DriverTaskHotPath::HdmiText,
@@ -365,6 +554,8 @@ impl LocalSeatRuntime {
             if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
                 self.driver_task_budget_overruns =
                     self.driver_task_budget_overruns.saturating_add(1);
+                self.refresh_usb_owner_record();
+                self.refresh_hdmi_owner_record();
                 return;
             }
         }
@@ -372,17 +563,18 @@ impl LocalSeatRuntime {
     }
 
     fn mirror_line_current_tcb(&mut self, line: &str) {
-        let truncated = truncate_for_display(line, self.status.line_bytes);
+        let truncated = truncate_for_display(line, self.hdmi_owner_record.line_bytes);
         let mut mirrored = String::new();
         mirrored.push_str(truncated);
 
-        while self.mirrored_lines.len() >= usize::from(self.status.buffer_lines) {
+        while self.mirrored_lines.len() >= usize::from(self.hdmi_owner_record.buffer_lines) {
             if self.mirrored_lines.pop_front().is_none() {
                 break;
             }
             self.dropped_mirrored_lines = self.dropped_mirrored_lines.saturating_add(1);
         }
         self.mirrored_lines.push_back(mirrored);
+        self.refresh_hdmi_owner_record();
 
         #[cfg(all(
             feature = "kernel",
@@ -513,9 +705,10 @@ impl LocalSeatRuntime {
             update_input_echo_preview(
                 &mut self.input_echo_preview,
                 byte,
-                usize::from(self.status.line_bytes),
+                usize::from(self.hdmi_owner_record.line_bytes),
             );
         }
+        self.refresh_hdmi_owner_record();
 
         #[cfg(all(
             feature = "kernel",
@@ -545,7 +738,8 @@ impl LocalSeatRuntime {
                 crate::hal::driver_task::DriverFrameDescriptor {
                     offset: 0,
                     len: 0,
-                    flags: 0,
+                    flags:
+                        crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
                 },
             );
             if crate::hal::driver_task::run_driver_task_ring_service(contract, command).is_some() {
@@ -568,6 +762,7 @@ impl LocalSeatRuntime {
             if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
                 self.driver_task_budget_overruns =
                     self.driver_task_budget_overruns.saturating_add(1);
+                self.refresh_usb_owner_record();
                 return;
             }
         }
@@ -581,11 +776,15 @@ impl LocalSeatRuntime {
             Err(_) => {
                 self.driver_task_budget_overruns =
                     self.driver_task_budget_overruns.saturating_add(1);
+                self.refresh_usb_owner_record();
+                self.refresh_hdmi_owner_record();
                 return;
             }
         };
         if budget.charge_ops(1).is_err() {
             self.driver_task_budget_overruns = self.driver_task_budget_overruns.saturating_add(1);
+            self.refresh_usb_owner_record();
+            self.refresh_hdmi_owner_record();
             return;
         }
         {
@@ -620,6 +819,8 @@ impl LocalSeatRuntime {
                         if !read_budget_ok {
                             self.driver_task_budget_overruns =
                                 self.driver_task_budget_overruns.saturating_add(1);
+                            self.refresh_usb_owner_record();
+                            self.refresh_hdmi_owner_record();
                             return;
                         }
                         self.backend_keyboard_read_bytes =
@@ -639,6 +840,8 @@ impl LocalSeatRuntime {
                 }
             }
         }
+        self.refresh_usb_owner_record();
+        self.refresh_hdmi_owner_record();
     }
 
     /// Return the current local input echo preview for diagnostics and tests.
@@ -731,7 +934,11 @@ unsafe fn display_ring_service_driver_task(
     context: usize,
     command: crate::hal::driver_task::DriverTaskCommandRecord,
 ) -> crate::hal::driver_task::DriverTaskCompletionRecord {
-    if command.opcode != crate::hal::driver_task::DriverTaskOpcode::SubmitFrame.as_u16() {
+    let expected_hot_path = crate::hal::driver_task::DriverTaskHotPath::HdmiText;
+    if command.opcode != expected_hot_path.opcode().as_u16()
+        || command.arg0 != expected_hot_path.as_u32()
+        || command.arg1 != expected_hot_path.role_bit() as u32
+    {
         return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
             command.sequence,
             crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
@@ -754,6 +961,8 @@ unsafe fn display_ring_service_driver_task(
     };
     // SAFETY: `context` is registered by `LocalSeatRuntime` before submitting a
     // synchronous ring command, and root waits for completion before mutating it.
+    // This root pointer is transitional service context and is not owner-state
+    // acceptance proof.
     let runtime = unsafe { &mut *(context as *mut LocalSeatRuntime) };
     runtime.mirror_line_current_tcb(line);
     crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence)
@@ -764,7 +973,12 @@ unsafe fn usb_keyboard_ring_service_driver_task(
     context: usize,
     command: crate::hal::driver_task::DriverTaskCommandRecord,
 ) -> crate::hal::driver_task::DriverTaskCompletionRecord {
-    if command.opcode != crate::hal::driver_task::DriverTaskOpcode::Service.as_u16() {
+    let expected_hot_path = crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard;
+    if command.opcode != expected_hot_path.opcode().as_u16()
+        || command.arg0 != expected_hot_path.as_u32()
+        || command.arg1 != expected_hot_path.role_bit() as u32
+        || command.frame.len != 0
+    {
         return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
             command.sequence,
             crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
@@ -772,6 +986,8 @@ unsafe fn usb_keyboard_ring_service_driver_task(
     }
     // SAFETY: `context` is registered by `LocalSeatRuntime` before submitting a
     // synchronous ring command, and root waits for completion before mutating it.
+    // This root pointer is transitional service context and is not owner-state
+    // acceptance proof.
     let runtime = unsafe { &mut *(context as *mut LocalSeatRuntime) };
     runtime.poll_backend_keyboard_current_tcb(driver_task_contract());
     crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence)
@@ -787,7 +1003,8 @@ struct DisplayMirrorTaskContext {
 #[cfg(feature = "kernel")]
 unsafe fn display_mirror_driver_task(context: usize) -> usize {
     // SAFETY: `context` is built by `LocalSeatRuntime::mirror_line`; root waits
-    // synchronously while this callback borrows the runtime and line slice.
+    // synchronously while this callback borrows the runtime and line slice. This
+    // callback-pointer path is compatibility-only, not owner-state proof.
     let task = unsafe { &mut *(context as *mut DisplayMirrorTaskContext) };
     // SAFETY: `line_ptr/line_len` describe the borrowed `&str` passed to
     // `mirror_line`, which remains live until the synchronous dispatch returns.
@@ -805,6 +1022,7 @@ unsafe fn display_mirror_driver_task(context: usize) -> usize {
 unsafe fn usb_keyboard_poll_driver_task(context: usize) -> usize {
     // SAFETY: `context` is the `self` pointer from `poll_backend_keyboard`;
     // root waits synchronously while the USB/local-seat TCB polls the backend.
+    // This callback-pointer path is compatibility-only, not owner-state proof.
     let runtime = unsafe { &mut *(context as *mut LocalSeatRuntime) };
     runtime.poll_backend_keyboard_current_tcb(driver_task_contract());
     0
@@ -1231,18 +1449,106 @@ mod tests {
         assert_eq!(trace.dropped_bytes, 0);
     }
 
-    #[cfg(feature = "kernel")]
     #[test]
-    fn usb_keyboard_ring_service_uses_fixed_service_command() {
+    fn usb_owner_runtime_record_is_fixed_layout_and_non_acceptance() {
+        assert_eq!(core::mem::size_of::<LocalSeatUsbOwnerRuntimeRecord>(), 64);
+        assert_eq!(core::mem::align_of::<LocalSeatUsbOwnerRuntimeRecord>(), 8);
+
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",
             line_bytes: 16,
             buffer_lines: 4,
         });
-        let command = crate::hal::driver_task::DriverTaskCommandRecord::service(
+        assert_eq!(runtime.enqueue_keyboard_bytes(b"abc"), 3);
+        let mut drained = [0u8; 2];
+        assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 2);
+
+        let record = runtime.usb_owner_runtime_record();
+        assert_eq!(record.version, USB_OWNER_STATE_RECORD_VERSION);
+        assert_eq!(record.flags, USB_OWNER_STATE_FLAGS);
+        assert_eq!(record.queue_capacity, KEYBOARD_QUEUE_MAX_BYTES as u16);
+        assert_eq!(record.poll_chunk_bytes, KEYBOARD_POLL_CHUNK_BYTES as u16);
+        assert_eq!(record.queued_bytes, 1);
+        assert_eq!(record.accepted_bytes, 3);
+        assert_eq!(record.drained_bytes, 2);
+        assert!(!runtime.usb_owner_state_acceptance_eligible());
+        assert_eq!(
+            runtime.usb_owner_state_non_acceptance_reason(),
+            "root-runtime-pointer"
+        );
+    }
+
+    #[test]
+    fn hdmi_owner_runtime_record_is_fixed_layout_and_non_acceptance() {
+        #[cfg(feature = "kernel")]
+        let _guard = LOCAL_SEAT_RING_TEST_LOCK.lock();
+        #[cfg(feature = "kernel")]
+        crate::hal::driver_task::publish_driver_task_ring(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            0,
+        );
+        assert!(
+            core::mem::size_of::<LocalSeatHdmiOwnerRuntimeRecord>()
+                <= crate::hal::driver_task::DRIVER_TASK_OWNER_STATE_BYTES
+        );
+        assert_eq!(core::mem::align_of::<LocalSeatHdmiOwnerRuntimeRecord>(), 8);
+        let descriptor =
+            hdmi_owner_state_descriptor().expect("HDMI owner-state record must fit the ring");
+        assert_eq!(
+            descriptor.hot_path,
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText
+        );
+        assert_eq!(
+            descriptor.state_len as usize,
+            core::mem::size_of::<LocalSeatHdmiOwnerRuntimeRecord>()
+        );
+
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 4,
+            buffer_lines: 2,
+        });
+        runtime.mirror_line("abcdef");
+        runtime.mirror_line("1234");
+        runtime.mirror_line("wxyz");
+        runtime.echo_input_bytes(b"hi");
+
+        let record = runtime.hdmi_owner_runtime_record();
+        assert_eq!(record.version, HDMI_OWNER_STATE_RECORD_VERSION);
+        assert_eq!(record.flags, HDMI_OWNER_STATE_FLAGS);
+        assert_eq!(record.line_bytes, 4);
+        assert_eq!(record.buffer_lines, 2);
+        assert_eq!(record.mirrored_lines, 2);
+        assert_eq!(record.input_echo_bytes, 2);
+        assert_eq!(record.dropped_lines, 1);
+        assert_eq!(record.echoed_bytes, 2);
+        assert!(!runtime.hdmi_owner_state_acceptance_eligible());
+        assert_eq!(
+            runtime.hdmi_owner_state_non_acceptance_reason(),
+            "root-runtime-pointer"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_keyboard_ring_service_uses_fixed_hot_path_command() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
             11,
+            crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
             crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(driver_task_contract()),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
         );
 
         let completion = unsafe {
@@ -1258,6 +1564,39 @@ mod tests {
             crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
         );
         assert_eq!(runtime.keyboard_trace().backend_poll_calls, 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_keyboard_ring_service_rejects_non_hot_path_commands() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::service(
+            13,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(driver_task_contract()),
+        );
+
+        let completion = unsafe {
+            usb_keyboard_ring_service_driver_task(
+                &mut runtime as *mut LocalSeatRuntime as usize,
+                command,
+            )
+        };
+
+        assert_eq!(completion.sequence, 13);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        );
+        assert_eq!(
+            completion.detail,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand.as_u16()
+        );
+        assert_eq!(runtime.keyboard_trace().backend_poll_calls, 0);
     }
 
     #[cfg(feature = "kernel")]

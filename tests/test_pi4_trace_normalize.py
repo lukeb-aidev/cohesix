@@ -332,6 +332,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_AFFINITY_APPLIED": 0,
         "DRIVER_TASK_VSPACE_PROOF": "no",
         "DRIVER_TASK_POINTER_FREE_IPC_PROOF": "no",
+        "DRIVER_TASK_OWNER_STATE_PROOF": "no",
         "DRIVER_TASK_ACTIVE_NET": "unknown",
         "DRIVER_TASK_BUDGET_OVERRUNS": 0,
         "DRIVER_TASK_LATENCY_PROOFS": 0,
@@ -382,6 +383,7 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["DRIVER_TASK_AFFINITY_APPLIED"] == 0
     assert record["DRIVER_TASK_VSPACE_PROOF"] == "no"
     assert record["DRIVER_TASK_POINTER_FREE_IPC_PROOF"] == "no"
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "no"
     assert record["DRIVER_TASK_ACTIVE_NET"] == "unknown"
     assert record["DRIVER_TASK_BUDGET_OVERRUNS"] == 0
     assert record["DRIVER_TASK_LATENCY_PROOFS"] == 2
@@ -401,7 +403,22 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
             "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
             "broad_caps_leaked=0 sched=yes affinity=per-driver "
             "affinity_configured=9 affinity_applied=9 "
-            "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes live_hot_paths=yes",
+            "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes "
+            "owner_state=driver-owned live_hot_paths=yes",
+            "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
             "DRIVER_TASK role=serial contract=driver-serial isolation=dedicated-sel4-task "
             "live_tcb=yes hot_path=dedicated "
             "capset=console-transport unexpected_caps=0 fault_probe=pass revoke_ready=yes "
@@ -429,7 +446,7 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
             "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes substrate=active capset=pass "
             "fault=pass revoke=pass sched=pass affinity=pass active_net=cyw43 required=6 "
             "dedicated=6 compatibility=0 vspace=isolated ipc_abi=shared-ring-command "
-            "pointer_free_ipc=yes",
+            "pointer_free_ipc=yes owner_state=driver-owned",
         ]
     )
 
@@ -448,6 +465,7 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
     assert record["DRIVER_TASK_AFFINITY_APPLIED"] == 9
     assert record["DRIVER_TASK_VSPACE_PROOF"] == "yes"
     assert record["DRIVER_TASK_POINTER_FREE_IPC_PROOF"] == "yes"
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
     assert record["DRIVER_TASK_LIVE_HOT_PATHS"] == "yes"
     assert record["DRIVER_TASK_SDIO_DEDICATED"] == "yes"
     assert record["DRIVER_TASK_PCIE_DEDICATED"] == "yes"
@@ -463,7 +481,8 @@ def test_gate_summary_explicit_pointer_free_ipc_no_overrides_abi_label() -> None
             "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
             "broad_caps_leaked=0 sched=yes affinity=per-driver "
             "affinity_configured=9 affinity_applied=9 "
-            "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=no live_hot_paths=yes",
+            "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=no "
+            "owner_state=driver-owned live_hot_paths=yes",
             "DRIVER_TASK role=serial contract=driver-serial isolation=dedicated-sel4-task "
             "live_tcb=yes hot_path=dedicated capset=console-transport "
             "unexpected_caps=0 fault_probe=pass revoke_ready=yes priority=240 "
@@ -486,7 +505,7 @@ def test_gate_summary_explicit_pointer_free_ipc_no_overrides_abi_label() -> None
             "fault_probe=pass revoke_ready=yes priority=170 observed_service_us=51",
             "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes substrate=active capset=pass "
             "fault=pass revoke=pass sched=pass affinity=pass vspace=isolated "
-            "ipc_abi=shared-ring-command pointer_free_ipc=no required=6 "
+            "ipc_abi=shared-ring-command pointer_free_ipc=no owner_state=driver-owned required=6 "
             "dedicated=6 compatibility=0",
         ]
     )
@@ -494,6 +513,56 @@ def test_gate_summary_explicit_pointer_free_ipc_no_overrides_abi_label() -> None
     record = normalizer.summarize_gates(events).to_record()
     assert record["DRIVER_TASK_POINTER_FREE_IPC_PROOF"] == "no"
     assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
+
+
+def test_gate_summary_requires_per_hot_path_owner_state_descriptors() -> None:
+    """Aggregate owner_state text cannot prove concrete driver-owned hardware."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 mcs=0 "
+            "task_count=9 failed_count=0 live_tcb_count=9 "
+            "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
+            "broad_caps_leaked=0 sched=yes affinity=per-driver "
+            "affinity_configured=9 affinity_applied=9 "
+            "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes "
+            "owner_state=driver-owned live_hot_paths=yes",
+            "DRIVER_TASK role=serial contract=driver-serial isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=18",
+            "DRIVER_TASK role=usb contract=driver-usb isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=22",
+            "DRIVER_TASK role=display contract=driver-display isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=44",
+            "DRIVER_TASK role=net contract=driver-wifi isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated active_net=cyw43 observed_service_us=73",
+            "DRIVER_TASK role=sdio contract=sdio-host isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=47",
+            "DRIVER_TASK role=pcie contract=pcie-root isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=51",
+            "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes substrate=active capset=pass "
+            "fault=pass revoke=pass sched=pass affinity=pass active_net=cyw43 required=6 "
+            "dedicated=6 compatibility=0 vspace=isolated ipc_abi=shared-ring-command "
+            "pointer_free_ipc=yes owner_state=driver-owned",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "no"
+    assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
+
+
+def test_gate_summary_rejects_owner_state_hot_path_in_descriptor_field() -> None:
+    """The descriptor field proves presence only; hot-path identity is explicit."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_OWNER_STATE contract=serial descriptor=serial-console "
+            "owner_state=driver-owned root_pointer=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "no"
 
 
 def test_gate_summary_requires_live_hot_path_for_dedicated_role() -> None:

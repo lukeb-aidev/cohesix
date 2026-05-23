@@ -5669,9 +5669,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         #[cfg(feature = "kernel")]
         {
             if let Some(hot_path) = net_driver_task_hot_path(contract) {
+                let mut root_pointer_context =
+                    NetRootPointerRingContext::new(self as *mut Self, hot_path);
                 crate::hal::driver_task::register_driver_task_ring_service(
                     contract,
-                    self as *mut Self as usize,
+                    &mut root_pointer_context as *mut NetRootPointerRingContext as usize,
                     net_ring_service_driver_task::<D>,
                 );
                 let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
@@ -5681,7 +5683,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     crate::hal::driver_task::DriverFrameDescriptor {
                         offset: 0,
                         len: 0,
-                        flags: 0,
+                        flags: NET_RING_FLAG_ROOT_POINTER_NON_ACCEPTANCE,
                     },
                 );
                 command.aux0 = now_ms as u32;
@@ -5728,9 +5730,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         #[cfg(feature = "kernel")]
         {
             if let Some(hot_path) = net_driver_task_hot_path(contract) {
+                let mut root_pointer_context =
+                    NetRootPointerRingContext::new(self as *mut Self, hot_path);
                 crate::hal::driver_task::register_driver_task_ring_service(
                     contract,
-                    self as *mut Self as usize,
+                    &mut root_pointer_context as *mut NetRootPointerRingContext as usize,
                     net_ring_service_driver_task::<D>,
                 );
                 let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
@@ -5740,7 +5744,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     crate::hal::driver_task::DriverFrameDescriptor {
                         offset: 0,
                         len: 0,
-                        flags: NET_RING_FLAG_BUDGETED,
+                        flags: NET_RING_FLAG_BUDGETED | NET_RING_FLAG_ROOT_POINTER_NON_ACCEPTANCE,
                     },
                 );
                 command.aux0 = now_ms as u32;
@@ -6133,6 +6137,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 
 #[cfg(feature = "kernel")]
 const NET_RING_FLAG_BUDGETED: u16 = 1;
+#[cfg(feature = "kernel")]
+const NET_RING_FLAG_ROOT_POINTER_NON_ACCEPTANCE: u16 =
+    crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
+#[cfg(feature = "kernel")]
+const NET_ROOT_POINTER_RING_CONTEXT_MAGIC: u32 = 0x4e45_5452;
 
 #[cfg(feature = "kernel")]
 struct NetDriverTaskContext<D: NetDevice> {
@@ -6140,6 +6149,41 @@ struct NetDriverTaskContext<D: NetDevice> {
     budget: usize,
     now_ms: u64,
     _marker: core::marker::PhantomData<fn() -> D>,
+}
+
+#[cfg(feature = "kernel")]
+#[repr(C)]
+struct NetRootPointerRingContext {
+    magic: u32,
+    hot_path: u16,
+    flags: u16,
+    stack: usize,
+}
+
+#[cfg(feature = "kernel")]
+impl NetRootPointerRingContext {
+    fn new<D: NetDevice>(
+        stack: *mut NetStack<D>,
+        hot_path: crate::hal::driver_task::DriverTaskHotPath,
+    ) -> Self {
+        Self {
+            magic: NET_ROOT_POINTER_RING_CONTEXT_MAGIC,
+            hot_path: hot_path.as_u32() as u16,
+            flags: NET_RING_FLAG_ROOT_POINTER_NON_ACCEPTANCE,
+            stack: stack as usize,
+        }
+    }
+
+    fn stack<D: NetDevice>(
+        &self,
+        hot_path: crate::hal::driver_task::DriverTaskHotPath,
+    ) -> Option<*mut NetStack<D>> {
+        (self.magic == NET_ROOT_POINTER_RING_CONTEXT_MAGIC
+            && self.hot_path == hot_path.as_u32() as u16
+            && self.flags & NET_RING_FLAG_ROOT_POINTER_NON_ACCEPTANCE != 0
+            && self.stack != 0)
+            .then_some(self.stack as *mut NetStack<D>)
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -6160,15 +6204,44 @@ unsafe fn net_ring_service_driver_task<D: NetDevice>(
     context: usize,
     command: crate::hal::driver_task::DriverTaskCommandRecord,
 ) -> crate::hal::driver_task::DriverTaskCompletionRecord {
+    let Some(hot_path) = net_driver_task_hot_path(D::driver_task_contract()) else {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    };
     if command.opcode != crate::hal::driver_task::DriverTaskOpcode::Service.as_u16() {
         return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
             command.sequence,
             crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
         );
     }
-    // SAFETY: `context` is registered by `NetStack` before submitting a
-    // synchronous ring command, and root waits for completion before mutating it.
-    let stack = unsafe { &mut *(context as *mut NetStack<D>) };
+    if command.arg0 != hot_path.as_u32()
+        || command.arg1 != hot_path.role_bit() as u32
+        || command.frame.len != 0
+        || command.flags & NET_RING_FLAG_ROOT_POINTER_NON_ACCEPTANCE == 0
+    {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    let Some(root_context) = (unsafe { (context as *mut NetRootPointerRingContext).as_mut() })
+    else {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::InternalInvariant,
+        );
+    };
+    let Some(stack_ptr) = root_context.stack::<D>(hot_path) else {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::InternalInvariant,
+        );
+    };
+    // SAFETY: `stack_ptr` was explicitly marked as root-pointer
+    // non-acceptance context and is valid only for this synchronous command.
+    let stack = unsafe { &mut *stack_ptr };
     let now_ms = u64::from(command.aux0) | (u64::from(command.aux1) << 32);
     if command.flags & NET_RING_FLAG_BUDGETED != 0 {
         let Ok(mut budget) = DriverServiceBudget::new(D::driver_task_contract()) else {
@@ -6622,6 +6695,36 @@ mod tests {
             crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand.as_u16()
         );
         assert_eq!(completion.result, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn net_ring_service_marks_root_pointer_context_non_acceptance() {
+        assert_eq!(core::mem::size_of::<NetRootPointerRingContext>(), 16);
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            23,
+            crate::hal::driver_task::DriverTaskHotPath::GenetNic,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(
+                crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            ),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+
+        let completion = unsafe { net_ring_service_driver_task::<BcmGenetDevice>(0, command) };
+
+        assert_eq!(completion.sequence, 23);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        );
+        assert_eq!(
+            completion.detail,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand.as_u16()
+        );
     }
 
     #[test]

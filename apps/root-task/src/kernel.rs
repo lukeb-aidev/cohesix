@@ -5124,10 +5124,10 @@ fn bootstrap<P: Platform>(
                 boot_log::force_uart_line(line.as_str());
                 console.writeln_prefixed(line.as_str());
                 let report = hal.bootstrap_qemu_post_net_driver_task_smoke(fault_ep_slot);
-                let mut line = heapless::String::<192>::new();
+                let mut line = heapless::String::<256>::new();
                 let _ = write!(
                     line,
-                    "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured={} failed={} live_tcb_count={} vspace={} ipc_abi={} pointer_free_ipc={}",
+                    "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured={} failed={} live_tcb_count={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={}",
                     report.configured_count,
                     report.failed_count,
                     report.live_tcb_count,
@@ -5138,6 +5138,11 @@ fn bootstrap<P: Platform>(
                         crate::hal::driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str()
                     },
                     if report.pointer_free_ipc_proof { "yes" } else { "no" },
+                    if report.owner_state_proof {
+                        "driver-owned"
+                    } else {
+                        "not-proven"
+                    },
                 );
                 console.writeln_prefixed(line.as_str());
                 crate::hal::driver_task::emit_boot_contract_proof();

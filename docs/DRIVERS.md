@@ -260,17 +260,19 @@ Boot logs must expose the distinction with these breadcrumbs:
   full-contract QEMU transport report and must still fail full Pi 4
   dedicated-driver-task acceptance because Pi hardware roles and hardware
   hot-path ownership are not proved by QEMU.
-- `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured=<n> failed=<n> live_tcb_count=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no>`
+- `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured=<n> failed=<n> live_tcb_count=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> owner_state=<driver-owned|root-owned|not-proven>`
   is also emitted through the root console path during QEMU smoke runs so the
   proof remains visible after the boot logger switches away from early UART.
-- `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> live_hot_paths=<yes|no>`
+- `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> owner_state=<driver-owned|root-owned> live_hot_paths=<yes|no>`
+- one `DRIVER_TASK_OWNER_STATE contract=<name> hot_path=<serial-console|usb-keyboard|hdmi-text|genet-nic|cyw43-wifi|sdio-host|pcie-root> owner_state=<driver-owned|missing> descriptor=<present|missing> root_pointer=<no|unknown>` line per required Pi 4 hot path
 - one `SCHED_CONTRACT` line per built-in contract, including `live_tcb` and
   `hot_path`; role-specific dedicated proof is credited only when both fields
   prove live dedicated dispatch
 - one `DRIVER_TASK` line per role, including `capset`, `fault_probe`, and
   `revoke_ready`
 - `DRIVER_TASK_SUMMARY` with contract, compatibility, live-role, hot-path,
-  shared-ring-role, and compatibility-role counts
+  shared-ring-role, owner-state-role, owner-state-hot-path, and
+  compatibility-role counts
 - `DRIVER_TASK_ACCEPTANCE dedicated_ready=<yes|no> reason=<reason> ...` as the
   final machine-checkable verdict
 
@@ -279,7 +281,8 @@ show useful `DRIVER_TASK_BOOT` evidence for the TCBs that started, but closure
 requires the expected nine-task count, `failed_count=0`, live TCB count,
 required role mask, per-driver affinity count, zero leaked broad caps, all
 proof booleans demanded by `scripts/pi4_gate_proof.sh --require-driver-task-proof`,
-and `DRIVER_TASK_POINTER_FREE_IPC_PROOF=yes`. Pointer callbacks into root-task
+`DRIVER_TASK_POINTER_FREE_IPC_PROOF=yes`, and
+`DRIVER_TASK_OWNER_STATE_PROOF=yes`. Pointer callbacks into root-task
 memory are compatibility evidence only; full VSpace isolation requires a
 pointer-free shared command/completion ABI. The code-level ABI contract is now
 spelled as fixed-layout `DriverTaskCommandRecord` and
@@ -292,7 +295,17 @@ the physical Pi 4 shared-root ring service path. On the physical Pi 4 profile,
 red until the live driver state boundary moves into isolated per-driver runtime
 images. Shared-root ring service roles are now reported separately as
 `shared_ring_roles`; they are useful readiness evidence but do not satisfy
-`hot_path=dedicated` or full acceptance. Physical Pi 4 builds compile out the
+`hot_path=dedicated` or full acceptance until `owner_state=driver-owned` also
+proves that hardware state no longer lives in root-owned runtime structs.
+Transitional ring commands that still carry a root runtime pointer or root-stack
+context set the common `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit,
+so a shared-ring transport turn cannot later be promoted into owner-state proof
+by accident.
+Owner-state proof is per-hot-path: an aggregate `owner_state=driver-owned`
+field on `DRIVER_TASK_SUBSTRATE` or `DRIVER_TASK_ACCEPTANCE` is diagnostic until
+all seven `DRIVER_TASK_OWNER_STATE` lines report a present descriptor and
+`root_pointer=no`.
+Physical Pi 4 builds compile out the
 callback slot state used by the transitional service ABI; serial,
 USB/local-seat, display, and network hot-path callers can reach compatibility
 dispatch only through the single HAL `try_driver_task_compat_service` gate,

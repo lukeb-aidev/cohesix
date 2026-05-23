@@ -169,23 +169,28 @@ struct DmaDesc {
     addr_hi: u32,
 }
 
+#[repr(u16)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BreadcrumbReason {
-    TxNoRoom,
-    TxNoRoomRecovered,
-    TxRingFull,
-    TxConsStalled,
-    TxConsRecovered,
-    TxConsJump,
-    TxSwIndexInvalid,
-    TxHwIndexInvalid,
-    TxFirstCompletion,
-    RxProdStalled,
-    RxProdRecovered,
-    RxFirstFrame,
+    TxNoRoom = 1,
+    TxNoRoomRecovered = 2,
+    TxRingFull = 3,
+    TxConsStalled = 4,
+    TxConsRecovered = 5,
+    TxConsJump = 6,
+    TxSwIndexInvalid = 7,
+    TxHwIndexInvalid = 8,
+    TxFirstCompletion = 9,
+    RxProdStalled = 10,
+    RxProdRecovered = 11,
+    RxFirstFrame = 12,
 }
 
 impl BreadcrumbReason {
+    const fn as_u16(self) -> u16 {
+        self as u16
+    }
+
     const fn as_str(self) -> &'static str {
         match self {
             Self::TxNoRoom => "tx-no-room",
@@ -204,6 +209,7 @@ impl BreadcrumbReason {
     }
 }
 
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct DmaBreadcrumbSnapshot {
     tx_sw_prod: u16,
@@ -236,6 +242,89 @@ struct DmaBreadcrumbSnapshot {
     rx_prod_addr_lo: u32,
     rx_prod_addr_hi: u32,
     rx_ready_len: u16,
+}
+
+const GENET_OWNER_FLAG_TX_STALL_LOGGED: u16 = 1 << 0;
+const GENET_OWNER_FLAG_TX_BACKPRESSURE_LOGGED: u16 = 1 << 1;
+const GENET_OWNER_FLAG_RX_IDLE_LOGGED: u16 = 1 << 2;
+const GENET_OWNER_FLAG_BREADCRUMB_SNAPSHOT_VALID: u16 = 1 << 3;
+
+/// Fixed-layout GENET runtime state that can move into a driver-local ring page.
+///
+/// This record intentionally contains only primitive fields. It is not
+/// registered as owner-state proof yet because the live smoltcp service entry
+/// still reaches the device through a root-owned stack pointer.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BcmGenetOwnerRuntime {
+    tx_prod_index: u16,
+    tx_cons_index: u16,
+    rx_cons_index: u16,
+    flags: u16,
+    tx_drops: u32,
+    tx_stall_polls: u32,
+    tx_backpressure_polls: u32,
+    rx_idle_polls: u32,
+    crumb_seq: u64,
+    crumb_repeat: u32,
+    crumb_suppressed: u32,
+    crumb_last_reason: u16,
+    _pad0: u16,
+    crumb_last_snapshot: DmaBreadcrumbSnapshot,
+}
+
+impl BcmGenetOwnerRuntime {
+    const fn tx_stall_logged(self) -> bool {
+        self.flags & GENET_OWNER_FLAG_TX_STALL_LOGGED != 0
+    }
+
+    const fn tx_backpressure_logged(self) -> bool {
+        self.flags & GENET_OWNER_FLAG_TX_BACKPRESSURE_LOGGED != 0
+    }
+
+    const fn rx_idle_logged(self) -> bool {
+        self.flags & GENET_OWNER_FLAG_RX_IDLE_LOGGED != 0
+    }
+
+    const fn breadcrumb_snapshot_valid(self) -> bool {
+        self.flags & GENET_OWNER_FLAG_BREADCRUMB_SNAPSHOT_VALID != 0
+    }
+
+    fn set_tx_stall_logged(&mut self, logged: bool) {
+        self.set_flag(GENET_OWNER_FLAG_TX_STALL_LOGGED, logged);
+    }
+
+    fn set_tx_backpressure_logged(&mut self, logged: bool) {
+        self.set_flag(GENET_OWNER_FLAG_TX_BACKPRESSURE_LOGGED, logged);
+    }
+
+    fn set_rx_idle_logged(&mut self, logged: bool) {
+        self.set_flag(GENET_OWNER_FLAG_RX_IDLE_LOGGED, logged);
+    }
+
+    fn set_flag(&mut self, flag: u16, enabled: bool) {
+        if enabled {
+            self.flags |= flag;
+        } else {
+            self.flags &= !flag;
+        }
+    }
+
+    fn repeated_breadcrumb(
+        &self,
+        reason: BreadcrumbReason,
+        snapshot: DmaBreadcrumbSnapshot,
+    ) -> bool {
+        self.breadcrumb_snapshot_valid()
+            && self.crumb_last_reason == reason.as_u16()
+            && self.crumb_last_snapshot == snapshot
+    }
+
+    fn remember_breadcrumb(&mut self, reason: BreadcrumbReason, snapshot: DmaBreadcrumbSnapshot) {
+        self.crumb_last_reason = reason.as_u16();
+        self.crumb_last_snapshot = snapshot;
+        self.set_flag(GENET_OWNER_FLAG_BREADCRUMB_SNAPSHOT_VALID, true);
+    }
 }
 
 #[derive(Debug)]
@@ -274,25 +363,11 @@ pub struct BcmGenetDevice {
     tx_frames: HeaplessVec<RamFrame, TX_RING_DESCS>,
     rx_dma_shares: HeaplessVec<Option<dma::PinnedDmaRange>, RX_RING_DESCS>,
     tx_dma_shares: HeaplessVec<Option<dma::PinnedDmaRange>, TX_RING_DESCS>,
-    tx_prod_index: u16,
-    tx_cons_index: u16,
-    rx_cons_index: u16,
     rx_ready: RxReadyQueue,
     mac: EthernetAddress,
     dma_cacheable: bool,
-    tx_drops: u32,
     counters: NetDeviceCounters,
-    tx_stall_polls: u32,
-    tx_stall_logged: bool,
-    tx_backpressure_polls: u32,
-    tx_backpressure_logged: bool,
-    rx_idle_polls: u32,
-    rx_idle_logged: bool,
-    crumb_seq: u64,
-    crumb_repeat: u32,
-    crumb_suppressed: u32,
-    crumb_last_reason: Option<BreadcrumbReason>,
-    crumb_last_snapshot: Option<DmaBreadcrumbSnapshot>,
+    owner: BcmGenetOwnerRuntime,
 }
 
 pub struct RxToken {
@@ -350,25 +425,11 @@ impl BcmGenetDevice {
             tx_frames,
             rx_dma_shares,
             tx_dma_shares,
-            tx_prod_index: 0,
-            tx_cons_index: 0,
-            rx_cons_index: 0,
             rx_ready: Deque::new(),
             mac: EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x01]),
             dma_cacheable,
-            tx_drops: 0,
             counters: NetDeviceCounters::default(),
-            tx_stall_polls: 0,
-            tx_stall_logged: false,
-            tx_backpressure_polls: 0,
-            tx_backpressure_logged: false,
-            rx_idle_polls: 0,
-            rx_idle_logged: false,
-            crumb_seq: 0,
-            crumb_repeat: 0,
-            crumb_suppressed: 0,
-            crumb_last_reason: None,
-            crumb_last_snapshot: None,
+            owner: BcmGenetOwnerRuntime::default(),
         };
         device.init_hardware();
         device.mac = device.read_or_default_mac();
@@ -390,8 +451,8 @@ impl BcmGenetDevice {
             genet_hal::BCMGENET_MMIO_PAGE_COUNT,
             TX_RING_DESCS,
             device.mac,
-            device.tx_prod_index,
-            device.rx_cons_index,
+            device.owner.tx_prod_index,
+            device.owner.rx_cons_index,
             genet_hal::dma_address_policy_name(),
             device.dma_cacheable,
         );
@@ -726,13 +787,13 @@ impl BcmGenetDevice {
         self.write_reg32(RDMA_WRITE_PTR, 0);
         self.write_reg32(RDMA_RING_REG_BASE + DMA_END_ADDR, ring_end_addr(ring_len));
         let prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
-        self.rx_cons_index = prod;
+        self.owner.rx_cons_index = prod;
         self.write_reg32(RDMA_CONS_INDEX, prod as u32);
         info!(
             "[bcmgenet] rx ring init prod={} cons={} slot={} ring_len={}",
             prod,
-            self.rx_cons_index,
-            ring_slot(self.rx_cons_index, ring_len),
+            self.owner.rx_cons_index,
+            ring_slot(self.owner.rx_cons_index, ring_len),
             ring_len
         );
         self.write_reg32(
@@ -751,14 +812,14 @@ impl BcmGenetDevice {
         self.write_reg32(TDMA_WRITE_PTR, 0);
         self.write_reg32(TDMA_RING_REG_BASE + DMA_END_ADDR, ring_end_addr(ring_len));
         let cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
-        self.tx_cons_index = cons;
-        self.tx_prod_index = cons;
+        self.owner.tx_cons_index = cons;
+        self.owner.tx_prod_index = cons;
         self.write_reg32(TDMA_PROD_INDEX, cons as u32);
         info!(
             "[bcmgenet] tx ring init cons={} prod={} slot={} ring_len={}",
-            self.tx_cons_index,
-            self.tx_prod_index,
-            ring_slot(self.tx_prod_index, ring_len),
+            self.owner.tx_cons_index,
+            self.owner.tx_prod_index,
+            ring_slot(self.owner.tx_prod_index, ring_len),
             ring_len
         );
         self.write_reg32(TDMA_RING_REG_BASE + DMA_MBUF_DONE_THRESH, 1);
@@ -855,7 +916,7 @@ impl BcmGenetDevice {
 
     fn refresh_tx_counters(&mut self) {
         let ring_len = self.tx_ring_len();
-        let in_flight = ring_distance(self.tx_prod_index, self.tx_cons_index) as usize;
+        let in_flight = ring_distance(self.owner.tx_prod_index, self.owner.tx_cons_index) as usize;
         if in_flight > ring_len {
             self.counters.tx_invalid_used_state =
                 self.counters.tx_invalid_used_state.saturating_add(1);
@@ -869,7 +930,7 @@ impl BcmGenetDevice {
     }
 
     fn tx_in_flight(&self) -> usize {
-        ring_distance(self.tx_prod_index, self.tx_cons_index) as usize
+        ring_distance(self.owner.tx_prod_index, self.owner.tx_cons_index) as usize
     }
 
     fn tx_has_room(&mut self) -> bool {
@@ -878,19 +939,19 @@ impl BcmGenetDevice {
         }
         self.poll_tx_completions();
         if self.tx_in_flight() < self.tx_ring_len() {
-            if self.tx_backpressure_logged {
+            if self.owner.tx_backpressure_logged() {
                 self.log_dma_breadcrumb(BreadcrumbReason::TxNoRoomRecovered);
             }
-            self.tx_backpressure_polls = 0;
-            self.tx_backpressure_logged = false;
+            self.owner.tx_backpressure_polls = 0;
+            self.owner.set_tx_backpressure_logged(false);
             true
         } else {
-            self.tx_backpressure_polls = self.tx_backpressure_polls.saturating_add(1);
-            if self.tx_backpressure_polls >= TX_BACKPRESSURE_LOG_POLL_THRESHOLD
-                && !self.tx_backpressure_logged
+            self.owner.tx_backpressure_polls = self.owner.tx_backpressure_polls.saturating_add(1);
+            if self.owner.tx_backpressure_polls >= TX_BACKPRESSURE_LOG_POLL_THRESHOLD
+                && !self.owner.tx_backpressure_logged()
             {
                 self.log_dma_breadcrumb(BreadcrumbReason::TxNoRoom);
-                self.tx_backpressure_logged = true;
+                self.owner.set_tx_backpressure_logged(true);
             }
             false
         }
@@ -903,9 +964,9 @@ impl BcmGenetDevice {
         let tx_hw_cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
         let rx_hw_prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
         let rx_hw_cons = self.read_reg32(RDMA_CONS_INDEX) as u16;
-        let tx_cons_slot = ring_slot(self.tx_cons_index, tx_ring_len);
-        let tx_prod_slot = ring_slot(self.tx_prod_index, tx_ring_len);
-        let rx_cons_slot = ring_slot(self.rx_cons_index, rx_ring_len);
+        let tx_cons_slot = ring_slot(self.owner.tx_cons_index, tx_ring_len);
+        let tx_prod_slot = ring_slot(self.owner.tx_prod_index, tx_ring_len);
+        let rx_cons_slot = ring_slot(self.owner.rx_cons_index, rx_ring_len);
         let rx_prod_slot = ring_slot(rx_hw_prod, rx_ring_len);
         let tx_cons_desc = self.read_tx_desc(tx_cons_slot).unwrap_or_default();
         let tx_prod_desc = self.read_tx_desc(tx_prod_slot).unwrap_or_default();
@@ -913,14 +974,14 @@ impl BcmGenetDevice {
         let rx_prod_desc = self.read_rx_desc(rx_prod_slot).unwrap_or_default();
 
         DmaBreadcrumbSnapshot {
-            tx_sw_prod: self.tx_prod_index,
-            tx_sw_cons: self.tx_cons_index,
-            rx_sw_cons: self.rx_cons_index,
+            tx_sw_prod: self.owner.tx_prod_index,
+            tx_sw_cons: self.owner.tx_cons_index,
+            rx_sw_cons: self.owner.rx_cons_index,
             tx_hw_prod,
             tx_hw_cons,
             rx_hw_prod,
             rx_hw_cons,
-            tx_sw_in_flight: ring_distance(self.tx_prod_index, self.tx_cons_index),
+            tx_sw_in_flight: ring_distance(self.owner.tx_prod_index, self.owner.tx_cons_index),
             tx_hw_in_flight: ring_distance(tx_hw_prod, tx_hw_cons),
             tx_read_ptr: self.read_reg32(TDMA_READ_PTR),
             tx_write_ptr: self.read_reg32(TDMA_WRITE_PTR),
@@ -948,35 +1009,32 @@ impl BcmGenetDevice {
 
     fn log_dma_breadcrumb(&mut self, reason: BreadcrumbReason) {
         let snapshot = self.capture_breadcrumb_snapshot();
-        let repeated = self.crumb_last_reason == Some(reason)
-            && self
-                .crumb_last_snapshot
-                .map_or(false, |prev| prev == snapshot);
+        let repeated = self.owner.repeated_breadcrumb(reason, snapshot);
         if repeated {
-            self.crumb_repeat = self.crumb_repeat.saturating_add(1);
-            self.crumb_suppressed = self.crumb_suppressed.saturating_add(1);
-            if !should_emit_repeated_breadcrumb(self.crumb_repeat) {
+            self.owner.crumb_repeat = self.owner.crumb_repeat.saturating_add(1);
+            self.owner.crumb_suppressed = self.owner.crumb_suppressed.saturating_add(1);
+            if !should_emit_repeated_breadcrumb(self.owner.crumb_repeat) {
                 return;
             }
         } else {
-            self.crumb_repeat = 0;
+            self.owner.crumb_repeat = 0;
         }
 
-        self.crumb_seq = self.crumb_seq.saturating_add(1);
-        let suppressed = core::mem::replace(&mut self.crumb_suppressed, 0);
+        self.owner.crumb_seq = self.owner.crumb_seq.saturating_add(1);
+        let suppressed = core::mem::replace(&mut self.owner.crumb_suppressed, 0);
         let tx_ring_len = self.tx_ring_len();
         let tx_sw_overflow = usize::from(snapshot.tx_sw_in_flight) > tx_ring_len;
         let tx_hw_overflow = usize::from(snapshot.tx_hw_in_flight) > tx_ring_len;
 
         warn!(
             "[bcmgenet][crumb] seq={} r={} rpt={} sup={} drops={} txblk={} rxidle={}",
-            self.crumb_seq,
+            self.owner.crumb_seq,
             reason.as_str(),
-            self.crumb_repeat,
+            self.owner.crumb_repeat,
             suppressed,
-            self.tx_drops,
+            self.owner.tx_drops,
             self.counters.tx_alloc_blocked_inflight,
-            self.rx_idle_polls,
+            self.owner.rx_idle_polls,
         );
         warn!(
             "[bcmgenet][crumb] sw tx={}/{} in={} ov={} hw tx={}/{} in={} ov={} sw rx={} hw rx={}/{} q={} txptr={:08x}/{:08x} rxptr={:08x}/{:08x}",
@@ -1017,8 +1075,7 @@ impl BcmGenetDevice {
             desc_dma_addr(snapshot.rx_cons_addr_hi, snapshot.rx_cons_addr_lo),
             desc_dma_addr(snapshot.rx_prod_addr_hi, snapshot.rx_prod_addr_lo),
         );
-        self.crumb_last_reason = Some(reason);
-        self.crumb_last_snapshot = Some(snapshot);
+        self.owner.remember_breadcrumb(reason, snapshot);
     }
 
     fn poll_tx_completions(&mut self) {
@@ -1035,17 +1092,19 @@ impl BcmGenetDevice {
                 self.counters.tx_invalid_used_state.saturating_add(1);
             self.log_dma_breadcrumb(BreadcrumbReason::TxHwIndexInvalid);
         }
-        let completed = ring_distance(new_cons, self.tx_cons_index);
+        let completed = ring_distance(new_cons, self.owner.tx_cons_index);
         if completed == 0 {
             if self.tx_in_flight() > 0 {
-                self.tx_stall_polls = self.tx_stall_polls.saturating_add(1);
-                if self.tx_stall_polls >= TX_STALL_LOG_POLL_THRESHOLD && !self.tx_stall_logged {
+                self.owner.tx_stall_polls = self.owner.tx_stall_polls.saturating_add(1);
+                if self.owner.tx_stall_polls >= TX_STALL_LOG_POLL_THRESHOLD
+                    && !self.owner.tx_stall_logged()
+                {
                     self.log_dma_breadcrumb(BreadcrumbReason::TxConsStalled);
-                    self.tx_stall_logged = true;
+                    self.owner.set_tx_stall_logged(true);
                 }
             } else {
-                self.tx_stall_polls = 0;
-                self.tx_stall_logged = false;
+                self.owner.tx_stall_polls = 0;
+                self.owner.set_tx_stall_logged(false);
             }
             self.refresh_tx_counters();
             return;
@@ -1059,7 +1118,9 @@ impl BcmGenetDevice {
             let reclaim = genet_tx_completion_reclaim_count(completed as usize);
             for completed_offset in 0..reclaim {
                 let slot = ring_slot(
-                    self.tx_cons_index.wrapping_add(completed_offset as u16),
+                    self.owner
+                        .tx_cons_index
+                        .wrapping_add(completed_offset as u16),
                     ring_len,
                 );
                 self.unshare_tx_slot(slot);
@@ -1072,13 +1133,13 @@ impl BcmGenetDevice {
             if prev_complete == 0 {
                 self.log_dma_breadcrumb(BreadcrumbReason::TxFirstCompletion);
             }
-            self.tx_cons_index = self.tx_cons_index.wrapping_add(reclaim as u16);
+            self.owner.tx_cons_index = self.owner.tx_cons_index.wrapping_add(reclaim as u16);
         }
-        if self.tx_stall_logged {
+        if self.owner.tx_stall_logged() {
             self.log_dma_breadcrumb(BreadcrumbReason::TxConsRecovered);
         }
-        self.tx_stall_logged = false;
-        self.tx_stall_polls = 0;
+        self.owner.set_tx_stall_logged(false);
+        self.owner.tx_stall_polls = 0;
         self.refresh_tx_counters();
     }
 
@@ -1169,19 +1230,19 @@ impl BcmGenetDevice {
     }
 
     fn advance_rx_consumer(&mut self) {
-        self.rx_cons_index = self.rx_cons_index.wrapping_add(1);
+        self.owner.rx_cons_index = self.owner.rx_cons_index.wrapping_add(1);
         tx_doorbell_barrier();
-        self.write_reg32(RDMA_CONS_INDEX, self.rx_cons_index as u32);
+        self.write_reg32(RDMA_CONS_INDEX, self.owner.rx_cons_index as u32);
     }
 
     fn transmit(&mut self, packet: &[u8]) -> Result<(), DriverError> {
         if packet.is_empty() {
-            self.tx_drops = self.tx_drops.saturating_add(1);
+            self.owner.tx_drops = self.owner.tx_drops.saturating_add(1);
             self.counters.tx_zero_len_attempt = self.counters.tx_zero_len_attempt.saturating_add(1);
             return Ok(());
         }
         if packet.len() > MAX_FRAME_LEN || packet.len() > RX_BUF_LENGTH {
-            self.tx_drops = self.tx_drops.saturating_add(1);
+            self.owner.tx_drops = self.owner.tx_drops.saturating_add(1);
             warn!("[bcmgenet] drop oversized tx len={}", packet.len());
             return Ok(());
         }
@@ -1191,19 +1252,19 @@ impl BcmGenetDevice {
 
         self.poll_tx_completions();
         let ring_len = self.tx_ring_len();
-        let in_flight = ring_distance(self.tx_prod_index, self.tx_cons_index) as usize;
+        let in_flight = ring_distance(self.owner.tx_prod_index, self.owner.tx_cons_index) as usize;
         if in_flight >= ring_len {
-            self.tx_drops = self.tx_drops.saturating_add(1);
+            self.owner.tx_drops = self.owner.tx_drops.saturating_add(1);
             self.counters.tx_alloc_blocked_inflight =
                 self.counters.tx_alloc_blocked_inflight.saturating_add(1);
-            if should_log_tx_drop(self.tx_drops) {
+            if should_log_tx_drop(self.owner.tx_drops) {
                 self.log_dma_breadcrumb(BreadcrumbReason::TxRingFull);
             }
             self.refresh_tx_counters();
             return Ok(());
         }
 
-        let slot = ring_slot(self.tx_prod_index, self.tx_ring_len());
+        let slot = ring_slot(self.owner.tx_prod_index, self.tx_ring_len());
         self.unshare_tx_slot(slot);
         let (frame_ptr, frame_paddr) = {
             let frame = self.tx_frames.get_mut(slot).ok_or(DriverError::QueueInit)?;
@@ -1228,8 +1289,8 @@ impl BcmGenetDevice {
         let frame_dma = genet_hal::dma_bus_addr(frame_paddr);
         self.write_tx_desc(slot, frame_dma, encode_tx_len_status(packet.len()));
         tx_doorbell_barrier();
-        self.tx_prod_index = self.tx_prod_index.wrapping_add(1);
-        self.write_reg32(TDMA_PROD_INDEX, self.tx_prod_index as u32);
+        self.owner.tx_prod_index = self.owner.tx_prod_index.wrapping_add(1);
+        self.write_reg32(TDMA_PROD_INDEX, self.owner.tx_prod_index as u32);
 
         self.counters.tx_packets = self.counters.tx_packets.saturating_add(1);
         self.counters.tx_submit = self.counters.tx_submit.saturating_add(1);
@@ -1238,8 +1299,8 @@ impl BcmGenetDevice {
             "[bcmgenet] tx len={} slot={} prod={} cons={} first={:02x?}",
             packet.len(),
             slot,
-            self.tx_prod_index,
-            self.tx_cons_index,
+            self.owner.tx_prod_index,
+            self.owner.tx_cons_index,
             &packet[..packet.len().min(8)]
         );
         Ok(())
@@ -1259,21 +1320,21 @@ impl BcmGenetDevice {
         let mut budget = genet_rx_drain_budget(self.rx_ring_len());
         while budget > 0 && self.rx_ready.len() < RX_READY_CAP {
             let prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
-            if prod == self.rx_cons_index {
-                self.rx_idle_polls = self.rx_idle_polls.saturating_add(1);
-                if should_log_rx_idle(self.rx_idle_polls, self.rx_idle_logged) {
+            if prod == self.owner.rx_cons_index {
+                self.owner.rx_idle_polls = self.owner.rx_idle_polls.saturating_add(1);
+                if should_log_rx_idle(self.owner.rx_idle_polls, self.owner.rx_idle_logged()) {
                     self.log_dma_breadcrumb(BreadcrumbReason::RxProdStalled);
-                    self.rx_idle_logged = true;
+                    self.owner.set_rx_idle_logged(true);
                 }
                 break;
             }
-            if self.rx_idle_logged {
+            if self.owner.rx_idle_logged() {
                 self.log_dma_breadcrumb(BreadcrumbReason::RxProdRecovered);
             }
-            self.rx_idle_logged = false;
-            self.rx_idle_polls = 0;
+            self.owner.set_rx_idle_logged(false);
+            self.owner.rx_idle_polls = 0;
 
-            let slot = ring_slot(self.rx_cons_index, self.rx_ring_len());
+            let slot = ring_slot(self.owner.rx_cons_index, self.rx_ring_len());
             let Some(desc) = self.read_rx_desc(slot) else {
                 break;
             };
@@ -1326,7 +1387,7 @@ impl BcmGenetDevice {
                     frame.len(),
                     slot,
                     prod,
-                    self.rx_cons_index,
+                    self.owner.rx_cons_index,
                     &frame[..frame.len().min(8)]
                 );
                 let _ = push_rx_ready_frame(&mut self.rx_ready, frame);
@@ -1589,7 +1650,7 @@ impl NetDevice for BcmGenetDevice {
     }
 
     fn tx_drop_count(&self) -> u32 {
-        self.tx_drops
+        self.owner.tx_drops
     }
 
     fn name() -> &'static str
@@ -1613,8 +1674,8 @@ impl NetDevice for BcmGenetDevice {
         let tx_cons = self.read_reg32(TDMA_CONS_INDEX) as u16;
         let rx_prod = self.read_reg32(RDMA_PROD_INDEX) as u16;
         let rx_cons = self.read_reg32(RDMA_CONS_INDEX) as u16;
-        let tx_desc = self.read_tx_desc(ring_slot(self.tx_cons_index, self.tx_ring_len()));
-        let rx_desc = self.read_rx_desc(ring_slot(self.rx_cons_index, self.rx_ring_len()));
+        let tx_desc = self.read_tx_desc(ring_slot(self.owner.tx_cons_index, self.tx_ring_len()));
+        let rx_desc = self.read_rx_desc(ring_slot(self.owner.rx_cons_index, self.rx_ring_len()));
         debug!(
             "[bcmgenet] snapshot mmio=0x{:016x} cmd=0x{:08x} tx(prod={},cons={},inflight={}) rx(prod={},cons={}) tx_desc={:?} rx_desc={:?} tx_drops={}",
             self.mmio_base,
@@ -1626,7 +1687,7 @@ impl NetDevice for BcmGenetDevice {
             rx_cons,
             tx_desc,
             rx_desc,
-            self.tx_drops
+            self.owner.tx_drops
         );
     }
 
@@ -1660,10 +1721,10 @@ mod tests {
         decode_bmcr_speed, decode_rx_length, encode_tx_len_status, genet_rx_drain_budget,
         genet_tx_completion_reclaim_count, ring_distance, ring_slot, rx_owned_len_status,
         should_emit_repeated_breadcrumb, should_log_rx_idle, should_log_tx_drop, BcmGenetDevice,
-        RxReadyQueue, DMA_BUFLENGTH_SHIFT, DMA_DEFAULT_QTAG, DMA_EOP, DMA_OWN, DMA_SOP,
-        DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT, MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH,
-        RX_DRAIN_BUDGET, TX_COMPLETION_RECLAIM_BUDGET, UMAC_SPEED_10, UMAC_SPEED_100,
-        UMAC_SPEED_1000,
+        BcmGenetOwnerRuntime, DmaBreadcrumbSnapshot, RxReadyQueue, DMA_BUFLENGTH_SHIFT,
+        DMA_DEFAULT_QTAG, DMA_EOP, DMA_OWN, DMA_SOP, DMA_TX_APPEND_CRC, DMA_TX_QTAG_SHIFT,
+        MII_BMCR_SPEED100, MII_BMCR_SPEED1000, RX_BUF_LENGTH, RX_DRAIN_BUDGET,
+        TX_COMPLETION_RECLAIM_BUDGET, UMAC_SPEED_10, UMAC_SPEED_100, UMAC_SPEED_1000,
     };
 
     #[test]
@@ -1683,6 +1744,14 @@ mod tests {
     fn ring_distance_handles_wrap() {
         assert_eq!(ring_distance(10, 7), 3);
         assert_eq!(ring_distance(0, u16::MAX), 1);
+    }
+
+    #[test]
+    fn owner_runtime_record_stays_pointer_free_fixed_layout() {
+        assert_eq!(core::mem::align_of::<BcmGenetOwnerRuntime>(), 8);
+        assert!(core::mem::size_of::<BcmGenetOwnerRuntime>() <= 160);
+        assert_eq!(core::mem::size_of::<DmaBreadcrumbSnapshot>() % 4, 0);
+        assert_eq!(BcmGenetOwnerRuntime::default().crumb_last_reason, 0);
     }
 
     #[test]
