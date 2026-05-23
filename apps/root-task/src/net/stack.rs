@@ -5668,33 +5668,53 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         let contract = D::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
-                let mut context = NetDriverTaskContext::<D> {
-                    stack: self as *mut NetStack<D> as usize,
-                    budget: 0,
-                    now_ms,
-                    _marker: core::marker::PhantomData,
-                };
-                // SAFETY: This transitional callback path is admitted only for
-                // QEMU/host compatibility. Physical Pi 4 steady-state NIC
-                // service must use a pointer-free frame ring below smoltcp.
-                if let Some(result) = unsafe {
-                    crate::hal::driver_task::run_driver_task_service(
-                        contract,
-                        &mut context as *mut NetDriverTaskContext<D> as usize,
-                        net_poll_driver_task::<D>,
-                    )
-                } {
-                    return result != 0;
+            if let Some(hot_path) = net_driver_task_hot_path(contract) {
+                crate::hal::driver_task::register_driver_task_ring_service(
+                    contract,
+                    self as *mut Self as usize,
+                    net_ring_service_driver_task::<D>,
+                );
+                let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                    0,
+                    hot_path,
+                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                    crate::hal::driver_task::DriverFrameDescriptor {
+                        offset: 0,
+                        len: 0,
+                        flags: 0,
+                    },
+                );
+                command.aux0 = now_ms as u32;
+                command.aux1 = (now_ms >> 32) as u32;
+                if let Some(completion) =
+                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                {
+                    return completion.code
+                        == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                        && completion.result != 0;
                 }
             }
-            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+            let mut context = NetDriverTaskContext::<D> {
+                stack: self as *mut NetStack<D> as usize,
+                budget: 0,
+                now_ms,
+                _marker: core::marker::PhantomData,
+            };
+            // SAFETY: The HAL admits this compatibility callback only for
+            // QEMU/host profiles. Physical Pi 4 builds return None without
+            // compiling callback slot state.
+            if let Some(result) = unsafe {
+                crate::hal::driver_task::try_driver_task_compat_service(
+                    contract,
+                    &mut context as *mut NetDriverTaskContext<D> as usize,
+                    net_poll_driver_task::<D>,
+                )
+            } {
+                return result != 0;
+            }
+            if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
                 return false;
             }
-            crate::hal::driver_task::record_driver_task_service(
-                contract,
-                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
-            );
         }
         self.poll_with_time(now_ms)
     }
@@ -5707,33 +5727,61 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         let contract = D::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
-                let mut context = NetDriverTaskContext::<D> {
-                    stack: self as *mut NetStack<D> as usize,
-                    budget: budget as *mut DriverServiceBudget as usize,
-                    now_ms,
-                    _marker: core::marker::PhantomData,
-                };
-                // SAFETY: This transitional callback path is admitted only for
-                // QEMU/host compatibility. Physical Pi 4 steady-state NIC
-                // service must use a pointer-free frame ring below smoltcp.
-                if let Some(result) = unsafe {
-                    crate::hal::driver_task::run_driver_task_service(
-                        contract,
-                        &mut context as *mut NetDriverTaskContext<D> as usize,
-                        net_poll_budgeted_driver_task::<D>,
-                    )
-                } {
-                    return unpack_net_poll_result(result);
+            if let Some(hot_path) = net_driver_task_hot_path(contract) {
+                crate::hal::driver_task::register_driver_task_ring_service(
+                    contract,
+                    self as *mut Self as usize,
+                    net_ring_service_driver_task::<D>,
+                );
+                let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                    0,
+                    hot_path,
+                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                    crate::hal::driver_task::DriverFrameDescriptor {
+                        offset: 0,
+                        len: 0,
+                        flags: NET_RING_FLAG_BUDGETED,
+                    },
+                );
+                command.aux0 = now_ms as u32;
+                command.aux1 = (now_ms >> 32) as u32;
+                if let Some(completion) =
+                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                {
+                    if completion.code
+                        == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                    {
+                        return unpack_net_poll_result(completion.result as usize);
+                    }
+                    if completion.code
+                        == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+                    {
+                        return Ok(false);
+                    }
+                    return Err(DriverServiceBudgetError::OperationsExhausted);
                 }
             }
-            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+            let mut context = NetDriverTaskContext::<D> {
+                stack: self as *mut NetStack<D> as usize,
+                budget: budget as *mut DriverServiceBudget as usize,
+                now_ms,
+                _marker: core::marker::PhantomData,
+            };
+            // SAFETY: The HAL admits this compatibility callback only for
+            // QEMU/host profiles. Physical Pi 4 builds return None without
+            // compiling callback slot state.
+            if let Some(result) = unsafe {
+                crate::hal::driver_task::try_driver_task_compat_service(
+                    contract,
+                    &mut context as *mut NetDriverTaskContext<D> as usize,
+                    net_poll_budgeted_driver_task::<D>,
+                )
+            } {
+                return unpack_net_poll_result(result);
+            }
+            if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
                 return Err(DriverServiceBudgetError::OperationsExhausted);
             }
-            crate::hal::driver_task::record_driver_task_service(
-                contract,
-                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
-            );
         }
         self.poll_budgeted_with_time(now_ms, budget)
     }
@@ -6084,11 +6132,59 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 }
 
 #[cfg(feature = "kernel")]
+const NET_RING_FLAG_BUDGETED: u16 = 1;
+
+#[cfg(feature = "kernel")]
 struct NetDriverTaskContext<D: NetDevice> {
     stack: usize,
     budget: usize,
     now_ms: u64,
     _marker: core::marker::PhantomData<fn() -> D>,
+}
+
+#[cfg(feature = "kernel")]
+fn net_driver_task_hot_path(
+    contract: crate::hal::driver_task::DriverTaskContract,
+) -> Option<crate::hal::driver_task::DriverTaskHotPath> {
+    if contract == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT {
+        Some(crate::hal::driver_task::DriverTaskHotPath::GenetNic)
+    } else if contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        Some(crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn net_ring_service_driver_task<D: NetDevice>(
+    context: usize,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> crate::hal::driver_task::DriverTaskCompletionRecord {
+    if command.opcode != crate::hal::driver_task::DriverTaskOpcode::Service.as_u16() {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    // SAFETY: `context` is registered by `NetStack` before submitting a
+    // synchronous ring command, and root waits for completion before mutating it.
+    let stack = unsafe { &mut *(context as *mut NetStack<D>) };
+    let now_ms = u64::from(command.aux0) | (u64::from(command.aux1) << 32);
+    if command.flags & NET_RING_FLAG_BUDGETED != 0 {
+        let Ok(mut budget) = DriverServiceBudget::new(D::driver_task_contract()) else {
+            return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+                command.sequence,
+                crate::hal::driver_task::DriverTaskFaultCode::InternalInvariant,
+            );
+        };
+        let packed = pack_net_poll_result(stack.poll_budgeted_with_time(now_ms, &mut budget));
+        return crate::hal::driver_task::DriverTaskCompletionRecord::progress(
+            command.sequence,
+            packed as u32,
+        );
+    }
+    let progress = stack.poll_with_time(now_ms);
+    crate::hal::driver_task::DriverTaskCompletionRecord::progress(command.sequence, progress as u32)
 }
 
 #[cfg(feature = "kernel")]
@@ -6481,6 +6577,51 @@ mod tests {
         assert!(MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL <= 4);
         assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 16);
         assert!(MAX_CONSOLE_BYTES_PER_POLL <= 8_192);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn net_ring_hot_path_is_limited_to_pi4_nics() {
+        assert_eq!(
+            net_driver_task_hot_path(crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT),
+            Some(crate::hal::driver_task::DriverTaskHotPath::GenetNic)
+        );
+        assert_eq!(
+            net_driver_task_hot_path(crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Some(crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi)
+        );
+        assert_eq!(
+            net_driver_task_hot_path(crate::hal::driver_task::RTL8139_DRIVER_TASK_CONTRACT),
+            None
+        );
+        assert_eq!(
+            net_driver_task_hot_path(crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT),
+            None
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn net_ring_service_rejects_non_service_command_before_context_use() {
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::flush(
+            17,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(
+                crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            ),
+        );
+
+        let completion = unsafe { net_ring_service_driver_task::<BcmGenetDevice>(0, command) };
+
+        assert_eq!(completion.sequence, 17);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        );
+        assert_eq!(
+            completion.detail,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand.as_u16()
+        );
+        assert_eq!(completion.result, 0);
     }
 
     #[test]

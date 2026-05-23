@@ -9,6 +9,11 @@ license = "MIT"
 publish = false
 description = "Cohesix host bridge CLI (mount, gpu, telemetry pull)"
 
+[[bin]]
+name = "coh"
+path = "src/main.rs"
+test = false
+
 [features]
 default = ["nvml", "cuda"]
 mock = []

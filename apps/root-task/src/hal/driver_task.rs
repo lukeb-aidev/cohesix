@@ -77,6 +77,18 @@ pub const CURRENT_DRIVER_TASK_RUNTIME_PROFILE: DriverTaskRuntimeProfile = if cfg
     DriverTaskRuntimeProfile::HostTest
 };
 
+/// Whether this build may compile steady-state compatibility service state.
+///
+/// The physical Pi 4 profile must not carry callback-pointer service slots for
+/// hardware turns. QEMU and host-test builds keep the narrow compatibility ABI
+/// so the architecture can be tested before every Pi-only driver is migrated.
+pub const STEADY_STATE_COMPAT_SERVICE_COMPILED: bool = cfg!(any(
+    not(feature = "kernel"),
+    not(target_arch = "aarch64"),
+    not(target_os = "none"),
+    feature = "net-backend-virtio"
+));
+
 impl DriverTaskKind {
     /// Stable role label used by Pi 4 driver-task proof tooling.
     #[must_use]
@@ -122,6 +134,9 @@ pub struct DriverTaskRuntimeProof {
     pub live_tcb_role_mask: usize,
     /// Role coverage for hot paths actually serviced by dedicated TCBs.
     pub hot_path_role_mask: usize,
+    /// Role coverage serviced through pointer-free rings before isolated
+    /// driver-owned state is proved.
+    pub shared_ring_service_role_mask: usize,
     /// Role coverage still observed on root-task compatibility service turns.
     pub compatibility_service_role_mask: usize,
     /// Whether minted driver CSpaces contain only declared caps.
@@ -217,6 +232,8 @@ pub fn driver_task_runtime_proof() -> DriverTaskRuntimeProof {
             live_tcb_count: DRIVER_TASK_LIVE_TCB_COUNT.load(Ordering::Acquire),
             live_tcb_role_mask: DRIVER_TASK_LIVE_TCB_ROLE_MASK.load(Ordering::Acquire),
             hot_path_role_mask: DRIVER_TASK_HOT_PATH_ROLE_MASK.load(Ordering::Acquire),
+            shared_ring_service_role_mask: DRIVER_TASK_SHARED_RING_SERVICE_ROLE_MASK
+                .load(Ordering::Acquire),
             compatibility_service_role_mask: DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK
                 .load(Ordering::Acquire),
             capset_proof: DRIVER_TASK_CAPSET_PROOF.load(Ordering::Acquire) != 0,
@@ -255,13 +272,20 @@ pub fn record_driver_task_service(contract: DriverTaskContract, isolation: Drive
 
 /// Records a service turn that completed through the pointer-free ring ABI.
 ///
-/// This is the only runtime accounting path that may credit a hardware hot
-/// path as fully dedicated once the driver state boundary moves behind the
-/// shared command/completion ring.
+/// Shared-ring dispatch is necessary but not sufficient for strongest driver
+/// isolation. It is credited as a dedicated hot path only after the runtime also
+/// proves isolated driver VSpaces and pointer-free IPC; otherwise it remains a
+/// distinct shared-ring diagnostic that does not satisfy acceptance.
 #[cfg(feature = "kernel")]
 pub fn record_driver_task_ring_hot_path(contract: DriverTaskContract) {
     let role_bit = driver_task_role_bit(contract.kind);
-    if role_bit != 0 {
+    if role_bit == 0 {
+        return;
+    }
+    DRIVER_TASK_SHARED_RING_SERVICE_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+    if DRIVER_TASK_VSPACE_PROOF.load(Ordering::Acquire) != 0
+        && DRIVER_TASK_POINTER_FREE_IPC_PROOF.load(Ordering::Acquire) != 0
+    {
         DRIVER_TASK_HOT_PATH_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
     }
 }
@@ -309,7 +333,29 @@ pub const fn steady_state_root_fallback_allowed(_contract: DriverTaskContract) -
     root_fallback_allowed_for_profile(CURRENT_DRIVER_TASK_RUNTIME_PROFILE)
 }
 
+/// Admit and record a root-owned compatibility service turn when the current
+/// profile is explicitly allowed to use one.
+///
+/// This is the only steady-state root-fallback admission point. Physical Pi 4
+/// builds return false, forcing the caller to fail closed until the relevant
+/// hardware path is serviced by a ring-backed driver task.
 #[cfg(feature = "kernel")]
+pub fn admit_root_task_compatibility_service(contract: DriverTaskContract) -> bool {
+    if !steady_state_root_fallback_allowed(contract) {
+        return false;
+    }
+    record_driver_task_service(contract, DriverTaskIsolation::RootTaskCompatibility);
+    true
+}
+
+#[cfg(all(
+    feature = "kernel",
+    any(
+        not(target_arch = "aarch64"),
+        not(target_os = "none"),
+        feature = "net-backend-virtio"
+    )
+))]
 fn record_driver_task_callback_compatibility(contract: DriverTaskContract) {
     let role_bit = driver_task_role_bit(contract.kind);
     if role_bit != 0 {
@@ -325,6 +371,11 @@ fn record_driver_task_callback_compatibility(contract: DriverTaskContract) {
 /// framework.
 #[cfg(feature = "kernel")]
 pub type DriverTaskServiceHandler = unsafe fn(usize) -> usize;
+
+/// Registered service owner for fixed-layout shared-ring commands.
+#[cfg(feature = "kernel")]
+pub type DriverTaskRingServiceHandler =
+    unsafe fn(usize, DriverTaskCommandRecord) -> DriverTaskCompletionRecord;
 
 /// Service IPC ABI installed for driver-task dispatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -354,10 +405,15 @@ impl DriverTaskIpcAbi {
 
 /// Current as-built service ABI.
 ///
-/// This remains the transitional callback ABI until the live service path moves
-/// to shared command/completion rings. Full dedicated-driver isolation must fail
-/// closed while this constant is `CallbackPointer`.
-pub const CURRENT_DRIVER_TASK_IPC_ABI: DriverTaskIpcAbi = DriverTaskIpcAbi::CallbackPointer;
+/// Physical Pi 4 builds use fixed command/completion rings for steady-state
+/// service turns. QEMU/host compatibility builds retain the callback ABI so
+/// existing virtual-device paths can keep running while isolated runtime images
+/// grow full hardware handlers.
+pub const CURRENT_DRIVER_TASK_IPC_ABI: DriverTaskIpcAbi = if STEADY_STATE_COMPAT_SERVICE_COMPILED {
+    DriverTaskIpcAbi::CallbackPointer
+} else {
+    DriverTaskIpcAbi::SharedRingCommand
+};
 
 /// Entry point for bootstrap-created driver TCBs.
 #[cfg(feature = "kernel")]
@@ -579,6 +635,9 @@ pub const DRIVER_TASK_STACK_TOP_VADDR: usize = 0x7000_3000;
 /// Offset of the first fixed-layout completion record within the ring page.
 pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
 
+/// Offset of the role-owned shared payload area within the ring page.
+pub const DRIVER_TASK_RING_FRAME_OFFSET: usize = 256;
+
 /// One page is enough for the current smoke command and completion records.
 pub const DRIVER_TASK_RING_PAGE_BYTES: usize = 4096;
 
@@ -622,6 +681,8 @@ static DRIVER_TASK_STARTED_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
 static DRIVER_TASK_STARTED_TASK_MASK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_HOT_PATH_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_SHARED_RING_SERVICE_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_COMPAT_SERVICE_ROLE_MASK: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
@@ -673,12 +734,34 @@ pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 struct DriverTaskCommandSlot {
     endpoint: AtomicUsize,
     ring_root_ptr: AtomicUsize,
-    handler: AtomicUsize,
-    context: AtomicUsize,
     request_seq: AtomicUsize,
-    done_seq: AtomicUsize,
-    result: AtomicUsize,
     active: AtomicUsize,
+    ring_handler: AtomicUsize,
+    ring_context: AtomicUsize,
+    #[cfg(any(
+        not(target_arch = "aarch64"),
+        not(target_os = "none"),
+        feature = "net-backend-virtio"
+    ))]
+    handler: AtomicUsize,
+    #[cfg(any(
+        not(target_arch = "aarch64"),
+        not(target_os = "none"),
+        feature = "net-backend-virtio"
+    ))]
+    context: AtomicUsize,
+    #[cfg(any(
+        not(target_arch = "aarch64"),
+        not(target_os = "none"),
+        feature = "net-backend-virtio"
+    ))]
+    done_seq: AtomicUsize,
+    #[cfg(any(
+        not(target_arch = "aarch64"),
+        not(target_os = "none"),
+        feature = "net-backend-virtio"
+    ))]
+    result: AtomicUsize,
 }
 
 #[cfg(feature = "kernel")]
@@ -687,12 +770,34 @@ impl DriverTaskCommandSlot {
         Self {
             endpoint: AtomicUsize::new(0),
             ring_root_ptr: AtomicUsize::new(0),
-            handler: AtomicUsize::new(0),
-            context: AtomicUsize::new(0),
             request_seq: AtomicUsize::new(0),
-            done_seq: AtomicUsize::new(0),
-            result: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
+            ring_handler: AtomicUsize::new(0),
+            ring_context: AtomicUsize::new(0),
+            #[cfg(any(
+                not(target_arch = "aarch64"),
+                not(target_os = "none"),
+                feature = "net-backend-virtio"
+            ))]
+            handler: AtomicUsize::new(0),
+            #[cfg(any(
+                not(target_arch = "aarch64"),
+                not(target_os = "none"),
+                feature = "net-backend-virtio"
+            ))]
+            context: AtomicUsize::new(0),
+            #[cfg(any(
+                not(target_arch = "aarch64"),
+                not(target_os = "none"),
+                feature = "net-backend-virtio"
+            ))]
+            done_seq: AtomicUsize::new(0),
+            #[cfg(any(
+                not(target_arch = "aarch64"),
+                not(target_os = "none"),
+                feature = "net-backend-virtio"
+            ))]
+            result: AtomicUsize::new(0),
         }
     }
 }
@@ -790,6 +895,105 @@ pub fn publish_driver_task_ring(contract: DriverTaskContract, ring_root_ptr: usi
     slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
 }
 
+/// Register the driver-owned state machine for fixed shared-ring service turns.
+#[cfg(feature = "kernel")]
+pub fn register_driver_task_ring_service(
+    contract: DriverTaskContract,
+    context: usize,
+    handler: DriverTaskRingServiceHandler,
+) -> bool {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.ring_context.store(context, Ordering::Release);
+    slot.ring_handler
+        .store(handler as *const () as usize, Ordering::Release);
+    true
+}
+
+/// Register the pointer-free default service handler for Pi 4 bus owner roles.
+#[cfg(feature = "kernel")]
+pub fn register_pi4_bus_ring_service(contract: DriverTaskContract) -> bool {
+    let hot_path = if contract == SDIO_HOST_DRIVER_TASK_CONTRACT {
+        DriverTaskHotPath::SdioHost
+    } else if contract == PCIE_ROOT_DRIVER_TASK_CONTRACT {
+        DriverTaskHotPath::PcieRoot
+    } else {
+        return false;
+    };
+    register_driver_task_ring_service(
+        contract,
+        hot_path.as_u32() as usize,
+        pi4_bus_ring_service_driver_task,
+    )
+}
+
+/// Stage a bounded payload into the driver-task ring shared-buffer area.
+#[cfg(feature = "kernel")]
+pub fn stage_driver_task_ring_frame(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    flags: u16,
+) -> Option<DriverFrameDescriptor> {
+    if payload.len() > MAX_DRIVER_TASK_FRAME_BYTES {
+        return None;
+    }
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let end = DRIVER_TASK_RING_FRAME_OFFSET.checked_add(payload.len())?;
+    if end > DRIVER_TASK_RING_PAGE_BYTES {
+        return None;
+    }
+    let dst = (ring_root_ptr + DRIVER_TASK_RING_FRAME_OFFSET) as *mut u8;
+    // SAFETY: The destination lies in the HAL-owned ring page after the fixed
+    // command/completion records. Bounds above keep the copy page-local, and the
+    // root TCB owns writes before it submits the command sequence.
+    unsafe {
+        core::ptr::copy_nonoverlapping(payload.as_ptr(), dst, payload.len());
+    }
+    DriverFrameDescriptor::new(
+        DRIVER_TASK_RING_FRAME_OFFSET as u32,
+        payload.len() as u16,
+        flags,
+    )
+    .ok()
+}
+
+/// Borrow a staged shared-ring payload for the current synchronous service turn.
+#[cfg(feature = "kernel")]
+pub fn driver_task_ring_frame_bytes(
+    contract: DriverTaskContract,
+    frame: DriverFrameDescriptor,
+) -> Option<&'static [u8]> {
+    if frame.len as usize > MAX_DRIVER_TASK_FRAME_BYTES {
+        return None;
+    }
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let offset = frame.offset as usize;
+    let end = offset.checked_add(frame.len as usize)?;
+    if offset < DRIVER_TASK_RING_FRAME_OFFSET || end > DRIVER_TASK_RING_PAGE_BYTES {
+        return None;
+    }
+    // SAFETY: The descriptor was bounds-checked against the same HAL-owned ring
+    // page. The returned slice is consumed synchronously by the driver service
+    // handler before root mutates the frame area for another command.
+    Some(unsafe {
+        core::slice::from_raw_parts((ring_root_ptr + offset) as *const u8, frame.len as usize)
+    })
+}
+
 /// Execute a fixed-layout command over the pointer-free shared-ring ABI.
 ///
 /// This transport is intentionally narrower than the transitional callback
@@ -851,8 +1055,77 @@ pub fn run_driver_task_ring_command(
     (completion.sequence == request as u32).then_some(completion)
 }
 
+/// Execute one registered driver service turn through the shared-ring ABI.
 #[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    let completion = run_driver_task_ring_command(contract, command)?;
+    if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
+        record_driver_task_ring_hot_path(contract);
+    }
+    Some(completion)
+}
+
+#[cfg(feature = "kernel")]
+fn service_pending_driver_task_ring_command(task_key: usize) -> Option<usize> {
+    let slot = slot_for_task_key(task_key)?;
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let handler_word = slot.ring_handler.load(Ordering::Acquire);
+    if handler_word == 0 {
+        return None;
+    }
+    let context = slot.ring_context.load(Ordering::Acquire);
+    let command_ptr = ring_root_ptr as *const DriverTaskCommandRecord;
+    let completion_ptr =
+        (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+    // SAFETY: The ring page is HAL-owned and page-local. Root writes the command
+    // before sending IPC to this TCB; volatile access preserves that boundary.
+    let command = unsafe { core::ptr::read_volatile(command_ptr) };
+    if command.sequence == 0 {
+        return None;
+    }
+    // SAFETY: Same page-local completion record as above.
+    let current = unsafe { core::ptr::read_volatile(completion_ptr) };
+    if current.sequence == command.sequence {
+        return Some(current.result as usize);
+    }
+
+    // SAFETY: `register_driver_task_ring_service` stores only function pointers
+    // with the exact `DriverTaskRingServiceHandler` ABI. The integer round trip
+    // keeps the slot atomically publishable to the service TCB.
+    let handler: DriverTaskRingServiceHandler =
+        unsafe { core::mem::transmute::<usize, DriverTaskRingServiceHandler>(handler_word) };
+    // SAFETY: The registered owner controls the context lifetime. Root submits a
+    // single synchronous command at a time (`active` gate) and does not mutate the
+    // driver-owned state until the completion sequence is published.
+    let mut completion = unsafe { handler(context, command) };
+    if completion.sequence != command.sequence {
+        completion.sequence = command.sequence;
+    }
+    // SAFETY: Completion record is page-local and naturally aligned.
+    unsafe {
+        core::ptr::write_volatile(completion_ptr, completion);
+    }
+    Some(completion.result as usize)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    any(
+        not(target_arch = "aarch64"),
+        not(target_os = "none"),
+        feature = "net-backend-virtio"
+    )
+))]
 fn service_pending_driver_task_command(task_key: usize) -> usize {
+    if let Some(result) = service_pending_driver_task_ring_command(task_key) {
+        return result;
+    }
     let Some(slot) = slot_for_task_key(task_key) else {
         return usize::MAX;
     };
@@ -881,13 +1154,49 @@ fn service_pending_driver_task_command(task_key: usize) -> usize {
     result
 }
 
+#[cfg(all(
+    feature = "kernel",
+    target_arch = "aarch64",
+    target_os = "none",
+    not(feature = "net-backend-virtio")
+))]
+fn service_pending_driver_task_command(task_key: usize) -> usize {
+    service_pending_driver_task_ring_command(task_key).unwrap_or(usize::MAX)
+}
+
+/// Execute a bounded compatibility callback on the contract's live driver TCB.
+///
+/// Returns `None` unless the current runtime profile explicitly admits
+/// QEMU/host compatibility dispatch.
+#[cfg(feature = "kernel")]
+pub unsafe fn try_driver_task_compat_service(
+    contract: DriverTaskContract,
+    context: usize,
+    handler: DriverTaskServiceHandler,
+) -> Option<usize> {
+    if !steady_state_callback_dispatch_allowed(contract) {
+        return None;
+    }
+    // SAFETY: The profile gate above admits only QEMU/host compatibility turns.
+    // The caller still owns the synchronous context lifetime required by the
+    // compatibility ABI.
+    unsafe { run_driver_task_service(contract, context, handler) }
+}
+
 /// Execute a bounded driver service callback on the contract's live driver TCB.
 ///
 /// Returns `None` when the task is not available or the command does not finish
-/// within the bounded wait. Callers must then preserve functionality through an
-/// explicit root-task compatibility path, which keeps acceptance proof honest.
-#[cfg(feature = "kernel")]
-pub unsafe fn run_driver_task_service(
+/// within the bounded wait. This compatibility ABI is compiled only for QEMU
+/// and host-test profiles; physical Pi 4 hardware builds use the no-op variant.
+#[cfg(all(
+    feature = "kernel",
+    any(
+        not(target_arch = "aarch64"),
+        not(target_os = "none"),
+        feature = "net-backend-virtio"
+    )
+))]
+unsafe fn run_driver_task_service(
     contract: DriverTaskContract,
     context: usize,
     handler: DriverTaskServiceHandler,
@@ -938,19 +1247,21 @@ pub unsafe fn run_driver_task_service(
     completed
 }
 
-/// Host/test fallback: no live seL4 driver TCB exists.
+/// Physical Pi 4 fail-closed compatibility boundary.
 ///
 /// # Safety
 ///
-/// This fallback never dereferences `context` and never invokes `handler`; it
-/// exists only to preserve the same unsafe ABI as the kernel-backed service
-/// path. Callers must still uphold the kernel-path ownership contract because
-/// the same call site may dispatch through a live driver TCB in kernel builds.
-#[cfg(not(feature = "kernel"))]
-pub unsafe fn run_driver_task_service(
+/// This variant never dereferences `context` and never invokes `handler`.
+#[cfg(all(
+    feature = "kernel",
+    target_arch = "aarch64",
+    target_os = "none",
+    not(feature = "net-backend-virtio")
+))]
+unsafe fn run_driver_task_service(
     _contract: DriverTaskContract,
     _context: usize,
-    _handler: unsafe fn(usize) -> usize,
+    _handler: DriverTaskServiceHandler,
 ) -> Option<usize> {
     None
 }
@@ -1530,6 +1841,21 @@ pub enum DriverTaskHotPath {
 }
 
 impl DriverTaskHotPath {
+    /// Decode a primitive ring argument into a known Pi 4 hot-path role.
+    #[must_use]
+    pub const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            1 => Some(Self::SerialConsole),
+            2 => Some(Self::UsbKeyboard),
+            3 => Some(Self::HdmiText),
+            4 => Some(Self::GenetNic),
+            5 => Some(Self::Cyw43Wifi),
+            6 => Some(Self::SdioHost),
+            7 => Some(Self::PcieRoot),
+            _ => None,
+        }
+    }
+
     /// Primitive wire identifier carried in `DriverTaskCommandRecord::arg0`.
     #[must_use]
     pub const fn as_u32(self) -> u32 {
@@ -1591,6 +1917,51 @@ pub const PI4_DRIVER_TASK_HOT_PATHS: [DriverTaskHotPath; 7] = [
     DriverTaskHotPath::PcieRoot,
 ];
 
+/// Pointer-free service handler for bus-owner roles whose concrete hardware
+/// queues are not allowed to fall back to root-owned pointer contexts.
+///
+/// The `context` word carries the expected [`DriverTaskHotPath`] id instead of
+/// a root pointer. This lets SDIO and PCIe driver-task service turns reject
+/// malformed ring commands through the same ABI that will later carry their
+/// bounded bus descriptors.
+#[cfg(feature = "kernel")]
+pub unsafe fn pi4_bus_ring_service_driver_task(
+    context: usize,
+    command: DriverTaskCommandRecord,
+) -> DriverTaskCompletionRecord {
+    let Some(expected_hot_path) = DriverTaskHotPath::from_u32(context as u32) else {
+        return DriverTaskCompletionRecord::fault(
+            command.sequence,
+            DriverTaskFaultCode::InternalInvariant,
+        );
+    };
+    if expected_hot_path != DriverTaskHotPath::SdioHost
+        && expected_hot_path != DriverTaskHotPath::PcieRoot
+    {
+        return DriverTaskCompletionRecord::fault(
+            command.sequence,
+            DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    if command.opcode != expected_hot_path.opcode().as_u16()
+        || command.arg0 != expected_hot_path.as_u32()
+        || command.arg1 != expected_hot_path.role_bit() as u32
+    {
+        return DriverTaskCompletionRecord::fault(
+            command.sequence,
+            DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    if command.frame.len != 0 {
+        return DriverTaskCompletionRecord::fault(
+            command.sequence,
+            DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+
+    DriverTaskCompletionRecord::idle(command.sequence)
+}
+
 /// Fault code encoded in the pointer-free shared-ring ABI.
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1645,6 +2016,10 @@ pub struct DriverTaskCommandRecord {
     pub arg0: u32,
     /// Second opcode-specific primitive argument.
     pub arg1: u32,
+    /// Auxiliary primitive argument for role-specific service handlers.
+    pub aux0: u32,
+    /// Second auxiliary primitive argument for role-specific service handlers.
+    pub aux1: u32,
     /// Per-command service budget.
     pub budget: DriverTaskBudgetGrant,
     /// Shared-buffer descriptor for frame-bearing commands.
@@ -1661,6 +2036,8 @@ impl DriverTaskCommandRecord {
             flags: 0,
             arg0: 0,
             arg1: 0,
+            aux0: 0,
+            aux1: 0,
             budget,
             frame: DriverFrameDescriptor {
                 offset: 0,
@@ -1679,6 +2056,8 @@ impl DriverTaskCommandRecord {
             flags: 0,
             arg0: irq,
             arg1: 0,
+            aux0: 0,
+            aux1: 0,
             budget,
             frame: DriverFrameDescriptor {
                 offset: 0,
@@ -1701,6 +2080,8 @@ impl DriverTaskCommandRecord {
             flags: frame.flags,
             arg0: 0,
             arg1: 0,
+            aux0: 0,
+            aux1: 0,
             budget,
             frame,
         }
@@ -1715,6 +2096,8 @@ impl DriverTaskCommandRecord {
             flags: 0,
             arg0: 0,
             arg1: 0,
+            aux0: 0,
+            aux1: 0,
             budget,
             frame: DriverFrameDescriptor {
                 offset: 0,
@@ -1742,6 +2125,8 @@ impl DriverTaskCommandRecord {
             flags: frame.flags,
             arg0: hot_path.as_u32(),
             arg1: hot_path.role_bit() as u32,
+            aux0: 0,
+            aux1: 0,
             budget,
             frame,
         }
@@ -1756,6 +2141,8 @@ impl DriverTaskCommandRecord {
             flags: 0,
             arg0: 0,
             arg1: 0,
+            aux0: 0,
+            aux1: 0,
             budget: DriverTaskBudgetGrant {
                 max_ops: 1,
                 max_frames: 1,
@@ -2339,13 +2726,14 @@ pub fn emit_boot_contract_proof() {
     let mut line = String::<256>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_SUMMARY contracts={} requested_dedicated={} dedicated={} compatibility={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
+        "DRIVER_TASK_SUMMARY contracts={} requested_dedicated={} dedicated={} compatibility={} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} shared_ring_roles=0x{:x} compatibility_roles=0x{:x}",
         summary.contracts,
         summary.requested_dedicated_sel4_tasks,
         summary.dedicated_sel4_tasks,
         summary.root_task_compatibility,
         proof.live_tcb_role_mask,
         proof.hot_path_role_mask,
+        proof.shared_ring_service_role_mask,
         proof.compatibility_service_role_mask,
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
@@ -2478,6 +2866,7 @@ mod tests {
             live_tcb_count: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
             live_tcb_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
             hot_path_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
+            shared_ring_service_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
             compatibility_service_role_mask: 0,
             capset_proof: true,
             fault_proof: true,
@@ -2500,6 +2889,38 @@ mod tests {
     }
 
     #[test]
+    fn shared_root_ring_service_does_not_satisfy_hot_path_acceptance() {
+        let summary = DriverTaskIsolationSummary {
+            contracts: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            requested_dedicated_sel4_tasks: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            root_task_compatibility: 0,
+            dedicated_sel4_tasks: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+        };
+        let proof = DriverTaskRuntimeProof {
+            substrate_active: true,
+            configured_count: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            failed_count: 0,
+            live_tcb_count: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            live_tcb_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
+            hot_path_role_mask: 0,
+            shared_ring_service_role_mask: REQUIRED_DRIVER_TASK_ROLE_MASK,
+            compatibility_service_role_mask: 0,
+            capset_proof: true,
+            fault_proof: true,
+            revoke_proof: true,
+            sched_proof: true,
+            affinity_configured_count: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            affinity_applied_count: BUILTIN_DRIVER_TASK_CONTRACTS.len(),
+            affinity_proof: true,
+            vspace_proof: true,
+            pointer_free_ipc_proof: true,
+            broad_caps_leaked: 0,
+        };
+
+        assert!(!driver_task_acceptance_ready_for(summary, proof));
+    }
+
+    #[test]
     fn current_driver_task_ipc_abi_is_transitional_callback_pointer() {
         assert_eq!(
             CURRENT_DRIVER_TASK_IPC_ABI,
@@ -2508,6 +2929,22 @@ mod tests {
         assert_eq!(CURRENT_DRIVER_TASK_IPC_ABI.as_str(), "callback-pointer");
         assert!(!CURRENT_DRIVER_TASK_IPC_ABI.is_pointer_free());
         assert!(DriverTaskIpcAbi::SharedRingCommand.is_pointer_free());
+    }
+
+    #[test]
+    fn physical_pi4_builds_do_not_compile_steady_state_compat_service() {
+        if matches!(
+            CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
+            DriverTaskRuntimeProfile::Pi4Hardware
+        ) {
+            assert!(!STEADY_STATE_COMPAT_SERVICE_COMPILED);
+        }
+        assert!(!callback_dispatch_allowed_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware
+        ));
+        assert!(!root_fallback_allowed_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware
+        ));
     }
 
     #[test]
@@ -2578,7 +3015,7 @@ mod tests {
         assert_eq!(core::mem::align_of::<DriverFrameDescriptor>(), 4);
         assert_eq!(core::mem::size_of::<DriverTaskBudgetGrant>(), 8);
         assert_eq!(core::mem::align_of::<DriverTaskBudgetGrant>(), 4);
-        assert_eq!(core::mem::size_of::<DriverTaskCommandRecord>(), 32);
+        assert_eq!(core::mem::size_of::<DriverTaskCommandRecord>(), 40);
         assert_eq!(core::mem::align_of::<DriverTaskCommandRecord>(), 4);
         assert_eq!(core::mem::size_of::<DriverTaskCompletionRecord>(), 20);
         assert_eq!(core::mem::align_of::<DriverTaskCompletionRecord>(), 4);
@@ -2587,6 +3024,15 @@ mod tests {
         );
         assert!(
             DRIVER_TASK_RING_COMPLETION_OFFSET + core::mem::size_of::<DriverTaskCompletionRecord>()
+                <= DRIVER_TASK_RING_PAGE_BYTES
+        );
+        assert!(
+            DRIVER_TASK_RING_FRAME_OFFSET
+                >= DRIVER_TASK_RING_COMPLETION_OFFSET
+                    + core::mem::size_of::<DriverTaskCompletionRecord>()
+        );
+        assert!(
+            DRIVER_TASK_RING_FRAME_OFFSET + MAX_DRIVER_TASK_FRAME_BYTES
                 <= DRIVER_TASK_RING_PAGE_BYTES
         );
         assert_eq!(DRIVER_TASK_RING_VADDR & 0xfff, 0);
@@ -2687,6 +3133,55 @@ mod tests {
         assert!(saw_cyw43);
         assert!(saw_sdio);
         assert!(saw_pcie);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_and_pcie_bus_ring_handlers_are_pointer_free_and_fail_closed() {
+        for hot_path in [DriverTaskHotPath::SdioHost, DriverTaskHotPath::PcieRoot] {
+            let command = DriverTaskCommandRecord::pi4_hot_path(
+                hot_path.as_u32(),
+                hot_path,
+                DriverTaskBudgetGrant::from_contract(hot_path.contract()),
+                DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            );
+
+            let completion =
+                unsafe { pi4_bus_ring_service_driver_task(hot_path.as_u32() as usize, command) };
+            assert_eq!(completion.sequence, hot_path.as_u32());
+            assert_eq!(completion.code, DriverTaskCompletionCode::Idle.as_u16());
+            assert_eq!(completion.result, 0);
+
+            let bad_context = unsafe {
+                pi4_bus_ring_service_driver_task(
+                    DriverTaskHotPath::GenetNic.as_u32() as usize,
+                    command,
+                )
+            };
+            assert_eq!(bad_context.code, DriverTaskCompletionCode::Fault.as_u16());
+            assert_eq!(
+                bad_context.detail,
+                DriverTaskFaultCode::RejectedCommand.as_u16()
+            );
+
+            let bad_command = DriverTaskCommandRecord::flush(
+                42,
+                DriverTaskBudgetGrant::from_contract(hot_path.contract()),
+            );
+            let completion = unsafe {
+                pi4_bus_ring_service_driver_task(hot_path.as_u32() as usize, bad_command)
+            };
+            assert_eq!(completion.sequence, 42);
+            assert_eq!(completion.code, DriverTaskCompletionCode::Fault.as_u16());
+            assert_eq!(
+                completion.detail,
+                DriverTaskFaultCode::RejectedCommand.as_u16()
+            );
+        }
     }
 
     #[test]

@@ -226,13 +226,18 @@ ring frames mapped, and proves a pointer-free ring command. Normal hardware
 driver service callbacks still run with the root VSpace until each live driver
 state boundary moves behind the fixed ring and declared device/shared buffers.
 This is an explicit remaining hardware isolation proof field, not an excuse for
-root-task hot paths. Serial, USB, HDMI, and active NIC service callbacks are
-routed through live driver TCBs only for QEMU/host compatibility profiles.
-Physical Pi 4 steady-state service does not silently fall back to callback or
-root-owned hardware turns; early/emergency serial output remains the only Pi
-root-owned escape hatch before the driver-task substrate exists. If an
-independent ring-backed hardware owner is unavailable, the service turn fails
-closed and acceptance remains red. `sdio-host` and `pcie-root` have
+root-task hot paths. Serial, USB, HDMI, GENET, and CYW43 service turns now use
+fixed shared-ring command/completion records on the physical Pi 4 profile and
+preserve the Pi hot-path identity plus primitive aux arguments without callback
+or context pointers. Those owner handlers are still registered from the
+shared-root runtime, so this is pointer-free service dispatch, not separate
+driver-local VSpace ownership. Callback-pointer service turns remain available
+only for QEMU/host compatibility profiles. Physical Pi 4 steady-state service
+does not silently fall back to callback or root-owned hardware turns;
+early/emergency serial output remains the only Pi root-owned escape hatch before
+the driver-task substrate exists. If an independent ring-backed hardware owner
+is unavailable, the service turn fails closed and acceptance remains red.
+`sdio-host` and `pcie-root` have
 declared boot-created driver TCB and per-driver affinity contracts; their bus
 operations are still reached through the CYW43 and USB/local-seat service
 callbacks until standalone bus-operation queues are split out and hardware
@@ -264,8 +269,8 @@ Boot logs must expose the distinction with these breadcrumbs:
   prove live dedicated dispatch
 - one `DRIVER_TASK` line per role, including `capset`, `fault_probe`, and
   `revoke_ready`
-- `DRIVER_TASK_SUMMARY` with contract, compatibility, live-role, hot-path, and
-  compatibility-role counts
+- `DRIVER_TASK_SUMMARY` with contract, compatibility, live-role, hot-path,
+  shared-ring-role, and compatibility-role counts
 - `DRIVER_TASK_ACCEPTANCE dedicated_ready=<yes|no> reason=<reason> ...` as the
   final machine-checkable verdict
 
@@ -279,16 +284,26 @@ memory are compatibility evidence only; full VSpace isolation requires a
 pointer-free shared command/completion ABI. The code-level ABI contract is now
 spelled as fixed-layout `DriverTaskCommandRecord` and
 `DriverTaskCompletionRecord` records containing only primitive opcodes,
-sequence numbers, service budgets, fault codes, and shared-buffer offsets.
-Those records are live for the explicit QEMU isolated-trampoline smoke proof;
-the normal hardware driver service path still reports
-`CURRENT_DRIVER_TASK_IPC_ABI=callback-pointer` until each driver state boundary
-moves behind the ring. The code now carries an explicit Pi 4 hot-path command
-catalog for serial console, USB keyboard, HDMI text, GENET RX/TX, CYW43 RX/TX,
-SDIO host, and PCIe root service turns; host tests prove each catalog entry
-has a fixed-layout pointer-free command record and covers the required role
-mask. That catalog is a migration boundary, not runtime hardware ownership.
-An aggregate task count alone is never sufficient.
+sequence numbers, service budgets, fault codes, shared-buffer offsets, and
+primitive aux fields for service-turn arguments such as network poll time. Those
+records are live for the explicit QEMU isolated-trampoline smoke proof and for
+the physical Pi 4 shared-root ring service path. On the physical Pi 4 profile,
+`CURRENT_DRIVER_TASK_IPC_ABI=shared-ring-command`; VSpace proof still remains
+red until the live driver state boundary moves into isolated per-driver runtime
+images. Shared-root ring service roles are now reported separately as
+`shared_ring_roles`; they are useful readiness evidence but do not satisfy
+`hot_path=dedicated` or full acceptance. Physical Pi 4 builds compile out the
+callback slot state used by the transitional service ABI; serial,
+USB/local-seat, display, and network hot-path callers can reach compatibility
+dispatch only through the single HAL `try_driver_task_compat_service` gate,
+which returns closed for the Pi 4 hardware profile. The code now carries an
+explicit Pi 4 hot-path command catalog for serial console, USB keyboard, HDMI
+text, GENET RX/TX, CYW43 RX/TX, SDIO host, and PCIe root service turns. Host
+tests prove each catalog entry has a fixed-layout pointer-free command record
+and cover the serial, USB, HDMI, SDIO, and PCIe handlers directly; GENET and
+CYW43 are admitted only through their Pi NIC ring route and still require fresh
+hardware proof for MMIO/DMA ownership. An aggregate task count alone is never
+sufficient.
 
 The HAL rejects missing, zero-budget, non-preemptible, or unbounded-blocking
 contracts before the driver is serviced. USB/local-seat and serial are
@@ -314,13 +329,16 @@ their explicit credit-wait probes because they are part of join/security
 progress, not ordinary bulk data service.
 
 Root-task compatibility remains only for early/emergency serial and QEMU/host
-compatibility. Any callback-pointer service turn records compatibility
-evidence even if the call rendezvoused with a live seL4 TCB, because the
-callback ABI still passes root-memory pointers. Physical Pi 4 steady-state
-driver paths do not use those compatibility fallbacks; if the ring-backed
-hardware owner is not available, the path fails closed instead of root-driving
-the hardware. Declared `max_service_us` budgets remain contract metadata;
-latency proof must come from observed service/latency fields.
+compatibility. The only steady-state root fallback admission point is the HAL
+`admit_root_task_compatibility_service` gate, which records
+`RootTaskCompatibility` and returns false for the physical Pi 4 profile. Any
+callback-pointer service turn records compatibility evidence even if the call
+rendezvoused with a live seL4 TCB, because the callback ABI still passes
+root-memory pointers. Physical Pi 4 steady-state driver paths do not use those
+compatibility fallbacks; if the ring-backed hardware owner is not available,
+the path fails closed instead of root-driving the hardware. Declared
+`max_service_us` budgets remain contract metadata; latency proof must come from
+observed service/latency fields.
 
 `DRIVER_TASK_SUBSTRATE_READY=yes` means boot evidence saw the nine-task
 substrate with no bootstrap failures. `DRIVER_TASK_DEDICATED_READY=yes` is

@@ -323,36 +323,50 @@ impl LocalSeatRuntime {
         #[cfg(feature = "kernel")]
         {
             let contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
-            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
-                let mut context = DisplayMirrorTaskContext {
-                    runtime: self as *mut Self as usize,
-                    line_ptr: line.as_ptr() as usize,
-                    line_len: line.len(),
-                };
-                // SAFETY: This transitional callback path is admitted only for
-                // QEMU/host compatibility. Physical Pi 4 steady-state display
-                // service must use the pointer-free ring-backed path.
-                if unsafe {
-                    crate::hal::driver_task::run_driver_task_service(
-                        contract,
-                        &mut context as *mut DisplayMirrorTaskContext as usize,
-                        display_mirror_driver_task,
-                    )
-                }
-                .is_some()
+            crate::hal::driver_task::register_driver_task_ring_service(
+                contract,
+                self as *mut Self as usize,
+                display_ring_service_driver_task,
+            );
+            if let Some(frame) =
+                crate::hal::driver_task::stage_driver_task_ring_frame(contract, line.as_bytes(), 0)
+            {
+                let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                    0,
+                    crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                    frame,
+                );
+                if crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                    .is_some()
                 {
                     return;
                 }
             }
-            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+            let mut context = DisplayMirrorTaskContext {
+                runtime: self as *mut Self as usize,
+                line_ptr: line.as_ptr() as usize,
+                line_len: line.len(),
+            };
+            // SAFETY: The HAL admits this compatibility callback only for
+            // QEMU/host profiles. Physical Pi 4 builds return None without
+            // compiling callback slot state.
+            if unsafe {
+                crate::hal::driver_task::try_driver_task_compat_service(
+                    contract,
+                    &mut context as *mut DisplayMirrorTaskContext as usize,
+                    display_mirror_driver_task,
+                )
+            }
+            .is_some()
+            {
+                return;
+            }
+            if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
                 self.driver_task_budget_overruns =
                     self.driver_task_budget_overruns.saturating_add(1);
                 return;
             }
-            crate::hal::driver_task::record_driver_task_service(
-                contract,
-                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
-            );
         }
         self.mirror_line_current_tcb(line);
     }
@@ -519,31 +533,43 @@ impl LocalSeatRuntime {
         let contract = driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
-                // SAFETY: This transitional callback path is admitted only for
-                // QEMU/host compatibility. Physical Pi 4 steady-state USB
-                // service must use the pointer-free ring-backed path.
-                if unsafe {
-                    crate::hal::driver_task::run_driver_task_service(
-                        contract,
-                        self as *mut Self as usize,
-                        usb_keyboard_poll_driver_task,
-                    )
-                }
-                .is_some()
-                {
-                    return;
-                }
+            crate::hal::driver_task::register_driver_task_ring_service(
+                contract,
+                self as *mut Self as usize,
+                usb_keyboard_ring_service_driver_task,
+            );
+            let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                0,
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                crate::hal::driver_task::DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            );
+            if crate::hal::driver_task::run_driver_task_ring_service(contract, command).is_some() {
+                return;
             }
-            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+            // SAFETY: The HAL admits this compatibility callback only for
+            // QEMU/host profiles. Physical Pi 4 builds return None without
+            // compiling callback slot state.
+            if unsafe {
+                crate::hal::driver_task::try_driver_task_compat_service(
+                    contract,
+                    self as *mut Self as usize,
+                    usb_keyboard_poll_driver_task,
+                )
+            }
+            .is_some()
+            {
+                return;
+            }
+            if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
                 self.driver_task_budget_overruns =
                     self.driver_task_budget_overruns.saturating_add(1);
                 return;
             }
-            crate::hal::driver_task::record_driver_task_service(
-                contract,
-                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
-            );
         }
         self.poll_backend_keyboard_current_tcb(contract);
     }
@@ -698,6 +724,57 @@ fn keyboard_poll_read_limit(contract: DriverTaskContract) -> usize {
         .min(contract.budget.max_bytes_per_turn as usize)
         .min(usize::from(contract.budget.max_frames_per_turn))
         .min(usize::from(contract.budget.max_ops_per_turn))
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn display_ring_service_driver_task(
+    context: usize,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> crate::hal::driver_task::DriverTaskCompletionRecord {
+    if command.opcode != crate::hal::driver_task::DriverTaskOpcode::SubmitFrame.as_u16() {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
+        crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        command.frame,
+    ) else {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable,
+        );
+    };
+    let Ok(line) = core::str::from_utf8(bytes) else {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    };
+    // SAFETY: `context` is registered by `LocalSeatRuntime` before submitting a
+    // synchronous ring command, and root waits for completion before mutating it.
+    let runtime = unsafe { &mut *(context as *mut LocalSeatRuntime) };
+    runtime.mirror_line_current_tcb(line);
+    crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence)
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn usb_keyboard_ring_service_driver_task(
+    context: usize,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> crate::hal::driver_task::DriverTaskCompletionRecord {
+    if command.opcode != crate::hal::driver_task::DriverTaskOpcode::Service.as_u16() {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    // SAFETY: `context` is registered by `LocalSeatRuntime` before submitting a
+    // synchronous ring command, and root waits for completion before mutating it.
+    let runtime = unsafe { &mut *(context as *mut LocalSeatRuntime) };
+    runtime.poll_backend_keyboard_current_tcb(driver_task_contract());
+    crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence)
 }
 
 #[cfg(feature = "kernel")]
@@ -980,6 +1057,9 @@ mod tests {
         NetworkMode, StaticIpv4Config,
     };
 
+    #[cfg(feature = "kernel")]
+    static LOCAL_SEAT_RING_TEST_LOCK: spin::Mutex<()> = spin::Mutex::new(());
+
     const KEYBOARD: HardwareDevice = HardwareDevice {
         kind: HardwareDeviceKind::Keyboard,
         id: "usb-kbd0",
@@ -1151,6 +1231,82 @@ mod tests {
         assert_eq!(trace.dropped_bytes, 0);
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_keyboard_ring_service_uses_fixed_service_command() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::service(
+            11,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(driver_task_contract()),
+        );
+
+        let completion = unsafe {
+            usb_keyboard_ring_service_driver_task(
+                &mut runtime as *mut LocalSeatRuntime as usize,
+                command,
+            )
+        };
+
+        assert_eq!(completion.sequence, 11);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+        );
+        assert_eq!(runtime.keyboard_trace().backend_poll_calls, 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn display_ring_service_uses_hot_path_submit_frame_command() {
+        let _guard = LOCAL_SEAT_RING_TEST_LOCK.lock();
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 4,
+            buffer_lines: 2,
+        });
+        let contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        crate::hal::driver_task::publish_driver_task_ring(
+            contract,
+            ring_page.as_mut_ptr() as usize,
+        );
+        let frame = crate::hal::driver_task::stage_driver_task_ring_frame(contract, b"abcdef", 0)
+            .expect("test ring has room for one display line");
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            12,
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+            frame,
+        );
+
+        let completion = unsafe {
+            display_ring_service_driver_task(
+                &mut runtime as *mut LocalSeatRuntime as usize,
+                command,
+            )
+        };
+        crate::hal::driver_task::publish_driver_task_ring(contract, 0);
+
+        assert_eq!(completion.sequence, 12);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+        );
+        assert_eq!(
+            command.arg0,
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32()
+        );
+        let lines = runtime.mirrored_lines_snapshot();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "abcd");
+    }
+
     #[test]
     fn local_seat_declares_valid_realtime_driver_task_contract() {
         let contract = driver_task_contract();
@@ -1165,6 +1321,13 @@ mod tests {
 
     #[test]
     fn runtime_mirrors_lines_with_manifest_bounds() {
+        #[cfg(feature = "kernel")]
+        let _guard = LOCAL_SEAT_RING_TEST_LOCK.lock();
+        #[cfg(feature = "kernel")]
+        crate::hal::driver_task::publish_driver_task_ring(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            0,
+        );
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",

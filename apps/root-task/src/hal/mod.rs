@@ -1365,6 +1365,7 @@ impl<'a> KernelHal<'a> {
         for contract in DRIVER_TASK_BOOTSTRAP_CONTRACTS {
             match self.create_driver_task(*contract, fault_endpoint) {
                 Ok(handle) => {
+                    let _ = driver_task::register_pi4_bus_ring_service(*contract);
                     if self.driver_tasks.push(handle).is_err() {
                         report.failed_count = report.failed_count.saturating_add(1);
                         let mut line = heapless::String::<192>::new();
@@ -1579,10 +1580,15 @@ impl<'a> KernelHal<'a> {
             .env
             .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
             .map_err(HalError::Sel4)?;
+        let mut ring_frame = self
+            .env
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .map_err(HalError::Sel4)?;
         let stack_frame = self
             .env
             .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
             .map_err(HalError::Sel4)?;
+        ring_frame.as_mut_slice().fill(0);
 
         let badge = 0xD000 | (role_bit as seL4_Word);
         let fault_err = sel4::cnode_mint_depth(
@@ -1613,6 +1619,7 @@ impl<'a> KernelHal<'a> {
             return Err(HalError::Sel4(endpoint_err));
         }
         driver_task::publish_driver_task_command_endpoint(contract, command_endpoint as usize);
+        driver_task::publish_driver_task_ring(contract, ring_frame.ptr().as_ptr() as usize);
 
         let notification_err = sel4::cnode_mint_depth(
             child_cnode,
@@ -1682,11 +1689,11 @@ impl<'a> KernelHal<'a> {
             fault_slot: driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
             ipc_frame: ipc_frame.cap(),
             stack_frame: stack_frame.cap(),
-            ring_frame: None,
+            ring_frame: Some(ring_frame.cap()),
             vspace: None,
             code_frame: None,
             ipc_vaddr,
-            ring_vaddr: 0,
+            ring_vaddr: ring_frame.ptr().as_ptr() as usize,
             stack_top,
             affinity_core,
             vspace_isolated: false,

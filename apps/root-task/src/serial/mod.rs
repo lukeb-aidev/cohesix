@@ -300,28 +300,44 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
-                // SAFETY: This transitional callback path is admitted only for
-                // QEMU/host compatibility. Physical Pi 4 steady-state driver
-                // service must use the pointer-free ring-backed path.
-                if let Some(result) = unsafe {
-                    crate::hal::driver_task::run_driver_task_service(
-                        contract,
-                        self as *mut Self as usize,
-                        serial_poll_io_driver_task::<D, RX, TX, LINE>,
-                    )
-                } {
-                    return result != 0;
-                }
+            crate::hal::driver_task::register_driver_task_ring_service(
+                contract,
+                self as *mut Self as usize,
+                serial_ring_service_driver_task::<D, RX, TX, LINE>,
+            );
+            let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                0,
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+                crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                crate::hal::driver_task::DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            );
+            if let Some(completion) =
+                crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+            {
+                return completion.code
+                    == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                    && completion.result != 0;
             }
-            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+            // SAFETY: The HAL admits this compatibility callback only for
+            // QEMU/host profiles. Physical Pi 4 builds return None without
+            // compiling callback slot state.
+            if let Some(result) = unsafe {
+                crate::hal::driver_task::try_driver_task_compat_service(
+                    contract,
+                    self as *mut Self as usize,
+                    serial_poll_io_driver_task::<D, RX, TX, LINE>,
+                )
+            } {
+                return result != 0;
+            }
+            if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
                 self.telemetry.driver_task_budget_overrun();
                 return false;
             }
-            crate::hal::driver_task::record_driver_task_service(
-                contract,
-                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
-            );
         }
         self.poll_io_current_tcb(contract)
     }
@@ -374,30 +390,36 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            if crate::hal::driver_task::steady_state_callback_dispatch_allowed(contract) {
-                // SAFETY: This transitional callback path is admitted only for
-                // QEMU/host compatibility. Physical Pi 4 steady-state driver
-                // service must use the pointer-free ring-backed path.
-                if unsafe {
-                    crate::hal::driver_task::run_driver_task_service(
-                        contract,
-                        self as *mut Self as usize,
-                        serial_flush_tx_driver_task::<D, RX, TX, LINE>,
-                    )
-                }
-                .is_some()
-                {
-                    return;
-                }
+            crate::hal::driver_task::register_driver_task_ring_service(
+                contract,
+                self as *mut Self as usize,
+                serial_ring_service_driver_task::<D, RX, TX, LINE>,
+            );
+            let command = crate::hal::driver_task::DriverTaskCommandRecord::flush(
+                0,
+                crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+            );
+            if crate::hal::driver_task::run_driver_task_ring_service(contract, command).is_some() {
+                return;
             }
-            if !crate::hal::driver_task::steady_state_root_fallback_allowed(contract) {
+            // SAFETY: The HAL admits this compatibility callback only for
+            // QEMU/host profiles. Physical Pi 4 builds return None without
+            // compiling callback slot state.
+            if unsafe {
+                crate::hal::driver_task::try_driver_task_compat_service(
+                    contract,
+                    self as *mut Self as usize,
+                    serial_flush_tx_driver_task::<D, RX, TX, LINE>,
+                )
+            }
+            .is_some()
+            {
+                return;
+            }
+            if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
                 self.telemetry.driver_task_budget_overrun();
                 return;
             }
-            crate::hal::driver_task::record_driver_task_service(
-                contract,
-                crate::hal::driver_task::DriverTaskIsolation::RootTaskCompatibility,
-            );
         }
         self.flush_tx_current_tcb(contract);
     }
@@ -577,6 +599,36 @@ where
     pub fn driver_mut(&mut self) -> &mut D {
         &mut self.driver
     }
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn serial_ring_service_driver_task<D, const RX: usize, const TX: usize, const LINE: usize>(
+    context: usize,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> crate::hal::driver_task::DriverTaskCompletionRecord
+where
+    D: SerialDriver,
+{
+    // SAFETY: `context` is registered by `SerialPort` before submitting a
+    // synchronous ring command, and the root TCB does not mutate the port until
+    // the driver TCB publishes a matching completion sequence.
+    let port = unsafe { &mut *(context as *mut SerialPort<D, RX, TX, LINE>) };
+    let contract = <D as SerialDriver>::driver_task_contract();
+    if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Service.as_u16() {
+        let progress = port.poll_io_current_tcb(contract);
+        return crate::hal::driver_task::DriverTaskCompletionRecord::progress(
+            command.sequence,
+            progress as u32,
+        );
+    }
+    if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Flush.as_u16() {
+        port.flush_tx_current_tcb(contract);
+        return crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence);
+    }
+    crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+        command.sequence,
+        crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -812,6 +864,59 @@ mod tests {
         let emitted = port.driver_mut().drain_tx();
         assert!(emitted.len() < output.len());
         assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ring_service_poll_turn_uses_fixed_command_record() {
+        let driver = LoopbackSerial::<16>::new();
+        let mut port: SerialPort<_, 16, 16, 16> = SerialPort::new(driver);
+        port.driver_mut().push_rx(b"z");
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::service(
+            9,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(driver_task_contract()),
+        );
+
+        let completion = unsafe {
+            serial_ring_service_driver_task::<LoopbackSerial<16>, 16, 16, 16>(
+                &mut port as *mut SerialPort<_, 16, 16, 16> as usize,
+                command,
+            )
+        };
+
+        assert_eq!(completion.sequence, 9);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+        );
+        assert_eq!(completion.result, 1);
+        assert_eq!(port.rx.len(), 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ring_service_flush_turn_rejects_callback_context_shape() {
+        let driver = LoopbackSerial::<16>::new();
+        let mut port: SerialPort<_, 16, 16, 16> = SerialPort::new(driver);
+        port.enqueue_tx(b"abc");
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::flush(
+            10,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(driver_task_contract()),
+        );
+
+        let completion = unsafe {
+            serial_ring_service_driver_task::<LoopbackSerial<16>, 16, 16, 16>(
+                &mut port as *mut SerialPort<_, 16, 16, 16> as usize,
+                command,
+            )
+        };
+
+        assert_eq!(completion.sequence, 10);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+        );
+        assert_eq!(port.driver_mut().drain_tx().as_slice(), b"abc");
     }
 
     #[test]

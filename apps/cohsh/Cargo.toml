@@ -8,6 +8,11 @@ edition = "2021"
 description = "Cohesix shell prototype using the live NineDoor Secure9P transport"
 license = "MIT"
 
+[[bin]]
+name = "cohsh"
+path = "src/main.rs"
+test = false
+
 [features]
 default = ["tcp", "rest", "in-process", "gpu-bridge"]
 # TCP transport pulls in `std` networking and is opt-in so offline workflows
