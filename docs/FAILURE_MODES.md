@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document deterministic failure behavior and operator recovery actions. -->
 <!-- Author: Lukas Bower -->
@@ -124,7 +124,7 @@ Telemetry ingest refusal is deterministic and policy-driven.
 
 **Recovery**
 - Adjust `telemetry_ingest.*` quotas in the manifest and regenerate with `coh-rtc`.
-- For persistent spool behavior (Milestone 25b), inspect `/proc/spool/status` once available.
+- Persistent VM-local spool behavior is planned for Milestone 27 and is not an as-built recovery surface until `/proc/spool/status` exists; until then, use telemetry quota/audit lines for recovery decisions.
 
 ## Host publish denial
 Host providers are gated by lifecycle state and policy.

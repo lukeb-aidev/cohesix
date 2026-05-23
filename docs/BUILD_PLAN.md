@@ -6788,6 +6788,7 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Multi-agent execution is mandatory for 26c scope: evidence generation, CI/test-plan plumbing, parity auditing, and cleanup work must have disjoint ownership so boundary-sensitive edits are not mixed with prose-only cleanup.
 - Milestone closure is blocked until the full target-qualified Test Plan succeeds on QEMU and Pi 4 with no `INCOMPLETE` markers, and Stage 05 verifies that required target artifacts exist in the active state dir before writing `stage_05.done`.
 - Milestone closure is also blocked until the 26c as-built blocker ledger is empty or every remaining item is explicitly deferred to a named later milestone with a non-overlapping dependency boundary. The initial blocker set includes: Pi 4 network IR/docs validation drift, target-qualified Test Plan runner implementation, Secure9P NUL and `..` path rejection, removal or reclassification of any non-console in-VM TCP listener, HAL ownership for driver MMIO/physical-address access, generated-snippet embedding drift in canonical docs, fixture/default secret handling in release/operator paths, placeholder auth defaults in host tools/docs, and the mismatch between worker documentation and current root-task worker task spawning.
+- The 26c blocker ledger must also classify planning drift discovered in later milestones: VM-local persistence is not implemented yet, `coh-status` is currently a library/convergence fixture rather than a read-only CLI, REST writes still use gateway-level authority rather than delegated per-request tickets, writer-epoch fencing is absent, AI namespace roots are not implemented, and AWS/ENA/IMDS runtime support is not in-tree. Later milestones may preserve those intentions, but they must not cite them as as-built prerequisites until their own acceptance evidence exists.
 
 ### Prerequisite
 - Reopened Milestones **26a** and **26b** completed, including checked-in Pi 4 USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load, driver-task scheduling evidence, GENET/static compatibility evidence, DHCP/Wi-Fi compatibility evidence, QEMU compatibility evidence, and regenerated profile-specific manifest evidence.
@@ -6870,7 +6871,7 @@ For each inventory entry, 26c must record one of:
 - **As-built blocker ledger before refactor**
   - Produce a checked-in blocker ledger for current red-line and docs-as-built mismatches before any structural cleanup begins.
   - Classify each blocker as fix-in-26c, fix-before-26d, or explicitly deferred with rationale and dependency impact.
-  - Required initial entries are: 26b hardware-evidence gap, Pi 4 network IR/docs validation drift, target-qualified Test Plan runner absence, Secure9P codec path-validation drift, non-console in-VM TCP listener exposure, direct driver MMIO outside HAL, generated canonical-doc snippet drift, fixture/default secret release path, placeholder auth defaults, and worker-task implementation/docs mismatch.
+  - Required initial entries are: 26b hardware-evidence gap, Pi 4 network IR/docs validation drift, target-qualified Test Plan runner absence, Secure9P codec path-validation drift, non-console in-VM TCP listener exposure, direct driver MMIO outside HAL, generated canonical-doc snippet drift, fixture/default secret release path, placeholder auth defaults, worker-task implementation/docs mismatch, and future-milestone as-built overclaims for persistence, `coh-status`, delegated REST identity, writer-epoch fencing, AI namespace roots, and AWS/ENA/IMDS support.
   - Downstream milestones may not cite a deferred blocker as already solved.
 
 - **Runtime boundary + semantic parity audit**
@@ -6999,7 +7000,7 @@ Commands:
   - cargo test -p secure9p-codec
   - scripts/ci/check_test_plan.sh
 Checks:
-  - Initial blocker entries cover 26b evidence, Pi 4 network IR/docs validation drift, target-qualified runner, Secure9P path validation, non-console in-VM TCP, HAL MMIO ownership, generated-doc drift, fixture/default secrets, placeholder auth defaults, and worker-task docs/implementation mismatch.
+  - Initial blocker entries cover 26b evidence, Pi 4 network IR/docs validation drift, target-qualified runner, Secure9P path validation, non-console in-VM TCP, HAL MMIO ownership, generated-doc drift, fixture/default secrets, placeholder auth defaults, worker-task docs/implementation mismatch, and later-milestone as-built overclaims for persistence, `coh-status`, delegated REST identity, writer-epoch fencing, AI namespace roots, and AWS/ENA/IMDS support.
   - No structural cleanup task starts until blockers are fixed or explicitly deferred with dependency impact.
 Deliverables:
   - Auditable 26c blocker ledger that prevents downstream milestones from inheriting unresolved as-built drift silently.
@@ -7412,6 +7413,8 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 
 **Why now (resilience):** After Pi 4 U-Boot boot + identity (26), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
 
+**As-built alignment note:** Current code has host-side sidecar buffering, telemetry ring snapshot helpers, and U-Boot-owned network/Wi-Fi persistence, but it does **not** have VM-local persistent spool/settings storage, `persistence.*` manifest IR, root-task block-device storage plumbing, or `/proc/spool/*` and `/queen/spool/*` providers. Milestone 27 introduces those surfaces; older docs or code comments that mention persistent spool as already available are drift unless backed by this milestone's acceptance evidence.
+
 **Non-negotiable constraints**
 - No changes to console grammar, 9P semantics, or TCP behavior vs VM unless profile‑gated and documented.
 - No POSIX VFS; no general filesystem.
@@ -7590,7 +7593,9 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (operator & adoption):**  
-By this stage Cohesix is architecturally complete, SMP-aware, and Pi 4 bare-metal capable. What remains is operability: giving operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols.
+After Milestones 26c, 26d, and 27 close, Cohesix should have the Pi 4/seL4 baseline and persistence evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
+
+**As-built alignment note:** `coh evidence pack` and `coh evidence timeline` already exist and are reused here. `coh inspect`, a first-class trace diagnostics command, `coh diff`, `coh attest`, and any `coh bundle` alias are not implemented as of the 26c planning audit and must be added as thin, read-only projections over existing file-shaped state and evidence packs.
 
 This milestone delivers a small, opinionated set of host-side utilities that read existing file-shaped state and artifacts. They do not mutate system state, do not self-heal, and do not bypass policy.
 
@@ -7807,6 +7812,8 @@ Milestones 25g and 25h delivered host tickets, federation relay, and bounded WAL
 2) failover correctness depends on external fencing discipline rather than deterministic writer fencing in the control plane path.
 
 This milestone closes those gaps using existing as-built mechanisms (`hive-gateway`, `cohsh-core` ticket claims, `/host/tickets/*`, relay WAL, manifest compiler) without introducing new VM protocols or relaxing single-writer semantics.
+
+**As-built alignment note:** The current REST gateway requires a gateway request-auth token for mutating routes, but REST writes still execute through the gateway's configured role/ticket rather than a delegated per-request capability ticket. Host-ticket idempotency by `id + idempotency_key` and relay dedupe exist, but writer-epoch fencing and strict Queen intent dedupe are not yet implemented. Milestone 28b hardens those specific gaps; it must not present current request-auth, relay dedupe, or host-ticket idempotency as delegated REST identity or failover fencing.
 
 ---
 
@@ -8037,6 +8044,8 @@ Milestone 28b makes writes attributable, replay-safe, fenced, and audit-first. B
 3. The highest-leverage fix is to keep durable run state, retrieval manifests, approvals, and evidence outside the live prompt, then route each run to the right host-side inference strategy under ticketed authority.
 
 This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, evidence packs, GPU leases, telemetry ingest, Python playbooks) to prove that model without adding VM AI roots yet.
+
+**As-built alignment note:** Python orchestration currently provides typed schedule, lease, export, host-ticket, federation, and Kubernetes coexistence helpers over existing control files. That substrate is useful leverage, but it is not yet the AI run/task graph envelope, checkpoint model, context-budget contract, prefix/hotset lifecycle, or NeMo provider family described here. Milestone 28c extends the host-ticket/evidence model; it must not re-label existing generic orchestration helpers as completed AI run control.
 
 **Goal**
 Add a host-side AI run substrate that lets external supervisors and agent frameworks coordinate long-context workflows through delegated tickets and existing host-ticket flows while preserving Cohesix's single-writer, append-only, audit-first discipline:
@@ -8341,8 +8350,10 @@ After Milestone 28c:
 
 **Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect Pi 4 boot profile semantics and attestation outputs.
 
+**As-built alignment note:** `apps/coh-status` currently exists as a library crate with trace replay support and a convergence transcript fixture. It is not yet a standalone read-only field CLI, and its current convergence fixture still exercises `/queen/ctl` writes. Milestone 29 promotes that crate into the read-only tool described below and replaces generic convergence coverage with status-specific read-only fixtures.
+
 **Goal**
-Provide `coh-status` as a **small read-only CLI** for local field inspection of boot/attest data using the existing TCP console transport and offline artifacts, without adding any in-VM 9P/TCP listener and without introducing a second UI stack.
+Promote `coh-status` into a **small read-only CLI** for local field inspection of boot/attest data using the existing TCP console transport and offline artifacts, without adding any in-VM 9P/TCP listener and without introducing a second UI stack.
 
 **Non-Goals**
 - Repo-wide SPDX/NOTICE header sweeps (track separately; not required for the status tool).
@@ -8380,7 +8391,9 @@ Goal: Build a real read-only `coh-status` CLI on top of shared inspect/attest in
 Inputs: apps/coh-status/, shared host-tool status core, Pi 4 boot profile manifest outputs, attestation nodes.
 Changes:
   - apps/coh-status/src/main.rs — status CLI entrypoint with read-only subcommands only.
+  - apps/coh-status/src/lib.rs — preserve trace replay helpers while exposing only read-only status/attestation operations to the CLI.
   - apps/coh-status/tests/offline.rs — simulate offline read and expired ticket.
+  - apps/coh-status/tests/transcript.rs — remove the current generic `/queen/ctl` convergence flow from the canonical status transcript.
 Commands:
   - cargo build -p coh-status
   - cargo run -p coh-status -- --help
@@ -8439,6 +8452,8 @@ Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU s
 
 **Goal**  
 Add a manifest-defined, role-scoped AI control namespace that lets operators and automation inspect and drive AI lifecycle state through existing Secure9P semantics. This milestone is limited to **control-plane surfaces only**: no in-VM application runtime, no general UI stack, no mutable POSIX-like filesystem, and no new transport or RPC model.
+
+**As-built alignment note:** There is no `ecosystem.ai.*` manifest IR and no `/jobs`, `/datasets`, `/experiments`, `/infer`, or `/metrics` AI namespace provider in the host or VM NineDoor implementations as of the 26c planning audit. Milestone 29b adds those roots only after 28b and 28c prove delegated authority, host-ticket AI actions, checkpoints, and evidence semantics.
 
 ### Prerequisites
 - Milestone **28b** completed (delegated REST identity, idempotent queen intents, writer-epoch fencing, audit/replay baseline).
@@ -8556,6 +8571,8 @@ Cohesix is ready to operate as the operating system. To make EC2 a first-class, 
 Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
 
 Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently described by the repo with the newer Pi 4 U-Boot path, then adds the **AWS-specific delta**: AWS profile admission, ENA, outbound bootstrap, optional IMDSv2, and AMI registration.
+
+**As-built alignment note:** The repo currently has UEFI profile/configuration material, a UEFI shim crate, and `scripts/uefi/*` helpers, but it does not have AWS profile admission, `scripts/aws/*`, ENA drivers, outbound 9door mount code, or approved root-task TLS/HTTP/IMDS support. Milestone 30 must start with boot-chain and TCB reconciliation before runtime code depends on UEFI, TLS/HTTP, IMDS, or AWS-specific assumptions.
 
 **Non-negotiable constraints**
 - Milestone 30 may not assume the UEFI/ESP baseline is authoritative until the first AWS task reconciles it against the current Pi 4 U-Boot pivot, `scripts/uefi/esp-build.sh`, `docs/BOOT_REFERENCE.md`, `docs/HARDWARE_BRINGUP.md`, and the charter rule for UEFI tooling. If the baseline is stale, AWS work starts by refreshing or reintroducing it under this milestone with docs and tests.
