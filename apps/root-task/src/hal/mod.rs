@@ -1408,7 +1408,7 @@ impl<'a> KernelHal<'a> {
         &mut self.env
     }
 
-    /// Creates the root-owned seL4 driver-task substrate for Pi 4 hardware roles.
+    /// Creates the seL4 driver-task substrate for Pi 4 hardware roles.
     ///
     /// This creates live, separately scheduled TCBs with restricted child CSpaces,
     /// command endpoints, notifications, IPC buffers, stacks, and fault endpoints.
@@ -1423,8 +1423,16 @@ impl<'a> KernelHal<'a> {
             ..DriverTaskBootstrapReport::default()
         };
 
+        let use_isolated_vspace =
+            driver_task::physical_pi_driver_task_bootstrap_requires_isolated_vspace();
+
         for contract in DRIVER_TASK_BOOTSTRAP_CONTRACTS {
-            match self.create_driver_task(*contract, fault_endpoint) {
+            let created = if use_isolated_vspace {
+                self.create_isolated_driver_task(*contract, fault_endpoint)
+            } else {
+                self.create_driver_task(*contract, fault_endpoint)
+            };
+            match created {
                 Ok(handle) => {
                     let _ = driver_task::register_pi4_bus_ring_service(*contract);
                     if self.driver_tasks.push(handle).is_err() {
@@ -1446,7 +1454,7 @@ impl<'a> KernelHal<'a> {
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace=shared-root ipc_abi={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state=root-owned owner_state_reason={}",
+                            "DRIVER_TASK_BOOT contract={} role={} tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} code_vaddr=0x{:08x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state={} owner_state_reason={}",
                             handle.contract.name,
                             handle.contract.kind.proof_role(),
                             handle.tcb,
@@ -1458,9 +1466,18 @@ impl<'a> KernelHal<'a> {
                                 Some(core) => core as i32,
                                 None => -1,
                             },
+                            if handle.vspace_isolated { "isolated" } else { "shared-root" },
+                            handle.vspace.unwrap_or(0),
+                            handle.code_vaddr,
+                            handle.ring_vaddr,
                             driver_task::CURRENT_DRIVER_TASK_IPC_ABI.as_str(),
+                            if handle.pointer_free_ipc { "yes" } else { "no" },
                             if handle.runtime_image_spec.is_some() {
-                                "declared-only"
+                                if handle.vspace_isolated {
+                                    "transport-mapped"
+                                } else {
+                                    "declared-only"
+                                }
                             } else {
                                 "none"
                             },
@@ -1470,6 +1487,13 @@ impl<'a> KernelHal<'a> {
                                 "yes"
                             } else {
                                 "no"
+                            },
+                            if handle.runtime_image_acceptance_eligible {
+                                "driver-owned"
+                            } else if handle.vspace_isolated {
+                                "not-proven"
+                            } else {
+                                "root-owned"
                             },
                             handle.runtime_image_non_acceptance_reason,
                         ),
@@ -1493,8 +1517,6 @@ impl<'a> KernelHal<'a> {
             }
         }
 
-        // The bootstrap TCBs intentionally share the root VSpace until the next
-        // migration step maps code/data/ring pages into dedicated driver VSpaces.
         finalize_driver_task_bootstrap_report(&mut report, DRIVER_TASK_BOOTSTRAP_CONTRACTS.len());
         self.driver_task_report = report;
         driver_task::publish_driver_task_bootstrap_report(report);

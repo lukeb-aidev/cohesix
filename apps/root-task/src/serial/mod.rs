@@ -575,13 +575,7 @@ where
                     crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
                     serial_runtime_ring_service_driver_task,
                 );
-                let command = crate::hal::driver_task::DriverTaskCommandRecord::flush(
-                    0,
-                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-                );
-                if crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                    .is_some()
-                {
+                if self.flush_tx_driver_task_ring(contract) {
                     return;
                 }
                 self.telemetry.driver_task_budget_overrun();
@@ -623,6 +617,66 @@ where
             }
         }
         self.flush_tx_current_tcb(contract);
+    }
+
+    #[cfg(feature = "kernel")]
+    fn flush_tx_driver_task_ring(&mut self, contract: DriverTaskContract) -> bool {
+        let mut staged =
+            heapless::Vec::<u8, { crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES }>::new();
+        if let Some(byte) = self.driver_local.take_pending_tx() {
+            let _ = staged.push(byte);
+        }
+        while staged.len() < staged.capacity() {
+            let Some(byte) = self.tx.dequeue() else {
+                break;
+            };
+            let _ = staged.push(byte);
+        }
+
+        let frame = if staged.is_empty() {
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            }
+        } else {
+            match crate::hal::driver_task::stage_driver_task_ring_frame(
+                contract,
+                staged.as_slice(),
+                0,
+            ) {
+                Some(frame) => frame,
+                None => {
+                    self.restore_staged_tx(staged.as_slice());
+                    return false;
+                }
+            }
+        };
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+            frame,
+        );
+        let ok = matches!(
+            crate::hal::driver_task::run_driver_task_ring_service(contract, command),
+            Some(completion)
+                if completion.code != crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        );
+        if !ok {
+            self.restore_staged_tx(staged.as_slice());
+        }
+        ok
+    }
+
+    #[cfg(feature = "kernel")]
+    fn restore_staged_tx(&mut self, staged: &[u8]) {
+        for &byte in staged {
+            if self.tx.enqueue(byte).is_err() {
+                self.telemetry.tx_overflow();
+                break;
+            }
+        }
     }
 
     fn flush_tx_current_tcb(&mut self, contract: DriverTaskContract) {
@@ -817,7 +871,6 @@ unsafe fn serial_runtime_ring_service_driver_task(
     if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Service.as_u16()
         && command.arg0 == expected_hot_path.as_u32()
         && command.arg1 == expected_hot_path.role_bit() as u32
-        && command.frame.len == 0
     {
         return crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence);
     }

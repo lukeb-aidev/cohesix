@@ -105,6 +105,16 @@ pub const fn physical_pi_driver_task_only_owner_state_active() -> bool {
     ))
 }
 
+/// Whether normal Pi 4 driver-task bootstrap must allocate isolated VSpaces.
+///
+/// QEMU/host compatibility profiles may still use the shared-root diagnostic
+/// path, but the physical Pi hardware profile must exercise the same isolated
+/// command/ring transport that acceptance proof requires.
+#[must_use]
+pub const fn physical_pi_driver_task_bootstrap_requires_isolated_vspace() -> bool {
+    physical_pi_driver_task_only_owner_state_active()
+}
+
 impl DriverTaskKind {
     /// Stable role label used by Pi 4 driver-task proof tooling.
     #[must_use]
@@ -1073,8 +1083,8 @@ pub const fn isolated_runtime_code_vaddr() -> usize {
 /// Runtime-image specs for every Pi 4 hardware hot path.
 ///
 /// These are declaration contracts, not proof. They intentionally remain
-/// non-acceptance until the live hardware-owned state is moved out of root
-/// structs and the isolated runtime image executes the relevant service turns.
+/// non-acceptance until the isolated runtime image executes the relevant
+/// hardware service turns from driver-owned state.
 pub const PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS: [DriverTaskRuntimeImageSpec; 7] = [
     DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::SerialConsole, 1, 0, 1, true, false),
     DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::UsbKeyboard, 2, 16, 2, true, false),
@@ -3680,6 +3690,14 @@ mod tests {
                 CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
                 DriverTaskRuntimeProfile::Pi4Hardware
             )
+        );
+    }
+
+    #[test]
+    fn physical_pi_bootstrap_isolation_helper_tracks_owner_state_cutover() {
+        assert_eq!(
+            physical_pi_driver_task_bootstrap_requires_isolated_vspace(),
+            physical_pi_driver_task_only_owner_state_active(),
         );
     }
 

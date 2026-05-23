@@ -525,9 +525,19 @@ impl LocalSeatRuntime {
                     crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
                     frame,
                 );
-                if crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                    .is_some()
+                if let Some(completion) =
+                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
                 {
+                    if completion.code
+                        == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
+                    {
+                        if let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
+                            contract,
+                            completion.frame,
+                        ) {
+                            let _ = self.enqueue_keyboard_bytes(bytes);
+                        }
+                    }
                     return;
                 }
             }
