@@ -781,6 +781,20 @@ fn pi4_local_usb_boot_wifi_defer_detail(reason: &str) -> HeaplessString<192> {
     detail
 }
 
+fn required_local_seat_probe_should_abort(
+    required: bool,
+    result: local_seat::LocalSeatKeyboardProbeResult,
+) -> bool {
+    required && result == local_seat::LocalSeatKeyboardProbeResult::BackendUnavailable
+}
+
+fn required_local_seat_probe_should_continue_polling(
+    required: bool,
+    result: local_seat::LocalSeatKeyboardProbeResult,
+) -> bool {
+    required && !result.attached() && !required_local_seat_probe_should_abort(required, result)
+}
+
 fn should_bootstrap_live_driver_tasks(qemu_virtio_compat: bool) -> bool {
     !qemu_virtio_compat
 }
@@ -2624,7 +2638,7 @@ fn init_local_seat_runtime<P: Platform>(
             }
         }
         if let Some(hint) = display_hint {
-            let mut line = heapless::String::<192>::new();
+            let mut line = heapless::String::<224>::new();
             let _ = write!(
                 line,
                 "[local-seat] fb-hint paddr=0x{paddr:016x} width={} height={} pitch={}",
@@ -4439,15 +4453,15 @@ fn bootstrap<P: Platform>(
         };
         let mut line = heapless::String::<224>::new();
         let _ = write!(
-            line,
-            "[uart] coverage backend={} paddr=0x{paddr:08x} region=[0x{base:08x}..0x{limit:08x}) idx={} used={}",
-            candidate.label(),
-            coverage.index,
-            if coverage.used { "yes" } else { "no" },
-            paddr = paddr,
-            base = coverage.base,
-            limit = coverage.limit,
-        );
+                line,
+                "[uart] coverage backend={} paddr=0x{paddr:08x} region=[0x{base:08x}..0x{limit:08x}) idx={} used={}",
+                candidate.label(),
+                coverage.index,
+                if coverage.used { "yes" } else { "no" },
+                paddr = paddr,
+                base = coverage.base,
+                limit = coverage.limit,
+            );
         console.writeln_prefixed(line.as_str());
 
         match hal.map_device(paddr) {
@@ -4466,19 +4480,32 @@ fn bootstrap<P: Platform>(
 
                 let mut map_line = heapless::String::<160>::new();
                 let _ = write!(
-                    map_line,
-                    "[vspace:map] uart backend={} paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
-                    mmio.label(),
-                    paddr = mmio.paddr(),
-                    vaddr = mmio.vaddr().as_ptr() as usize,
-                );
+                        map_line,
+                        "[vspace:map] uart backend={} paddr=0x{paddr:08x} -> vaddr=0x{vaddr:016x} attrs=UNCACHED OK",
+                        mmio.label(),
+                        paddr = mmio.paddr(),
+                        vaddr = mmio.vaddr().as_ptr() as usize,
+                    );
                 console.writeln_prefixed(map_line.as_str());
 
-                uart_pl011::publish_uart_slot(region.cap());
-                if mmio.kind() == KernelUartKind::Pl011 {
-                    early_uart::register_console_base(mmio.vaddr().as_ptr() as usize);
+                if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+                    boot_log::force_uart_line("[uart] driver-task runtime init begin owner=serial");
+                    if !crate::serial::init_serial_driver_task_runtime(mmio) {
+                        boot_log::force_uart_line(
+                            "[uart] driver-task runtime init failed owner=serial",
+                        );
+                        return Err(BootError::Fatal(
+                            "serial driver-task runtime init failed".to_owned(),
+                        ));
+                    }
+                    boot_log::force_uart_line("[uart] driver-task runtime init ok owner=serial");
+                } else {
+                    uart_pl011::publish_uart_slot(region.cap());
+                    if mmio.kind() == KernelUartKind::Pl011 {
+                        early_uart::register_console_base(mmio.vaddr().as_ptr() as usize);
+                    }
+                    uart_slot = Some(region.cap());
                 }
-                uart_slot = Some(region.cap());
                 uart_mmio = Some(mmio);
                 break;
             }
@@ -4546,7 +4573,7 @@ fn bootstrap<P: Platform>(
             runtime.backend_keyboard_polling_enabled() as u8
         );
         boot_log::force_uart_line(probe_line.as_str());
-        if hardware.local_seat.required && !probe_result.attached() {
+        if required_local_seat_probe_should_abort(hardware.local_seat.required, probe_result) {
             let mut line = heapless::String::<192>::new();
             let _ = write!(
                 line,
@@ -4559,10 +4586,29 @@ fn bootstrap<P: Platform>(
                 "local-seat required keyboard probe failed: {}",
                 probe_result.as_str()
             )));
+        } else if required_local_seat_probe_should_continue_polling(
+            hardware.local_seat.required,
+            probe_result,
+        ) {
+            runtime.enable_backend_keyboard_polling();
+            let mut line = heapless::String::<192>::new();
+            let _ = write!(
+                line,
+                "[local-seat] required keyboard not ready yet detail={} action=continue-polling",
+                probe_result.as_str()
+            );
+            console.writeln_prefixed(line.as_str());
+            boot_log::force_uart_line(line.as_str());
         }
     }
 
-    if uart_mmio.is_none() {
+    if uart_mmio.is_none()
+        && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+    {
+        console.writeln_prefixed(
+            "[uart] root runtime init skipped reason=driver-task-serial-owner-state-cutover",
+        );
+    } else if uart_mmio.is_none() {
         let label = uart_map_error
             .map(error_name)
             .unwrap_or("mapping not available");
@@ -4583,7 +4629,10 @@ fn bootstrap<P: Platform>(
 
     #[cfg(feature = "debug-input")]
     {
-        if let Some(mmio) = uart_mmio {
+        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            console
+                .writeln_prefixed("[uart] debug-input skipped reason=driver-task-serial-runtime");
+        } else if let Some(mmio) = uart_mmio {
             match mmio {
                 KernelUartMmio::Pl011(mapping) => {
                     let mut driver = Pl011::new(mapping.vaddr());
@@ -4618,7 +4667,18 @@ fn bootstrap<P: Platform>(
 
     #[cfg(not(feature = "debug-input"))]
     {
-        if let Some(mmio) = uart_mmio {
+        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+            && crate::serial::serial_driver_task_runtime_attached()
+        {
+            console
+                .writeln_prefixed("[uart] init OK backend=driver-task-serial-client owner=serial");
+            serial = Some(SerialPort::<
+                _,
+                DEFAULT_RX_CAPACITY,
+                DEFAULT_TX_CAPACITY,
+                DEFAULT_LINE_CAPACITY,
+            >::new(KernelSerialDriver::driver_task_client()));
+        } else if let Some(mmio) = uart_mmio {
             let mut driver = KernelSerialDriver::from_mmio(mmio);
             let mut begin_line = heapless::String::<128>::new();
             let _ = write!(
@@ -4895,15 +4955,29 @@ fn bootstrap<P: Platform>(
                             "[net-console] disabled reason={reason} err={err_code}"
                         );
                         boot_log::force_uart_line(fail_line.as_str());
-                        boot_log::force_uart_line(
-                            "[boot] net-console init failed nonfatal; continuing serial root console",
-                        );
+                        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(
+                        ) {
+                            boot_log::force_uart_line(
+                                "[boot] net-console init failed fatal; physical Pi has no root hardware fallback",
+                            );
+                        } else {
+                            boot_log::force_uart_line(
+                                "[boot] net-console init failed nonfatal; continuing serial root console",
+                            );
+                        }
                         let detail = format_net_console_init_detail(&err);
                         let mut detail_line = heapless::String::<192>::new();
                         let _ =
                             write!(detail_line, "[net-console] init detail={}", detail.as_str());
                         boot_log::force_uart_line(detail_line.as_str());
                         log::warn!("{} detail={}", fail_line.as_str(), detail.as_str());
+                        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(
+                        ) {
+                            return Err(BootError::Fatal(format!(
+                                "physical Pi net-console init failed without fallback: {}",
+                                detail.as_str()
+                            )));
+                        }
                         let virtio_present = cfg!(feature = "net-backend-virtio")
                             && net_backend_label == "virtio-net"
                             && !matches!(err, NetConsoleError::NoDevice);
@@ -7345,6 +7419,52 @@ mod tests {
             super::pi4_local_usb_boot_wifi_defer_detail("pi4-local-seat-explicit-wifi").as_str(),
             "wifi-net-console-pending-before-root-console:pi4-local-seat-explicit-wifi"
         );
+    }
+
+    #[test]
+    fn required_local_seat_probe_aborts_only_when_backend_absent() {
+        use crate::local_seat::LocalSeatKeyboardProbeResult::{
+            Attached, BackendUnavailable, KeyboardUnavailable,
+        };
+
+        assert!(super::required_local_seat_probe_should_abort(
+            true,
+            BackendUnavailable
+        ));
+        assert!(!super::required_local_seat_probe_should_abort(
+            true,
+            KeyboardUnavailable
+        ));
+        assert!(!super::required_local_seat_probe_should_abort(
+            true, Attached
+        ));
+        assert!(!super::required_local_seat_probe_should_abort(
+            false,
+            BackendUnavailable
+        ));
+    }
+
+    #[test]
+    fn required_local_seat_probe_continues_polling_when_keyboard_not_ready() {
+        use crate::local_seat::LocalSeatKeyboardProbeResult::{
+            Attached, BackendUnavailable, KeyboardUnavailable,
+        };
+
+        assert!(super::required_local_seat_probe_should_continue_polling(
+            true,
+            KeyboardUnavailable
+        ));
+        assert!(!super::required_local_seat_probe_should_continue_polling(
+            true,
+            BackendUnavailable
+        ));
+        assert!(!super::required_local_seat_probe_should_continue_polling(
+            true, Attached
+        ));
+        assert!(!super::required_local_seat_probe_should_continue_polling(
+            false,
+            KeyboardUnavailable
+        ));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

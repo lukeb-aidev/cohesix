@@ -9381,6 +9381,36 @@ impl SdioBusOwnerQueue {
     }
 }
 
+#[cfg(feature = "kernel")]
+fn sdio_owner_queue_ring_service_turn(cmd: u16, arg: u32, len: usize, flags: u16) -> bool {
+    let contract = super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT;
+    let _ = super::driver_task::register_pi4_bus_ring_service(contract);
+    let mut command = super::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        super::driver_task::DriverTaskHotPath::SdioHost,
+        super::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        super::driver_task::DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags,
+        },
+    );
+    command.flags = flags;
+    command.aux0 = ((cmd as u32) << 16) | u32::from(flags);
+    command.aux1 = arg ^ len.min(u32::MAX as usize) as u32;
+    let Some(completion) = super::driver_task::run_driver_task_ring_service(contract, command)
+    else {
+        return false;
+    };
+    completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        && completion.result == 0
+}
+
+#[cfg(not(feature = "kernel"))]
+fn sdio_owner_queue_ring_service_turn(_cmd: u16, _arg: u32, _len: usize, _flags: u16) -> bool {
+    false
+}
+
 struct SdioHost {
     regs: MappedRegs,
     regs_paddr: usize,
@@ -24359,6 +24389,15 @@ impl SdioHost {
         let owner_sequence =
             self.bus_owner_queue
                 .push(cmd, arg, 0, SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC);
+        if super::driver_task::physical_pi_driver_task_only_owner_state_active()
+            && !sdio_owner_queue_ring_service_turn(cmd, arg, 0, SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC)
+        {
+            self.bus_owner_queue.complete(owner_sequence, false);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] sdio owner-ring unavailable cmd={cmd} arg=0x{arg:08x} action=fail-closed"
+            ));
+            return Err(HalError::Unsupported("sdio-owner-ring-unavailable"));
+        }
         let result = (|| {
             self.wait_inhibit_clear(matches!(response, ResponseType::ShortBusy))?;
             self.write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
@@ -24424,6 +24463,16 @@ impl SdioHost {
         let owner_sequence = self
             .bus_owner_queue
             .push(cmd, arg, buffer.len(), owner_flags);
+        if super::driver_task::physical_pi_driver_task_only_owner_state_active()
+            && !sdio_owner_queue_ring_service_turn(cmd, arg, buffer.len(), owner_flags)
+        {
+            self.bus_owner_queue.complete(owner_sequence, false);
+            emit_breadcrumb(format_args!(
+                "[pi4-wifi] sdio owner-ring unavailable cmd={cmd} arg=0x{arg:08x} len={} action=fail-closed",
+                buffer.len()
+            ));
+            return Err(HalError::Unsupported("sdio-owner-ring-unavailable"));
+        }
         let result = (|| {
             self.clear_last_data_wait_diag();
             self.wait_inhibit_clear(true)?;

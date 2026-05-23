@@ -1329,6 +1329,59 @@ fn runtime_image_acceptance_eligible(
 }
 
 #[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_SERIAL_MMIO_BASES: &[usize] = &[uart::PI4_MINI_UART_PADDR];
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_USB_XHCI_MMIO_BASES: &[usize] =
+    &[0x0000_0006_0000_0000, 0xFE98_0000, 0x7E98_0000];
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES: &[usize] = &[0xFE00_B000, 0x7E00_B000];
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_GENET_MMIO_BASES: &[usize] = &[0xFD58_0000, 0x7D58_0000, 0xFE58_0000];
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES: &[usize] = &[0xFE30_0000, 0x7E30_0000];
+#[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES: &[usize] = &[0xFD50_0000];
+
+#[cfg(feature = "kernel")]
+fn runtime_mmio_candidate_bases(hot_path: driver_task::DriverTaskHotPath) -> &'static [usize] {
+    match hot_path {
+        driver_task::DriverTaskHotPath::SerialConsole => PI4_DRIVER_RUNTIME_SERIAL_MMIO_BASES,
+        driver_task::DriverTaskHotPath::UsbKeyboard => PI4_DRIVER_RUNTIME_USB_XHCI_MMIO_BASES,
+        driver_task::DriverTaskHotPath::HdmiText => PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES,
+        driver_task::DriverTaskHotPath::GenetNic => PI4_DRIVER_RUNTIME_GENET_MMIO_BASES,
+        driver_task::DriverTaskHotPath::Cyw43Wifi => &[],
+        driver_task::DriverTaskHotPath::SdioHost => PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES,
+        driver_task::DriverTaskHotPath::PcieRoot => PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_candidate_covers_pages(env: &KernelEnv<'_>, base: usize, pages: usize) -> bool {
+    let page_bytes = 1usize << sel4::PAGE_BITS;
+    for page in 0..pages {
+        let Some(offset) = page.checked_mul(page_bytes) else {
+            return false;
+        };
+        let Some(paddr) = base.checked_add(offset) else {
+            return false;
+        };
+        if env.device_coverage(paddr, sel4::PAGE_BITS).is_none() {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_region_page_vaddr(
+    region: driver_task::DriverTaskRuntimeRegion,
+    page: usize,
+) -> Option<usize> {
+    let page_bytes = 1usize << sel4::PAGE_BITS;
+    region.vaddr.checked_add(page.checked_mul(page_bytes)?)
+}
+
+#[cfg(feature = "kernel")]
 fn finalize_driver_task_bootstrap_report(
     report: &mut DriverTaskBootstrapReport,
     expected_count: usize,
@@ -1345,10 +1398,18 @@ fn finalize_driver_task_bootstrap_report(
     report.vspace_proof = all_configured && report.isolated_vspace_count == expected_count;
     report.pointer_free_ipc_proof =
         report.vspace_proof && report.pointer_free_ipc_count == expected_count;
+    let owner_hot_paths_complete = report.owner_state_hot_path_mask
+        & driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+        == driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
+    let runtime_images_acceptance_ready = report.runtime_image_acceptance_count
+        == driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATHS
+        && report.runtime_image_transport_mapped_hot_path_mask
+            & driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+            == driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
     report.owner_state_proof = report.vspace_proof
         && report.pointer_free_ipc_proof
-        && report.owner_state_hot_path_mask & driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
-            == driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
+        && owner_hot_paths_complete
+        && runtime_images_acceptance_ready;
 }
 
 #[cfg(feature = "kernel")]
@@ -1821,9 +1882,134 @@ impl<'a> KernelHal<'a> {
             stack_top,
             affinity_core,
             vspace_isolated: false,
-            pointer_free_ipc: false,
+            pointer_free_ipc: driver_task::CURRENT_DRIVER_TASK_IPC_ABI.is_pointer_free(),
             started,
         })
+    }
+
+    fn map_isolated_runtime_declared_regions(
+        &mut self,
+        spec: Option<driver_task::DriverTaskRuntimeImageSpec>,
+        vspace: seL4_CPtr,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<u16, HalError> {
+        let Some(spec) = spec else {
+            return Ok(0);
+        };
+        if !driver_task::physical_pi_driver_task_only_owner_state_active() {
+            return Ok(driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK);
+        }
+
+        let mut mapped_mask = driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK;
+        for region in spec.regions.iter().flatten().copied() {
+            match region.kind {
+                driver_task::DriverTaskRuntimeRegionKind::Code
+                | driver_task::DriverTaskRuntimeRegionKind::Stack
+                | driver_task::DriverTaskRuntimeRegionKind::Ipc
+                | driver_task::DriverTaskRuntimeRegionKind::Ring => {}
+                driver_task::DriverTaskRuntimeRegionKind::Mmio => {
+                    if self.map_isolated_runtime_mmio_region(
+                        spec.hot_path,
+                        region,
+                        vspace,
+                        tracker,
+                    )? {
+                        mapped_mask |= region.kind.mask_bit();
+                    }
+                }
+                driver_task::DriverTaskRuntimeRegionKind::Dma => {
+                    if self.map_isolated_runtime_ram_region(region, vspace, tracker, true)? {
+                        mapped_mask |= region.kind.mask_bit();
+                    }
+                }
+                driver_task::DriverTaskRuntimeRegionKind::SharedBuffer => {
+                    if self.map_isolated_runtime_ram_region(region, vspace, tracker, false)? {
+                        mapped_mask |= region.kind.mask_bit();
+                    }
+                }
+            }
+        }
+        Ok(mapped_mask)
+    }
+
+    fn map_isolated_runtime_mmio_region(
+        &mut self,
+        hot_path: driver_task::DriverTaskHotPath,
+        region: driver_task::DriverTaskRuntimeRegion,
+        vspace: seL4_CPtr,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<bool, HalError> {
+        let pages = region.pages as usize;
+        if pages == 0 {
+            return Ok(false);
+        }
+        let page_bytes = 1usize << sel4::PAGE_BITS;
+        let rights = sel4_sys::seL4_CapRights_ReadWrite;
+        for &base in runtime_mmio_candidate_bases(hot_path) {
+            if !runtime_candidate_covers_pages(&self.env, base, pages) {
+                continue;
+            }
+            for page in 0..pages {
+                let paddr = base
+                    .checked_add(page.saturating_mul(page_bytes))
+                    .ok_or(HalError::Unsupported("driver-runtime-mmio-paddr"))?;
+                let vaddr = runtime_region_page_vaddr(region, page)
+                    .ok_or(HalError::Unsupported("driver-runtime-mmio-vaddr"))?;
+                self.env
+                    .map_device_page_into_vspace(
+                        paddr,
+                        vspace,
+                        vaddr,
+                        rights,
+                        sel4_sys::seL4_ARM_Page_Uncached,
+                        tracker,
+                    )
+                    .map_err(HalError::Sel4)?;
+            }
+            return Ok(true);
+        }
+        Err(HalError::Unsupported("driver-runtime-mmio-not-covered"))
+    }
+
+    fn map_isolated_runtime_ram_region(
+        &mut self,
+        region: driver_task::DriverTaskRuntimeRegion,
+        vspace: seL4_CPtr,
+        tracker: &mut VSpaceTableTracker,
+        dma_owned: bool,
+    ) -> Result<bool, HalError> {
+        let pages = region.pages as usize;
+        if pages == 0 {
+            return Ok(false);
+        }
+        let rights = sel4_sys::seL4_CapRights_ReadWrite;
+        let attr = if dma_owned {
+            sel4_sys::seL4_ARM_Page_Uncached
+        } else {
+            sel4_sys::seL4_ARM_Page_Default
+        };
+        for page in 0..pages {
+            let vaddr = runtime_region_page_vaddr(region, page)
+                .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?;
+            if dma_owned {
+                let frame = self
+                    .env
+                    .alloc_unmapped_ram_frame_attr(attr)
+                    .map_err(HalError::Sel4)?;
+                self.env
+                    .map_page_cap_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
+                    .map_err(HalError::Sel4)?;
+            } else {
+                let frame = self
+                    .env
+                    .alloc_dma_frame_attr(attr)
+                    .map_err(HalError::Sel4)?;
+                self.env
+                    .map_page_copy_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
+                    .map_err(HalError::Sel4)?;
+            }
+        }
+        Ok(true)
     }
 
     fn create_isolated_driver_task(
@@ -1984,6 +2170,9 @@ impl<'a> KernelHal<'a> {
             )
             .map_err(HalError::Sel4)?;
 
+        let runtime_image_mapped_region_mask =
+            self.map_isolated_runtime_declared_regions(runtime_image_spec, vspace, &mut tracker)?;
+
         let guard_bits = sel4::word_bits().saturating_sub(child_depth as seL4_Word);
         let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
         sel4::set_tcb_space(
@@ -2035,6 +2224,15 @@ impl<'a> KernelHal<'a> {
                 if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
                     && done.result == task_key as u32
         );
+        self.env
+            .unmap_page_cap(code_frame.cap())
+            .map_err(HalError::Sel4)?;
+        self.env
+            .unmap_page_cap(ipc_frame.cap())
+            .map_err(HalError::Sel4)?;
+        self.env
+            .unmap_page_cap(stack_frame.cap())
+            .map_err(HalError::Sel4)?;
 
         Ok(KernelDriverTaskHandle {
             contract,
@@ -2053,8 +2251,7 @@ impl<'a> KernelHal<'a> {
             runtime_image_declared_region_mask: runtime_image_declared_region_mask(
                 runtime_image_spec,
             ),
-            runtime_image_mapped_region_mask:
-                driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK,
+            runtime_image_mapped_region_mask,
             runtime_image_acceptance_eligible: runtime_image_acceptance_eligible(
                 runtime_image_spec,
             ),
@@ -2536,6 +2733,15 @@ mod tests {
         handle
     }
 
+    #[test]
+    fn pi4_runtime_mmio_candidates_cover_usb_high_bar_and_legacy_aliases() {
+        let bases =
+            super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::UsbKeyboard);
+        assert!(bases.contains(&0x0000_0006_0000_0000));
+        assert!(bases.contains(&0xFE98_0000));
+        assert!(bases.contains(&0x7E98_0000));
+    }
+
     #[cfg(feature = "kernel")]
     #[test]
     fn irq_notification_badges_are_nonzero_and_irq_derived() {
@@ -2637,6 +2843,14 @@ mod tests {
 
         report.owner_state_hot_path_mask =
             super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
+        super::finalize_driver_task_bootstrap_report(
+            &mut report,
+            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
+        );
+        assert!(!report.owner_state_proof);
+
+        report.runtime_image_acceptance_count =
+            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATHS;
         super::finalize_driver_task_bootstrap_report(
             &mut report,
             super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),

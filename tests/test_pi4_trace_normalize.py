@@ -565,6 +565,50 @@ def test_gate_summary_rejects_owner_state_hot_path_in_descriptor_field() -> None
     assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "no"
 
 
+def test_gate_summary_rejects_owner_state_without_explicit_hot_path() -> None:
+    """Contract or role labels must not stand in for hot-path owner proof."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_OWNER_STATE contract=serial "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE role=usb "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE driver=hdmi "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "no"
+
+
+def test_gate_summary_rejects_owner_state_truthy_aliases() -> None:
+    """Owner-state proof requires the exact driver-owned state label."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+            "owner_state=yes descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+            "owner_state=pass descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+            "owner_state=true descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
+            "owner_state=owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+            "owner_state=driver descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+            "owner_state=1 descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+            "owner_state=driver-owned descriptor=yes root_pointer=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "no"
+
+
 def test_gate_summary_requires_live_hot_path_for_dedicated_role() -> None:
     """Static contract isolation alone must not prove dedicated hot-path ownership."""
 

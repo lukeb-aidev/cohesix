@@ -75,8 +75,8 @@ no_nic = false
 [hw.network]
 enabled = true
 backend = "bcmgenet-v5"
-mode = "static"
-interface = "wired"
+mode = "dhcp"
+interface = "auto"
 
 [hw.network.static_ipv4]
 ip = "192.168.10.42"
@@ -95,7 +95,7 @@ evidence_max_bytes = 256
 
 [hw.local_seat]
 enabled = true
-required = false
+required = true
 keyboard_device = "usb-kbd0"
 display_device = "hdmi0"
 line_bytes = 160

@@ -56,6 +56,23 @@ type NetStackHandle = NetStack;
 #[cfg(not(feature = "net-console"))]
 type NetStackHandle = ();
 
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+fn serial_console_uart_status(
+    slot_present: bool,
+    vaddr_present: bool,
+    physical_driver_task_serial: bool,
+) -> &'static str {
+    if !vaddr_present {
+        "unavailable"
+    } else if physical_driver_task_serial && !slot_present {
+        "driver-task-runtime"
+    } else if !slot_present {
+        "slot-missing"
+    } else {
+        "root-mapped"
+    }
+}
+
 /// Authoritative entrypoint for userland bring-up and runtime loops. Full boots
 /// must always flow through this handoff so pre-root network gates and the
 /// serial root console are ordered consistently; bootstrap-minimal remains a
@@ -171,11 +188,24 @@ pub fn main(ctx: BootContext) -> ! {
             uart_base.is_some(),
             uart_backend,
         );
-        if ctx.uart_slot.is_none() || uart_base.is_none() {
-            log::warn!(
+        match serial_console_uart_status(
+            ctx.uart_slot.is_some(),
+            uart_base.is_some(),
+            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+        ) {
+            "driver-task-runtime" => log::info!(
+                target: "userland",
+                "[userland] UART cap owned by serial driver task; root console uses ring client"
+            ),
+            "unavailable" => log::warn!(
                 target: "userland",
                 "[userland] UART mapping unavailable; continuing with serial console anyway"
-            );
+            ),
+            "slot-missing" => log::warn!(
+                target: "userland",
+                "[userland] UART slot unavailable; serial console backend may be degraded"
+            ),
+            _ => {}
         }
         log::info!(
             target: "userland",
@@ -841,4 +871,28 @@ fn read_cntfrq() -> u64 {
         core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value);
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(all(feature = "serial-console", feature = "kernel"))]
+    #[test]
+    fn serial_console_uart_status_names_driver_task_ownership() {
+        assert_eq!(
+            super::serial_console_uart_status(false, true, true),
+            "driver-task-runtime"
+        );
+        assert_eq!(
+            super::serial_console_uart_status(false, true, false),
+            "slot-missing"
+        );
+        assert_eq!(
+            super::serial_console_uart_status(true, true, true),
+            "root-mapped"
+        );
+        assert_eq!(
+            super::serial_console_uart_status(true, false, true),
+            "unavailable"
+        );
+    }
 }

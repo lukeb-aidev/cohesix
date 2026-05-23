@@ -105,14 +105,16 @@ pub const fn physical_pi_driver_task_only_owner_state_active() -> bool {
     ))
 }
 
-/// Whether normal Pi 4 driver-task bootstrap must allocate isolated VSpaces.
+/// Whether normal Pi 4 driver-task bootstrap must use the minimal isolated
+/// trampoline path.
 ///
-/// QEMU/host compatibility profiles may still use the shared-root diagnostic
-/// path, but the physical Pi hardware profile must exercise the same isolated
-/// command/ring transport that acceptance proof requires.
+/// The current physical Pi hardware path uses pointer-free shared-ring service
+/// turns so the real Rust runtimes can own hardware progress. The isolated
+/// trampoline remains transport-substrate proof until separate driver runtime
+/// images can execute the same service handlers without root image globals.
 #[must_use]
 pub const fn physical_pi_driver_task_bootstrap_requires_isolated_vspace() -> bool {
-    physical_pi_driver_task_only_owner_state_active()
+    false
 }
 
 impl DriverTaskKind {
@@ -357,12 +359,6 @@ pub fn record_driver_task_ring_service(
     }
 }
 
-/// Records an owner-state-eligible ring service turn.
-#[cfg(feature = "kernel")]
-pub fn record_driver_task_ring_hot_path(contract: DriverTaskContract) {
-    record_driver_task_ring_service(contract, true);
-}
-
 #[must_use]
 pub const fn driver_task_service_counts_as_hot_path(isolation: DriverTaskIsolation) -> bool {
     match isolation {
@@ -585,12 +581,50 @@ cohesix_driver_task_isolated_entry:
 
     ldr x9, ={ring_vaddr}
     ldr w10, [x9]
+    mov w12, {completion_code}
+    mov w23, w20
+    ldr w13, [x9, #8]
+    cbz w13, 6f
+    cmp w13, {serial_hot_path}
+    b.ne 5f
+    mov w12, {idle_code}
+    mov w23, wzr
+    ldrh w14, [x9, #36]
+    cbz w14, 6f
+    ldr w15, [x9, #32]
+    cmp w15, {frame_offset}
+    b.lo 6f
+    add w24, w15, w14
+    cmp w24, {ring_page_bytes}
+    b.hi 6f
+    add x16, x9, x15
+    ldr x22, ={mmio_vaddr}
+2:
+    cbz w14, 6f
+    ldrb w17, [x16], #1
+    mov x18, #1024
+3:
+    ldr w19, [x22, #{mini_uart_lsr_offset}]
+    tst w19, #{mini_uart_lsr_tx_empty}
+    b.ne 4f
+    subs x18, x18, #1
+    b.ne 3b
+    b 6f
+4:
+    str w17, [x22, #{mini_uart_io_offset}]
+    mov w12, {completion_code}
+    add w23, w23, #1
+    subs w14, w14, #1
+    b 2b
+5:
+    mov w12, {idle_code}
+    mov w23, wzr
+6:
     add x11, x9, {completion_offset}
     str w10, [x11]
-    mov w12, {completion_code}
     strh w12, [x11, #4]
     strh wzr, [x11, #6]
-    str w20, [x11, #8]
+    str w23, [x11, #8]
     str xzr, [x11, #12]
 
     b 1b
@@ -598,8 +632,16 @@ cohesix_driver_task_isolated_entry:
     "#,
     child_command_slot = const DRIVER_TASK_CHILD_COMMAND_SLOT,
     completion_code = const DriverTaskCompletionCode::Progress as u16,
+    idle_code = const DriverTaskCompletionCode::Idle as u16,
     completion_offset = const DRIVER_TASK_RING_COMPLETION_OFFSET,
     ring_vaddr = const DRIVER_TASK_RING_VADDR,
+    mmio_vaddr = const DRIVER_TASK_DEVICE_MMIO_VADDR,
+    frame_offset = const DRIVER_TASK_RING_FRAME_OFFSET,
+    ring_page_bytes = const DRIVER_TASK_RING_PAGE_BYTES,
+    mini_uart_io_offset = const crate::serial::bcm2711_mini_uart::MU_IO_OFFSET,
+    mini_uart_lsr_offset = const crate::serial::bcm2711_mini_uart::MU_LSR_OFFSET,
+    mini_uart_lsr_tx_empty = const 1 << 5,
+    serial_hot_path = const DriverTaskHotPath::SerialConsole as u32,
     sys_recv = const sel4_sys::seL4_SysRecv,
 );
 
@@ -1092,7 +1134,7 @@ pub const PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS: [DriverTaskRuntimeImageSpec; 7] =
     DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::GenetNic, 6, 64, 4, true, false),
     DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::Cyw43Wifi, 0, 8, 4, true, false),
     DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::SdioHost, 1, 2, 2, true, false),
-    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::PcieRoot, 4, 0, 1, true, false),
+    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::PcieRoot, 10, 0, 1, true, false),
 ];
 
 /// Returns the runtime-image spec for a Pi 4 hot path.
@@ -1547,6 +1589,12 @@ pub fn register_driver_task_owner_state_descriptor(
     if !descriptor.has_required_runtime_flags() {
         return false;
     }
+    let Some(spec) = pi4_driver_task_runtime_image_spec_for_contract(contract) else {
+        return false;
+    };
+    if spec.hot_path != descriptor.hot_path || !spec.acceptance_eligible() {
+        return false;
+    }
     let role_bit = driver_task_role_bit(contract.kind);
     if role_bit == 0 {
         return false;
@@ -1724,9 +1772,36 @@ pub fn run_driver_task_ring_service(
         driver_task_ring_service_owner_state_credit_eligible(service_kind, command);
     let completion = run_driver_task_ring_command(contract, command)?;
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
-        record_driver_task_ring_service(contract, owner_state_credit_eligible);
+        record_driver_task_ring_service(
+            contract,
+            owner_state_credit_eligible && driver_task_completion_has_hardware_progress(completion),
+        );
     }
     Some(completion)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_completion_has_hardware_progress(completion: DriverTaskCompletionRecord) -> bool {
+    if completion.code == DriverTaskCompletionCode::Progress.as_u16() {
+        return completion.result != 0;
+    }
+    if completion.code != DriverTaskCompletionCode::FrameReady.as_u16() {
+        return false;
+    }
+    if completion.frame.len == 0
+        || completion.result != completion.frame.len as u32
+        || completion.frame.root_context_non_acceptance()
+    {
+        return false;
+    }
+    let offset = completion.frame.offset as usize;
+    let len = completion.frame.len as usize;
+    let Some(end) = offset.checked_add(len) else {
+        return false;
+    };
+    offset >= DRIVER_TASK_RING_FRAME_OFFSET
+        && end <= DRIVER_TASK_RING_PAGE_BYTES
+        && len <= MAX_DRIVER_TASK_FRAME_BYTES
 }
 
 #[cfg(feature = "kernel")]
@@ -3269,6 +3344,10 @@ pub const fn driver_task_acceptance_ready_for(
         && proof.vspace_proof
         && proof.pointer_free_ipc_proof
         && proof.owner_state_proof
+        && proof.owner_state_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ROLE_MASK
+        && proof.owner_state_hot_path_mask & REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+            == REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
         && proof.broad_caps_leaked == 0
         && proof.live_tcb_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
             == REQUIRED_DRIVER_TASK_ROLE_MASK
@@ -3615,6 +3694,15 @@ mod tests {
 
         let proof = DriverTaskRuntimeProof {
             owner_state_proof: true,
+            owner_state_hot_path_mask: REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+                & !DriverTaskHotPath::PcieRoot.owner_state_bit(),
+            ..proof
+        };
+        assert!(!driver_task_acceptance_ready_for(summary, proof));
+
+        let proof = DriverTaskRuntimeProof {
+            owner_state_proof: true,
+            owner_state_hot_path_mask: REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK,
             ..proof
         };
         assert!(driver_task_acceptance_ready_for(summary, proof));
@@ -3952,6 +4040,72 @@ mod tests {
         assert!(!scaffolding.has_required_runtime_flags());
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn owner_state_registration_rejects_non_acceptance_runtime_specs() {
+        for hot_path in PI4_DRIVER_TASK_HOT_PATHS.iter().copied() {
+            let descriptor = DriverTaskOwnerStateDescriptor::new(
+                hot_path,
+                DRIVER_TASK_OWNER_STATE_OFFSET as u32,
+                16,
+                DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                128,
+                DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS,
+            )
+            .unwrap();
+
+            assert!(
+                !register_driver_task_owner_state_descriptor(hot_path.contract(), descriptor),
+                "{hot_path:?}"
+            );
+            assert!(
+                !pi4_driver_task_runtime_image_spec(hot_path).acceptance_eligible(),
+                "{hot_path:?}"
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn hardware_progress_credit_excludes_idle_zero_progress_and_bad_frames() {
+        assert!(driver_task_completion_has_hardware_progress(
+            DriverTaskCompletionRecord::progress(1, 1)
+        ));
+        assert!(!driver_task_completion_has_hardware_progress(
+            DriverTaskCompletionRecord::progress(2, 0)
+        ));
+        assert!(!driver_task_completion_has_hardware_progress(
+            DriverTaskCompletionRecord::idle(3)
+        ));
+
+        let valid_frame =
+            DriverFrameDescriptor::new(DRIVER_TASK_RING_FRAME_OFFSET as u32, 8, 0).unwrap();
+        assert!(driver_task_completion_has_hardware_progress(
+            DriverTaskCompletionRecord::frame_ready(4, valid_frame)
+        ));
+
+        let zero_frame =
+            DriverFrameDescriptor::new(DRIVER_TASK_RING_FRAME_OFFSET as u32, 0, 0).unwrap();
+        assert!(!driver_task_completion_has_hardware_progress(
+            DriverTaskCompletionRecord::frame_ready(5, zero_frame)
+        ));
+
+        let root_frame = DriverFrameDescriptor::new(
+            DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            8,
+            DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
+        )
+        .unwrap();
+        assert!(!driver_task_completion_has_hardware_progress(
+            DriverTaskCompletionRecord::frame_ready(6, root_frame)
+        ));
+
+        let bad_offset = DriverFrameDescriptor::new(0, 8, 0).unwrap();
+        assert!(!driver_task_completion_has_hardware_progress(
+            DriverTaskCompletionRecord::frame_ready(7, bad_offset)
+        ));
+    }
+
     #[test]
     fn pi4_runtime_image_specs_cover_all_hot_paths_but_stay_non_acceptance() {
         assert_eq!(PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS.len(), 7);
@@ -4020,12 +4174,15 @@ mod tests {
         let genet = pi4_driver_task_runtime_image_spec(DriverTaskHotPath::GenetNic);
         let cyw43 = pi4_driver_task_runtime_image_spec(DriverTaskHotPath::Cyw43Wifi);
         let sdio = pi4_driver_task_runtime_image_spec(DriverTaskHotPath::SdioHost);
+        let pcie = pi4_driver_task_runtime_image_spec(DriverTaskHotPath::PcieRoot);
         assert_eq!(genet.hot_path, DriverTaskHotPath::GenetNic);
         assert_eq!(cyw43.hot_path, DriverTaskHotPath::Cyw43Wifi);
         assert_eq!(sdio.hot_path, DriverTaskHotPath::SdioHost);
+        assert_eq!(pcie.hot_path, DriverTaskHotPath::PcieRoot);
         assert!(genet.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 6);
         assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
         assert_ne!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
+        assert!(pcie.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 10);
     }
 
     #[test]

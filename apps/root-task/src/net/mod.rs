@@ -799,7 +799,9 @@ pub trait NetDevice: Device {
         Self: Sized;
 
     /// Whether this device is only a root-side client for an isolated
-    /// driver-task runtime that owns physical hardware state.
+    /// driver-task runtime boundary. This is not owner-state proof by itself:
+    /// the runtime must return hardware-progress completions and publish
+    /// owner-state descriptors before it can be counted as driver-owned.
     fn driver_task_runtime_client() -> bool
     where
         Self: Sized,

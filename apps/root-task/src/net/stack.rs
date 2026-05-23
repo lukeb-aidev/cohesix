@@ -1760,6 +1760,13 @@ fn init_genet_driver_task_console<H>(
 where
     H: Hardware<Error = HalError>,
 {
+    crate::drivers::driver_task_net::init_genet_runtime(hal, &config, NET_STAGE)
+        .map_err(convert_driver_error::<DriverTaskNetError>)?;
+    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+        crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+        crate::hal::driver_task::DriverTaskHotPath::GenetNic.as_u32() as usize,
+        crate::drivers::driver_task_net::runtime_ring_service,
+    );
     let stack = NetStack::<GenetDriverTaskDevice>::new(hal, config, backend)
         .map_err(convert_console_error::<DriverTaskNetError>)?;
     check_bootinfo_wrap(mark)?;
@@ -1775,6 +1782,13 @@ fn init_cyw43_driver_task_console<H>(
 where
     H: Hardware<Error = HalError>,
 {
+    crate::drivers::driver_task_net::init_cyw43_runtime(hal, &config, NET_STAGE)
+        .map_err(convert_driver_error::<DriverTaskNetError>)?;
+    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+        crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+        crate::drivers::driver_task_net::runtime_ring_service,
+    );
     let stack = NetStack::<Cyw43DriverTaskDevice>::new(hal, config, backend)
         .map_err(convert_console_error::<DriverTaskNetError>)?;
     check_bootinfo_wrap(mark)?;
@@ -2031,6 +2045,17 @@ where
         NetStackError::DriverTaskContract(reason) => {
             NetConsoleError::Init(NetStackError::DriverTaskContract(reason))
         }
+    }
+}
+
+fn convert_driver_error<E>(err: E) -> DefaultNetConsoleError
+where
+    E: NetDriverError + Into<DefaultDriverError>,
+{
+    if err.is_absent() {
+        NetConsoleError::NoDevice
+    } else {
+        NetConsoleError::Init(NetStackError::Driver(err.into()))
     }
 }
 
@@ -5771,7 +5796,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
                         contract,
                         hot_path.as_u32() as usize,
-                        net_driver_task_runtime_ring_service,
+                        crate::drivers::driver_task_net::runtime_ring_service,
                     );
                     let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
                         0,
@@ -5858,7 +5883,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
                         contract,
                         hot_path.as_u32() as usize,
-                        net_driver_task_runtime_ring_service,
+                        crate::drivers::driver_task_net::runtime_ring_service,
                     );
                     let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
                         0,
@@ -6354,29 +6379,9 @@ unsafe fn net_driver_task_runtime_ring_service(
     context: usize,
     command: crate::hal::driver_task::DriverTaskCommandRecord,
 ) -> crate::hal::driver_task::DriverTaskCompletionRecord {
-    let hot_path = if context
-        == crate::hal::driver_task::DriverTaskHotPath::GenetNic.as_u32() as usize
-    {
-        crate::hal::driver_task::DriverTaskHotPath::GenetNic
-    } else if context == crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi.as_u32() as usize {
-        crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi
-    } else {
-        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
-            command.sequence,
-            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
-        );
-    };
-    if command.opcode != crate::hal::driver_task::DriverTaskOpcode::Service.as_u16()
-        || command.arg0 != hot_path.as_u32()
-        || command.arg1 != hot_path.role_bit() as u32
-        || command.frame.len != 0
-    {
-        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
-            command.sequence,
-            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
-        );
-    }
-    crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence)
+    // SAFETY: This test/compatibility wrapper preserves the exact registered
+    // service ABI and forwards the primitive selector context unchanged.
+    unsafe { crate::drivers::driver_task_net::runtime_ring_service(context, command) }
 }
 
 #[cfg(feature = "kernel")]
@@ -6928,7 +6933,11 @@ mod tests {
         assert_eq!(completion.sequence, 31);
         assert_eq!(
             completion.code,
-            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+            crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        );
+        assert_eq!(
+            completion.detail,
+            crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable.as_u16()
         );
     }
 

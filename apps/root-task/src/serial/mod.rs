@@ -109,6 +109,25 @@ const SERIAL_DRIVER_LOCAL_FLAG_ECHO_ENABLED: u16 = 1 << 0;
 const SERIAL_DRIVER_LOCAL_FLAG_SUPPRESS_LF: u16 = 1 << 1;
 const SERIAL_PENDING_TX_NONE: u16 = u16::MAX;
 const SERIAL_OWNER_DESCRIPTOR_TRANSITIONAL_ROOT_CONTEXT: u16 = 1 << 0;
+#[cfg(feature = "kernel")]
+const SERIAL_RUNTIME_AUX_INIT: u32 = 0x5345_5249;
+
+#[cfg(feature = "kernel")]
+static SERIAL_DRIVER_RUNTIME: SpinMutex<
+    Option<
+        SerialPort<
+            kernel_uart::KernelSerialDriver,
+            DEFAULT_RX_CAPACITY,
+            DEFAULT_TX_CAPACITY,
+            DEFAULT_LINE_CAPACITY,
+        >,
+    >,
+> = SpinMutex::new(None);
+#[cfg(feature = "kernel")]
+static SERIAL_RUNTIME_INIT_LEASE: SpinMutex<Option<kernel_uart::KernelUartMmio>> =
+    SpinMutex::new(None);
+#[cfg(feature = "kernel")]
+static SERIAL_CLIENT_RX: SpinMutex<Queue<u8, DEFAULT_RX_CAPACITY>> = SpinMutex::new(Queue::new());
 
 /// Error type surfaced by the serial subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,6 +326,122 @@ pub const fn serial_owner_state_acceptance_ready() -> bool {
     false
 }
 
+/// Construct the physical UART runtime behind the serial driver-task ring.
+#[cfg(feature = "kernel")]
+pub fn init_serial_driver_task_runtime(mmio: kernel_uart::KernelUartMmio) -> bool {
+    let contract = driver_task_contract();
+    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+        contract,
+        crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+        serial_runtime_ring_service_driver_task,
+    );
+    *SERIAL_RUNTIME_INIT_LEASE.lock() = Some(mmio);
+    let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        crate::hal::driver_task::DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    );
+    command.aux0 = SERIAL_RUNTIME_AUX_INIT;
+    let ok = crate::hal::driver_task::run_driver_task_ring_service(contract, command).is_some_and(
+        |completion| {
+            completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+        },
+    );
+    if !ok {
+        let _ = SERIAL_RUNTIME_INIT_LEASE.lock().take();
+    }
+    ok
+}
+
+/// Returns whether the physical serial runtime is attached to its driver task.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn serial_driver_task_runtime_attached() -> bool {
+    SERIAL_DRIVER_RUNTIME.lock().is_some()
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_client_read_byte() -> nb::Result<u8, SerialError> {
+    if let Some(byte) = SERIAL_CLIENT_RX.lock().dequeue() {
+        return Ok(byte);
+    }
+    let contract = driver_task_contract();
+    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+        contract,
+        crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+        serial_runtime_ring_service_driver_task,
+    );
+    let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        crate::hal::driver_task::DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    );
+    let Some(completion) = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+    else {
+        return Err(NbError::WouldBlock);
+    };
+    if completion.code != crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16() {
+        return Err(NbError::WouldBlock);
+    }
+    let Some(bytes) =
+        crate::hal::driver_task::driver_task_ring_frame_bytes(contract, completion.frame)
+    else {
+        return Err(NbError::Other(SerialError::DeviceFault));
+    };
+    let mut rx = SERIAL_CLIENT_RX.lock();
+    for &byte in bytes {
+        let _ = rx.enqueue(byte);
+    }
+    rx.dequeue().ok_or(NbError::WouldBlock)
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_client_write_byte(byte: u8) -> nb::Result<(), SerialError> {
+    let contract = driver_task_contract();
+    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+        contract,
+        crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+        serial_runtime_ring_service_driver_task,
+    );
+    let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(contract, &[byte], 0)
+    else {
+        return Err(NbError::WouldBlock);
+    };
+    let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        frame,
+    );
+    match crate::hal::driver_task::run_driver_task_ring_service(contract, command) {
+        Some(completion)
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1 =>
+        {
+            Ok(())
+        }
+        Some(completion)
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16() =>
+        {
+            Err(NbError::Other(SerialError::DeviceFault))
+        }
+        _ => Err(NbError::WouldBlock),
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 const fn serial_owner_state_descriptor(
 ) -> Option<crate::hal::driver_task::DriverTaskOwnerStateDescriptor> {
@@ -471,6 +606,26 @@ where
                 if let Some(completion) =
                     crate::hal::driver_task::run_driver_task_ring_service(contract, command)
                 {
+                    if completion.code
+                        == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
+                    {
+                        if let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
+                            contract,
+                            completion.frame,
+                        ) {
+                            let mut accepted = 0usize;
+                            for &byte in bytes {
+                                if self.rx.enqueue(byte).is_err() {
+                                    self.telemetry.rx_overflow();
+                                    break;
+                                }
+                                accepted = accepted.saturating_add(1);
+                            }
+                            return accepted != 0;
+                        }
+                        self.telemetry.driver_task_budget_overrun();
+                        return false;
+                    }
                     return completion.code
                         == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                         && completion.result != 0;
@@ -658,15 +813,30 @@ where
             crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
             frame,
         );
-        let ok = matches!(
-            crate::hal::driver_task::run_driver_task_ring_service(contract, command),
+        let completion = crate::hal::driver_task::run_driver_task_ring_service(contract, command);
+        let written = match completion {
             Some(completion)
-                if completion.code != crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16()
-        );
-        if !ok {
-            self.restore_staged_tx(staged.as_slice());
+                if completion.code
+                    == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16() =>
+            {
+                completion.result as usize
+            }
+            Some(completion)
+                if completion.code
+                    == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+                    && staged.is_empty() =>
+            {
+                0
+            }
+            _ => {
+                self.restore_staged_tx(staged.as_slice());
+                return false;
+            }
+        };
+        if written < staged.len() {
+            self.restore_staged_tx(&staged[written..]);
         }
-        ok
+        true
     }
 
     #[cfg(feature = "kernel")]
@@ -868,19 +1038,153 @@ unsafe fn serial_runtime_ring_service_driver_task(
             crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
         );
     }
+    if command.aux0 == SERIAL_RUNTIME_AUX_INIT {
+        let Some(mmio) = SERIAL_RUNTIME_INIT_LEASE.lock().take() else {
+            return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+                command.sequence,
+                crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable,
+            );
+        };
+        let mut driver = kernel_uart::KernelSerialDriver::from_mmio(mmio);
+        driver.init();
+        *SERIAL_DRIVER_RUNTIME.lock() = Some(SerialPort::new(driver));
+        return crate::hal::driver_task::DriverTaskCompletionRecord::progress(command.sequence, 1);
+    }
     if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Service.as_u16()
         && command.arg0 == expected_hot_path.as_u32()
         && command.arg1 == expected_hot_path.role_bit() as u32
     {
-        return crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence);
+        let mut runtime = SERIAL_DRIVER_RUNTIME.lock();
+        let Some(port) = runtime.as_mut() else {
+            return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+                command.sequence,
+                crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable,
+            );
+        };
+        return service_serial_runtime_port(port, command);
     }
     if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Flush.as_u16() {
+        let mut runtime = SERIAL_DRIVER_RUNTIME.lock();
+        let Some(port) = runtime.as_mut() else {
+            return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+                command.sequence,
+                crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable,
+            );
+        };
+        port.flush_tx_current_tcb(driver_task_contract());
         return crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence);
     }
     crate::hal::driver_task::DriverTaskCompletionRecord::fault(
         command.sequence,
         crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
     )
+}
+
+#[cfg(feature = "kernel")]
+fn service_serial_runtime_port<D, const RX: usize, const TX: usize, const LINE: usize>(
+    port: &mut SerialPort<D, RX, TX, LINE>,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> crate::hal::driver_task::DriverTaskCompletionRecord
+where
+    D: SerialDriver,
+{
+    let contract = driver_task_contract();
+    if command.frame.len != 0 {
+        let Some(bytes) =
+            crate::hal::driver_task::driver_task_ring_frame_bytes(contract, command.frame)
+        else {
+            return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+                command.sequence,
+                crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+            );
+        };
+        let written = serial_runtime_write_bytes(port, bytes, contract);
+        if written == 0 {
+            return crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence);
+        }
+        return crate::hal::driver_task::DriverTaskCompletionRecord::progress(
+            command.sequence,
+            written as u32,
+        );
+    }
+
+    let mut rx = [0u8; crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES];
+    let read = serial_runtime_poll_bytes(port, &mut rx, contract);
+    if read == 0 {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence);
+    }
+    let Some(frame) =
+        crate::hal::driver_task::stage_driver_task_ring_frame(contract, &rx[..read], 0)
+    else {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable,
+        );
+    };
+    crate::hal::driver_task::DriverTaskCompletionRecord::frame_ready(command.sequence, frame)
+}
+
+#[cfg(feature = "kernel")]
+fn serial_runtime_poll_bytes<D, const RX: usize, const TX: usize, const LINE: usize>(
+    port: &mut SerialPort<D, RX, TX, LINE>,
+    out: &mut [u8],
+    contract: DriverTaskContract,
+) -> usize
+where
+    D: SerialDriver,
+{
+    let _ = port.poll_io_current_tcb(contract);
+    let mut read = 0usize;
+    while read < out.len() {
+        let Some(byte) = port.rx.dequeue() else {
+            break;
+        };
+        out[read] = byte;
+        read = read.saturating_add(1);
+    }
+    read
+}
+
+#[cfg(feature = "kernel")]
+fn serial_runtime_write_bytes<D, const RX: usize, const TX: usize, const LINE: usize>(
+    port: &mut SerialPort<D, RX, TX, LINE>,
+    bytes: &[u8],
+    contract: DriverTaskContract,
+) -> usize
+where
+    D: SerialDriver,
+{
+    let mut budget = match DriverServiceBudget::new(contract) {
+        Ok(budget) => budget,
+        Err(_) => {
+            port.telemetry.driver_task_budget_overrun();
+            return 0;
+        }
+    };
+    let mut written = 0usize;
+    with_uart_tx_lock(|| {
+        for &byte in bytes {
+            if port.serial_byte_budget_available(&budget).is_err() {
+                port.telemetry.driver_task_budget_overrun();
+                break;
+            }
+            match port.driver.write_byte(byte) {
+                Ok(()) => {
+                    if port.charge_serial_byte(&mut budget).is_err() {
+                        port.telemetry.driver_task_budget_overrun();
+                        break;
+                    }
+                    written = written.saturating_add(1);
+                }
+                Err(NbError::WouldBlock) => break,
+                Err(NbError::Other(_)) => {
+                    port.telemetry.tx_overflow();
+                    break;
+                }
+            }
+        }
+    });
+    written
 }
 
 #[cfg(feature = "kernel")]
@@ -1252,7 +1556,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn runtime_ring_service_uses_selector_without_serial_port_pointer() {
+    fn runtime_ring_service_rejects_when_serial_runtime_missing() {
         let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
             11,
             crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
@@ -1274,8 +1578,35 @@ mod tests {
         assert_eq!(completion.sequence, 11);
         assert_eq!(
             completion.code,
-            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+            crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16()
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_serial_write_moves_bytes_without_root_port_pointer() {
+        let driver = LoopbackSerial::<16>::new();
+        let mut port: SerialPort<_, 16, 16, 16> = SerialPort::new(driver);
+
+        let written = serial_runtime_write_bytes(&mut port, b"abc", driver_task_contract());
+
+        assert_eq!(written, 3);
+        assert_eq!(port.driver_mut().drain_tx().as_slice(), b"abc");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_serial_poll_moves_rx_bytes_without_root_port_pointer() {
+        let driver = LoopbackSerial::<16>::new();
+        let mut port: SerialPort<_, 16, 16, 16> = SerialPort::new(driver);
+        port.driver_mut().push_rx(b"xy");
+        let mut out = [0u8; 8];
+
+        let read = serial_runtime_poll_bytes(&mut port, &mut out, driver_task_contract());
+
+        assert_eq!(read, 2);
+        assert_eq!(&out[..read], b"xy");
+        assert_eq!(port.rx.len(), 0);
     }
 
     #[test]

@@ -61,7 +61,7 @@
 - `go ${loadaddr}`
 
 ## U-Boot networking setup (for 26a/26b prep)
-- Milestone 26a uses static IPv4 in runtime. The current 26b Pi 4 path adds an interactive U-Boot wizard plus persisted `cohesix.env` policy handoff through a staged padded DTB and U-Boot `bootm`, while keeping manifest defaults authoritative when the handoff is absent or invalid.
+- The current Pi 4 manifest defaults to DHCP with `interface=auto` and requires the local-seat path: without saved U-Boot policy or Wi-Fi credentials it selects GENET/wired DHCP, while explicit wizard/DTB policy can select Wi-Fi DHCP once credentials are provided. HDMI/USB failures are no longer silent on the Pi 4 profile; required local-seat runtime initialization fails boot, while a present backend with a keyboard that is not ready on the first bounded probe keeps polling instead of falling back to serial-only. The U-Boot wizard plus persisted `cohesix.env` policy handoff still flows through a staged padded DTB and U-Boot `bootm`, with manifest defaults authoritative when the handoff is absent or invalid.
 - Typical env setup:
 - `setenv autoload no`
 - `setenv ipaddr <board-ip>`
@@ -101,15 +101,16 @@
 ## Milestone 26a Pi 4 network checklist
 1. Build/validate the QEMU U-Boot harness:
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
-2. Build Pi 4 payload with 26a manifest defaults:
+2. Build Pi 4 payload with Pi 4 manifest defaults:
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 3. Boot on Pi 4 and verify runtime lines include:
 - `manifest.hw.network.enabled=true`
 - `manifest.hw.network.backend=bcmgenet-v5`
-- `manifest.hw.network.static_ipv4.ip=<configured-ip>`
-- `manifest.hw.networking=enabled-static-ipv4`
+- `manifest.hw.network.mode=dhcp`
+- `manifest.hw.network.interface=auto`
+- `manifest.hw.networking=enabled-dhcp`
 4. Validate TCP console reachability from host:
-- `cargo run -p cohsh --features tcp -- --transport tcp --host <STATIC_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
+- `cargo run -p cohsh --features tcp -- --transport tcp --host <LEASE_IP> --port 31337 --script scripts/cohsh/boot_v0.coh`
 
 ## Milestone 26b Pi 4 network wizard checklist (as-built)
 1. Build Pi 4 payload with the 26b policy-capable manifest:
@@ -128,10 +129,10 @@
 - choose `Save current settings and reboot` or `Save settings and reboot` to persist only the Cohesix policy fields into `cohesix.env`.
 4. Boot and confirm policy evidence:
 - `[net-policy] source=manifest ...`, `[net-policy] source=dtb ...`, or `[net-policy] source=dtb rejected reason=<reason> ...`
-- `manifest.hw.network.mode=static`
-- `manifest.hw.network.interface=wired`
-- `manifest.hw.networking=enabled-static-ipv4`
-- for the manifest-default boot, `[net-console] init: bringing up backend=... mode=static interface=wired ip=192.168.10.42/24 ...`
+- `manifest.hw.network.mode=dhcp`
+- `manifest.hw.network.interface=auto`
+- `manifest.hw.networking=enabled-dhcp`
+- for the manifest-default boot with no saved Wi-Fi credentials, `[net-console] pending-dhcp ... active=wired ...` followed by `[dhcp] lease bound ...`
 - for wizard-selected `mode=dhcp`, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...` and then `[net-console] ready ip=<lease-ip> ...`
 - for wizard-selected `mode=static`, `[net-console] init: bringing up backend=... mode=static interface=... ip=<static-ip>/<prefix> ...`
 - if the staged DTB carries an explicit invalid override such as `wifi-psk-too-short`, root-task now rejects that override, emits `[net-policy] source=dtb rejected reason=<reason> ...`, and disables net-console with `invalid net config: dtb override rejected (<reason>)` instead of silently falling back to the manifest-selected backend.
@@ -214,8 +215,8 @@ Capture only these operator-facing lines from that session:
 - Current M26b Wi-Fi correction: the ALP-only firmware proof gate remains bounded, but a transport-unavailable Linux-shaped CMD53 read after a successful firmware/NVRAM/tail upload is evidence-only. Cohesix no longer burns additional pre-release SDIO setup commands just to retry a readback Linux does not require. A byte mismatch remains terminal; unavailable readback proceeds to ARMCR4 release as an unverified Linux-style upload.
 - Current M26b USB correction: after the post-mailbox `platform-reset-complete` path has live BAR/COMMAND proof, runtime treats any captured pre-reset stop seed as stale, replays `CONFIG.MaxSlotsEn`, publishes fresh Cohesix-owned DCBAA/rings, starts the controller, then mirrors U-Boot's poll-only post-start interrupter state with HAL-drained `IMOD=0` / `IMAN=0` writes before command proof. Runtime continues to root-port enumeration only after U-Boot-shaped command/event-ring proof. The port-event command-proof frontier does not pre-acknowledge `ERDP.EHB` / `IMAN.IP`, does not seed Linux-style `DNCTRL`, `IMOD`, or `IMAN.IE`, preserves current-boot Port Status Change events, submits Enable Slot as the first real U-Boot allocation command, and skips/acknowledges leading PSCs while waiting for that matching command completion. No Op is diagnostic-only and cannot prove gate 4 or authorize recovery. Each command publish flushes only the 16-byte submitted command TRB range before the doorbell, matching U-Boot's `queue_trb()` cache contract, and ERDP acknowledgement now fails closed if the event-ring dequeue pointer cannot be translated to the device-visible DMA address. Same-command re-doorbell and Linux-shaped recovery helpers are diagnostic only; the active recovery lane is U-Boot poll-only and requires a fresh Enable Slot completion sourced from an Enable Slot timeout. Pre-reset quiesce uses the generated seL4/GIC PCIe host, child INTx-A, and MSI caps (`179`, `175`, and `180`) through HAL only after the HAL BCM2711 EXT_CFG path has masked/cleared the PCIe host sources; ACK breadcrumbs include `source_clear=hal-ext-cfg-prior`. IRQ27 remains the kernel timer and is never bound as a USB interrupt. If live BAR/COMMAND proof is absent, runtime returns before controller entry; no stop-state, bootloader-authorized, or preserve-state lane is promoted, and the proof script reports `USB_BOOTLOADER_HANDOFF_SEEN=yes` if any such USB evidence appears.
 5. Validate diagnostics surfaces:
-- on the manifest-default boot, `netstats` includes `mode=static policy=wired active=wired standby=none addr_src=manifest-static ip=192.168.10.42 gateway=192.168.10.1 dhcp=disabled`
-- on the manifest-default boot, `netstatus` prints `ip=192.168.10.42 gateway=192.168.10.1 src=manifest-static dhcp=disabled`
+- on the manifest-default boot with no saved Wi-Fi credentials, `netstats` includes `mode=dhcp policy=auto active=wired standby=wifi addr_src=dhcp-lease ip=<lease-ip> gateway=<gw> dhcp=bound`
+- on the manifest-default boot, `netstatus` prints `ip=<lease-ip> gateway=<gw> src=dhcp-lease dhcp=bound`
 - on DHCP boots, `netstatus` prints the compact lease state (`ip=<lease-ip> gateway=<gw> src=dhcp-lease dhcp=bound`) so wrapped serial consoles still show the active address.
 - `nettest` targets the active wired address only.
 6. Current limitation:

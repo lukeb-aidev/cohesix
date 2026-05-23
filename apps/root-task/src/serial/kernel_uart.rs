@@ -159,12 +159,20 @@ impl KernelUartMmio {
     }
 }
 
+// SAFETY: `KernelUartMmio` is a page-local mapping descriptor moved once from
+// bootstrap into the serial driver-task init lease. The physical UART runtime
+// consumes the lease synchronously before steady-state service, and later MMIO
+// access is serialized through the serial driver-task runtime mutex.
+unsafe impl Send for KernelUartMmio {}
+
 /// Runtime-selected serial driver used by the event pump in kernel builds.
 pub enum KernelSerialDriver {
     /// PL011 backend.
     Pl011(Pl011),
     /// BCM2711 mini-UART backend.
     Bcm2711MiniUart(Bcm2711MiniUart),
+    /// Physical Pi client that reaches the UART only through the serial driver task.
+    DriverTaskClient,
     /// No physical UART is mapped; reads/writes stay non-blocking no-op.
     Null,
 }
@@ -187,13 +195,19 @@ impl KernelSerialDriver {
         Self::Null
     }
 
+    /// Construct the root-side serial client for the physical Pi driver task.
+    #[must_use]
+    pub const fn driver_task_client() -> Self {
+        Self::DriverTaskClient
+    }
+
     /// Backend kind.
     #[must_use]
     pub const fn kind(&self) -> KernelUartKind {
         match self {
             Self::Pl011(_) => KernelUartKind::Pl011,
             Self::Bcm2711MiniUart(_) => KernelUartKind::Bcm2711MiniUart,
-            Self::Null => KernelUartKind::Pl011,
+            Self::DriverTaskClient | Self::Null => KernelUartKind::Pl011,
         }
     }
 
@@ -203,6 +217,7 @@ impl KernelSerialDriver {
         match self {
             Self::Pl011(_) => "pl011",
             Self::Bcm2711MiniUart(_) => "bcm2711-mini-uart",
+            Self::DriverTaskClient => "driver-task-serial-client",
             Self::Null => "none",
         }
     }
@@ -213,6 +228,7 @@ impl KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.vaddr(),
             Self::Bcm2711MiniUart(driver) => driver.vaddr(),
+            Self::DriverTaskClient => 0,
             Self::Null => 0,
         }
     }
@@ -222,6 +238,7 @@ impl KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.init(),
             Self::Bcm2711MiniUart(driver) => driver.init(),
+            Self::DriverTaskClient => {}
             Self::Null => {}
         }
     }
@@ -231,6 +248,11 @@ impl KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.write_str(text),
             Self::Bcm2711MiniUart(driver) => driver.write_str(text),
+            Self::DriverTaskClient => {
+                for &byte in text.as_bytes() {
+                    let _ = crate::serial::driver_task_client_write_byte(byte);
+                }
+            }
             Self::Null => {
                 let _ = text;
             }
@@ -242,10 +264,16 @@ impl KernelSerialDriver {
     pub fn into_pl011(self) -> Option<Pl011> {
         match self {
             Self::Pl011(driver) => Some(driver),
-            Self::Bcm2711MiniUart(_) | Self::Null => None,
+            Self::Bcm2711MiniUart(_) | Self::DriverTaskClient | Self::Null => None,
         }
     }
 }
+
+// SAFETY: The physical Pi client variant carries no raw pointers. The MMIO-backed
+// variants are moved once into the serial driver-task runtime and thereafter
+// protected by that runtime's `SpinMutex`, so cross-TCB service turns serialize
+// access to the underlying UART registers.
+unsafe impl Send for KernelSerialDriver {}
 
 impl ErrorType for KernelSerialDriver {
     type Error = SerialError;
@@ -256,6 +284,7 @@ impl SerialDriver for KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.read_byte(),
             Self::Bcm2711MiniUart(driver) => driver.read_byte(),
+            Self::DriverTaskClient => crate::serial::driver_task_client_read_byte(),
             Self::Null => Err(nb::Error::WouldBlock),
         }
     }
@@ -264,6 +293,7 @@ impl SerialDriver for KernelSerialDriver {
         match self {
             Self::Pl011(driver) => driver.write_byte(byte),
             Self::Bcm2711MiniUart(driver) => driver.write_byte(byte),
+            Self::DriverTaskClient => crate::serial::driver_task_client_write_byte(byte),
             Self::Null => {
                 let _ = byte;
                 Err(nb::Error::WouldBlock)

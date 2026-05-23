@@ -3964,6 +3964,27 @@ impl RamFrame {
     }
 }
 
+/// RAM frame capability intentionally left unmapped in the root VSpace.
+#[derive(Clone)]
+pub struct UnmappedRamFrame {
+    cap: seL4_CPtr,
+    paddr: usize,
+}
+
+impl UnmappedRamFrame {
+    /// Returns the physical address for device-owned DMA.
+    #[must_use]
+    pub fn paddr(&self) -> usize {
+        self.paddr
+    }
+
+    /// Returns the capability referencing this RAM frame.
+    #[must_use]
+    pub fn cap(&self) -> seL4_CPtr {
+        self.cap
+    }
+}
+
 /// Aggregates bootinfo-derived allocators and helpers for the root task.
 pub struct KernelEnv<'a> {
     bootinfo: &'a seL4_BootInfo,
@@ -4606,6 +4627,48 @@ impl<'a> KernelEnv<'a> {
         Ok(frame_copy)
     }
 
+    /// Maps an existing page capability into a non-root VSpace.
+    pub fn map_page_cap_into_vspace(
+        &mut self,
+        frame: seL4_CPtr,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<(), seL4_Error> {
+        self.ensure_page_table_in_vspace(vspace, vaddr, tracker)?;
+        map_page_into_vspace(frame, vspace, vaddr, rights, attr)
+    }
+
+    /// Removes the root VSpace mapping attached to a frame capability.
+    pub fn unmap_page_cap(&mut self, frame: seL4_CPtr) -> Result<(), seL4_Error> {
+        // SAFETY: `frame` is a frame capability allocated by this bootstrap
+        // environment. seL4 validates the object type and returns a typed error
+        // if the cap is not currently mapped.
+        let result = unsafe { sel4_sys::seL4_ARM_Page_Unmap(frame) };
+        if result == seL4_NoError {
+            Ok(())
+        } else {
+            Err(result)
+        }
+    }
+
+    /// Retypes a physical device page and maps it only into a non-root VSpace.
+    pub fn map_device_page_into_vspace(
+        &mut self,
+        paddr: usize,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<seL4_CPtr, seL4_Error> {
+        let frame_slot = self.retype_device_page_for_paddr(paddr, "driver-vspace-device")?;
+        self.map_page_cap_into_vspace(frame_slot, vspace, vaddr, rights, attr, tracker)?;
+        Ok(frame_slot)
+    }
+
     /// Ensures that all intermediate page-table objects exist in a target VSpace.
     pub fn ensure_page_table_in_vspace(
         &mut self,
@@ -4760,6 +4823,23 @@ impl<'a> KernelEnv<'a> {
             caller.line(),
             device_cursor = self.device_cursor,
         );
+        let frame_slot = self.retype_device_page_for_paddr(paddr, "root-device")?;
+        let range = self.next_mapping_range(self.device_cursor, PAGE_SIZE, "device-frame");
+        self.device_cursor = range.end;
+        self.map_frame(frame_slot, range.start, DEVICE_VM_ATTRIBUTES, false)?;
+        Ok(DeviceFrame {
+            cap: frame_slot,
+            paddr,
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
+                .expect("device mapping address must be non-null"),
+        })
+    }
+
+    fn retype_device_page_for_paddr(
+        &mut self,
+        paddr: usize,
+        label: &'static str,
+    ) -> Result<seL4_CPtr, seL4_Error> {
         let coverage = self
             .untyped
             .device_coverage(paddr, PAGE_BITS)
@@ -4772,7 +4852,7 @@ impl<'a> KernelEnv<'a> {
             .ok_or(seL4_NotEnoughMemory)?;
         if current_offset > target_offset {
             log::warn!(
-                "[sel4.map_device] cannot map paddr=0x{paddr:08x}; untyped cursor advanced to 0x{cursor:08x}",
+                "[sel4.retype_device] cannot map label={label} paddr=0x{paddr:08x}; untyped cursor advanced to 0x{cursor:08x}",
                 cursor = coverage.base.saturating_add(current_offset),
             );
             return Err(seL4_NotEnoughMemory);
@@ -4821,7 +4901,7 @@ impl<'a> KernelEnv<'a> {
             .ok_or(seL4_NotEnoughMemory)?;
         if reserved.paddr() != paddr {
             log::warn!(
-                "[sel4.map_device] reservation mismatch target=0x{target:08x} reserved=0x{reserved:08x} ut=0x{cap:03x}",
+                "[sel4.retype_device] reservation mismatch label={label} target=0x{target:08x} reserved=0x{reserved:08x} ut=0x{cap:03x}",
                 target = paddr,
                 reserved = reserved.paddr(),
                 cap = reserved.cap(),
@@ -4838,23 +4918,17 @@ impl<'a> KernelEnv<'a> {
         #[cfg(not(target_arch = "aarch64"))]
         compile_error!("Wire correct page object type/size for non-AArch64 targets.");
 
-        let dev_index = reserved.index();
-        let dev_base_paddr = reserved.paddr();
-        let dev_size_bits = reserved.size_bits();
-        let dev_span = 1usize.checked_shl(dev_size_bits as u32).unwrap_or_else(|| {
-            panic!(
-                "device untyped size_bits {} exceeds host word size",
-                dev_size_bits
-            )
-        });
-        let dev_end_paddr = dev_base_paddr.saturating_add(dev_span);
+        let dev_span = 1usize
+            .checked_shl(reserved.size_bits() as u32)
+            .expect("device untyped size_bits must fit host word size");
         log::trace!(
-            "device_untyped chosen: cap=0x{:x} idx={} covers=[0x{:08x}..0x{:08x}) size_bits={} target=0x{:08x}",
+            "device_untyped chosen: label={} cap=0x{:x} idx={} covers=[0x{:08x}..0x{:08x}) size_bits={} target=0x{:08x}",
+            label,
             reserved.cap(),
-            dev_index,
-            dev_base_paddr as u64,
-            dev_end_paddr as u64,
-            dev_size_bits,
+            reserved.index(),
+            reserved.paddr() as u64,
+            reserved.paddr().saturating_add(dev_span) as u64,
+            reserved.size_bits(),
             paddr as u64
         );
 
@@ -4880,7 +4954,7 @@ impl<'a> KernelEnv<'a> {
         };
         if actual_paddr != paddr {
             log::warn!(
-                "[sel4.map_device] cap paddr mismatch target=0x{target:08x} actual=0x{actual:08x} slot=0x{slot:04x}",
+                "[sel4.retype_device] cap paddr mismatch label={label} target=0x{target:08x} actual=0x{actual:08x} slot=0x{slot:04x}",
                 target = paddr,
                 actual = actual_paddr,
                 slot = frame_slot,
@@ -4889,15 +4963,7 @@ impl<'a> KernelEnv<'a> {
             return Err(seL4_RangeError);
         }
         self.record_retype(trace, RetypeStatus::Ok);
-        let range = self.next_mapping_range(self.device_cursor, PAGE_SIZE, "device-frame");
-        self.device_cursor = range.end;
-        self.map_frame(frame_slot, range.start, DEVICE_VM_ATTRIBUTES, false)?;
-        Ok(DeviceFrame {
-            cap: frame_slot,
-            paddr,
-            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
-                .expect("device mapping address must be non-null"),
-        })
+        Ok(frame_slot)
     }
 
     fn retype_device_skip_object(
@@ -5149,6 +5215,91 @@ impl<'a> KernelEnv<'a> {
         attr: sel4_sys::seL4_ARM_VMAttributes,
     ) -> Result<RamFrame, seL4_Error> {
         self.alloc_dma_frame_attr_inner(attr, false)
+    }
+
+    /// Allocates a DMA-capable RAM frame without mapping it into the root VSpace.
+    ///
+    /// This is for driver-local runtime buffers that are mapped only into a
+    /// child driver VSpace. Root-visible shared buffers should continue to use
+    /// [`KernelEnv::alloc_dma_frame_attr`] so the root task can act as the ring
+    /// client without raw driver-state pointers.
+    pub fn alloc_unmapped_ram_frame_attr(
+        &mut self,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> Result<UnmappedRamFrame, seL4_Error> {
+        let trace_uncached = attr == sel4_sys::seL4_ARM_Page_Uncached;
+        let trace_verbose = trace_uncached && LOCAL_SEAT_DMA_FRAME_VERBOSE_LOGS;
+        if trace_verbose {
+            let mut line = HeaplessString::<160>::new();
+            let _ = write!(
+                &mut line,
+                "[driver-runtime] unmapped-ram-frame begin source=high attr=0x{:08x}",
+                vm_attributes_raw(attr) as u32
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
+        BOOTINFO_WINDOW_GUARD.check("alloc_unmapped_ram_frame_attr");
+        let reserved = self
+            .untyped
+            .reserve_ram_high(PAGE_BITS as u8)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let frame_slot = self.allocate_slot();
+        let mut trace = self.prepare_retype_trace(
+            &reserved,
+            frame_slot,
+            SEL4_ARM_PAGE_OBJECT_WORD,
+            PAGE_BITS as seL4_Word,
+            RetypeKind::DmaPage { paddr: 0 },
+        );
+        self.record_retype(trace, RetypeStatus::Pending);
+        if let Err(err) = self.retype_page(reserved.cap(), &trace) {
+            if trace_uncached {
+                let mut line = HeaplessString::<208>::new();
+                let _ = write!(
+                    &mut line,
+                    "[driver-runtime] unmapped-ram-frame retype failed ut=0x{:04x} slot=0x{:04x} err={} ({})",
+                    reserved.cap(),
+                    frame_slot,
+                    err,
+                    error_name(err)
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+            self.record_retype(trace, RetypeStatus::Err(err));
+            self.untyped.release(&reserved);
+            return Err(err);
+        }
+        let paddr = match page_get_address(frame_slot) {
+            Ok(paddr) => paddr,
+            Err(err) => {
+                if trace_uncached {
+                    let mut line = HeaplessString::<192>::new();
+                    let _ = write!(
+                        &mut line,
+                        "[driver-runtime] unmapped-ram-frame paddr failed slot=0x{:04x} err={} ({})",
+                        frame_slot,
+                        err,
+                        error_name(err)
+                    );
+                    boot_log::force_uart_line(line.as_str());
+                }
+                self.record_retype(trace, RetypeStatus::Err(err));
+                return Err(err);
+            }
+        };
+        trace.kind = RetypeKind::DmaPage { paddr };
+        self.record_retype(trace, RetypeStatus::Ok);
+        ::log::debug!(
+            target: "hal",
+            "[hal] unmapped ram frame allocated source=high slot=0x{slot:04x} paddr=0x{paddr:08x} attr=0x{attr:08x}",
+            slot = frame_slot,
+            paddr = paddr,
+            attr = vm_attributes_raw(attr) as usize,
+        );
+        Ok(UnmappedRamFrame {
+            cap: frame_slot,
+            paddr,
+        })
     }
 
     fn alloc_dma_frame_attr_inner(
@@ -6264,6 +6415,17 @@ mod tests {
         }
 
         assert_eq!(error_name(42), "seL4_UnknownError");
+    }
+
+    #[test]
+    fn unmapped_ram_frame_handle_exposes_no_root_mapping_pointer() {
+        let frame = UnmappedRamFrame {
+            cap: 0x42,
+            paddr: 0x8000_0000,
+        };
+
+        assert_eq!(frame.cap(), 0x42);
+        assert_eq!(frame.paddr(), 0x8000_0000);
     }
 
     #[test]

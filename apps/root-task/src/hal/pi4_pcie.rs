@@ -327,6 +327,11 @@ fn pcie_owner_queue_submit(op: u16, stage: u16, offset: usize, value: u32) -> bo
     ring_serviced
 }
 
+#[inline]
+fn physical_pi_pcie_owner_ring_required() -> bool {
+    super::driver_task::physical_pi_driver_task_only_owner_state_active()
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn pi4_pcie_owner_queue_record() -> Pi4PcieOwnerQueueRecord {
     let op_stage = PCIE_OWNER_QUEUE_LAST_OP_STAGE.load(Ordering::Acquire);
@@ -592,7 +597,14 @@ pub fn vl805_xhci_port_read32(mmio_virt: usize, offset: usize, port: u8, max_por
         boot_log::force_uart_line("[local-seat] vl805 xhci port read rejected reason=no-mmio");
         return 0;
     };
-    let _ = pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_READ, 0, offset, 0);
+    if !pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_READ, 0, offset, 0)
+        && physical_pi_pcie_owner_ring_required()
+    {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 xhci port read rejected reason=pcie-owner-ring-unavailable action=fail-closed",
+        );
+        return 0;
+    }
     fence(Ordering::SeqCst);
     let ptr = addr as *const u32;
     // SAFETY: the caller-installed xHCI hook supplies a live device mapping
@@ -628,7 +640,14 @@ pub fn vl805_xhci_port_write32(
         boot_log::force_uart_line("[local-seat] vl805 xhci port write rejected reason=no-mmio");
         return;
     };
-    let _ = pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_WRITE, 0, offset, value);
+    if !pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_WRITE, 0, offset, value)
+        && physical_pi_pcie_owner_ring_required()
+    {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 xhci port write rejected reason=pcie-owner-ring-unavailable action=fail-closed",
+        );
+        return;
+    }
     fence(Ordering::SeqCst);
     let ptr = addr as *mut u32;
     // SAFETY: the caller-installed xHCI hook supplies a live device mapping
@@ -760,7 +779,14 @@ pub fn vl805_xhci_flush_posted_write(
     stage: u16,
 ) -> bool {
     let role = vl805_xhci_flush_stage_role(stage, offset);
-    let _ = pcie_owner_queue_submit(PCIE_OWNER_OP_POSTED_WRITE_FLUSH, stage, offset, value);
+    if !pcie_owner_queue_submit(PCIE_OWNER_OP_POSTED_WRITE_FLUSH, stage, offset, value)
+        && physical_pi_pcie_owner_ring_required()
+    {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 posted-write flush rejected reason=pcie-owner-ring-unavailable action=fail-closed",
+        );
+        return false;
+    }
     let config_page = PCIE_EXT_DATA_PAGE_VIRT.load(Ordering::Acquire);
     let index_page = PCIE_EXT_INDEX_PAGE_VIRT.load(Ordering::Acquire);
     if config_page == 0 || index_page == 0 {

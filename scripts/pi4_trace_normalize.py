@@ -4061,24 +4061,6 @@ def classify_owner_state_hot_path(fields: dict[str, str]) -> str | None:
         normalized = value.lower().replace("_", "-")
         if normalized in REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS:
             return normalized
-    label = fields.get("contract") or fields.get("driver") or fields.get("role")
-    if not label:
-        return None
-    normalized = label.lower().replace("_", "-")
-    if "serial" in normalized or "uart" in normalized:
-        return "serial-console"
-    if "usb" in normalized or "xhci" in normalized or "keyboard" in normalized:
-        return "usb-keyboard"
-    if "hdmi" in normalized or "display" in normalized or "framebuffer" in normalized:
-        return "hdmi-text"
-    if "bcmgenet" in normalized or "genet" in normalized:
-        return "genet-nic"
-    if "cyw" in normalized or "43455" in normalized or "wifi" in normalized:
-        return "cyw43-wifi"
-    if "sdio" in normalized or "sdhci" in normalized or "mmc" in normalized:
-        return "sdio-host"
-    if "pcie" in normalized or "pci-root" in normalized or "vl805" in normalized:
-        return "pcie-root"
     return None
 
 
@@ -4097,15 +4079,7 @@ def _owner_state_proven(fields: dict[str, str]) -> bool:
     explicit = fields.get("owner_state")
     if explicit is None:
         return False
-    return explicit.lower() in {
-        "driver-owned",
-        "driver",
-        "owned",
-        "yes",
-        "pass",
-        "true",
-        "1",
-    }
+    return explicit.lower() == "driver-owned"
 
 
 def summarize_driver_task_proofs(
@@ -4307,8 +4281,8 @@ def summarize_driver_task_proofs(
                 if (
                     hot_path is not None
                     and _owner_state_proven(fields)
-                    and descriptor not in {"", "missing", "none", "no"}
-                    and root_pointer in {"no", "false", "0"}
+                    and descriptor == "present"
+                    and root_pointer == "no"
                 ):
                     owner_state_hot_paths.add(hot_path)
             unexpected_caps = parse_hex_int(fields.get("unexpected_caps"))
