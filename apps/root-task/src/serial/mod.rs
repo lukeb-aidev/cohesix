@@ -452,6 +452,32 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
+            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+                crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                    contract,
+                    crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+                    serial_runtime_ring_service_driver_task,
+                );
+                let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                    0,
+                    crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                    crate::hal::driver_task::DriverFrameDescriptor {
+                        offset: 0,
+                        len: 0,
+                        flags: 0,
+                    },
+                );
+                if let Some(completion) =
+                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                {
+                    return completion.code
+                        == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                        && completion.result != 0;
+                }
+                self.telemetry.driver_task_budget_overrun();
+                return false;
+            }
             crate::hal::driver_task::register_driver_task_root_context_ring_service(
                 contract,
                 self as *mut Self as usize,
@@ -543,6 +569,24 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
+            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+                crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                    contract,
+                    crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+                    serial_runtime_ring_service_driver_task,
+                );
+                let command = crate::hal::driver_task::DriverTaskCommandRecord::flush(
+                    0,
+                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                );
+                if crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                    .is_some()
+                {
+                    return;
+                }
+                self.telemetry.driver_task_budget_overrun();
+                return;
+            }
             crate::hal::driver_task::register_driver_task_root_context_ring_service(
                 contract,
                 self as *mut Self as usize,
@@ -756,6 +800,34 @@ where
     pub fn driver_mut(&mut self) -> &mut D {
         &mut self.driver
     }
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn serial_runtime_ring_service_driver_task(
+    context: usize,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> crate::hal::driver_task::DriverTaskCompletionRecord {
+    let expected_hot_path = crate::hal::driver_task::DriverTaskHotPath::SerialConsole;
+    if context != expected_hot_path.as_u32() as usize {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Service.as_u16()
+        && command.arg0 == expected_hot_path.as_u32()
+        && command.arg1 == expected_hot_path.role_bit() as u32
+        && command.frame.len == 0
+    {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence);
+    }
+    if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Flush.as_u16() {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence);
+    }
+    crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+        command.sequence,
+        crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -1123,6 +1195,34 @@ mod tests {
             crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
         );
         assert_eq!(port.driver_mut().drain_tx().as_slice(), b"abc");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_ring_service_uses_selector_without_serial_port_pointer() {
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            11,
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(driver_task_contract()),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+
+        let completion = unsafe {
+            serial_runtime_ring_service_driver_task(
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+                command,
+            )
+        };
+
+        assert_eq!(completion.sequence, 11);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+        );
     }
 
     #[test]

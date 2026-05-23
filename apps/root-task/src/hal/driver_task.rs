@@ -89,6 +89,22 @@ pub const STEADY_STATE_COMPAT_SERVICE_COMPILED: bool = cfg!(any(
     feature = "net-backend-virtio"
 ));
 
+/// Whether this build is the physical Pi 4 owner-state cutover profile.
+///
+/// In this profile steady-state hardware progress must come from the
+/// driver-task ring path. Root may still keep emergency serial writes alive for
+/// boot diagnostics, but it must not construct or service normal Pi 4 hardware
+/// drivers through root-owned runtime structs.
+#[must_use]
+pub const fn physical_pi_driver_task_only_owner_state_active() -> bool {
+    cfg!(all(
+        feature = "kernel",
+        target_arch = "aarch64",
+        target_os = "none",
+        not(feature = "net-backend-virtio")
+    ))
+}
+
 impl DriverTaskKind {
     /// Stable role label used by Pi 4 driver-task proof tooling.
     #[must_use]
@@ -3654,6 +3670,17 @@ mod tests {
         assert!(!root_fallback_allowed_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware
         ));
+    }
+
+    #[test]
+    fn physical_pi_owner_state_cutover_helper_matches_runtime_profile() {
+        assert_eq!(
+            physical_pi_driver_task_only_owner_state_active(),
+            matches!(
+                CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
+                DriverTaskRuntimeProfile::Pi4Hardware
+            )
+        );
     }
 
     #[test]

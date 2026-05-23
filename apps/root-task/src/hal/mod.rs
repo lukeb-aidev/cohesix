@@ -1209,6 +1209,11 @@ impl<T> Hardware for T where T: PciHal + Cyw43Hal {}
 #[cfg(feature = "kernel")]
 pub struct KernelHal<'a> {
     env: KernelEnv<'a>,
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        target_os = "none",
+        not(feature = "net-backend-virtio")
+    )))]
     pi4_wifi: Option<pi4_wifi::Pi4WifiState>,
     driver_tasks: heapless::Vec<KernelDriverTaskHandle, MAX_KERNEL_DRIVER_TASKS>,
     driver_task_report: DriverTaskBootstrapReport,
@@ -1377,6 +1382,11 @@ impl<'a> KernelHal<'a> {
     pub fn new(env: KernelEnv<'a>) -> Self {
         Self {
             env,
+            #[cfg(not(all(
+                target_arch = "aarch64",
+                target_os = "none",
+                not(feature = "net-backend-virtio")
+            )))]
             pi4_wifi: None,
             driver_tasks: heapless::Vec::new(),
             driver_task_report: DriverTaskBootstrapReport::default(),
@@ -2186,12 +2196,29 @@ impl<'a> KernelHal<'a> {
     }
 
     fn pi4_wifi_state(&mut self) -> Result<&mut pi4_wifi::Pi4WifiState, HalError> {
-        if self.pi4_wifi.is_none() {
-            self.pi4_wifi = Some(pi4_wifi::Pi4WifiState::new(self)?);
+        #[cfg(all(
+            target_arch = "aarch64",
+            target_os = "none",
+            not(feature = "net-backend-virtio")
+        ))]
+        {
+            return Err(HalError::Unsupported(
+                "pi4-wifi-driver-task-runtime-required",
+            ));
         }
-        self.pi4_wifi
-            .as_mut()
-            .ok_or(HalError::Unsupported("pi4-wifi-state"))
+        #[cfg(not(all(
+            target_arch = "aarch64",
+            target_os = "none",
+            not(feature = "net-backend-virtio")
+        )))]
+        {
+            if self.pi4_wifi.is_none() {
+                self.pi4_wifi = Some(pi4_wifi::Pi4WifiState::new(self)?);
+            }
+            self.pi4_wifi
+                .as_mut()
+                .ok_or(HalError::Unsupported("pi4-wifi-state"))
+        }
     }
 }
 
@@ -2331,18 +2358,38 @@ impl<'a> PciHal for KernelHal<'a> {
 #[cfg(feature = "kernel")]
 impl<'a> Cyw43Hal for KernelHal<'a> {
     fn wifi_firmware_bundle(&self) -> Result<WifiFirmwareBundle<'static>, Self::Error> {
-        Ok(self
-            .pi4_wifi
-            .as_ref()
-            .map(pi4_wifi::Pi4WifiState::firmware_bundle)
-            .unwrap_or_else(|| {
-                WifiFirmwareBundle::new(
-                    pi4_wifi::PI4_WIFI_FIRMWARE,
-                    pi4_wifi::PI4_WIFI_NVRAM,
-                    Some(pi4_wifi::PI4_WIFI_CLM_BLOB),
-                    pi4_wifi::PI4_WIFI_BOARD_TYPE,
-                )
-            }))
+        #[cfg(all(
+            target_arch = "aarch64",
+            target_os = "none",
+            not(feature = "net-backend-virtio")
+        ))]
+        {
+            Ok(WifiFirmwareBundle::new(
+                pi4_wifi::PI4_WIFI_FIRMWARE,
+                pi4_wifi::PI4_WIFI_NVRAM,
+                Some(pi4_wifi::PI4_WIFI_CLM_BLOB),
+                pi4_wifi::PI4_WIFI_BOARD_TYPE,
+            ))
+        }
+        #[cfg(not(all(
+            target_arch = "aarch64",
+            target_os = "none",
+            not(feature = "net-backend-virtio")
+        )))]
+        {
+            Ok(self
+                .pi4_wifi
+                .as_ref()
+                .map(pi4_wifi::Pi4WifiState::firmware_bundle)
+                .unwrap_or_else(|| {
+                    WifiFirmwareBundle::new(
+                        pi4_wifi::PI4_WIFI_FIRMWARE,
+                        pi4_wifi::PI4_WIFI_NVRAM,
+                        Some(pi4_wifi::PI4_WIFI_CLM_BLOB),
+                        pi4_wifi::PI4_WIFI_BOARD_TYPE,
+                    )
+                }))
+        }
     }
 
     fn wifi_set_power(&mut self, state: WifiPowerState) -> Result<(), Self::Error> {

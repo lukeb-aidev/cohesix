@@ -189,15 +189,15 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 
 | Contract | Role | Manifest affinity target | Current VSpace | Current hot path |
 | --- | --- | --- | --- | --- |
-| `serial` | serial console | `serial` | shared root VSpace | dedicated TCB service dispatch for normal RX/TX; emergency early UART remains root-owned |
-| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | shared root VSpace | dedicated TCB service dispatch for keyboard polling and VL805/xHCI local-seat progress |
-| `hdmi-text` | HDMI text mirror | `hdmi-text` | shared root VSpace | dedicated TCB service dispatch for bounded text mirroring |
-| `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | shared root VSpace | dedicated TCB service dispatch for active wired network polling |
-| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | shared root VSpace | dedicated TCB service dispatch for active Wi-Fi network polling and CYW43/SDIO progress reached from that poll |
+| `serial` | serial console | `serial` | runtime pending; emergency UART remains root-owned | physical Pi steady-state RX/TX registers a pointer-free selector ring handler and does not enter the root `SerialPort` poll/flush fallback |
+| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | runtime pending; no root `Pi4LocalSeat` backend | physical Pi steady-state keyboard polling registers a pointer-free selector ring handler and does not attach the root xHCI/VL805 backend |
+| `hdmi-text` | HDMI text mirror | `hdmi-text` | runtime pending; no root framebuffer backend | physical Pi steady-state text mirroring registers a pointer-free selector ring handler and does not attach the root HDMI framebuffer backend |
+| `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | runtime pending; no root `BcmGenetDevice` | physical Pi network init selects an inert `GenetDriverTaskDevice` client shell instead of constructing root-owned GENET MMIO/DMA rings |
+| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | runtime pending; no root `Cyw43NetDevice` | physical Pi network init selects an inert `Cyw43DriverTaskDevice` client shell instead of constructing root-owned CYW43/SDIO state |
 | `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
-| `sdio-host` | SDIO host for CYW43 | `sdio-host` | shared root VSpace | boot-created TCB and affinity contract; CYW43 poll currently contains the SDIO service turn |
-| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | shared root VSpace | boot-created TCB and affinity contract; USB/local-seat poll currently contains the VL805 service turn |
+| `sdio-host` | SDIO host for CYW43 | `sdio-host` | runtime pending; root Wi-Fi HAL construction rejected on physical Pi | boot-created TCB and affinity contract; live SDIO command/data service must be implemented by the driver runtime before Wi-Fi can work again |
+| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | runtime pending; root xHCI hook path not attached by local-seat init | boot-created TCB and affinity contract; live PCIe/VL805 service must be implemented by the driver runtime before USB keyboard can work again |
 
 The Pi 4 manifest default pins both network dataplane driver contracts to the
 fourth core (`core=3`): `root_task.affinity.drivers.bcmgenet-v5=3` and
@@ -217,31 +217,29 @@ resumes the TCB. The child entry marks its task key as started and then waits
 on the command endpoint. Root dispatches bounded service callbacks through the
 per-driver endpoint and waits only for that bounded turn to complete.
 
-The default Pi/hardware service path intentionally does not yet prove driver
-VSpace isolation. Low-level seL4 wrappers now exist for allocating AArch64
-VSpace roots, assigning an ASID from the boot ASID pool, and mapping
-pages/page tables into a non-root VSpace. The explicit QEMU smoke path uses
-those wrappers to run a driver-local trampoline with only code, stack, IPC, and
-ring frames mapped, and proves a pointer-free ring command. Normal hardware
-driver service callbacks still run with the root VSpace until each live driver
-state boundary moves behind the fixed ring and declared device/shared buffers.
-This is an explicit remaining hardware isolation proof field, not an excuse for
-root-task hot paths. Serial, USB, HDMI, GENET, and CYW43 service turns now use
-fixed shared-ring command/completion records on the physical Pi 4 profile and
-preserve the Pi hot-path identity plus primitive aux arguments without callback
-or context pointers. Those owner handlers are still registered from the
-shared-root runtime, so this is pointer-free service dispatch, not separate
-driver-local VSpace ownership. Callback-pointer service turns remain available
-only for QEMU/host compatibility profiles. Physical Pi 4 steady-state service
-does not silently fall back to callback or root-owned hardware turns;
-early/emergency serial output remains the only Pi root-owned escape hatch before
-the driver-task substrate exists. If an independent ring-backed hardware owner
-is unavailable, the service turn fails closed and acceptance remains red.
-`sdio-host` and `pcie-root` have
-declared boot-created driver TCB and per-driver affinity contracts; their bus
-operations are still reached through the CYW43 and USB/local-seat service
-callbacks until standalone bus-operation queues are split out and hardware
-proof shows live TCB ownership.
+The default Pi/hardware path is now cut over away from root-owned hardware
+driver structs, but it intentionally does not yet prove useful hardware
+service. Low-level seL4 wrappers now exist for allocating AArch64 VSpace roots,
+assigning an ASID from the boot ASID pool, and mapping pages/page tables into a
+non-root VSpace. The explicit QEMU smoke path uses those wrappers to run a
+driver-local trampoline with only code, stack, IPC, and ring frames mapped, and
+proves a pointer-free ring command. Physical Pi steady-state callers now use
+pointer-free selector ring handlers for serial, USB/local-seat, HDMI, GENET,
+and CYW43 instead of constructing or entering root-owned hardware driver
+objects. GENET and CYW43 network init selects inert driver-task client shells;
+local-seat init no longer attaches `Pi4LocalSeat`, so root does not install the
+VL805 xHCI hooks or HDMI framebuffer backend; the physical Pi `KernelHal` build
+does not carry a `Pi4WifiState` slot and Wi-Fi HAL state construction returns
+`pi4-wifi-driver-task-runtime-required`.
+This deliberately may break Pi 4 GENET, Wi-Fi, USB keyboard, and HDMI behavior
+until the real isolated runtimes implement MMIO/DMA/ring ownership, but it
+removes the old root-owned steady-state hardware path. Emergency early serial
+output remains the only Pi root-owned escape hatch before the driver-task
+substrate exists. If an independent ring-backed hardware owner is unavailable,
+the service turn fails closed and acceptance remains red. `sdio-host` and
+`pcie-root` have declared boot-created driver TCB and per-driver affinity
+contracts; their live bus-operation queues still need implementation in the
+driver runtimes before hardware closure can be claimed.
 
 Boot logs must expose the distinction with these breadcrumbs:
 
@@ -297,7 +295,8 @@ red until the live driver state boundary moves into isolated per-driver runtime
 images. Shared-root ring service roles are now reported separately as
 `shared_ring_roles`; they are useful readiness evidence but do not satisfy
 `hot_path=dedicated` or full acceptance until `owner_state=driver-owned` also
-proves that hardware state no longer lives in root-owned runtime structs.
+proves live isolated runtime descriptors, mapped MMIO/DMA/shared buffers, and
+hardware progress through the driver task.
 The HAL now uses separate registration APIs for root-context diagnostic ring
 services and pointer-free selector ring services. Transitional ring commands that
 still carry a root runtime pointer or root-stack context are registered as
@@ -322,10 +321,9 @@ which returns closed for the Pi 4 hardware profile. The code now carries an
 explicit Pi 4 hot-path command catalog for serial console, USB keyboard, HDMI
 text, GENET RX/TX, CYW43 RX/TX, SDIO host, and PCIe root service turns. Host
 tests prove each catalog entry has a fixed-layout pointer-free command record
-and cover the serial, USB, HDMI, SDIO, and PCIe handlers directly; GENET and
-CYW43 are admitted only through their Pi NIC ring route and still require fresh
-hardware proof for MMIO/DMA ownership. An aggregate task count alone is never
-sufficient.
+and cover the serial, USB, HDMI, GENET, CYW43, SDIO, and PCIe handlers or
+client shells directly; fresh hardware proof is still required for useful
+MMIO/DMA ownership. An aggregate task count alone is never sufficient.
 
 The HAL rejects missing, zero-budget, non-preemptible, or unbounded-blocking
 contracts before the driver is serviced. USB/local-seat and serial are

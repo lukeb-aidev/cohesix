@@ -9,6 +9,8 @@
 pub(crate) mod bcmgenet;
 #[cfg(feature = "kernel")]
 pub(crate) mod cyw43;
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+pub(crate) mod driver_task_net;
 pub(crate) mod rtl8139;
 #[cfg(feature = "kernel")]
 pub(crate) mod virtio;

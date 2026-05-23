@@ -798,6 +798,15 @@ pub trait NetDevice: Device {
     where
         Self: Sized;
 
+    /// Whether this device is only a root-side client for an isolated
+    /// driver-task runtime that owns physical hardware state.
+    fn driver_task_runtime_client() -> bool
+    where
+        Self: Sized,
+    {
+        false
+    }
+
     /// Active interface label surfaced through diagnostics.
     fn interface_label(&self) -> &'static str {
         "wired"

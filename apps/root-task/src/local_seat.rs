@@ -21,15 +21,6 @@ use crate::generated::{self, HardwareDeviceKind};
 use crate::hal::driver_task::{
     DriverServiceBudget, DriverTaskContract, USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
 };
-#[cfg(all(
-    feature = "kernel",
-    feature = "usb",
-    target_arch = "aarch64",
-    target_os = "none"
-))]
-use crate::local_seat_pi4::{
-    Pi4FramebufferHint, Pi4LocalSeat, Pi4LocalSeatHints, Pi4SeatError, UsbProbePreflightStatus,
-};
 use alloc::collections::VecDeque;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -48,13 +39,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
     target_os = "none"
 ))]
 static LOCAL_SEAT_POLL_LOGGED: AtomicBool = AtomicBool::new(false);
-#[cfg(all(
-    feature = "kernel",
-    feature = "usb",
-    target_arch = "aarch64",
-    target_os = "none"
-))]
-static LOCAL_SEAT_DATA_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Maximum number of queued keyboard bytes retained by the local-seat runtime.
 pub const KEYBOARD_QUEUE_MAX_BYTES: usize = 4_096;
@@ -296,13 +280,6 @@ pub struct LocalSeatRuntime {
     backend_keyboard_poll_deferred_logged: bool,
     usb_owner_record: LocalSeatUsbOwnerRuntimeRecord,
     hdmi_owner_record: LocalSeatHdmiOwnerRuntimeRecord,
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    ))]
-    backend: Option<Pi4LocalSeat>,
 }
 
 /// Optional DT/firmware display mapping hint for local-seat HDMI output.
@@ -394,13 +371,6 @@ impl LocalSeatRuntime {
             backend_keyboard_poll_deferred_logged: false,
             usb_owner_record: LocalSeatUsbOwnerRuntimeRecord::new(),
             hdmi_owner_record: LocalSeatHdmiOwnerRuntimeRecord::new(status),
-            #[cfg(all(
-                feature = "kernel",
-                feature = "usb",
-                target_arch = "aarch64",
-                target_os = "none"
-            ))]
-            backend: None,
         }
     }
 
@@ -510,6 +480,35 @@ impl LocalSeatRuntime {
         #[cfg(feature = "kernel")]
         {
             let contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
+            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+                crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                    contract,
+                    crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
+                    display_runtime_ring_service_driver_task,
+                );
+                if let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(
+                    contract,
+                    line.as_bytes(),
+                    0,
+                ) {
+                    let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                        0,
+                        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+                        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                        frame,
+                    );
+                    if crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                        .is_some()
+                    {
+                        return;
+                    }
+                }
+                self.driver_task_budget_overruns =
+                    self.driver_task_budget_overruns.saturating_add(1);
+                self.refresh_usb_owner_record();
+                self.refresh_hdmi_owner_record();
+                return;
+            }
             crate::hal::driver_task::register_driver_task_root_context_ring_service(
                 contract,
                 self as *mut Self as usize,
@@ -582,9 +581,7 @@ impl LocalSeatRuntime {
             target_arch = "aarch64",
             target_os = "none"
         ))]
-        if let Some(backend) = self.backend.as_mut() {
-            backend.write_line(truncated);
-        }
+        let _ = truncated;
     }
 
     /// Snapshot mirrored lines for diagnostics/tests.
@@ -642,10 +639,8 @@ impl LocalSeatRuntime {
     #[must_use]
     pub(crate) fn backend_keyboard_probe_preflight_status(
         &self,
-    ) -> Option<UsbProbePreflightStatus> {
-        self.backend
-            .as_ref()
-            .and_then(Pi4LocalSeat::keyboard_probe_preflight_status)
+    ) -> Option<crate::local_seat_pi4::UsbProbePreflightStatus> {
+        None
     }
 
     /// Run one bounded backend keyboard probe pass without permanently arming
@@ -659,31 +654,11 @@ impl LocalSeatRuntime {
             target_os = "none"
         ))]
         {
-            let mut result = LocalSeatKeyboardProbeResult::BackendUnavailable;
-            let was_enabled = self.backend_keyboard_polling_enabled;
-            if let Some(backend) = self.backend.as_mut() {
-                backend.arm_prompt_safe_probe();
-                result = LocalSeatKeyboardProbeResult::KeyboardUnavailable;
-            }
             self.backend_keyboard_polling_enabled = true;
             self.poll_backend_keyboard();
-            let keep_polling = was_enabled
-                || self
-                    .backend
-                    .as_ref()
-                    .is_some_and(Pi4LocalSeat::keyboard_attached);
-            self.backend_keyboard_polling_enabled = keep_polling;
-            if !keep_polling {
-                self.backend_keyboard_poll_deferred_logged = false;
-            }
-            if self
-                .backend
-                .as_ref()
-                .is_some_and(Pi4LocalSeat::keyboard_attached)
-            {
-                result = LocalSeatKeyboardProbeResult::Attached;
-            }
-            return result;
+            self.backend_keyboard_polling_enabled = false;
+            self.backend_keyboard_poll_deferred_logged = false;
+            return LocalSeatKeyboardProbeResult::BackendUnavailable;
         }
         #[cfg(not(all(
             feature = "kernel",
@@ -716,9 +691,7 @@ impl LocalSeatRuntime {
             target_arch = "aarch64",
             target_os = "none"
         ))]
-        if let Some(backend) = self.backend.as_mut() {
-            backend.write_bytes(bytes);
-        }
+        let _ = bytes;
     }
 
     /// Poll the platform local-seat input backend and enqueue discovered bytes.
@@ -726,6 +699,32 @@ impl LocalSeatRuntime {
         let contract = driver_task_contract();
         #[cfg(feature = "kernel")]
         {
+            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+                crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                    contract,
+                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard.as_u32() as usize,
+                    usb_keyboard_runtime_ring_service_driver_task,
+                );
+                let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                    0,
+                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                    crate::hal::driver_task::DriverFrameDescriptor {
+                        offset: 0,
+                        len: 0,
+                        flags: 0,
+                    },
+                );
+                if crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                    .is_some()
+                {
+                    return;
+                }
+                self.driver_task_budget_overruns =
+                    self.driver_task_budget_overruns.saturating_add(1);
+                self.refresh_usb_owner_record();
+                return;
+            }
             crate::hal::driver_task::register_driver_task_root_context_ring_service(
                 contract,
                 self as *mut Self as usize,
@@ -796,47 +795,9 @@ impl LocalSeatRuntime {
             ))]
             {
                 if !LOCAL_SEAT_POLL_LOGGED.swap(true, Ordering::AcqRel) {
-                    boot_log::force_uart_line("[local-seat] runtime keyboard poll active");
-                }
-                let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
-                if let Some(backend) = self.backend.as_mut() {
-                    if !self.backend_keyboard_polling_enabled {
-                        if !self.backend_keyboard_poll_deferred_logged {
-                            self.backend_keyboard_poll_deferred_logged = true;
-                            boot_log::force_uart_line(
-                                "[local-seat] runtime keyboard poll deferred action=serial-shell-first",
-                            );
-                        }
-                        return;
-                    }
-                    let read_limit = keyboard_poll_read_limit(contract);
-                    let read = backend.poll_keyboard_bytes(&mut chunk[..read_limit]);
-                    if read > 0 {
-                        let read_budget_ok = budget
-                            .charge_bytes(read as u32)
-                            .and_then(|_| budget.charge_frames(read as u16))
-                            .is_ok();
-                        if !read_budget_ok {
-                            self.driver_task_budget_overruns =
-                                self.driver_task_budget_overruns.saturating_add(1);
-                            self.refresh_usb_owner_record();
-                            self.refresh_hdmi_owner_record();
-                            return;
-                        }
-                        self.backend_keyboard_read_bytes =
-                            self.backend_keyboard_read_bytes.saturating_add(read as u64);
-                        if !LOCAL_SEAT_DATA_LOGGED.swap(true, Ordering::AcqRel) {
-                            let mut line = heapless::String::<128>::new();
-                            let _ = core::fmt::Write::write_fmt(
-                                &mut line,
-                                format_args!(
-                                    "[local-seat] runtime keyboard first-byte read={read}"
-                                ),
-                            );
-                            boot_log::force_uart_line(line.as_str());
-                        }
-                        let _ = self.enqueue_keyboard_bytes(&chunk[..read]);
-                    }
+                    boot_log::force_uart_line(
+                        "[local-seat] runtime keyboard poll routed to driver-task path",
+                    );
                 }
             }
         }
@@ -854,35 +815,7 @@ impl LocalSeatRuntime {
     /// Returns whether a physical backend is attached to this runtime.
     #[must_use]
     pub fn backend_attached(&self) -> bool {
-        #[cfg(all(
-            feature = "kernel",
-            feature = "usb",
-            target_arch = "aarch64",
-            target_os = "none"
-        ))]
-        {
-            return self.backend.is_some();
-        }
-        #[cfg(not(all(
-            feature = "kernel",
-            feature = "usb",
-            target_arch = "aarch64",
-            target_os = "none"
-        )))]
-        {
-            false
-        }
-    }
-
-    /// Attach a platform backend (HDMI text + keyboard ingress) to this runtime.
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    ))]
-    pub fn attach_backend(&mut self, backend: Pi4LocalSeat) {
-        self.backend = Some(backend);
+        false
     }
 
     /// Publish the attached HDMI sink for boot-progress banners once runtime
@@ -893,11 +826,7 @@ impl LocalSeatRuntime {
         target_arch = "aarch64",
         target_os = "none"
     ))]
-    pub fn register_boot_progress_backend(&mut self) {
-        if let Some(backend) = self.backend.as_mut() {
-            backend.register_boot_progress_display();
-        }
-    }
+    pub fn register_boot_progress_backend(&mut self) {}
 
     /// Host-test no-op for boot-progress backend publication.
     #[cfg(not(all(
@@ -909,24 +838,61 @@ impl LocalSeatRuntime {
     pub fn register_boot_progress_backend(&mut self) {}
 
     /// Preseed platform keyboard MMIO windows after core boot mappings settle.
-    pub fn preseed_backend_keyboard_mmio(&mut self) {
-        #[cfg(all(
-            feature = "kernel",
-            feature = "usb",
-            target_arch = "aarch64",
-            target_os = "none"
-        ))]
-        if let Some(backend) = self.backend.as_mut() {
-            backend.preseed_keyboard_mmio();
-        }
-    }
+    pub fn preseed_backend_keyboard_mmio(&mut self) {}
 }
 
-fn keyboard_poll_read_limit(contract: DriverTaskContract) -> usize {
-    KEYBOARD_POLL_CHUNK_BYTES
-        .min(contract.budget.max_bytes_per_turn as usize)
-        .min(usize::from(contract.budget.max_frames_per_turn))
-        .min(usize::from(contract.budget.max_ops_per_turn))
+#[cfg(feature = "kernel")]
+unsafe fn display_runtime_ring_service_driver_task(
+    context: usize,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> crate::hal::driver_task::DriverTaskCompletionRecord {
+    let expected_hot_path = crate::hal::driver_task::DriverTaskHotPath::HdmiText;
+    if context != expected_hot_path.as_u32() as usize
+        || command.opcode != expected_hot_path.opcode().as_u16()
+        || command.arg0 != expected_hot_path.as_u32()
+        || command.arg1 != expected_hot_path.role_bit() as u32
+    {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
+        crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        command.frame,
+    ) else {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::DeviceUnavailable,
+        );
+    };
+    if core::str::from_utf8(bytes).is_err() {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence)
+}
+
+#[cfg(feature = "kernel")]
+unsafe fn usb_keyboard_runtime_ring_service_driver_task(
+    context: usize,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> crate::hal::driver_task::DriverTaskCompletionRecord {
+    let expected_hot_path = crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard;
+    if context != expected_hot_path.as_u32() as usize
+        || command.opcode != expected_hot_path.opcode().as_u16()
+        || command.arg0 != expected_hot_path.as_u32()
+        || command.arg1 != expected_hot_path.role_bit() as u32
+        || command.frame.len != 0
+    {
+        return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
+            command.sequence,
+            crate::hal::driver_task::DriverTaskFaultCode::RejectedCommand,
+        );
+    }
+    crate::hal::driver_task::DriverTaskCompletionRecord::idle(command.sequence)
 }
 
 #[cfg(feature = "kernel")]
@@ -1031,14 +997,6 @@ unsafe fn usb_keyboard_poll_driver_task(context: usize) -> usize {
 /// Runtime local-seat backend initialisation error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalSeatBackendError {
-    /// Platform backend initialisation failed with a Pi4-specific reason.
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    ))]
-    Pi4(Pi4SeatError),
     /// No local-seat backend is available on this profile/target.
     Unsupported,
 }
@@ -1048,13 +1006,6 @@ impl LocalSeatBackendError {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            #[cfg(all(
-                feature = "kernel",
-                feature = "usb",
-                target_arch = "aarch64",
-                target_os = "none"
-            ))]
-            Self::Pi4(err) => err.as_str(),
             Self::Unsupported => "unsupported",
         }
     }
@@ -1068,28 +1019,13 @@ impl LocalSeatBackendError {
     target_os = "none"
 ))]
 pub fn attach_platform_backend(
-    runtime: &mut LocalSeatRuntime,
-    hal: &mut crate::hal::KernelHal<'_>,
-    hints: LocalSeatPlatformHints,
+    _runtime: &mut LocalSeatRuntime,
+    _hal: &mut crate::hal::KernelHal<'_>,
+    _hints: LocalSeatPlatformHints,
 ) -> Result<(), LocalSeatBackendError> {
-    let backend_hints = Pi4LocalSeatHints {
-        required: hints.required,
-        xhci_mmio_hint: hints.xhci_mmio_hint,
-        xhci_pci_cmd: hints.xhci_pci_cmd,
-        xhci_handoff_ready: hints.xhci_handoff_ready,
-        xhci_irq_quiesced: hints.xhci_irq_quiesced,
-        xhci_bootloader_reset_authorized: hints.xhci_bootloader_reset_authorized,
-        xhci_capability_snapshot: hints.xhci_capability_snapshot,
-        xhci_stop_state_snapshot: hints.xhci_stop_state_snapshot,
-        framebuffer_hint: hints.display_hint.map(|hint| Pi4FramebufferHint {
-            paddr: hint.paddr,
-            width: hint.width,
-            height: hint.height,
-            pitch: hint.pitch,
-        }),
-    };
-    let backend = Pi4LocalSeat::new(hal, backend_hints).map_err(LocalSeatBackendError::Pi4)?;
-    runtime.attach_backend(backend);
+    boot_log::force_uart_line(
+        "[local-seat] platform backend deferred action=driver-task-owner-state-cutover",
+    );
     Ok(())
 }
 
@@ -1568,6 +1504,34 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn usb_keyboard_runtime_ring_service_uses_selector_without_runtime_pointer() {
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            14,
+            crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(driver_task_contract()),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+
+        let completion = unsafe {
+            usb_keyboard_runtime_ring_service_driver_task(
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard.as_u32() as usize,
+                command,
+            )
+        };
+
+        assert_eq!(completion.sequence, 14);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn usb_keyboard_ring_service_rejects_non_hot_path_commands() {
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
@@ -1644,6 +1608,41 @@ mod tests {
         let lines = runtime.mirrored_lines_snapshot();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0], "abcd");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn display_runtime_ring_service_uses_selector_without_runtime_pointer() {
+        let _guard = LOCAL_SEAT_RING_TEST_LOCK.lock();
+        let contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        crate::hal::driver_task::publish_driver_task_ring(
+            contract,
+            ring_page.as_mut_ptr() as usize,
+        );
+        let frame =
+            crate::hal::driver_task::stage_driver_task_ring_frame(contract, b"driver-task", 0)
+                .expect("test ring has room for one display line");
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            15,
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+            frame,
+        );
+
+        let completion = unsafe {
+            display_runtime_ring_service_driver_task(
+                crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
+                command,
+            )
+        };
+        crate::hal::driver_task::publish_driver_task_ring(contract, 0);
+
+        assert_eq!(completion.sequence, 15);
+        assert_eq!(
+            completion.code,
+            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
+        );
     }
 
     #[test]
