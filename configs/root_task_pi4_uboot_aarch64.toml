@@ -27,6 +27,121 @@ virtio-net = 3
 sdio-host = 3
 pcie-root = 2
 
+[root_task.driver_images]
+required = true
+
+[[root_task.driver_images.images]]
+id = "pi4-serial-runtime"
+contract = "serial"
+hot-path = "serial-console"
+artifact = "cohesix/bin/pi4-driver-serial"
+entry-symbol = "cohesix_pi4_driver_runtime_entry"
+code-pages = 1
+stack-pages = 1
+ipc-pages = 1
+ring-pages = 1
+mmio-pages = 1
+dma-pages = 0
+shared-buffer-pages = 1
+root-context-required = false
+hardware-state-migrated = true
+
+[[root_task.driver_images.images]]
+id = "pi4-usb-runtime"
+contract = "usb-local-seat"
+hot-path = "usb-keyboard"
+artifact = "cohesix/bin/pi4-driver-usb"
+entry-symbol = "cohesix_pi4_driver_runtime_entry"
+code-pages = 1
+stack-pages = 1
+ipc-pages = 1
+ring-pages = 1
+mmio-pages = 2
+dma-pages = 16
+shared-buffer-pages = 2
+root-context-required = true
+hardware-state-migrated = false
+
+[[root_task.driver_images.images]]
+id = "pi4-hdmi-runtime"
+contract = "hdmi-text"
+hot-path = "hdmi-text"
+artifact = "cohesix/bin/pi4-driver-hdmi"
+entry-symbol = "cohesix_pi4_driver_runtime_entry"
+code-pages = 1
+stack-pages = 1
+ipc-pages = 1
+ring-pages = 1
+mmio-pages = 1
+dma-pages = 1
+shared-buffer-pages = 2
+root-context-required = true
+hardware-state-migrated = false
+
+[[root_task.driver_images.images]]
+id = "pi4-genet-runtime"
+contract = "bcmgenet-v5"
+hot-path = "genet-nic"
+artifact = "cohesix/bin/pi4-driver-genet"
+entry-symbol = "cohesix_pi4_driver_runtime_entry"
+code-pages = 1
+stack-pages = 1
+ipc-pages = 1
+ring-pages = 1
+mmio-pages = 6
+dma-pages = 64
+shared-buffer-pages = 4
+root-context-required = true
+hardware-state-migrated = false
+
+[[root_task.driver_images.images]]
+id = "pi4-cyw43-runtime"
+contract = "cyw43455"
+hot-path = "cyw43-wifi"
+artifact = "cohesix/bin/pi4-driver-cyw43"
+entry-symbol = "cohesix_pi4_driver_runtime_entry"
+code-pages = 1
+stack-pages = 1
+ipc-pages = 1
+ring-pages = 1
+mmio-pages = 0
+dma-pages = 8
+shared-buffer-pages = 4
+root-context-required = true
+hardware-state-migrated = false
+
+[[root_task.driver_images.images]]
+id = "pi4-sdio-runtime"
+contract = "sdio-host"
+hot-path = "sdio-host"
+artifact = "cohesix/bin/pi4-driver-sdio"
+entry-symbol = "cohesix_pi4_driver_runtime_entry"
+code-pages = 1
+stack-pages = 1
+ipc-pages = 1
+ring-pages = 1
+mmio-pages = 1
+dma-pages = 2
+shared-buffer-pages = 2
+root-context-required = true
+hardware-state-migrated = false
+
+[[root_task.driver_images.images]]
+id = "pi4-pcie-runtime"
+contract = "pcie-root"
+hot-path = "pcie-root"
+artifact = "cohesix/bin/pi4-driver-pcie"
+entry-symbol = "cohesix_pi4_driver_runtime_entry"
+code-pages = 1
+stack-pages = 1
+ipc-pages = 1
+ring-pages = 1
+mmio-pages = 10
+dma-pages = 0
+shared-buffer-pages = 1
+root-context-required = true
+hardware-state-migrated = false
+
 [profile]
 name = "pi4-uboot-aarch64"
 kernel = true

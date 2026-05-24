@@ -77,7 +77,9 @@ use crate::sel4::{
     DevicePtPool, KernelEnv, ReservedVaddrRanges, IPC_PAGE_BYTES, MSG_MAX_WORDS,
 };
 use crate::serial::{
-    kernel_uart::{KernelSerialDriver, KernelUartKind, KernelUartMmio, UART_CANDIDATES},
+    kernel_uart::{
+        KernelSerialDriver, KernelUartCandidate, KernelUartKind, KernelUartMmio, UART_CANDIDATES,
+    },
     pl011::Pl011,
     SerialPort, DEFAULT_LINE_CAPACITY, DEFAULT_RX_CAPACITY, DEFAULT_TX_CAPACITY,
 };
@@ -797,6 +799,10 @@ fn required_local_seat_probe_should_continue_polling(
 
 fn should_bootstrap_live_driver_tasks(qemu_virtio_compat: bool) -> bool {
     !qemu_virtio_compat
+}
+
+fn physical_pi_linked_serial_runtime_candidate(candidate: KernelUartCandidate) -> bool {
+    candidate.kind() == KernelUartKind::Bcm2711MiniUart
 }
 
 fn live_driver_task_bootstrap_skip_reason(qemu_virtio_compat: bool) -> Option<&'static str> {
@@ -3817,6 +3823,7 @@ fn bootstrap<P: Platform>(
     );
     let extra_bytes = bootinfo_view.extra();
     let extra_range = bootinfo_view.extra_range();
+    crate::hal::driver_task::publish_driver_runtime_payload(extra_bytes);
     let mut extra_state_line = HeaplessString::<192>::new();
     let extra_ptr = extra_bytes.as_ptr() as usize;
     let _ = write!(
@@ -4461,8 +4468,30 @@ fn bootstrap<P: Platform>(
                 paddr = paddr,
                 base = coverage.base,
                 limit = coverage.limit,
-            );
+        );
         console.writeln_prefixed(line.as_str());
+
+        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            if !physical_pi_linked_serial_runtime_candidate(candidate) {
+                let mut skip_line = heapless::String::<160>::new();
+                let _ = write!(
+                    skip_line,
+                    "[uart] root mapping skipped backend={} reason=linked-serial-runtime-mini-uart-only",
+                    candidate.label(),
+                );
+                console.writeln_prefixed(skip_line.as_str());
+                continue;
+            }
+            boot_log::force_uart_line("[uart] driver-task runtime init begin owner=serial");
+            if !crate::serial::init_serial_driver_task_runtime() {
+                boot_log::force_uart_line("[uart] driver-task runtime init failed owner=serial");
+                return Err(BootError::Fatal(
+                    "serial driver-task runtime init failed".to_owned(),
+                ));
+            }
+            boot_log::force_uart_line("[uart] driver-task runtime init ok owner=serial");
+            break;
+        }
 
         match hal.map_device(paddr) {
             Ok(region) => {
@@ -4488,24 +4517,11 @@ fn bootstrap<P: Platform>(
                     );
                 console.writeln_prefixed(map_line.as_str());
 
-                if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-                    boot_log::force_uart_line("[uart] driver-task runtime init begin owner=serial");
-                    if !crate::serial::init_serial_driver_task_runtime(mmio) {
-                        boot_log::force_uart_line(
-                            "[uart] driver-task runtime init failed owner=serial",
-                        );
-                        return Err(BootError::Fatal(
-                            "serial driver-task runtime init failed".to_owned(),
-                        ));
-                    }
-                    boot_log::force_uart_line("[uart] driver-task runtime init ok owner=serial");
-                } else {
-                    uart_pl011::publish_uart_slot(region.cap());
-                    if mmio.kind() == KernelUartKind::Pl011 {
-                        early_uart::register_console_base(mmio.vaddr().as_ptr() as usize);
-                    }
-                    uart_slot = Some(region.cap());
+                uart_pl011::publish_uart_slot(region.cap());
+                if mmio.kind() == KernelUartKind::Pl011 {
+                    early_uart::register_console_base(mmio.vaddr().as_ptr() as usize);
                 }
+                uart_slot = Some(region.cap());
                 uart_mmio = Some(mmio);
                 break;
             }
@@ -4605,8 +4621,13 @@ fn bootstrap<P: Platform>(
     if uart_mmio.is_none()
         && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
     {
+        if !crate::serial::serial_driver_task_runtime_attached() {
+            return Err(BootError::Fatal(
+                "serial driver-task runtime missing after owner-state cutover".to_owned(),
+            ));
+        }
         console.writeln_prefixed(
-            "[uart] root runtime init skipped reason=driver-task-serial-owner-state-cutover",
+            "[uart] root runtime init skipped reason=driver-task-serial-runtime-attached",
         );
     } else if uart_mmio.is_none() {
         let label = uart_map_error
@@ -7274,6 +7295,21 @@ mod tests {
     fn pi4_profile_keeps_live_driver_task_bootstrap_enabled_by_default() {
         assert!(super::should_bootstrap_live_driver_tasks(false));
         assert_eq!(super::live_driver_task_bootstrap_skip_reason(false), None);
+    }
+
+    #[test]
+    fn physical_pi_linked_serial_runtime_uses_only_mini_uart() {
+        use crate::serial::kernel_uart::KernelUartCandidate;
+
+        assert!(super::physical_pi_linked_serial_runtime_candidate(
+            KernelUartCandidate::Pi4MiniUart,
+        ));
+        assert!(!super::physical_pi_linked_serial_runtime_candidate(
+            KernelUartCandidate::QemuPl011,
+        ));
+        assert!(!super::physical_pi_linked_serial_runtime_candidate(
+            KernelUartCandidate::Pi4Pl011,
+        ));
     }
 
     #[test]

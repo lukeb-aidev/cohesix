@@ -753,7 +753,7 @@ main() {
         --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
         --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
-    SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu)
+    SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu pi4-driver-runtime)
     HOST_TOOL_PACKAGES=(gpu-bridge-host cas-tool hive-gateway)
     if has_root_task_feature "cohesix-dev"; then
         HOST_TOOL_PACKAGES+=(swarmui)
@@ -840,7 +840,19 @@ main() {
 
     describe_file "Built root-task" "$SEL4_ARTIFACT_DIR/root-task"
 
-    COMPONENT_BINS=(root-task nine-door worker-heart worker-gpu)
+    COMPONENT_BINS=(
+        root-task
+        nine-door
+        worker-heart
+        worker-gpu
+        pi4-driver-serial
+        pi4-driver-usb
+        pi4-driver-hdmi
+        pi4-driver-genet
+        pi4-driver-cyw43
+        pi4-driver-sdio
+        pi4-driver-pcie
+    )
     HOST_ONLY_BINS=(cohsh coh gpu-bridge-host host-sidecar-bridge cas-tool hive-gateway)
     if has_root_task_feature "cohesix-dev"; then
         HOST_ONLY_BINS+=(swarmui)

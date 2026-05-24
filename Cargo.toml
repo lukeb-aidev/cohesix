@@ -14,6 +14,7 @@ members = [
     "apps/cas-tool",
     "apps/swarmui",
     "apps/root-task",
+    "apps/pi4-driver-runtime",
     "apps/nine-door",
     "apps/worker-heart",
     "apps/worker-gpu",

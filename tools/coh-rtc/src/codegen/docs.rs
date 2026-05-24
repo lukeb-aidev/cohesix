@@ -135,6 +135,31 @@ impl DocFragments {
             format_affinity_core(affinity.drivers.pcie_root)
         )
         .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.driver_images.required`: `{}`",
+            manifest.root_task.driver_images.required
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `root_task.driver_images.images`: `{}`",
+            manifest.root_task.driver_images.images.len()
+        )
+        .ok();
+        for image in &manifest.root_task.driver_images.images {
+            writeln!(
+                schema_md,
+                "- `root_task.driver_images.{}`: contract=`{}` hot_path=`{}` artifact=`{}` root_context_required=`{}` hardware_state_migrated=`{}`",
+                image.id,
+                image.contract,
+                image.hot_path,
+                image.artifact,
+                image.root_context_required,
+                image.hardware_state_migrated
+            )
+            .ok();
+        }
         writeln!(schema_md, "- `profile.name`: `{}`", manifest.profile.name).ok();
         writeln!(
             schema_md,

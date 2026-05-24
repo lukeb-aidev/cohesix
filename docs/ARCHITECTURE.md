@@ -10,7 +10,7 @@ Cohesix is a control-plane OS for secure orchestration and telemetry of edge GPU
 ## 1. Scope and Non-Goals
 Scope:
 - Host: macOS 26 on Apple Silicon for build, QEMU, and host tools.
-- Targets: QEMU `aarch64/virt` (GICv3) for development/CI and Raspberry Pi 4 (`bcm2711`) via `Pi firmware -> U-Boot -> seL4 image -> root-task`; userspace is a pure Rust CPIO rootfs.
+- Targets: QEMU `aarch64/virt` for development/CI, with the GIC version selected from the local seL4 build configuration, and Raspberry Pi 4 (`bcm2711`) via `Pi firmware -> U-Boot -> seL4 image -> root-task`; userspace is a pure Rust CPIO rootfs.
 - Control plane: Secure9P namespace plus a deterministic console grammar shared with `cohsh`/`cohsh-core`.
 
 Non-goals:
@@ -22,11 +22,13 @@ Non-goals:
 
 ## 2. System Boundaries and TCB
 - VM boundary: seL4 kernel plus the CPIO userspace payload (`root-task` and worker binaries). This is the trusted computing base.
-- The root task owns capability setup, the event pump, console surfaces, HAL, logging, and the in-VM NineDoor bridge. It is the sole authority for side effects.
+- The root task owns capability setup, the event pump, console surfaces, logging, and the in-VM NineDoor bridge. It retains capability authority and revocation for hardware, while Pi 4 physical driver progress is routed through root-created driver-task service TCBs and fixed-layout command/completion rings.
 - Host tooling (`cohsh`, `coh`, `swarmui`, `gpu-bridge-host`, `host-sidecar-bridge`, `cas-tool`) is outside the TCB and interacts only through Secure9P or the console.
 - The only in-VM TCP listener is the root-task console; all other TCP services remain host-only.
 - Device access (MMIO, DMA, cache ops) goes through the HAL; no direct MMIO outside HAL.
 - The HAL is capability-layered rather than board-layered: generic MMIO/DMA access lives in `DeviceHal`, PCI-backed discovery/configuration lives in `PciHal`, and the Pi 4 CYW43-over-SDIO bring-up path lives in `Cyw43Hal`. The compatibility `Hardware` façade remains for call sites that still span multiple backends, but drivers are expected to depend on the narrowest HAL layer they actually need.
+- On the physical Pi 4 profile, driver bootstrap now requires isolated child VSpaces and fixed command/completion rings. Root publishes the staged driver-runtime boot payload and loads linked `pi4-driver-*` runtime images when the generated artifact is present; QEMU and host profiles keep compatibility paths for virtual-device testing.
+- The intended isolated-image contract is represented in compiler IR under `root_task.driver_images` and generated into root-task tables. The build now produces and stages linked `pi4-driver-*` image artifacts with a real fixed-ring smoke loop; the serial image additionally handles bounded mini-UART init/RX/TX and is acceptance-eligible in the generated manifest. The remaining Pi 4 hardware state machines have not yet moved into those images, so aggregate owner-state acceptance remains fail-closed.
 
 ## 2.1 SMP Execution Model (Task Isolation)
 - SMP is enabled only when the seL4 kernel is built with `SMP=ON` and `KernelMaxNumNodes >= 2`.
@@ -68,23 +70,23 @@ Non-goals:
 ## 5. Boot and Bring-Up Flow
 1. seL4 elfloader enters the root-task entry point.
 2. Root task reconstructs canonical CSpace addressing using `seL4_CapInitThreadCNode` and `bootinfo.initThreadCNodeSizeBits`, validates the `bootinfo.empty` window, and logs copy/mint/retype tuples before consuming slots.
-3. UART is mapped and the serial logger is activated; the boot banner is emitted.
+3. UART boot diagnostics are emitted through the emergency path, then physical Pi 4 skips installing a steady-state root UART mapping and initializes the linked mini-UART serial driver-task runtime instead. When the init command succeeds, the steady-state event pump receives only a ring-backed serial client; failed runtime init is a boot error rather than a silent root-MMIO fallback.
 4. HAL setup, timer initialization, and IPC endpoints are established.
 5. Manifest-generated tables (tickets, Secure9P limits, policy/audit flags) are loaded from `apps/root-task/src/generated`.
 6. Milestone 26 hardware gates execute before ticket publication:
 - no-NIC baseline (`hw.no_nic`) suppresses net-console bring-up.
 - attestation policy (`hw.attestation.*`) is evaluated and can abort boot deterministically.
-- local-seat policy (`hw.local_seat.*`) is evaluated with fail-fast/degrade semantics.
+- local-seat policy (`hw.local_seat.*`) is evaluated with fail-fast/degrade semantics; the checked-in Pi 4 U-Boot profile requires local-seat runtime initialization.
 7. The log buffer (`/log/queen.log`) and NineDoorBridge are initialized.
 8. Serial console starts; TCP console is started only when networking is enabled by profile/policy.
 9. The event pump enters its cooperative loop (serial, timer, networking, IPC, NineDoorBridge), avoiding busy waits.
 
 ### 5.1 Profile-gated NIC matrix (Milestone 26a/26b as-built)
 - QEMU/dev-virt flow keeps existing behavior: virtio-net is default when enabled, RTL8139 remains supported, and dev defaults remain `10.0.2.15/24` with gateway `10.0.2.2`.
-- Pi 4 U-Boot flow uses manifest-authored `hw.network.mode`, `hw.network.interface`, `hw.network.static_ipv4`, and `hw.network.dhcp` bounds with `hw.network.enabled=true` and `hw.network.backend=bcmgenet-v5`.
+- Pi 4 U-Boot flow uses manifest-authored `hw.network.mode`, `hw.network.interface`, `hw.network.static_ipv4`, and `hw.network.dhcp` bounds with `hw.network.enabled=true` and `hw.network.backend=bcmgenet-v5`. The checked-in Pi 4 U-Boot manifest defaults to DHCP with `interface=auto`, so a no-saved-policy boot selects GENET DHCP unless bounded Wi-Fi credentials or explicit Wi-Fi policy select CYW43.
 - The staged Pi 4 U-Boot boot script persists only Cohesix policy in `cohesix.env`, reloads it on each boot, then loads the staged padded `bcm2711-rpi-4-b.dtb`, mirrors `coh_net_mode`, `coh_net_interface`, `coh_static_ip`, `coh_static_prefix_len`, `coh_static_gateway`, `coh_wifi_ssid`, and `coh_wifi_psk` into `/chosen/cohesix,*`, and hands that DTB to the seL4 elfloader via the U-Boot `uImage`/`bootm` path. Root-task applies only bounded overrides and otherwise falls back to manifest defaults; saved U-Boot settings do not rewrite the build-time manifest.
 - The current runtime still exposes exactly one active control-plane interface. `mode=static` uses manifest static IPv4 unless a bounded U-Boot static override is applied, `mode=dhcp` acquires a lease through the bounded DHCPv4 client, and `mode=off` disables net-console before socket bring-up.
-- On Pi 4, `wired` selects the on-board GENETv5 path, explicit `wifi` selects the HAL-backed CYW43455 SDIO path for bounded `static` or `dhcp`, and `auto` remains DHCP-only while preferring CYW43455 only when bounded credentials are present and the Wi-Fi attach/join path succeeds. Auto falls back to wired only when CYW43455 attach/join setup fails before DHCP ownership transfers to the active Wi-Fi stack, with explicit boot logs.
+- On Pi 4, `wired` selects the on-board GENETv5 path, explicit `wifi` selects the HAL-backed CYW43455 SDIO path for bounded `static` or `dhcp`, and `auto` remains DHCP-only. In the physical driver-task cutover profile, `auto` selects CYW43 when bounded credentials are present and otherwise selects GENET; once CYW43 is selected, attach/join/runtime failures are fatal driver evidence rather than an implicit wired fallback. QEMU/host compatibility profiles may still exercise the older absent-device fallback logic for virtual-device tests.
 - Legacy `uefi-aarch64` manifests are accepted only as migration alias and emit deterministic diagnostics (`manifest.profile.alias=uefi-aarch64->pi4-uboot-aarch64`).
 - Source of truth is compiler IR (`coh-rtc`) fields under `hw.network.*`; root-task does not hard-code Pi 4 network addresses.
 - GENETv5 design provenance order is Linux `bcmgenet` -> Linux `bcm2711` DT bindings -> U-Boot `bcmgenet`; references are design-only and no source code lift is permitted.

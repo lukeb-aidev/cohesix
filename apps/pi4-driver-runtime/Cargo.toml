@@ -1,0 +1,47 @@
+# Author: Lukas Bower
+# Purpose: Configure linked Pi 4 isolated driver runtime image binaries.
+# Copyright 2026 Lukas Bower
+
+[package]
+name = "pi4-driver-runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+sel4-sys = { path = "../../crates/sel4-sys" }
+
+[[bin]]
+name = "pi4-driver-serial"
+test = false
+bench = false
+
+[[bin]]
+name = "pi4-driver-usb"
+test = false
+bench = false
+
+[[bin]]
+name = "pi4-driver-hdmi"
+test = false
+bench = false
+
+[[bin]]
+name = "pi4-driver-genet"
+test = false
+bench = false
+
+[[bin]]
+name = "pi4-driver-cyw43"
+test = false
+bench = false
+
+[[bin]]
+name = "pi4-driver-sdio"
+test = false
+bench = false
+
+[[bin]]
+name = "pi4-driver-pcie"
+test = false
+bench = false

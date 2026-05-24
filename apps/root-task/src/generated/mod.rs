@@ -88,6 +88,30 @@ pub struct DriverAffinityPolicy {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct DriverRuntimeImagePolicy {
+    pub required: bool,
+    pub images: &'static [DriverRuntimeImageSpec],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DriverRuntimeImageSpec {
+    pub id: &'static str,
+    pub contract: &'static str,
+    pub hot_path: &'static str,
+    pub artifact: &'static str,
+    pub entry_symbol: &'static str,
+    pub code_pages: u16,
+    pub stack_pages: u16,
+    pub ipc_pages: u16,
+    pub ring_pages: u16,
+    pub mmio_pages: u16,
+    pub dma_pages: u16,
+    pub shared_buffer_pages: u16,
+    pub root_context_required: bool,
+    pub hardware_state_migrated: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub enum TelemetryFrameSchema {
     LegacyPlaintext,
     CborV1,
@@ -576,7 +600,7 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
 pub const MANIFEST_SHA256: &str =
-    "c0040ba75c4fadbebdb8fcd8983ad6ee807988ef1a83056b20320405a0513af8";
+    "041df6fa762c18a7822cac60d3552f00320866abc0ddcc7c7de0e48ca03e2ca8";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -585,6 +609,8 @@ pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
 pub const TICKET_LIMITS: TicketLimits = bootstrap::TICKET_LIMITS;
 pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
 pub const AFFINITY_POLICY: AffinityPolicy = bootstrap::AFFINITY_POLICY;
+pub const DRIVER_RUNTIME_IMAGE_POLICY: DriverRuntimeImagePolicy =
+    bootstrap::DRIVER_RUNTIME_IMAGE_POLICY;
 pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();
 pub const TELEMETRY_CONFIG: TelemetryConfig = bootstrap::TELEMETRY_CONFIG;
 pub const TELEMETRY_INGEST_CONFIG: TelemetryIngestConfig = bootstrap::TELEMETRY_INGEST_CONFIG;
@@ -647,6 +673,17 @@ pub const fn sharding_config() -> ShardingConfig {
 
 pub const fn affinity_policy() -> AffinityPolicy {
     bootstrap::AFFINITY_POLICY
+}
+
+pub const fn driver_runtime_image_policy() -> DriverRuntimeImagePolicy {
+    bootstrap::DRIVER_RUNTIME_IMAGE_POLICY
+}
+
+pub fn driver_runtime_image_for_hot_path(hot_path: &str) -> Option<DriverRuntimeImageSpec> {
+    bootstrap::DRIVER_RUNTIME_IMAGES
+        .iter()
+        .copied()
+        .find(|image| image.hot_path == hot_path)
 }
 
 pub const fn shard_labels() -> &'static [&'static str] {

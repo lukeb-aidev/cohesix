@@ -108,7 +108,8 @@ const SERIAL_DRIVER_LOCAL_RECORD_VERSION: u16 = 1;
 const SERIAL_DRIVER_LOCAL_FLAG_ECHO_ENABLED: u16 = 1 << 0;
 const SERIAL_DRIVER_LOCAL_FLAG_SUPPRESS_LF: u16 = 1 << 1;
 const SERIAL_PENDING_TX_NONE: u16 = u16::MAX;
-const SERIAL_OWNER_DESCRIPTOR_TRANSITIONAL_ROOT_CONTEXT: u16 = 1 << 0;
+const SERIAL_OWNER_DESCRIPTOR_FLAGS: u16 =
+    crate::hal::driver_task::DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS;
 #[cfg(feature = "kernel")]
 const SERIAL_RUNTIME_AUX_INIT: u32 = 0x5345_5249;
 
@@ -128,6 +129,8 @@ static SERIAL_RUNTIME_INIT_LEASE: SpinMutex<Option<kernel_uart::KernelUartMmio>>
     SpinMutex::new(None);
 #[cfg(feature = "kernel")]
 static SERIAL_CLIENT_RX: SpinMutex<Queue<u8, DEFAULT_RX_CAPACITY>> = SpinMutex::new(Queue::new());
+#[cfg(feature = "kernel")]
+static SERIAL_LINKED_RUNTIME_ATTACHED: AtomicU32 = AtomicU32::new(0);
 
 /// Error type surfaced by the serial subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -319,23 +322,23 @@ const fn saturating_u16(value: usize) -> u16 {
 
 /// Whether serial can be credited as driver-owned owner-state proof.
 ///
-/// This remains false because the live ring service still needs a root-owned
-/// [`SerialPort`] pointer to reach the MMIO driver and heapless queues.
+/// This is true only for the physical Pi linked-runtime path: root keeps the
+/// ring client, while mini-UART MMIO/RX/TX progress runs inside the mapped
+/// serial driver image.
 #[must_use]
 pub const fn serial_owner_state_acceptance_ready() -> bool {
-    false
+    true
 }
 
 /// Construct the physical UART runtime behind the serial driver-task ring.
 #[cfg(feature = "kernel")]
-pub fn init_serial_driver_task_runtime(mmio: kernel_uart::KernelUartMmio) -> bool {
+pub fn init_serial_driver_task_runtime() -> bool {
     let contract = driver_task_contract();
     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
         contract,
         crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
         serial_runtime_ring_service_driver_task,
     );
-    *SERIAL_RUNTIME_INIT_LEASE.lock() = Some(mmio);
     let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
         0,
         crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
@@ -353,9 +356,21 @@ pub fn init_serial_driver_task_runtime(mmio: kernel_uart::KernelUartMmio) -> boo
                 && completion.result == 1
         },
     );
-    if !ok {
-        let _ = SERIAL_RUNTIME_INIT_LEASE.lock().take();
+    if ok {
+        let owner_state_registered = serial_owner_state_descriptor().is_some_and(|descriptor| {
+            crate::hal::driver_task::register_driver_task_owner_state_descriptor(
+                contract, descriptor,
+            )
+        });
+        if !owner_state_registered {
+            SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
+            return false;
+        }
+        SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
+    } else {
+        SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
     }
+    let _ = SERIAL_RUNTIME_INIT_LEASE.lock().take();
     ok
 }
 
@@ -363,7 +378,8 @@ pub fn init_serial_driver_task_runtime(mmio: kernel_uart::KernelUartMmio) -> boo
 #[cfg(feature = "kernel")]
 #[must_use]
 pub fn serial_driver_task_runtime_attached() -> bool {
-    SERIAL_DRIVER_RUNTIME.lock().is_some()
+    SERIAL_LINKED_RUNTIME_ATTACHED.load(AtomicOrdering::Acquire) != 0
+        || SERIAL_DRIVER_RUNTIME.lock().is_some()
 }
 
 #[cfg(feature = "kernel")]
@@ -451,7 +467,7 @@ const fn serial_owner_state_descriptor(
         core::mem::size_of::<SerialDriverLocalRuntimeRecord>() as u16,
         crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET as u32,
         crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES as u16,
-        SERIAL_OWNER_DESCRIPTOR_TRANSITIONAL_ROOT_CONTEXT,
+        SERIAL_OWNER_DESCRIPTOR_FLAGS,
     )
 }
 
@@ -1047,6 +1063,7 @@ unsafe fn serial_runtime_ring_service_driver_task(
         };
         let mut driver = kernel_uart::KernelSerialDriver::from_mmio(mmio);
         driver.init();
+        SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
         *SERIAL_DRIVER_RUNTIME.lock() = Some(SerialPort::new(driver));
         return crate::hal::driver_task::DriverTaskCompletionRecord::progress(command.sequence, 1);
     }
@@ -1414,7 +1431,7 @@ mod tests {
     }
 
     #[test]
-    fn serial_owner_runtime_record_is_fixed_layout_but_not_acceptance_ready() {
+    fn serial_owner_runtime_record_is_fixed_layout_and_acceptance_ready() {
         assert!(
             core::mem::size_of::<SerialDriverLocalRuntimeRecord>()
                 <= crate::hal::driver_task::DRIVER_TASK_OWNER_STATE_BYTES
@@ -1433,7 +1450,8 @@ mod tests {
             descriptor.buffer_offset as usize,
             crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET
         );
-        assert!(!serial_owner_state_acceptance_ready());
+        assert!(descriptor.has_required_runtime_flags());
+        assert!(serial_owner_state_acceptance_ready());
     }
 
     #[test]

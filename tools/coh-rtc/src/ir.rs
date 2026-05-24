@@ -77,6 +77,20 @@ const MAX_LEASE_ACTIVE_ENTRIES: u32 = 256;
 const MAX_LEASE_PREEMPTION_ENTRIES: u32 = 256;
 const MAX_AFFINITY_CORES: u8 = 64;
 const MAX_TELEMETRY_REFERENCE_ENTRIES_PER_SEGMENT: u32 = 16_384;
+const MAX_DRIVER_RUNTIME_IMAGES: usize = 16;
+const MAX_DRIVER_RUNTIME_IMAGE_ID_LEN: usize = 64;
+const MAX_DRIVER_RUNTIME_IMAGE_PATH_LEN: usize = 160;
+const MAX_DRIVER_RUNTIME_ENTRY_SYMBOL_LEN: usize = 96;
+const MAX_DRIVER_RUNTIME_REGION_PAGES: u16 = 1024;
+const REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS: [&str; 7] = [
+    "serial-console",
+    "usb-keyboard",
+    "hdmi-text",
+    "genet-nic",
+    "cyw43-wifi",
+    "sdio-host",
+    "pcie-root",
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -184,6 +198,7 @@ impl Manifest {
         self.validate_swarmui()?;
         self.validate_cas(base_dir)?;
         self.validate_affinity()?;
+        self.root_task.driver_images.validate()?;
         Ok(())
     }
 
@@ -2383,6 +2398,167 @@ pub struct RootTaskSection {
     pub schema: String,
     #[serde(default)]
     pub affinity: AffinityPolicy,
+    #[serde(default)]
+    pub driver_images: DriverRuntimeImagePolicy,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DriverRuntimeImagePolicy {
+    pub required: bool,
+    pub images: Vec<DriverRuntimeImageSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default, rename_all = "kebab-case")]
+pub struct DriverRuntimeImageSpec {
+    pub id: String,
+    pub contract: String,
+    pub hot_path: String,
+    pub artifact: String,
+    pub entry_symbol: String,
+    pub code_pages: u16,
+    pub stack_pages: u16,
+    pub ipc_pages: u16,
+    pub ring_pages: u16,
+    pub mmio_pages: u16,
+    pub dma_pages: u16,
+    pub shared_buffer_pages: u16,
+    pub root_context_required: bool,
+    pub hardware_state_migrated: bool,
+}
+
+impl DriverRuntimeImagePolicy {
+    fn validate(&self) -> Result<()> {
+        if self.images.len() > MAX_DRIVER_RUNTIME_IMAGES {
+            bail!(
+                "root_task.driver_images.images contains {} entries, max {}",
+                self.images.len(),
+                MAX_DRIVER_RUNTIME_IMAGES
+            );
+        }
+        let mut ids = BTreeSet::new();
+        let mut contracts = BTreeSet::new();
+        let mut hot_paths = BTreeSet::new();
+        for image in &self.images {
+            image.validate()?;
+            if !ids.insert(image.id.as_str()) {
+                bail!("duplicate driver runtime image id {}", image.id);
+            }
+            if !contracts.insert(image.contract.as_str()) {
+                bail!("duplicate driver runtime image contract {}", image.contract);
+            }
+            if !hot_paths.insert(image.hot_path.as_str()) {
+                bail!("duplicate driver runtime image hot path {}", image.hot_path);
+            }
+        }
+        if self.required {
+            for required in REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS {
+                if !hot_paths.contains(required) {
+                    bail!(
+                        "root_task.driver_images.required missing hot path {}",
+                        required
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl DriverRuntimeImageSpec {
+    fn validate(&self) -> Result<()> {
+        validate_driver_runtime_text("id", &self.id, MAX_DRIVER_RUNTIME_IMAGE_ID_LEN)?;
+        validate_driver_runtime_text("contract", &self.contract, MAX_DRIVER_RUNTIME_IMAGE_ID_LEN)?;
+        validate_driver_runtime_text("hot_path", &self.hot_path, MAX_DRIVER_RUNTIME_IMAGE_ID_LEN)?;
+        validate_driver_runtime_text(
+            "artifact",
+            &self.artifact,
+            MAX_DRIVER_RUNTIME_IMAGE_PATH_LEN,
+        )?;
+        validate_driver_runtime_text(
+            "entry_symbol",
+            &self.entry_symbol,
+            MAX_DRIVER_RUNTIME_ENTRY_SYMBOL_LEN,
+        )?;
+        if !REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS.contains(&self.hot_path.as_str()) {
+            bail!("unknown driver runtime hot path {}", self.hot_path);
+        }
+        for (name, pages) in [
+            ("code_pages", self.code_pages),
+            ("stack_pages", self.stack_pages),
+            ("ipc_pages", self.ipc_pages),
+            ("ring_pages", self.ring_pages),
+            ("mmio_pages", self.mmio_pages),
+            ("dma_pages", self.dma_pages),
+            ("shared_buffer_pages", self.shared_buffer_pages),
+        ] {
+            if pages > MAX_DRIVER_RUNTIME_REGION_PAGES {
+                bail!(
+                    "root_task.driver_images.images.{} for {} exceeds max {}",
+                    name,
+                    self.id,
+                    MAX_DRIVER_RUNTIME_REGION_PAGES
+                );
+            }
+        }
+        if self.code_pages == 0
+            || self.stack_pages == 0
+            || self.ipc_pages == 0
+            || self.ring_pages == 0
+            || self.shared_buffer_pages == 0
+        {
+            bail!(
+                "driver runtime image {} must declare nonzero code, stack, ipc, ring, and shared-buffer pages",
+                self.id
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Default for DriverRuntimeImagePolicy {
+    fn default() -> Self {
+        Self {
+            required: false,
+            images: Vec::new(),
+        }
+    }
+}
+
+impl Default for DriverRuntimeImageSpec {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            contract: String::new(),
+            hot_path: String::new(),
+            artifact: String::new(),
+            entry_symbol: String::new(),
+            code_pages: 1,
+            stack_pages: 1,
+            ipc_pages: 1,
+            ring_pages: 1,
+            mmio_pages: 0,
+            dma_pages: 0,
+            shared_buffer_pages: 1,
+            root_context_required: true,
+            hardware_state_migrated: false,
+        }
+    }
+}
+
+fn validate_driver_runtime_text(field: &str, value: &str, max_len: usize) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        bail!("root_task.driver_images.images.{field} must not be empty");
+    }
+    if trimmed.len() > max_len {
+        bail!(
+            "root_task.driver_images.images.{field} exceeds max length {}",
+            max_len
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2484,8 +2660,9 @@ impl Default for AffinityPolicy {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_manifest, AffinityPolicy, AttestationPolicy, DriverAffinityPolicy, HardwareDevice,
-        HardwareDeviceKind, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
+        load_manifest, AffinityPolicy, AttestationPolicy, DriverAffinityPolicy,
+        DriverRuntimeImagePolicy, DriverRuntimeImageSpec, HardwareDevice, HardwareDeviceKind,
+        NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
     };
     use std::path::PathBuf;
 
@@ -2507,6 +2684,53 @@ mod tests {
         assert_eq!(policy.drivers.virtio_net, Some(3));
         assert_eq!(policy.drivers.sdio_host, Some(3));
         assert_eq!(policy.drivers.pcie_root, Some(2));
+    }
+
+    fn driver_runtime_image(hot_path: &str) -> DriverRuntimeImageSpec {
+        DriverRuntimeImageSpec {
+            id: format!("pi4-{hot_path}"),
+            contract: hot_path.to_owned(),
+            hot_path: hot_path.to_owned(),
+            artifact: format!("cohesix/bin/pi4-driver-{hot_path}"),
+            entry_symbol: "cohesix_pi4_driver_runtime_entry".to_owned(),
+            code_pages: 1,
+            stack_pages: 1,
+            ipc_pages: 1,
+            ring_pages: 1,
+            mmio_pages: 1,
+            dma_pages: 1,
+            shared_buffer_pages: 1,
+            root_context_required: true,
+            hardware_state_migrated: false,
+        }
+    }
+
+    #[test]
+    fn driver_runtime_policy_required_covers_all_pi4_hot_paths() {
+        let policy = DriverRuntimeImagePolicy {
+            required: true,
+            images: super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+                .iter()
+                .copied()
+                .map(driver_runtime_image)
+                .collect(),
+        };
+        policy.validate().expect("complete driver runtime table");
+    }
+
+    #[test]
+    fn driver_runtime_policy_rejects_missing_required_hot_path() {
+        let policy = DriverRuntimeImagePolicy {
+            required: true,
+            images: super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+                .iter()
+                .copied()
+                .filter(|hot_path| *hot_path != "pcie-root")
+                .map(driver_runtime_image)
+                .collect(),
+        };
+        let err = policy.validate().expect_err("missing pcie-root rejected");
+        assert!(err.to_string().contains("missing hot path pcie-root"));
     }
 
     #[test]

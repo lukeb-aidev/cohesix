@@ -41,8 +41,9 @@ failure condition is not progress.
 This document is scoped to active Pi 4 work in `docs/BUILD_PLAN.md`:
 
 - Milestone 26: `m26-hal-boundary`, local diagnostics, and the U-Boot boot/DTB handoff.
-- Milestone 26a: `m26a-bcmgenet-driver` and Pi 4 static IPv4.
-- Milestone 26b: DHCP plus the profile-gated CYW43455 Wi-Fi path.
+- Milestone 26a: `m26a-bcmgenet-driver` and the original Pi 4 wired/static baseline.
+- Milestone 26b: DHCP plus the profile-gated CYW43455 Wi-Fi path; the checked-in
+  Pi 4 U-Boot manifest now defaults to DHCP/`auto`.
 
 It targets seL4 13 behavior on AArch64/Pi 4 while preserving Cohesix's current
 as-built constraints. `docs/BUILD_PLAN.md` currently records a future seL4 15
@@ -189,15 +190,33 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 
 | Contract | Role | Manifest affinity target | Current VSpace | Current hot path |
 | --- | --- | --- | --- | --- |
-| `serial` | serial console | `serial` | shared-ring service TCB with service-side `KernelSerialDriver` runtime; emergency early UART remains root-owned | physical Pi UART init now runs through a serial driver-task init command, root receives a `driver-task-serial-client`, and steady-state RX/TX is carried by pointer-free shared-ring commands |
-| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | shared-ring service TCB with service-side `Pi4LocalSeat` runtime | physical Pi local-seat init constructs the real `Pi4LocalSeat` backend behind the driver-task runtime slot; root polls keyboard bytes and mirrors display lines only by pointer-free selector commands |
-| `hdmi-text` | HDMI text mirror | `hdmi-text` | shared-ring service TCB with service-side `Pi4LocalSeat` runtime | physical Pi text mirroring stages display lines into the shared ring and the service-side local-seat runtime writes the framebuffer/backend state |
-| `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | shared-ring service TCB with service-side `BcmGenetDevice` runtime | physical Pi network init builds the real GENET MMIO/DMA device behind the driver-task runtime slot and gives smoltcp a ring-backed `GenetDriverTaskDevice` client shell |
-| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | shared-ring service TCB with service-side `Cyw43NetDevice` runtime | physical Pi network init builds the real CYW43/SDIO device behind the driver-task runtime slot and gives smoltcp a ring-backed `Cyw43DriverTaskDevice` client shell |
+| `serial` | serial console | `serial` | isolated child VSpace using the linked `pi4-driver-serial` image; emergency early UART remains root-owned | linked image services the fixed-ring smoke path plus bounded mini-UART init/RX/TX; generated spec is acceptance-eligible, but fresh Pi proof is still required |
+| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image fails closed for real USB work until the xHCI/HID state machine moves out of root-owned local-seat code |
+| `hdmi-text` | HDMI text mirror | `hdmi-text` | isolated child VSpace using the linked `pi4-driver-hdmi` image | linked image validates bounded frame submissions but fails closed until framebuffer/local-seat state moves into the runtime |
+| `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | isolated child VSpace using the linked `pi4-driver-genet` image | linked image fails closed for real GENET RX/TX until descriptor rings, DMA state, and MMIO ownership move into the runtime |
+| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image fails closed for real CYW43 RX/TX until SDPCM/firmware/flow-control state moves into the runtime |
 | `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
-| `sdio-host` | SDIO host for CYW43 | `sdio-host` | shared-ring service TCB; SDIO state is owned by the CYW43 service runtime | physical Pi root Wi-Fi HAL construction is rejected; SDIO command/data progress is reached only through the service-side `Cyw43NetDevice`/`Pi4WifiState` runtime |
-| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | shared-ring service TCB; PCIe/xHCI state is owned by the local-seat service runtime | physical Pi root xHCI hooks are not installed; PCIe/VL805 progress is reached only through the service-side `Pi4LocalSeat` runtime |
+| `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | linked image fails closed for real SDIO command/data work until the bus queue is split from CYW43 root-owned transport state |
+| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | isolated child VSpace using the linked `pi4-driver-pcie` image | linked image fails closed for real PCIe/VL805 work until the bus queue is split from local-seat root-owned transport state |
+
+The final isolated-image contract is now generated rather than hand-authored in
+HAL. `configs/root_task.toml` and `configs/root_task_pi4_uboot_aarch64.toml`
+declare `root_task.driver_images` for `serial-console`, `usb-keyboard`,
+`hdmi-text`, `genet-nic`, `cyw43-wifi`, `sdio-host`, and `pcie-root`;
+`coh-rtc` emits those records into `apps/root-task/src/generated`; and
+`scripts/cohesix-build-run.sh` stages linked `pi4-driver-*` runtime image
+binaries, and `scripts/pi4-image-build.sh` packages those images into the Pi 4
+driver-runtime CPIO passed at U-Boot handoff. Those binaries now implement the
+fixed command/completion ring smoke loop, so physical Pi bootstrap can debug the
+linked-image path instead of a shared-root service TCB. The serial image now
+handles the bounded mini-UART init/RX/TX service over the fixed ring, and its
+generated runtime spec reports `root_context_required=false` and
+`hardware_state_migrated=true`. Aggregate acceptance still remains fail-closed:
+the generated USB/HDMI, GENET, CYW43/SDIO, and PCIe/VL805 runtime specs still
+report `root_context_required=true` and `hardware_state_migrated=false` until
+those service loops move into their linked images and fresh Pi proof confirms
+the serial and remaining hardware paths.
 
 The Pi 4 manifest default pins both network dataplane driver contracts to the
 fourth core (`core=3`): `root_task.affinity.drivers.bcmgenet-v5=3` and
@@ -216,28 +235,27 @@ object, child CNode, command endpoint, notification, IPC frame, stack frame,
 ring frame, and fault endpoint slot; installs a restricted child CSpace; binds
 the remote IPC buffer; applies the contract priority; applies
 manifest-selected per-driver affinity through `seL4_TCB_SetAffinity`; binds the
-notification; writes the shared-ring Rust service entry registers; and resumes
-the TCB. The service entry for physical Pi hardware dispatches only fixed-layout
-command/completion records; callback-pointer dispatch is compiled out for that
-profile. QEMU smoke can additionally allocate isolated VSpaces and map the
-minimal trampoline transport set, but that remains transport proof rather than
-the functional Pi hardware path.
+notification; maps the linked runtime image plus declared runtime regions; and
+resumes the TCB. The physical Pi linked-runtime entry dispatches only
+fixed-layout command/completion records; callback-pointer dispatch is compiled
+out for that profile. QEMU smoke can additionally allocate isolated VSpaces and
+map the minimal trampoline transport set, but that remains transport proof
+rather than the functional Pi hardware path.
 
-The default Pi/hardware path is now cut over away from root-owned steady-state
-hardware driver structs. Physical Pi callers use pointer-free selector ring
-handlers for serial, USB/local-seat, HDMI, GENET, and CYW43 instead of entering
-root-owned hardware objects. Serial runtime init first constructs the real
-service-side `KernelSerialDriver`, then gives the event pump a
-`driver-task-serial-client`. GENET and CYW43 network init first constructs the
-real service-side `BcmGenetDevice` or `Cyw43NetDevice`, then gives smoltcp a
-ring-backed client shell. Local-seat init constructs the real service-side
-`Pi4LocalSeat`, then root polls keyboard and mirrors display text through
-ring commands. The physical Pi `KernelHal` build does not carry a `Pi4WifiState`
-slot and direct Wi-Fi HAL state construction returns
+The default Pi/hardware path is partially cut over to linked isolated images.
+Normal serial init now goes through the linked `pi4-driver-serial` image and the
+event pump uses a `driver-task-serial-client` once that init command succeeds.
+The GENET/CYW43 and USB/local-seat root callers are shaped as ring clients, but
+their current service runtimes still construct `BcmGenetDevice`,
+`Cyw43NetDevice`, and `Pi4LocalSeat` in root-owned memory when the old
+root-service path is used. They therefore remain migration scaffolding rather
+than full isolated-image ownership. The physical Pi `KernelHal` build does not
+carry a `Pi4WifiState` slot and direct Wi-Fi HAL state construction returns
 `pi4-wifi-driver-task-runtime-required`. Emergency early serial output remains
-the only Pi root-owned escape hatch before or outside the driver-task substrate.
-If a ring-backed hardware owner is unavailable, the service turn fails closed
-with `DeviceUnavailable` instead of falling back to root-driving the hardware.
+the only intended Pi root-owned escape hatch before or outside the driver-task
+substrate. If a linked ring-backed hardware owner is unavailable, the service
+turn fails closed with `DeviceUnavailable` instead of falling back to
+root-driving the hardware.
 `sdio-host` and `pcie-root` remain declared, affinity-controlled bus contracts;
 their underlying hardware state is currently owned through the composite CYW43
 and local-seat service runtimes rather than by standalone bus-driver queues.
@@ -292,14 +310,14 @@ spelled as fixed-layout `DriverTaskCommandRecord` and
 sequence numbers, service budgets, fault codes, shared-buffer offsets, and
 primitive aux fields for service-turn arguments such as network poll time. Those
 records are live for the explicit QEMU isolated-trampoline smoke proof and for
-the physical Pi 4 shared-ring Rust service path. On the physical Pi 4 profile,
+the physical Pi 4 linked-runtime transport. On the physical Pi 4 profile,
 `CURRENT_DRIVER_TASK_IPC_ABI=shared-ring-command`; owner-state proof still
-remains red until the live driver state boundary moves into isolated per-driver
-runtime images. Shared-root ring service roles are now reported separately as
-`shared_ring_roles`; they are useful readiness evidence but do not satisfy
-`hot_path=dedicated` or full acceptance until `owner_state=driver-owned` also
-proves live isolated runtime descriptors, mapped MMIO/DMA/shared buffers, and
-hardware progress through the driver task. Idle completions and zero-result
+remains red until every live driver state boundary moves into isolated
+per-driver runtime images. Shared-root ring service roles are reported
+separately as `shared_ring_roles`; they are useful readiness evidence but do not
+satisfy `hot_path=dedicated` or full acceptance until `owner_state=driver-owned`
+also proves live isolated runtime descriptors, mapped MMIO/DMA/shared buffers,
+and hardware progress through the driver task. Idle completions and zero-result
 progress completions never credit hot-path ownership.
 The HAL now uses separate registration APIs for root-context diagnostic ring
 services and pointer-free selector ring services. Transitional ring commands that
@@ -308,14 +326,13 @@ still carry a root runtime pointer or root-stack context are registered as
 `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit, so a shared-ring
 transport turn cannot later be promoted into owner-state proof by accident.
 Runtime-image specs declare the intended per-hot-path mapping contract for code,
-stack, IPC, ring, MMIO, DMA, and shared buffers. Physical Pi 4 bootstrap
-currently uses the shared-ring Rust service entry so the real GENET,
-CYW43/SDIO, USB/PCIe, and HDMI/local-seat runtimes can execute existing hardware
-code on the driver TCB. The isolated VSpace constructor is kept for explicit
-QEMU smoke transport proof and for the next step of splitting those service
-runtimes into separate linked driver images. The mapped pages are not full
-acceptance by themselves: the specs remain non-acceptance for full Pi 4 VSpace
-closure while their reason is `root-context-required` or
+stack, IPC, ring, MMIO, DMA, and shared buffers. Physical Pi 4 bootstrap now
+selects the isolated VSpace constructor; for generated Pi 4 hot paths it looks
+up the linked runtime artifact in the boot payload CPIO, maps the executable
+ELF page plus stack/IPC/ring/MMIO/DMA/shared regions, and starts the fixed-ring
+runtime entry. The mapped pages are not full acceptance by themselves: the specs
+remain non-acceptance for full Pi 4 VSpace closure while their reason is
+`root-context-required` or
 `hardware-state-not-migrated`. Standalone SDIO and PCIe owner-queue records
 similarly remain non-acceptance until the composite CYW43/local-seat bus state
 is split into dedicated bus runtime queues.
@@ -331,9 +348,10 @@ callback slot state used by the transitional service ABI; serial,
 USB/local-seat, display, and network hot-path callers can reach compatibility
 dispatch only through the single HAL `try_driver_task_compat_service` gate,
 which returns closed for the Pi 4 hardware profile. Physical Pi owner-state
-builds map UART only to seed the service-side serial runtime; the event pump
-holds a ring client, not the MMIO-backed driver. The remaining serial exception
-is emergency boot logging before or outside the substrate. The code now carries an
+builds skip installing a steady-state root UART mapping; the linked serial
+runtime owns mini-UART MMIO, and the event pump holds a ring client rather than
+the MMIO-backed driver. The remaining serial exception is emergency boot logging
+before or outside the substrate. The code now carries an
 explicit Pi 4 hot-path command catalog for serial console, USB keyboard, HDMI
 text, GENET RX/TX, CYW43 RX/TX, SDIO host, and PCIe root service turns. Host
 tests prove each catalog entry has a fixed-layout pointer-free command record
@@ -1030,10 +1048,13 @@ power/reset state.
   serial prompt on Pi 4 local-seat Wi-Fi boots, and the pre-root event-pump wait
   keeps polling until association and DHCP/static addressing reach a usable
   state, terminally fail, or hit the bounded pre-root timeout.
-- `auto` interface policy may fall back from Wi-Fi to wired only when CYW43 is
-  truly absent or Wi-Fi credentials are missing. CYW43 protocol, HAL transport,
-  firmware, join, and post-Function-2 errors are Wi-Fi gate evidence and must
-  remain fatal so gates 7 and 8 cannot be hidden by the wired backend.
+- In the physical Pi driver-task cutover profile, `auto` selects CYW43 when
+  bounded Wi-Fi credentials are present and otherwise selects wired GENET before
+  Wi-Fi ownership begins. Once CYW43 is selected, protocol, HAL transport,
+  firmware, join, and post-Function-2 errors are Wi-Fi gate evidence and remain
+  fatal so gates 7 and 8 cannot be hidden by the wired backend. QEMU/host
+  compatibility profiles may still exercise absent-device fallback logic for
+  virtual-device tests.
 - Once host-EAPOL secure completion is proven during the join-submit proof
   window, the CYW43 path releases DHCP immediately and must not emit stale
   `wifi-host-eapol-pending` / `data=blocked` diagnostics. Optional
@@ -1229,10 +1250,11 @@ active path is Cohesix-owned cold start:
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local
   seat is enabled, explicit Wi-Fi net-console bring-up, and Auto policy with
   Wi-Fi credentials, proceed only after that pre-net USB probe has completed;
-  if `hw.local_seat.required=true`, a failed display init or pre-net keyboard
-  probe is fatal before ticket publication. When `required=false`, the same
-  failures degrade to serial-only diagnostics with explicit `[local-seat]`
-  boot lines and no repeated xHCI probing.
+  if `hw.local_seat.required=true`, a missing local-seat backend is fatal before
+  ticket publication. A present backend with no keyboard ready on the first
+  bounded probe keeps polling instead of falling back to serial-only. When
+  `required=false`, backend failures degrade to serial-only diagnostics with
+  explicit `[local-seat]` boot lines and no repeated xHCI probing.
   The root console then waits in the event pump until Wi-Fi association and
   addressing are reachable. USB and Wi-Fi may only be interleaved at explicit
   boot/event-pump phase boundaries where the root task is not holding

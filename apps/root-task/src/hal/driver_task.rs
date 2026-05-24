@@ -105,16 +105,14 @@ pub const fn physical_pi_driver_task_only_owner_state_active() -> bool {
     ))
 }
 
-/// Whether normal Pi 4 driver-task bootstrap must use the minimal isolated
-/// trampoline path.
+/// Whether normal Pi 4 driver-task bootstrap must use isolated child VSpaces.
 ///
-/// The current physical Pi hardware path uses pointer-free shared-ring service
-/// turns so the real Rust runtimes can own hardware progress. The isolated
-/// trampoline remains transport-substrate proof until separate driver runtime
-/// images can execute the same service handlers without root image globals.
+/// Physical Pi 4 builds must not create shared-root service TCBs for normal
+/// hardware progress. QEMU/host compatibility builds may keep the transitional
+/// root-image path so virtual networking and smoke tests remain available.
 #[must_use]
 pub const fn physical_pi_driver_task_bootstrap_requires_isolated_vspace() -> bool {
-    false
+    physical_pi_driver_task_only_owner_state_active()
 }
 
 impl DriverTaskKind {
@@ -1122,35 +1120,169 @@ pub const fn isolated_runtime_code_vaddr() -> usize {
     0
 }
 
+/// Number of required Pi 4 hardware runtime-image declarations.
+pub const PI4_DRIVER_TASK_RUNTIME_IMAGE_SPEC_COUNT: usize = 7;
+
+#[cfg(feature = "kernel")]
+static DRIVER_RUNTIME_PAYLOAD_PTR: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_RUNTIME_PAYLOAD_LEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Publish the boot payload that may contain linked Pi 4 driver runtime images.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_runtime_payload(payload: &'static [u8]) {
+    DRIVER_RUNTIME_PAYLOAD_PTR.store(payload.as_ptr() as usize, Ordering::Release);
+    DRIVER_RUNTIME_PAYLOAD_LEN.store(payload.len(), Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_payload() -> Option<&'static [u8]> {
+    let ptr = DRIVER_RUNTIME_PAYLOAD_PTR.load(Ordering::Acquire);
+    let len = DRIVER_RUNTIME_PAYLOAD_LEN.load(Ordering::Acquire);
+    if ptr == 0 || len == 0 {
+        return None;
+    }
+    // SAFETY: `publish_driver_runtime_payload` stores the pointer/length for
+    // the kernel-provided bootinfo extra slice, which is mapped for the root
+    // task lifetime. The atomics are write-once during early boot.
+    Some(unsafe { core::slice::from_raw_parts(ptr as *const u8, len) })
+}
+
+#[cfg(feature = "kernel")]
+fn read_cpio_hex(bytes: &[u8]) -> Option<usize> {
+    let mut value = 0usize;
+    for &byte in bytes {
+        value = value.checked_mul(16)?;
+        value = value.checked_add(match byte {
+            b'0'..=b'9' => usize::from(byte - b'0'),
+            b'a'..=b'f' => usize::from(byte - b'a' + 10),
+            b'A'..=b'F' => usize::from(byte - b'A' + 10),
+            _ => return None,
+        })?;
+    }
+    Some(value)
+}
+
+#[cfg(feature = "kernel")]
+fn align4(value: usize) -> Option<usize> {
+    value.checked_add(3).map(|v| v & !3)
+}
+
+#[cfg(feature = "kernel")]
+fn cpio_entry_data<'a>(archive: &'a [u8], name: &str) -> Option<&'a [u8]> {
+    const HEADER_LEN: usize = 110;
+    const MAGIC: &[u8; 6] = b"070701";
+
+    let mut cursor = 0usize;
+    while cursor.checked_add(HEADER_LEN)? <= archive.len() {
+        let header = &archive[cursor..cursor + HEADER_LEN];
+        if &header[..6] != MAGIC {
+            return None;
+        }
+        let filesize = read_cpio_hex(&header[54..62])?;
+        let namesize = read_cpio_hex(&header[94..102])?;
+        if namesize == 0 {
+            return None;
+        }
+        let name_start = cursor.checked_add(HEADER_LEN)?;
+        let name_end = name_start.checked_add(namesize)?;
+        if name_end > archive.len() {
+            return None;
+        }
+        let raw_name = &archive[name_start..name_end.saturating_sub(1)];
+        let entry_name = core::str::from_utf8(raw_name).ok()?;
+        let data_start = align4(name_end)?;
+        let data_end = data_start.checked_add(filesize)?;
+        if data_end > archive.len() {
+            return None;
+        }
+        if entry_name == "TRAILER!!!" {
+            return None;
+        }
+        if entry_name == name || entry_name.strip_prefix("./") == Some(name) {
+            return Some(&archive[data_start..data_end]);
+        }
+        cursor = align4(data_end)?;
+    }
+    None
+}
+
+#[cfg(feature = "kernel")]
+fn cpio_entry_data_with_optional_wrapper<'a>(payload: &'a [u8], name: &str) -> Option<&'a [u8]> {
+    if let Some(data) = cpio_entry_data(payload, name) {
+        return Some(data);
+    }
+    let search_len = payload.len().min(4096);
+    let mut offset = 1usize;
+    while offset.checked_add(6)? <= search_len {
+        if payload.get(offset..offset + 6) == Some(b"070701") {
+            if let Some(data) = cpio_entry_data(&payload[offset..], name) {
+                return Some(data);
+            }
+        }
+        offset = offset.saturating_add(1);
+    }
+    None
+}
+
+/// Return the linked driver runtime image bytes for a Pi 4 hot path.
+#[cfg(feature = "kernel")]
+pub fn driver_runtime_image_bytes(hot_path: DriverTaskHotPath) -> Option<&'static [u8]> {
+    let generated = generated_runtime_image_spec_for_hot_path(hot_path)?;
+    let payload = driver_runtime_payload()?;
+    cpio_entry_data_with_optional_wrapper(payload, generated.artifact)
+}
+
+fn generated_runtime_image_spec_for_hot_path(
+    hot_path: DriverTaskHotPath,
+) -> Option<crate::generated::DriverRuntimeImageSpec> {
+    crate::generated::driver_runtime_image_for_hot_path(hot_path.as_str())
+}
+
+fn fallback_runtime_image_spec(hot_path: DriverTaskHotPath) -> DriverTaskRuntimeImageSpec {
+    DriverTaskRuntimeImageSpec::new(hot_path, 0, 0, 0, true, false)
+}
+
+fn runtime_image_spec_from_generated(
+    hot_path: DriverTaskHotPath,
+    generated: crate::generated::DriverRuntimeImageSpec,
+) -> DriverTaskRuntimeImageSpec {
+    DriverTaskRuntimeImageSpec::new(
+        hot_path,
+        generated.mmio_pages,
+        generated.dma_pages,
+        generated.shared_buffer_pages,
+        generated.root_context_required,
+        generated.hardware_state_migrated,
+    )
+}
+
 /// Runtime-image specs for every Pi 4 hardware hot path.
 ///
-/// These are declaration contracts, not proof. They intentionally remain
-/// non-acceptance until the isolated runtime image executes the relevant
-/// hardware service turns from driver-owned state.
-pub const PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS: [DriverTaskRuntimeImageSpec; 7] = [
-    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::SerialConsole, 1, 0, 1, true, false),
-    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::UsbKeyboard, 2, 16, 2, true, false),
-    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::HdmiText, 1, 1, 2, true, false),
-    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::GenetNic, 6, 64, 4, true, false),
-    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::Cyw43Wifi, 0, 8, 4, true, false),
-    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::SdioHost, 1, 2, 2, true, false),
-    DriverTaskRuntimeImageSpec::new(DriverTaskHotPath::PcieRoot, 10, 0, 1, true, false),
-];
+/// These are generated manifest contracts, not proof. They remain
+/// non-acceptance while the manifest says a root context is still required or
+/// hardware state has not moved into a linked driver runtime image.
+#[must_use]
+pub fn pi4_driver_task_runtime_image_specs() -> [DriverTaskRuntimeImageSpec; 7] {
+    [
+        pi4_driver_task_runtime_image_spec(DriverTaskHotPath::SerialConsole),
+        pi4_driver_task_runtime_image_spec(DriverTaskHotPath::UsbKeyboard),
+        pi4_driver_task_runtime_image_spec(DriverTaskHotPath::HdmiText),
+        pi4_driver_task_runtime_image_spec(DriverTaskHotPath::GenetNic),
+        pi4_driver_task_runtime_image_spec(DriverTaskHotPath::Cyw43Wifi),
+        pi4_driver_task_runtime_image_spec(DriverTaskHotPath::SdioHost),
+        pi4_driver_task_runtime_image_spec(DriverTaskHotPath::PcieRoot),
+    ]
+}
 
 /// Returns the runtime-image spec for a Pi 4 hot path.
 #[must_use]
-pub const fn pi4_driver_task_runtime_image_spec(
+pub fn pi4_driver_task_runtime_image_spec(
     hot_path: DriverTaskHotPath,
 ) -> DriverTaskRuntimeImageSpec {
-    let mut index = 0;
-    while index < PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS.len() {
-        let spec = PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS[index];
-        if spec.hot_path as u16 == hot_path as u16 {
-            return spec;
-        }
-        index += 1;
-    }
-    DriverTaskRuntimeImageSpec::new(hot_path, 0, 0, 0, true, false)
+    generated_runtime_image_spec_for_hot_path(hot_path)
+        .map(|generated| runtime_image_spec_from_generated(hot_path, generated))
+        .unwrap_or_else(|| fallback_runtime_image_spec(hot_path))
 }
 
 /// Returns the Pi 4 runtime-image spec for a driver-task contract when the
@@ -1159,7 +1291,7 @@ pub const fn pi4_driver_task_runtime_image_spec(
 pub fn pi4_driver_task_runtime_image_spec_for_contract(
     contract: DriverTaskContract,
 ) -> Option<DriverTaskRuntimeImageSpec> {
-    for spec in PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS {
+    for spec in pi4_driver_task_runtime_image_specs() {
         if spec.hot_path.contract() == contract {
             return Some(spec);
         }
@@ -4042,7 +4174,16 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn owner_state_registration_rejects_non_acceptance_runtime_specs() {
+    fn owner_state_registration_accepts_only_migrated_runtime_specs() {
+        publish_driver_task_bootstrap_report(DriverTaskBootstrapReport {
+            configured_count: PI4_DRIVER_TASK_HOT_PATHS.len(),
+            live_tcb_count: PI4_DRIVER_TASK_HOT_PATHS.len(),
+            isolated_vspace_count: PI4_DRIVER_TASK_HOT_PATHS.len(),
+            pointer_free_ipc_count: PI4_DRIVER_TASK_HOT_PATHS.len(),
+            vspace_proof: true,
+            pointer_free_ipc_proof: true,
+            ..DriverTaskBootstrapReport::default()
+        });
         for hot_path in PI4_DRIVER_TASK_HOT_PATHS.iter().copied() {
             let descriptor = DriverTaskOwnerStateDescriptor::new(
                 hot_path,
@@ -4054,15 +4195,23 @@ mod tests {
             )
             .unwrap();
 
-            assert!(
-                !register_driver_task_owner_state_descriptor(hot_path.contract(), descriptor),
-                "{hot_path:?}"
-            );
-            assert!(
-                !pi4_driver_task_runtime_image_spec(hot_path).acceptance_eligible(),
+            let registered =
+                register_driver_task_owner_state_descriptor(hot_path.contract(), descriptor);
+            let spec = pi4_driver_task_runtime_image_spec(hot_path);
+            assert_eq!(registered, spec.acceptance_eligible(), "{hot_path:?}");
+            assert_eq!(
+                registered,
+                matches!(hot_path, DriverTaskHotPath::SerialConsole),
                 "{hot_path:?}"
             );
         }
+        let proof = driver_task_runtime_proof();
+        assert_eq!(
+            proof.owner_state_hot_path_mask & DriverTaskHotPath::SerialConsole.owner_state_bit(),
+            DriverTaskHotPath::SerialConsole.owner_state_bit()
+        );
+        assert!(!proof.owner_state_proof);
+        publish_driver_task_bootstrap_report(DriverTaskBootstrapReport::default());
     }
 
     #[cfg(feature = "kernel")]
@@ -4107,10 +4256,17 @@ mod tests {
     }
 
     #[test]
-    fn pi4_runtime_image_specs_cover_all_hot_paths_but_stay_non_acceptance() {
-        assert_eq!(PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS.len(), 7);
+    fn pi4_runtime_image_specs_cover_all_hot_paths_with_serial_migrated() {
+        let generated_policy = crate::generated::driver_runtime_image_policy();
+        assert!(generated_policy.required);
+        assert_eq!(
+            generated_policy.images.len(),
+            PI4_DRIVER_TASK_RUNTIME_IMAGE_SPEC_COUNT
+        );
+        let specs = pi4_driver_task_runtime_image_specs();
+        assert_eq!(specs.len(), PI4_DRIVER_TASK_RUNTIME_IMAGE_SPEC_COUNT);
         let mut hot_path_mask = 0usize;
-        for spec in PI4_DRIVER_TASK_RUNTIME_IMAGE_SPECS {
+        for spec in specs {
             hot_path_mask |= spec.hot_path.owner_state_bit();
             assert_ne!(
                 spec.region_pages(DriverTaskRuntimeRegionKind::Code),
@@ -4145,15 +4301,22 @@ mod tests {
             assert!(spec.declares_transport_regions(), "{:?}", spec.hot_path);
             assert_ne!(spec.declared_region_count(), 0, "{:?}", spec.hot_path);
             assert_ne!(spec.declared_page_count(), 0, "{:?}", spec.hot_path);
-            assert!(spec.root_context_required, "{:?}", spec.hot_path);
-            assert!(!spec.hardware_state_migrated, "{:?}", spec.hot_path);
-            assert!(!spec.acceptance_eligible(), "{:?}", spec.hot_path);
-            assert_eq!(
-                spec.non_acceptance_reason(),
-                Some("root-context-required"),
-                "{:?}",
-                spec.hot_path
-            );
+            if spec.hot_path == DriverTaskHotPath::SerialConsole {
+                assert!(!spec.root_context_required, "{:?}", spec.hot_path);
+                assert!(spec.hardware_state_migrated, "{:?}", spec.hot_path);
+                assert!(spec.acceptance_eligible(), "{:?}", spec.hot_path);
+                assert_eq!(spec.non_acceptance_reason(), None, "{:?}", spec.hot_path);
+            } else {
+                assert!(spec.root_context_required, "{:?}", spec.hot_path);
+                assert!(!spec.hardware_state_migrated, "{:?}", spec.hot_path);
+                assert!(!spec.acceptance_eligible(), "{:?}", spec.hot_path);
+                assert_eq!(
+                    spec.non_acceptance_reason(),
+                    Some("root-context-required"),
+                    "{:?}",
+                    spec.hot_path
+                );
+            }
         }
         assert_eq!(hot_path_mask, REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK);
         assert_eq!(
@@ -4183,6 +4346,59 @@ mod tests {
         assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
         assert_ne!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
         assert!(pcie.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 10);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cpio_runtime_payload_lookup_accepts_uimage_wrapped_archive() {
+        fn pad4(bytes: &mut Vec<u8>) {
+            while bytes.len() % 4 != 0 {
+                bytes.push(0);
+            }
+        }
+
+        fn append_entry(bytes: &mut Vec<u8>, name: &str, data: &[u8]) {
+            let namesize = name.len() + 1;
+            let header = format!(
+                "070701{ino:08x}{mode:08x}{uid:08x}{gid:08x}{nlink:08x}{mtime:08x}{filesize:08x}{devmajor:08x}{devminor:08x}{rdevmajor:08x}{rdevminor:08x}{namesize:08x}{check:08x}",
+                ino = 1,
+                mode = 0o100755,
+                uid = 0,
+                gid = 0,
+                nlink = 1,
+                mtime = 0,
+                filesize = data.len(),
+                devmajor = 0,
+                devminor = 0,
+                rdevmajor = 0,
+                rdevminor = 0,
+                namesize = namesize,
+                check = 0,
+            );
+            bytes.extend_from_slice(header.as_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(0);
+            pad4(bytes);
+            bytes.extend_from_slice(data);
+            pad4(bytes);
+        }
+
+        let mut archive = vec![0xa5; 64];
+        append_entry(
+            &mut archive,
+            "cohesix/bin/pi4-driver-serial",
+            b"serial-runtime-elf",
+        );
+        append_entry(&mut archive, "TRAILER!!!", &[]);
+
+        assert_eq!(
+            cpio_entry_data_with_optional_wrapper(&archive, "cohesix/bin/pi4-driver-serial"),
+            Some(&b"serial-runtime-elf"[..])
+        );
+        assert_eq!(
+            cpio_entry_data_with_optional_wrapper(&archive, "cohesix/bin/missing"),
+            None
+        );
     }
 
     #[test]

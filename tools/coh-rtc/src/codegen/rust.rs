@@ -122,6 +122,33 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct DriverRuntimeImagePolicy {{")?;
+    writeln!(mod_contents, "    pub required: bool,")?;
+    writeln!(
+        mod_contents,
+        "    pub images: &'static [DriverRuntimeImageSpec],"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct DriverRuntimeImageSpec {{")?;
+    writeln!(mod_contents, "    pub id: &'static str,")?;
+    writeln!(mod_contents, "    pub contract: &'static str,")?;
+    writeln!(mod_contents, "    pub hot_path: &'static str,")?;
+    writeln!(mod_contents, "    pub artifact: &'static str,")?;
+    writeln!(mod_contents, "    pub entry_symbol: &'static str,")?;
+    writeln!(mod_contents, "    pub code_pages: u16,")?;
+    writeln!(mod_contents, "    pub stack_pages: u16,")?;
+    writeln!(mod_contents, "    pub ipc_pages: u16,")?;
+    writeln!(mod_contents, "    pub ring_pages: u16,")?;
+    writeln!(mod_contents, "    pub mmio_pages: u16,")?;
+    writeln!(mod_contents, "    pub dma_pages: u16,")?;
+    writeln!(mod_contents, "    pub shared_buffer_pages: u16,")?;
+    writeln!(mod_contents, "    pub root_context_required: bool,")?;
+    writeln!(mod_contents, "    pub hardware_state_migrated: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub enum TelemetryFrameSchema {{")?;
     writeln!(mod_contents, "    LegacyPlaintext,")?;
     writeln!(mod_contents, "    CborV1,")?;
@@ -691,6 +718,10 @@ pub fn emit_rust(
     )?;
     writeln!(
         mod_contents,
+        "pub const DRIVER_RUNTIME_IMAGE_POLICY: DriverRuntimeImagePolicy = bootstrap::DRIVER_RUNTIME_IMAGE_POLICY;"
+    )?;
+    writeln!(
+        mod_contents,
         "pub const SHARD_COUNT: usize = bootstrap::SHARD_LABELS.len();"
     )?;
     writeln!(
@@ -866,6 +897,23 @@ pub fn emit_rust(
     writeln!(mod_contents)?;
     writeln!(
         mod_contents,
+        "pub const fn driver_runtime_image_policy() -> DriverRuntimeImagePolicy {{"
+    )?;
+    writeln!(mod_contents, "    bootstrap::DRIVER_RUNTIME_IMAGE_POLICY")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "pub fn driver_runtime_image_for_hot_path(hot_path: &str) -> Option<DriverRuntimeImageSpec> {{"
+    )?;
+    writeln!(
+        mod_contents,
+        "    bootstrap::DRIVER_RUNTIME_IMAGES.iter().copied().find(|image| image.hot_path == hot_path)"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
         "pub const fn shard_labels() -> &'static [&'static str] {{"
     )?;
     writeln!(mod_contents, "    &bootstrap::SHARD_LABELS")?;
@@ -1008,7 +1056,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DriverAffinityPolicy, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DriverAffinityPolicy, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
     )?;
     writeln!(
         bootstrap_contents,
@@ -1165,6 +1213,37 @@ pub fn emit_rust(
         affinity.enabled,
         affinity.max_cores,
         affinity_authority
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; {}] = [",
+        manifest.root_task.driver_images.images.len()
+    )?;
+    for image in &manifest.root_task.driver_images.images {
+        writeln!(
+            bootstrap_contents,
+            "    DriverRuntimeImageSpec {{ id: \"{}\", contract: \"{}\", hot_path: \"{}\", artifact: \"{}\", entry_symbol: \"{}\", code_pages: {}, stack_pages: {}, ipc_pages: {}, ring_pages: {}, mmio_pages: {}, dma_pages: {}, shared_buffer_pages: {}, root_context_required: {}, hardware_state_migrated: {} }},",
+            escape_literal(&image.id),
+            escape_literal(&image.contract),
+            escape_literal(&image.hot_path),
+            escape_literal(&image.artifact),
+            escape_literal(&image.entry_symbol),
+            image.code_pages,
+            image.stack_pages,
+            image.ipc_pages,
+            image.ring_pages,
+            image.mmio_pages,
+            image.dma_pages,
+            image.shared_buffer_pages,
+            image.root_context_required,
+            image.hardware_state_migrated,
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const DRIVER_RUNTIME_IMAGE_POLICY: DriverRuntimeImagePolicy = DriverRuntimeImagePolicy {{ required: {}, images: &DRIVER_RUNTIME_IMAGES }};\n",
+        manifest.root_task.driver_images.required,
     )?;
     let shard_labels = build_shard_labels(manifest);
     writeln!(

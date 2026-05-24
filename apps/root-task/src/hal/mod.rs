@@ -1308,8 +1308,10 @@ fn add_driver_task_handle_to_report(
 fn runtime_image_non_acceptance_reason(
     spec: Option<driver_task::DriverTaskRuntimeImageSpec>,
 ) -> &'static str {
-    spec.and_then(driver_task::DriverTaskRuntimeImageSpec::non_acceptance_reason)
-        .unwrap_or("qemu-compatibility-or-non-pi-contract")
+    match spec {
+        Some(spec) => spec.non_acceptance_reason().unwrap_or("acceptance-ready"),
+        None => "qemu-compatibility-or-non-pi-contract",
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -1379,6 +1381,133 @@ fn runtime_region_page_vaddr(
 ) -> Option<usize> {
     let page_bytes = 1usize << sel4::PAGE_BITS;
     region.vaddr.checked_add(page.checked_mul(page_bytes)?)
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeElfLoad {
+    entry: usize,
+    code_vaddr: usize,
+}
+
+#[cfg(feature = "kernel")]
+fn read_le_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    let raw: [u8; 2] = bytes.get(offset..end)?.try_into().ok()?;
+    Some(u16::from_le_bytes(raw))
+}
+
+#[cfg(feature = "kernel")]
+fn read_le_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let end = offset.checked_add(4)?;
+    let raw: [u8; 4] = bytes.get(offset..end)?.try_into().ok()?;
+    Some(u32::from_le_bytes(raw))
+}
+
+#[cfg(feature = "kernel")]
+fn read_le_u64(bytes: &[u8], offset: usize) -> Option<u64> {
+    let end = offset.checked_add(8)?;
+    let raw: [u8; 8] = bytes.get(offset..end)?.try_into().ok()?;
+    Some(u64::from_le_bytes(raw))
+}
+
+#[cfg(feature = "kernel")]
+fn load_runtime_elf_code_page(
+    image: &[u8],
+    code_page: &mut [u8],
+) -> Result<RuntimeElfLoad, HalError> {
+    const ELF_HEADER_LEN: usize = 64;
+    const PROGRAM_HEADER_LEN: usize = 56;
+    const PT_LOAD: u32 = 1;
+    const PF_X: u32 = 1;
+    const EM_AARCH64: u16 = 183;
+    const ET_EXEC: u16 = 2;
+
+    if image.len() < ELF_HEADER_LEN || image.get(0..4) != Some(b"\x7fELF") {
+        return Err(HalError::Unsupported("driver-runtime-elf-magic"));
+    }
+    if image.get(4) != Some(&2) || image.get(5) != Some(&1) {
+        return Err(HalError::Unsupported("driver-runtime-elf-class"));
+    }
+    if read_le_u16(image, 16) != Some(ET_EXEC) || read_le_u16(image, 18) != Some(EM_AARCH64) {
+        return Err(HalError::Unsupported("driver-runtime-elf-target"));
+    }
+
+    let entry = usize::try_from(
+        read_le_u64(image, 24).ok_or(HalError::Unsupported("driver-runtime-elf-entry"))?,
+    )
+    .map_err(|_| HalError::Unsupported("driver-runtime-elf-entry"))?;
+    let phoff = usize::try_from(
+        read_le_u64(image, 32).ok_or(HalError::Unsupported("driver-runtime-elf-phoff"))?,
+    )
+    .map_err(|_| HalError::Unsupported("driver-runtime-elf-phoff"))?;
+    let phentsize = usize::from(
+        read_le_u16(image, 54).ok_or(HalError::Unsupported("driver-runtime-elf-phentsize"))?,
+    );
+    let phnum = usize::from(
+        read_le_u16(image, 56).ok_or(HalError::Unsupported("driver-runtime-elf-phnum"))?,
+    );
+    if phentsize < PROGRAM_HEADER_LEN || phnum == 0 {
+        return Err(HalError::Unsupported("driver-runtime-elf-phdr"));
+    }
+
+    let page_bytes = 1usize << sel4::PAGE_BITS;
+    for index in 0..phnum {
+        let ph = phoff
+            .checked_add(index.saturating_mul(phentsize))
+            .ok_or(HalError::Unsupported("driver-runtime-elf-phdr"))?;
+        let ph_end = ph
+            .checked_add(PROGRAM_HEADER_LEN)
+            .ok_or(HalError::Unsupported("driver-runtime-elf-phdr"))?;
+        if ph_end > image.len() {
+            return Err(HalError::Unsupported("driver-runtime-elf-phdr"));
+        }
+        let p_type =
+            read_le_u32(image, ph).ok_or(HalError::Unsupported("driver-runtime-elf-phdr"))?;
+        let p_flags =
+            read_le_u32(image, ph + 4).ok_or(HalError::Unsupported("driver-runtime-elf-phdr"))?;
+        if p_type != PT_LOAD || p_flags & PF_X == 0 {
+            continue;
+        }
+        let p_offset = usize::try_from(
+            read_le_u64(image, ph + 8).ok_or(HalError::Unsupported("driver-runtime-elf-offset"))?,
+        )
+        .map_err(|_| HalError::Unsupported("driver-runtime-elf-offset"))?;
+        let p_vaddr = usize::try_from(
+            read_le_u64(image, ph + 16).ok_or(HalError::Unsupported("driver-runtime-elf-vaddr"))?,
+        )
+        .map_err(|_| HalError::Unsupported("driver-runtime-elf-vaddr"))?;
+        let p_filesz = usize::try_from(
+            read_le_u64(image, ph + 32)
+                .ok_or(HalError::Unsupported("driver-runtime-elf-filesz"))?,
+        )
+        .map_err(|_| HalError::Unsupported("driver-runtime-elf-filesz"))?;
+        let p_memsz = usize::try_from(
+            read_le_u64(image, ph + 40).ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?,
+        )
+        .map_err(|_| HalError::Unsupported("driver-runtime-elf-memsz"))?;
+        let code_vaddr = p_vaddr & !(page_bytes - 1);
+        let page_offset = p_vaddr - code_vaddr;
+        let file_end = p_offset
+            .checked_add(p_filesz)
+            .ok_or(HalError::Unsupported("driver-runtime-elf-filesz"))?;
+        let mem_end = page_offset
+            .checked_add(p_memsz)
+            .ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?;
+        if file_end > image.len()
+            || mem_end > code_page.len()
+            || p_filesz > p_memsz
+            || entry < p_vaddr
+            || entry >= p_vaddr.saturating_add(p_memsz)
+        {
+            return Err(HalError::Unsupported("driver-runtime-elf-segment"));
+        }
+        code_page.fill(0);
+        code_page[page_offset..page_offset + p_filesz].copy_from_slice(&image[p_offset..file_end]);
+        return Ok(RuntimeElfLoad { entry, code_vaddr });
+    }
+
+    Err(HalError::Unsupported("driver-runtime-elf-exec-segment"))
 }
 
 #[cfg(feature = "kernel")]
@@ -2018,9 +2147,6 @@ impl<'a> KernelHal<'a> {
         fault_endpoint: seL4_CPtr,
     ) -> Result<KernelDriverTaskHandle, HalError> {
         contract.validate().map_err(HalError::DriverTaskContract)?;
-        if !driver_task::isolated_trampoline_supported() {
-            return Err(HalError::Unsupported("driver-task-isolated-trampoline"));
-        }
 
         let role_bit = driver_task::driver_task_role_bit(contract.kind);
         if role_bit == 0 {
@@ -2031,12 +2157,27 @@ impl<'a> KernelHal<'a> {
         let runtime_image_spec =
             driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract);
 
-        let trampoline_range = driver_task::isolated_trampoline_range();
         let page_bytes = 1usize << sel4::PAGE_BITS;
-        if trampoline_range.start == 0
-            || trampoline_range.end <= trampoline_range.start
-            || trampoline_range.start & (page_bytes - 1) != 0
-            || trampoline_range.end - trampoline_range.start > page_bytes
+        let linked_runtime_image = runtime_image_spec.and_then(|spec| {
+            driver_task::physical_pi_driver_task_only_owner_state_active()
+                .then(|| driver_task::driver_runtime_image_bytes(spec.hot_path))
+                .flatten()
+        });
+        if driver_task::physical_pi_driver_task_only_owner_state_active()
+            && runtime_image_spec.is_some()
+            && linked_runtime_image.is_none()
+        {
+            return Err(HalError::Unsupported("driver-runtime-image-missing"));
+        }
+        if linked_runtime_image.is_none() && !driver_task::isolated_trampoline_supported() {
+            return Err(HalError::Unsupported("driver-task-isolated-trampoline"));
+        }
+        let trampoline_range = driver_task::isolated_trampoline_range();
+        if linked_runtime_image.is_none()
+            && (trampoline_range.start == 0
+                || trampoline_range.end <= trampoline_range.start
+                || trampoline_range.start & (page_bytes - 1) != 0
+                || trampoline_range.end - trampoline_range.start > page_bytes)
         {
             return Err(HalError::Unsupported("driver-task-trampoline-layout"));
         }
@@ -2071,12 +2212,21 @@ impl<'a> KernelHal<'a> {
             .map_err(HalError::Sel4)?;
 
         code_frame.as_mut_slice().fill(0);
-        // SAFETY: The linker script page-aligns `.driver_task_text`, the range
-        // check above bounds it to one mapped user-image page, and this copy
-        // reads only that page into a HAL-owned frame.
-        let source =
-            unsafe { core::slice::from_raw_parts(trampoline_range.start as *const u8, page_bytes) };
-        code_frame.as_mut_slice().copy_from_slice(source);
+        let runtime_load = if let Some(image) = linked_runtime_image {
+            load_runtime_elf_code_page(image, code_frame.as_mut_slice())?
+        } else {
+            // SAFETY: The linker script page-aligns `.driver_task_text`, the
+            // range check above bounds it to one mapped user-image page, and
+            // this copy reads only that page into a HAL-owned frame.
+            let source = unsafe {
+                core::slice::from_raw_parts(trampoline_range.start as *const u8, page_bytes)
+            };
+            code_frame.as_mut_slice().copy_from_slice(source);
+            RuntimeElfLoad {
+                entry: driver_task::isolated_trampoline_entry(),
+                code_vaddr: trampoline_range.start,
+            }
+        };
         ring_frame.as_mut_slice().fill(0);
         ipc_frame.as_mut_slice().fill(0);
         stack_frame.as_mut_slice().fill(0);
@@ -2133,7 +2283,7 @@ impl<'a> KernelHal<'a> {
             .map_page_copy_into_vspace(
                 code_frame.cap(),
                 vspace,
-                trampoline_range.start,
+                runtime_load.code_vaddr,
                 code_rights,
                 sel4_sys::seL4_ARM_Page_Default,
                 &mut tracker,
@@ -2205,7 +2355,7 @@ impl<'a> KernelHal<'a> {
         sel4::bind_tcb_notification(tcb, notification).map_err(HalError::Sel4)?;
         sel4::write_tcb_registers(
             tcb,
-            driver_task::isolated_trampoline_entry(),
+            runtime_load.entry,
             driver_task::DRIVER_TASK_STACK_TOP_VADDR,
             task_key as seL4_Word,
             false,
@@ -2258,7 +2408,7 @@ impl<'a> KernelHal<'a> {
             runtime_image_non_acceptance_reason: runtime_image_non_acceptance_reason(
                 runtime_image_spec,
             ),
-            code_vaddr: trampoline_range.start,
+            code_vaddr: runtime_load.code_vaddr,
             ipc_vaddr: driver_task::DRIVER_TASK_IPC_VADDR,
             ring_vaddr: driver_task::DRIVER_TASK_RING_VADDR,
             stack_top: driver_task::DRIVER_TASK_STACK_TOP_VADDR,
@@ -2800,7 +2950,7 @@ mod tests {
         assert!(!report.owner_state_proof);
         assert_eq!(report.runtime_image_declared_count, 7);
         assert_eq!(report.runtime_image_transport_mapped_count, 0);
-        assert_eq!(report.runtime_image_acceptance_count, 0);
+        assert_eq!(report.runtime_image_acceptance_count, 1);
         assert_eq!(
             report.runtime_image_declared_hot_path_mask,
             super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
@@ -2832,7 +2982,7 @@ mod tests {
         );
         assert_eq!(report.runtime_image_declared_count, 7);
         assert_eq!(report.runtime_image_transport_mapped_count, 7);
-        assert_eq!(report.runtime_image_acceptance_count, 0);
+        assert_eq!(report.runtime_image_acceptance_count, 1);
         assert_eq!(
             report.runtime_image_transport_mapped_hot_path_mask,
             super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
@@ -2896,16 +3046,29 @@ mod tests {
                 "{}",
                 contract.name
             );
-            assert!(
-                !handle.runtime_image_acceptance_eligible,
-                "{}",
-                contract.name
-            );
-            assert_eq!(
-                handle.runtime_image_non_acceptance_reason, "root-context-required",
-                "{}",
-                contract.name
-            );
+            if contract == super::driver_task::SERIAL_DRIVER_TASK_CONTRACT {
+                assert!(
+                    handle.runtime_image_acceptance_eligible,
+                    "{}",
+                    contract.name
+                );
+                assert_eq!(
+                    handle.runtime_image_non_acceptance_reason, "acceptance-ready",
+                    "{}",
+                    contract.name
+                );
+            } else {
+                assert!(
+                    !handle.runtime_image_acceptance_eligible,
+                    "{}",
+                    contract.name
+                );
+                assert_eq!(
+                    handle.runtime_image_non_acceptance_reason, "root-context-required",
+                    "{}",
+                    contract.name
+                );
+            }
         }
     }
 

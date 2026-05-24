@@ -23,6 +23,7 @@ COHESIX_LOGO_STAGE_NAME="cohesix-logo.bmp"
 BOOTSTD_LOGO_STAGE_NAME="boot.bmp"
 BRCMFMAC_CMDLINE_STAGE_NAME="brcmfmac-dyndbg.cmdline"
 BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME="brcmfmac-dyndbg.sh"
+DRIVER_RUNTIME_CPIO_STAGE_NAME="cohesix-driver-runtimes.cpio.uimg"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"
@@ -706,6 +707,12 @@ build_pi4_image() {
       --no-default-features \
       --features "$ROOT_TASK_FEATURES"
 
+    log "Building Pi4 isolated driver runtime images"
+    cargo build \
+      --target aarch64-unknown-none \
+      --release \
+      -p pi4-driver-runtime
+
     jobs="$(sysctl -n hw.ncpu)"
     require_file "$root_task_elf"
     log "Using root-task ELF: ${root_task_elf}"
@@ -832,6 +839,8 @@ setenv coh_dtb_addr 0x14000000
 setenv coh_dtb_file bcm2711-rpi-4-b.dtb
 setenv coh_policy_addr 0x02100000
 setenv coh_policy_file cohesix.env
+setenv coh_runtime_cpio_addr 0x15000000
+setenv coh_runtime_cpio_file __COH_RUNTIME_CPIO_FILE__
 setenv coh_logo_addr 0x02000000
 setenv coh_logo_file __COH_LOGO_FILE__
 setenv coh_logo_bootstd_file __COH_BOOTSTD_LOGO_FILE__
@@ -853,7 +862,8 @@ setenv coh_show_logo_splash 'if test "${coh_show_logo}" = "1"; then if test "${c
 setenv coh_load_runtime_dtb 'setenv coh_boot_error 0; if fatload mmc 0:1 ${coh_dtb_addr} ${coh_dtb_file}; then if fdt addr ${coh_dtb_addr}; then echo "[cohesix] loaded ${coh_dtb_file} to ${coh_dtb_addr}"; else echo "[cohesix] ERROR: failed to select ${coh_dtb_file}"; setenv coh_boot_error 1; fi; else echo "[cohesix] ERROR: failed to load ${coh_dtb_file}"; setenv coh_boot_error 1; fi'
 setenv coh_apply_dtb_policy 'if test "${coh_boot_error}" != "1" && test -n "${coh_net_mode}"; then if fdt set /chosen cohesix,net-mode "${coh_net_mode}"; then echo "[cohesix] dtb chosen cohesix,net-mode=${coh_net_mode}"; else echo "[cohesix] ERROR: failed to set cohesix,net-mode"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_net_interface}"; then if fdt set /chosen cohesix,net-interface "${coh_net_interface}"; then echo "[cohesix] dtb chosen cohesix,net-interface=${coh_net_interface}"; else echo "[cohesix] ERROR: failed to set cohesix,net-interface"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_ip}"; then if fdt set /chosen cohesix,static-ipv4 "${coh_static_ip}"; then echo "[cohesix] dtb chosen cohesix,static-ipv4=${coh_static_ip}"; else echo "[cohesix] ERROR: failed to set cohesix,static-ipv4"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_prefix_len}"; then if fdt set /chosen cohesix,static-prefix-len "${coh_static_prefix_len}"; then echo "[cohesix] dtb chosen cohesix,static-prefix-len=${coh_static_prefix_len}"; else echo "[cohesix] ERROR: failed to set cohesix,static-prefix-len"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_static_gateway}"; then if fdt set /chosen cohesix,static-gateway "${coh_static_gateway}"; then echo "[cohesix] dtb chosen cohesix,static-gateway=${coh_static_gateway}"; else echo "[cohesix] ERROR: failed to set cohesix,static-gateway"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_wifi_ssid}"; then if fdt set /chosen cohesix,wifi-ssid "${coh_wifi_ssid}"; then echo "[cohesix] dtb chosen cohesix,wifi-ssid=<set>"; else echo "[cohesix] ERROR: failed to set cohesix,wifi-ssid"; setenv coh_boot_error 1; fi; fi; if test "${coh_boot_error}" != "1" && test -n "${coh_wifi_psk}"; then if fdt set /chosen cohesix,wifi-psk "${coh_wifi_psk}"; then echo "[cohesix] dtb chosen cohesix,wifi-psk=<set>"; else echo "[cohesix] ERROR: failed to set cohesix,wifi-psk"; setenv coh_boot_error 1; fi; fi'
 setenv coh_emit_policy_summary 'if test -n "${coh_net_mode}"; then echo "[cohesix] mode=${coh_net_mode}"; else echo "[cohesix] mode=manifest"; fi; if test -n "${coh_net_interface}"; then echo "[cohesix] interface=${coh_net_interface}"; else echo "[cohesix] interface=manifest"; fi; if test -n "${coh_static_ip}"; then echo "[cohesix] static-ip=${coh_static_ip}/${coh_static_prefix_len} gateway=${coh_static_gateway}"; fi; if test -n "${coh_wifi_ssid}"; then echo "[cohesix] wifi-ssid=${coh_wifi_ssid}"; fi'
-setenv coh_boot_loaded_image 'run coh_load_runtime_dtb; if test "${coh_boot_error}" = "1"; then echo "[cohesix] ERROR: boot aborted before USB quiesce"; else run coh_quiesce_usb; run coh_apply_dtb_policy; if test "${coh_boot_error}" = "1"; then echo "[cohesix] ERROR: boot aborted before kernel handoff"; else echo "[cohesix] loaded ${coh_image} to ${coh_addr}; bootm with ${coh_dtb_file}"; bootm ${coh_addr} - ${coh_dtb_addr}; echo "[cohesix] returned from image"; fi; fi'
+setenv coh_load_driver_runtimes 'if fatload mmc 0:1 ${coh_runtime_cpio_addr} ${coh_runtime_cpio_file}; then echo "[cohesix] loaded ${coh_runtime_cpio_file} to ${coh_runtime_cpio_addr}"; else echo "[cohesix] ERROR: failed to load ${coh_runtime_cpio_file}"; setenv coh_boot_error 1; fi'
+setenv coh_boot_loaded_image 'run coh_load_runtime_dtb; if test "${coh_boot_error}" = "1"; then echo "[cohesix] ERROR: boot aborted before driver runtime load"; else run coh_load_driver_runtimes; if test "${coh_boot_error}" = "1"; then echo "[cohesix] ERROR: boot aborted before USB quiesce"; else run coh_quiesce_usb; run coh_apply_dtb_policy; if test "${coh_boot_error}" = "1"; then echo "[cohesix] ERROR: boot aborted before kernel handoff"; else echo "[cohesix] loaded ${coh_image} and ${coh_runtime_cpio_file}; bootm with ${coh_dtb_file}"; bootm ${coh_addr} ${coh_runtime_cpio_addr} ${coh_dtb_addr}; echo "[cohesix] returned from image"; fi; fi; fi'
 setenv coh_boot_sequence 'run coh_emit_policy_summary; if fatload mmc 0:1 ${coh_addr} ${coh_image}; then run coh_boot_loaded_image; else echo "[cohesix] primary image load failed: ${coh_image}"; if fatload mmc 0:1 ${coh_addr} ${coh_image_fallback}; then setenv coh_image ${coh_image_fallback}; run coh_boot_loaded_image; else echo "[cohesix] ERROR: failed to load ${coh_image} or fallback ${coh_image_fallback} from mmc 0:1"; echo "[cohesix] manual: fatls mmc 0:1"; echo "[cohesix] manual: fatload mmc 0:1 0x10000000 ${coh_image}"; echo "[cohesix] manual: fatload mmc 0:1 0x14000000 ${coh_dtb_file}"; echo "[cohesix] manual: bootm 0x10000000 - 0x14000000"; fi; fi'
 setenv coh_prompt_dhcp 'run coh_prepare_input; cls; echo "[cohesix] Guided network setup"; echo "[cohesix] Select address acquisition mode"; echo "  1. DHCP ON (automatic address)"; echo "  2. DHCP OFF (static IPv4)"; echo "  3. Back to boot options"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then setenv coh_net_mode dhcp; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; run coh_prompt_interface; elif test "${coh_choice}" = "2"; then setenv coh_net_mode static; run coh_prompt_interface; elif test "${coh_choice}" = "3"; then run coh_prompt_root; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_dhcp; fi'
 setenv coh_prompt_interface 'run coh_prepare_input; cls; echo "[cohesix] Guided network setup"; echo "[cohesix] Select active interface"; echo "  1. Wired Ethernet (GENET)"; echo "  2. Wi-Fi (CYW43455)"; echo "  3. Back to DHCP selection"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then setenv coh_net_interface wired; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""; run coh_after_interface; elif test "${coh_choice}" = "2"; then setenv coh_net_interface wifi; run coh_after_interface; elif test "${coh_choice}" = "3"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_interface; fi'
@@ -869,6 +879,7 @@ EOF
     sed -i '' "s/__COH_IMAGE_FALLBACK__/${fallback_image}/g" "$out"
     sed -i '' "s/__COH_LOGO_FILE__/${COHESIX_LOGO_STAGE_NAME}/g" "$out"
     sed -i '' "s/__COH_BOOTSTD_LOGO_FILE__/${BOOTSTD_LOGO_STAGE_NAME}/g" "$out"
+    sed -i '' "s/__COH_RUNTIME_CPIO_FILE__/${DRIVER_RUNTIME_CPIO_STAGE_NAME}/g" "$out"
 }
 
 write_linux_wifi_debug_helpers() {
@@ -915,6 +926,46 @@ EOF
     grep -q 'dynamic_debug/control' "${script_path}" || fail "brcmfmac dynamic debug helper missing debugfs control path"
 }
 
+stage_driver_runtime_payload() {
+    local mkimage_bin="$1"
+    local runtime_root="${STAGE_DIR}/driver-runtime-root"
+    local runtime_bin="${runtime_root}/cohesix/bin"
+    local raw_cpio="${STAGE_DIR}/cohesix-driver-runtimes.cpio"
+    local runtime_artifact_dir="${ROOT_DIR}/target/aarch64-unknown-none/release"
+    local bin
+
+    rm -rf "$runtime_root"
+    mkdir -p "$runtime_bin"
+    for bin in \
+        pi4-driver-serial \
+        pi4-driver-usb \
+        pi4-driver-hdmi \
+        pi4-driver-genet \
+        pi4-driver-cyw43 \
+        pi4-driver-sdio \
+        pi4-driver-pcie
+    do
+        require_file "${runtime_artifact_dir}/${bin}"
+        install -m 0755 "${runtime_artifact_dir}/${bin}" "${runtime_bin}/${bin}"
+        log "Staged isolated driver runtime: ${bin}"
+    done
+
+    (
+        cd "$runtime_root"
+        find cohesix -print | LC_ALL=C sort | cpio --reproducible -o -H newc > "$raw_cpio"
+    )
+    "$mkimage_bin" \
+      -A arm64 \
+      -T ramdisk \
+      -C none \
+      -n "Cohesix Pi4 driver runtimes" \
+      -d "$raw_cpio" \
+      "${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}" \
+      >/dev/null
+    require_file "${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
+    log "Staged Pi4 driver runtime payload at ${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
+}
+
 stage_sd_payload() {
     local mkimage_bin="$1"
     local sel4_image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
@@ -942,6 +993,7 @@ stage_sd_payload() {
     if [[ -f "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}" ]]; then
         cp -f "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}" "${STAGE_DIR}/${BOOTSTD_LOGO_STAGE_NAME}"
     fi
+    stage_driver_runtime_payload "$mkimage_bin"
     write_linux_wifi_debug_helpers
 
     cat > "${STAGE_DIR}/config.txt" <<EOF
