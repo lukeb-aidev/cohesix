@@ -6,6 +6,17 @@
 #![cfg_attr(target_os = "none", no_std)]
 #![allow(unsafe_code)]
 
+use core::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicU32, Ordering},
+};
+
+use pi4_driver_abi::{
+    DriverRuntimeInitDescriptor, DRIVER_RUNTIME_INIT_AUX, HOT_PATH_CYW43_WIFI, HOT_PATH_GENET_NIC,
+    HOT_PATH_HDMI_TEXT, HOT_PATH_PCIE_ROOT, HOT_PATH_SDIO_HOST, HOT_PATH_SERIAL_CONSOLE,
+    HOT_PATH_USB_KEYBOARD,
+};
+
 /// Child CSpace slot containing the root-to-driver command endpoint.
 pub const DRIVER_TASK_CHILD_COMMAND_SLOT: sel4_sys::seL4_CPtr = 2;
 /// Driver-local fixed virtual address for the command/completion ring.
@@ -38,20 +49,47 @@ const FAULT_DEVICE_UNAVAILABLE: u16 = 3;
 
 const SERIAL_RUNTIME_AUX_INIT: u32 = 0x5345_5249;
 
-const HOT_PATH_SERIAL_CONSOLE: u32 = 1;
-const HOT_PATH_USB_KEYBOARD: u32 = 2;
-const HOT_PATH_HDMI_TEXT: u32 = 3;
-const HOT_PATH_GENET_NIC: u32 = 4;
-const HOT_PATH_CYW43_WIFI: u32 = 5;
-const HOT_PATH_SDIO_HOST: u32 = 6;
-const HOT_PATH_PCIE_ROOT: u32 = 7;
-
 const ROLE_SERIAL: u32 = 1 << 0;
 const ROLE_USB: u32 = 1 << 1;
 const ROLE_DISPLAY: u32 = 1 << 2;
 const ROLE_NET: u32 = 1 << 3;
 const ROLE_SDIO: u32 = 1 << 4;
 const ROLE_PCIE: u32 = 1 << 5;
+
+struct RuntimeDescriptorSlot {
+    descriptor: UnsafeCell<DriverRuntimeInitDescriptor>,
+}
+
+// SAFETY: Each isolated runtime image is single-TCB by construction. Root
+// submits one synchronous ring command at a time, and the runtime copies the
+// descriptor before publishing completion.
+unsafe impl Sync for RuntimeDescriptorSlot {}
+
+impl RuntimeDescriptorSlot {
+    const fn new() -> Self {
+        Self {
+            descriptor: UnsafeCell::new(DriverRuntimeInitDescriptor::empty()),
+        }
+    }
+
+    fn store(&self, descriptor: DriverRuntimeInitDescriptor) {
+        // SAFETY: See the `Sync` invariant above; there is exactly one runtime
+        // TCB mutating this cell and root does not map this static.
+        unsafe {
+            core::ptr::write_volatile(self.descriptor.get(), descriptor);
+        }
+    }
+
+    fn load(&self) -> DriverRuntimeInitDescriptor {
+        // SAFETY: See the `Sync` invariant above; volatile keeps command-turn
+        // state visible to tests and target code without inventing references.
+        unsafe { core::ptr::read_volatile(self.descriptor.get()) }
+    }
+}
+
+static RUNTIME_DESCRIPTOR: RuntimeDescriptorSlot = RuntimeDescriptorSlot::new();
+static RUNTIME_INIT_HOT_PATH: AtomicU32 = AtomicU32::new(0);
+static RUNTIME_INIT_FLAGS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(target_os = "none")]
 const MINI_UART_IO_OFFSET: usize = 0x40;
@@ -228,6 +266,12 @@ pub fn service_command(
     if command.arg1 != role {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
+    if command.aux0 == DRIVER_RUNTIME_INIT_AUX {
+        return service_runtime_init(command);
+    }
+    if RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) != command.arg0 {
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
+    }
     if !opcode_matches_hot_path(command.opcode, command.arg0) {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
@@ -242,6 +286,57 @@ pub fn service_command(
         HOT_PATH_HDMI_TEXT => service_hdmi_text(command),
         _ => DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND),
     }
+}
+
+#[must_use]
+fn validate_runtime_init_descriptor(
+    command: DriverTaskCommandRecord,
+    descriptor: DriverRuntimeInitDescriptor,
+) -> DriverTaskCompletionRecord {
+    if command.opcode != OPCODE_SERVICE
+        || command.frame.len as usize != core::mem::size_of::<DriverRuntimeInitDescriptor>()
+    {
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
+    }
+    if !descriptor.valid()
+        || descriptor.hot_path != command.arg0
+        || descriptor.role_bit != command.arg1
+    {
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
+    }
+    RUNTIME_DESCRIPTOR.store(descriptor);
+    RUNTIME_INIT_HOT_PATH.store(descriptor.hot_path, Ordering::Release);
+    RUNTIME_INIT_FLAGS.store(descriptor.flags, Ordering::Release);
+    DriverTaskCompletionRecord::progress(command.sequence, descriptor.hot_path)
+}
+
+#[cfg(target_os = "none")]
+fn service_runtime_init(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
+    if !command.frame.in_ring_payload() {
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
+    }
+    let descriptor_addr = DRIVER_TASK_RING_VADDR + command.frame.offset as usize;
+    // SAFETY: The frame descriptor is bounds-checked against the fixed ring
+    // page. Root stages `DriverRuntimeInitDescriptor` at an aligned offset in
+    // the ring payload before submitting the init command.
+    let descriptor =
+        unsafe { core::ptr::read_volatile(descriptor_addr as *const DriverRuntimeInitDescriptor) };
+    validate_runtime_init_descriptor(command, descriptor)
+}
+
+#[cfg(not(target_os = "none"))]
+fn service_runtime_init(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
+    DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE)
+}
+
+/// Host-test helper for exercising runtime init without mapping the fixed ring.
+#[cfg(test)]
+#[must_use]
+fn service_runtime_init_for_test(
+    command: DriverTaskCommandRecord,
+    descriptor: DriverRuntimeInitDescriptor,
+) -> DriverTaskCompletionRecord {
+    validate_runtime_init_descriptor(command, descriptor)
 }
 
 fn role_for_hot_path(hot_path: u32) -> Option<u32> {
@@ -299,6 +394,12 @@ fn service_hdmi_text(command: DriverTaskCommandRecord) -> DriverTaskCompletionRe
     }
     if !command.frame.in_ring_payload() {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
+    }
+    if RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) != HOT_PATH_HDMI_TEXT {
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
+    }
+    if !RUNTIME_DESCRIPTOR.load().hdmi_ready() {
+        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
     DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE)
 }
@@ -490,6 +591,39 @@ mod tests {
         }
     }
 
+    fn descriptor_for(hot_path: u32, role: u32) -> DriverRuntimeInitDescriptor {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = hot_path;
+        descriptor.role_bit = role;
+        descriptor.flags = pi4_driver_abi::DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            | pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = pi4_driver_abi::DriverRuntimePageDescriptor::new(0x4000_0000);
+        descriptor
+    }
+
+    fn init_runtime_for_test(hot_path: u32, role: u32) {
+        let command = DriverTaskCommandRecord {
+            sequence: 1,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: hot_path,
+            arg1: role,
+            aux0: DRIVER_RUNTIME_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+                flags: 0,
+            },
+        };
+        assert_eq!(
+            service_runtime_init_for_test(command, descriptor_for(hot_path, role)),
+            DriverTaskCompletionRecord::progress(1, hot_path)
+        );
+    }
+
     #[test]
     fn wire_records_match_root_task_layout_sizes() {
         assert_eq!(core::mem::size_of::<DriverFrameDescriptor>(), 8);
@@ -523,6 +657,7 @@ mod tests {
 
     #[test]
     fn serial_init_command_marks_runtime_attached() {
+        init_runtime_for_test(HOT_PATH_SERIAL_CONSOLE, ROLE_SERIAL);
         let command = DriverTaskCommandRecord {
             sequence: 13,
             opcode: OPCODE_SERVICE,
@@ -579,6 +714,39 @@ mod tests {
         assert_eq!(
             service_command(0, command),
             DriverTaskCompletionRecord::fault(11, FAULT_DEVICE_UNAVAILABLE)
+        );
+    }
+
+    #[test]
+    fn runtime_init_descriptor_is_pointer_free_and_role_checked() {
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+
+        let command = DriverTaskCommandRecord {
+            sequence: 14,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_GENET_NIC,
+            arg1: ROLE_NET,
+            aux0: DRIVER_RUNTIME_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+                flags: 0,
+            },
+        };
+
+        assert_eq!(
+            service_runtime_init_for_test(command, descriptor),
+            DriverTaskCompletionRecord::progress(14, HOT_PATH_GENET_NIC)
+        );
+
+        let mut wrong_role = descriptor;
+        wrong_role.role_bit = ROLE_USB;
+        assert_eq!(
+            service_runtime_init_for_test(command, wrong_role),
+            DriverTaskCompletionRecord::fault(14, FAULT_REJECTED_COMMAND)
         );
     }
 

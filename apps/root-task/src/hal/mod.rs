@@ -60,6 +60,14 @@ use crate::sel4::{
 #[cfg(feature = "kernel")]
 use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
+use pi4_driver_abi::{
+    DriverRuntimeInitDescriptor, DriverRuntimePageDescriptor,
+    DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
+    DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
+    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS,
+};
+#[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
 
 /// Timebase exists to unify timing for event pump + smoltcp; wiring will follow.
@@ -1385,6 +1393,85 @@ fn runtime_region_page_vaddr(
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeInitDescriptorBuilder {
+    descriptor: DriverRuntimeInitDescriptor,
+    expected_mmio_pages: u16,
+    expected_dma_pages: u16,
+    expected_shared_pages: u16,
+}
+
+#[cfg(feature = "kernel")]
+impl RuntimeInitDescriptorBuilder {
+    fn new(spec: driver_task::DriverTaskRuntimeImageSpec, role_bit: usize) -> Self {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = spec.hot_path.as_u32();
+        descriptor.role_bit = role_bit as u32;
+        descriptor.flags = DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE
+            | DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING
+            | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY
+            | DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN;
+        descriptor.mmio_vaddr_base = driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR as u64;
+        descriptor.dma_vaddr_base = driver_task::DRIVER_TASK_DMA_BUFFER_VADDR as u64;
+        descriptor.shared_vaddr_base = driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR as u64;
+        Self {
+            descriptor,
+            expected_mmio_pages: spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Mmio),
+            expected_dma_pages: spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Dma),
+            expected_shared_pages: spec
+                .region_pages(driver_task::DriverTaskRuntimeRegionKind::SharedBuffer),
+        }
+    }
+
+    fn add_mmio_page(&mut self, paddr: usize) -> Result<(), HalError> {
+        let index = usize::from(self.descriptor.mmio_page_count);
+        let Some(slot) = self.descriptor.mmio_pages.get_mut(index) else {
+            return Err(HalError::Unsupported("driver-runtime-init-mmio-overflow"));
+        };
+        *slot = DriverRuntimePageDescriptor::new(paddr);
+        self.descriptor.mmio_page_count = self.descriptor.mmio_page_count.saturating_add(1);
+        self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED;
+        Ok(())
+    }
+
+    fn add_dma_page(&mut self, paddr: usize) -> Result<(), HalError> {
+        let index = usize::from(self.descriptor.dma_page_count);
+        let Some(slot) = self.descriptor.dma_pages.get_mut(index) else {
+            return Err(HalError::Unsupported("driver-runtime-init-dma-overflow"));
+        };
+        *slot = DriverRuntimePageDescriptor::new(paddr);
+        self.descriptor.dma_page_count = self.descriptor.dma_page_count.saturating_add(1);
+        self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS;
+        Ok(())
+    }
+
+    fn add_shared_page(&mut self, paddr: usize) -> Result<(), HalError> {
+        let index = usize::from(self.descriptor.shared_page_count);
+        let Some(slot) = self.descriptor.shared_pages.get_mut(index) else {
+            return Err(HalError::Unsupported("driver-runtime-init-shared-overflow"));
+        };
+        *slot = DriverRuntimePageDescriptor::new(paddr);
+        self.descriptor.shared_page_count = self.descriptor.shared_page_count.saturating_add(1);
+        self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<DriverRuntimeInitDescriptor, HalError> {
+        if self.descriptor.valid_for_resources(
+            self.descriptor.hot_path,
+            self.descriptor.role_bit,
+            self.expected_mmio_pages,
+            self.expected_dma_pages,
+            self.expected_shared_pages,
+        ) {
+            Ok(self.descriptor)
+        } else {
+            Err(HalError::Unsupported("driver-runtime-init-invalid"))
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeElfLoad {
     entry: usize,
     code_vaddr: usize,
@@ -2021,6 +2108,7 @@ impl<'a> KernelHal<'a> {
         spec: Option<driver_task::DriverTaskRuntimeImageSpec>,
         vspace: seL4_CPtr,
         tracker: &mut VSpaceTableTracker,
+        mut init_descriptor: Option<&mut RuntimeInitDescriptorBuilder>,
     ) -> Result<u16, HalError> {
         let Some(spec) = spec else {
             return Ok(0);
@@ -2042,17 +2130,30 @@ impl<'a> KernelHal<'a> {
                         region,
                         vspace,
                         tracker,
+                        init_descriptor.as_deref_mut(),
                     )? {
                         mapped_mask |= region.kind.mask_bit();
                     }
                 }
                 driver_task::DriverTaskRuntimeRegionKind::Dma => {
-                    if self.map_isolated_runtime_ram_region(region, vspace, tracker, true)? {
+                    if self.map_isolated_runtime_ram_region(
+                        region,
+                        vspace,
+                        tracker,
+                        true,
+                        init_descriptor.as_deref_mut(),
+                    )? {
                         mapped_mask |= region.kind.mask_bit();
                     }
                 }
                 driver_task::DriverTaskRuntimeRegionKind::SharedBuffer => {
-                    if self.map_isolated_runtime_ram_region(region, vspace, tracker, false)? {
+                    if self.map_isolated_runtime_ram_region(
+                        region,
+                        vspace,
+                        tracker,
+                        false,
+                        init_descriptor.as_deref_mut(),
+                    )? {
                         mapped_mask |= region.kind.mask_bit();
                     }
                 }
@@ -2067,6 +2168,7 @@ impl<'a> KernelHal<'a> {
         region: driver_task::DriverTaskRuntimeRegion,
         vspace: seL4_CPtr,
         tracker: &mut VSpaceTableTracker,
+        mut init_descriptor: Option<&mut RuntimeInitDescriptorBuilder>,
     ) -> Result<bool, HalError> {
         let pages = region.pages as usize;
         if pages == 0 {
@@ -2094,6 +2196,9 @@ impl<'a> KernelHal<'a> {
                         tracker,
                     )
                     .map_err(HalError::Sel4)?;
+                if let Some(builder) = init_descriptor.as_deref_mut() {
+                    builder.add_mmio_page(paddr)?;
+                }
             }
             return Ok(true);
         }
@@ -2106,6 +2211,7 @@ impl<'a> KernelHal<'a> {
         vspace: seL4_CPtr,
         tracker: &mut VSpaceTableTracker,
         dma_owned: bool,
+        mut init_descriptor: Option<&mut RuntimeInitDescriptorBuilder>,
     ) -> Result<bool, HalError> {
         let pages = region.pages as usize;
         if pages == 0 {
@@ -2125,17 +2231,25 @@ impl<'a> KernelHal<'a> {
                     .env
                     .alloc_unmapped_ram_frame_attr(attr)
                     .map_err(HalError::Sel4)?;
+                let paddr = frame.paddr();
                 self.env
                     .map_page_cap_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
                     .map_err(HalError::Sel4)?;
+                if let Some(builder) = init_descriptor.as_deref_mut() {
+                    builder.add_dma_page(paddr)?;
+                }
             } else {
                 let frame = self
                     .env
                     .alloc_dma_frame_attr(attr)
                     .map_err(HalError::Sel4)?;
+                let paddr = frame.paddr();
                 self.env
                     .map_page_copy_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
                     .map_err(HalError::Sel4)?;
+                if let Some(builder) = init_descriptor.as_deref_mut() {
+                    builder.add_shared_page(paddr)?;
+                }
             }
         }
         Ok(true)
@@ -2320,8 +2434,20 @@ impl<'a> KernelHal<'a> {
             )
             .map_err(HalError::Sel4)?;
 
-        let runtime_image_mapped_region_mask =
-            self.map_isolated_runtime_declared_regions(runtime_image_spec, vspace, &mut tracker)?;
+        let mut runtime_init_descriptor =
+            runtime_image_spec.map(|spec| RuntimeInitDescriptorBuilder::new(spec, role_bit));
+        let runtime_image_mapped_region_mask = self.map_isolated_runtime_declared_regions(
+            runtime_image_spec,
+            vspace,
+            &mut tracker,
+            runtime_init_descriptor.as_mut(),
+        )?;
+        let runtime_init_descriptor = match runtime_init_descriptor {
+            Some(builder) if driver_task::physical_pi_driver_task_only_owner_state_active() => {
+                Some(builder.finish()?)
+            }
+            _ => None,
+        };
 
         let guard_bits = sel4::word_bits().saturating_sub(child_depth as seL4_Word);
         let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
@@ -2363,6 +2489,26 @@ impl<'a> KernelHal<'a> {
         .map_err(HalError::Sel4)?;
         sel4::resume_tcb(tcb).map_err(HalError::Sel4)?;
 
+        let runtime_init_ok = if let Some(descriptor) = runtime_init_descriptor.as_ref() {
+            let spec =
+                runtime_image_spec.ok_or(HalError::Unsupported("driver-runtime-init-spec"))?;
+            let frame = driver_task::stage_driver_runtime_init_descriptor(contract, descriptor)
+                .ok_or(HalError::Unsupported("driver-runtime-init-stage"))?;
+            let command = driver_task::runtime_init_command(
+                spec.hot_path,
+                driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                frame,
+            );
+            matches!(
+                driver_task::run_driver_task_ring_command(contract, command),
+                Some(done)
+                    if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                        && done.result == spec.hot_path.as_u32()
+            )
+        } else {
+            true
+        };
+
         let command = driver_task::DriverTaskCommandRecord::service(
             0,
             driver_task::DriverTaskBudgetGrant::from_contract(contract),
@@ -2373,7 +2519,7 @@ impl<'a> KernelHal<'a> {
             Some(done)
                 if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
                     && done.result == task_key as u32
-        );
+        ) && runtime_init_ok;
         self.env
             .unmap_page_cap(code_frame.cap())
             .map_err(HalError::Sel4)?;
@@ -2890,6 +3036,43 @@ mod tests {
         assert!(bases.contains(&0x0000_0006_0000_0000));
         assert!(bases.contains(&0xFE98_0000));
         assert!(bases.contains(&0x7E98_0000));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_init_descriptor_builder_records_primitive_page_metadata() {
+        let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
+            super::driver_task::DriverTaskHotPath::GenetNic,
+            1,
+            1,
+            1,
+            true,
+            false,
+        );
+        let mut builder = super::RuntimeInitDescriptorBuilder::new(
+            spec,
+            super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
+        );
+        builder.add_mmio_page(0xFD58_0000).unwrap();
+        builder.add_dma_page(0x4000_0000).unwrap();
+        builder.add_shared_page(0x5000_0000).unwrap();
+
+        let descriptor = builder.finish().unwrap();
+        assert_eq!(
+            descriptor.hot_path,
+            super::driver_task::DriverTaskHotPath::GenetNic.as_u32()
+        );
+        assert_eq!(
+            descriptor.role_bit as usize,
+            super::driver_task::DRIVER_TASK_ROLE_NET_BIT
+        );
+        assert_eq!(descriptor.mmio_page_count, 1);
+        assert_eq!(descriptor.dma_page_count, 1);
+        assert_eq!(descriptor.shared_page_count, 1);
+        assert_eq!(descriptor.mmio_pages[0].paddr, 0xFD58_0000);
+        assert_eq!(descriptor.dma_pages[0].paddr, 0x4000_0000);
+        assert_eq!(descriptor.shared_pages[0].paddr, 0x5000_0000);
+        assert!(descriptor.valid());
     }
 
     #[cfg(feature = "kernel")]

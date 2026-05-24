@@ -13,6 +13,7 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use heapless::Deque;
+use pi4_driver_abi::{DriverRuntimeInitDescriptor, DRIVER_RUNTIME_INIT_AUX};
 
 /// Hardware driver instance covered by a scheduling contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -755,6 +756,16 @@ pub const MAX_DRIVER_TASK_FRAME_BYTES: usize = 1536;
 /// transport. These commands may prove the ring ABI but never owner-state
 /// isolation.
 pub const DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE: u16 = 1 << 15;
+/// Ring command flag used by runtime initialization descriptor submissions.
+///
+/// Runtime init proves descriptor transport only. It must not credit hardware
+/// owner-state progress by itself because the driver has not serviced a device
+/// turn yet.
+pub const DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE: u16 = 1 << 14;
+/// Any ring flag that prevents owner-state credit.
+pub const DRIVER_TASK_RING_NON_ACCEPTANCE_FLAGS: u16 =
+    DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE
+        | DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE;
 
 /// Current as-built state of the seL4 driver-task creation substrate.
 ///
@@ -1800,6 +1811,49 @@ pub fn stage_driver_task_ring_frame(
     .ok()
 }
 
+/// Stage a pointer-free runtime initialization descriptor into the shared ring.
+#[cfg(feature = "kernel")]
+pub fn stage_driver_runtime_init_descriptor(
+    contract: DriverTaskContract,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<DriverFrameDescriptor> {
+    if !descriptor.valid() {
+        return None;
+    }
+    // SAFETY: `DriverRuntimeInitDescriptor` is `repr(C)`, primitive-only, and
+    // bounded by the shared ABI crate. The resulting byte view is copied
+    // immediately into the HAL-owned ring page and does not outlive
+    // `descriptor`.
+    let bytes = unsafe {
+        core::slice::from_raw_parts(
+            core::ptr::from_ref(descriptor).cast::<u8>(),
+            core::mem::size_of::<DriverRuntimeInitDescriptor>(),
+        )
+    };
+    stage_driver_task_ring_frame(contract, bytes, 0)
+}
+
+/// Build a runtime init command for a Pi 4 hot path.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub const fn runtime_init_command(
+    hot_path: DriverTaskHotPath,
+    budget: DriverTaskBudgetGrant,
+    frame: DriverFrameDescriptor,
+) -> DriverTaskCommandRecord {
+    DriverTaskCommandRecord {
+        sequence: 0,
+        opcode: DriverTaskOpcode::Service.as_u16(),
+        flags: DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE,
+        arg0: hot_path.as_u32(),
+        arg1: hot_path.role_bit() as u32,
+        aux0: DRIVER_RUNTIME_INIT_AUX,
+        aux1: 0,
+        budget,
+        frame,
+    }
+}
+
 /// Borrow a staged shared-ring payload for the current synchronous service turn.
 #[cfg(feature = "kernel")]
 pub fn driver_task_ring_frame_bytes(
@@ -2644,6 +2698,12 @@ impl DriverFrameDescriptor {
     pub const fn root_context_non_acceptance(self) -> bool {
         self.flags & DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE != 0
     }
+
+    /// Returns whether this frame descriptor blocks owner-state credit.
+    #[must_use]
+    pub const fn non_acceptance(self) -> bool {
+        self.flags & DRIVER_TASK_RING_NON_ACCEPTANCE_FLAGS != 0
+    }
 }
 
 /// Primitive budget grant encoded in the pointer-free shared-ring ABI.
@@ -3050,8 +3110,7 @@ impl DriverTaskCommandRecord {
     /// Returns whether this command may be credited toward owner-state proof.
     #[must_use]
     pub const fn owner_state_credit_eligible(self) -> bool {
-        self.flags & DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE == 0
-            && !self.frame.root_context_non_acceptance()
+        self.flags & DRIVER_TASK_RING_NON_ACCEPTANCE_FLAGS == 0 && !self.frame.non_acceptance()
     }
 }
 
@@ -4101,6 +4160,28 @@ mod tests {
             DriverTaskRingServiceKind::RootContextDiagnostic.as_str(),
             "root-context-diagnostic"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_init_command_uses_pointer_free_descriptor_aux() {
+        let frame = DriverFrameDescriptor::new(
+            DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+            0,
+        )
+        .unwrap();
+        let command = runtime_init_command(
+            DriverTaskHotPath::PcieRoot,
+            DriverTaskBudgetGrant::from_contract(PCIE_ROOT_DRIVER_TASK_CONTRACT),
+            frame,
+        );
+        assert_eq!(command.opcode, DriverTaskOpcode::Service.as_u16());
+        assert_eq!(command.arg0, DriverTaskHotPath::PcieRoot.as_u32());
+        assert_eq!(command.arg1, DriverTaskHotPath::PcieRoot.role_bit() as u32);
+        assert_eq!(command.aux0, DRIVER_RUNTIME_INIT_AUX);
+        assert_eq!(command.frame, frame);
+        assert!(!command.owner_state_credit_eligible());
     }
 
     #[test]

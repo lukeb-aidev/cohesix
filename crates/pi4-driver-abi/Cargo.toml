@@ -1,0 +1,11 @@
+# Author: Lukas Bower
+# Purpose: Configure shared Pi 4 isolated driver runtime ABI definitions.
+# Copyright 2026 Lukas Bower
+
+[package]
+name = "pi4-driver-abi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]

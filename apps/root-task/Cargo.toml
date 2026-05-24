@@ -126,6 +126,7 @@ cohesix-proto = { workspace = true }
 embedded-io = { version = "0.7.1", default-features = false }
 nb = "1.1"
 portable-atomic = "1.6"
+pi4-driver-abi = { workspace = true }
 secure9p-codec = { workspace = true }
 sha2 = { workspace = true, default-features = false }
 cohesix-cas = { workspace = true }

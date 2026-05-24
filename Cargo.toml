@@ -29,6 +29,7 @@ members = [
     "crates/cohesix-rest",
     "crates/cohesix-ticket",
     "crates/cohsh-core",
+    "crates/pi4-driver-abi",
     "crates/host-cuda",
     "crates/secure9p-codec",
     "crates/secure9p-core",
@@ -84,6 +85,7 @@ console-ack-wire = { path = "apps/console-ack-wire" }
 ed25519-dalek = { version = "2.1", default-features = false, features = ["alloc"] }
 signature = { version = "2.2", default-features = false }
 cohesix-cas = { path = "crates/cohesix-cas" }
+pi4-driver-abi = { path = "crates/pi4-driver-abi" }
 
 [patch.crates-io]
 sel4-sys = { path = "crates/sel4-sys" }

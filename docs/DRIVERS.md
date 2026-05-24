@@ -242,6 +242,18 @@ out for that profile. QEMU smoke can additionally allocate isolated VSpaces and
 map the minimal trampoline transport set, but that remains transport proof
 rather than the functional Pi hardware path.
 
+Before any linked runtime can accept hardware service, root now stages a
+pointer-free `DriverRuntimeInitDescriptor` from the shared `pi4-driver-abi`
+crate into the command ring and submits a runtime-init command. That descriptor
+contains the hot-path id, role bit, fixed MMIO/DMA/shared-buffer virtual bases,
+the physical page list for mapped MMIO, runtime-owned DMA pages and shared
+pages, bus-address alias policy, framebuffer metadata, IRQ descriptors, and
+bus-link descriptors for split owners such as USB/PCIe and CYW43/SDIO. Runtime
+init is deliberately non-acceptance: it proves that the child image received
+primitive hardware topology without root pointers, but it does not credit
+owner-state progress until a later device service turn makes real hardware
+progress from driver-local state.
+
 The default Pi/hardware path is partially cut over to linked isolated images.
 Normal serial init now goes through the linked `pi4-driver-serial` image and the
 event pump uses a `driver-task-serial-client` once that init command succeeds.

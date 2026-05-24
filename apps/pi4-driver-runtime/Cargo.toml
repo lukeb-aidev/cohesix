@@ -9,6 +9,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+pi4-driver-abi = { workspace = true }
 sel4-sys = { path = "../../crates/sel4-sys" }
 
 [[bin]]
