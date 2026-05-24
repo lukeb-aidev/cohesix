@@ -6780,7 +6780,7 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Large `root-task`, HAL, driver, and host-tool monoliths are explicit 26c refactor targets, but they are not first-wave edit targets. They may be decomposed only after characterization tests, parity matrices, dependency-tree evidence, and rollback-sized ownership plans exist for the touched surface.
 - Driver-enabling HAL abstractions in 26c are limited to behavior-preserving cleanup of the driver-task model established by reopened 26a/26b. `SdioHostHal`-style seams may sit underneath the current CYW43 path, and USB platform/DMA seams may sit underneath the current local-seat/VL805 path, but 26c must not add support for new Wi-Fi chipsets, new USB controllers, new USB classes, or a second driver framework parallel to the 26a/26b driver-task substrate.
 - Milestone 26c must not collapse host-side `std` capability into the seL4 build. VM-side Cohesix remains `no_std`; any "convergence" under 26c is limited to contracts, fixtures, generated artifacts, and explicitly `no_std`-safe semantic helpers.
-- Runtime-boundary-sensitive surfaces include `apps/root-task/src/ninedoor.rs`, `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, `apps/root-task/src/net/**`, `apps/root-task/src/hal/**`, `apps/root-task/src/local_seat_pi4.rs`, and `apps/nine-door/src/host/*`. 26c may structurally refactor these files only behind existing public contracts, with no adapter collapse, no host capability leakage, no new HAL bypass, and no external grammar drift.
+- Runtime-boundary-sensitive surfaces include `apps/root-task/src/ninedoor.rs`, `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, `apps/root-task/src/net/**`, `apps/root-task/src/hal/**`, `apps/root-task/src/local_seat_pi4.rs`, `apps/pi4-driver-runtime/**`, `crates/pi4-driver-abi/**`, and `apps/nine-door/src/host/*`. 26c may structurally refactor these files only behind existing public contracts, with no adapter collapse, no host capability leakage, no new HAL bypass, and no external grammar drift.
 - Any new shared semantic helper must be `no_std` by construction, must have host and VM tests where it represents overlapping behavior, and must not import host transport, filesystem, process, network, or provider crates into VM closure profiles.
 - AI-assisted or model-generated Rust remains untrusted. 26c refactor PRs must include baseline command evidence, risk-ratchet review for `unsafe`, `unwrap`, `expect`, and `panic!`, and reviewer sign-off before merge.
 - `docs/snippets/*.md`, `docs/nist/REPORT.md`, tracked release-cut docs, and other generated or derived documentation remain update-by-source artifacts; they are not to be hand-edited as a shortcut.
@@ -6788,10 +6788,10 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Multi-agent execution is mandatory for 26c scope: evidence generation, CI/test-plan plumbing, parity auditing, and cleanup work must have disjoint ownership so boundary-sensitive edits are not mixed with prose-only cleanup.
 - Milestone closure is blocked until the full target-qualified Test Plan succeeds on QEMU and Pi 4 with no `INCOMPLETE` markers, and Stage 05 verifies that required target artifacts exist in the active state dir before writing `stage_05.done`.
 - Milestone closure is also blocked until the 26c as-built blocker ledger is empty or every remaining item is explicitly deferred to a named later milestone with a non-overlapping dependency boundary. The initial blocker set includes: Pi 4 network IR/docs validation drift, target-qualified Test Plan runner implementation, Secure9P NUL and `..` path rejection, removal or reclassification of any non-console in-VM TCP listener, HAL ownership for driver MMIO/physical-address access, generated-snippet embedding drift in canonical docs, fixture/default secret handling in release/operator paths, placeholder auth defaults in host tools/docs, and the mismatch between worker documentation and current root-task worker task spawning.
-- The 26c blocker ledger must also classify planning drift discovered in later milestones: VM-local persistence is not implemented yet, `coh-status` is currently a library/convergence fixture rather than a read-only CLI, REST writes still use gateway-level authority rather than delegated per-request tickets, writer-epoch fencing is absent, AI namespace roots are not implemented, and AWS/ENA/IMDS runtime support is not in-tree. Later milestones may preserve those intentions, but they must not cite them as as-built prerequisites until their own acceptance evidence exists.
+- The 26c blocker ledger must also classify planning drift discovered in later milestones: linked Pi 4 `pi4-driver-*` runtime images and `pi4-driver-abi` now exist and are staged/generated, but aggregate driver-task closure is still blocked by non-serial runtime-image non-acceptance specs, owner-state proof, and fresh Pi hardware evidence; VM-local persistence is not implemented yet, `coh-status` is currently a library/convergence fixture rather than a read-only CLI, REST writes still use gateway-level authority rather than delegated per-request tickets, writer-epoch fencing is absent, AI namespace roots are not implemented, and AWS/ENA/IMDS runtime support is not in-tree. Later milestones may preserve those intentions, but they must not cite them as as-built prerequisites until their own acceptance evidence exists.
 
 ### Prerequisite
-- Reopened Milestones **26a** and **26b** completed, including checked-in Pi 4 USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load, driver-task scheduling evidence, GENET/static compatibility evidence, DHCP/Wi-Fi compatibility evidence, QEMU compatibility evidence, and regenerated profile-specific manifest evidence.
+- Reopened Milestones **26a** and **26b** completed, including checked-in Pi 4 USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load, driver-task scheduling evidence, GENET/static compatibility evidence, DHCP/Wi-Fi compatibility evidence, QEMU compatibility evidence, regenerated profile-specific manifest evidence, linked `pi4-driver-*` runtime image/ABI evidence, and explicit closure or deferral of any non-acceptance runtime-image owner-state boundary.
 
 ### Goal
 Refactor and humanize the authored Cohesix code and documentation surfaces without protocol or behavioral regression by:
@@ -6803,9 +6803,10 @@ Refactor and humanize the authored Cohesix code and documentation surfaces witho
 6. recording the intentional host-`std` / VM-`no_std` runtime boundary and proving parity for overlapping NineDoor semantics across the actual operator-visible path without implying runtime merger,
 7. decomposing high-value Cohesix-owned monoliths and duplicate validation paths only after their current behavior is pinned,
 8. extracting narrow HAL abstraction seams for existing SDIO/CYW43 and USB/VL805 behavior so later driver work starts from explicit authority boundaries instead of raw seL4 mechanics,
-9. replacing template-heavy comments and test naming with invariant-focused prose,
-10. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
-11. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
+9. tracking linked Pi 4 driver-runtime ABI, generated `root_task.driver_images` descriptors, and staged runtime images as first-class VM boundary surfaces without crediting non-serial owner-state until acceptance evidence exists,
+10. replacing template-heavy comments and test naming with invariant-focused prose,
+11. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
+12. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
 
 ### Markdown review scope (tracked `*.md` only)
 Milestone 26c must inventory every tracked Markdown file returned by:
@@ -6871,7 +6872,7 @@ For each inventory entry, 26c must record one of:
 - **As-built blocker ledger before refactor**
   - Produce a checked-in blocker ledger for current red-line and docs-as-built mismatches before any structural cleanup begins.
   - Classify each blocker as fix-in-26c, fix-before-26d, or explicitly deferred with rationale and dependency impact.
-  - Required initial entries are: 26b hardware-evidence gap, Pi 4 network IR/docs validation drift, target-qualified Test Plan runner absence, Secure9P codec path-validation drift, non-console in-VM TCP listener exposure, direct driver MMIO outside HAL, generated canonical-doc snippet drift, fixture/default secret release path, placeholder auth defaults, worker-task implementation/docs mismatch, and future-milestone as-built overclaims for persistence, `coh-status`, delegated REST identity, writer-epoch fencing, AI namespace roots, and AWS/ENA/IMDS support.
+  - Required initial entries are: 26b hardware-evidence gap; linked Pi 4 runtime-image acceptance gap for non-serial drivers; Pi 4 network IR/docs validation drift; target-qualified Test Plan runner absence; Secure9P codec path-validation drift; non-console in-VM TCP listener exposure; direct driver MMIO outside HAL; generated canonical-doc snippet drift; fixture/default secret release path; placeholder auth defaults; worker-task implementation/docs mismatch; and future-milestone as-built overclaims for persistence, `coh-status`, delegated REST identity, writer-epoch fencing, AI namespace roots, and AWS/ENA/IMDS support.
   - Downstream milestones may not cite a deferred blocker as already solved.
 
 - **Runtime boundary + semantic parity audit**
@@ -6887,8 +6888,8 @@ For each inventory entry, 26c must record one of:
   - Keep changes behavior-preserving and small enough to review mechanically.
 
 - **Characterization and gate expansion**
-  - Add or expand tests around crates currently most exposed to cleanup risk and currently weaker in CI coverage, especially `coh`, `cohsh`, `host-ticket-agent`, selected `root-task` event/console/net/HAL helper modules, and the overlapping semantics exercised by `apps/nine-door`.
-  - Extend CI/test-plan execution so cleanup work in these areas is exercised automatically before merge, including root-task integration tests, host-tool characterization tests, a VM-target `no_std` boundary check, and parity evidence capture for overlapping host/VM semantics.
+  - Add or expand tests around crates currently most exposed to cleanup risk and currently weaker in CI coverage, especially `coh`, `cohsh`, `host-ticket-agent`, `pi4-driver-abi`, `pi4-driver-runtime`, selected `root-task` event/console/net/HAL helper modules, and the overlapping semantics exercised by `apps/nine-door`.
+  - Extend CI/test-plan execution so cleanup work in these areas is exercised automatically before merge, including root-task integration tests, host-tool characterization tests, `pi4-driver-abi` descriptor tests, linked runtime tests, a VM-target `no_std` boundary check, and parity evidence capture for overlapping host/VM semantics.
   - Fail the gate on protocol drift, fixture drift, undocumented output changes, missing risk-ratchet review, or missing before/after evidence for a refactored surface.
 
 - **HAL abstraction preparation for future drivers**
@@ -6941,10 +6942,13 @@ For each inventory entry, 26c must record one of:
 - `python3 -m pytest tools/cohesix-py/tests -q`
 - `cargo test -p root-task --tests`
 - `cargo test -p root-task --lib`
+- `cargo test -p pi4-driver-abi`
+- `cargo test -p pi4-driver-runtime`
 - `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"`
 - `cargo tree -p root-task --target aarch64-unknown-none -e normal --no-default-features --features "cohesix-dev" > out/audit/m26c_root_task_tree_qemu.txt`
 - `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"`
 - `cargo tree -p root-task --target aarch64-unknown-none -e normal --no-default-features --features "kernel bootstrap-trace serial-console net-console" > out/audit/m26c_root_task_tree_pi4.txt`
+- `cargo check -p pi4-driver-runtime --target aarch64-unknown-none`
 - `scripts/ci/check_test_plan.sh`
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26c-qemu`
@@ -6968,6 +6972,7 @@ For each inventory entry, 26c must record one of:
 - Low-risk code/comment cleanup lands with no console grammar, Secure9P semantics, manifest output, telemetry format, or release workflow drift.
 - Cleanup candidates previously excluded or weakly covered in CI have characterization tests and staged-run coverage before structural refactors are accepted.
 - Root-task, HAL, driver, and host-tool decompositions preserve external contracts, keep device access behind HAL, and do not introduce host-only crates into VM dependency closures.
+- Linked Pi 4 driver-runtime ABI, generated `root_task.driver_images` records, staged runtime images, and driver-runtime CPIO packaging are preserved by refactors; non-serial runtime images remain non-acceptance until owner-state proof and fresh Pi hardware evidence close the gap.
 - VM-target boundary evidence demonstrates that the kernel/root-task build remains `no_std` and does not absorb host-only operator/tooling crates across each closure profile, at minimum QEMU `cohesix-dev` and Pi 4 U-Boot.
 - Workspace-level `fmt`, `clippy -D warnings`, `check`, `test`, `cargo audit`, and `cargo deny check advisories` all pass or have documented environment blockers plus scoped remediation before milestone closure.
 - QEMU full Test Plan run is `PASS` via the target-aware staged runner with `stage_01.done` through `stage_05.done`, required QEMU artifacts archived in the state dir, and no `*.incomplete` markers.
@@ -6981,6 +6986,7 @@ For each inventory entry, 26c must record one of:
 - Mermaid diagrams inside generated, release-derived, vendored, or reference-only Markdown follow the same disposition rules as their containing file; 26c may audit and report them, but edits must occur through the proper source, release-cut, or provenance flow.
 - Tracked release-cut documentation under `releases/RELEASE_NOTES-*.md`, `releases/*/{README.md,QUICKSTART.md,RELEASE_NOTES.md}`, `releases/*/docs/**/*.md`, and `releases/*/python/**/README.md` remains derived from canonical docs and release packaging; if snapshot wording changes, the corresponding release-cut flow and notes must change in the same work. Release-local validation outputs under `releases/**/out/**`, embedded virtualenv content under `releases/**/.venv*/**`, and other untracked byproducts are provenance inputs only and are not part of the 26c inventory.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, `scripts/ci/check_test_plan.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
+- Generated `root_task.driver_images` records, `crates/pi4-driver-abi`, linked `pi4-driver-*` runtime image artifacts, and driver-runtime CPIO packaging are authoritative boundary artifacts for Pi 4 driver-task cleanup; 26c may audit, test, and refactor around them only without changing acceptance status or hand-editing generated descriptors.
 - Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe, must not import host-side capabilities, transports, or provider crates into the VM build, and must be reviewed against the archived per-profile dependency trees.
 - Refactor-generated module boundaries must not become new public interfaces unless `docs/INTERFACES.md`, `docs/HOST_TOOLS.md`, or the relevant canonical doc is updated in the same change.
 - HAL/network decompositions must retain generated manifest authority for boot policy defaults and must not hand-code policy values that already belong in `root_task.toml` or `coh-rtc` outputs.
@@ -6989,7 +6995,7 @@ For each inventory entry, 26c must record one of:
 ```
 Title/ID: m26c-as-built-blocker-ledger
 Goal: Record and gate current as-built mismatches before 26c cleanup or downstream milestones claim alignment.
-Inputs: docs/BUILD_PLAN.md, AGENTS.md, docs/SECURE9P.md, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md, docs/SECURITY_NIST_800_53.md, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, configs/root_task_pi4_uboot_aarch64.toml, scripts/ci/test_plan_run.sh, apps/root-task/src/net/**, apps/root-task/src/drivers/**, apps/root-task/src/hal/**, apps/root-task/src/ninedoor.rs, apps/worker-heart/src/kernel.rs, apps/worker-gpu/src/kernel.rs, scripts/release_bundle.sh
+Inputs: docs/BUILD_PLAN.md, AGENTS.md, docs/SECURE9P.md, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md, docs/SECURITY_NIST_800_53.md, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, configs/root_task_pi4_uboot_aarch64.toml, scripts/ci/test_plan_run.sh, apps/root-task/src/net/**, apps/root-task/src/drivers/**, apps/root-task/src/hal/**, apps/root-task/src/ninedoor.rs, apps/pi4-driver-runtime/**, crates/pi4-driver-abi/**, apps/worker-heart/src/kernel.rs, apps/worker-gpu/src/kernel.rs, scripts/release_bundle.sh
 Changes:
   - docs/audit/M26C_AS_BUILT_BLOCKERS.md — checked-in blocker ledger with owner, severity, dependency impact, evidence command, and closure/defer decision for each initial blocker.
   - docs/BUILD_PLAN.md — keep 26c and later milestones synchronized with blocker disposition changes.
@@ -7000,7 +7006,7 @@ Commands:
   - cargo test -p secure9p-codec
   - scripts/ci/check_test_plan.sh
 Checks:
-  - Initial blocker entries cover 26b evidence, Pi 4 network IR/docs validation drift, target-qualified runner, Secure9P path validation, non-console in-VM TCP, HAL MMIO ownership, generated-doc drift, fixture/default secrets, placeholder auth defaults, worker-task docs/implementation mismatch, and later-milestone as-built overclaims for persistence, `coh-status`, delegated REST identity, writer-epoch fencing, AI namespace roots, and AWS/ENA/IMDS support.
+  - Initial blocker entries cover 26b evidence, linked Pi 4 runtime-image acceptance gaps, Pi 4 network IR/docs validation drift, target-qualified runner, Secure9P path validation, non-console in-VM TCP, HAL MMIO ownership, generated-doc drift, fixture/default secrets, placeholder auth defaults, worker-task docs/implementation mismatch, and later-milestone as-built overclaims for persistence, `coh-status`, delegated REST identity, writer-epoch fencing, AI namespace roots, and AWS/ENA/IMDS support.
   - No structural cleanup task starts until blockers are fixed or explicitly deferred with dependency impact.
 Deliverables:
   - Auditable 26c blocker ledger that prevents downstream milestones from inheriting unresolved as-built drift silently.
@@ -7145,10 +7151,10 @@ Deliverables:
 
 Title/ID: m26c-characterization-gates-before-refactor
 Goal: Add characterization tests and merge gates around cleanup-sensitive crates before accepting structural refactors.
-Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/ci/check_test_plan.sh, apps/coh/src/mount.rs, apps/cohsh/src/**, crates/cohsh-core/**, apps/host-ticket-agent/src/*.rs, apps/gpu-bridge-host/src/**, apps/root-task/src/net/**, apps/root-task/src/hal/**, apps/root-task/src/local_seat_pi4.rs, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/nine-door/tests/*.rs, docs/TEST_PLAN.md, docs/audit/M26C_REFACTOR_MAP.md
+Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/ci/check_test_plan.sh, apps/coh/src/mount.rs, apps/cohsh/src/**, crates/cohsh-core/**, apps/host-ticket-agent/src/*.rs, apps/gpu-bridge-host/src/**, apps/root-task/src/net/**, apps/root-task/src/hal/**, apps/root-task/src/local_seat_pi4.rs, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/pi4-driver-runtime/**, crates/pi4-driver-abi/**, apps/nine-door/tests/*.rs, docs/TEST_PLAN.md, docs/audit/M26C_REFACTOR_MAP.md
 Changes:
-  - .github/workflows/ci.yml — stop excluding cleanup-sensitive crates without compensating gate coverage, or add explicit targeted jobs for `coh`, `cohsh`, `cohsh-core`, `host-ticket-agent`, `gpu-bridge-host`, `root-task`, and `nine-door` parity surfaces.
-  - scripts/ci/test_plan_stage_02_host_fast.sh — exercise `coh`, `cohsh`, `cohsh-core`, `host-ticket-agent`, `gpu-bridge-host`, `nine-door` integration coverage, `root-task --tests`, `root-task --lib`, and VM-target boundary checks as first-class checks.
+  - .github/workflows/ci.yml — stop excluding cleanup-sensitive crates without compensating gate coverage, or add explicit targeted jobs for `coh`, `cohsh`, `cohsh-core`, `host-ticket-agent`, `gpu-bridge-host`, `root-task`, `pi4-driver-abi`, `pi4-driver-runtime`, and `nine-door` parity surfaces.
+  - scripts/ci/test_plan_stage_02_host_fast.sh — exercise `coh`, `cohsh`, `cohsh-core`, `host-ticket-agent`, `gpu-bridge-host`, `nine-door` integration coverage, `root-task --tests`, `root-task --lib`, `pi4-driver-abi`, `pi4-driver-runtime`, and VM-target boundary checks as first-class checks.
   - scripts/ci/check_test_plan.sh — enforce the updated target-aware staged-run contract and authoritative command matrix.
   - docs/TEST_PLAN.md — document the expanded cleanup-target coverage, VM boundary evidence, target-qualified artifacts, and required artifact retention.
   - apps/coh/src/mount.rs + apps/cohsh/src/** + crates/cohsh-core/** + apps/host-ticket-agent/src/*.rs + apps/gpu-bridge-host/src/** + selected apps/root-task/src/* helpers + selected `apps/nine-door` and root-task parity surfaces — add characterization tests for current outputs, errors, and state transitions before refactor.
@@ -7161,10 +7167,14 @@ Commands:
   - cargo test -p nine-door --test integration
   - cargo test -p root-task --tests
   - cargo test -p root-task --lib
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
+  - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
   - rg -n "unsafe|unwrap\\(|expect\\(|panic!" apps crates tools
   - scripts/ci/check_test_plan.sh
 Checks:
   - Cleanup-sensitive crates have deterministic tests that pin current operator-visible behavior.
+  - Driver runtime ABI descriptors, linked runtime service turns, and non-acceptance classification fixtures remain pinned before cleanup touches driver-task code.
   - CI and staged test-plan coverage run those tests automatically and retain root-task VM-boundary evidence and target-qualified staged-run artifacts.
   - Risk-ratchet output is attached to refactor reviews and does not drift without an approved exception.
 Deliverables:
@@ -7172,10 +7182,10 @@ Deliverables:
 
 Title/ID: m26c-no-std-boundary-gates
 Goal: Add explicit CI and audit gates that fail if host-side capability leaks into the VM build across the closure profiles used by 26c.
-Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_stage_02_host_fast.sh, apps/root-task/Cargo.toml, apps/nine-door/Cargo.toml, configs/root_task.toml, configs/root_task_pi4_uboot_aarch64.toml, docs/TEST_PLAN.md, docs/ARCHITECTURE.md
+Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_stage_02_host_fast.sh, apps/root-task/Cargo.toml, apps/nine-door/Cargo.toml, apps/pi4-driver-runtime/Cargo.toml, crates/pi4-driver-abi/Cargo.toml, configs/root_task.toml, configs/root_task_pi4_uboot_aarch64.toml, docs/TEST_PLAN.md, docs/ARCHITECTURE.md
 Changes:
-  - .github/workflows/ci.yml — add root-task VM-profile `no_std` checks and archive dependency-tree artifacts for the QEMU `cohesix-dev` and Pi 4 U-Boot closure profiles at minimum.
-  - scripts/ci/test_plan_stage_02_host_fast.sh — emit `out/audit/m26c_root_task_tree_qemu.txt` and `out/audit/m26c_root_task_tree_pi4.txt` (or equivalent state-dir artifacts) from the VM-target dependency tree as part of cleanup gating.
+  - .github/workflows/ci.yml — add root-task VM-profile and `pi4-driver-runtime` `no_std` checks and archive dependency-tree artifacts for the QEMU `cohesix-dev` and Pi 4 U-Boot closure profiles at minimum.
+  - scripts/ci/test_plan_stage_02_host_fast.sh — emit `out/audit/m26c_root_task_tree_qemu.txt`, `out/audit/m26c_root_task_tree_pi4.txt`, and driver-runtime VM-target dependency evidence (or equivalent state-dir artifacts) from the VM-target dependency tree as part of cleanup gating.
   - docs/TEST_PLAN.md + docs/ARCHITECTURE.md — document the VM boundary gate, expected artifacts, and interpretation rules per closure profile.
   - docs/BUILD_PLAN.md — record that shared semantic helpers are allowed only when they remain `no_std`-safe and do not drag host-side crates into the VM build.
 Commands:
@@ -7183,9 +7193,11 @@ Commands:
   - cargo tree -p root-task --target aarch64-unknown-none -e normal --no-default-features --features "cohesix-dev" > out/audit/m26c_root_task_tree_qemu.txt
   - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"
   - cargo tree -p root-task --target aarch64-unknown-none -e normal --no-default-features --features "kernel bootstrap-trace serial-console net-console" > out/audit/m26c_root_task_tree_pi4.txt
+  - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
+  - cargo tree -p pi4-driver-runtime --target aarch64-unknown-none -e normal > out/audit/m26c_pi4_driver_runtime_tree.txt
   - scripts/ci/check_test_plan.sh
 Checks:
-  - The VM-target root-task build remains `no_std` and succeeds without host-side operator/tooling dependencies across the closure profiles.
+  - The VM-target root-task build and linked Pi 4 driver runtime build remain `no_std` and succeed without host-side operator/tooling dependencies across the closure profiles.
   - The dependency-tree artifacts are reviewed as part of 26c evidence and show no accidental pull-in of host-only surfaces.
   - Cleanup work cannot merge if boundary evidence is missing or contradicts the documented VM/host split.
 Deliverables:
@@ -7217,22 +7229,27 @@ Deliverables:
 
 Title/ID: m26c-root-task-runtime-decomposition
 Goal: Decompose root-task runtime adapter code into smaller invariant-bearing modules after parity and `no_std` gates pin behavior.
-Inputs: apps/root-task/src/lib.rs, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/root-task/src/log_buffer.rs, apps/root-task/src/audit/**, apps/root-task/src/bootstrap/**, apps/root-task/tests/**, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURE9P.md, docs/TEST_PLAN.md, docs/audit/M26C_RUNTIME_BOUNDARY_AUDIT.md, docs/audit/M26C_NINEDOOR_PARITY_MATRIX.md
+Inputs: apps/root-task/src/lib.rs, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/root-task/src/log_buffer.rs, apps/root-task/src/audit/**, apps/root-task/src/bootstrap/**, apps/root-task/src/hal/driver_task.rs, apps/root-task/tests/**, apps/pi4-driver-runtime/**, crates/pi4-driver-abi/**, configs/root_task*.toml, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURE9P.md, docs/TEST_PLAN.md, docs/audit/M26C_RUNTIME_BOUNDARY_AUDIT.md, docs/audit/M26C_NINEDOOR_PARITY_MATRIX.md
 Changes:
   - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** + apps/root-task/src/console/** — split parsing, dispatch, event pumping, completion formatting, and permission-denial paths into narrowly named modules without changing console grammar or Secure9P namespace semantics.
   - apps/root-task/src/log_buffer.rs + selected `/proc` emitters — extract append-only, cursor, and evidence formatting helpers while preserving current output fixtures.
-  - apps/root-task/src/lib.rs + apps/root-task/src/bootstrap/** — clarify initialization sequencing and generated-manifest handoff boundaries without moving authority out of compiler-generated artifacts.
+  - apps/root-task/src/lib.rs + apps/root-task/src/bootstrap/** + apps/root-task/src/hal/driver_task.rs — clarify initialization sequencing, generated-manifest handoff boundaries, and linked driver-runtime descriptor ownership without moving authority out of compiler-generated artifacts.
+  - apps/pi4-driver-runtime/** + crates/pi4-driver-abi/** — keep ABI and runtime changes behavior-preserving, pointer-free, and aligned with generated `root_task.driver_images` records.
   - apps/root-task/tests/** + apps/nine-door/tests/*.rs — preserve and extend parity fixtures before and after the decomposition.
   - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURE9P.md + docs/TEST_PLAN.md — update as-built module ownership only when public contracts or evidence paths become clearer.
 Commands:
   - cargo test -p nine-door --test integration
   - cargo test -p root-task --tests
   - cargo test -p root-task --lib
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
   - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"
   - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"
+  - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
   - cargo clippy --workspace --all-targets -- -D warnings
 Checks:
   - Root-task decomposition preserves ACK/ERR/END grammar, namespace layout, `/proc` output shapes, event ordering, append-only behavior, and generated-manifest authority.
+  - Linked driver-runtime descriptor handling, fixed-ring command/completion ABI, and non-acceptance spec classification remain unchanged unless a reopened 26a/26b acceptance task changes them with hardware evidence.
   - VM-target builds remain `no_std` across QEMU and Pi 4 closure profiles.
   - No new `unsafe`, `unwrap`, `expect`, or `panic!` appears in non-test root-task code without an approved exception.
 Deliverables:
@@ -7240,21 +7257,25 @@ Deliverables:
 
 Title/ID: m26c-hal-network-and-local-seat-decomposition
 Goal: Refactor Pi 4 HAL-facing network, Wi-Fi, and local-seat code into clearer bounded units and narrow SDIO/USB platform seams without changing boot policy, transcripts, or device authority.
-Inputs: apps/root-task/src/hal/**, apps/root-task/src/net/**, apps/root-task/src/drivers/**, apps/root-task/src/local_seat_pi4.rs, apps/root-task/src/generated/**, configs/root_task_pi4_uboot_aarch64.toml, docs/HARDWARE_BRINGUP.md, docs/NETWORK_CONFIG.md, docs/BOOT_REFERENCE.md, docs/TEST_PLAN.md
+Inputs: apps/root-task/src/hal/**, apps/root-task/src/net/**, apps/root-task/src/drivers/**, apps/root-task/src/local_seat_pi4.rs, apps/root-task/src/generated/**, apps/pi4-driver-runtime/**, crates/pi4-driver-abi/**, configs/root_task_pi4_uboot_aarch64.toml, docs/HARDWARE_BRINGUP.md, docs/NETWORK_CONFIG.md, docs/BOOT_REFERENCE.md, docs/TEST_PLAN.md
 Changes:
   - apps/root-task/src/net/** — separate policy parsing, DHCP state, static IPv4 validation, active/standby interface selection, and evidence formatting while preserving manifest and DTB override semantics.
-  - apps/root-task/src/hal/** + apps/root-task/src/drivers/** — keep all device access behind HAL traits, split device-state and firmware/handoff bookkeeping from transcript emission, extract current-behavior-only SDIO host and USB platform/DMA seams after characterization tests exist, and remove duplicated bounds checks under the same evidence gate.
+  - apps/root-task/src/hal/** + apps/root-task/src/drivers/** + apps/pi4-driver-runtime/** + crates/pi4-driver-abi/** — keep all device access behind HAL traits, split device-state and firmware/handoff bookkeeping from transcript emission, preserve linked-runtime command ownership, extract current-behavior-only SDIO host and USB platform/DMA seams after characterization tests exist, and remove duplicated bounds checks under the same evidence gate.
   - apps/root-task/src/local_seat_pi4.rs — isolate local-seat input/display policy from boot evidence and network policy handoff code without changing first-boot operator behavior.
   - docs/HARDWARE_BRINGUP.md + docs/NETWORK_CONFIG.md + docs/BOOT_REFERENCE.md + docs/TEST_PLAN.md — update as-built explanations and evidence commands for any clearer module boundaries.
 Commands:
   - cargo test -p root-task --tests
   - cargo test -p root-task --lib
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
   - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"
+  - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26c-pi4
 Checks:
   - HAL access remains centralized behind HAL traits; no direct MMIO, physical address, or firmware-service shortcuts are introduced outside HAL.
   - New SDIO/USB seams are extraction-only, have before/after characterization evidence, and do not add new hardware support or generic future-driver behavior.
+  - Serial linked-runtime acceptance eligibility and non-serial linked-runtime non-acceptance boundaries remain explicit until owner-state proof and fresh Pi hardware evidence close them.
   - Boot transcripts, `netstats`, `netstatus`, DHCP/static policy evidence, Wi-Fi fallback semantics, and no-NIC compatibility remain unchanged unless a separately approved breaking-change path is followed.
   - Pi 4 staged evidence proves the refactor did not regress local-seat, network-policy, or U-Boot handoff behavior.
 Deliverables:
@@ -7316,7 +7337,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
   - Record any seL4 15 changes that are intentionally irrelevant to Cohesix today, especially domain-schedule features tied to Microkit/CAmkES/capDL workflows.
 
 - **Direct-API compatibility audit and fixes**
-  - Audit `crates/sel4-sys`, `crates/sel4-runtime`, and root-task bootstrap code against seL4 15 headers and generated metadata.
+  - Audit `crates/sel4-sys`, `crates/sel4-runtime`, `crates/pi4-driver-abi`, linked `apps/pi4-driver-runtime` images, generated `root_task.driver_images` descriptors, and root-task bootstrap code against seL4 15 headers and generated metadata.
   - Preserve Cohesix’s explicit TLS and IPC-buffer installation path unless a compatibility fix requires adjustment.
   - Keep SMP affinity, boot-info handling, CSpace assumptions, and debug-syscall guards aligned with seL4 15 generated headers for both single-core and SMP builds.
 
@@ -7336,8 +7357,11 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo check --workspace`
 - `cargo test --workspace`
+- `cargo test -p pi4-driver-abi`
+- `cargo test -p pi4-driver-runtime`
 - `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"`
 - `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"`
+- `cargo check -p pi4-driver-runtime --target aarch64-unknown-none`
 - `scripts/cohesix-build-run.sh --sel4-build seL4/build --no-run --cargo-target aarch64-unknown-none --profile release --root-task-features cohesix-dev`
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir seL4/build_UBOOT`
 - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu`
@@ -7345,7 +7369,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 
 ### Checks (DoD)
 - Canonical docs link the official seL4 Reference Manual v15.0.0 PDF and explicitly align to the accepted seL4 15.0.0 baseline, remaining consistent with the refreshed as-built evidence.
-- `crates/sel4-sys`, `crates/sel4-runtime`, and root-task bootstrap code build cleanly against seL4 15 generated headers/artifacts for the QEMU baseline, SMP baseline, and Pi 4 U-Boot baseline used by Cohesix.
+- `crates/sel4-sys`, `crates/sel4-runtime`, `crates/pi4-driver-abi`, `apps/pi4-driver-runtime`, generated driver-image descriptors, driver-runtime CPIO packaging, and root-task bootstrap code build cleanly against seL4 15 generated headers/artifacts for the QEMU baseline, SMP baseline, and Pi 4 U-Boot baseline used by Cohesix.
 - QEMU and Pi 4 target-qualified Test Plan runs pass on the refreshed kernel baseline with no `*.incomplete` markers and no undocumented operator-visible output drift.
 - Secure9P bounds, console grammar, manifest outputs, release semantics, and host/VM runtime boundaries remain unchanged unless separately documented as defects fixed in the same change.
 - Build artifacts and documentation no longer rely on an accidental `sel4test`-provided `domain_schedule.c` dependency for one-domain Cohesix configurations; any remaining dependency is explicit, justified, and documented.
@@ -7353,6 +7377,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 
 ### Compiler / docsystem touchpoints
 - `coh-rtc` outputs, docs snippets, and manifest fingerprints remain authoritative; 26d may update generators or schemas only when required by the seL4 15 baseline refresh, and any such change must be reflected in the same evidence set.
+- Pi 4 linked driver-runtime ABI/descriptors/images remain authoritative for driver-task bootstrap evidence during the kernel refresh; 26d may adapt them only for seL4 15 compatibility and must not reclassify non-acceptance runtime specs without reopened 26a/26b hardware acceptance evidence.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and target-qualified state-dir evidence remain the source of truth for QEMU/Pi 4 pass semantics during the kernel refresh.
 
 ### Atomic tasks
@@ -7372,13 +7397,18 @@ Deliverables: updated docs/reference provenance and a checked-in note of the acc
 ```
 Title/ID: m26d-sel4-api-compat-audit
 Goal: Bring Cohesix-owned seL4 bindings/runtime/bootstrap code into clean alignment with seL4 15 generated artifacts.
-Inputs: crates/sel4-sys, crates/sel4-runtime, apps/root-task, seL4/build, seL4/SMP_build, seL4/build_UBOOT.
+Inputs: crates/sel4-sys, crates/sel4-runtime, crates/pi4-driver-abi, apps/pi4-driver-runtime, apps/root-task, configs/root_task*.toml, seL4/build, seL4/SMP_build, seL4/build_UBOOT.
 Changes:
   - crates/sel4-sys — compatibility fixes required by seL4 15 headers/generated metadata.
   - crates/sel4-runtime — compatibility fixes required by seL4 15 root-task startup behavior.
-  - apps/root-task — bootstrap adjustments only where required by seL4 15 semantics.
-Commands: cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"
-Checks: direct-seL4 Cohesix builds compile on all supported kernel profiles without changing system model or operator-visible semantics.
+  - crates/pi4-driver-abi + apps/pi4-driver-runtime — compatibility fixes required by seL4 15 runtime-init descriptor layout, pointer-free ring transport, or target build rules.
+  - apps/root-task — bootstrap and generated driver-image handoff adjustments only where required by seL4 15 semantics.
+Commands:
+  - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
+  - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
+Checks: direct-seL4 Cohesix builds compile on all supported kernel profiles, and linked driver-runtime ABI/build evidence stays green, without changing system model or operator-visible semantics.
 Deliverables: passing workspace/build-target checks and refreshed low-level compatibility evidence.
 ```
 
