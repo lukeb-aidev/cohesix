@@ -75,11 +75,20 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(network["dhcp"]["discover_timeout_ms"], 1000);
     assert_eq!(network["dhcp"]["request_timeout_ms"], 1000);
     assert_eq!(network["dhcp"]["max_retries"], 4);
-    assert!(manifest["hw"]["devices"]
-        .as_array()
-        .expect("devices array")
+    let local_seat = &manifest["hw"]["local_seat"];
+    assert_eq!(local_seat["enabled"], true);
+    assert_eq!(local_seat["required"], true);
+    assert_eq!(local_seat["keyboard_device"], "usb-kbd0");
+    assert_eq!(local_seat["display_device"], "hdmi0");
+    assert_eq!(local_seat["line_bytes"], 160);
+    assert_eq!(local_seat["buffer_lines"], 128);
+
+    let devices = manifest["hw"]["devices"].as_array().expect("devices array");
+    assert!(devices
         .iter()
         .any(|device| device["kind"] == "wifi" && device["id"] == "cyw43xx0"));
+    assert!(device_required(devices, "keyboard", "usb-kbd0"));
+    assert!(device_required(devices, "display", "hdmi0"));
 
     let images = manifest["root_task"]["driver_images"]["images"]
         .as_array()
@@ -101,4 +110,55 @@ fn pi4_uboot_profile_emits_network_policy() {
         usb["mmio-pages"].as_u64().expect("usb mmio pages") >= 16,
         "USB runtime must cover the xHCI minimum operational aperture"
     );
+    assert_eq!(
+        runtime_pages(images, "serial-console", "shared-buffer-pages"),
+        4
+    );
+    assert_eq!(runtime_pages(images, "usb-keyboard", "dma-pages"), 128);
+    assert_eq!(
+        runtime_pages(images, "usb-keyboard", "shared-buffer-pages"),
+        32
+    );
+    assert_eq!(runtime_pages(images, "hdmi-text", "dma-pages"), 16);
+    assert_eq!(
+        runtime_pages(images, "hdmi-text", "shared-buffer-pages"),
+        16
+    );
+    assert_eq!(runtime_pages(images, "genet-nic", "dma-pages"), 512);
+    assert_eq!(
+        runtime_pages(images, "genet-nic", "shared-buffer-pages"),
+        32
+    );
+    assert_eq!(runtime_pages(images, "cyw43-wifi", "dma-pages"), 128);
+    assert_eq!(
+        runtime_pages(images, "cyw43-wifi", "shared-buffer-pages"),
+        64
+    );
+    assert_eq!(runtime_pages(images, "sdio-host", "dma-pages"), 64);
+    assert_eq!(
+        runtime_pages(images, "sdio-host", "shared-buffer-pages"),
+        32
+    );
+    assert_eq!(
+        runtime_pages(images, "pcie-root", "shared-buffer-pages"),
+        16
+    );
+}
+
+fn runtime_pages(images: &[Value], hot_path: &str, field: &str) -> u64 {
+    images
+        .iter()
+        .find(|image| image["hot-path"] == hot_path)
+        .unwrap_or_else(|| panic!("runtime image for {hot_path}"))
+        .get(field)
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| panic!("{field} for {hot_path}"))
+}
+
+fn device_required(devices: &[Value], kind: &str, id: &str) -> bool {
+    devices
+        .iter()
+        .find(|device| device["kind"] == kind && device["id"] == id)
+        .and_then(|device| device["required"].as_bool())
+        .unwrap_or(false)
 }

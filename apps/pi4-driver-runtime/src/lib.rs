@@ -37,9 +37,9 @@ pub const DRIVER_TASK_RING_VADDR: usize = 0x7000_0000;
 /// First fixed driver-local virtual address reserved for explicit MMIO pages.
 pub const DRIVER_TASK_DEVICE_MMIO_VADDR: usize = 0x7020_0000;
 /// First fixed driver-local virtual address reserved for runtime-owned DMA pages.
-pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7050_0000;
+pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7080_0000;
 /// First fixed driver-local virtual address reserved for shared control pages.
-pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x7060_0000;
+pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x70c0_0000;
 /// Offset of the completion record in the command/completion ring page.
 pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
 /// Offset of the shared payload area in the command/completion ring page.
@@ -123,21 +123,21 @@ const SDHCI_INT_COMMAND_DATA_CLEAR_MASK: u32 = u32::MAX;
 const SDHCI_CMD_WAIT_LOOPS: usize = 100_000;
 
 const USB_REQUIRED_MMIO_PAGES: u16 = 16;
-const USB_REQUIRED_DMA_PAGES: u16 = 16;
-const USB_REQUIRED_SHARED_PAGES: u16 = 2;
+const USB_REQUIRED_DMA_PAGES: u16 = 128;
+const USB_REQUIRED_SHARED_PAGES: u16 = 32;
 const HDMI_REQUIRED_MMIO_PAGES: u16 = 1;
-const HDMI_REQUIRED_DMA_PAGES: u16 = 1;
-const HDMI_REQUIRED_SHARED_PAGES: u16 = 2;
+const HDMI_REQUIRED_DMA_PAGES: u16 = 16;
+const HDMI_REQUIRED_SHARED_PAGES: u16 = 16;
 const GENET_REQUIRED_MMIO_PAGES: u16 = 6;
-const GENET_REQUIRED_DMA_PAGES: u16 = 64;
-const GENET_REQUIRED_SHARED_PAGES: u16 = 4;
-const CYW43_REQUIRED_DMA_PAGES: u16 = 8;
-const CYW43_REQUIRED_SHARED_PAGES: u16 = 4;
+const GENET_REQUIRED_DMA_PAGES: u16 = 512;
+const GENET_REQUIRED_SHARED_PAGES: u16 = 32;
+const CYW43_REQUIRED_DMA_PAGES: u16 = 128;
+const CYW43_REQUIRED_SHARED_PAGES: u16 = 64;
 const SDIO_REQUIRED_MMIO_PAGES: u16 = 1;
-const SDIO_REQUIRED_DMA_PAGES: u16 = 2;
-const SDIO_REQUIRED_SHARED_PAGES: u16 = 2;
+const SDIO_REQUIRED_DMA_PAGES: u16 = 64;
+const SDIO_REQUIRED_SHARED_PAGES: u16 = 32;
 const PCIE_REQUIRED_MMIO_PAGES: u16 = 10;
-const PCIE_REQUIRED_SHARED_PAGES: u16 = 1;
+const PCIE_REQUIRED_SHARED_PAGES: u16 = 16;
 
 struct RuntimeDescriptorSlot {
     descriptor: UnsafeCell<DriverRuntimeInitDescriptor>,
@@ -1579,18 +1579,24 @@ mod tests {
             HOT_PATH_PCIE_ROOT => (PCIE_REQUIRED_MMIO_PAGES, 0, PCIE_REQUIRED_SHARED_PAGES),
             _ => (1, 0, 1),
         };
-        descriptor.mmio_page_count = mmio_pages;
-        descriptor.dma_page_count = dma_pages;
-        descriptor.shared_page_count = shared_pages;
-        for index in 0..usize::from(mmio_pages) {
+        let mmio_descriptor_pages =
+            mmio_pages.min(pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES as u16);
+        let dma_descriptor_pages =
+            dma_pages.min(pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_DMA_PAGES as u16);
+        let shared_descriptor_pages =
+            shared_pages.min(pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES as u16);
+        descriptor.mmio_page_count = mmio_descriptor_pages;
+        descriptor.dma_page_count = dma_descriptor_pages;
+        descriptor.shared_page_count = shared_descriptor_pages;
+        for index in 0..usize::from(mmio_descriptor_pages) {
             descriptor.mmio_pages[index] =
                 pi4_driver_abi::DriverRuntimePageDescriptor::new(0x1000_0000 + index * 0x1000);
         }
-        for index in 0..usize::from(dma_pages) {
+        for index in 0..usize::from(dma_descriptor_pages) {
             descriptor.dma_pages[index] =
                 pi4_driver_abi::DriverRuntimePageDescriptor::new(0x2000_0000 + index * 0x1000);
         }
-        for index in 0..usize::from(shared_pages) {
+        for index in 0..usize::from(shared_descriptor_pages) {
             descriptor.shared_pages[index] =
                 pi4_driver_abi::DriverRuntimePageDescriptor::new(0x4000_0000 + index * 0x1000);
         }

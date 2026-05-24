@@ -336,7 +336,19 @@ manifest-selected per-driver affinity through `seL4_TCB_SetAffinity`; binds the
 notification; maps every bounded `PT_LOAD` page from the linked runtime ELF plus
 declared runtime regions; and resumes the TCB. Generated `code-pages=64`
 currently covers the observed ~35 KiB runtime images and the 64 KiB linker
-alignment gaps between RO, RX, and RW load segments. The physical Pi
+alignment gaps between RO, RX, and RW load segments. The generated runtime
+buffer budgets are intentionally no longer first-boot-minimal: serial receives
+four shared pages; USB receives 128 DMA pages plus 32 shared pages; HDMI
+receives 16 DMA pages plus 16 shared pages in addition to the framebuffer
+aperture; GENET receives 512 DMA pages plus 32 shared pages to match the
+current 256-RX/256-TX descriptor-ring shape; CYW43 receives 128 DMA pages plus
+64 shared pages for SDPCM/control/glom batching; SDIO receives 64 DMA pages plus
+32 shared pages for batched CMD53 windows; and PCIe receives 16 shared control
+pages. The driver-local virtual layout reserves non-overlapping windows for
+those larger arenas: MMIO at `0x70200000`, DMA at `0x70800000`, and shared
+control buffers at `0x70c00000`; semantic resource ranges carry aggregate page
+counts when the fixed descriptor page arrays are intentionally capped. The
+physical Pi
 linked-runtime entry dispatches only
 fixed-layout command/completion records; callback-pointer dispatch is compiled
 out for that profile. QEMU smoke can additionally allocate isolated VSpaces and
@@ -1365,8 +1377,10 @@ active path is Cohesix-owned cold start:
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local
   seat is enabled, explicit Wi-Fi net-console bring-up, and Auto policy with
   Wi-Fi credentials, proceed only after that pre-net USB probe has completed;
-  if `hw.local_seat.required=true`, a missing local-seat backend is fatal before
-  ticket publication. A present backend with no keyboard ready on the first
+  if `hw.local_seat.required=true`, `coh-rtc` requires matching
+  `hw.devices[]` entries for the configured keyboard/display IDs with
+  `required=true`, and a missing local-seat backend is fatal before ticket
+  publication. A present backend with no keyboard ready on the first
   bounded probe keeps polling instead of falling back to serial-only. When
   `required=false`, backend failures degrade to serial-only diagnostics with
   explicit `[local-seat]` boot lines and no repeated xHCI probing.

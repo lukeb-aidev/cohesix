@@ -827,11 +827,11 @@ pub const DRIVER_TASK_STACK_TOP_VADDR: usize = 0x7000_3000;
 pub const DRIVER_TASK_DEVICE_MMIO_VADDR: usize = 0x7020_0000;
 
 /// First fixed driver-local virtual address reserved for explicit DMA pages.
-pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7050_0000;
+pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7080_0000;
 
 /// First fixed driver-local virtual address reserved for shared RX/TX/control
 /// buffers outside the command ring page.
-pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x7060_0000;
+pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x70c0_0000;
 
 /// Offset of the first fixed-layout completion record within the ring page.
 pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
@@ -4432,6 +4432,55 @@ mod tests {
             assert!(spec.declares_transport_regions(), "{:?}", spec.hot_path);
             assert_ne!(spec.declared_region_count(), 0, "{:?}", spec.hot_path);
             assert_ne!(spec.declared_page_count(), 0, "{:?}", spec.hot_path);
+            match spec.hot_path {
+                DriverTaskHotPath::SerialConsole => {
+                    assert_eq!(
+                        spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
+                        4
+                    );
+                }
+                DriverTaskHotPath::UsbKeyboard => {
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 128);
+                    assert_eq!(
+                        spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
+                        32
+                    );
+                }
+                DriverTaskHotPath::HdmiText => {
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 16);
+                    assert_eq!(
+                        spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
+                        16
+                    );
+                }
+                DriverTaskHotPath::GenetNic => {
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 512);
+                    assert_eq!(
+                        spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
+                        32
+                    );
+                }
+                DriverTaskHotPath::Cyw43Wifi => {
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 128);
+                    assert_eq!(
+                        spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
+                        64
+                    );
+                }
+                DriverTaskHotPath::SdioHost => {
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 64);
+                    assert_eq!(
+                        spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
+                        32
+                    );
+                }
+                DriverTaskHotPath::PcieRoot => {
+                    assert_eq!(
+                        spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
+                        16
+                    );
+                }
+            }
             if spec.hot_path == DriverTaskHotPath::SerialConsole {
                 assert!(!spec.root_context_required, "{:?}", spec.hot_path);
                 assert!(spec.hardware_state_migrated, "{:?}", spec.hot_path);

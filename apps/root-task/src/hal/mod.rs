@@ -1472,22 +1472,20 @@ impl RuntimeInitDescriptorBuilder {
 
     fn add_dma_page(&mut self, paddr: usize) -> Result<(), HalError> {
         let index = usize::from(self.descriptor.dma_page_count);
-        let Some(slot) = self.descriptor.dma_pages.get_mut(index) else {
-            return Err(HalError::Unsupported("driver-runtime-init-dma-overflow"));
-        };
-        *slot = DriverRuntimePageDescriptor::new(paddr);
-        self.descriptor.dma_page_count = self.descriptor.dma_page_count.saturating_add(1);
+        if let Some(slot) = self.descriptor.dma_pages.get_mut(index) {
+            *slot = DriverRuntimePageDescriptor::new(paddr);
+            self.descriptor.dma_page_count = self.descriptor.dma_page_count.saturating_add(1);
+        }
         self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS;
         Ok(())
     }
 
     fn add_shared_page(&mut self, paddr: usize) -> Result<(), HalError> {
         let index = usize::from(self.descriptor.shared_page_count);
-        let Some(slot) = self.descriptor.shared_pages.get_mut(index) else {
-            return Err(HalError::Unsupported("driver-runtime-init-shared-overflow"));
-        };
-        *slot = DriverRuntimePageDescriptor::new(paddr);
-        self.descriptor.shared_page_count = self.descriptor.shared_page_count.saturating_add(1);
+        if let Some(slot) = self.descriptor.shared_pages.get_mut(index) {
+            *slot = DriverRuntimePageDescriptor::new(paddr);
+            self.descriptor.shared_page_count = self.descriptor.shared_page_count.saturating_add(1);
+        }
         self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS;
         Ok(())
     }
@@ -3656,6 +3654,93 @@ mod tests {
             512,
             16,
             2,
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_init_descriptor_builder_keeps_large_buffer_budgets_semantic() {
+        let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
+            super::driver_task::DriverTaskHotPath::GenetNic,
+            64,
+            6,
+            512,
+            32,
+            true,
+            false,
+        );
+        let mut builder = super::RuntimeInitDescriptorBuilder::new(
+            spec,
+            super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
+        );
+        for index in 0..6 {
+            builder
+                .add_mmio_page(0xfd58_0000usize + index * 0x1000)
+                .unwrap();
+        }
+        builder
+            .add_mmio_resource_range(
+                super::driver_task::DriverTaskHotPath::GenetNic,
+                super::driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR,
+                0xfd58_0000usize,
+                6,
+                0,
+            )
+            .unwrap();
+        for index in 0..512 {
+            builder
+                .add_dma_page(0x4000_0000usize + index * 0x1000)
+                .unwrap();
+        }
+        builder
+            .add_buffer_resource_range(
+                super::driver_task::DriverTaskHotPath::GenetNic,
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR,
+                0x4000_0000,
+                512,
+                0,
+            )
+            .unwrap();
+        for index in 0..32 {
+            builder
+                .add_shared_page(0x5000_0000usize + index * 0x1000)
+                .unwrap();
+        }
+        builder
+            .add_buffer_resource_range(
+                super::driver_task::DriverTaskHotPath::GenetNic,
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+                super::driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR,
+                0x5000_0000,
+                32,
+                0,
+            )
+            .unwrap();
+
+        let descriptor = builder.finish().unwrap();
+        assert_eq!(
+            descriptor.dma_page_count,
+            pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_DMA_PAGES as u16
+        );
+        assert_eq!(
+            descriptor.shared_page_count,
+            pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES as u16
+        );
+        assert_eq!(
+            descriptor.resource_pages_by_kind(pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_DMA),
+            512
+        );
+        assert_eq!(
+            descriptor.resource_pages_by_kind(pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED),
+            32
+        );
+        assert!(descriptor.valid_for_resources(
+            super::driver_task::DriverTaskHotPath::GenetNic.as_u32(),
+            super::driver_task::DRIVER_TASK_ROLE_NET_BIT as u32,
+            6,
+            512,
+            32,
         ));
     }
 

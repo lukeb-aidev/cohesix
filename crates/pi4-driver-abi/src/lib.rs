@@ -751,6 +751,79 @@ mod tests {
     }
 
     #[test]
+    fn resource_ranges_can_describe_large_dma_and_shared_budgets() {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = HOT_PATH_GENET_NIC;
+        descriptor.role_bit = 1 << 3;
+        descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY
+            | DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED
+            | DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS;
+        descriptor.mmio_page_count = 6;
+        descriptor.dma_page_count = DRIVER_RUNTIME_INIT_MAX_DMA_PAGES as u16;
+        descriptor.shared_page_count = DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES as u16;
+        for index in 0..6 {
+            descriptor.mmio_pages[index] =
+                DriverRuntimePageDescriptor::new(0xfd58_0000usize + index * 0x1000);
+        }
+        for index in 0..DRIVER_RUNTIME_INIT_MAX_DMA_PAGES {
+            descriptor.dma_pages[index] =
+                DriverRuntimePageDescriptor::new(0x4000_0000usize + index * 0x1000);
+        }
+        for index in 0..DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES {
+            descriptor.shared_pages[index] =
+                DriverRuntimePageDescriptor::new(0x5000_0000usize + index * 0x1000);
+        }
+        descriptor.resource_range_count = 3;
+        descriptor.resource_ranges[0] = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+            DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+            0x7020_0000,
+            0xfd58_0000,
+            6 * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+            6,
+            0,
+        );
+        descriptor.resource_ranges[1] = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+            0x7080_0000,
+            0x4000_0000,
+            512 * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+            512,
+            0,
+        );
+        descriptor.resource_ranges[2] = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
+                | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+            DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+            0x70c0_0000,
+            0x5000_0000,
+            32 * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+            32,
+            0,
+        );
+
+        assert!(descriptor.valid());
+        assert_eq!(
+            descriptor.resource_pages_by_kind(DRIVER_RUNTIME_RESOURCE_KIND_DMA),
+            512
+        );
+        assert_eq!(
+            descriptor.resource_pages_by_kind(DRIVER_RUNTIME_RESOURCE_KIND_SHARED),
+            32
+        );
+        assert!(descriptor.valid_for_resources(HOT_PATH_GENET_NIC, 1 << 3, 6, 512, 32));
+    }
+
+    #[test]
     fn bus_links_are_pointer_free_and_owner_checked() {
         let mut descriptor = DriverRuntimeInitDescriptor::empty();
         descriptor.hot_path = HOT_PATH_CYW43_WIFI;

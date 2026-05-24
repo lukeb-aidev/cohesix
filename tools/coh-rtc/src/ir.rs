@@ -374,6 +374,12 @@ impl Manifest {
 
         let has_device =
             |kind: HardwareDeviceKind| self.hw.devices.iter().any(|device| device.kind == kind);
+        let find_device = |kind: HardwareDeviceKind, id: &str| {
+            self.hw
+                .devices
+                .iter()
+                .find(|device| device.kind == kind && device.id == id)
+        };
         let has_tpm = has_device(HardwareDeviceKind::Tpm);
         let has_net = has_device(HardwareDeviceKind::Net);
         let has_wifi = has_device(HardwareDeviceKind::Wifi);
@@ -459,11 +465,32 @@ impl Manifest {
                 );
             }
             if local_seat.enabled {
-                if !has_device(HardwareDeviceKind::Keyboard) {
-                    bail!("hw.local_seat.enabled requires hw.devices[] kind=keyboard");
+                let keyboard =
+                    find_device(HardwareDeviceKind::Keyboard, &local_seat.keyboard_device)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "hw.local_seat.keyboard_device={} requires matching hw.devices[] kind=keyboard",
+                                local_seat.keyboard_device
+                            )
+                        })?;
+                let display = find_device(HardwareDeviceKind::Display, &local_seat.display_device)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "hw.local_seat.display_device={} requires matching hw.devices[] kind=display",
+                            local_seat.display_device
+                        )
+                    })?;
+                if local_seat.required && !keyboard.required {
+                    bail!(
+                        "hw.local_seat.required=true requires hw.devices[] kind=keyboard id={} required=true",
+                        local_seat.keyboard_device
+                    );
                 }
-                if !has_device(HardwareDeviceKind::Display) {
-                    bail!("hw.local_seat.enabled requires hw.devices[] kind=display");
+                if local_seat.required && !display.required {
+                    bail!(
+                        "hw.local_seat.required=true requires hw.devices[] kind=display id={} required=true",
+                        local_seat.display_device
+                    );
                 }
             }
             if self.hw.no_nic {
@@ -3024,6 +3051,111 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("hw.local_seat.required=true requires hw.local_seat.enabled=true"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn pi4_local_seat_requires_matching_keyboard_and_display_ids() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.local_seat.enabled = true;
+        manifest.hw.local_seat.required = false;
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Keyboard,
+            id: "other-kbd".to_owned(),
+            required: false,
+        });
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Display,
+            id: "hdmi0".to_owned(),
+            required: false,
+        });
+        let err = manifest
+            .validate()
+            .expect_err("local-seat keyboard id mismatch should fail");
+        assert!(
+            err.to_string().contains(
+                "hw.local_seat.keyboard_device=usb-kbd0 requires matching hw.devices[] kind=keyboard"
+            ),
+            "unexpected error: {err}"
+        );
+
+        manifest.hw.devices.clear();
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Uart,
+            id: "uart0".to_owned(),
+            required: true,
+        });
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Rtc,
+            id: "rtc0".to_owned(),
+            required: true,
+        });
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Net,
+            id: "bcmgenet0".to_owned(),
+            required: true,
+        });
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Keyboard,
+            id: "usb-kbd0".to_owned(),
+            required: false,
+        });
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Display,
+            id: "other-display".to_owned(),
+            required: false,
+        });
+        let err = manifest
+            .validate()
+            .expect_err("local-seat display id mismatch should fail");
+        assert!(
+            err.to_string().contains(
+                "hw.local_seat.display_device=hdmi0 requires matching hw.devices[] kind=display"
+            ),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn pi4_required_local_seat_requires_required_devices() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.hw.local_seat.enabled = true;
+        manifest.hw.local_seat.required = true;
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Keyboard,
+            id: "usb-kbd0".to_owned(),
+            required: false,
+        });
+        manifest.hw.devices.push(HardwareDevice {
+            kind: HardwareDeviceKind::Display,
+            id: "hdmi0".to_owned(),
+            required: false,
+        });
+        let err = manifest
+            .validate()
+            .expect_err("required local-seat keyboard must be required");
+        assert!(
+            err.to_string().contains(
+                "hw.local_seat.required=true requires hw.devices[] kind=keyboard id=usb-kbd0 required=true"
+            ),
+            "unexpected error: {err}"
+        );
+
+        let keyboard = manifest
+            .hw
+            .devices
+            .iter_mut()
+            .find(|device| device.kind == HardwareDeviceKind::Keyboard)
+            .expect("keyboard device");
+        keyboard.required = true;
+        let err = manifest
+            .validate()
+            .expect_err("required local-seat display must be required");
+        assert!(
+            err.to_string().contains(
+                "hw.local_seat.required=true requires hw.devices[] kind=display id=hdmi0 required=true"
+            ),
             "unexpected error: {err}"
         );
     }

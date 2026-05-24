@@ -42,7 +42,7 @@ ipc-pages = 1
 ring-pages = 1
 mmio-pages = 1
 dma-pages = 0
-shared-buffer-pages = 1
+shared-buffer-pages = 4
 root-context-required = false
 hardware-state-migrated = true
 
@@ -57,8 +57,8 @@ stack-pages = 1
 ipc-pages = 1
 ring-pages = 1
 mmio-pages = 16
-dma-pages = 16
-shared-buffer-pages = 2
+dma-pages = 128
+shared-buffer-pages = 32
 root-context-required = true
 hardware-state-migrated = false
 
@@ -73,8 +73,8 @@ stack-pages = 1
 ipc-pages = 1
 ring-pages = 1
 mmio-pages = 1
-dma-pages = 1
-shared-buffer-pages = 2
+dma-pages = 16
+shared-buffer-pages = 16
 root-context-required = true
 hardware-state-migrated = false
 
@@ -89,8 +89,8 @@ stack-pages = 1
 ipc-pages = 1
 ring-pages = 1
 mmio-pages = 6
-dma-pages = 64
-shared-buffer-pages = 4
+dma-pages = 512
+shared-buffer-pages = 32
 root-context-required = true
 hardware-state-migrated = false
 
@@ -105,8 +105,8 @@ stack-pages = 1
 ipc-pages = 1
 ring-pages = 1
 mmio-pages = 0
-dma-pages = 8
-shared-buffer-pages = 4
+dma-pages = 128
+shared-buffer-pages = 64
 root-context-required = true
 hardware-state-migrated = false
 
@@ -121,8 +121,8 @@ stack-pages = 1
 ipc-pages = 1
 ring-pages = 1
 mmio-pages = 1
-dma-pages = 2
-shared-buffer-pages = 2
+dma-pages = 64
+shared-buffer-pages = 32
 root-context-required = true
 hardware-state-migrated = false
 
@@ -138,7 +138,7 @@ ipc-pages = 1
 ring-pages = 1
 mmio-pages = 10
 dma-pages = 0
-shared-buffer-pages = 1
+shared-buffer-pages = 16
 root-context-required = true
 hardware-state-migrated = false
 
@@ -244,12 +244,12 @@ required = false
 [[hw.devices]]
 kind = "keyboard"
 id = "usb-kbd0"
-required = false
+required = true
 
 [[hw.devices]]
 kind = "display"
 id = "hdmi0"
-required = false
+required = true
 
 [namespaces]
 role_isolation = true
