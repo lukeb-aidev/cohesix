@@ -139,6 +139,95 @@ depend on the narrow HAL trait that represents the resource they need:
 The compatibility `Hardware` facade may remain where legacy call sites span
 several domains, but new driver logic should prefer the narrowest trait.
 
+### HAL And Driver Architecture
+
+The architecture below shows the current authority path. The manifest compiler
+declares driver images, affinity, and policy; root-task validates and maps the
+resources through HAL; linked Pi 4 runtimes receive only bounded descriptors,
+capabilities, and fixed-ring service turns.
+
+```mermaid
+flowchart TD
+    manifest["configs/root_task*.toml"]
+    rtc["coh-rtc validation and codegen"]
+    tables["root-task generated tables"]
+    specs["root_task.driver_images specs"]
+    policy["affinity and boot policy"]
+    root["root-task authority"]
+    retained["tickets, namespaces, console, revocation"]
+    hal["HAL admission boundary"]
+    contracts["driver-task contracts and budgets"]
+    caps["seL4 caps, VSpaces, MMIO, DMA, IRQs"]
+    abi["pi4-driver-abi init descriptor"]
+    boot["driver-task bootstrap"]
+    images["linked pi4 driver images in CPIO"]
+    rings["fixed command and completion rings"]
+    devices["Pi 4 devices and shared buffers"]
+    proof["breadcrumbs and owner-state proof"]
+    compat["QEMU and host compatibility gates"]
+
+    manifest --> rtc
+    rtc --> tables
+    rtc --> specs
+    rtc --> policy
+    tables --> root
+    policy --> root
+    root --> retained
+    root --> hal
+    specs --> boot
+    hal --> contracts
+
+    subgraph layers["HAL layers"]
+        deviceHal["DeviceHal: MMIO DMA IRQ"]
+        pciHal["PciHal: PCI topology"]
+        cywHal["Cyw43Hal: SDIO firmware reset"]
+        pcieHal["pi4_pcie: VL805 root complex"]
+    end
+
+    contracts --> deviceHal
+    contracts --> pciHal
+    contracts --> cywHal
+    contracts --> pcieHal
+    deviceHal --> caps
+    pciHal --> caps
+    cywHal --> caps
+    pcieHal --> caps
+    caps --> boot
+    abi --> boot
+    boot --> rings
+
+    subgraph runtimes["Driver tasks in isolated child VSpaces"]
+        entry["runtime entrypoints"]
+        serial["serial runtime"]
+        usb["USB local-seat runtime"]
+        hdmi["HDMI runtime"]
+        genet["GENET runtime"]
+        cyw43["CYW43 runtime"]
+        sdio["SDIO runtime"]
+        pcie["PCIe runtime"]
+        entry --> serial
+        entry --> usb
+        entry --> hdmi
+        entry --> genet
+        entry --> cyw43
+        entry --> sdio
+        entry --> pcie
+    end
+
+    images --> entry
+    rings --> entry
+    entry --> devices
+    entry --> proof
+    devices --> proof
+    compat -. "diagnostic only" .-> hal
+    compat -. "not Pi owner proof" .-> proof
+```
+
+The diagram is intentionally split between runtime transport and owner-state
+proof. Serial is acceptance-eligible once fresh Pi evidence proves the linked
+path. The other Pi 4 runtime images remain non-acceptance until their hardware
+state machines make real progress from driver-local state on Pi hardware.
+
 ### Driver-Task Scheduling Contracts
 
 Reopened Milestones 26a and 26b require every hardware-facing driver path to
