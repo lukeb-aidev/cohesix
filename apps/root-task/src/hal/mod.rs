@@ -61,11 +61,11 @@ use crate::sel4::{
 use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
-    DriverRuntimeInitDescriptor, DriverRuntimePageDescriptor,
+    DriverRuntimeInitDescriptor, DriverRuntimePageDescriptor, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
     DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
-    DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
-    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS,
+    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED,
+    DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
+    DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN, DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1455,6 +1455,11 @@ impl RuntimeInitDescriptorBuilder {
         Ok(())
     }
 
+    fn set_framebuffer(&mut self, framebuffer: pi4_driver_abi::DriverRuntimeFramebufferDescriptor) {
+        self.descriptor.framebuffer = framebuffer;
+        self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+    }
+
     fn finish(self) -> Result<DriverRuntimeInitDescriptor, HalError> {
         if self.descriptor.valid_for_resources(
             self.descriptor.hot_path,
@@ -2159,7 +2164,69 @@ impl<'a> KernelHal<'a> {
                 }
             }
         }
+        if spec.hot_path == driver_task::DriverTaskHotPath::HdmiText {
+            let _ = self.map_isolated_runtime_hdmi_framebuffer(
+                vspace,
+                tracker,
+                init_descriptor.as_deref_mut(),
+            )?;
+        }
         Ok(mapped_mask)
+    }
+
+    fn map_isolated_runtime_hdmi_framebuffer(
+        &mut self,
+        vspace: seL4_CPtr,
+        tracker: &mut VSpaceTableTracker,
+        mut init_descriptor: Option<&mut RuntimeInitDescriptorBuilder>,
+    ) -> Result<bool, HalError> {
+        let Some(mut framebuffer) = driver_task::hdmi_runtime_framebuffer_hint() else {
+            return Ok(false);
+        };
+        let paddr = usize::try_from(framebuffer.paddr)
+            .map_err(|_| HalError::Unsupported("driver-runtime-hdmi-fb-paddr"))?;
+        let width = framebuffer.width as usize;
+        let height = framebuffer.height as usize;
+        let pitch = framebuffer.pitch as usize;
+        let Some(framebuffer_len) = pitch.checked_mul(height) else {
+            return Err(HalError::Unsupported("driver-runtime-hdmi-fb-size"));
+        };
+        let page_bytes = 1usize << sel4::PAGE_BITS;
+        let page_base = paddr & !(page_bytes - 1);
+        let page_offset = paddr & (page_bytes - 1);
+        let Some(map_len) = page_offset.checked_add(framebuffer_len) else {
+            return Err(HalError::Unsupported("driver-runtime-hdmi-fb-map-len"));
+        };
+        let page_count = map_len.saturating_add(page_bytes - 1) / page_bytes;
+        if page_count == 0 || width == 0 || page_count > 2048 {
+            return Err(HalError::Unsupported("driver-runtime-hdmi-fb-pages"));
+        }
+        let rights = sel4_sys::seL4_CapRights_ReadWrite;
+        for page in 0..page_count {
+            let paddr = page_base
+                .checked_add(page.saturating_mul(page_bytes))
+                .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-page"))?;
+            let vaddr = (DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize)
+                .checked_add(page.saturating_mul(page_bytes))
+                .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-vaddr"))?;
+            self.env
+                .map_device_page_into_vspace(
+                    paddr,
+                    vspace,
+                    vaddr,
+                    rights,
+                    sel4_sys::seL4_ARM_Page_Uncached,
+                    tracker,
+                )
+                .map_err(HalError::Sel4)?;
+        }
+        framebuffer.vaddr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR
+            .checked_add(page_offset as u64)
+            .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-vaddr"))?;
+        if let Some(builder) = init_descriptor.as_deref_mut() {
+            builder.set_framebuffer(framebuffer);
+        }
+        Ok(true)
     }
 
     fn map_isolated_runtime_mmio_region(
@@ -3073,6 +3140,41 @@ mod tests {
         assert_eq!(descriptor.dma_pages[0].paddr, 0x4000_0000);
         assert_eq!(descriptor.shared_pages[0].paddr, 0x5000_0000);
         assert!(descriptor.valid());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_init_descriptor_builder_records_hdmi_framebuffer_metadata() {
+        let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
+            super::driver_task::DriverTaskHotPath::HdmiText,
+            1,
+            1,
+            1,
+            true,
+            false,
+        );
+        let mut builder = super::RuntimeInitDescriptorBuilder::new(
+            spec,
+            super::driver_task::DRIVER_TASK_ROLE_DISPLAY_BIT,
+        );
+        builder.add_mmio_page(0xFE00_B000).unwrap();
+        builder.add_dma_page(0x4000_0000).unwrap();
+        builder.add_shared_page(0x5000_0000).unwrap();
+        builder.set_framebuffer(pi4_driver_abi::DriverRuntimeFramebufferDescriptor {
+            vaddr: pi4_driver_abi::DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 640,
+            height: 480,
+            pitch: 640 * 4,
+            format: pi4_driver_abi::DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        });
+
+        let descriptor = builder.finish().unwrap();
+        assert!(descriptor.hdmi_ready());
+        assert_eq!(
+            descriptor.framebuffer.vaddr,
+            pi4_driver_abi::DRIVER_RUNTIME_FRAMEBUFFER_VADDR
+        );
     }
 
     #[cfg(feature = "kernel")]

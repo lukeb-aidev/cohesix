@@ -31,6 +31,12 @@ use crate::local_seat_pi4::{
 };
 use crate::rust_alloc::vec::Vec;
 use crate::sel4::{page_get_address, DeviceFrame, PAGE_BITS};
+use pi4_driver_abi::{
+    DRIVER_RUNTIME_SDIO_FLAG_DATA, DRIVER_RUNTIME_SDIO_FLAG_QUIET,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR, DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_FLAG_WRITE,
+};
 use spin::Mutex;
 
 #[cfg(not(all(
@@ -9288,11 +9294,21 @@ where
 }
 
 const SDIO_BUS_OWNER_QUEUE_CAPACITY: usize = 8;
-const SDIO_BUS_OWNER_FLAG_DATA: u16 = 1 << 0;
-const SDIO_BUS_OWNER_FLAG_WRITE: u16 = 1 << 1;
-const SDIO_BUS_OWNER_FLAG_QUIET: u16 = 1 << 2;
+const SDIO_BUS_OWNER_FLAG_DATA: u16 = DRIVER_RUNTIME_SDIO_FLAG_DATA;
+const SDIO_BUS_OWNER_FLAG_WRITE: u16 = DRIVER_RUNTIME_SDIO_FLAG_WRITE;
+const SDIO_BUS_OWNER_FLAG_QUIET: u16 = DRIVER_RUNTIME_SDIO_FLAG_QUIET;
 const SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC: u16 =
     super::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
+
+const fn sdio_runtime_response_flag(response: ResponseType) -> u16 {
+    match response {
+        ResponseType::None => DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
+        ResponseType::Ocr => DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
+        ResponseType::Short => DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+        ResponseType::ShortBusy => DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
+        ResponseType::Long => DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG,
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -9382,33 +9398,67 @@ impl SdioBusOwnerQueue {
 }
 
 #[cfg(feature = "kernel")]
-fn sdio_owner_queue_ring_service_turn(cmd: u16, arg: u32, len: usize, flags: u16) -> bool {
+fn sdio_owner_queue_ring_service_completion(
+    cmd: u16,
+    arg: u32,
+    len: usize,
+    flags: u16,
+    payload: Option<&[u8]>,
+    response: ResponseType,
+) -> Option<super::driver_task::DriverTaskCompletionRecord> {
     let contract = super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT;
     let _ = super::driver_task::register_pi4_bus_ring_service(contract);
-    let mut command = super::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-        0,
-        super::driver_task::DriverTaskHotPath::SdioHost,
-        super::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+    let frame = if len == 0 {
         super::driver_task::DriverFrameDescriptor {
             offset: 0,
             len: 0,
             flags,
-        },
+        }
+    } else if let Some(payload) = payload {
+        if payload.len() != len {
+            return None;
+        }
+        let Some(frame) =
+            super::driver_task::stage_driver_task_ring_frame(contract, payload, flags)
+        else {
+            return None;
+        };
+        frame
+    } else {
+        if len > super::driver_task::MAX_DRIVER_TASK_FRAME_BYTES {
+            return None;
+        }
+        let scratch = [0u8; super::driver_task::MAX_DRIVER_TASK_FRAME_BYTES];
+        let Some(frame) =
+            super::driver_task::stage_driver_task_ring_frame(contract, &scratch[..len], flags)
+        else {
+            return None;
+        };
+        frame
+    };
+    let mut command = super::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        super::driver_task::DriverTaskHotPath::SdioHost,
+        super::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        frame,
     );
     command.flags = flags;
-    command.aux0 = ((cmd as u32) << 16) | u32::from(flags);
-    command.aux1 = arg ^ len.min(u32::MAX as usize) as u32;
-    let Some(completion) = super::driver_task::run_driver_task_ring_service(contract, command)
-    else {
-        return false;
-    };
-    completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
-        && completion.result == 0
+    let runtime_flags = flags | sdio_runtime_response_flag(response);
+    command.aux0 = ((cmd as u32) << 16) | u32::from(runtime_flags);
+    command.aux1 = arg;
+    super::driver_task::run_driver_task_ring_service(contract, command)
 }
 
 #[cfg(not(feature = "kernel"))]
-fn sdio_owner_queue_ring_service_turn(_cmd: u16, _arg: u32, _len: usize, _flags: u16) -> bool {
-    false
+fn sdio_owner_queue_ring_service_completion(
+    _cmd: u16,
+    _arg: u32,
+    _len: usize,
+    _flags: u16,
+    _payload: Option<&[u8]>,
+    _response: ResponseType,
+) -> Option<super::driver_task::DriverTaskCompletionRecord> {
+    None
 }
 
 struct SdioHost {
@@ -24389,14 +24439,36 @@ impl SdioHost {
         let owner_sequence =
             self.bus_owner_queue
                 .push(cmd, arg, 0, SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC);
-        if super::driver_task::physical_pi_driver_task_only_owner_state_active()
-            && !sdio_owner_queue_ring_service_turn(cmd, arg, 0, SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC)
-        {
-            self.bus_owner_queue.complete(owner_sequence, false);
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] sdio owner-ring unavailable cmd={cmd} arg=0x{arg:08x} action=fail-closed"
-            ));
-            return Err(HalError::Unsupported("sdio-owner-ring-unavailable"));
+        if super::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            let completion = sdio_owner_queue_ring_service_completion(
+                cmd,
+                arg,
+                0,
+                SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC,
+                None,
+                response,
+            );
+            let Some(completion) = completion else {
+                self.bus_owner_queue.complete(owner_sequence, false);
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdio owner-ring unavailable cmd={cmd} arg=0x{arg:08x} action=fail-closed"
+                ));
+                return Err(HalError::Unsupported("sdio-owner-ring-unavailable"));
+            };
+            if completion.code == super::driver_task::DriverTaskCompletionCode::Fault.as_u16() {
+                self.bus_owner_queue.complete(owner_sequence, false);
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdio owner-ring fault cmd={cmd} arg=0x{arg:08x} detail=0x{:04x} action=fail-closed",
+                    completion.detail
+                ));
+                return Err(HalError::Unsupported("sdio-owner-ring-fault"));
+            }
+            let mut resp = [0u32; 4];
+            if !matches!(response, ResponseType::None) {
+                resp[0] = completion.result;
+            }
+            self.bus_owner_queue.complete(owner_sequence, true);
+            return Ok(resp);
         }
         let result = (|| {
             self.wait_inhibit_clear(matches!(response, ResponseType::ShortBusy))?;
@@ -24463,15 +24535,55 @@ impl SdioHost {
         let owner_sequence = self
             .bus_owner_queue
             .push(cmd, arg, buffer.len(), owner_flags);
-        if super::driver_task::physical_pi_driver_task_only_owner_state_active()
-            && !sdio_owner_queue_ring_service_turn(cmd, arg, buffer.len(), owner_flags)
-        {
-            self.bus_owner_queue.complete(owner_sequence, false);
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] sdio owner-ring unavailable cmd={cmd} arg=0x{arg:08x} len={} action=fail-closed",
-                buffer.len()
-            ));
-            return Err(HalError::Unsupported("sdio-owner-ring-unavailable"));
+        if super::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            let completion = sdio_owner_queue_ring_service_completion(
+                cmd,
+                arg,
+                buffer.len(),
+                owner_flags,
+                write.then_some(&buffer[..]),
+                ResponseType::Short,
+            );
+            let Some(completion) = completion else {
+                self.bus_owner_queue.complete(owner_sequence, false);
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdio owner-ring unavailable cmd={cmd} arg=0x{arg:08x} len={} action=fail-closed",
+                    buffer.len()
+                ));
+                return Err(HalError::Unsupported("sdio-owner-ring-unavailable"));
+            };
+            if completion.code == super::driver_task::DriverTaskCompletionCode::Fault.as_u16() {
+                self.bus_owner_queue.complete(owner_sequence, false);
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] sdio owner-ring fault cmd={cmd} arg=0x{arg:08x} len={} detail=0x{:04x} action=fail-closed",
+                    buffer.len(),
+                    completion.detail
+                ));
+                return Err(HalError::Unsupported("sdio-owner-ring-fault"));
+            }
+            if !write {
+                if completion.code
+                    != super::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
+                    || completion.frame.len as usize != buffer.len()
+                {
+                    self.bus_owner_queue.complete(owner_sequence, false);
+                    return Err(HalError::Unsupported("sdio-owner-ring-read-frame"));
+                }
+                let Some(bytes) = super::driver_task::driver_task_ring_frame_bytes(
+                    super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+                    completion.frame,
+                ) else {
+                    self.bus_owner_queue.complete(owner_sequence, false);
+                    return Err(HalError::Unsupported("sdio-owner-ring-read-frame"));
+                };
+                if bytes.len() != buffer.len() {
+                    self.bus_owner_queue.complete(owner_sequence, false);
+                    return Err(HalError::Unsupported("sdio-owner-ring-read-frame"));
+                }
+                buffer.copy_from_slice(bytes);
+            }
+            self.bus_owner_queue.complete(owner_sequence, true);
+            return Ok(());
         }
         let result = (|| {
             self.clear_last_data_wait_diag();

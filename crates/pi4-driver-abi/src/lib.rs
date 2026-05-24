@@ -11,6 +11,40 @@ pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 1;
 /// Command `aux0` value used to submit a runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_AUX: u32 = 0x4452_494e;
+/// Command `aux0` value used to ask a linked runtime to instantiate its engine state.
+pub const DRIVER_RUNTIME_ENGINE_INIT_AUX: u32 = 0x454e_474e;
+/// Local-seat USB/HDMI init command used by the root ring client.
+pub const DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX: u32 = 0x4c53_494e;
+/// GENET/CYW43 network init command used by the root ring client.
+pub const DRIVER_RUNTIME_NET_INIT_AUX: u32 = 0x494e_4954;
+/// PCIe runtime command operation: read one 32-bit xHCI/VL805 register.
+pub const DRIVER_RUNTIME_PCIE_OP_PORT_READ: u16 = 1;
+/// PCIe runtime command operation: write one 32-bit xHCI/VL805 register.
+pub const DRIVER_RUNTIME_PCIE_OP_PORT_WRITE: u16 = 2;
+/// PCIe runtime command operation: flush posted writes.
+pub const DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH: u16 = 3;
+/// SDIO runtime command flag: command has an SDIO data phase.
+pub const DRIVER_RUNTIME_SDIO_FLAG_DATA: u16 = 1 << 0;
+/// SDIO runtime command flag: data phase writes root-staged bytes to the card.
+pub const DRIVER_RUNTIME_SDIO_FLAG_WRITE: u16 = 1 << 1;
+/// SDIO runtime command flag: transfer should suppress noisy diagnostics.
+pub const DRIVER_RUNTIME_SDIO_FLAG_QUIET: u16 = 1 << 2;
+/// SDIO runtime command flag: command expects no response.
+pub const DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE: u16 = 1 << 3;
+/// SDIO runtime command flag: command expects an OCR/R4-style response.
+pub const DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR: u16 = 1 << 4;
+/// SDIO runtime command flag: command expects a short response.
+pub const DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT: u16 = 1 << 5;
+/// SDIO runtime command flag: command expects a short-busy response.
+pub const DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY: u16 = 1 << 6;
+/// SDIO runtime command flag: command expects a long response.
+pub const DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG: u16 = 1 << 7;
+/// Pixel format tag for 32-bit xRGB/BGR framebuffer words.
+pub const DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888: u32 = 1;
+/// Pixel format tag for 24-bit RGB/BGR framebuffer bytes.
+pub const DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888: u32 = 2;
+/// Fixed driver-local virtual base used when root maps the HDMI framebuffer.
+pub const DRIVER_RUNTIME_FRAMEBUFFER_VADDR: u64 = 0x7100_0000;
 /// Maximum MMIO page descriptors carried in one init descriptor.
 pub const DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES: usize = 16;
 /// Maximum DMA page descriptors carried in one init descriptor.
@@ -127,10 +161,20 @@ impl DriverRuntimeFramebufferDescriptor {
     /// Returns true when the geometry is bounded and usable.
     #[must_use]
     pub const fn valid(self) -> bool {
+        let bytes_per_pixel = match self.format {
+            DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888 => 4,
+            DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888 => 3,
+            _ => 0,
+        };
+        let min_pitch = self.width.saturating_mul(bytes_per_pixel);
         self.vaddr != 0
+            && self.paddr != 0
+            && self.vaddr >= DRIVER_RUNTIME_FRAMEBUFFER_VADDR
             && self.width != 0
             && self.height != 0
             && self.pitch != 0
+            && bytes_per_pixel != 0
+            && self.pitch >= min_pitch
             && self.pitch <= 16 * 1024
             && self.height <= 4096
     }
@@ -392,5 +436,34 @@ mod tests {
 
         assert!(descriptor.valid_for_resources(HOT_PATH_PCIE_ROOT, 1 << 5, 2, 0, 1));
         assert!(!descriptor.valid_for_resources(HOT_PATH_PCIE_ROOT, 1 << 5, 1, 0, 1));
+    }
+
+    #[test]
+    fn hdmi_ready_requires_framebuffer_flag_and_geometry() {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = HOT_PATH_HDMI_TEXT;
+        descriptor.role_bit = 1 << 2;
+        descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = DriverRuntimePageDescriptor::new(0x4000_0000);
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 640,
+            height: 480,
+            pitch: 640 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        assert!(!descriptor.hdmi_ready());
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+        assert!(descriptor.hdmi_ready());
+        descriptor.framebuffer.pitch = 0;
+        assert!(!descriptor.hdmi_ready());
+        descriptor.framebuffer.pitch = 640 * 4;
+        descriptor.framebuffer.format = 0;
+        assert!(!descriptor.hdmi_ready());
+        descriptor.framebuffer.format = DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888;
+        descriptor.framebuffer.vaddr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR - 0x1000;
+        assert!(!descriptor.hdmi_ready());
     }
 }

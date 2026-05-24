@@ -264,13 +264,25 @@ fn pcie_owner_queue_log_non_acceptance_once() {
 }
 
 #[cfg(feature = "kernel")]
-fn pcie_owner_queue_ring_service_turn(op: u16, stage: u16, offset: usize) -> bool {
+fn pcie_owner_queue_ring_service_completion(
+    op: u16,
+    stage: u16,
+    offset: usize,
+    value: u32,
+) -> Option<super::driver_task::DriverTaskCompletionRecord> {
     let contract = super::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT;
     let _ = super::driver_task::register_pi4_bus_ring_service(contract);
-    let frame = super::driver_task::DriverFrameDescriptor {
-        offset: 0,
-        len: 0,
-        flags: 0,
+    let frame = if op == PCIE_OWNER_OP_PORT_WRITE {
+        match super::driver_task::stage_driver_task_ring_frame(contract, &value.to_le_bytes(), 0) {
+            Some(frame) => frame,
+            None => return None,
+        }
+    } else {
+        super::driver_task::DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        }
     };
     let mut command = super::driver_task::DriverTaskCommandRecord::pi4_hot_path(
         0,
@@ -280,18 +292,48 @@ fn pcie_owner_queue_ring_service_turn(op: u16, stage: u16, offset: usize) -> boo
     );
     command.aux0 = ((op as u32) << 16) | u32::from(stage);
     command.aux1 = offset as u32;
-    command.flags = PCIE_OWNER_QUEUE_FLAGS;
-    command.frame.flags = PCIE_OWNER_QUEUE_FLAGS;
-    let Some(completion) = super::driver_task::run_driver_task_ring_service(contract, command)
-    else {
-        return false;
-    };
-    completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
-        && completion.result == 0
+    if !physical_pi_pcie_owner_ring_required() {
+        command.flags = PCIE_OWNER_QUEUE_FLAGS;
+        command.frame.flags = PCIE_OWNER_QUEUE_FLAGS;
+    }
+    super::driver_task::run_driver_task_ring_service(contract, command)
+}
+
+#[cfg(feature = "kernel")]
+fn pcie_owner_queue_ring_service_turn(op: u16, stage: u16, offset: usize, value: u32) -> bool {
+    pcie_owner_queue_ring_service_completion(op, stage, offset, value).is_some_and(|completion| {
+        completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn pcie_owner_queue_runtime_read(offset: usize) -> Option<u32> {
+    pcie_owner_queue_ring_service_completion(PCIE_OWNER_OP_PORT_READ, 0, offset, 0)
+        .filter(|completion| {
+            completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        })
+        .map(|completion| completion.result)
+}
+
+#[cfg(feature = "kernel")]
+fn pcie_owner_queue_runtime_write(op: u16, stage: u16, offset: usize, value: u32) -> bool {
+    pcie_owner_queue_ring_service_completion(op, stage, offset, value).is_some_and(|completion| {
+        completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+    })
 }
 
 #[cfg(not(feature = "kernel"))]
-fn pcie_owner_queue_ring_service_turn(_op: u16, _stage: u16, _offset: usize) -> bool {
+fn pcie_owner_queue_ring_service_turn(_op: u16, _stage: u16, _offset: usize, _value: u32) -> bool {
+    false
+}
+
+#[cfg(not(feature = "kernel"))]
+fn pcie_owner_queue_runtime_read(_offset: usize) -> Option<u32> {
+    None
+}
+
+#[cfg(not(feature = "kernel"))]
+fn pcie_owner_queue_runtime_write(_op: u16, _stage: u16, _offset: usize, _value: u32) -> bool {
     false
 }
 
@@ -312,7 +354,7 @@ fn pcie_owner_queue_submit(op: u16, stage: u16, offset: usize, value: u32) -> bo
     PCIE_OWNER_QUEUE_LAST_OFFSET.store(offset, Ordering::Release);
     PCIE_OWNER_QUEUE_LAST_VALUE.store(value as usize, Ordering::Release);
 
-    let ring_serviced = pcie_owner_queue_ring_service_turn(op, stage, offset);
+    let ring_serviced = pcie_owner_queue_ring_service_turn(op, stage, offset, value);
     if ring_serviced {
         PCIE_OWNER_QUEUE_RING_SERVICED.fetch_add(1, Ordering::AcqRel);
         PCIE_OWNER_QUEUE_TAIL.store(submitted % PCIE_OWNER_QUEUE_DEPTH, Ordering::Release);
@@ -597,13 +639,17 @@ pub fn vl805_xhci_port_read32(mmio_virt: usize, offset: usize, port: u8, max_por
         boot_log::force_uart_line("[local-seat] vl805 xhci port read rejected reason=no-mmio");
         return 0;
     };
-    if !pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_READ, 0, offset, 0)
-        && physical_pi_pcie_owner_ring_required()
-    {
+    if physical_pi_pcie_owner_ring_required() {
+        if let Some(value) = pcie_owner_queue_runtime_read(offset) {
+            return value;
+        }
         boot_log::force_uart_line(
             "[local-seat] vl805 xhci port read rejected reason=pcie-owner-ring-unavailable action=fail-closed",
         );
         return 0;
+    }
+    if !pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_READ, 0, offset, 0) {
+        pcie_owner_queue_log_non_acceptance_once();
     }
     fence(Ordering::SeqCst);
     let ptr = addr as *const u32;
@@ -640,13 +686,17 @@ pub fn vl805_xhci_port_write32(
         boot_log::force_uart_line("[local-seat] vl805 xhci port write rejected reason=no-mmio");
         return;
     };
-    if !pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_WRITE, 0, offset, value)
-        && physical_pi_pcie_owner_ring_required()
-    {
+    if physical_pi_pcie_owner_ring_required() {
+        if pcie_owner_queue_runtime_write(PCIE_OWNER_OP_PORT_WRITE, 0, offset, value) {
+            return;
+        }
         boot_log::force_uart_line(
             "[local-seat] vl805 xhci port write rejected reason=pcie-owner-ring-unavailable action=fail-closed",
         );
         return;
+    }
+    if !pcie_owner_queue_submit(PCIE_OWNER_OP_PORT_WRITE, 0, offset, value) {
+        pcie_owner_queue_log_non_acceptance_once();
     }
     fence(Ordering::SeqCst);
     let ptr = addr as *mut u32;
@@ -779,13 +829,17 @@ pub fn vl805_xhci_flush_posted_write(
     stage: u16,
 ) -> bool {
     let role = vl805_xhci_flush_stage_role(stage, offset);
-    if !pcie_owner_queue_submit(PCIE_OWNER_OP_POSTED_WRITE_FLUSH, stage, offset, value)
-        && physical_pi_pcie_owner_ring_required()
-    {
+    if physical_pi_pcie_owner_ring_required() {
+        if pcie_owner_queue_runtime_write(PCIE_OWNER_OP_POSTED_WRITE_FLUSH, stage, offset, value) {
+            return true;
+        }
         boot_log::force_uart_line(
             "[local-seat] vl805 posted-write flush rejected reason=pcie-owner-ring-unavailable action=fail-closed",
         );
         return false;
+    }
+    if !pcie_owner_queue_submit(PCIE_OWNER_OP_POSTED_WRITE_FLUSH, stage, offset, value) {
+        pcie_owner_queue_log_non_acceptance_once();
     }
     let config_page = PCIE_EXT_DATA_PAGE_VIRT.load(Ordering::Acquire);
     let index_page = PCIE_EXT_INDEX_PAGE_VIRT.load(Ordering::Acquire);

@@ -13,7 +13,12 @@
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use heapless::Deque;
-use pi4_driver_abi::{DriverRuntimeInitDescriptor, DRIVER_RUNTIME_INIT_AUX};
+#[cfg(feature = "kernel")]
+use pi4_driver_abi::{
+    DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
+    DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+    DRIVER_RUNTIME_INIT_AUX,
+};
 
 /// Hardware driver instance covered by a scheduling contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1138,12 +1143,55 @@ pub const PI4_DRIVER_TASK_RUNTIME_IMAGE_SPEC_COUNT: usize = 7;
 static DRIVER_RUNTIME_PAYLOAD_PTR: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_RUNTIME_PAYLOAD_LEN: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static HDMI_RUNTIME_FRAMEBUFFER_PADDR: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static HDMI_RUNTIME_FRAMEBUFFER_WIDTH: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static HDMI_RUNTIME_FRAMEBUFFER_HEIGHT: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static HDMI_RUNTIME_FRAMEBUFFER_PITCH: AtomicUsize = AtomicUsize::new(0);
 
 /// Publish the boot payload that may contain linked Pi 4 driver runtime images.
 #[cfg(feature = "kernel")]
 pub fn publish_driver_runtime_payload(payload: &'static [u8]) {
     DRIVER_RUNTIME_PAYLOAD_PTR.store(payload.as_ptr() as usize, Ordering::Release);
     DRIVER_RUNTIME_PAYLOAD_LEN.store(payload.len(), Ordering::Release);
+}
+
+/// Publish bootloader-discovered framebuffer metadata for the linked HDMI runtime.
+#[cfg(feature = "kernel")]
+pub fn publish_hdmi_runtime_framebuffer_hint(
+    paddr: usize,
+    width: usize,
+    height: usize,
+    pitch: usize,
+) {
+    HDMI_RUNTIME_FRAMEBUFFER_PADDR.store(paddr, Ordering::Release);
+    HDMI_RUNTIME_FRAMEBUFFER_WIDTH.store(width, Ordering::Release);
+    HDMI_RUNTIME_FRAMEBUFFER_HEIGHT.store(height, Ordering::Release);
+    HDMI_RUNTIME_FRAMEBUFFER_PITCH.store(pitch, Ordering::Release);
+}
+
+/// Return the bootloader framebuffer metadata staged for the linked HDMI runtime.
+#[cfg(feature = "kernel")]
+pub fn hdmi_runtime_framebuffer_hint() -> Option<DriverRuntimeFramebufferDescriptor> {
+    let paddr = HDMI_RUNTIME_FRAMEBUFFER_PADDR.load(Ordering::Acquire);
+    let width = HDMI_RUNTIME_FRAMEBUFFER_WIDTH.load(Ordering::Acquire);
+    let height = HDMI_RUNTIME_FRAMEBUFFER_HEIGHT.load(Ordering::Acquire);
+    let pitch = HDMI_RUNTIME_FRAMEBUFFER_PITCH.load(Ordering::Acquire);
+    if paddr == 0 || width == 0 || height == 0 || pitch == 0 {
+        return None;
+    }
+    let descriptor = DriverRuntimeFramebufferDescriptor {
+        vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+        paddr: paddr as u64,
+        width: width as u32,
+        height: height as u32,
+        pitch: pitch as u32,
+        format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+    };
+    descriptor.valid().then_some(descriptor)
 }
 
 #[cfg(feature = "kernel")]

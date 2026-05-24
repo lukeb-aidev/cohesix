@@ -32,19 +32,21 @@ use crate::hal::{HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetStage, MAX_FRAME_LEN,
 };
+use pi4_driver_abi::DRIVER_RUNTIME_NET_INIT_AUX;
 
 const GENET_DRIVER_TASK_MAC: EthernetAddress =
     EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x31]);
 const CYW43_DRIVER_TASK_MAC: EthernetAddress =
     EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x32]);
 const DRIVER_TASK_NET_STATUS: &str = "driver-task-ring-client";
-const DRIVER_TASK_NET_AUX_INIT: u32 = 0x494e_4954;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
+static GENET_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
+static CYW43_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static GENET_RUNTIME: Mutex<Option<BcmGenetDevice>> = Mutex::new(None);
 static CYW43_RUNTIME: Mutex<Option<Cyw43NetDevice>> = Mutex::new(None);
 static NET_RUNTIME_INIT_LEASE: Mutex<Option<NetRuntimeInitLease>> = Mutex::new(None);
@@ -146,6 +148,43 @@ fn init_runtime_via_driver_task<H>(
 where
     H: Hardware<Error = HalError>,
 {
+    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+            contract,
+            hot_path.as_u32() as usize,
+            runtime_ring_service,
+        );
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            hot_path,
+            DriverTaskBudgetGrant::from_contract(contract),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_NET_INIT_AUX;
+        let initialized = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+            .is_some_and(|completion| {
+                completion.code == DriverTaskCompletionCode::Progress.as_u16()
+                    && completion.result == 1
+            });
+        if initialized {
+            match hot_path {
+                DriverTaskHotPath::GenetNic => {
+                    GENET_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+                }
+                DriverTaskHotPath::Cyw43Wifi => {
+                    CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+        return Err(DriverTaskNetError::RuntimeInit(hot_path.as_str()));
+    }
+
     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
         contract,
         hot_path.as_u32() as usize,
@@ -167,7 +206,7 @@ where
             flags: 0,
         },
     );
-    command.aux0 = DRIVER_TASK_NET_AUX_INIT;
+    command.aux0 = DRIVER_RUNTIME_NET_INIT_AUX;
     let result = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
         .is_some_and(|completion| {
             completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
@@ -216,7 +255,7 @@ pub fn service_runtime_command(
     hot_path: DriverTaskHotPath,
     command: DriverTaskCommandRecord,
 ) -> DriverTaskCompletionRecord {
-    if command.aux0 == DRIVER_TASK_NET_AUX_INIT {
+    if command.aux0 == DRIVER_RUNTIME_NET_INIT_AUX {
         return service_runtime_init_command(hot_path, command);
     }
     match hot_path {
@@ -318,8 +357,14 @@ fn service_cyw43(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord
 
 fn runtime_ready(hot_path: DriverTaskHotPath) -> bool {
     match hot_path {
-        DriverTaskHotPath::GenetNic => GENET_RUNTIME.lock().is_some(),
-        DriverTaskHotPath::Cyw43Wifi => CYW43_RUNTIME.lock().is_some(),
+        DriverTaskHotPath::GenetNic => {
+            GENET_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0
+                || GENET_RUNTIME.lock().is_some()
+        }
+        DriverTaskHotPath::Cyw43Wifi => {
+            CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0
+                || CYW43_RUNTIME.lock().is_some()
+        }
         _ => false,
     }
 }
@@ -793,7 +838,7 @@ mod tests {
                 flags: 0,
             },
         );
-        command.aux0 = DRIVER_TASK_NET_AUX_INIT;
+        command.aux0 = DRIVER_RUNTIME_NET_INIT_AUX;
 
         let completion = unsafe {
             runtime_ring_service(DriverTaskHotPath::Cyw43Wifi.as_u32() as usize, command)

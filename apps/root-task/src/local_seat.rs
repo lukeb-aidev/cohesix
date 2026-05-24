@@ -46,6 +46,13 @@ use core::sync::atomic::{AtomicBool, Ordering};
     target_arch = "aarch64",
     target_os = "none"
 ))]
+use pi4_driver_abi::DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 use spin::Mutex;
 
 #[cfg(all(
@@ -76,7 +83,7 @@ static LOCAL_SEAT_RUNTIME_INIT_LEASE: Mutex<Option<LocalSeatRuntimeInitLease>> =
     target_arch = "aarch64",
     target_os = "none"
 ))]
-const LOCAL_SEAT_AUX_INIT: u32 = 0x4c53_494e;
+static LINKED_LOCAL_SEAT_RUNTIME_ATTACHED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(
     feature = "kernel",
@@ -978,7 +985,8 @@ impl LocalSeatRuntime {
     target_os = "none"
 ))]
 fn local_seat_driver_runtime_attached() -> bool {
-    LOCAL_SEAT_DRIVER_RUNTIME.lock().is_some()
+    LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
+        || LOCAL_SEAT_DRIVER_RUNTIME.lock().is_some()
 }
 
 #[cfg(all(
@@ -988,6 +996,9 @@ fn local_seat_driver_runtime_attached() -> bool {
     target_os = "none"
 ))]
 fn local_seat_driver_runtime_keyboard_attached() -> bool {
+    if LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire) {
+        return true;
+    }
     LOCAL_SEAT_DRIVER_RUNTIME
         .lock()
         .as_ref()
@@ -1077,6 +1088,59 @@ fn init_local_seat_driver_runtime_on_service(
         crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
         display_runtime_ring_service_driver_task,
     );
+    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        let mut usb_command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(driver_task_contract()),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        usb_command.aux0 = DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+        let usb_ok = crate::hal::driver_task::run_driver_task_ring_service(
+            driver_task_contract(),
+            usb_command,
+        )
+        .is_some_and(|completion| {
+            completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+        });
+
+        let mut hdmi_command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(
+                crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            ),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        hdmi_command.aux0 = DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+        let hdmi_ok = crate::hal::driver_task::run_driver_task_ring_service(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            hdmi_command,
+        )
+        .is_some_and(|completion| {
+            completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+        });
+
+        if usb_ok && hdmi_ok {
+            LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.store(true, Ordering::Release);
+            let _ = hints;
+            let _ = hal;
+            return Ok(());
+        }
+        return Err(LocalSeatBackendError::RuntimeInit(
+            "local-seat-linked-runtime-init",
+        ));
+    }
     *LOCAL_SEAT_RUNTIME_INIT_LEASE.lock() = Some(LocalSeatRuntimeInitLease {
         hal_ptr: hal as *mut crate::hal::KernelHal<'_> as usize,
         hints,
@@ -1091,7 +1155,7 @@ fn init_local_seat_driver_runtime_on_service(
             flags: 0,
         },
     );
-    command.aux0 = LOCAL_SEAT_AUX_INIT;
+    command.aux0 = DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
     let ok = crate::hal::driver_task::run_driver_task_ring_service(driver_task_contract(), command)
         .is_some_and(|completion| {
             completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
@@ -1214,7 +1278,7 @@ unsafe fn usb_keyboard_runtime_ring_service_driver_task(
         target_os = "none"
     ))]
     {
-        if command.aux0 == LOCAL_SEAT_AUX_INIT {
+        if command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX {
             let Some(lease) = LOCAL_SEAT_RUNTIME_INIT_LEASE.lock().take() else {
                 return crate::hal::driver_task::DriverTaskCompletionRecord::fault(
                     command.sequence,

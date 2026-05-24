@@ -4385,6 +4385,18 @@ fn bootstrap<P: Platform>(
         consumed_slots = measured_consumed;
     }
 
+    let hardware = generated::hardware_config();
+    if hardware.local_seat.enabled {
+        if let Some(hint) = infer_pi4_uefi_framebuffer_hint(extra_bytes, extra_range.clone()) {
+            crate::hal::driver_task::publish_hdmi_runtime_framebuffer_hint(
+                hint.paddr,
+                hint.width,
+                hint.height,
+                hint.pitch,
+            );
+        }
+    }
+
     let empty_start = bootinfo_ref.empty_first_slot();
     let empty_end = bootinfo_ref.empty_last_slot_excl();
     let mut cnode_line = heapless::String::<160>::new();
@@ -4434,7 +4446,6 @@ fn bootstrap<P: Platform>(
     );
     boot_log::force_uart_line(driver_task_line.as_str());
 
-    let hardware = generated::hardware_config();
     // Reserve the low mailbox/GPIO pages before mid/high Pi4 MMIO mappings
     // advance the device-untyped cursor. Defer SDHCI until after UART so the
     // FE300000 page cannot consume past the FE215000 UART window first.
