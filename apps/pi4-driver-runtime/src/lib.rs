@@ -18,7 +18,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_RGB888, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
     DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
     DRIVER_RUNTIME_PCIE_OP_PORT_READ, DRIVER_RUNTIME_PCIE_OP_PORT_WRITE,
-    DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH, DRIVER_RUNTIME_SDIO_FLAG_DATA,
+    DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+    DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_SDIO_FLAG_DATA,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR, DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_FLAG_WRITE, HOT_PATH_CYW43_WIFI,
@@ -31,7 +35,11 @@ pub const DRIVER_TASK_CHILD_COMMAND_SLOT: sel4_sys::seL4_CPtr = 2;
 /// Driver-local fixed virtual address for the command/completion ring.
 pub const DRIVER_TASK_RING_VADDR: usize = 0x7000_0000;
 /// First fixed driver-local virtual address reserved for explicit MMIO pages.
-pub const DRIVER_TASK_DEVICE_MMIO_VADDR: usize = 0x7000_4000;
+pub const DRIVER_TASK_DEVICE_MMIO_VADDR: usize = 0x7020_0000;
+/// First fixed driver-local virtual address reserved for runtime-owned DMA pages.
+pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7050_0000;
+/// First fixed driver-local virtual address reserved for shared control pages.
+pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x7060_0000;
 /// Offset of the completion record in the command/completion ring page.
 pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
 /// Offset of the shared payload area in the command/completion ring page.
@@ -114,7 +122,7 @@ const SDHCI_INT_DATA_END_BIT: u32 = 1 << 22;
 const SDHCI_INT_COMMAND_DATA_CLEAR_MASK: u32 = u32::MAX;
 const SDHCI_CMD_WAIT_LOOPS: usize = 100_000;
 
-const USB_REQUIRED_MMIO_PAGES: u16 = 2;
+const USB_REQUIRED_MMIO_PAGES: u16 = 16;
 const USB_REQUIRED_DMA_PAGES: u16 = 16;
 const USB_REQUIRED_SHARED_PAGES: u16 = 2;
 const HDMI_REQUIRED_MMIO_PAGES: u16 = 1;
@@ -500,35 +508,67 @@ fn mark_engine_initialized(hot_path: u32) -> bool {
 }
 
 fn descriptor_resources_ready(descriptor: DriverRuntimeInitDescriptor, hot_path: u32) -> bool {
+    let mmio_pages = descriptor.resource_pages_or_count(
+        DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+        descriptor.mmio_page_count,
+    );
+    let dma_pages = descriptor
+        .resource_pages_or_count(DRIVER_RUNTIME_RESOURCE_KIND_DMA, descriptor.dma_page_count);
+    let shared_pages = descriptor.resource_pages_or_count(
+        DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+        descriptor.shared_page_count,
+    );
     match hot_path {
         HOT_PATH_USB_KEYBOARD => {
-            descriptor.mmio_page_count >= USB_REQUIRED_MMIO_PAGES
-                && descriptor.dma_page_count >= USB_REQUIRED_DMA_PAGES
-                && descriptor.shared_page_count >= USB_REQUIRED_SHARED_PAGES
+            mmio_pages >= USB_REQUIRED_MMIO_PAGES
+                && dma_pages >= USB_REQUIRED_DMA_PAGES
+                && shared_pages >= USB_REQUIRED_SHARED_PAGES
+                && descriptor.has_resource_range(
+                    DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+                    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+                )
+                && descriptor.has_bus_link_to(HOT_PATH_PCIE_ROOT)
         }
         HOT_PATH_HDMI_TEXT => {
-            descriptor.mmio_page_count >= HDMI_REQUIRED_MMIO_PAGES
-                && descriptor.dma_page_count >= HDMI_REQUIRED_DMA_PAGES
-                && descriptor.shared_page_count >= HDMI_REQUIRED_SHARED_PAGES
+            mmio_pages >= HDMI_REQUIRED_MMIO_PAGES
+                && dma_pages >= HDMI_REQUIRED_DMA_PAGES
+                && shared_pages >= HDMI_REQUIRED_SHARED_PAGES
                 && descriptor.hdmi_ready()
         }
         HOT_PATH_GENET_NIC => {
-            descriptor.mmio_page_count >= GENET_REQUIRED_MMIO_PAGES
-                && descriptor.dma_page_count >= GENET_REQUIRED_DMA_PAGES
-                && descriptor.shared_page_count >= GENET_REQUIRED_SHARED_PAGES
+            mmio_pages >= GENET_REQUIRED_MMIO_PAGES
+                && dma_pages >= GENET_REQUIRED_DMA_PAGES
+                && shared_pages >= GENET_REQUIRED_SHARED_PAGES
+                && descriptor.has_resource_range(
+                    DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+                    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+                )
         }
         HOT_PATH_CYW43_WIFI => {
-            descriptor.dma_page_count >= CYW43_REQUIRED_DMA_PAGES
-                && descriptor.shared_page_count >= CYW43_REQUIRED_SHARED_PAGES
+            dma_pages >= CYW43_REQUIRED_DMA_PAGES
+                && shared_pages >= CYW43_REQUIRED_SHARED_PAGES
+                && descriptor.has_resource_range(
+                    DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+                    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+                )
+                && descriptor.has_bus_link_to(HOT_PATH_SDIO_HOST)
         }
         HOT_PATH_SDIO_HOST => {
-            descriptor.mmio_page_count >= SDIO_REQUIRED_MMIO_PAGES
-                && descriptor.dma_page_count >= SDIO_REQUIRED_DMA_PAGES
-                && descriptor.shared_page_count >= SDIO_REQUIRED_SHARED_PAGES
+            mmio_pages >= SDIO_REQUIRED_MMIO_PAGES
+                && dma_pages >= SDIO_REQUIRED_DMA_PAGES
+                && shared_pages >= SDIO_REQUIRED_SHARED_PAGES
+                && descriptor.has_resource_range(
+                    DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+                    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+                )
         }
         HOT_PATH_PCIE_ROOT => {
-            descriptor.mmio_page_count >= PCIE_REQUIRED_MMIO_PAGES
-                && descriptor.shared_page_count >= PCIE_REQUIRED_SHARED_PAGES
+            mmio_pages >= PCIE_REQUIRED_MMIO_PAGES
+                && shared_pages >= PCIE_REQUIRED_SHARED_PAGES
+                && descriptor.has_resource_range(
+                    DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+                    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+                )
         }
         _ => false,
     }
@@ -1459,8 +1499,19 @@ pub fn runtime_main(task_key: usize) -> ! {
 mod tests {
     use super::*;
     use pi4_driver_abi::{
-        DriverRuntimeFramebufferDescriptor, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
-        DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
+        DriverRuntimeBusLinkDescriptor, DriverRuntimeFramebufferDescriptor,
+        DriverRuntimeResourceRangeDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+        DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+        DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
+        DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+        DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+        DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+        DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+        DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+        DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
     };
 
     fn test_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -1542,6 +1593,88 @@ mod tests {
         for index in 0..usize::from(shared_pages) {
             descriptor.shared_pages[index] =
                 pi4_driver_abi::DriverRuntimePageDescriptor::new(0x4000_0000 + index * 0x1000);
+        }
+        let mut range_index = 0usize;
+        if mmio_pages != 0 {
+            descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED;
+            descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+                DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+                DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+                match hot_path {
+                    HOT_PATH_USB_KEYBOARD => DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+                    HOT_PATH_GENET_NIC => DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+                    HOT_PATH_SDIO_HOST => DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+                    HOT_PATH_PCIE_ROOT => DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+                    _ => pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_GENERIC,
+                },
+                DRIVER_TASK_DEVICE_MMIO_VADDR as u64,
+                0x1000_0000,
+                u64::from(mmio_pages) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                mmio_pages,
+                0,
+            );
+            range_index += 1;
+        }
+        if dma_pages != 0 {
+            descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+                DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+                DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                DRIVER_TASK_DMA_BUFFER_VADDR as u64,
+                0x2000_0000,
+                u64::from(dma_pages) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                dma_pages,
+                0,
+            );
+            range_index += 1;
+        }
+        if shared_pages != 0 {
+            descriptor.resource_ranges[range_index] = DriverRuntimeResourceRangeDescriptor::new(
+                DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+                DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+                if hot_path == HOT_PATH_CYW43_WIFI {
+                    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL
+                } else {
+                    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL
+                },
+                DRIVER_TASK_SHARED_BUFFER_VADDR as u64,
+                0x4000_0000,
+                u64::from(shared_pages) * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+                shared_pages,
+                0,
+            );
+            range_index += 1;
+        }
+        descriptor.resource_range_count = range_index as u16;
+        match hot_path {
+            HOT_PATH_USB_KEYBOARD => {
+                descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
+                descriptor.bus_link_count = 1;
+                descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+                    HOT_PATH_PCIE_ROOT,
+                    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+                    0,
+                    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as u32,
+                    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+                );
+            }
+            HOT_PATH_CYW43_WIFI => {
+                descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
+                descriptor.bus_link_count = 1;
+                descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+                    HOT_PATH_SDIO_HOST,
+                    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+                    0,
+                    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as u32,
+                    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+                );
+            }
+            _ => {}
         }
         descriptor
     }

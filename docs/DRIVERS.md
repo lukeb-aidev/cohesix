@@ -226,7 +226,10 @@ flowchart TD
 The diagram is intentionally split between runtime transport and owner-state
 proof. Serial is acceptance-eligible once fresh Pi evidence proves the linked
 path. The other Pi 4 runtime images remain non-acceptance until their hardware
-state machines make real progress from driver-local state on Pi hardware.
+state machines make real progress from driver-local state on Pi hardware. The
+transport boundary is no longer a one-page smoke loader: root now maps bounded
+multi-page `PT_LOAD` runtime images and semantic MMIO/DMA/shared resource ranges
+before submitting the pointer-free init descriptor.
 
 ### Driver-Task Scheduling Contracts
 
@@ -280,10 +283,10 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 | Contract | Role | Manifest affinity target | Current VSpace | Current hot path |
 | --- | --- | --- | --- | --- |
 | `serial` | serial console | `serial` | isolated child VSpace using the linked `pi4-driver-serial` image; emergency early UART remains root-owned | linked image services the fixed-ring smoke path plus bounded mini-UART init/RX/TX; generated spec is acceptance-eligible, but fresh Pi proof is still required |
-| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image requires declared xHCI/MMIO, DMA, and shared pages before engine init and can decode a bounded boot-keyboard report carried over the ring; xHCI enumeration, event rings, and HID polling still need Pi hardware completion |
+| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image requires a semantic xHCI MMIO range, DMA/shared pages, and a pointer-free USB-to-PCIe bus link before engine init; the manifest now budgets 16 xHCI MMIO pages instead of the earlier 2-page stub and the runtime can decode a bounded boot-keyboard report carried over the ring; xHCI enumeration, event rings, and HID polling still need Pi hardware completion |
 | `hdmi-text` | HDMI text mirror | `hdmi-text` | isolated child VSpace using the linked `pi4-driver-hdmi` image | linked image requires framebuffer metadata plus declared resources and renders bounded text frames directly into the mapped framebuffer |
 | `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | isolated child VSpace using the linked `pi4-driver-genet` image | linked image requires declared GENET MMIO/DMA/shared pages before engine init and accepts bounded TX frames over the fixed ring; descriptor-ring RX/TX hardware programming still needs Pi proof and completion |
-| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image requires declared DMA/shared buffers before engine init and accepts bounded TX frames over the fixed ring; firmware, SDPCM, WPA/EAPOL, and SDIO bus-link ownership still need Pi proof and completion |
+| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image requires declared DMA/shared buffers plus a pointer-free CYW43-to-SDIO bus link before engine init and accepts bounded TX frames over the fixed ring; firmware, SDPCM, WPA/EAPOL, and full SDIO bus sequencing still need Pi proof and completion |
 | `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
 | `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | linked image requires declared SDHCI MMIO/DMA/shared pages, validates primitive CMD/response/data flags, and has a target-side bounded SDHCI single-frame command/data turn; full CYW43 bus-link sequencing still needs Pi proof and completion |
@@ -330,8 +333,11 @@ object, child CNode, command endpoint, notification, IPC frame, stack frame,
 ring frame, and fault endpoint slot; installs a restricted child CSpace; binds
 the remote IPC buffer; applies the contract priority; applies
 manifest-selected per-driver affinity through `seL4_TCB_SetAffinity`; binds the
-notification; maps the linked runtime image plus declared runtime regions; and
-resumes the TCB. The physical Pi linked-runtime entry dispatches only
+notification; maps every bounded `PT_LOAD` page from the linked runtime ELF plus
+declared runtime regions; and resumes the TCB. Generated `code-pages=64`
+currently covers the observed ~35 KiB runtime images and the 64 KiB linker
+alignment gaps between RO, RX, and RW load segments. The physical Pi
+linked-runtime entry dispatches only
 fixed-layout command/completion records; callback-pointer dispatch is compiled
 out for that profile. QEMU smoke can additionally allocate isolated VSpaces and
 map the minimal trampoline transport set, but that remains transport proof
@@ -342,12 +348,12 @@ pointer-free `DriverRuntimeInitDescriptor` from the shared `pi4-driver-abi`
 crate into the command ring and submits a runtime-init command. That descriptor
 contains the hot-path id, role bit, fixed MMIO/DMA/shared-buffer virtual bases,
 the physical page list for mapped MMIO, runtime-owned DMA pages and shared
-pages, bus-address alias policy, framebuffer metadata, IRQ descriptors, and
-bus-link descriptors for split owners such as USB/PCIe and CYW43/SDIO. Runtime
-init is deliberately non-acceptance: it proves that the child image received
-primitive hardware topology without root pointers, but it does not credit
-owner-state progress until a later device service turn makes real hardware
-progress from driver-local state.
+pages, semantic resource ranges for large apertures, bus-address alias policy,
+framebuffer metadata, IRQ descriptors, and bus-link descriptors for split owners
+such as USB/PCIe and CYW43/SDIO. Runtime init is deliberately non-acceptance: it
+proves that the child image received primitive hardware topology without root
+pointers, but it does not credit owner-state progress until a later device
+service turn makes real hardware progress from driver-local state.
 
 The default Pi/hardware path is partially cut over to linked isolated images.
 Normal serial init now goes through the linked `pi4-driver-serial` image and the

@@ -8,7 +8,7 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 1;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 2;
 /// Command `aux0` value used to submit a runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_AUX: u32 = 0x4452_494e;
 /// Command `aux0` value used to ask a linked runtime to instantiate its engine state.
@@ -55,8 +55,62 @@ pub const DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES: usize = 16;
 pub const DRIVER_RUNTIME_INIT_MAX_IRQS: usize = 4;
 /// Maximum bus-link descriptors carried in one init descriptor.
 pub const DRIVER_RUNTIME_INIT_MAX_BUS_LINKS: usize = 2;
+/// Maximum semantic resource ranges carried in one init descriptor.
+pub const DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES: usize = 8;
+/// Runtime resource descriptors use 4 KiB pages.
+pub const DRIVER_RUNTIME_RESOURCE_PAGE_BYTES: u64 = 4096;
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
+
+/// Resource range kind: memory-mapped device registers.
+pub const DRIVER_RUNTIME_RESOURCE_KIND_MMIO: u16 = 1;
+/// Resource range kind: runtime-owned DMA pages.
+pub const DRIVER_RUNTIME_RESOURCE_KIND_DMA: u16 = 2;
+/// Resource range kind: root/runtime shared pages outside the command ring.
+pub const DRIVER_RUNTIME_RESOURCE_KIND_SHARED: u16 = 3;
+/// Resource range kind: HDMI framebuffer aperture.
+pub const DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER: u16 = 4;
+
+/// Resource range flag: virtual addresses are contiguous in the runtime.
+pub const DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS: u16 = 1 << 0;
+/// Resource range flag: physical addresses are contiguous.
+pub const DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS: u16 = 1 << 1;
+/// Resource range flag: physical addresses are device-visible bus addresses.
+pub const DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE: u16 = 1 << 2;
+/// Resource range flag: pages are also intentionally visible to root.
+pub const DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED: u16 = 1 << 3;
+
+/// Generic runtime buffer tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_GENERIC: u32 = 0;
+/// Mini-UART MMIO tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART: u32 = 1;
+/// VL805/xHCI MMIO tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI: u32 = 2;
+/// HDMI control-register MMIO tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS: u32 = 3;
+/// HDMI framebuffer tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER: u32 = 4;
+/// BCM GENET register MMIO tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS: u32 = 5;
+/// CYW43 firmware/control buffer tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL: u32 = 6;
+/// SDHCI/SDIO host MMIO tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST: u32 = 7;
+/// BCM2711 PCIe host bridge MMIO tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST: u32 = 8;
+/// Generic driver-local DMA arena tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA: u32 = 9;
+/// Generic root/runtime shared control buffer tag.
+pub const DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL: u32 = 10;
+
+/// Bus link flag: child runtime issues requests to the linked bus owner.
+pub const DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT: u32 = 1 << 0;
+/// Bus link flag: channel carries only pointer-free ring offsets/lengths.
+pub const DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE: u32 = 1 << 1;
+/// Bus link channel id for USB using the PCIe/VL805 owner.
+pub const DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE: u32 = 1;
+/// Bus link channel id for CYW43 using the SDIO owner.
+pub const DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO: u32 = 2;
 
 /// Runtime hot-path ids. These mirror the root-task command ABI.
 pub const HOT_PATH_SERIAL_CONSOLE: u32 = 1;
@@ -247,6 +301,117 @@ impl DriverRuntimeBusLinkDescriptor {
             reserved: 0,
         }
     }
+
+    /// Construct a non-empty bus-link descriptor.
+    #[must_use]
+    pub const fn new(
+        owner_hot_path: u32,
+        channel_id: u32,
+        shared_offset: u32,
+        shared_len: u32,
+        flags: u32,
+    ) -> Self {
+        Self {
+            owner_hot_path,
+            channel_id,
+            shared_offset,
+            shared_len,
+            flags,
+            reserved: 0,
+        }
+    }
+
+    /// Returns true when the link contains a bounded pointer-free channel.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.owner_hot_path >= HOT_PATH_SERIAL_CONSOLE
+            && self.owner_hot_path <= HOT_PATH_PCIE_ROOT
+            && self.channel_id != 0
+            && (self.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE) != 0
+    }
+}
+
+/// One semantic resource range handed to an isolated runtime.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeResourceRangeDescriptor {
+    /// [`DRIVER_RUNTIME_RESOURCE_KIND_*`] value.
+    pub kind: u16,
+    /// [`DRIVER_RUNTIME_RESOURCE_FLAG_*`] bitset.
+    pub flags: u16,
+    /// Role-specific resource tag.
+    pub tag: u32,
+    /// First driver-local virtual address for this resource.
+    pub vaddr: u64,
+    /// First physical address when known.
+    pub paddr: u64,
+    /// Bounded byte length represented by this range.
+    pub bytes: u64,
+    /// Pages represented by this range.
+    pub page_count: u16,
+    /// First index in the legacy page array, when descriptors were emitted.
+    pub first_page_index: u16,
+    /// Reserved for alignment and future fields.
+    pub reserved: u32,
+}
+
+impl DriverRuntimeResourceRangeDescriptor {
+    /// Empty resource range.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            kind: 0,
+            flags: 0,
+            tag: DRIVER_RUNTIME_RESOURCE_TAG_GENERIC,
+            vaddr: 0,
+            paddr: 0,
+            bytes: 0,
+            page_count: 0,
+            first_page_index: 0,
+            reserved: 0,
+        }
+    }
+
+    /// Construct a non-empty resource range descriptor.
+    #[must_use]
+    pub const fn new(
+        kind: u16,
+        flags: u16,
+        tag: u32,
+        vaddr: u64,
+        paddr: u64,
+        bytes: u64,
+        page_count: u16,
+        first_page_index: u16,
+    ) -> Self {
+        Self {
+            kind,
+            flags,
+            tag,
+            vaddr,
+            paddr,
+            bytes,
+            page_count,
+            first_page_index,
+            reserved: 0,
+        }
+    }
+
+    /// Returns true when the range is bounded and non-empty.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        let known_kind = self.kind == DRIVER_RUNTIME_RESOURCE_KIND_MMIO
+            || self.kind == DRIVER_RUNTIME_RESOURCE_KIND_DMA
+            || self.kind == DRIVER_RUNTIME_RESOURCE_KIND_SHARED
+            || self.kind == DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER;
+        let max_bytes = (self.page_count as u64).saturating_mul(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES);
+        known_kind
+            && self.vaddr != 0
+            && self.paddr != 0
+            && self.bytes != 0
+            && self.page_count != 0
+            && self.bytes <= max_bytes
+    }
 }
 
 /// Pointer-free descriptor submitted by root before a driver runtime owns work.
@@ -275,6 +440,8 @@ pub struct DriverRuntimeInitDescriptor {
     pub irq_count: u16,
     /// Bus-link descriptors populated in `bus_links`.
     pub bus_link_count: u16,
+    /// Semantic resource ranges populated in `resource_ranges`.
+    pub resource_range_count: u16,
     /// Reserved for alignment and future fixed-layout fields.
     pub reserved0: u16,
     /// Device bus alias OR mask, or zero when physical addresses are direct.
@@ -299,6 +466,9 @@ pub struct DriverRuntimeInitDescriptor {
     pub irqs: [DriverRuntimeIrqDescriptor; DRIVER_RUNTIME_INIT_MAX_IRQS],
     /// Bus-owner links for split runtimes such as USB/PCIe and CYW43/SDIO.
     pub bus_links: [DriverRuntimeBusLinkDescriptor; DRIVER_RUNTIME_INIT_MAX_BUS_LINKS],
+    /// Semantic resource ranges for large or role-specific apertures.
+    pub resource_ranges:
+        [DriverRuntimeResourceRangeDescriptor; DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES],
 }
 
 impl DriverRuntimeInitDescriptor {
@@ -317,6 +487,7 @@ impl DriverRuntimeInitDescriptor {
             shared_page_count: 0,
             irq_count: 0,
             bus_link_count: 0,
+            resource_range_count: 0,
             reserved0: 0,
             bus_alias_or: 0,
             bus_alias_and: u64::MAX,
@@ -330,6 +501,8 @@ impl DriverRuntimeInitDescriptor {
                 DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES],
             irqs: [DriverRuntimeIrqDescriptor::empty(); DRIVER_RUNTIME_INIT_MAX_IRQS],
             bus_links: [DriverRuntimeBusLinkDescriptor::empty(); DRIVER_RUNTIME_INIT_MAX_BUS_LINKS],
+            resource_ranges: [DriverRuntimeResourceRangeDescriptor::empty();
+                DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES],
         }
     }
 
@@ -350,6 +523,7 @@ impl DriverRuntimeInitDescriptor {
             && (self.shared_page_count as usize) <= DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES
             && (self.irq_count as usize) <= DRIVER_RUNTIME_INIT_MAX_IRQS
             && (self.bus_link_count as usize) <= DRIVER_RUNTIME_INIT_MAX_BUS_LINKS
+            && (self.resource_range_count as usize) <= DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES
             && if self.irq_count == 0 {
                 (self.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY) != 0
             } else {
@@ -360,6 +534,34 @@ impl DriverRuntimeInitDescriptor {
             } else {
                 (self.flags & DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS) != 0
             }
+            && self.valid_resource_ranges()
+            && self.valid_bus_links()
+    }
+
+    /// Returns true when populated resource ranges are valid.
+    #[must_use]
+    pub const fn valid_resource_ranges(self) -> bool {
+        let mut index = 0;
+        while index < self.resource_range_count as usize {
+            if !self.resource_ranges[index].valid() {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    /// Returns true when populated bus-link descriptors are valid.
+    #[must_use]
+    pub const fn valid_bus_links(self) -> bool {
+        let mut index = 0;
+        while index < self.bus_link_count as usize {
+            if !self.bus_links[index].valid() {
+                return false;
+            }
+            index += 1;
+        }
+        true
     }
 
     /// Returns true when this descriptor matches one generated runtime spec.
@@ -372,12 +574,18 @@ impl DriverRuntimeInitDescriptor {
         dma_pages: u16,
         shared_pages: u16,
     ) -> bool {
+        let mmio_total =
+            self.resource_pages_or_count(DRIVER_RUNTIME_RESOURCE_KIND_MMIO, self.mmio_page_count);
+        let dma_total =
+            self.resource_pages_or_count(DRIVER_RUNTIME_RESOURCE_KIND_DMA, self.dma_page_count);
+        let shared_total = self
+            .resource_pages_or_count(DRIVER_RUNTIME_RESOURCE_KIND_SHARED, self.shared_page_count);
         self.valid()
             && self.hot_path == hot_path
             && self.role_bit == role_bit
-            && self.mmio_page_count == mmio_pages
-            && self.dma_page_count == dma_pages
-            && self.shared_page_count == shared_pages
+            && mmio_total == mmio_pages
+            && dma_total == dma_pages
+            && shared_total == shared_pages
     }
 
     /// Returns true when this descriptor is eligible to back HDMI ownership.
@@ -387,6 +595,67 @@ impl DriverRuntimeInitDescriptor {
             && self.hot_path == HOT_PATH_HDMI_TEXT
             && (self.flags & DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER) != 0
             && self.framebuffer.valid()
+    }
+
+    /// Returns total pages for one resource kind, or the legacy count when no
+    /// semantic ranges were supplied.
+    #[must_use]
+    pub const fn resource_pages_or_count(self, kind: u16, fallback: u16) -> u16 {
+        let pages = self.resource_pages_by_kind(kind);
+        if pages == 0 {
+            fallback
+        } else {
+            pages
+        }
+    }
+
+    /// Returns total pages for one resource kind.
+    #[must_use]
+    pub const fn resource_pages_by_kind(self, kind: u16) -> u16 {
+        let mut total = 0u16;
+        let mut index = 0;
+        while index < self.resource_range_count as usize {
+            let range = self.resource_ranges[index];
+            if range.kind == kind {
+                total = total.saturating_add(range.page_count);
+            }
+            index += 1;
+        }
+        total
+    }
+
+    /// Returns total pages for one resource kind and tag.
+    #[must_use]
+    pub const fn resource_pages_by_kind_and_tag(self, kind: u16, tag: u32) -> u16 {
+        let mut total = 0u16;
+        let mut index = 0;
+        while index < self.resource_range_count as usize {
+            let range = self.resource_ranges[index];
+            if range.kind == kind && range.tag == tag {
+                total = total.saturating_add(range.page_count);
+            }
+            index += 1;
+        }
+        total
+    }
+
+    /// Returns true when the descriptor includes one matching resource range.
+    #[must_use]
+    pub const fn has_resource_range(self, kind: u16, tag: u32) -> bool {
+        self.resource_pages_by_kind_and_tag(kind, tag) != 0
+    }
+
+    /// Returns true when the descriptor includes a bus link to `owner_hot_path`.
+    #[must_use]
+    pub const fn has_bus_link_to(self, owner_hot_path: u32) -> bool {
+        let mut index = 0;
+        while index < self.bus_link_count as usize {
+            if self.bus_links[index].owner_hot_path == owner_hot_path {
+                return true;
+            }
+            index += 1;
+        }
+        false
     }
 }
 
@@ -436,6 +705,74 @@ mod tests {
 
         assert!(descriptor.valid_for_resources(HOT_PATH_PCIE_ROOT, 1 << 5, 2, 0, 1));
         assert!(!descriptor.valid_for_resources(HOT_PATH_PCIE_ROOT, 1 << 5, 1, 0, 1));
+    }
+
+    #[test]
+    fn resource_ranges_can_describe_large_mmio_without_page_array_growth() {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = HOT_PATH_USB_KEYBOARD;
+        descriptor.role_bit = 1 << 1;
+        descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY
+            | DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = DriverRuntimePageDescriptor::new(0x4000_0000);
+        descriptor.mmio_page_count = DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES as u16;
+        for index in 0..DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES {
+            descriptor.mmio_pages[index] = DriverRuntimePageDescriptor::new(
+                0x0000_0006_0000_0000usize + index * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as usize,
+            );
+        }
+        descriptor.resource_range_count = 1;
+        descriptor.resource_ranges[0] = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+            DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+            0x7020_0000,
+            0x0000_0006_0000_0000,
+            512 * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+            512,
+            0,
+        );
+
+        assert!(descriptor.valid());
+        assert_eq!(
+            descriptor.resource_pages_by_kind(DRIVER_RUNTIME_RESOURCE_KIND_MMIO),
+            512
+        );
+        assert!(descriptor.has_resource_range(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI
+        ));
+        assert!(descriptor.valid_for_resources(HOT_PATH_USB_KEYBOARD, 1 << 1, 512, 0, 1));
+        assert!(!descriptor.valid_for_resources(HOT_PATH_USB_KEYBOARD, 1 << 1, 16, 0, 1));
+    }
+
+    #[test]
+    fn bus_links_are_pointer_free_and_owner_checked() {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = HOT_PATH_CYW43_WIFI;
+        descriptor.role_bit = 1 << 3;
+        descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY
+            | DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = DriverRuntimePageDescriptor::new(0x4000_0000);
+        descriptor.bus_link_count = 1;
+        descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+            0,
+            DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as u32,
+            DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+        );
+
+        assert!(descriptor.valid());
+        assert!(descriptor.has_bus_link_to(HOT_PATH_SDIO_HOST));
+        descriptor.bus_links[0].flags &= !DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE;
+        assert!(!descriptor.valid());
     }
 
     #[test]

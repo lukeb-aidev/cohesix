@@ -70,8 +70,8 @@ fn pi4_uboot_profile_emits_network_policy() {
 
     assert_eq!(manifest["profile"]["name"], "pi4-uboot-aarch64");
     assert_eq!(network["backend"], "bcmgenet-v5");
-    assert_eq!(network["mode"], "static");
-    assert_eq!(network["interface"], "wired");
+    assert_eq!(network["mode"], "dhcp");
+    assert_eq!(network["interface"], "auto");
     assert_eq!(network["dhcp"]["discover_timeout_ms"], 1000);
     assert_eq!(network["dhcp"]["request_timeout_ms"], 1000);
     assert_eq!(network["dhcp"]["max_retries"], 4);
@@ -80,4 +80,25 @@ fn pi4_uboot_profile_emits_network_policy() {
         .expect("devices array")
         .iter()
         .any(|device| device["kind"] == "wifi" && device["id"] == "cyw43xx0"));
+
+    let images = manifest["root_task"]["driver_images"]["images"]
+        .as_array()
+        .expect("driver runtime images");
+    assert_eq!(images.len(), 7);
+    for image in images {
+        assert_eq!(
+            image["code-pages"].as_u64().expect("code pages"),
+            64,
+            "runtime image {} must leave room for the multi-segment linked ELF",
+            image["id"]
+        );
+    }
+    let usb = images
+        .iter()
+        .find(|image| image["hot-path"] == "usb-keyboard")
+        .expect("usb runtime image");
+    assert!(
+        usb["mmio-pages"].as_u64().expect("usb mmio pages") >= 16,
+        "USB runtime must cover the xHCI minimum operational aperture"
+    );
 }

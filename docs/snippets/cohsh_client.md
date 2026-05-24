@@ -3,7 +3,7 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `041df6fa762c18a7822cac60d3552f00320866abc0ddcc7c7de0e48ca03e2ca8`
+- `manifest.sha256`: `5e002c1f5819592a9d7c559f7dbfec16abac16e48d3570c166c7575961ad9c94`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `trace.max_bytes`: `1048576`
@@ -22,4 +22,4 @@
 - `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `041df6fa762c18a7822cac60d3552f00320866abc0ddcc7c7de0e48ca03e2ca8`)._
+_Generated from `configs/root_task.toml` (sha256: `5e002c1f5819592a9d7c559f7dbfec16abac16e48d3570c166c7575961ad9c94`)._

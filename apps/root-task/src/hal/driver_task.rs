@@ -824,14 +824,14 @@ pub const DRIVER_TASK_STACK_BOTTOM_VADDR: usize = 0x7000_2000;
 pub const DRIVER_TASK_STACK_TOP_VADDR: usize = 0x7000_3000;
 
 /// First fixed driver-local virtual address reserved for explicit MMIO pages.
-pub const DRIVER_TASK_DEVICE_MMIO_VADDR: usize = 0x7000_4000;
+pub const DRIVER_TASK_DEVICE_MMIO_VADDR: usize = 0x7020_0000;
 
 /// First fixed driver-local virtual address reserved for explicit DMA pages.
-pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7001_0000;
+pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7050_0000;
 
 /// First fixed driver-local virtual address reserved for shared RX/TX/control
 /// buffers outside the command ring page.
-pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x7002_0000;
+pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x7060_0000;
 
 /// Offset of the first fixed-layout completion record within the ring page.
 pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
@@ -977,6 +977,7 @@ impl DriverTaskRuntimeImageSpec {
     #[must_use]
     pub const fn new(
         hot_path: DriverTaskHotPath,
+        code_pages: u16,
         mmio_pages: u16,
         dma_pages: u16,
         shared_buffer_pages: u16,
@@ -987,7 +988,7 @@ impl DriverTaskRuntimeImageSpec {
         regions[0] = DriverTaskRuntimeRegion::new(
             DriverTaskRuntimeRegionKind::Code,
             isolated_runtime_code_vaddr(),
-            1,
+            code_pages,
             0,
         );
         regions[1] = DriverTaskRuntimeRegion::new(
@@ -1299,7 +1300,7 @@ fn generated_runtime_image_spec_for_hot_path(
 }
 
 fn fallback_runtime_image_spec(hot_path: DriverTaskHotPath) -> DriverTaskRuntimeImageSpec {
-    DriverTaskRuntimeImageSpec::new(hot_path, 0, 0, 0, true, false)
+    DriverTaskRuntimeImageSpec::new(hot_path, 1, 0, 0, 0, true, false)
 }
 
 fn runtime_image_spec_from_generated(
@@ -1308,6 +1309,7 @@ fn runtime_image_spec_from_generated(
 ) -> DriverTaskRuntimeImageSpec {
     DriverTaskRuntimeImageSpec::new(
         hot_path,
+        generated.code_pages,
         generated.mmio_pages,
         generated.dma_pages,
         generated.shared_buffer_pages,

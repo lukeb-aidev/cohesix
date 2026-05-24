@@ -61,11 +61,24 @@ use crate::sel4::{
 use pci::{PciAddress, PciTopology};
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
-    DriverRuntimeInitDescriptor, DriverRuntimePageDescriptor, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
-    DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
-    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED,
-    DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
-    DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN, DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS,
+    DriverRuntimeBusLinkDescriptor, DriverRuntimeInitDescriptor, DriverRuntimePageDescriptor,
+    DriverRuntimeResourceRangeDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+    DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
+    DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
+    DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
+    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+    DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
+    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1413,6 +1426,31 @@ impl RuntimeInitDescriptorBuilder {
         descriptor.mmio_vaddr_base = driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR as u64;
         descriptor.dma_vaddr_base = driver_task::DRIVER_TASK_DMA_BUFFER_VADDR as u64;
         descriptor.shared_vaddr_base = driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR as u64;
+        match spec.hot_path {
+            driver_task::DriverTaskHotPath::UsbKeyboard => {
+                descriptor.bus_link_count = 1;
+                descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+                    driver_task::DriverTaskHotPath::PcieRoot.as_u32(),
+                    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+                    0,
+                    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as u32,
+                    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+                );
+                descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
+            }
+            driver_task::DriverTaskHotPath::Cyw43Wifi => {
+                descriptor.bus_link_count = 1;
+                descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+                    driver_task::DriverTaskHotPath::SdioHost.as_u32(),
+                    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+                    0,
+                    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as u32,
+                    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+                );
+                descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
+            }
+            _ => {}
+        }
         Self {
             descriptor,
             expected_mmio_pages: spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Mmio),
@@ -1424,11 +1462,10 @@ impl RuntimeInitDescriptorBuilder {
 
     fn add_mmio_page(&mut self, paddr: usize) -> Result<(), HalError> {
         let index = usize::from(self.descriptor.mmio_page_count);
-        let Some(slot) = self.descriptor.mmio_pages.get_mut(index) else {
-            return Err(HalError::Unsupported("driver-runtime-init-mmio-overflow"));
-        };
-        *slot = DriverRuntimePageDescriptor::new(paddr);
-        self.descriptor.mmio_page_count = self.descriptor.mmio_page_count.saturating_add(1);
+        if let Some(slot) = self.descriptor.mmio_pages.get_mut(index) {
+            *slot = DriverRuntimePageDescriptor::new(paddr);
+            self.descriptor.mmio_page_count = self.descriptor.mmio_page_count.saturating_add(1);
+        }
         self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED;
         Ok(())
     }
@@ -1460,6 +1497,111 @@ impl RuntimeInitDescriptorBuilder {
         self.descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
     }
 
+    fn set_framebuffer_region(
+        &mut self,
+        framebuffer: pi4_driver_abi::DriverRuntimeFramebufferDescriptor,
+        page_base: usize,
+        bytes: usize,
+        pages: usize,
+    ) -> Result<(), HalError> {
+        self.set_framebuffer(framebuffer);
+        self.add_resource_range(DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
+                | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+            DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
+            framebuffer.vaddr,
+            page_base as u64,
+            bytes as u64,
+            u16::try_from(pages)
+                .map_err(|_| HalError::Unsupported("driver-runtime-init-fb-range-pages"))?,
+            0,
+        ))
+    }
+
+    fn add_mmio_resource_range(
+        &mut self,
+        hot_path: driver_task::DriverTaskHotPath,
+        vaddr: usize,
+        paddr: usize,
+        pages: usize,
+        first_page_index: u16,
+    ) -> Result<(), HalError> {
+        let page_count = u16::try_from(pages)
+            .map_err(|_| HalError::Unsupported("driver-runtime-init-mmio-range-pages"))?;
+        self.add_resource_range(DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+            runtime_mmio_resource_tag(hot_path),
+            vaddr as u64,
+            paddr as u64,
+            (pages as u64).saturating_mul(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES),
+            page_count,
+            first_page_index,
+        ))
+    }
+
+    fn add_buffer_resource_range(
+        &mut self,
+        hot_path: driver_task::DriverTaskHotPath,
+        kind: u16,
+        vaddr: usize,
+        first_paddr: usize,
+        pages: usize,
+        first_page_index: u16,
+    ) -> Result<(), HalError> {
+        let page_count = u16::try_from(pages)
+            .map_err(|_| HalError::Unsupported("driver-runtime-init-buffer-range-pages"))?;
+        let (tag, flags) = match kind {
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA => (
+                DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+            ),
+            DRIVER_RUNTIME_RESOURCE_KIND_SHARED => (
+                if hot_path == driver_task::DriverTaskHotPath::Cyw43Wifi {
+                    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL
+                } else {
+                    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL
+                },
+                DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+            ),
+            _ => return Err(HalError::Unsupported("driver-runtime-init-buffer-kind")),
+        };
+        self.add_resource_range(DriverRuntimeResourceRangeDescriptor::new(
+            kind,
+            flags,
+            tag,
+            vaddr as u64,
+            first_paddr as u64,
+            (pages as u64).saturating_mul(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES),
+            page_count,
+            first_page_index,
+        ))
+    }
+
+    fn add_resource_range(
+        &mut self,
+        range: DriverRuntimeResourceRangeDescriptor,
+    ) -> Result<(), HalError> {
+        let index = usize::from(self.descriptor.resource_range_count);
+        let Some(slot) = self.descriptor.resource_ranges.get_mut(index) else {
+            return Err(HalError::Unsupported(
+                "driver-runtime-init-resource-overflow",
+            ));
+        };
+        *slot = range;
+        self.descriptor.resource_range_count =
+            self.descriptor.resource_range_count.saturating_add(1);
+        Ok(())
+    }
+
     fn finish(self) -> Result<DriverRuntimeInitDescriptor, HalError> {
         if self.descriptor.valid_for_resources(
             self.descriptor.hot_path,
@@ -1476,11 +1618,62 @@ impl RuntimeInitDescriptorBuilder {
 }
 
 #[cfg(feature = "kernel")]
+fn runtime_mmio_resource_tag(hot_path: driver_task::DriverTaskHotPath) -> u32 {
+    match hot_path {
+        driver_task::DriverTaskHotPath::SerialConsole => {
+            DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART
+        }
+        driver_task::DriverTaskHotPath::UsbKeyboard => DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+        driver_task::DriverTaskHotPath::HdmiText => DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
+        driver_task::DriverTaskHotPath::GenetNic => DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+        driver_task::DriverTaskHotPath::Cyw43Wifi => DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+        driver_task::DriverTaskHotPath::SdioHost => DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+        driver_task::DriverTaskHotPath::PcieRoot => DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+    }
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeElfLoad {
     entry: usize,
     code_vaddr: usize,
 }
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeElfSegment {
+    offset: usize,
+    vaddr: usize,
+    filesz: usize,
+    memsz: usize,
+    flags: u32,
+}
+
+#[cfg(feature = "kernel")]
+impl RuntimeElfSegment {
+    const fn empty() -> Self {
+        Self {
+            offset: 0,
+            vaddr: 0,
+            filesz: 0,
+            memsz: 0,
+            flags: 0,
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeElfLoadPlan {
+    entry: usize,
+    base_vaddr: usize,
+    page_count: usize,
+    segment_count: usize,
+    segments: [RuntimeElfSegment; MAX_RUNTIME_ELF_LOAD_SEGMENTS],
+}
+
+#[cfg(feature = "kernel")]
+const MAX_RUNTIME_ELF_LOAD_SEGMENTS: usize = 8;
 
 #[cfg(feature = "kernel")]
 fn read_le_u16(bytes: &[u8], offset: usize) -> Option<u16> {
@@ -1504,10 +1697,10 @@ fn read_le_u64(bytes: &[u8], offset: usize) -> Option<u64> {
 }
 
 #[cfg(feature = "kernel")]
-fn load_runtime_elf_code_page(
+fn plan_runtime_elf_load(
     image: &[u8],
-    code_page: &mut [u8],
-) -> Result<RuntimeElfLoad, HalError> {
+    declared_code_pages: u16,
+) -> Result<RuntimeElfLoadPlan, HalError> {
     const ELF_HEADER_LEN: usize = 64;
     const PROGRAM_HEADER_LEN: usize = 56;
     const PT_LOAD: u32 = 1;
@@ -1544,6 +1737,11 @@ fn load_runtime_elf_code_page(
     }
 
     let page_bytes = 1usize << sel4::PAGE_BITS;
+    let mut segments = [RuntimeElfSegment::empty(); MAX_RUNTIME_ELF_LOAD_SEGMENTS];
+    let mut segment_count = 0usize;
+    let mut min_vaddr = usize::MAX;
+    let mut max_vaddr = 0usize;
+    let mut entry_in_exec = false;
     for index in 0..phnum {
         let ph = phoff
             .checked_add(index.saturating_mul(phentsize))
@@ -1558,7 +1756,7 @@ fn load_runtime_elf_code_page(
             read_le_u32(image, ph).ok_or(HalError::Unsupported("driver-runtime-elf-phdr"))?;
         let p_flags =
             read_le_u32(image, ph + 4).ok_or(HalError::Unsupported("driver-runtime-elf-phdr"))?;
-        if p_type != PT_LOAD || p_flags & PF_X == 0 {
+        if p_type != PT_LOAD {
             continue;
         }
         let p_offset = usize::try_from(
@@ -1578,28 +1776,126 @@ fn load_runtime_elf_code_page(
             read_le_u64(image, ph + 40).ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?,
         )
         .map_err(|_| HalError::Unsupported("driver-runtime-elf-memsz"))?;
-        let code_vaddr = p_vaddr & !(page_bytes - 1);
-        let page_offset = p_vaddr - code_vaddr;
+        if p_memsz == 0 {
+            continue;
+        }
         let file_end = p_offset
             .checked_add(p_filesz)
             .ok_or(HalError::Unsupported("driver-runtime-elf-filesz"))?;
-        let mem_end = page_offset
-            .checked_add(p_memsz)
-            .ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?;
         if file_end > image.len()
-            || mem_end > code_page.len()
             || p_filesz > p_memsz
-            || entry < p_vaddr
-            || entry >= p_vaddr.saturating_add(p_memsz)
+            || segment_count >= MAX_RUNTIME_ELF_LOAD_SEGMENTS
         {
             return Err(HalError::Unsupported("driver-runtime-elf-segment"));
         }
-        code_page.fill(0);
-        code_page[page_offset..page_offset + p_filesz].copy_from_slice(&image[p_offset..file_end]);
-        return Ok(RuntimeElfLoad { entry, code_vaddr });
+        let segment_end = p_vaddr
+            .checked_add(p_memsz)
+            .ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?;
+        let page_base = p_vaddr & !(page_bytes - 1);
+        let page_end = segment_end.saturating_add(page_bytes - 1) & !(page_bytes - 1);
+        min_vaddr = core::cmp::min(min_vaddr, page_base);
+        max_vaddr = core::cmp::max(max_vaddr, page_end);
+        if p_flags & PF_X != 0 && entry >= p_vaddr && entry < segment_end {
+            entry_in_exec = true;
+        }
+        segments[segment_count] = RuntimeElfSegment {
+            offset: p_offset,
+            vaddr: p_vaddr,
+            filesz: p_filesz,
+            memsz: p_memsz,
+            flags: p_flags,
+        };
+        segment_count += 1;
     }
 
-    Err(HalError::Unsupported("driver-runtime-elf-exec-segment"))
+    if segment_count == 0 || !entry_in_exec || min_vaddr == usize::MAX || max_vaddr <= min_vaddr {
+        return Err(HalError::Unsupported("driver-runtime-elf-exec-segment"));
+    }
+    let span = max_vaddr
+        .checked_sub(min_vaddr)
+        .ok_or(HalError::Unsupported("driver-runtime-elf-span"))?;
+    let page_count = span
+        .checked_div(page_bytes)
+        .ok_or(HalError::Unsupported("driver-runtime-elf-span"))?;
+    if page_count == 0 || page_count > usize::from(declared_code_pages) {
+        return Err(HalError::Unsupported("driver-runtime-elf-code-pages"));
+    }
+    Ok(RuntimeElfLoadPlan {
+        entry,
+        base_vaddr: min_vaddr,
+        page_count,
+        segment_count,
+        segments,
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn fill_runtime_elf_page(
+    image: &[u8],
+    plan: RuntimeElfLoadPlan,
+    page_index: usize,
+    page: &mut [u8],
+) -> Result<bool, HalError> {
+    const PF_W: u32 = 2;
+
+    let page_bytes = 1usize << sel4::PAGE_BITS;
+    let page_vaddr = plan
+        .base_vaddr
+        .checked_add(page_index.saturating_mul(page_bytes))
+        .ok_or(HalError::Unsupported("driver-runtime-elf-page"))?;
+    let page_end = page_vaddr
+        .checked_add(page_bytes)
+        .ok_or(HalError::Unsupported("driver-runtime-elf-page"))?;
+    page.fill(0);
+    let mut writable = false;
+    let mut index = 0usize;
+    while index < plan.segment_count {
+        let segment = plan.segments[index];
+        let segment_mem_end = segment
+            .vaddr
+            .checked_add(segment.memsz)
+            .ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?;
+        if segment.vaddr < page_end && segment_mem_end > page_vaddr {
+            writable |= segment.flags & PF_W != 0;
+            let copy_start = core::cmp::max(page_vaddr, segment.vaddr);
+            let segment_file_end = segment
+                .vaddr
+                .checked_add(segment.filesz)
+                .ok_or(HalError::Unsupported("driver-runtime-elf-filesz"))?;
+            let copy_end = core::cmp::min(page_end, segment_file_end);
+            if copy_start < copy_end {
+                let dest_start = copy_start
+                    .checked_sub(page_vaddr)
+                    .ok_or(HalError::Unsupported("driver-runtime-elf-copy"))?;
+                let src_start = segment
+                    .offset
+                    .checked_add(
+                        copy_start
+                            .checked_sub(segment.vaddr)
+                            .ok_or(HalError::Unsupported("driver-runtime-elf-copy"))?,
+                    )
+                    .ok_or(HalError::Unsupported("driver-runtime-elf-copy"))?;
+                let copy_len = copy_end
+                    .checked_sub(copy_start)
+                    .ok_or(HalError::Unsupported("driver-runtime-elf-copy"))?;
+                let src_end = src_start
+                    .checked_add(copy_len)
+                    .ok_or(HalError::Unsupported("driver-runtime-elf-copy"))?;
+                let dest_end = dest_start
+                    .checked_add(copy_len)
+                    .ok_or(HalError::Unsupported("driver-runtime-elf-copy"))?;
+                let Some(src) = image.get(src_start..src_end) else {
+                    return Err(HalError::Unsupported("driver-runtime-elf-copy"));
+                };
+                let Some(dst) = page.get_mut(dest_start..dest_end) else {
+                    return Err(HalError::Unsupported("driver-runtime-elf-copy"));
+                };
+                dst.copy_from_slice(src);
+            }
+        }
+        index += 1;
+    }
+    Ok(writable)
 }
 
 #[cfg(feature = "kernel")]
@@ -2142,6 +2438,7 @@ impl<'a> KernelHal<'a> {
                 }
                 driver_task::DriverTaskRuntimeRegionKind::Dma => {
                     if self.map_isolated_runtime_ram_region(
+                        spec.hot_path,
                         region,
                         vspace,
                         tracker,
@@ -2153,6 +2450,7 @@ impl<'a> KernelHal<'a> {
                 }
                 driver_task::DriverTaskRuntimeRegionKind::SharedBuffer => {
                     if self.map_isolated_runtime_ram_region(
+                        spec.hot_path,
                         region,
                         vspace,
                         tracker,
@@ -2172,6 +2470,45 @@ impl<'a> KernelHal<'a> {
             )?;
         }
         Ok(mapped_mask)
+    }
+
+    fn map_runtime_elf_image(
+        &mut self,
+        image: &[u8],
+        plan: RuntimeElfLoadPlan,
+        vspace: seL4_CPtr,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<RuntimeElfLoad, HalError> {
+        let code_rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
+        let data_rights = sel4_sys::seL4_CapRights_ReadWrite;
+        for page_index in 0..plan.page_count {
+            let mut frame = self
+                .env
+                .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+                .map_err(HalError::Sel4)?;
+            let writable = fill_runtime_elf_page(image, plan, page_index, frame.as_mut_slice())?;
+            let vaddr = plan
+                .base_vaddr
+                .checked_add(page_index.saturating_mul(1usize << sel4::PAGE_BITS))
+                .ok_or(HalError::Unsupported("driver-runtime-elf-map-vaddr"))?;
+            self.env
+                .map_page_copy_into_vspace(
+                    frame.cap(),
+                    vspace,
+                    vaddr,
+                    if writable { data_rights } else { code_rights },
+                    sel4_sys::seL4_ARM_Page_Default,
+                    tracker,
+                )
+                .map_err(HalError::Sel4)?;
+            self.env
+                .unmap_page_cap(frame.cap())
+                .map_err(HalError::Sel4)?;
+        }
+        Ok(RuntimeElfLoad {
+            entry: plan.entry,
+            code_vaddr: plan.base_vaddr,
+        })
     }
 
     fn map_isolated_runtime_hdmi_framebuffer(
@@ -2224,7 +2561,7 @@ impl<'a> KernelHal<'a> {
             .checked_add(page_offset as u64)
             .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-vaddr"))?;
         if let Some(builder) = init_descriptor.as_deref_mut() {
-            builder.set_framebuffer(framebuffer);
+            builder.set_framebuffer_region(framebuffer, page_base, map_len, page_count)?;
         }
         Ok(true)
     }
@@ -2247,6 +2584,10 @@ impl<'a> KernelHal<'a> {
             if !runtime_candidate_covers_pages(&self.env, base, pages) {
                 continue;
             }
+            let first_page_index = init_descriptor
+                .as_deref()
+                .map(|builder| builder.descriptor.mmio_page_count)
+                .unwrap_or(0);
             for page in 0..pages {
                 let paddr = base
                     .checked_add(page.saturating_mul(page_bytes))
@@ -2267,6 +2608,15 @@ impl<'a> KernelHal<'a> {
                     builder.add_mmio_page(paddr)?;
                 }
             }
+            if let Some(builder) = init_descriptor.as_deref_mut() {
+                builder.add_mmio_resource_range(
+                    hot_path,
+                    region.vaddr,
+                    base,
+                    pages,
+                    first_page_index,
+                )?;
+            }
             return Ok(true);
         }
         Err(HalError::Unsupported("driver-runtime-mmio-not-covered"))
@@ -2274,6 +2624,7 @@ impl<'a> KernelHal<'a> {
 
     fn map_isolated_runtime_ram_region(
         &mut self,
+        hot_path: driver_task::DriverTaskHotPath,
         region: driver_task::DriverTaskRuntimeRegion,
         vspace: seL4_CPtr,
         tracker: &mut VSpaceTableTracker,
@@ -2290,6 +2641,17 @@ impl<'a> KernelHal<'a> {
         } else {
             sel4_sys::seL4_ARM_Page_Default
         };
+        let first_page_index = init_descriptor
+            .as_deref()
+            .map(|builder| {
+                if dma_owned {
+                    builder.descriptor.dma_page_count
+                } else {
+                    builder.descriptor.shared_page_count
+                }
+            })
+            .unwrap_or(0);
+        let mut first_paddr = 0usize;
         for page in 0..pages {
             let vaddr = runtime_region_page_vaddr(region, page)
                 .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?;
@@ -2299,6 +2661,9 @@ impl<'a> KernelHal<'a> {
                     .alloc_unmapped_ram_frame_attr(attr)
                     .map_err(HalError::Sel4)?;
                 let paddr = frame.paddr();
+                if page == 0 {
+                    first_paddr = paddr;
+                }
                 self.env
                     .map_page_cap_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
                     .map_err(HalError::Sel4)?;
@@ -2311,6 +2676,9 @@ impl<'a> KernelHal<'a> {
                     .alloc_dma_frame_attr(attr)
                     .map_err(HalError::Sel4)?;
                 let paddr = frame.paddr();
+                if page == 0 {
+                    first_paddr = paddr;
+                }
                 self.env
                     .map_page_copy_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
                     .map_err(HalError::Sel4)?;
@@ -2318,6 +2686,20 @@ impl<'a> KernelHal<'a> {
                     builder.add_shared_page(paddr)?;
                 }
             }
+        }
+        if let Some(builder) = init_descriptor.as_deref_mut() {
+            builder.add_buffer_resource_range(
+                hot_path,
+                if dma_owned {
+                    DRIVER_RUNTIME_RESOURCE_KIND_DMA
+                } else {
+                    DRIVER_RUNTIME_RESOURCE_KIND_SHARED
+                },
+                region.vaddr,
+                first_paddr,
+                pages,
+                first_page_index,
+            )?;
         }
         Ok(true)
     }
@@ -2362,6 +2744,15 @@ impl<'a> KernelHal<'a> {
         {
             return Err(HalError::Unsupported("driver-task-trampoline-layout"));
         }
+        let linked_runtime_plan =
+            if let (Some(image), Some(spec)) = (linked_runtime_image, runtime_image_spec) {
+                Some(plan_runtime_elf_load(
+                    image,
+                    spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Code),
+                )?)
+            } else {
+                None
+            };
 
         let root_cnode = self.env.init_cnode_cap();
         let root_depth = sel4::word_bits() as u8;
@@ -2375,10 +2766,6 @@ impl<'a> KernelHal<'a> {
             .assign_vspace_asid_from_init_pool(vspace)
             .map_err(HalError::Sel4)?;
 
-        let mut code_frame = self
-            .env
-            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
-            .map_err(HalError::Sel4)?;
         let mut ring_frame = self
             .env
             .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
@@ -2392,22 +2779,6 @@ impl<'a> KernelHal<'a> {
             .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
             .map_err(HalError::Sel4)?;
 
-        code_frame.as_mut_slice().fill(0);
-        let runtime_load = if let Some(image) = linked_runtime_image {
-            load_runtime_elf_code_page(image, code_frame.as_mut_slice())?
-        } else {
-            // SAFETY: The linker script page-aligns `.driver_task_text`, the
-            // range check above bounds it to one mapped user-image page, and
-            // this copy reads only that page into a HAL-owned frame.
-            let source = unsafe {
-                core::slice::from_raw_parts(trampoline_range.start as *const u8, page_bytes)
-            };
-            code_frame.as_mut_slice().copy_from_slice(source);
-            RuntimeElfLoad {
-                entry: driver_task::isolated_trampoline_entry(),
-                code_vaddr: trampoline_range.start,
-            }
-        };
         ring_frame.as_mut_slice().fill(0);
         ipc_frame.as_mut_slice().fill(0);
         stack_frame.as_mut_slice().fill(0);
@@ -2460,16 +2831,39 @@ impl<'a> KernelHal<'a> {
         let mut tracker = VSpaceTableTracker::new();
         let code_rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
         let data_rights = sel4_sys::seL4_CapRights_ReadWrite;
-        self.env
-            .map_page_copy_into_vspace(
-                code_frame.cap(),
-                vspace,
-                runtime_load.code_vaddr,
-                code_rights,
-                sel4_sys::seL4_ARM_Page_Default,
-                &mut tracker,
-            )
-            .map_err(HalError::Sel4)?;
+        let mut mapped_code_frame = None;
+        let runtime_load =
+            if let (Some(image), Some(plan)) = (linked_runtime_image, linked_runtime_plan) {
+                self.map_runtime_elf_image(image, plan, vspace, &mut tracker)?
+            } else {
+                let mut code_frame = self
+                    .env
+                    .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+                    .map_err(HalError::Sel4)?;
+                code_frame.as_mut_slice().fill(0);
+                // SAFETY: The linker script page-aligns `.driver_task_text`, the
+                // range check above bounds it to one mapped user-image page, and
+                // this copy reads only that page into a HAL-owned frame.
+                let source = unsafe {
+                    core::slice::from_raw_parts(trampoline_range.start as *const u8, page_bytes)
+                };
+                code_frame.as_mut_slice().copy_from_slice(source);
+                self.env
+                    .map_page_copy_into_vspace(
+                        code_frame.cap(),
+                        vspace,
+                        trampoline_range.start,
+                        code_rights,
+                        sel4_sys::seL4_ARM_Page_Default,
+                        &mut tracker,
+                    )
+                    .map_err(HalError::Sel4)?;
+                mapped_code_frame = Some(code_frame.cap());
+                RuntimeElfLoad {
+                    entry: driver_task::isolated_trampoline_entry(),
+                    code_vaddr: trampoline_range.start,
+                }
+            };
         self.env
             .map_page_copy_into_vspace(
                 ring_frame.cap(),
@@ -2587,9 +2981,11 @@ impl<'a> KernelHal<'a> {
                 if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
                     && done.result == task_key as u32
         ) && runtime_init_ok;
-        self.env
-            .unmap_page_cap(code_frame.cap())
-            .map_err(HalError::Sel4)?;
+        if let Some(code_frame) = mapped_code_frame {
+            self.env
+                .unmap_page_cap(code_frame)
+                .map_err(HalError::Sel4)?;
+        }
         self.env
             .unmap_page_cap(ipc_frame.cap())
             .map_err(HalError::Sel4)?;
@@ -2609,7 +3005,7 @@ impl<'a> KernelHal<'a> {
             stack_frame: stack_frame.cap(),
             ring_frame: Some(ring_frame.cap()),
             vspace: Some(vspace),
-            code_frame: Some(code_frame.cap()),
+            code_frame: mapped_code_frame,
             runtime_image_spec,
             runtime_image_declared_region_mask: runtime_image_declared_region_mask(
                 runtime_image_spec,
@@ -3113,6 +3509,7 @@ mod tests {
             1,
             1,
             1,
+            1,
             true,
             false,
         );
@@ -3150,6 +3547,7 @@ mod tests {
             1,
             1,
             1,
+            1,
             true,
             false,
         );
@@ -3175,6 +3573,165 @@ mod tests {
             descriptor.framebuffer.vaddr,
             pi4_driver_abi::DRIVER_RUNTIME_FRAMEBUFFER_VADDR
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_init_descriptor_builder_records_semantic_ranges_and_bus_links() {
+        let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
+            super::driver_task::DriverTaskHotPath::UsbKeyboard,
+            64,
+            512,
+            16,
+            2,
+            true,
+            false,
+        );
+        let mut builder = super::RuntimeInitDescriptorBuilder::new(
+            spec,
+            super::driver_task::DRIVER_TASK_ROLE_USB_BIT,
+        );
+        for index in 0..pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES {
+            builder
+                .add_mmio_page(0x0000_0006_0000_0000usize + index * 0x1000)
+                .unwrap();
+        }
+        builder
+            .add_mmio_resource_range(
+                super::driver_task::DriverTaskHotPath::UsbKeyboard,
+                super::driver_task::DRIVER_TASK_DEVICE_MMIO_VADDR,
+                0x0000_0006_0000_0000usize,
+                512,
+                0,
+            )
+            .unwrap();
+        for index in 0..16 {
+            builder.add_dma_page(0x4000_0000 + index * 0x1000).unwrap();
+        }
+        builder
+            .add_buffer_resource_range(
+                super::driver_task::DriverTaskHotPath::UsbKeyboard,
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR,
+                0x4000_0000,
+                16,
+                0,
+            )
+            .unwrap();
+        for index in 0..2 {
+            builder
+                .add_shared_page(0x5000_0000 + index * 0x1000)
+                .unwrap();
+        }
+        builder
+            .add_buffer_resource_range(
+                super::driver_task::DriverTaskHotPath::UsbKeyboard,
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+                super::driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR,
+                0x5000_0000,
+                2,
+                0,
+            )
+            .unwrap();
+
+        let descriptor = builder.finish().unwrap();
+        assert_eq!(
+            descriptor.resource_pages_by_kind(pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_MMIO),
+            512
+        );
+        assert!(descriptor.has_resource_range(
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI
+        ));
+        assert!(
+            descriptor.has_bus_link_to(super::driver_task::DriverTaskHotPath::PcieRoot.as_u32())
+        );
+        assert_eq!(
+            descriptor.mmio_page_count,
+            pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES as u16
+        );
+        assert!(descriptor.valid_for_resources(
+            super::driver_task::DriverTaskHotPath::UsbKeyboard.as_u32(),
+            super::driver_task::DRIVER_TASK_ROLE_USB_BIT as u32,
+            512,
+            16,
+            2,
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_elf_loader_plans_multiple_load_segments() {
+        fn put16(bytes: &mut [u8], offset: usize, value: u16) {
+            bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+        }
+        fn put32(bytes: &mut [u8], offset: usize, value: u32) {
+            bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        fn put64(bytes: &mut [u8], offset: usize, value: u64) {
+            bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        fn phdr(
+            bytes: &mut [u8],
+            index: usize,
+            flags: u32,
+            offset: u64,
+            vaddr: u64,
+            filesz: u64,
+            memsz: u64,
+        ) {
+            let base = 64 + index * 56;
+            put32(bytes, base, 1);
+            put32(bytes, base + 4, flags);
+            put64(bytes, base + 8, offset);
+            put64(bytes, base + 16, vaddr);
+            put64(bytes, base + 24, vaddr);
+            put64(bytes, base + 32, filesz);
+            put64(bytes, base + 40, memsz);
+            put64(bytes, base + 48, 0x10000);
+        }
+
+        let mut image = vec![0u8; 0x5000];
+        image[0..4].copy_from_slice(b"\x7fELF");
+        image[4] = 2;
+        image[5] = 1;
+        put16(&mut image, 16, 2);
+        put16(&mut image, 18, 183);
+        put64(&mut image, 24, 0x210010);
+        put64(&mut image, 32, 64);
+        put16(&mut image, 52, 64);
+        put16(&mut image, 54, 56);
+        put16(&mut image, 56, 3);
+        phdr(&mut image, 0, 4, 0x1000, 0x200000, 0x10, 0x10);
+        phdr(&mut image, 1, 5, 0x2000, 0x210000, 0x1200, 0x1200);
+        phdr(&mut image, 2, 6, 0x4000, 0x226000, 0x20, 0x80);
+        image[0x2000..0x3200].fill(0xaa);
+        image[0x4000..0x4020].fill(0xbb);
+
+        assert!(matches!(
+            super::plan_runtime_elf_load(&image, 1),
+            Err(super::HalError::Unsupported(
+                "driver-runtime-elf-code-pages"
+            ))
+        ));
+        let plan = super::plan_runtime_elf_load(&image, 64).unwrap();
+        assert_eq!(plan.base_vaddr, 0x200000);
+        assert_eq!(plan.page_count, 39);
+        assert_eq!(plan.segment_count, 3);
+
+        let mut page = [0u8; 4096];
+        let rx_page = (0x210000 - plan.base_vaddr) / 4096;
+        let writable = super::fill_runtime_elf_page(&image, plan, rx_page, &mut page).unwrap();
+        assert!(!writable);
+        assert_eq!(page[0], 0xaa);
+        assert_eq!(page[0x0fff], 0xaa);
+
+        let data_page = (0x226000 - plan.base_vaddr) / 4096;
+        let writable = super::fill_runtime_elf_page(&image, plan, data_page, &mut page).unwrap();
+        assert!(writable);
+        assert_eq!(page[0], 0xbb);
+        assert_eq!(page[0x1f], 0xbb);
+        assert_eq!(page[0x20], 0);
     }
 
     #[cfg(feature = "kernel")]
