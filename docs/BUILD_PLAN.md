@@ -6777,6 +6777,8 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Humanization is subtractive by default: delete generic restatement comments and repetitive prose before rewriting; retained comments must explain invariants, authority boundaries, limits, operator-visible behavior, or rationale.
 - Humanized documentation must remain auditable against the as-built system: generated snippets, manifest fingerprints, fixture outputs, release artifacts, and staged test evidence take precedence over prose.
 - Generic restatement comments ("Defines the X module", "Provides the Y library surface", "CLI entry point") are prohibited once 26c lands; comments must explain invariants, authority boundaries, limits, operator-visible behavior, or rationale.
+- AI-fingerprint cleanup is a first-class 26c gate, not a cosmetic pass. The audit must remove or rewrite template-shaped comments, overly balanced bullet lists, inflated adjectives, vague "robust/flexible/seamless" claims, repetitive section openings, placeholder-sounding test names, and prose that sounds confident without evidence.
+- Authored code and docs must read as repository-native: specific to Cohesix authority boundaries, current file ownership, observed failure modes, and exact operator contracts. Generic polish that could apply to any project is a review failure even when it is grammatically clean.
 - Required file headers may be narrowed, reformatted, or reduced only by updating `AGENTS.md`, `CONTRIBUTING.md`, and `docs/CODING_GUIDELINES.md` in the same change.
 - Milestone 26c inventories tracked Markdown only via `git ls-files '*.md' | sort`; ignored or untracked build outputs, caches, local virtualenvs, nested dependency trees, and local evidence directories are excluded unless committed as canonical sources.
 - Large `root-task`, HAL, driver, and host-tool monoliths are explicit 26c refactor targets, but they are not first-wave edit targets. They may be decomposed only after characterization tests, parity matrices, dependency-tree evidence, and rollback-sized ownership plans exist for the touched surface.
@@ -6787,7 +6789,8 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - AI-assisted or model-generated Rust remains untrusted. 26c refactor PRs must include baseline command evidence, risk-ratchet review for `unsafe`, `unwrap`, `expect`, and `panic!`, and reviewer sign-off before merge.
 - `docs/snippets/*.md`, `docs/nist/REPORT.md`, tracked release-cut docs, and other generated or derived documentation remain update-by-source artifacts; they are not to be hand-edited as a shortcut.
 - Tracked vendored/reference Markdown under `third_party/**/*.md` and tracked in-repo seL4/reference Markdown under `seL4/**/*.md` are inventory-only unless provenance, licensing, or linkage is wrong. If a nested external checkout exists, 26c inventories only the files tracked by the main Cohesix repository.
-- Multi-agent execution is mandatory for 26c scope: evidence generation, CI/test-plan plumbing, parity auditing, and cleanup work must have disjoint ownership so boundary-sensitive edits are not mixed with prose-only cleanup.
+- Multi-agent execution is mandatory for 26c scope: evidence generation, CI/test-plan plumbing, parity auditing, AI-fingerprint review, and cleanup work must have disjoint ownership so boundary-sensitive edits are not mixed with prose-only cleanup.
+- Every 26c sub-agent lane must produce a checked-in or attached handoff covering inputs inspected, files touched or intentionally not touched, commands run, evidence paths, blockers found, and explicit residual gaps. The main implementer may not mark a lane complete from chat summary alone.
 - Milestone closure is blocked until the full target-qualified Test Plan succeeds on QEMU and Pi 4 with no `INCOMPLETE` markers, and Stage 05 verifies that required target artifacts exist in the active state dir before writing `stage_05.done`.
 - Milestone closure is also blocked until the 26c as-built blocker ledger is empty or every remaining item is explicitly deferred to a named later milestone with a non-overlapping dependency boundary. The initial blocker set includes: Pi 4 network IR/docs validation drift, target-qualified Test Plan runner implementation, Secure9P NUL and `..` path rejection, removal or reclassification of any non-console in-VM TCP listener, HAL ownership for driver MMIO/physical-address access, generated-snippet embedding drift in canonical docs, fixture/default secret handling in release/operator paths, placeholder auth defaults in host tools/docs, and the mismatch between worker documentation and current root-task worker task spawning.
 - The 26c blocker ledger must also classify planning drift discovered in later milestones: linked Pi 4 `pi4-driver-*` runtime images and `pi4-driver-abi` now exist and are staged/generated with acceptance-eligible runtime specs, but aggregate driver-task closure still requires owner-state proof and fresh Pi hardware evidence; VM-local persistence is not implemented yet, `coh-status` is currently a library/convergence fixture rather than a read-only CLI, REST writes still use gateway-level authority rather than delegated per-request tickets, writer-epoch fencing is absent, AI namespace roots are not implemented, and AWS/ENA/IMDS runtime support is not in-tree. Later milestones may preserve those intentions, but they must not cite them as as-built prerequisites until their own acceptance evidence exists.
@@ -6806,9 +6809,10 @@ Refactor and humanize the authored Cohesix code and documentation surfaces witho
 7. decomposing high-value Cohesix-owned monoliths and duplicate validation paths only after their current behavior is pinned,
 8. extracting narrow HAL abstraction seams for existing SDIO/CYW43 and USB/VL805 behavior so later driver work starts from explicit authority boundaries instead of raw seL4 mechanics,
 9. tracking linked Pi 4 driver-runtime ABI, generated `root_task.driver_images` descriptors, staged runtime images, and fresh-Pi owner-state evidence as first-class VM boundary surfaces,
-10. replacing template-heavy comments and test naming with invariant-focused prose,
-11. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
-12. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
+10. auditing authored code, tests, and documentation for AI fingerprints before public-facing cleanup is accepted,
+11. replacing template-heavy comments and test naming with invariant-focused prose,
+12. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
+13. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
 
 ### Markdown review scope (tracked `*.md` only)
 Milestone 26c must inventory every tracked Markdown file returned by:
@@ -6871,6 +6875,12 @@ For each inventory entry, 26c must record one of:
   - Record every docs/script mismatch found during 26c in a checked-in drift ledger and close or explicitly defer it before cleanup lands.
   - Reject any humanizing change that makes prose nicer but less faithful to the observed system.
 
+- **AI-fingerprint and authorship audit**
+  - Produce a checked-in audit of Cohesix-authored code comments, public README text, canonical docs, task names, test names, and operator-facing examples that identifies template residue, generic filler, overconfident claims, repetitive AI-like cadence, and vague adjectives that are not backed by evidence.
+  - Treat the audit as evidence-driven: each finding must name the file, classify the fingerprint pattern, say whether the correct action is delete/rewrite/defer, and tie any retained wording to an invariant, failure mode, generated artifact, or operator contract.
+  - Require a separate reviewer lane for this audit so the person who wrote cleanup prose is not the only person deciding whether it still reads as generated.
+  - Preserve technical accuracy over style. Do not "humanize" generated snippets, release snapshots, vendored references, or append-only audit evidence except through their proper source/disposition path.
+
 - **As-built blocker ledger before refactor**
   - Produce a checked-in blocker ledger for current red-line and docs-as-built mismatches before any structural cleanup begins.
   - Classify each blocker as fix-in-26c, fix-before-26d, or explicitly deferred with rationale and dependency impact.
@@ -6908,9 +6918,11 @@ For each inventory entry, 26c must record one of:
   - Focus on readability wins that reduce duplication, tighten typed errors, make invariants explicit, or shrink review surface; defer behavior changes, feature additions, and monolithic rewrites that cannot be proven by existing contracts.
 
 - **Multi-agent execution plan**
-  - Run 26c in waves with disjoint ownership: one Planner lane for scope freeze and file ownership, one Auditor lane for inventory/provenance, one Auditor lane for docs-as-built and runtime-boundary evidence, one Builder lane for CI/test-plan plumbing, and separate cleanup Builder lanes for host tools, root-task runtime, HAL/network, tests, and docs only after the evidence lanes are green.
+  - Run 26c in waves with disjoint ownership: one Planner lane for scope freeze and file ownership, one Auditor lane for inventory/provenance, one Auditor lane for docs-as-built and runtime-boundary evidence, one Auditor lane for AI-fingerprint/authorship review, one Builder lane for CI/test-plan plumbing, and separate cleanup Builder lanes for host tools, root-task runtime, HAL/network, tests, and docs only after the evidence lanes are green.
+  - Keep a checked-in `docs/audit/M26C_AGENT_HANDOFFS.md` handoff log that records each lane's assigned surface, input evidence, commands, artifact paths, blockers, deferrals, and final PASS/FAIL status.
   - Keep evidence generation, target-aware staged-run plumbing, and prose/code cleanup in separate changesets whenever possible so reviewer trust does not depend on reading mixed-purpose diffs.
   - Do not allow concurrent cleanup edits on runtime-boundary-sensitive files while parity or gate-plumbing work is still in flight.
+  - Require the Planner lane to reconcile all sub-agent handoffs before closure; missing handoffs, unowned files, unclassified blockers, or stale artifact paths fail the milestone even if tests pass.
 
 - **QEMU + Pi 4 full regression evidence**
   - Extend the staged Test Plan runner and docs so `PASS` can be asserted separately for QEMU and Pi 4 hardware runs using the same target-aware stage contract and evidence layout.
@@ -6933,6 +6945,8 @@ For each inventory entry, 26c must record one of:
 - `cargo audit`
 - `cargo deny check advisories`
 - `rg -n "unsafe|unwrap\\(|expect\\(|panic!" apps crates tools`
+- `rg -n "robust|flexible|seamless|world-class|comprehensive|easy to use|powerful|simple and intuitive|AI-generated|generated by" README.md CONTRIBUTING.md AGENTS.md docs apps crates tools`
+- `rg -n "Defines the|Provides the|CLI entry point|library surface|module for|This module" apps crates tools docs README.md CONTRIBUTING.md AGENTS.md`
 - `cargo test -p secure9p-core`
 - `cargo test -p nine-door --test integration`
 - `cargo test -p coh --features mock`
@@ -6967,6 +6981,8 @@ For each inventory entry, 26c must record one of:
 - Each structural refactor has before/after characterization evidence, a rollback-sized diff boundary, and a risk-ratchet review for non-test `unsafe`, `unwrap`, `expect`, and `panic!`.
 - Cohesix-authored canonical docs are audited against generated snippets, manifest fingerprints, fixture outputs, release artifacts, and staged-run evidence before and after prose cleanup.
 - Docs/script drift discovered during the audit is corrected or explicitly deferred with scope-safe rationale before humanizing edits are accepted.
+- `docs/audit/M26C_AI_FINGERPRINT_AUDIT.md` exists, covers Cohesix-authored comments/docs/tests/examples, records every delete/rewrite/defer decision, and has an independent reviewer lane recorded in `docs/audit/M26C_AGENT_HANDOFFS.md`.
+- Public-facing prose avoids generic AI-like filler and inflated claims; retained wording is tied to concrete Cohesix behavior, evidence, or constraints.
 - Cohesix-authored canonical docs are rewritten to remove generic template prose and to describe the as-built system, invariants, or operator contract.
 - The checked-in 26c audit artifacts explicitly document the intentional host `std` / VM `no_std` boundary and do not imply runtime convergence where the design requires separate adapters.
 - Overlapping NineDoor semantics exercised by host and VM adapters are recorded in a parity matrix and backed by `apps/nine-door` tests plus `root-task` integration and library tests covering the actual event/console path; undocumented differences are rejected.
@@ -6980,7 +6996,7 @@ For each inventory entry, 26c must record one of:
 - QEMU full Test Plan run is `PASS` via the target-aware staged runner with `stage_01.done` through `stage_05.done`, required QEMU artifacts archived in the state dir, and no `*.incomplete` markers.
 - Pi 4 full Test Plan run is `PASS` via the target-aware staged runner with the same stage completeness requirements, required Pi 4 artifacts archived in the state dir, and no `*.incomplete` markers.
 - Stage 05 validates required target-qualified artifacts before writing `stage_05.done`.
-- Milestone closure evidence includes before/after reviewer-facing artifacts: representative code diffs, machine-readable Markdown inventory/disposition, rendered inventory report, QEMU test-plan state dir, Pi 4 test-plan state dir, parity audit artifacts, and due-diligence outputs.
+- Milestone closure evidence includes before/after reviewer-facing artifacts: representative code diffs, machine-readable Markdown inventory/disposition, rendered inventory report, AI-fingerprint audit, sub-agent handoff log, QEMU test-plan state dir, Pi 4 test-plan state dir, parity audit artifacts, and due-diligence outputs.
 
 ### Compiler / docsystem touchpoints
 - `coh-rtc` generated snippets referenced by `docs/snippets/*.md` remain authoritative; 26c may only change their source schemas or generators, never hand-edit the derived snippet text.
@@ -7031,6 +7047,27 @@ Checks:
 Deliverables:
   - Canonical authoring policy for human-readable code and docs without hidden behavior changes.
 
+Title/ID: m26c-ai-fingerprint-authorship-review
+Goal: Make authored code, docs, tests, and examples read as repository-native work rather than template or model-generated filler.
+Inputs: README.md, CONTRIBUTING.md, AGENTS.md, docs/**/*.md, apps/**/README.md, crates/**/README.md, tools/**/*.md, apps/**/src/**/*.rs, crates/**/src/**/*.rs, tools/**/*.rs, tools/cohesix-py/**/*.py, tests/**/*.rs, docs/audit/M26C_MARKDOWN_INVENTORY.csv, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md, docs/audit/M26C_REFACTOR_MAP.md
+Changes:
+  - docs/audit/M26C_AI_FINGERPRINT_AUDIT.md — checked-in audit of generic phrasing, template comments, repetitive cadence, inflated adjectives, placeholder examples, and non-specific test names, with delete/rewrite/defer decisions and evidence links.
+  - docs/audit/M26C_AGENT_HANDOFFS.md — record the independent authorship-review lane, reviewer, inspected surfaces, commands, residual gaps, and PASS/FAIL decision.
+  - README.md + CONTRIBUTING.md + docs/CODING_GUIDELINES.md + docs/API_GUIDELINES.md — document authorship expectations and the difference between required provenance metadata and low-value boilerplate.
+  - Cohesix-authored docs, comments, tests, and examples classified as low-risk by `M26C_REFACTOR_MAP.md` — delete or rewrite AI-fingerprint findings without changing behavior, grammar, fixture outputs, generated snippets, release snapshots, vendored references, or append-only audit evidence.
+Commands:
+  - rg -n "robust|flexible|seamless|world-class|comprehensive|easy to use|powerful|simple and intuitive|AI-generated|generated by" README.md CONTRIBUTING.md AGENTS.md docs apps crates tools
+  - rg -n "Defines the|Provides the|CLI entry point|library surface|module for|This module" apps crates tools docs README.md CONTRIBUTING.md AGENTS.md
+  - cargo fmt --all -- --check
+  - scripts/check-generated.sh
+Checks:
+  - Every finding is classified as delete, rewrite, acceptable-as-specific, generated/do-not-edit, release-derived, vendored/reference-only, append-only, or deferred with rationale.
+  - Rewritten prose names the actual Cohesix contract, invariant, failure mode, evidence path, or operator-visible behavior instead of using generic praise or template structure.
+  - Generated snippets, release snapshots, vendored references, and append-only audit evidence are not hand-edited to satisfy style.
+  - An independent reviewer lane signs off in `docs/audit/M26C_AGENT_HANDOFFS.md` before low-risk cleanup or public documentation polish is marked complete.
+Deliverables:
+  - Checked-in AI-fingerprint/authorship audit and cleanup evidence that make first-read code and documentation feel specific, technical, and maintained.
+
 Title/ID: m26c-markdown-inventory-and-disposition
 Goal: Inventory and disposition every tracked Markdown file in the main Cohesix repository so canonical, generated, release-derived, append-only, and vendored docs are handled correctly.
 Inputs: `git ls-files '*.md' | sort`, root/project docs, apps/**/README.md, crates/**/README.md, docs/**/*.md, tracked release-cut docs, seL4/**/*.md, tests/integration/README.md, tools/**/*.md, third_party/**/*.md
@@ -7072,7 +7109,7 @@ Checks:
   - Canonical diagrams describe the as-built system with enough detail to show authority boundaries, HAL ownership, host/VM separation, generated-manifest authority, Secure9P paths, worker roles, Pi 4 boot/network flows, and operator-visible control/data paths.
   - Diagram changes do not contradict generated snippets, manifests, fixtures, test-plan evidence, or the 26c blocker ledger.
 Deliverables:
-  - World-class GitHub-renderable Mermaid diagram set with inventory, compatibility proof, and as-built traceability for every tracked Markdown diagram.
+  - Review-grade GitHub-renderable Mermaid diagram set with inventory, compatibility proof, and as-built traceability for every tracked Markdown diagram.
 
 Title/ID: m26c-refactor-map-and-risk-ratchet
 Goal: Freeze the aggressive refactor scope, ownership, preserved contracts, and risk-ratchet baseline before structural edits begin.
@@ -7134,7 +7171,7 @@ Deliverables:
 
 Title/ID: m26c-low-risk-surface-cleanup
 Goal: Humanize the highest-visibility low-risk code and doc surfaces after docs-as-built alignment is proven.
-Inputs: apps/*/README.md, crates/**/README.md, tools/cohesix-py/README.md, tests/integration/README.md, public crate roots under apps/*/src/lib.rs, tests/**/*.rs, docs/OPERATOR_WALKTHROUGH.md, docs/QUICKSTART.md, docs/QUICKSTART_ALPHA.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
+Inputs: apps/*/README.md, crates/**/README.md, tools/cohesix-py/README.md, tests/integration/README.md, public crate roots under apps/*/src/lib.rs, tests/**/*.rs, docs/OPERATOR_WALKTHROUGH.md, docs/QUICKSTART.md, docs/QUICKSTART_ALPHA.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md, docs/audit/M26C_AI_FINGERPRINT_AUDIT.md
 Changes:
   - apps/*/README.md + crates/**/README.md + tools/cohesix-py/README.md + tests/integration/README.md — replace template summaries with role-specific descriptions, assumptions, and operator-facing boundaries.
   - apps/*/src/lib.rs + apps/*/src/main.rs + crates/**/src/lib.rs — remove generic module-surface comments and rewrite surviving doc comments around invariants or usage.
@@ -7147,6 +7184,7 @@ Commands:
 Checks:
   - High-visibility surface files read as authored, file-specific documentation instead of generated scaffolding.
   - Humanized docs remain consistent with the audit evidence produced by `m26c-docs-as-built-audit`.
+  - AI-fingerprint findings for touched low-risk surfaces are closed or explicitly deferred in `docs/audit/M26C_AI_FINGERPRINT_AUDIT.md`.
   - Test names and doc comments describe behaviors and scenarios, not file names.
 Deliverables:
   - First-wave cleanup across low-risk surfaces with zero behavior changes and passing tests.
