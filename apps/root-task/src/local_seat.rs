@@ -474,7 +474,7 @@ impl LocalSeatRuntime {
         self.usb_owner_record.acceptance_eligible()
     }
 
-    /// Stable reason the current USB owner record remains non-acceptance.
+    /// Stable non-acceptance reason when the USB owner record is not eligible.
     #[must_use]
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn usb_owner_state_non_acceptance_reason(&self) -> &'static str {
@@ -495,7 +495,7 @@ impl LocalSeatRuntime {
         self.hdmi_owner_record.acceptance_eligible()
     }
 
-    /// Stable reason the current HDMI owner record remains non-acceptance.
+    /// Stable non-acceptance reason when the HDMI owner record is not eligible.
     #[must_use]
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) const fn hdmi_owner_state_non_acceptance_reason(&self) -> &'static str {

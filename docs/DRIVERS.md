@@ -224,12 +224,12 @@ flowchart TD
 ```
 
 The diagram is intentionally split between runtime transport and owner-state
-proof. Serial is acceptance-eligible once fresh Pi evidence proves the linked
-path. The other Pi 4 runtime images remain non-acceptance until their hardware
-state machines make real progress from driver-local state on Pi hardware. The
-transport boundary is no longer a one-page smoke loader: root now maps bounded
-multi-page `PT_LOAD` runtime images and semantic MMIO/DMA/shared resource ranges
-before submitting the pointer-free init descriptor.
+proof. All seven Pi 4 runtime images are acceptance-eligible in the generated
+manifest, but fresh Pi evidence must still prove their hardware state machines
+make real progress from driver-local state. The transport boundary is no longer
+a one-page smoke loader: root now maps bounded multi-page `PT_LOAD` runtime
+images and semantic MMIO/DMA/shared resource ranges before submitting the
+pointer-free init descriptor.
 
 ### Driver-Task Scheduling Contracts
 
@@ -283,13 +283,13 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 | Contract | Role | Manifest affinity target | Current VSpace | Current hot path |
 | --- | --- | --- | --- | --- |
 | `serial` | serial console | `serial` | isolated child VSpace using the linked `pi4-driver-serial` image; emergency early UART remains root-owned | linked image services the fixed-ring smoke path plus bounded mini-UART init/RX/TX; generated spec is acceptance-eligible, but fresh Pi proof is still required |
-| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image requires a semantic xHCI MMIO range, DMA/shared pages, and a pointer-free USB-to-PCIe bus link before engine init; the manifest now budgets 16 xHCI MMIO pages instead of the earlier 2-page stub and the runtime can decode a bounded boot-keyboard report carried over the ring; xHCI enumeration, event rings, and HID polling still need Pi hardware completion |
+| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image requires a semantic xHCI MMIO range, DMA/shared pages, a physically contiguous DMA arena, the VL805 PCIe DMA bus alias, and a pointer-free USB-to-PCIe bus link before engine init; the runtime now owns a direct-root-port xHCI keyboard path with command/event/EP0/interrupt-IN rings, root-port reset, slot/address/configure-endpoint commands, HID boot-protocol setup, duplicate-key suppression, and DMA report polling; hub keyboards and VL805 timing still need Pi hardware proof |
 | `hdmi-text` | HDMI text mirror | `hdmi-text` | isolated child VSpace using the linked `pi4-driver-hdmi` image | linked image requires framebuffer metadata plus declared resources and renders bounded text frames directly into the mapped framebuffer |
-| `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | isolated child VSpace using the linked `pi4-driver-genet` image | linked image requires declared GENET MMIO/DMA/shared pages before engine init and accepts bounded TX frames over the fixed ring; descriptor-ring RX/TX hardware programming still needs Pi proof and completion |
-| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image requires declared DMA/shared buffers plus a pointer-free CYW43-to-SDIO bus link before engine init and accepts bounded TX frames over the fixed ring; firmware, SDPCM, WPA/EAPOL, and full SDIO bus sequencing still need Pi proof and completion |
+| `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | isolated child VSpace using the linked `pi4-driver-genet` image | linked image requires declared GENET MMIO/DMA/shared pages and a physically contiguous DMA arena before engine init; it programs UMAC/RGMII, MDIO PHY speed, MAC address, RX/TX descriptor rings, bounded TX submission, RX drain, and TX completion reclaim inside the runtime; useful link/DHCP progress still needs Pi hardware proof |
+| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image requires SDIO-host MMIO, declared DMA/shared buffers, and a pointer-free CYW43-to-SDIO bus link before engine init; it performs SDIO card/function bring-up, backplane windowing, firmware/NVRAM streaming, ARMCR4 release, bounded control-frame TX, Ethernet TX, and RX polling over SDPCM; Wi-Fi association/DHCP and WPA/EAPOL still need Pi hardware proof |
 | `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
-| `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | linked image requires declared SDHCI MMIO/DMA/shared pages, validates primitive CMD/response/data flags, and has a target-side bounded SDHCI single-frame command/data turn; full CYW43 bus-link sequencing still needs Pi proof and completion |
+| `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | linked image requires declared SDHCI MMIO/DMA/shared pages and a physically contiguous DMA arena; it accepts both the legacy primitive command shape and a fixed-layout SDIO command descriptor for explicit CMD52/CMD53/POLL_IRQ turns, including byte/block sizing and R5-style response handling; CYW43 now consumes those primitives from its linked runtime, but Wi-Fi acceptance still needs Pi proof |
 | `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | isolated child VSpace using the linked `pi4-driver-pcie` image | linked image requires declared PCIe MMIO/shared pages and services bounded 32-bit read/write/posted-write-flush turns inside the mapped aperture; broader root-complex/VL805 handoff still needs Pi proof and completion |
 
 The final isolated-image contract is now generated rather than hand-authored in
@@ -299,22 +299,23 @@ declare `root_task.driver_images` for `serial-console`, `usb-keyboard`,
 `coh-rtc` emits those records into `apps/root-task/src/generated`; and
 `scripts/cohesix-build-run.sh` stages linked `pi4-driver-*` runtime image
 binaries, and `scripts/pi4-image-build.sh` packages those images into the Pi 4
-driver-runtime CPIO passed at U-Boot handoff. Those binaries now implement the
-fixed command/completion ring smoke loop, so physical Pi bootstrap can debug the
-linked-image path instead of a shared-root service TCB. The serial image now
-handles the bounded mini-UART init/RX/TX service over the fixed ring, and its
-generated runtime spec reports `root_context_required=false` and
-`hardware_state_migrated=true`. The other linked images now contain
-resource-gated service turns rather than inert stubs: HDMI renders to a mapped
-framebuffer, PCIe services primitive MMIO read/write/flush operations, SDIO
-services primitive bounded command/data turns, USB decodes a bounded boot
-keyboard report, and GENET/CYW43 accept bounded ring TX frames. Aggregate
-acceptance still remains fail-closed: the generated USB/HDMI, GENET,
-CYW43/SDIO, and PCIe/VL805 runtime specs still report
-`root_context_required=true` and `hardware_state_migrated=false` until those
-runtime engines are proved on Pi hardware and the remaining xHCI, GENET DMA,
-CYW43 firmware/SDPCM, SDIO bus-link, and VL805 handoff state is accepted as
-driver-owned.
+driver-runtime CPIO passed at U-Boot handoff. Those binaries now implement
+fixed command/completion ring service engines for every Pi 4 hardware owner,
+so physical Pi bootstrap debugs linked-image hardware turns instead of
+shared-root service TCBs. The serial image handles bounded mini-UART
+init/RX/TX. HDMI renders to a mapped framebuffer, PCIe services primitive MMIO
+read/write/flush operations, SDIO services bounded command/data turns and
+fixed-layout CMD52/CMD53 records, USB owns a direct-root-port xHCI
+boot-keyboard path, and GENET owns bounded descriptor-ring RX/TX programming
+with MDIO/MAC setup. CYW43 performs SDIO transport initialization, backplane
+windowing, firmware/NVRAM streaming, ARMCR4 release, SDPCM control/data TX, and
+RX polling through fixed CYW43 command records. The generated runtime specs for
+all seven Pi 4 images report `root_context_required=false` and
+`hardware_state_migrated=true`, making them acceptance-eligible as independent
+hardware owners. Fresh Pi hardware proof is still required before claiming the
+engines are production-proven: xHCI hub/timing, Wi-Fi association/DHCP, GENET
+DHCP, HDMI scanout, serial I/O, and VL805 handoff all have to be observed on the
+board.
 
 The Pi 4 manifest default pins both network dataplane driver contracts to the
 fourth core (`core=3`): `root_task.affinity.drivers.bcmgenet-v5=3` and
@@ -367,23 +368,22 @@ proves that the child image received primitive hardware topology without root
 pointers, but it does not credit owner-state progress until a later device
 service turn makes real hardware progress from driver-local state.
 
-The default Pi/hardware path is partially cut over to linked isolated images.
-Normal serial init now goes through the linked `pi4-driver-serial` image and the
-event pump uses a `driver-task-serial-client` once that init command succeeds.
-The GENET/CYW43 and USB/local-seat root callers are ring clients on the physical
-Pi branch; the old root-resident `BcmGenetDevice`, `Cyw43NetDevice`, and
-`Pi4LocalSeat` constructors remain only in compatibility paths and cannot count
-as owner-state proof. The physical Pi `KernelHal` build does not carry a direct
-`Pi4WifiState` slot and direct Wi-Fi HAL state construction returns
+The default Pi/hardware path is cut over to linked isolated images. Normal
+serial init goes through the linked `pi4-driver-serial` image and the event pump
+uses a `driver-task-serial-client` once that init command succeeds. GENET/CYW43
+and USB/local-seat root callers are ring clients on the physical Pi branch; the
+old root-resident `BcmGenetDevice`, `Cyw43NetDevice`, and `Pi4LocalSeat`
+constructors remain only in compatibility paths and cannot count as owner-state
+proof. The physical Pi `KernelHal` build does not carry a direct `Pi4WifiState`
+slot and direct Wi-Fi HAL state construction returns
 `pi4-wifi-driver-task-runtime-required`. Emergency early serial output remains
 the only intended Pi root-owned escape hatch before or outside the driver-task
 substrate. If a linked ring-backed hardware owner is unavailable, the service
 turn fails closed with `DeviceUnavailable` instead of falling back to
-root-driving the hardware. `sdio-host` and `pcie-root` now have primitive
-linked-runtime command handlers. On the strict Pi owner-ring path, SDIO command
-and single-frame data calls consume the linked-runtime completion and return
-before the root SDHCI body, and PCIe physical port read/write/flush helpers
-return from linked-runtime completions before root MMIO. Full CYW43 firmware and
+root-driving the hardware. On the strict Pi owner-ring path, SDIO command and
+single-frame data calls consume the linked-runtime completion and return before
+the root SDHCI body, and PCIe physical port read/write/flush helpers return
+from linked-runtime completions before root MMIO. Full CYW43 firmware and
 SDPCM ownership, GENET DMA, USB/xHCI event-ring ownership, and broader VL805
 handoff still need fresh Pi proof and remaining hardware-state completion.
 
@@ -458,18 +458,17 @@ selects the isolated VSpace constructor; for generated Pi 4 hot paths it looks
 up the linked runtime artifact in the boot payload CPIO, maps the executable
 ELF page plus stack/IPC/ring/MMIO/DMA/shared regions, and starts the fixed-ring
 runtime entry. The mapped pages are not full acceptance by themselves: the specs
-remain non-acceptance for full Pi 4 VSpace closure while their reason is
-`root-context-required` or
-`hardware-state-not-migrated`. Standalone SDIO and PCIe owner-queue records
-similarly remain non-acceptance until the composite CYW43/local-seat bus state
-is split into dedicated bus runtime queues.
+are acceptance-eligible, but full Pi 4 VSpace closure still requires hardware
+service evidence from each linked runtime. Standalone SDIO and PCIe owner-queue
+records similarly are not closure until the composite CYW43/local-seat bus state
+is proved from the linked runtimes on Pi hardware.
 Owner-state proof is per-hot-path: an aggregate `owner_state=driver-owned`
 field on `DRIVER_TASK_SUBSTRATE` or `DRIVER_TASK_ACCEPTANCE` is diagnostic until
 all seven `DRIVER_TASK_OWNER_STATE` lines report a present descriptor and
 `root_pointer=no` and all seven runtime-image specs are acceptance-eligible with
 complete transport mapping. Descriptor registration is also rejected while the
-matching runtime-image spec remains non-acceptance, so proof cannot be forced by
-setting descriptor flags ahead of actual runtime migration.
+matching runtime-image spec is not acceptance-eligible, so proof cannot be
+forced by setting descriptor flags ahead of actual runtime migration.
 Physical Pi 4 builds compile out the
 callback slot state used by the transitional service ABI; serial,
 USB/local-seat, display, and network hot-path callers can reach compatibility

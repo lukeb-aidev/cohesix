@@ -27,18 +27,26 @@ use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
     DriverTaskCompletionCode, DriverTaskCompletionRecord, DriverTaskContract, DriverTaskFaultCode,
     DriverTaskHotPath, CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT,
+    MAX_DRIVER_TASK_FRAME_BYTES,
 };
 use crate::hal::{HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetStage, MAX_FRAME_LEN,
 };
-use pi4_driver_abi::DRIVER_RUNTIME_NET_INIT_AUX;
+use pi4_driver_abi::{
+    DriverRuntimeCyw43CommandDescriptor, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK, DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
+    DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL, DRIVER_RUNTIME_CYW43_OP_RELEASE,
+    DRIVER_RUNTIME_NET_INIT_AUX,
+};
 
 const GENET_DRIVER_TASK_MAC: EthernetAddress =
     EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x31]);
 const CYW43_DRIVER_TASK_MAC: EthernetAddress =
     EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x32]);
 const DRIVER_TASK_NET_STATUS: &str = "driver-task-ring-client";
+const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
+const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -79,7 +87,7 @@ unsafe impl Send for Cyw43NetDevice {}
 /// Error surfaced by driver-task NIC clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DriverTaskNetError {
-    /// The isolated driver runtime is not yet servicing hardware rings.
+    /// The isolated driver runtime has not completed its hardware service turn.
     RuntimePending(&'static str),
     /// The driver-task runtime could not initialise the real hardware backend.
     RuntimeInit(&'static str),
@@ -176,6 +184,7 @@ where
                     GENET_LINKED_RUNTIME_READY.store(1, Ordering::Release);
                 }
                 DriverTaskHotPath::Cyw43Wifi => {
+                    complete_cyw43_linked_runtime_firmware(hal, contract)?;
                     CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
                 }
                 _ => {}
@@ -217,6 +226,201 @@ where
         let _ = NET_RUNTIME_INIT_LEASE.lock().take();
         Err(DriverTaskNetError::RuntimeInit(hot_path.as_str()))
     }
+}
+
+#[cfg(feature = "kernel")]
+fn complete_cyw43_linked_runtime_firmware<H>(
+    hal: &mut H,
+    contract: DriverTaskContract,
+) -> Result<(), DriverTaskNetError>
+where
+    H: Hardware<Error = HalError>,
+{
+    let bundle = hal
+        .wifi_firmware_bundle()
+        .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
+    bundle
+        .validate()
+        .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
+    let reset_vector = firmware_reset_vector(bundle.firmware)
+        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-rstvec"))?;
+    stream_cyw43_runtime_payload(
+        contract,
+        DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+        CYW43_RAM_BASE_4345,
+        bundle.firmware,
+        bundle.firmware.len(),
+    )?;
+
+    let nvram = crate::hal::pi4_wifi::normalize_nvram(bundle.nvram);
+    let nvram_offset = CYW43_RAM_BASE_4345
+        .checked_add(CYW43_RAM_SIZE_4345_PI4)
+        .and_then(|value| value.checked_sub(4))
+        .and_then(|value| value.checked_sub(u32::try_from(nvram.len()).ok()?))
+        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-nvram-range"))?;
+    stream_cyw43_runtime_payload(
+        contract,
+        DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
+        nvram_offset,
+        nvram.as_slice(),
+        nvram.len(),
+    )?;
+
+    let nvram_words = u32::try_from(nvram.len() / 4)
+        .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-nvram-len"))?;
+    let nvram_magic = (!nvram_words << 16) | nvram_words;
+    let nvram_tail = CYW43_RAM_BASE_4345
+        .checked_add(CYW43_RAM_SIZE_4345_PI4)
+        .and_then(|value| value.checked_sub(4))
+        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-nvram-tail"))?;
+    submit_cyw43_runtime_command(
+        contract,
+        DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL,
+            target_addr: nvram_tail,
+            arg0: nvram_magic,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        },
+        &[],
+    )?;
+    submit_cyw43_runtime_command(
+        contract,
+        DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_RELEASE,
+            arg0: reset_vector,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        },
+        &[],
+    )?;
+    Ok(())
+}
+
+#[cfg(not(feature = "kernel"))]
+fn complete_cyw43_linked_runtime_firmware<H>(
+    _hal: &mut H,
+    _contract: DriverTaskContract,
+) -> Result<(), DriverTaskNetError>
+where
+    H: Hardware<Error = HalError>,
+{
+    Err(DriverTaskNetError::RuntimeInit("cyw43-kernel-runtime"))
+}
+
+#[cfg(feature = "kernel")]
+fn stream_cyw43_runtime_payload(
+    contract: DriverTaskContract,
+    op: u16,
+    base_addr: u32,
+    payload: &[u8],
+    total_len: usize,
+) -> Result<(), DriverTaskNetError> {
+    let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
+    let max_payload = MAX_DRIVER_TASK_FRAME_BYTES
+        .checked_sub(desc_size)
+        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-command-budget"))?;
+    let mut offset = 0usize;
+    while offset < payload.len() {
+        let chunk_len = (payload.len() - offset).min(max_payload);
+        let target_addr = base_addr
+            .checked_add(
+                u32::try_from(offset)
+                    .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-offset"))?,
+            )
+            .ok_or(DriverTaskNetError::RuntimeInit("cyw43-target-range"))?;
+        submit_cyw43_runtime_command(
+            contract,
+            DriverRuntimeCyw43CommandDescriptor {
+                op,
+                target_addr,
+                payload_len: chunk_len as u16,
+                total_len: total_len as u32,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            &payload[offset..offset + chunk_len],
+        )?;
+        offset += chunk_len;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "kernel")]
+fn submit_cyw43_runtime_command(
+    contract: DriverTaskContract,
+    mut descriptor: DriverRuntimeCyw43CommandDescriptor,
+    payload: &[u8],
+) -> Result<(), DriverTaskNetError> {
+    let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
+    if desc_size + payload.len() > MAX_DRIVER_TASK_FRAME_BYTES {
+        return Err(DriverTaskNetError::RuntimeInit("cyw43-command-budget"));
+    }
+    let payload_offset = crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET
+        .checked_add(desc_size)
+        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-payload-offset"))?;
+    descriptor.payload_offset = u16::try_from(payload_offset)
+        .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-payload-offset"))?;
+    if payload.is_empty() {
+        descriptor.payload_offset = 0;
+    }
+    let mut scratch = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    encode_cyw43_descriptor(&mut scratch[..desc_size], descriptor);
+    scratch[desc_size..desc_size + payload.len()].copy_from_slice(payload);
+    let staged = crate::hal::driver_task::stage_driver_task_ring_frame(
+        contract,
+        &scratch[..desc_size + payload.len()],
+        0,
+    )
+    .ok_or(DriverTaskNetError::RuntimeInit("cyw43-stage-command"))?;
+    let mut command = DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        DriverTaskHotPath::Cyw43Wifi,
+        DriverTaskBudgetGrant::from_contract(contract),
+        DriverFrameDescriptor {
+            offset: staged.offset,
+            len: desc_size as u16,
+            flags: staged.flags,
+        },
+    );
+    command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+    let completion = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-command-completion"))?;
+    if completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result != 0 {
+        Ok(())
+    } else {
+        Err(DriverTaskNetError::RuntimeInit("cyw43-command"))
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn encode_cyw43_descriptor(out: &mut [u8], descriptor: DriverRuntimeCyw43CommandDescriptor) {
+    put_le_u16(out, 0, descriptor.op);
+    put_le_u16(out, 2, descriptor.flags);
+    put_le_u32(out, 4, descriptor.target_addr);
+    put_le_u16(out, 8, descriptor.payload_offset);
+    put_le_u16(out, 10, descriptor.payload_len);
+    put_le_u32(out, 12, descriptor.total_len);
+    put_le_u32(out, 16, descriptor.arg0);
+    put_le_u32(out, 20, descriptor.arg1);
+    put_le_u32(out, 24, descriptor.reserved);
+}
+
+#[cfg(feature = "kernel")]
+fn put_le_u16(out: &mut [u8], offset: usize, value: u16) {
+    out[offset] = (value & 0xff) as u8;
+    out[offset + 1] = (value >> 8) as u8;
+}
+
+#[cfg(feature = "kernel")]
+fn put_le_u32(out: &mut [u8], offset: usize, value: u32) {
+    out[offset] = (value & 0xff) as u8;
+    out[offset + 1] = ((value >> 8) & 0xff) as u8;
+    out[offset + 2] = ((value >> 16) & 0xff) as u8;
+    out[offset + 3] = ((value >> 24) & 0xff) as u8;
+}
+
+#[cfg(feature = "kernel")]
+fn firmware_reset_vector(firmware: &[u8]) -> Option<u32> {
+    let bytes = firmware.get(0..4)?;
+    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
 unsafe fn init_runtime_for_hal<H>(

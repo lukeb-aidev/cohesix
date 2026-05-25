@@ -28,7 +28,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "982f9a562a7519a2deab504fdbb849abf34939bcdd0e6977585e70fb6dfc02d6";
+    "599f1e17e143bdda07fd2fe74b42ebdb3fec9c9ad248d835de6e18dbb8bd8608";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -171,8 +171,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 16,
         dma_pages: 128,
         shared_buffer_pages: 32,
-        root_context_required: true,
-        hardware_state_migrated: false,
+        root_context_required: false,
+        hardware_state_migrated: true,
     },
     DriverRuntimeImageSpec {
         id: "pi4-hdmi-runtime",
@@ -187,8 +187,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 1,
         dma_pages: 16,
         shared_buffer_pages: 16,
-        root_context_required: true,
-        hardware_state_migrated: false,
+        root_context_required: false,
+        hardware_state_migrated: true,
     },
     DriverRuntimeImageSpec {
         id: "pi4-genet-runtime",
@@ -203,8 +203,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 6,
         dma_pages: 512,
         shared_buffer_pages: 32,
-        root_context_required: true,
-        hardware_state_migrated: false,
+        root_context_required: false,
+        hardware_state_migrated: true,
     },
     DriverRuntimeImageSpec {
         id: "pi4-cyw43-runtime",
@@ -216,11 +216,11 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         stack_pages: 1,
         ipc_pages: 1,
         ring_pages: 1,
-        mmio_pages: 0,
+        mmio_pages: 1,
         dma_pages: 128,
         shared_buffer_pages: 64,
-        root_context_required: true,
-        hardware_state_migrated: false,
+        root_context_required: false,
+        hardware_state_migrated: true,
     },
     DriverRuntimeImageSpec {
         id: "pi4-sdio-runtime",
@@ -235,8 +235,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 1,
         dma_pages: 64,
         shared_buffer_pages: 32,
-        root_context_required: true,
-        hardware_state_migrated: false,
+        root_context_required: false,
+        hardware_state_migrated: true,
     },
     DriverRuntimeImageSpec {
         id: "pi4-pcie-runtime",
@@ -251,8 +251,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 10,
         dma_pages: 0,
         shared_buffer_pages: 16,
-        root_context_required: true,
-        hardware_state_migrated: false,
+        root_context_required: false,
+        hardware_state_migrated: true,
     },
 ];
 
@@ -651,7 +651,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 36] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=8fc340ec6531d79bc9712a5bf81ca985942023b71367799d5e622f6333bfd603",
+    "manifest.sha256=3b19c14c97f59749a1b5b06dcd90af57e97f79a2c98964fe25fca9c2f41b8b65",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

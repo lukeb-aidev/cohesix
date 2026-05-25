@@ -1372,7 +1372,7 @@ fn runtime_mmio_candidate_bases(hot_path: driver_task::DriverTaskHotPath) -> &'s
         driver_task::DriverTaskHotPath::UsbKeyboard => PI4_DRIVER_RUNTIME_USB_XHCI_MMIO_BASES,
         driver_task::DriverTaskHotPath::HdmiText => PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES,
         driver_task::DriverTaskHotPath::GenetNic => PI4_DRIVER_RUNTIME_GENET_MMIO_BASES,
-        driver_task::DriverTaskHotPath::Cyw43Wifi => &[],
+        driver_task::DriverTaskHotPath::Cyw43Wifi => PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES,
         driver_task::DriverTaskHotPath::SdioHost => PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES,
         driver_task::DriverTaskHotPath::PcieRoot => PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES,
     }
@@ -1405,6 +1405,21 @@ fn runtime_region_page_vaddr(
 }
 
 #[cfg(feature = "kernel")]
+fn runtime_region_paddr_is_contiguous(
+    first_paddr: usize,
+    page: usize,
+    page_bytes: usize,
+    paddr: usize,
+) -> bool {
+    first_paddr.checked_add(page.saturating_mul(page_bytes)) == Some(paddr)
+}
+
+#[cfg(feature = "kernel")]
+const PI4_VL805_DMA_BUS_ALIAS_OR: u64 = 0x0000_0004_0000_0000;
+#[cfg(feature = "kernel")]
+const PI4_VL805_DMA_BUS_ALIAS_AND: u64 = 0x0000_0000_ffff_ffff;
+
+#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeInitDescriptorBuilder {
     descriptor: DriverRuntimeInitDescriptor,
@@ -1428,6 +1443,8 @@ impl RuntimeInitDescriptorBuilder {
         descriptor.shared_vaddr_base = driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR as u64;
         match spec.hot_path {
             driver_task::DriverTaskHotPath::UsbKeyboard => {
+                descriptor.bus_alias_or = PI4_VL805_DMA_BUS_ALIAS_OR;
+                descriptor.bus_alias_and = PI4_VL805_DMA_BUS_ALIAS_AND;
                 descriptor.bus_link_count = 1;
                 descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
                     driver_task::DriverTaskHotPath::PcieRoot.as_u32(),
@@ -1558,6 +1575,7 @@ impl RuntimeInitDescriptorBuilder {
             DRIVER_RUNTIME_RESOURCE_KIND_DMA => (
                 DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
                 DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
                     | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
             ),
             DRIVER_RUNTIME_RESOURCE_KIND_SHARED => (
@@ -1624,7 +1642,7 @@ fn runtime_mmio_resource_tag(hot_path: driver_task::DriverTaskHotPath) -> u32 {
         driver_task::DriverTaskHotPath::UsbKeyboard => DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
         driver_task::DriverTaskHotPath::HdmiText => DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
         driver_task::DriverTaskHotPath::GenetNic => DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
-        driver_task::DriverTaskHotPath::Cyw43Wifi => DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+        driver_task::DriverTaskHotPath::Cyw43Wifi => DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
         driver_task::DriverTaskHotPath::SdioHost => DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
         driver_task::DriverTaskHotPath::PcieRoot => DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
     }
@@ -2176,7 +2194,7 @@ impl<'a> KernelHal<'a> {
                     let _ = fmt::write(
                         &mut line,
                         format_args!(
-                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} code_vaddr=0x{:08x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} proof={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state=root-owned owner_state_reason={}",
+                            "DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu contract={} role={} status=created tcb=0x{:04x} cnode=0x{:04x} endpoint=0x{:04x} notification=0x{:04x} started={} affinity_core={} isolation_cspace=restricted vspace={} vspace_cap=0x{:04x} code_vaddr=0x{:08x} ring_vaddr=0x{:08x} ipc_abi={} pointer_free_ipc={} proof={} runtime_image={} runtime_declared=0x{:02x} runtime_mapped=0x{:02x} runtime_acceptance={} owner_state=not-proven owner_state_reason={}",
                             handle.contract.name,
                             handle.contract.kind.proof_role(),
                             handle.tcb,
@@ -2639,6 +2657,7 @@ impl<'a> KernelHal<'a> {
         } else {
             sel4_sys::seL4_ARM_Page_Default
         };
+        let page_bytes = 1usize << sel4::PAGE_BITS;
         let first_page_index = init_descriptor
             .as_deref()
             .map(|builder| {
@@ -2650,6 +2669,7 @@ impl<'a> KernelHal<'a> {
             })
             .unwrap_or(0);
         let mut first_paddr = 0usize;
+        let mut physically_contiguous = true;
         for page in 0..pages {
             let vaddr = runtime_region_page_vaddr(region, page)
                 .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?;
@@ -2661,6 +2681,9 @@ impl<'a> KernelHal<'a> {
                 let paddr = frame.paddr();
                 if page == 0 {
                     first_paddr = paddr;
+                } else if !runtime_region_paddr_is_contiguous(first_paddr, page, page_bytes, paddr)
+                {
+                    physically_contiguous = false;
                 }
                 self.env
                     .map_page_cap_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
@@ -2684,6 +2707,9 @@ impl<'a> KernelHal<'a> {
                     builder.add_shared_page(paddr)?;
                 }
             }
+        }
+        if dma_owned && !physically_contiguous {
+            return Err(HalError::Unsupported("driver-runtime-dma-noncontiguous"));
         }
         if let Some(builder) = init_descriptor.as_deref_mut() {
             builder.add_buffer_resource_range(
@@ -3490,6 +3516,7 @@ mod tests {
         handle
     }
 
+    #[cfg(feature = "kernel")]
     #[test]
     fn pi4_runtime_mmio_candidates_cover_usb_high_bar_and_legacy_aliases() {
         let bases =
@@ -3497,6 +3524,23 @@ mod tests {
         assert!(bases.contains(&0x0000_0006_0000_0000));
         assert!(bases.contains(&0xFE98_0000));
         assert!(bases.contains(&0x7E98_0000));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_region_paddr_contiguity_checks_exact_page_stride() {
+        assert!(super::runtime_region_paddr_is_contiguous(
+            0x4000_0000,
+            3,
+            0x1000,
+            0x4000_3000
+        ));
+        assert!(!super::runtime_region_paddr_is_contiguous(
+            0x4000_0000,
+            3,
+            0x1000,
+            0x4000_4000
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -3644,6 +3688,15 @@ mod tests {
         assert!(
             descriptor.has_bus_link_to(super::driver_task::DriverTaskHotPath::PcieRoot.as_u32())
         );
+        assert_eq!(descriptor.bus_alias_or, super::PI4_VL805_DMA_BUS_ALIAS_OR);
+        assert_eq!(descriptor.bus_alias_and, super::PI4_VL805_DMA_BUS_ALIAS_AND);
+        assert!(descriptor.has_resource_range_at_with_flags(
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+            super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR as u64,
+            16,
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+        ));
         assert_eq!(
             descriptor.mmio_page_count,
             pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES as u16
@@ -3877,7 +3930,10 @@ mod tests {
         assert!(!report.owner_state_proof);
         assert_eq!(report.runtime_image_declared_count, 7);
         assert_eq!(report.runtime_image_transport_mapped_count, 0);
-        assert_eq!(report.runtime_image_acceptance_count, 1);
+        assert_eq!(
+            report.runtime_image_acceptance_count,
+            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATHS
+        );
         assert_eq!(
             report.runtime_image_declared_hot_path_mask,
             super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
@@ -3909,7 +3965,10 @@ mod tests {
         );
         assert_eq!(report.runtime_image_declared_count, 7);
         assert_eq!(report.runtime_image_transport_mapped_count, 7);
-        assert_eq!(report.runtime_image_acceptance_count, 1);
+        assert_eq!(
+            report.runtime_image_acceptance_count,
+            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATHS
+        );
         assert_eq!(
             report.runtime_image_transport_mapped_hot_path_mask,
             super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
@@ -3920,14 +3979,6 @@ mod tests {
 
         report.owner_state_hot_path_mask =
             super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
-        super::finalize_driver_task_bootstrap_report(
-            &mut report,
-            super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
-        );
-        assert!(!report.owner_state_proof);
-
-        report.runtime_image_acceptance_count =
-            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATHS;
         super::finalize_driver_task_bootstrap_report(
             &mut report,
             super::DRIVER_TASK_BOOTSTRAP_CONTRACTS.len(),
@@ -3973,29 +4024,16 @@ mod tests {
                 "{}",
                 contract.name
             );
-            if contract == super::driver_task::SERIAL_DRIVER_TASK_CONTRACT {
-                assert!(
-                    handle.runtime_image_acceptance_eligible,
-                    "{}",
-                    contract.name
-                );
-                assert_eq!(
-                    handle.runtime_image_non_acceptance_reason, "acceptance-ready",
-                    "{}",
-                    contract.name
-                );
-            } else {
-                assert!(
-                    !handle.runtime_image_acceptance_eligible,
-                    "{}",
-                    contract.name
-                );
-                assert_eq!(
-                    handle.runtime_image_non_acceptance_reason, "root-context-required",
-                    "{}",
-                    contract.name
-                );
-            }
+            assert!(
+                handle.runtime_image_acceptance_eligible,
+                "{}",
+                contract.name
+            );
+            assert_eq!(
+                handle.runtime_image_non_acceptance_reason, "acceptance-ready",
+                "{}",
+                contract.name
+            );
         }
     }
 

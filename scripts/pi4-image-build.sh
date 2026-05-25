@@ -928,9 +928,12 @@ EOF
 
 stage_driver_runtime_payload() {
     local mkimage_bin="$1"
-    local runtime_root="${STAGE_DIR}/driver-runtime-root"
+    mkdir -p "$STAGE_DIR"
+    local stage_dir_abs
+    stage_dir_abs="$(cd "$STAGE_DIR" && pwd)"
+    local runtime_root="${stage_dir_abs}/driver-runtime-root"
     local runtime_bin="${runtime_root}/cohesix/bin"
-    local raw_cpio="${STAGE_DIR}/cohesix-driver-runtimes.cpio"
+    local raw_cpio="${stage_dir_abs}/cohesix-driver-runtimes.cpio"
     local runtime_artifact_dir="${ROOT_DIR}/target/aarch64-unknown-none/release"
     local bin
 
@@ -960,10 +963,10 @@ stage_driver_runtime_payload() {
       -C none \
       -n "Cohesix Pi4 driver runtimes" \
       -d "$raw_cpio" \
-      "${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}" \
+      "${stage_dir_abs}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}" \
       >/dev/null
-    require_file "${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
-    log "Staged Pi4 driver runtime payload at ${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
+    require_file "${stage_dir_abs}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
+    log "Staged Pi4 driver runtime payload at ${stage_dir_abs}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
 }
 
 stage_sd_payload() {

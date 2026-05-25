@@ -59,8 +59,8 @@ ring-pages = 1
 mmio-pages = 16
 dma-pages = 128
 shared-buffer-pages = 32
-root-context-required = true
-hardware-state-migrated = false
+root-context-required = false
+hardware-state-migrated = true
 
 [[root_task.driver_images.images]]
 id = "pi4-hdmi-runtime"
@@ -75,8 +75,8 @@ ring-pages = 1
 mmio-pages = 1
 dma-pages = 16
 shared-buffer-pages = 16
-root-context-required = true
-hardware-state-migrated = false
+root-context-required = false
+hardware-state-migrated = true
 
 [[root_task.driver_images.images]]
 id = "pi4-genet-runtime"
@@ -91,8 +91,8 @@ ring-pages = 1
 mmio-pages = 6
 dma-pages = 512
 shared-buffer-pages = 32
-root-context-required = true
-hardware-state-migrated = false
+root-context-required = false
+hardware-state-migrated = true
 
 [[root_task.driver_images.images]]
 id = "pi4-cyw43-runtime"
@@ -104,11 +104,11 @@ code-pages = 64
 stack-pages = 1
 ipc-pages = 1
 ring-pages = 1
-mmio-pages = 0
+mmio-pages = 1
 dma-pages = 128
 shared-buffer-pages = 64
-root-context-required = true
-hardware-state-migrated = false
+root-context-required = false
+hardware-state-migrated = true
 
 [[root_task.driver_images.images]]
 id = "pi4-sdio-runtime"
@@ -123,8 +123,8 @@ ring-pages = 1
 mmio-pages = 1
 dma-pages = 64
 shared-buffer-pages = 32
-root-context-required = true
-hardware-state-migrated = false
+root-context-required = false
+hardware-state-migrated = true
 
 [[root_task.driver_images.images]]
 id = "pi4-pcie-runtime"
@@ -139,8 +139,8 @@ ring-pages = 1
 mmio-pages = 10
 dma-pages = 0
 shared-buffer-pages = 16
-root-context-required = true
-hardware-state-migrated = false
+root-context-required = false
+hardware-state-migrated = true
 
 [profile]
 name = "pi4-uboot-aarch64"

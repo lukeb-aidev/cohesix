@@ -24,12 +24,12 @@
 - `root_task.driver_images.required`: `true`
 - `root_task.driver_images.images`: `7`
 - `root_task.driver_images.pi4-serial-runtime`: contract=`serial` hot_path=`serial-console` artifact=`cohesix/bin/pi4-driver-serial` root_context_required=`false` hardware_state_migrated=`true`
-- `root_task.driver_images.pi4-usb-runtime`: contract=`usb-local-seat` hot_path=`usb-keyboard` artifact=`cohesix/bin/pi4-driver-usb` root_context_required=`true` hardware_state_migrated=`false`
-- `root_task.driver_images.pi4-hdmi-runtime`: contract=`hdmi-text` hot_path=`hdmi-text` artifact=`cohesix/bin/pi4-driver-hdmi` root_context_required=`true` hardware_state_migrated=`false`
-- `root_task.driver_images.pi4-genet-runtime`: contract=`bcmgenet-v5` hot_path=`genet-nic` artifact=`cohesix/bin/pi4-driver-genet` root_context_required=`true` hardware_state_migrated=`false`
-- `root_task.driver_images.pi4-cyw43-runtime`: contract=`cyw43455` hot_path=`cyw43-wifi` artifact=`cohesix/bin/pi4-driver-cyw43` root_context_required=`true` hardware_state_migrated=`false`
-- `root_task.driver_images.pi4-sdio-runtime`: contract=`sdio-host` hot_path=`sdio-host` artifact=`cohesix/bin/pi4-driver-sdio` root_context_required=`true` hardware_state_migrated=`false`
-- `root_task.driver_images.pi4-pcie-runtime`: contract=`pcie-root` hot_path=`pcie-root` artifact=`cohesix/bin/pi4-driver-pcie` root_context_required=`true` hardware_state_migrated=`false`
+- `root_task.driver_images.pi4-usb-runtime`: contract=`usb-local-seat` hot_path=`usb-keyboard` artifact=`cohesix/bin/pi4-driver-usb` root_context_required=`false` hardware_state_migrated=`true`
+- `root_task.driver_images.pi4-hdmi-runtime`: contract=`hdmi-text` hot_path=`hdmi-text` artifact=`cohesix/bin/pi4-driver-hdmi` root_context_required=`false` hardware_state_migrated=`true`
+- `root_task.driver_images.pi4-genet-runtime`: contract=`bcmgenet-v5` hot_path=`genet-nic` artifact=`cohesix/bin/pi4-driver-genet` root_context_required=`false` hardware_state_migrated=`true`
+- `root_task.driver_images.pi4-cyw43-runtime`: contract=`cyw43455` hot_path=`cyw43-wifi` artifact=`cohesix/bin/pi4-driver-cyw43` root_context_required=`false` hardware_state_migrated=`true`
+- `root_task.driver_images.pi4-sdio-runtime`: contract=`sdio-host` hot_path=`sdio-host` artifact=`cohesix/bin/pi4-driver-sdio` root_context_required=`false` hardware_state_migrated=`true`
+- `root_task.driver_images.pi4-pcie-runtime`: contract=`pcie-root` hot_path=`pcie-root` artifact=`cohesix/bin/pi4-driver-pcie` root_context_required=`false` hardware_state_migrated=`true`
 - `profile.name`: `virt-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
@@ -217,7 +217,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `8fc340ec6531d79bc9712a5bf81ca985942023b71367799d5e622f6333bfd603`
+- `manifest.sha256`: `3b19c14c97f59749a1b5b06dcd90af57e97f79a2c98964fe25fca9c2f41b8b65`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -279,4 +279,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `8fc340ec6531d79bc9712a5bf81ca985942023b71367799d5e622f6333bfd603`)._
+_Generated from `configs/root_task.toml` (sha256: `3b19c14c97f59749a1b5b06dcd90af57e97f79a2c98964fe25fca9c2f41b8b65`)._

@@ -17,6 +17,24 @@ pub const DRIVER_RUNTIME_ENGINE_INIT_AUX: u32 = 0x454e_474e;
 pub const DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX: u32 = 0x4c53_494e;
 /// GENET/CYW43 network init command used by the root ring client.
 pub const DRIVER_RUNTIME_NET_INIT_AUX: u32 = 0x494e_4954;
+/// CYW43 command descriptor submission marker used in `aux0`.
+pub const DRIVER_RUNTIME_CYW43_COMMAND_AUX: u32 = 0x4359_5734;
+/// CYW43 operation: initialize the SDIO transport and firmware upload lane.
+pub const DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT: u16 = 1;
+/// CYW43 operation: write a firmware chunk into dongle RAM.
+pub const DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK: u16 = 2;
+/// CYW43 operation: write a normalized NVRAM chunk into dongle RAM.
+pub const DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK: u16 = 3;
+/// CYW43 operation: write the NVRAM tail marker.
+pub const DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL: u16 = 4;
+/// CYW43 operation: release the ARMCR4 firmware CPU.
+pub const DRIVER_RUNTIME_CYW43_OP_RELEASE: u16 = 5;
+/// CYW43 operation: submit one SDPCM/BDC control payload.
+pub const DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME: u16 = 6;
+/// CYW43 operation: submit one Ethernet payload through SDPCM/BDC.
+pub const DRIVER_RUNTIME_CYW43_OP_ETH_TX: u16 = 7;
+/// CYW43 operation: poll the Function 2 RX path.
+pub const DRIVER_RUNTIME_CYW43_OP_RX_POLL: u16 = 8;
 /// PCIe runtime command operation: read one 32-bit xHCI/VL805 register.
 pub const DRIVER_RUNTIME_PCIE_OP_PORT_READ: u16 = 1;
 /// PCIe runtime command operation: write one 32-bit xHCI/VL805 register.
@@ -39,6 +57,26 @@ pub const DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT: u16 = 1 << 5;
 pub const DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY: u16 = 1 << 6;
 /// SDIO runtime command flag: command expects a long response.
 pub const DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG: u16 = 1 << 7;
+/// SDIO bus-owner operation: read one byte with CMD52.
+pub const DRIVER_RUNTIME_SDIO_OP_CMD52_READ: u16 = 1;
+/// SDIO bus-owner operation: write one byte with CMD52.
+pub const DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE: u16 = 2;
+/// SDIO bus-owner operation: read bytes or blocks with CMD53.
+pub const DRIVER_RUNTIME_SDIO_OP_CMD53_READ: u16 = 3;
+/// SDIO bus-owner operation: write bytes or blocks with CMD53.
+pub const DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE: u16 = 4;
+/// SDIO bus-owner operation: poll interrupt status.
+pub const DRIVER_RUNTIME_SDIO_OP_POLL_IRQ: u16 = 5;
+/// SDIO response kind: no response.
+pub const DRIVER_RUNTIME_SDIO_RESP_NONE: u8 = 0;
+/// SDIO response kind: OCR/R4 response.
+pub const DRIVER_RUNTIME_SDIO_RESP_OCR: u8 = 1;
+/// SDIO response kind: short/R5 response.
+pub const DRIVER_RUNTIME_SDIO_RESP_SHORT: u8 = 2;
+/// SDIO response kind: short-busy response.
+pub const DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY: u8 = 3;
+/// SDIO response kind: long response.
+pub const DRIVER_RUNTIME_SDIO_RESP_LONG: u8 = 4;
 /// Pixel format tag for 32-bit xRGB/BGR framebuffer words.
 pub const DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888: u32 = 1;
 /// Pixel format tag for 24-bit RGB/BGR framebuffer bytes.
@@ -59,6 +97,10 @@ pub const DRIVER_RUNTIME_INIT_MAX_BUS_LINKS: usize = 2;
 pub const DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES: usize = 8;
 /// Runtime resource descriptors use 4 KiB pages.
 pub const DRIVER_RUNTIME_RESOURCE_PAGE_BYTES: u64 = 4096;
+/// Fixed offset of the root/runtime payload area in one ring page.
+pub const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
+/// Bytes in one command/completion ring page.
+pub const DRIVER_RUNTIME_RING_PAGE_BYTES: u16 = 4096;
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
 
@@ -196,6 +238,171 @@ pub struct DriverRuntimeFramebufferDescriptor {
     pub pitch: u32,
     /// Pixel format tag owned by the runtime.
     pub format: u32,
+}
+
+/// Fixed SDIO command record carried in the shared driver ring.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeSdioCommandDescriptor {
+    /// [`DRIVER_RUNTIME_SDIO_OP_*`] value.
+    pub op: u16,
+    /// Function number for CMD52/CMD53.
+    pub function: u8,
+    /// [`DRIVER_RUNTIME_SDIO_RESP_*`] value.
+    pub response_kind: u8,
+    /// SDIO register/window address.
+    pub addr: u32,
+    /// Data payload offset inside the fixed command ring page.
+    pub data_offset: u16,
+    /// Data bytes for byte-mode transfers.
+    pub len: u16,
+    /// Block size for CMD53 block-mode transfers.
+    pub block_size: u16,
+    /// Block count for CMD53 block-mode transfers.
+    pub block_count: u16,
+    /// Bit 0 requests incrementing CMD53 address mode.
+    pub flags: u16,
+    /// Reserved for alignment and future fields.
+    pub reserved: u16,
+    /// Bounded command timeout in microseconds.
+    pub timeout_us: u32,
+}
+
+impl DriverRuntimeSdioCommandDescriptor {
+    /// CMD53 address increments after each byte/block.
+    pub const FLAG_INCREMENT: u16 = 1 << 0;
+
+    /// Empty descriptor.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            op: 0,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: 0,
+            data_offset: 0,
+            len: 0,
+            block_size: 0,
+            block_count: 0,
+            flags: 0,
+            reserved: 0,
+            timeout_us: 0,
+        }
+    }
+
+    /// Returns true when the command is bounded and internally consistent.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        let known_op = self.op == DRIVER_RUNTIME_SDIO_OP_CMD52_READ
+            || self.op == DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE
+            || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_READ
+            || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+            || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
+        let known_response = self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
+            || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_OCR
+            || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_SHORT
+            || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY
+            || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_LONG;
+        let cmd52 = self.op == DRIVER_RUNTIME_SDIO_OP_CMD52_READ
+            || self.op == DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE;
+        let cmd53 = self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_READ
+            || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE;
+        let read_result = self.op == DRIVER_RUNTIME_SDIO_OP_CMD52_READ
+            || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
+        let effective_len = if read_result {
+            1
+        } else if self.block_count != 0 {
+            (self.block_count as u32).saturating_mul(self.block_size as u32)
+        } else {
+            self.len as u32
+        };
+        let payload_end = self.data_offset as u32 + effective_len;
+        known_op
+            && known_response
+            && self.function <= 7
+            && self.addr < (1 << 17)
+            && (!cmd52 || (self.len == 1 && self.block_count == 0 && self.block_size == 0))
+            && (!cmd53
+                || ((self.len != 0 || self.block_count != 0)
+                    && (self.block_count == 0
+                        || (self.block_size != 0
+                            && self.block_size <= 512
+                            && self.block_count <= 511))))
+            && effective_len != 0
+            && self.data_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
+            && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32
+    }
+}
+
+/// Fixed CYW43 command record carried in the shared driver ring.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43CommandDescriptor {
+    /// [`DRIVER_RUNTIME_CYW43_OP_*`] value.
+    pub op: u16,
+    /// Role-specific primitive flags.
+    pub flags: u16,
+    /// Backplane target address for firmware/NVRAM/control writes.
+    pub target_addr: u32,
+    /// Payload offset inside the fixed command ring page.
+    pub payload_offset: u16,
+    /// Payload bytes carried in this command.
+    pub payload_len: u16,
+    /// Total stream length for chunked transfers.
+    pub total_len: u32,
+    /// Operation-specific argument.
+    pub arg0: u32,
+    /// Operation-specific argument.
+    pub arg1: u32,
+    /// Reserved for alignment and future fields.
+    pub reserved: u32,
+}
+
+impl DriverRuntimeCyw43CommandDescriptor {
+    /// Empty descriptor.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            op: 0,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            arg0: 0,
+            arg1: 0,
+            reserved: 0,
+        }
+    }
+
+    /// Returns true when the command is pointer-free and bounded to the ring.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        let known_op = self.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+            || self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
+            || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+            || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL
+            || self.op == DRIVER_RUNTIME_CYW43_OP_RELEASE
+            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
+            || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX
+            || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL;
+        let carries_payload = self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
+            || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
+            || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX;
+        let zero_payload = self.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+            || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL
+            || self.op == DRIVER_RUNTIME_CYW43_OP_RELEASE
+            || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL;
+        let payload_end = self.payload_offset as u32 + self.payload_len as u32;
+        known_op
+            && ((carries_payload
+                && self.payload_len != 0
+                && self.payload_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
+                && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32)
+                || (zero_payload && self.payload_len == 0))
+            && (self.total_len == 0 || self.total_len >= self.payload_len as u32)
+    }
 }
 
 impl DriverRuntimeFramebufferDescriptor {
@@ -645,12 +852,71 @@ impl DriverRuntimeInitDescriptor {
         self.resource_pages_by_kind_and_tag(kind, tag) != 0
     }
 
+    /// Returns true when a matching range starts at the expected driver-local
+    /// virtual address and carries at least `min_pages` pages.
+    #[must_use]
+    pub const fn has_resource_range_at(
+        self,
+        kind: u16,
+        tag: u32,
+        expected_vaddr: u64,
+        min_pages: u16,
+    ) -> bool {
+        self.has_resource_range_at_with_flags(kind, tag, expected_vaddr, min_pages, 0)
+    }
+
+    /// Returns true when a matching range starts at the expected driver-local
+    /// virtual address, carries at least `min_pages`, and includes all
+    /// `required_flags`.
+    #[must_use]
+    pub const fn has_resource_range_at_with_flags(
+        self,
+        kind: u16,
+        tag: u32,
+        expected_vaddr: u64,
+        min_pages: u16,
+        required_flags: u16,
+    ) -> bool {
+        let mut index = 0;
+        while index < self.resource_range_count as usize {
+            let range = self.resource_ranges[index];
+            if range.kind == kind
+                && range.tag == tag
+                && range.vaddr == expected_vaddr
+                && range.page_count >= min_pages
+                && (range.flags & required_flags) == required_flags
+            {
+                return true;
+            }
+            index += 1;
+        }
+        false
+    }
+
     /// Returns true when the descriptor includes a bus link to `owner_hot_path`.
     #[must_use]
     pub const fn has_bus_link_to(self, owner_hot_path: u32) -> bool {
         let mut index = 0;
         while index < self.bus_link_count as usize {
             if self.bus_links[index].owner_hot_path == owner_hot_path {
+                return true;
+            }
+            index += 1;
+        }
+        false
+    }
+
+    /// Returns true when the descriptor includes the exact pointer-free bus
+    /// channel required by a split runtime.
+    #[must_use]
+    pub const fn has_pointer_free_bus_link(self, owner_hot_path: u32, channel_id: u32) -> bool {
+        let mut index = 0;
+        while index < self.bus_link_count as usize {
+            let link = self.bus_links[index];
+            if link.owner_hot_path == owner_hot_path
+                && link.channel_id == channel_id
+                && (link.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE) != 0
+            {
                 return true;
             }
             index += 1;
@@ -844,8 +1110,78 @@ mod tests {
 
         assert!(descriptor.valid());
         assert!(descriptor.has_bus_link_to(HOT_PATH_SDIO_HOST));
+        assert!(descriptor.has_pointer_free_bus_link(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+        ));
+        assert!(!descriptor.has_pointer_free_bus_link(
+            HOT_PATH_PCIE_ROOT,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+        ));
         descriptor.bus_links[0].flags &= !DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE;
         assert!(!descriptor.valid());
+        assert!(!descriptor.has_pointer_free_bus_link(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+        ));
+    }
+
+    #[test]
+    fn resource_range_at_requires_exact_vaddr_and_minimum_pages() {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = HOT_PATH_GENET_NIC;
+        descriptor.role_bit = 1 << 3;
+        descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY
+            | DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = DriverRuntimePageDescriptor::new(0x5000_0000);
+        descriptor.resource_range_count = 1;
+        descriptor.resource_ranges[0] = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+            DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+            0x7020_0000,
+            0xfd58_0000,
+            6 * DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+            6,
+            0,
+        );
+
+        assert!(descriptor.has_resource_range_at(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+            0x7020_0000,
+            6
+        ));
+        assert!(descriptor.has_resource_range_at_with_flags(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+            0x7020_0000,
+            6,
+            DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
+        ));
+        assert!(!descriptor.has_resource_range_at_with_flags(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+            0x7020_0000,
+            6,
+            DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED
+        ));
+        assert!(!descriptor.has_resource_range_at(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+            0x7020_1000,
+            6
+        ));
+        assert!(!descriptor.has_resource_range_at(
+            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+            DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+            0x7020_0000,
+            7
+        ));
     }
 
     #[test]
@@ -875,5 +1211,78 @@ mod tests {
         descriptor.framebuffer.format = DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888;
         descriptor.framebuffer.vaddr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR - 0x1000;
         assert!(!descriptor.hdmi_ready());
+    }
+
+    #[test]
+    fn sdio_command_descriptor_validates_cmd52_and_cmd53_bounds() {
+        let mut descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: 0x1000,
+            data_offset: 256,
+            len: 512,
+            block_size: 512,
+            block_count: 0,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT,
+            reserved: 0,
+            timeout_us: 1000,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.function = 8;
+        assert!(!descriptor.valid());
+        descriptor.function = 2;
+        descriptor.addr = 1 << 17;
+        assert!(!descriptor.valid());
+        descriptor.addr = 0x1000;
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE;
+        descriptor.len = 2;
+        descriptor.block_size = 0;
+        assert!(!descriptor.valid());
+        descriptor.len = 1;
+        assert!(descriptor.valid());
+
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD53_READ;
+        descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET - 1;
+        assert!(!descriptor.valid());
+        descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
+        descriptor.len = DRIVER_RUNTIME_RING_PAGE_BYTES;
+        assert!(!descriptor.valid());
+    }
+
+    #[test]
+    fn cyw43_command_descriptor_validates_ring_payload_bounds() {
+        let mut descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            flags: 0,
+            target_addr: 0x0019_8000,
+            payload_offset: DRIVER_RUNTIME_RING_FRAME_OFFSET,
+            payload_len: 512,
+            total_len: 4096,
+            arg0: 0,
+            arg1: 0,
+            reserved: 0,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET - 1;
+        assert!(!descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
+        descriptor.payload_len = 0;
+        assert!(!descriptor.valid());
+        descriptor.payload_len = 512;
+        descriptor.total_len = 128;
+        assert!(!descriptor.valid());
+        descriptor.total_len = 4096;
+        descriptor.payload_offset = DRIVER_RUNTIME_RING_PAGE_BYTES - 128;
+        descriptor.payload_len = 129;
+        assert!(!descriptor.valid());
+
+        descriptor = DriverRuntimeCyw43CommandDescriptor::empty();
+        descriptor.op = DRIVER_RUNTIME_CYW43_OP_RX_POLL;
+        assert!(descriptor.valid());
+        descriptor.payload_len = 1;
+        assert!(!descriptor.valid());
     }
 }

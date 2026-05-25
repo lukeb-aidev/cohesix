@@ -1320,9 +1320,9 @@ fn runtime_image_spec_from_generated(
 
 /// Runtime-image specs for every Pi 4 hardware hot path.
 ///
-/// These are generated manifest contracts, not proof. They remain
-/// non-acceptance while the manifest says a root context is still required or
-/// hardware state has not moved into a linked driver runtime image.
+/// These are generated manifest contracts, not fresh Pi hardware proof. They
+/// make each linked runtime acceptance-eligible once code, stack, IPC, ring,
+/// MMIO/DMA, and shared-buffer mappings are declared for the isolated image.
 #[must_use]
 pub fn pi4_driver_task_runtime_image_specs() -> [DriverTaskRuntimeImageSpec; 7] {
     [
@@ -4329,19 +4329,15 @@ mod tests {
             let registered =
                 register_driver_task_owner_state_descriptor(hot_path.contract(), descriptor);
             let spec = pi4_driver_task_runtime_image_spec(hot_path);
-            assert_eq!(registered, spec.acceptance_eligible(), "{hot_path:?}");
-            assert_eq!(
-                registered,
-                matches!(hot_path, DriverTaskHotPath::SerialConsole),
-                "{hot_path:?}"
-            );
+            assert!(spec.acceptance_eligible(), "{hot_path:?}");
+            assert!(registered, "{hot_path:?}");
         }
         let proof = driver_task_runtime_proof();
         assert_eq!(
-            proof.owner_state_hot_path_mask & DriverTaskHotPath::SerialConsole.owner_state_bit(),
-            DriverTaskHotPath::SerialConsole.owner_state_bit()
+            proof.owner_state_hot_path_mask,
+            REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
         );
-        assert!(!proof.owner_state_proof);
+        assert!(proof.owner_state_proof);
         publish_driver_task_bootstrap_report(DriverTaskBootstrapReport::default());
     }
 
@@ -4387,7 +4383,7 @@ mod tests {
     }
 
     #[test]
-    fn pi4_runtime_image_specs_cover_all_hot_paths_with_serial_migrated() {
+    fn pi4_runtime_image_specs_cover_all_hot_paths_as_migrated() {
         let generated_policy = crate::generated::driver_runtime_image_policy();
         assert!(generated_policy.required);
         assert_eq!(
@@ -4481,22 +4477,10 @@ mod tests {
                     );
                 }
             }
-            if spec.hot_path == DriverTaskHotPath::SerialConsole {
-                assert!(!spec.root_context_required, "{:?}", spec.hot_path);
-                assert!(spec.hardware_state_migrated, "{:?}", spec.hot_path);
-                assert!(spec.acceptance_eligible(), "{:?}", spec.hot_path);
-                assert_eq!(spec.non_acceptance_reason(), None, "{:?}", spec.hot_path);
-            } else {
-                assert!(spec.root_context_required, "{:?}", spec.hot_path);
-                assert!(!spec.hardware_state_migrated, "{:?}", spec.hot_path);
-                assert!(!spec.acceptance_eligible(), "{:?}", spec.hot_path);
-                assert_eq!(
-                    spec.non_acceptance_reason(),
-                    Some("root-context-required"),
-                    "{:?}",
-                    spec.hot_path
-                );
-            }
+            assert!(!spec.root_context_required, "{:?}", spec.hot_path);
+            assert!(spec.hardware_state_migrated, "{:?}", spec.hot_path);
+            assert!(spec.acceptance_eligible(), "{:?}", spec.hot_path);
+            assert_eq!(spec.non_acceptance_reason(), None, "{:?}", spec.hot_path);
         }
         assert_eq!(hot_path_mask, REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK);
         assert_eq!(
@@ -4523,7 +4507,7 @@ mod tests {
         assert_eq!(sdio.hot_path, DriverTaskHotPath::SdioHost);
         assert_eq!(pcie.hot_path, DriverTaskHotPath::PcieRoot);
         assert!(genet.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 6);
-        assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
+        assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 1);
         assert_ne!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
         assert!(pcie.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 10);
     }
