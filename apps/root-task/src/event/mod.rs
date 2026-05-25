@@ -967,6 +967,205 @@ pub struct PumpMetrics {
     pub bootstrap_messages: u64,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct SmpActivitySnapshot {
+    now_ms: u64,
+    metrics: PumpMetrics,
+    serial: SerialTelemetry,
+    local_seat: Option<SmpLocalSeatActivitySnapshot>,
+    #[cfg(feature = "net-console")]
+    net: Option<SmpNetActivitySnapshot>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct SmpLocalSeatActivitySnapshot {
+    backend_poll_calls: u64,
+    drained_bytes: u64,
+    echoed_bytes: u64,
+    dropped_bytes: u64,
+    mirrored_line_drops: u64,
+    budget_overruns: u64,
+}
+
+#[cfg(feature = "net-console")]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct SmpNetActivitySnapshot {
+    counters: crate::net::NetCounters,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct SmpActivityRates {
+    command_per_s: u64,
+    line_per_s: u64,
+    tick_per_s: u64,
+    serial_drop_per_s: u64,
+    seat_poll_per_s: u64,
+    keyboard_bytes_per_s: u64,
+    display_bytes_per_s: u64,
+    net_rx_per_s: u64,
+    net_tx_per_s: u64,
+    tcp_bytes_per_s: u64,
+    drop_per_s: u64,
+}
+
+impl SmpActivityRates {
+    fn from_snapshots(
+        previous: SmpActivitySnapshot,
+        current: SmpActivitySnapshot,
+        window_ms: u64,
+        include_authority: bool,
+        include_serial: bool,
+        include_local_seat: bool,
+        include_net: bool,
+    ) -> Self {
+        let mut rates = Self::default();
+        if include_authority {
+            let previous_commands = previous
+                .metrics
+                .accepted_commands
+                .saturating_add(previous.metrics.denied_commands);
+            let current_commands = current
+                .metrics
+                .accepted_commands
+                .saturating_add(current.metrics.denied_commands);
+            rates.command_per_s = rate_per_second(
+                current_commands.saturating_sub(previous_commands),
+                window_ms,
+            );
+            rates.line_per_s = rate_per_second(
+                current
+                    .metrics
+                    .console_lines
+                    .saturating_sub(previous.metrics.console_lines),
+                window_ms,
+            );
+            rates.tick_per_s = rate_per_second(
+                current
+                    .metrics
+                    .timer_ticks
+                    .saturating_sub(previous.metrics.timer_ticks),
+                window_ms,
+            );
+        }
+        if include_serial {
+            rates.serial_drop_per_s = rate_per_second(
+                delta_u32(
+                    current.serial.rx_backpressure,
+                    previous.serial.rx_backpressure,
+                )
+                .saturating_add(delta_u32(
+                    current.serial.tx_backpressure,
+                    previous.serial.tx_backpressure,
+                ))
+                .saturating_add(delta_u32(
+                    current.serial.utf8_dropped,
+                    previous.serial.utf8_dropped,
+                ))
+                .saturating_add(delta_u32(
+                    current.serial.driver_task_budget_overruns,
+                    previous.serial.driver_task_budget_overruns,
+                )),
+                window_ms,
+            );
+        }
+        if include_local_seat {
+            let previous_local = previous.local_seat.unwrap_or_default();
+            let current_local = current.local_seat.unwrap_or_default();
+            rates.seat_poll_per_s = rate_per_second(
+                current_local
+                    .backend_poll_calls
+                    .saturating_sub(previous_local.backend_poll_calls),
+                window_ms,
+            );
+            rates.keyboard_bytes_per_s = rate_per_second(
+                current_local
+                    .drained_bytes
+                    .saturating_sub(previous_local.drained_bytes),
+                window_ms,
+            );
+            rates.display_bytes_per_s = rate_per_second(
+                current_local
+                    .echoed_bytes
+                    .saturating_sub(previous_local.echoed_bytes),
+                window_ms,
+            );
+            rates.drop_per_s = rates.drop_per_s.saturating_add(rate_per_second(
+                current_local
+                    .dropped_bytes
+                    .saturating_sub(previous_local.dropped_bytes)
+                    .saturating_add(
+                        current_local
+                            .mirrored_line_drops
+                            .saturating_sub(previous_local.mirrored_line_drops),
+                    )
+                    .saturating_add(
+                        current_local
+                            .budget_overruns
+                            .saturating_sub(previous_local.budget_overruns),
+                    ),
+                window_ms,
+            ));
+        }
+        if include_net {
+            #[cfg(feature = "net-console")]
+            if let (Some(previous_net), Some(current_net)) = (previous.net, current.net) {
+                rates.net_rx_per_s = rate_per_second(
+                    current_net
+                        .counters
+                        .rx_packets
+                        .saturating_sub(previous_net.counters.rx_packets),
+                    window_ms,
+                );
+                rates.net_tx_per_s = rate_per_second(
+                    current_net
+                        .counters
+                        .tx_packets
+                        .saturating_sub(previous_net.counters.tx_packets),
+                    window_ms,
+                );
+                rates.tcp_bytes_per_s = rate_per_second(
+                    current_net
+                        .counters
+                        .tcp_rx_bytes
+                        .saturating_sub(previous_net.counters.tcp_rx_bytes)
+                        .saturating_add(
+                            current_net
+                                .counters
+                                .tcp_tx_bytes
+                                .saturating_sub(previous_net.counters.tcp_tx_bytes),
+                        ),
+                    window_ms,
+                );
+                rates.drop_per_s = rates.drop_per_s.saturating_add(rate_per_second(
+                    current_net
+                        .counters
+                        .dropped_zero_len_tx
+                        .saturating_sub(previous_net.counters.dropped_zero_len_tx)
+                        .saturating_add(
+                            current_net
+                                .counters
+                                .tx_double_submit
+                                .saturating_sub(previous_net.counters.tx_double_submit),
+                        ),
+                    window_ms,
+                ));
+            }
+        }
+        rates
+    }
+}
+
+fn delta_u32(current: u32, previous: u32) -> u64 {
+    u64::from(current.saturating_sub(previous))
+}
+
+fn rate_per_second(delta: u64, window_ms: u64) -> u64 {
+    if window_ms == 0 {
+        return 0;
+    }
+    delta.saturating_mul(1_000).saturating_add(window_ms / 2) / window_ms
+}
+
 /// Authenticated session state maintained by the pump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionRole {
@@ -1207,6 +1406,7 @@ where
     #[cfg(test)]
     test_pi4_debug_commands: bool,
     banner_emitted: bool,
+    last_smp_activity_snapshot: Option<SmpActivitySnapshot>,
 }
 
 #[cfg(feature = "kernel")]
@@ -1287,6 +1487,7 @@ where
             #[cfg(test)]
             test_pi4_debug_commands: false,
             banner_emitted: false,
+            last_smp_activity_snapshot: None,
         }
     }
 
@@ -2086,13 +2287,44 @@ where
     }
 
     fn emit_smp_activity(&mut self) {
+        let snapshot = self.smp_activity_snapshot();
+        let previous = self.last_smp_activity_snapshot;
         self.emit_console_line("[smp] activity begin source=userspace benchmark=off hdmi=mirrored");
         self.emit_smp_activity_pump();
         self.emit_smp_activity_local_seat();
         self.emit_smp_activity_net();
+        self.emit_smp_activity_rates(previous, snapshot);
         self.emit_smp_activity_driver_contracts();
         self.emit_smp_activity_affinity();
         self.emit_console_line("[smp] activity end");
+        self.last_smp_activity_snapshot = Some(snapshot);
+    }
+
+    fn smp_activity_snapshot(&self) -> SmpActivitySnapshot {
+        let local_seat = self.local_seat.as_ref().map(|runtime| {
+            let trace = runtime.keyboard_trace();
+            SmpLocalSeatActivitySnapshot {
+                backend_poll_calls: trace.backend_poll_calls,
+                drained_bytes: trace.drained_bytes,
+                echoed_bytes: trace.echoed_bytes,
+                dropped_bytes: trace.dropped_bytes,
+                mirrored_line_drops: runtime.dropped_mirrored_lines(),
+                budget_overruns: trace.driver_task_budget_overruns,
+            }
+        });
+        #[cfg(feature = "net-console")]
+        let net = self.net.as_ref().map(|net| SmpNetActivitySnapshot {
+            counters: net.stats(),
+        });
+
+        SmpActivitySnapshot {
+            now_ms: self.now_ms,
+            metrics: self.metrics,
+            serial: self.serial_telemetry(),
+            local_seat,
+            #[cfg(feature = "net-console")]
+            net,
+        }
     }
 
     fn emit_smp_activity_pump(&mut self) {
@@ -2146,6 +2378,126 @@ where
             metrics.local_seat_post_runtime_hits,
         ));
         self.emit_console_line(turns.as_str());
+    }
+
+    fn emit_smp_activity_rates(
+        &mut self,
+        previous: Option<SmpActivitySnapshot>,
+        current: SmpActivitySnapshot,
+    ) {
+        let Some(previous) = previous else {
+            self.emit_console_line(
+                "[smp] activity rates sample=first run_again=yes cpu_pct=unavailable",
+            );
+            return;
+        };
+        let window_ms = current.now_ms.saturating_sub(previous.now_ms);
+        if window_ms == 0 {
+            self.emit_console_line(
+                "[smp] activity rates window_ms=0 status=stale run_again=yes cpu_pct=unavailable",
+            );
+            return;
+        }
+        let line = format_message(format_args!(
+            "[smp] activity rates window_ms={} cpu_pct=unavailable view=counter-delta task_allocation=multi",
+            window_ms,
+        ));
+        self.emit_console_line(line.as_str());
+        self.emit_smp_activity_core_rates(previous, current, window_ms);
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_smp_activity_core_rates(
+        &mut self,
+        previous: SmpActivitySnapshot,
+        current: SmpActivitySnapshot,
+        window_ms: u64,
+    ) {
+        let policy = affinity::policy();
+        if !policy.enabled || policy.max_cores == 0 {
+            self.emit_smp_activity_unassigned_rates(previous, current, window_ms, "affinity-off");
+            return;
+        }
+
+        for core in 0..policy.max_cores {
+            let tasks = affinity::format_core_assignments(&policy, core);
+            let authority = policy.authority_core == Some(core);
+            let serial = policy.drivers.serial == Some(core);
+            let local_seat = policy.drivers.usb_local_seat == Some(core)
+                || policy.drivers.hdmi_text == Some(core);
+            let net = policy.drivers.bcmgenet_v5 == Some(core)
+                || policy.drivers.cyw43455 == Some(core)
+                || policy.drivers.rtl8139 == Some(core)
+                || policy.drivers.virtio_net == Some(core)
+                || policy.drivers.sdio_host == Some(core)
+                || policy.drivers.pcie_root == Some(core);
+            let rates = SmpActivityRates::from_snapshots(
+                previous, current, window_ms, authority, serial, local_seat, net,
+            );
+            let line = format_message(format_args!(
+                "[smp] activity core c={} tasks={} win={} cmd_s={} line_s={} tick_s={} serial_drop_s={} seatPoll_s={} kbdB_s={} hdmiB_s={} netRx_s={} netTx_s={} tcpB_s={} drop_s={}",
+                core,
+                tasks.as_str(),
+                window_ms,
+                rates.command_per_s,
+                rates.line_per_s,
+                rates.tick_per_s,
+                rates.serial_drop_per_s,
+                rates.seat_poll_per_s,
+                rates.keyboard_bytes_per_s,
+                rates.display_bytes_per_s,
+                rates.net_rx_per_s,
+                rates.net_tx_per_s,
+                rates.tcp_bytes_per_s,
+                rates.drop_per_s,
+            ));
+            self.emit_console_line(line.as_str());
+        }
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    fn emit_smp_activity_core_rates(
+        &mut self,
+        previous: SmpActivitySnapshot,
+        current: SmpActivitySnapshot,
+        window_ms: u64,
+    ) {
+        self.emit_smp_activity_unassigned_rates(previous, current, window_ms, "host-test");
+    }
+
+    fn emit_smp_activity_unassigned_rates(
+        &mut self,
+        previous: SmpActivitySnapshot,
+        current: SmpActivitySnapshot,
+        window_ms: u64,
+        tasks: &str,
+    ) {
+        let rates = SmpActivityRates::from_snapshots(
+            previous,
+            current,
+            window_ms,
+            true,
+            true,
+            current.local_seat.is_some(),
+            true,
+        );
+        let line = format_message(format_args!(
+            "[smp] activity core c=n/a tasks={} win={} cmd_s={} line_s={} tick_s={} serial_drop_s={} seatPoll_s={} kbdB_s={} hdmiB_s={} netRx_s={} netTx_s={} tcpB_s={} drop_s={}",
+            tasks,
+            window_ms,
+            rates.command_per_s,
+            rates.line_per_s,
+            rates.tick_per_s,
+            rates.serial_drop_per_s,
+            rates.seat_poll_per_s,
+            rates.keyboard_bytes_per_s,
+            rates.display_bytes_per_s,
+            rates.net_rx_per_s,
+            rates.net_tx_per_s,
+            rates.tcp_bytes_per_s,
+            rates.drop_per_s,
+        ));
+        self.emit_console_line(line.as_str());
     }
 
     #[cfg(feature = "net-console")]
@@ -8129,6 +8481,10 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered.contains("[smp] activity rates sample=first run_again=yes"),
+            "{rendered}"
+        );
+        assert!(
             rendered.contains("[smp] activity affinity unavailable=host-test"),
             "{rendered}"
         );
@@ -8145,6 +8501,48 @@ mod tests {
         assert!(mirrored
             .iter()
             .any(|line| line.contains("[smp] activity end")));
+    }
+
+    #[test]
+    fn smp_activity_second_sample_reports_userspace_rates() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.now_ms = 1_000;
+        pump.metrics.console_lines = 1;
+        pump.metrics.accepted_commands = 1;
+        pump.metrics.timer_ticks = 1;
+        pump.handle_command(Command::Smp {
+            mode: SmpMode::Activity,
+        })
+        .unwrap();
+        let _ = pump.serial_mut().driver_mut().drain_tx();
+
+        pump.now_ms = 2_000;
+        pump.metrics.console_lines = 5;
+        pump.metrics.accepted_commands = 4;
+        pump.metrics.timer_ticks = 3;
+        pump.handle_command(Command::Smp {
+            mode: SmpMode::Activity,
+        })
+        .unwrap();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("[smp] activity core c=n/a tasks=host-test win=1000"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("cmd_s=3"), "{rendered}");
+        assert!(rendered.contains("line_s=4"), "{rendered}");
+        assert!(rendered.contains("tick_s=2"), "{rendered}");
+        assert!(rendered.contains("cpu_pct=unavailable"), "{rendered}");
     }
 
     #[cfg(feature = "net-console")]

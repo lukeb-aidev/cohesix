@@ -6210,7 +6210,7 @@ Goal: Add `smp activity` as a bounded root-console diagnostic for cross-core act
 Inputs: crates/cohsh-core/src/command.rs, crates/cohsh-core/src/verb.rs, apps/root-task/src/event/mod.rs, apps/root-task/src/console/mod.rs, apps/root-task/src/local_seat.rs, apps/root-task/src/net/mod.rs, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/affinity.rs, docs/USERLAND_AND_CLI.md.
 Changes:
   - crates/cohsh-core/src/command.rs + crates/cohsh-core/src/verb.rs — extend the canonical grammar from `smp` to `smp [activity]`, reject unknown pseudo-profile arguments, and keep plain `smp` mapped to the existing debug-kernel scheduler snapshot.
-  - apps/root-task/src/event/mod.rs — implement `smp activity` from bounded userspace telemetry: event-pump command/timer counters, serial backpressure, local-seat keyboard/HDMI mirror counters, network status/counters when present, HAL driver-task contracts, driver-task runtime proof masks, and manifest affinity assignments.
+  - apps/root-task/src/affinity.rs + apps/root-task/src/event/mod.rs — implement `smp activity` from bounded userspace telemetry: event-pump command/timer counters, serial backpressure, local-seat keyboard/HDMI mirror counters, network status/counters when present, HAL driver-task contracts, driver-task runtime proof masks, manifest affinity assignments, and repeated-sample per-core counter-delta rows; keep the original plain `smp` debug path on the same multi-assignment core bucket formatter.
   - apps/root-task/src/console/mod.rs — keep early-console behavior explicit when the event-pump telemetry source is unavailable.
   - docs/USERLAND_AND_CLI.md + docs/snippets/cohsh_grammar.md — document that `smp activity` is not a cycle-accurate profiler, does not require kernel benchmark builds, and is mirrored to HDMI through the local-seat path while raw seL4 debug dump text remains UART-only.
 Commands:
@@ -6220,6 +6220,8 @@ Commands:
 Checks:
   - `smp activity` never depends on `CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES`, debug-kernel benchmark syscalls, PMU counters, or unbounded sampling.
   - Output is line-bounded and useful for Pi 4 diagnostics: it distinguishes parser/event-loop progress, serial pressure, HDMI/local-seat mirroring, attached network progress, driver-task compatibility vs dedicated proof, and configured role/driver affinity.
+  - The htop-ish core rows are assignment buckets, not exclusive CPU owners: when multiple roles/drivers map to the same core, `tasks=` lists all of them and the rate fields aggregate only safe userspace counter deltas for that bucket while keeping `cpu_pct=unavailable`.
+  - Plain debug-kernel `smp` also treats core rows as assignment buckets: before each UART-only seL4 scheduler/CPU dump, the probe line includes every role/driver allocated to that core instead of dropping secondary assignments.
   - HDMI display receives the same event-pump `smp activity` lines when local-seat mirroring is active; raw kernel debug output from plain `smp` remains serial-only.
   - Unknown arguments such as `smp profile` fail grammar validation instead of silently aliasing to plain `smp`.
 Deliverables:
@@ -6901,11 +6903,23 @@ For each inventory entry, 26c must record one of:
   - Emit absent, stale, generated-only, QEMU-only, and fresh Pi hardware proof states through the 26c audit/test-plan evidence path without turning read-only host tools into acceptance authority.
   - Keep all DMA ownership, cache maintenance, bus-address publication, and runtime-init descriptor handling behind HAL, generated manifests, `pi4-driver-abi`, and linked runtime records.
 
+- **DMA protection profile truth**
+  - Add generated DMA protection profile vocabulary that distinguishes `bounded_no_iommu` Pi 4 discipline from future `smmu_v2` or `smmu_v3` hardware-enforced DMA isolation profiles.
+  - Document that Raspberry Pi 4 / BCM2711 does not provide an seL4-supported SMMU path for Cohesix and must not be described as IOMMU- or SMMU-isolated.
+  - Treat Pi 4 as HAL-mediated bounded DMA ownership: per-driver arenas, descriptor validation, bus-address publication, cache maintenance, buffer quarantine, and evidence, but no malicious-device DMA confinement claim.
+  - Define the future SMMU platform contract separately: seL4-managed StreamID/context-bank or equivalent IO-space mappings, per-device DMA domains, fault evidence, and revoke/unmap semantics before any strong DMA isolation claim is allowed.
+
 - **Worker architecture implementation**
   - Replace placeholder kernel-side worker-gpu and worker-lora behavior with real seL4 worker loops that consume scoped tickets, observe leases, emit telemetry, handle shutdown/revocation, and expose bounded receipts through the documented Queen/Worker namespace.
   - Worker-heart, worker-gpu, and worker-lora must run as VM-side `no_std` worker tasks where the public docs describe VM workers; host-side helpers may remain adapters but must not be the only implementation behind public worker claims.
   - Root-task remains the authority for ticket mint/validation, namespace publication, lifecycle gates, and revocation; workers receive only role-scoped caps, endpoints, and namespace access needed for their documented loops.
   - No new protocol, hidden mailbox, POSIX facade, or host-only crate may enter the VM closure; worker coordination uses existing Secure9P/console semantics, generated manifests, tickets, and append-only telemetry/control files.
+
+- **Cap-backed worker ticket phase 1**
+  - Make VM worker attach, telemetry, lease renewal, and revocation paths require badged seL4 endpoint capabilities, so ticket strings become audit metadata rather than standalone authority.
+  - Root-task must mint role/lease/epoch-badged endpoint caps for worker control and telemetry paths and retain the parent capability needed to revoke derived lease caps.
+  - Worker-heart, worker-gpu, and worker-lora must prove that forged ticket metadata without the corresponding endpoint cap cannot attach, emit accepted telemetry, renew a lease, or publish a valid receipt.
+  - Full frame, notification, shared-ring, fault-endpoint, DMA, and driver-resource cap bundles are deferred to the later authority-hardening phase; 26c must not claim complete cap-bundle isolation.
 
 - **Low-risk surface cleanup**
   - Clean up public crate surfaces, tiny modules, tests, READMEs, and operator docs first.
@@ -7004,7 +7018,9 @@ For each inventory entry, 26c must record one of:
 - The checked-in 26c audit artifacts explicitly document the intentional host `std` / VM `no_std` boundary and do not imply runtime convergence where the design requires separate adapters.
 - Overlapping NineDoor semantics exercised by host and VM adapters are recorded in a parity matrix and backed by `apps/nine-door` tests plus `root-task` integration and library tests covering the actual event/console path; undocumented differences are rejected.
 - Pi 4 runtime/DMA proof classification distinguishes absent proof, generated eligibility, target compile evidence, QEMU evidence, and fresh hardware proof before 26c closure can cite linked-runtime owner-state or DMA readiness.
+- Pi 4 documentation, generated manifests, evidence packs, and diagrams use `bounded_no_iommu` or equivalent wording and never imply hardware-enforced SMMU/IOMMU isolation for BCM2711.
 - Worker-heart, worker-gpu, and worker-lora kernel-side implementations attach through scoped worker tickets, observe lease/lifecycle state, emit bounded telemetry, and handle revocation/shutdown without relying on host-only scaffolding or placeholder spin loops.
+- VM worker ticket strings are not accepted as standalone authority: attach, telemetry, lease-renewal, and revoke-sensitive worker paths require the matching badged seL4 endpoint cap, and forged metadata-only tickets fail deterministically.
 - Public Queen/Worker, GPU, LoRA, worker-ticket, and role/scheduling docs match the implemented VM worker architecture and generated manifest truth.
 - Release snapshots, generated snippets, generated compliance reports, seL4 mirrors, and vendored docs are handled according to their disposition rules; no ad-hoc edits hide provenance.
 - Low-risk code/comment cleanup lands with no console grammar, Secure9P semantics, manifest output, telemetry format, or release workflow drift.
@@ -7026,8 +7042,10 @@ For each inventory entry, 26c must record one of:
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, `scripts/ci/check_test_plan.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
 - Generated `root_task.driver_images` records, `crates/pi4-driver-abi`, linked `pi4-driver-*` runtime image artifacts, and driver-runtime CPIO packaging are authoritative boundary artifacts for Pi 4 driver-task cleanup; 26c may audit, test, and refactor around them only without changing acceptance status or hand-editing generated descriptors.
 - Pi 4 runtime/DMA proof fields, descriptor resource totals, owner-state evidence, and source artifact freshness are 26c audit/test-plan surfaces; later operator tooling may project them only after this milestone defines the evidence semantics.
+- DMA protection profile fields are compiler-owned surfaces. Pi 4 profiles must resolve to bounded no-IOMMU discipline, while SMMU-backed profiles are future hardware targets that require generated per-device DMA-domain state before code or docs may claim hardware-enforced isolation.
 - Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe, must not import host-side capabilities, transports, or provider crates into the VM build, and must be reviewed against the archived per-profile dependency trees.
 - Worker role/task manifests, ticket scopes, lease bindings, telemetry paths, and lifecycle gates are compiler-owned surfaces; any new worker implementation fields must enter `coh-rtc` IR and generated docs before code depends on them.
+- Cap-backed worker endpoint-ticket fields are compiler-owned surfaces in 26c. Generated role state must describe which badged endpoint caps are minted for attach/control/telemetry/revoke-sensitive paths and which stronger cap-bundle fields remain deferred.
 - Refactor-generated module boundaries must not become new public interfaces unless `docs/INTERFACES.md`, `docs/HOST_TOOLS.md`, or the relevant canonical doc is updated in the same change.
 - HAL/network decompositions must retain generated manifest authority for boot policy defaults and must not hand-code policy values that already belong in `root_task.toml` or `coh-rtc` outputs.
 
@@ -7215,6 +7233,56 @@ Checks:
   - Fresh Pi evidence, when claimed, names the exact serial log, manifest hash, image build, and test-plan state directory used for the claim.
 Deliverables:
   - 26c-owned Pi 4 runtime/DMA proof semantics and evidence gates strong enough for later operator tools to project read-only summaries without defining acceptance.
+
+Title/ID: m26c-dma-protection-profile-truth
+Goal: Add compiler-owned DMA protection profiles that state Pi 4 as bounded no-IOMMU DMA discipline and reserve SMMU-backed isolation claims for future hardware profiles.
+Inputs: tools/coh-rtc/src/ir.rs, tools/coh-rtc/src/validate.rs, configs/root_task_pi4_uboot_aarch64.toml, configs/root_task.toml, apps/root-task/src/hal/**, docs/ARCHITECTURE.md, docs/HARDWARE_BRINGUP.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
+Changes:
+  - tools/coh-rtc/src/ir.rs + tools/coh-rtc/src/validate.rs — add a generated DMA protection profile enum such as `none`, `bounded_no_iommu`, `smmu_v2`, and `smmu_v3`, with Pi 4 profiles required to resolve to `bounded_no_iommu`.
+  - configs/root_task_pi4_uboot_aarch64.toml + generated manifests/snippets — record Pi 4 DMA as HAL-mediated bounded DMA ownership, not hardware-enforced IOMMU/SMMU isolation.
+  - apps/root-task/src/hal/** — expose profile-specific evidence fields for bounded arenas, descriptor validation, bus-address publication, cache maintenance, buffer quarantine, and absent SMMU capability.
+  - docs/ARCHITECTURE.md + docs/HARDWARE_BRINGUP.md + docs/SECURITY.md + docs/TEST_PLAN.md — document the Pi 4 limitation, prohibit SMMU/IOMMU isolation wording for BCM2711, and define the future SMMU hardware contract separately.
+  - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md — add a docs-as-built check that rejects diagrams, prose, or evidence claims that imply Pi 4 malicious-device DMA confinement.
+Commands:
+  - cargo test -p coh-rtc dma_protection
+  - cargo test -p root-task --tests dma
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+  - rg -n "IOMMU|SMMU|hardware-enforced DMA|DMA isolation" docs README.md AGENTS.md
+Checks:
+  - Pi 4 manifests and docs resolve to bounded no-IOMMU DMA discipline and explicitly refuse hardware-enforced SMMU/IOMMU isolation claims.
+  - Bounded Pi 4 DMA evidence covers per-driver arenas, descriptor validation, bus-address publication, cache maintenance, quarantine/reuse policy, and fresh proof provenance.
+  - Future `smmu_v2` or `smmu_v3` profiles cannot be enabled unless generated per-device DMA-domain state, StreamID/context-bank or equivalent IO-space mapping policy, fault evidence, and revoke/unmap semantics are present.
+  - No public doc, Mermaid diagram, evidence pack, or operator output describes BCM2711/Pi 4 as providing malicious-device DMA confinement.
+Deliverables:
+  - Review-grade DMA protection vocabulary that keeps Pi 4 claims honest while preserving a clean path to real SMMU-backed targets.
+
+Title/ID: m26c-cap-backed-worker-endpoints
+Goal: Make first-phase VM worker tickets cap-backed by requiring badged seL4 endpoint capabilities for worker attach, telemetry, lease renewal, and revocation-sensitive paths.
+Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/generated/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, tools/coh-rtc/src/**, crates/cohesix-ticket/**, docs/WORKER_TICKETS.md, docs/ROLES_AND_SCHEDULING.md, docs/SECURITY.md, docs/INTERFACES.md
+Changes:
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — mint role/lease/epoch-badged endpoint caps for worker attach, control, telemetry, and revoke-sensitive receipt paths; retain the parent cap path needed to revoke derived lease caps.
+  - apps/root-task/src/ninedoor.rs — reject worker attach, telemetry append, lease-renewal, and receipt paths when only ticket metadata is present and no matching badged endpoint cap was invoked.
+  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — replace metadata-only ticket presentation with endpoint-cap invocation in the worker loops while preserving bounded no_std behavior.
+  - tools/coh-rtc/src/** + generated snippets — add phase-1 cap-backed-ticket fields for endpoint badges, lease epochs, role scopes, revoke behavior, and explicit deferred full-cap-bundle status.
+  - docs/WORKER_TICKETS.md + docs/ROLES_AND_SCHEDULING.md + docs/SECURITY.md + docs/INTERFACES.md — document Cohesix tickets as audit records backed by badged endpoint caps for VM worker authority.
+Commands:
+  - cargo test -p root-task --tests worker
+  - cargo test -p worker-heart
+  - cargo test -p worker-gpu
+  - cargo test -p worker-lora
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+  - cargo check -p worker-heart --target aarch64-unknown-none
+  - cargo check -p worker-gpu --target aarch64-unknown-none
+  - cargo check -p worker-lora --target aarch64-unknown-none
+Checks:
+  - Forged ticket strings or stale ticket metadata without the corresponding badged endpoint cap cannot attach as a worker, renew a lease, emit accepted telemetry, or publish a valid receipt.
+  - Revocation deletes or invalidates the derived endpoint caps and late invocations from the old lease epoch fail deterministically.
+  - Generated manifests and docs distinguish phase-1 endpoint-cap-backed tickets from the later full cap-bundle work.
+  - Existing Secure9P grammar, console ACK/ERR/END behavior, and host-ticket schemas do not drift.
+Deliverables:
+  - First-phase cap-backed VM worker ticket authority with concrete seL4 endpoint caps and negative tests, without overclaiming full frame/notification/DMA cap-bundle isolation.
 
 Title/ID: m26c-worker-architecture-implementation
 Goal: Replace placeholder kernel-side worker GPU/LoRA paths with real seL4 worker ticket, lease, telemetry, and revocation loops matching public Queen/Worker documentation.
@@ -8009,6 +8077,7 @@ Strengthen authority and failover guarantees while preserving current transport 
 6. Establish the mandatory authority floor for Milestone 28c host-side AI actuation and Milestone 29b AI namespace projections.
 7. Harden host-ticket execution so target/arg validation and replay durability are strong enough for host side effects.
 8. Harden host bridge and debug surfaces that can otherwise bypass the authority story: GPU bridge authentication/frame bounds and root-console memory diagnostics.
+9. Complete the second phase of cap-backed ticket authority by moving worker and driver resource grants from metadata-only policy into generated seL4 cap bundles.
 
 ---
 
@@ -8136,6 +8205,21 @@ As-built leverage:
 
 ---
 
+### 8) Full Cap-Bundle Ticket Authority
+**Purpose:** Finish the authority conversion started in 26c by ensuring worker and driver tickets are backed by complete generated seL4 cap bundles, not only badged endpoint caps.
+
+Implementation requirements:
+- Extend generated role state so each worker or driver ticket maps to an explicit cap bundle: endpoint caps, notification caps, fault endpoint caps, shared-ring frames, allowed data frames, declared MMIO frames, and DMA/shared-buffer frames where applicable.
+- Root-task must construct per-role child CSpaces/VSpaces from generated bundle records and must not hand out catch-all root authority, broad namespace authority, or undeclared frame caps.
+- Revocation must delete/revoke derived caps and make late invocations, stale shared-ring turns, and stale telemetry writes fail deterministically.
+- Ledger and evidence state must reconcile cap-bundle creation, transfer, revocation, and fault handling so recovery cannot claim a ticket is active when its cap bundle is gone, or vice versa.
+- The 26c endpoint-cap phase remains the compatibility floor; production profiles that claim cap-backed ticket authority require the full bundle.
+
+As-built leverage:
+- Build on 26c badged endpoint tickets, existing driver-task CSpace/VSpace bootstrap, generated `root_task.driver_images`, HAL admission, worker lifecycle tests, and 28b audit/replay evidence.
+
+---
+
 ## Commands
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `cargo test -p hive-gateway`
@@ -8162,6 +8246,7 @@ As-built leverage:
 - Host ticket crash/restart tests prove no silent duplicate host side effects after an executor succeeds but status writeback fails.
 - `gpu-bridge-host` rejects placeholder auth in live mode and refuses oversized peer frames before allocation.
 - Root-console arbitrary memory diagnostics are unavailable in release/production profiles or constrained to HAL-classified diagnostic ranges.
+- Full cap-bundle production profiles prove that worker/driver tickets correspond to generated seL4 cap bundles, and stale metadata without live caps cannot exercise endpoint, notification, frame, shared-ring, MMIO, or DMA authority.
 - Milestone 28c host-side AI control cannot be enabled in target profiles unless delegated REST identity, writer-epoch fencing, and audit/replay requirements are all active.
 - Regression pack passes unchanged in compatibility mode; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
 
@@ -8177,6 +8262,7 @@ As-built leverage:
   - host-ticket provider target/arg grammars and execution WAL policy,
   - live host-bridge auth and frame-length limits,
   - profile-gated debug diagnostic policy,
+  - full cap-bundle ticket authority profile, generated per-role cap inventories, revoke/recovery evidence, and production enablement gates,
   - host-AI enablement dependency gates consumed by Milestone 28c and Milestone 29b.
 - Generated snippets refreshed in:
   - `docs/INTERFACES.md`
@@ -8281,6 +8367,35 @@ Changes:
 Commands: cargo test -p root-task --test console_debug_gate && cargo test -p root-task
 Checks: Production console cannot read arbitrary memory; bring-up diagnostics are range-bounded and audited.
 Deliverables: Debug memory access is no longer an unbounded operator surface.
+
+Title/ID: m28b-full-cap-bundle-ticket-authority
+Goal: Complete cap-backed tickets by making production worker and driver tickets correspond to generated seL4 cap bundles for endpoints, notifications, frames, shared rings, MMIO, DMA, and fault handling.
+Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/root-task/src/ninedoor.rs, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, tools/coh-rtc/src/**, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md
+Changes:
+  - tools/coh-rtc/src/** — add generated per-role cap-bundle records for endpoint, notification, fault, shared-ring, frame, MMIO, DMA/shared-buffer, and revoke policy fields.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — construct child CSpaces/VSpaces from generated cap-bundle records and retain parent/origin caps for deterministic revoke.
+  - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — reconcile ticket ledger state with live cap-bundle state and refuse metadata-only authority in production profiles.
+  - apps/pi4-driver-runtime/src/** + crates/pi4-driver-abi/src/** — bind driver-runtime command/completion, MMIO, DMA, shared-buffer, IRQ notification, and fault handling to generated cap-bundle descriptors.
+  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — consume full role cap bundles where enabled while preserving the 26c endpoint-cap compatibility floor.
+  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — document full cap-bundle semantics, production profile gates, revoke/recovery behavior, and negative tests.
+Commands:
+  - cargo test -p root-task --tests cap_bundle
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
+  - cargo test -p worker-heart
+  - cargo test -p worker-gpu
+  - cargo test -p worker-lora
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28b-qemu-cap-bundles
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m28b-pi4-cap-bundles
+Checks:
+  - Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
+  - Revoked tickets lose endpoint, notification, frame, shared-ring, MMIO, DMA/shared-buffer, and fault authority; stale invocations and stale ring turns fail deterministically.
+  - Recovery reconciles ticket ledger and CSpace/VSpace state so no active ticket exists without live caps and no live caps remain for terminal tickets.
+  - Compatibility profiles may retain 26c endpoint-cap-only tickets only when docs and generated profile state explicitly say full cap bundles are disabled.
+Deliverables:
+  - Production-grade cap-backed ticket authority with generated seL4 cap bundles and evidence strong enough to answer the seL4 criticism that tickets are only application metadata.
 ```
 
 ---

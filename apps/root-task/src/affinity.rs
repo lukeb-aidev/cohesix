@@ -7,6 +7,7 @@
 use core::fmt;
 
 use crate::generated;
+use heapless::String as HeaplessString;
 
 #[cfg(feature = "kernel")]
 use crate::sel4::seL4_CPtr;
@@ -290,6 +291,56 @@ fn pick_core(cores: &[u8], index: usize) -> Option<u8> {
     }
 }
 
+pub fn format_core_assignments(
+    policy: &generated::AffinityPolicy,
+    core: u8,
+) -> HeaplessString<128> {
+    let mut buf = HeaplessString::new();
+    push_core_assignment(&mut buf, policy.authority_core == Some(core), "authority");
+    push_core_assignment(
+        &mut buf,
+        core_slice_has(policy.ninedoor_cores, core),
+        "ninedoor",
+    );
+    push_core_assignment(
+        &mut buf,
+        core_slice_has(policy.provider_cores, core),
+        "provider",
+    );
+    push_core_assignment(
+        &mut buf,
+        core_slice_has(policy.worker_cores, core),
+        "worker",
+    );
+    push_core_assignment(&mut buf, policy.drivers.serial == Some(core), "serial");
+    push_core_assignment(&mut buf, policy.drivers.usb_local_seat == Some(core), "usb");
+    push_core_assignment(&mut buf, policy.drivers.hdmi_text == Some(core), "hdmi");
+    push_core_assignment(&mut buf, policy.drivers.bcmgenet_v5 == Some(core), "genet");
+    push_core_assignment(&mut buf, policy.drivers.cyw43455 == Some(core), "cyw43");
+    push_core_assignment(&mut buf, policy.drivers.rtl8139 == Some(core), "rtl8139");
+    push_core_assignment(&mut buf, policy.drivers.virtio_net == Some(core), "virtio");
+    push_core_assignment(&mut buf, policy.drivers.sdio_host == Some(core), "sdio");
+    push_core_assignment(&mut buf, policy.drivers.pcie_root == Some(core), "pcie");
+    if buf.is_empty() {
+        let _ = buf.push_str("none");
+    }
+    buf
+}
+
+fn push_core_assignment<const N: usize>(buf: &mut HeaplessString<N>, assigned: bool, label: &str) {
+    if !assigned {
+        return;
+    }
+    if !buf.is_empty() {
+        let _ = buf.push(',');
+    }
+    let _ = buf.push_str(label);
+}
+
+fn core_slice_has(cores: &[u8], core: u8) -> bool {
+    cores.iter().any(|candidate| *candidate == core)
+}
+
 #[cfg(feature = "kernel")]
 fn apply_role_affinity(
     tcb: seL4_CPtr,
@@ -371,8 +422,6 @@ pub fn debug_dump_per_core<F>(policy: &generated::AffinityPolicy, mut emit: F)
 where
     F: FnMut(&str),
 {
-    use heapless::String as HeaplessString;
-
     let tcb = sel4_sys::seL4_CapInitThreadTCB;
     if !policy.enabled {
         emit("[smp] affinity disabled; dumping scheduler once");
@@ -384,19 +433,14 @@ where
 
     emit("[smp] note: kernel scheduler/CPU dump text is UART-only");
 
-    let mut seen = [false; 64];
-    let mut probe = |core: u8, label: &'static str| {
-        if core as usize >= seen.len() {
-            return;
-        }
-        if seen[core as usize] {
-            return;
-        }
-        seen[core as usize] = true;
-        let mut line = HeaplessString::<96>::new();
+    let mut probe = |core: u8, tasks: &str| {
+        let mut line = HeaplessString::<192>::new();
         let _ = fmt::write(
             &mut line,
-            format_args!("[smp] affinity probe role={} core={}", label, core),
+            format_args!(
+                "[smp] affinity probe core={} tasks={} task_allocation=multi",
+                core, tasks
+            ),
         );
         emit(line.as_str());
         if let Err(err) = crate::sel4::set_tcb_affinity_silent(tcb, core) {
@@ -416,17 +460,11 @@ where
         crate::sel4::debug_dump_cpu_info();
     };
 
-    if let Some(core) = policy.authority_core {
-        probe(core, "authority");
-    }
-    for &core in policy.ninedoor_cores {
-        probe(core, "ninedoor");
-    }
-    for &core in policy.provider_cores {
-        probe(core, "provider");
-    }
-    for &core in policy.worker_cores {
-        probe(core, "worker");
+    for core in 0..policy.max_cores {
+        let tasks = format_core_assignments(policy, core);
+        if tasks.as_str() != "none" {
+            probe(core, tasks.as_str());
+        }
     }
 
     if let Some(core) = policy.authority_core {
@@ -559,6 +597,23 @@ mod tests {
         assert_eq!(
             select_driver_core(&policy, DriverAffinityTarget::Cyw43455),
             Some(3)
+        );
+    }
+
+    #[test]
+    fn format_core_assignments_lists_multiple_allocations() {
+        let policy = sample_policy();
+        assert_eq!(
+            format_core_assignments(&policy, 1).as_str(),
+            "ninedoor,serial,usb"
+        );
+        assert_eq!(
+            format_core_assignments(&policy, 2).as_str(),
+            "ninedoor,worker,hdmi,rtl8139,pcie"
+        );
+        assert_eq!(
+            format_core_assignments(&policy, 3).as_str(),
+            "provider,worker,genet,cyw43,virtio,sdio"
         );
     }
 
