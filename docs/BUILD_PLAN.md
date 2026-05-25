@@ -6784,7 +6784,8 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Large `root-task`, HAL, driver, and host-tool monoliths are explicit 26c refactor targets, but they are not first-wave edit targets. They may be decomposed only after characterization tests, parity matrices, dependency-tree evidence, and rollback-sized ownership plans exist for the touched surface.
 - Driver-enabling HAL abstractions in 26c are limited to behavior-preserving cleanup of the driver-task model established by reopened 26a/26b. `SdioHostHal`-style seams may sit underneath the current CYW43 path, and USB platform/DMA seams may sit underneath the current local-seat/VL805 path, but 26c must not add support for new Wi-Fi chipsets, new USB controllers, new USB classes, or a second driver framework parallel to the 26a/26b driver-task substrate.
 - Milestone 26c must not collapse host-side `std` capability into the seL4 build. VM-side Cohesix remains `no_std`; any "convergence" under 26c is limited to contracts, fixtures, generated artifacts, and explicitly `no_std`-safe semantic helpers.
-- Runtime-boundary-sensitive surfaces include `apps/root-task/src/ninedoor.rs`, `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, `apps/root-task/src/net/**`, `apps/root-task/src/hal/**`, `apps/root-task/src/local_seat_pi4.rs`, `apps/pi4-driver-runtime/**`, `crates/pi4-driver-abi/**`, and `apps/nine-door/src/host/*`. 26c may structurally refactor these files only behind existing public contracts, with no adapter collapse, no host capability leakage, no new HAL bypass, and no external grammar drift.
+- Runtime-boundary-sensitive surfaces include `apps/root-task/src/ninedoor.rs`, `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, `apps/root-task/src/net/**`, `apps/root-task/src/hal/**`, `apps/root-task/src/local_seat_pi4.rs`, `apps/pi4-driver-runtime/**`, `crates/pi4-driver-abi/**`, `apps/worker-heart/**`, `apps/worker-gpu/**`, `apps/worker-lora/**`, and `apps/nine-door/src/host/*`. 26c may structurally refactor these files only behind existing public contracts, with no adapter collapse, no host capability leakage, no new HAL bypass, and no external grammar drift.
+- The worker architecture task is the explicit 26c behavior-change exception required to close public Queen/Worker documentation drift: it must implement the already-documented worker ticket/lease/telemetry loops instead of inventing new protocols, roles, or namespace grammar.
 - Any new shared semantic helper must be `no_std` by construction, must have host and VM tests where it represents overlapping behavior, and must not import host transport, filesystem, process, network, or provider crates into VM closure profiles.
 - AI-assisted or model-generated Rust remains untrusted. 26c refactor PRs must include baseline command evidence, risk-ratchet review for `unsafe`, `unwrap`, `expect`, and `panic!`, and reviewer sign-off before merge.
 - `docs/snippets/*.md`, `docs/nist/REPORT.md`, tracked release-cut docs, and other generated or derived documentation remain update-by-source artifacts; they are not to be hand-edited as a shortcut.
@@ -6812,7 +6813,8 @@ Refactor and humanize the authored Cohesix code and documentation surfaces witho
 10. auditing authored code, tests, and documentation for AI fingerprints before public-facing cleanup is accepted,
 11. replacing template-heavy comments and test naming with invariant-focused prose,
 12. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
-13. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
+13. replacing placeholder kernel-side worker-gpu/LoRA paths with real seL4 worker ticket/lease/telemetry loops that match public Queen/Worker docs, and
+14. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
 
 ### Markdown review scope (tracked `*.md` only)
 Milestone 26c must inventory every tracked Markdown file returned by:
@@ -6893,6 +6895,18 @@ For each inventory entry, 26c must record one of:
   - Treat `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, `apps/root-task/src/net/**`, `apps/root-task/src/hal/**`, and `apps/root-task/src/local_seat_pi4.rs` as first-class VM parity inputs rather than treating `ninedoor.rs` as the entire VM-side boundary.
   - Treat undocumented divergence as a defect unless the surface is explicitly classified as host-only, VM-only, generated-only, or release-derived.
 
+- **Pi 4 runtime/DMA proof closure**
+  - Move Pi 4 linked-runtime descriptor and DMA proof classification into 26c instead of deferring it to Milestone 28 operator tooling.
+  - Prove generated runtime-image eligibility, descriptor resource ranges, DMA reservation/allocation evidence, owner-state fields, and fresh-source artifact provenance before structural cleanup can cite the linked-runtime path as closure evidence.
+  - Emit absent, stale, generated-only, QEMU-only, and fresh Pi hardware proof states through the 26c audit/test-plan evidence path without turning read-only host tools into acceptance authority.
+  - Keep all DMA ownership, cache maintenance, bus-address publication, and runtime-init descriptor handling behind HAL, generated manifests, `pi4-driver-abi`, and linked runtime records.
+
+- **Worker architecture implementation**
+  - Replace placeholder kernel-side worker-gpu and worker-lora behavior with real seL4 worker loops that consume scoped tickets, observe leases, emit telemetry, handle shutdown/revocation, and expose bounded receipts through the documented Queen/Worker namespace.
+  - Worker-heart, worker-gpu, and worker-lora must run as VM-side `no_std` worker tasks where the public docs describe VM workers; host-side helpers may remain adapters but must not be the only implementation behind public worker claims.
+  - Root-task remains the authority for ticket mint/validation, namespace publication, lifecycle gates, and revocation; workers receive only role-scoped caps, endpoints, and namespace access needed for their documented loops.
+  - No new protocol, hidden mailbox, POSIX facade, or host-only crate may enter the VM closure; worker coordination uses existing Secure9P/console semantics, generated manifests, tickets, and append-only telemetry/control files.
+
 - **Low-risk surface cleanup**
   - Clean up public crate surfaces, tiny modules, tests, READMEs, and operator docs first.
   - Prefer renaming tests, tightening doc comments, and deleting generic noise before any control-flow refactor.
@@ -6958,6 +6972,9 @@ For each inventory entry, 26c must record one of:
 - `python3 -m pytest tools/cohesix-py/tests -q`
 - `cargo test -p root-task --tests`
 - `cargo test -p root-task --lib`
+- `cargo test -p worker-heart`
+- `cargo test -p worker-gpu`
+- `cargo test -p worker-lora`
 - `cargo test -p pi4-driver-abi`
 - `cargo test -p pi4-driver-runtime`
 - `cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "cohesix-dev"`
@@ -6986,6 +7003,9 @@ For each inventory entry, 26c must record one of:
 - Cohesix-authored canonical docs are rewritten to remove generic template prose and to describe the as-built system, invariants, or operator contract.
 - The checked-in 26c audit artifacts explicitly document the intentional host `std` / VM `no_std` boundary and do not imply runtime convergence where the design requires separate adapters.
 - Overlapping NineDoor semantics exercised by host and VM adapters are recorded in a parity matrix and backed by `apps/nine-door` tests plus `root-task` integration and library tests covering the actual event/console path; undocumented differences are rejected.
+- Pi 4 runtime/DMA proof classification distinguishes absent proof, generated eligibility, target compile evidence, QEMU evidence, and fresh hardware proof before 26c closure can cite linked-runtime owner-state or DMA readiness.
+- Worker-heart, worker-gpu, and worker-lora kernel-side implementations attach through scoped worker tickets, observe lease/lifecycle state, emit bounded telemetry, and handle revocation/shutdown without relying on host-only scaffolding or placeholder spin loops.
+- Public Queen/Worker, GPU, LoRA, worker-ticket, and role/scheduling docs match the implemented VM worker architecture and generated manifest truth.
 - Release snapshots, generated snippets, generated compliance reports, seL4 mirrors, and vendored docs are handled according to their disposition rules; no ad-hoc edits hide provenance.
 - Low-risk code/comment cleanup lands with no console grammar, Secure9P semantics, manifest output, telemetry format, or release workflow drift.
 - Cleanup candidates previously excluded or weakly covered in CI have characterization tests and staged-run coverage before structural refactors are accepted.
@@ -7005,7 +7025,9 @@ For each inventory entry, 26c must record one of:
 - Tracked release-cut documentation under `releases/RELEASE_NOTES-*.md`, `releases/*/{README.md,QUICKSTART.md,RELEASE_NOTES.md}`, `releases/*/docs/**/*.md`, and `releases/*/python/**/README.md` remains derived from canonical docs and release packaging; if snapshot wording changes, the corresponding release-cut flow and notes must change in the same work. Release-local validation outputs under `releases/**/out/**`, embedded virtualenv content under `releases/**/.venv*/**`, and other untracked byproducts are provenance inputs only and are not part of the 26c inventory.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, `scripts/ci/check_test_plan.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
 - Generated `root_task.driver_images` records, `crates/pi4-driver-abi`, linked `pi4-driver-*` runtime image artifacts, and driver-runtime CPIO packaging are authoritative boundary artifacts for Pi 4 driver-task cleanup; 26c may audit, test, and refactor around them only without changing acceptance status or hand-editing generated descriptors.
+- Pi 4 runtime/DMA proof fields, descriptor resource totals, owner-state evidence, and source artifact freshness are 26c audit/test-plan surfaces; later operator tooling may project them only after this milestone defines the evidence semantics.
 - Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe, must not import host-side capabilities, transports, or provider crates into the VM build, and must be reviewed against the archived per-profile dependency trees.
+- Worker role/task manifests, ticket scopes, lease bindings, telemetry paths, and lifecycle gates are compiler-owned surfaces; any new worker implementation fields must enter `coh-rtc` IR and generated docs before code depends on them.
 - Refactor-generated module boundaries must not become new public interfaces unless `docs/INTERFACES.md`, `docs/HOST_TOOLS.md`, or the relevant canonical doc is updated in the same change.
 - HAL/network decompositions must retain generated manifest authority for boot policy defaults and must not hand-code policy values that already belong in `root_task.toml` or `coh-rtc` outputs.
 
@@ -7168,6 +7190,60 @@ Checks:
   - Canonical docs describe the runtime split as intentional architecture rather than an accidental temporary inconsistency.
 Deliverables:
   - Auditable runtime-boundary report and semantic-parity matrix that establish the proof surface required before boundary-sensitive runtime refactors.
+
+Title/ID: m26c-pi-runtime-dma-proof-closure
+Goal: Define and prove Pi 4 linked-runtime descriptor, DMA, owner-state, and artifact-freshness evidence before 26c cleanup or later operator tooling cites the runtime path as closed.
+Inputs: apps/root-task/src/hal/**, apps/root-task/src/local_seat_pi4.rs, apps/root-task/src/generated/**, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, configs/root_task_pi4_uboot_aarch64.toml, scripts/pi4-image-build.sh, scripts/ci/test_plan_run.sh, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
+Changes:
+  - crates/pi4-driver-abi/src/** — add or tighten descriptor-resource tests for runtime MMIO, DMA, shared-buffer, IRQ, bus-alias, and framebuffer ranges emitted by generated Pi 4 driver-image records.
+  - apps/pi4-driver-runtime/src/** — add runtime tests that classify DMA reservation/allocation and owner-state evidence without relying on root-owned fallback paths.
+  - apps/root-task/src/hal/** + apps/root-task/src/local_seat_pi4.rs — surface bounded evidence for DMA arena reservation, bus-address publication, cache maintenance, runtime-init descriptor delivery, and hardware-state handoff while preserving HAL-only authority.
+  - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md + docs/TEST_PLAN.md + docs/HARDWARE_BRINGUP.md — define absent, stale, generated-only, target-build, QEMU, and fresh Pi hardware proof states and require source artifact provenance for each claim.
+  - scripts/ci/test_plan_run.sh + stage checks where needed — fail 26c Pi closure if runtime/DMA proof is absent, stale, or inferred from generated eligibility alone.
+Commands:
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
+  - cargo test -p root-task --tests
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26c-pi4
+Checks:
+  - Runtime-image eligibility, descriptor resource totals, DMA reservation/allocation evidence, owner-state fields, and source artifact freshness are reported separately.
+  - Missing DMA proof is a blocking absent-evidence state, not inferred success from manifest generation, target compilation, QEMU smoke output, or stale serial logs.
+  - DMA ownership, cache maintenance, bus-address publication, runtime-init descriptor delivery, and hardware handoff remain behind HAL/generated interfaces with no direct MMIO or ad-hoc physical-address path.
+  - Fresh Pi evidence, when claimed, names the exact serial log, manifest hash, image build, and test-plan state directory used for the claim.
+Deliverables:
+  - 26c-owned Pi 4 runtime/DMA proof semantics and evidence gates strong enough for later operator tools to project read-only summaries without defining acceptance.
+
+Title/ID: m26c-worker-architecture-implementation
+Goal: Replace placeholder kernel-side worker GPU/LoRA paths with real seL4 worker ticket, lease, telemetry, and revocation loops matching public Queen/Worker documentation.
+Inputs: apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/lifecycle.rs, apps/root-task/src/generated/**, tools/coh-rtc/src/**, crates/cohesix-ticket/**, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/GPU_NODES.md, docs/WORKER_TICKETS.md, docs/ROLES_AND_SCHEDULING.md, docs/SECURITY.md, docs/TEST_PLAN.md
+Changes:
+  - apps/worker-heart/src/kernel.rs — implement the VM-side heartbeat worker loop that attaches with a scoped worker ticket, emits bounded telemetry to the documented worker path, observes lifecycle/revocation state, and exits deterministically on shutdown.
+  - apps/worker-gpu/src/kernel.rs + apps/worker-gpu/src/lib.rs — replace placeholder spin/stub behavior with a no_std worker loop that consumes WorkerGpu tickets, reads lease/model pointers through the documented namespace, emits GPU lease/job telemetry receipts, and never touches CUDA/NVML or raw GPU hardware.
+  - apps/worker-lora/src/lib.rs + apps/worker-lora/src/common.rs — implement the VM-side LoRA worker control/telemetry loop for ticket-scoped adapter/model lifecycle receipts while keeping training, TensorRT, CUDA, and PEFT execution host-side.
+  - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** + apps/root-task/src/lifecycle.rs — publish worker namespace entries, ticket-gated attach state, lease/lifecycle revocation signals, and bounded telemetry paths needed by the VM workers without changing Secure9P grammar.
+  - tools/coh-rtc/src/ir.rs + tools/coh-rtc/src/validate.rs + generated snippets — add worker-role implementation state, ticket scopes, lease paths, telemetry bounds, shutdown/revoke policy, and docs-as-built validation so public worker claims are compiler-aligned.
+  - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/GPU_NODES.md + docs/WORKER_TICKETS.md + docs/ROLES_AND_SCHEDULING.md + docs/SECURITY.md + docs/TEST_PLAN.md — update public Queen/Worker behavior to match the implemented seL4 worker loops and host-only GPU/PEFT boundaries.
+Commands:
+  - cargo test -p worker-heart
+  - cargo test -p worker-gpu
+  - cargo test -p worker-lora
+  - cargo test -p root-task --tests worker
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+  - cargo check -p worker-heart --target aarch64-unknown-none
+  - cargo check -p worker-gpu --target aarch64-unknown-none
+  - cargo check -p worker-lora --target aarch64-unknown-none
+Checks:
+  - Worker-heart, worker-gpu, and worker-lora no longer rely on placeholder kernel spin loops for public VM worker semantics.
+  - Each worker loop uses scoped tickets and documented namespace paths, emits bounded telemetry/receipts, and handles lease expiry, lifecycle cut, revocation, and shutdown deterministically.
+  - GPU and LoRA workers remain control-plane workers only: CUDA, NVML, TensorRT, PEFT training/import execution, and raw hardware access stay host-side.
+  - Generated manifests and docs agree on which worker roles are implemented, which paths they may access, and which telemetry/lease bounds apply.
+  - Existing console grammar, Secure9P framing, ACK/ERR/END behavior, and host-side worker helper APIs do not drift.
+Deliverables:
+  - Real seL4 worker architecture matching public Queen/Worker docs, with host/VM boundaries and tests strong enough for 26c closure.
 
 Title/ID: m26c-low-risk-surface-cleanup
 Goal: Humanize the highest-visibility low-risk code and doc surfaces after docs-as-built alignment is proven.
@@ -7698,6 +7774,7 @@ Provide a coherent operator toolkit that:
 3. Produces self-contained reproducibility artifacts without inventing a second pack format (`bundle`)
 4. Compares system state and policy deterministically (`diff`)
 5. Verifies device identity and attestation evidence (`attest`)
+6. Refreshes audit blocker/risk ledgers from current generated artifacts and evidence packs so later milestones do not inherit stale proof claims.
 
 All tools must be:
 - host-side only
@@ -7845,6 +7922,8 @@ This command is binary by design and suitable for CI and compliance workflows.
   - Output guarantees
 - `docs/SECURITY.md`
   - Operator tooling trust model
+- `docs/audit/*`
+  - Current blocker ledger, risk baseline, and accepted-risk cross references
 - `docs/ARCHITECTURE.md`
   - Operator interaction layer (read-only tools)
 
@@ -7855,6 +7934,7 @@ This command is binary by design and suitable for CI and compliance workflows.
 - Evidence-pack/bundle → diff → inspect roundtrip tests
 - Trace replay regression using the existing canonical trace fixtures
 - Attestation positive and negative cases
+- Audit ledger consistency checks across blockers, exceptions, findings, and risk baseline files
 - Tools must operate correctly against:
   - QEMU single-core
   - QEMU multicore
@@ -7868,6 +7948,7 @@ This command is binary by design and suitable for CI and compliance workflows.
 - No new protocols introduced
 - Trace replay yields byte-identical ACK/ERR using the existing canonical trace format
 - Canonical evidence packs/bundles are sufficient for offline diagnosis
+- Audit blocker/risk ledgers agree with current generated artifacts and evidence-pack schema before Milestone 28b/28c tasks cite them.
 - Documentation reflects as-built behavior
 
 ---
@@ -7887,6 +7968,22 @@ After Milestone 28:
 3. Add `coh diff` against live targets and canonical evidence packs.
 4. Add `coh attest` over `/proc/boot` + `/proc/attest/*` with trust-anchor validation.
 5. Reuse the existing trace substrate for pack correlation and diagnostics; do not add a second trace recorder.
+6. Refresh audit ledgers from the current repo state and generated outputs before 28b/28c hardening work cites blocker or exception state.
+
+## Task Breakdown
+```
+Title/ID: m28-audit-ledger-refresh
+Goal: Refresh audit blockers, exceptions, findings, and risk baselines so later hardening milestones cite current state.
+Inputs: docs/audit/, scripts/check-generated.sh, docs/BUILD_PLAN.md, current evidence-pack schema.
+Changes:
+  - docs/audit/BLOCKERS.md — update blocker status and classify remaining issues by milestone owner.
+  - docs/audit/EXCEPTIONS.md — remove contradictory `None` state when active exceptions exist and cross-link accepted-risk ids.
+  - docs/audit/findings.csv + docs/audit/rust_risk_baseline.toml — align risk ids, counts, and accepted exceptions with current code.
+  - docs/TEST_PLAN.md — add audit-ledger consistency check before 28b/28c closure.
+Commands: scripts/check-generated.sh && cargo test -p tests --test audit_ledgers
+Checks: Blockers, exceptions, findings, and risk baseline agree; stale audit snapshots cannot be cited as current closure evidence.
+Deliverables: Current, internally consistent audit ledgers for authority hardening and host-side AI milestones.
+```
 
 ## Milestone 28b — Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents <a id="28b"></a>
 [Milestones](#Milestones)
@@ -7910,6 +8007,8 @@ Strengthen authority and failover guarantees while preserving current transport 
 4. Eliminate fixture/bootstrap secret usage from release profiles.
 5. Ship production profiles with audit/replay enabled and bounded by manifest limits.
 6. Establish the mandatory authority floor for Milestone 28c host-side AI actuation and Milestone 29b AI namespace projections.
+7. Harden host-ticket execution so target/arg validation and replay durability are strong enough for host side effects.
+8. Harden host bridge and debug surfaces that can otherwise bypass the authority story: GPU bridge authentication/frame bounds and root-console memory diagnostics.
 
 ---
 
@@ -8008,11 +8107,42 @@ As-built leverage:
 
 ---
 
+### 6) Host Ticket Validation and Durable Execution
+**Purpose:** Keep `/host/tickets/spec` as a safe host-side actuation lane rather than an under-validated side-effect queue.
+
+Implementation requirements:
+- Introduce provider-specific validated newtypes for host ticket targets, args, ids, and action fields.
+- Reject empty components, `..`, slash-bearing identifiers where a single token is expected, control characters, overlong values, leading option-like values where they become argv operands, and unsupported provider-specific fields.
+- Enforce manifest action allowlists before executor dispatch, not only after schema parsing.
+- Add durable execution WAL states such as `prepared`, `executed`, and `terminal`, keyed by `id + idempotency_key`.
+- A crash or writeback failure after host side effects must not cause silent duplicate execution on restart; recovery must either publish the terminal receipt or deadletter with explicit replay state.
+
+As-built leverage:
+- Reuse the existing host-ticket schema, relay WAL, receipts, and idempotency key model.
+
+---
+
+### 7) Host Bridge Auth/Frame Caps and Debug Memory Gates
+**Purpose:** Remove authority bypasses from host bridge and debug surfaces before they become production dependencies.
+
+Implementation requirements:
+- `gpu-bridge-host` must reject placeholder auth such as `changeme` outside explicit mock/test modes and require a configured token source for live publish paths.
+- `gpu-bridge-host` console/REST clients must cap frame length before allocating buffers from peer-controlled sizes; the cap must be documented and tested.
+- Root-console memory diagnostics such as arbitrary-address hexdump must be disabled in release/production profiles or restricted to HAL-classified diagnostic ranges.
+- Documentation must distinguish emergency bring-up diagnostics from production operator surfaces.
+
+As-built leverage:
+- Reuse existing cohsh placeholder-auth rejection patterns, Secure9P/console frame limits, HAL device coverage checks, and test-plan profile gates.
+
+---
+
 ## Commands
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `cargo test -p hive-gateway`
 - `cargo test -p coh`
 - `cargo test -p cohsh`
+- `cargo test -p gpu-bridge-host`
+- `cargo test -p host-ticket-agent`
 - `cargo test -p root-task`
 - `cargo test -p tests --test host_ticket_agent`
 - `cargo test -p tests --test failover`
@@ -8028,6 +8158,10 @@ As-built leverage:
 - Stale writer epoch is rejected deterministically across local and relayed host tickets.
 - Production manifest/profile fails validation if fixture/default secrets are present.
 - Production profile surfaces `/audit/*` and `/replay/*`; evidence packs include epoch and dedupe state.
+- Host ticket targets and args are provider-validated before side effects; unsupported or ambiguous values fail deterministically with no executor call.
+- Host ticket crash/restart tests prove no silent duplicate host side effects after an executor succeeds but status writeback fails.
+- `gpu-bridge-host` rejects placeholder auth in live mode and refuses oversized peer frames before allocation.
+- Root-console arbitrary memory diagnostics are unavailable in release/production profiles or constrained to HAL-classified diagnostic ranges.
 - Milestone 28c host-side AI control cannot be enabled in target profiles unless delegated REST identity, writer-epoch fencing, and audit/replay requirements are all active.
 - Regression pack passes unchanged in compatibility mode; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
 
@@ -8040,6 +8174,9 @@ As-built leverage:
   - writer-epoch fencing policy and relay requirements,
   - production secret references,
   - audit/replay required defaults for release profiles,
+  - host-ticket provider target/arg grammars and execution WAL policy,
+  - live host-bridge auth and frame-length limits,
+  - profile-gated debug diagnostic policy,
   - host-AI enablement dependency gates consumed by Milestone 28c and Milestone 29b.
 - Generated snippets refreshed in:
   - `docs/INTERFACES.md`
@@ -8107,6 +8244,43 @@ Changes:
 Commands: cargo test -p coh && cargo test -p tests --test evidence && scripts/cohsh/run_regression_batch.sh
 Checks: Evidence includes audit/replay plus fencing/dedupe state; regression pack remains byte-stable.
 Deliverables: Audit-first production baseline with deterministic incident reconstruction inputs.
+
+Title/ID: m28b-host-ticket-validation-replay
+Goal: Harden host-ticket target/arg validation and make host side-effect replay durable across crashes.
+Inputs: apps/host-ticket-agent, docs/INTERFACES.md, docs/SECURITY.md, docs/FAILOVER.md
+Changes:
+  - apps/host-ticket-agent/src/claim.rs — parse provider-specific target and arg newtypes with strict component, length, and token validation.
+  - apps/host-ticket-agent/src/executors/mod.rs — dispatch only after manifest allowlist and provider grammar validation pass.
+  - apps/host-ticket-agent/src/wal.rs — record prepared/executed/terminal states keyed by id + idempotency_key.
+  - apps/host-ticket-agent/tests/replay.rs — simulate crash after executor success but before status writeback.
+  - docs/INTERFACES.md + docs/SECURITY.md — document host-ticket validation, replay states, and deterministic refusal semantics.
+Commands: cargo test -p host-ticket-agent && cargo test -p tests --test host_ticket_agent
+Checks: Invalid target/arg values never reach executors; crash/restart replay publishes or deadletters existing execution state without duplicating side effects.
+Deliverables: `/host/tickets/spec` is a durable, grammar-checked actuation lane rather than a best-effort command queue.
+
+Title/ID: m28b-gpu-bridge-auth-frame-caps
+Goal: Enforce live GPU bridge auth discipline and bounded peer frame allocation.
+Inputs: apps/gpu-bridge-host, docs/HOST_TOOLS.md, docs/GPU_NODES.md, docs/SECURITY.md
+Changes:
+  - apps/gpu-bridge-host/src/main.rs — reject placeholder auth outside mock/test mode and require explicit token/env resolution for live publish.
+  - apps/gpu-bridge-host/src/console.rs — cap length-prefixed frames before allocation and return deterministic errors on oversize input.
+  - apps/gpu-bridge-host/tests/auth_frame_bounds.rs — placeholder-auth and oversized-frame negative tests.
+  - docs/HOST_TOOLS.md + docs/GPU_NODES.md — document live auth requirements and frame-size limits.
+Commands: cargo test -p gpu-bridge-host && cargo test -p coh --features mock
+Checks: Live bridge cannot start with placeholder auth; malicious or corrupted frame lengths are rejected without unbounded allocation.
+Deliverables: GPU bridge remains a bounded host-side projection of Cohesix authority.
+
+Title/ID: m28b-console-debug-memory-gate
+Goal: Gate arbitrary memory diagnostics behind explicit bring-up policy and HAL-classified ranges.
+Inputs: apps/root-task/src/kernel.rs, apps/root-task/src/hal, docs/SECURITY.md, docs/HARDWARE_BRINGUP.md
+Changes:
+  - apps/root-task/src/kernel.rs — compile or profile gate raw hexdump commands out of production/release console builds.
+  - apps/root-task/src/hal/mod.rs — expose diagnostic-range classification for allowed bring-up memory reads where needed.
+  - apps/root-task/tests/console_debug_gate.rs — prove release profile rejects hexdump and bring-up profile bounds addresses/lengths.
+  - docs/SECURITY.md + docs/HARDWARE_BRINGUP.md — document emergency diagnostic scope and production refusal behavior.
+Commands: cargo test -p root-task --test console_debug_gate && cargo test -p root-task
+Checks: Production console cannot read arbitrary memory; bring-up diagnostics are range-bounded and audited.
+Deliverables: Debug memory access is no longer an unbounded operator surface.
 ```
 
 ---
@@ -8140,6 +8314,8 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 4. Reuse warmed prefixes and hotsets across related runs within bounded quotas and TTLs.
 5. Expose TTFT, decode, cache-hit, and resume metrics as first-class evidence.
 6. Represent multi-agent work as explicit task graphs and handoffs, not as an opaque shared transcript or hidden message bus.
+7. Resolve worker implementation boundaries before AI supervisors depend on worker claims: kernel-side worker stubs must either become real ticket/lease loops or be documented as host/root-task scaffolding.
+8. Make PEFT/model registry import, activation, rollback, and provider receipts transactionally auditable before AI run control treats them as dependable actuation.
 
 **Non-Goals (Explicit)**
 - No in-VM transformer kernels, sparse-attention implementations, KV-compression implementations, or CUDA/NVML changes.
@@ -8151,6 +8327,7 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 - No opaque prompt transcript as the source of truth for agent state, approvals, retrieval, or tool output.
 - No hidden inter-agent mailbox or side-channel coordination surface outside delegated tickets, durable artifacts, and existing evidence flows.
 - No NeMo-specific control plane, namespace grammar, or provider lock-in semantics; NeMo support must remain an optional host-side provider family under the same Cohesix authority/evidence contract as other backends.
+- No claim that VM worker-gpu, worker-lora, or worker-heart kernel binaries are full task implementations unless they attach, consume scoped tickets, service the documented lease/telemetry loop, and have tests/evidence matching the documentation.
 
 **Deliverables**
 
@@ -8250,7 +8427,38 @@ As-built leverage:
 
 ---
 
-### 6) Optional NeMo runtime family (host-only, governed, cross-provider)
+### 6) Worker Boundary and Documentation Closure
+**Purpose:** Prevent host-side AI orchestration from depending on stronger worker claims than the VM actually implements.
+
+Implementation requirements:
+- Audit worker-heart, worker-gpu, and worker-lora kernel entrypoints against README, GPU, worker-ticket, role/scheduling, and interface docs.
+- Choose one of two paths per worker role:
+  - implement the ticket attach, lease/telemetry, shutdown, and evidence loop expected by the docs, or
+  - rewrite docs and generated snippets to say the current role is root-task/host scaffolding until a later milestone authorizes full VM worker behavior.
+- Add tests that prevent future docs from claiming worker spawn/lease semantics not backed by code and generated manifest truth.
+- Host-side AI run envelopes must reference host-ticket/provider receipts, not undocumented VM worker behavior.
+
+As-built leverage:
+- Reuse role-scoped ticket docs, worker crates, host-ticket receipts, and evidence-pack schemas.
+
+---
+
+### 7) PEFT/Model Registry Transaction and Provenance Closure
+**Purpose:** Make model/adapter activation safe enough for AI run control and PEFT reviewers without moving ML runtimes into the VM.
+
+Implementation requirements:
+- Add registry locking, canonical-path confinement, symlink rejection or explicit canonicalization policy, unique temp files, fsync/rename ordering, and rollback-safe activation records.
+- Validate adapter metadata, model id, LoRA id, artifact hashes, source job refs, and optional signature/provenance refs before import or activation.
+- Activation must record both host-registry state and VM `/gpu/models/*` publish/ack state so partial activation is visible and recoverable.
+- Evidence packs must include bounded PEFT registry transaction receipts and activation/rollback provenance, redacted where needed.
+- Direct PEFT/NeMo/provider activation remains host-side and ticket-scoped; Cohesix records authority/evidence, not training internals.
+
+As-built leverage:
+- Reuse `coh peft`, `/gpu/models`, host-ticket-agent, evidence timeline, and Milestone 28b audit/replay defaults.
+
+---
+
+### 8) Optional NeMo runtime family (host-only, governed, cross-provider)
 **Purpose:** Support NVIDIA NeMo where it creates clear operational leverage over simpler direct-serving alternatives, while keeping Cohesix as the authority, evidence, and policy layer.
 
 Implementation requirements:
@@ -8289,6 +8497,8 @@ As-built leverage:
 - `python -m pytest tools/cohesix-py/tests/test_playbooks.py -k nemo`
 - `cargo test -p tests --test host_ticket_agent -- nemo`
 - `cohesix-playbook --playbook long-context-agent-factory --dry-run --mock`
+- `cargo test -p worker-gpu && cargo test -p worker-lora && cargo test -p worker-heart`
+- `cargo test -p coh --test peft && cargo test -p coh --test peft_registry_transactions`
 
 **Checks (Definition of Done)**
 - Multi-agent host workflows never require an undifferentiated shared Queen writer.
@@ -8298,6 +8508,8 @@ As-built leverage:
 - Prefix cache hits and misses are explainable from bounded eligibility/invalidation fields rather than hidden provider behavior.
 - Strategy selection and long-context cost metrics are observable per run/step.
 - High-risk live AI mutations remain policy-gated and ticket-scoped.
+- Worker-role documentation and generated snippets match actual kernel/host implementation boundaries; no AI task depends on undocumented VM worker behavior.
+- PEFT/model registry import, activation, and rollback are transactional, provenance-recorded, and recoverable after partial host/VM publish failure.
 - Optional NeMo support remains host-side, ticket-scoped, writer-fenced, and evidence-backed; disabling NeMo leaves the baseline 28c substrate intact.
 - The same Cohesix run envelope and evidence model works against NeMo and at least one alternate provider family, proving NeMo support adds governed lifecycle value rather than vendor-specific lock-in.
 - Guardrail and evaluator receipts can gate live promotion or actuation decisions deterministically in dry-run/mock tests before any real provider mutation is allowed.
@@ -8306,6 +8518,8 @@ As-built leverage:
 **Compiler touchpoints**
 - `coh-rtc` emits generated host-tool defaults for AI run envelope limits, task-graph/handoff bounds, context budget ceilings, retrieval-manifest and artifact-ref bounds, prefix/hotset TTLs, and metrics bounds under the existing host policy/codegen path.
 - Manifest validation rejects AI host-control enablement when Milestone 28b delegated identity or audit/replay requirements are disabled in the target profile.
+- Manifest/docs validation rejects worker-role claims that exceed the current code/generated worker implementation boundary.
+- `coh-rtc` emits PEFT/model registry transaction/provenance bounds consumed by host tools and evidence exports.
 - `coh-rtc` additionally emits optional provider-family policy for NeMo capability probes, action allowlists, endpoint/auth refs, deployment/evaluation/guardrail bounds, and alternate-provider parity requirements.
 - Canonical interface/architecture docs refreshed in:
   - `docs/INTERFACES.md`
@@ -8375,6 +8589,31 @@ Changes:
 Commands: python -m pytest tools/cohesix-py/tests/test_integrations.py && python -m pytest tools/cohesix-py/tests/test_examples_ci_siem.py
 Checks: Reference adapters use delegated tickets, explicit handoff/checkpoint refs, and evidence exports only; no hidden side-channel state or direct `/queen/ctl` mutation is required.
 Deliverables: Cohesix remains the authority/evidence layer beneath supervisor frameworks instead of becoming one.
+
+Title/ID: m28c-worker-boundary-closure
+Goal: Align worker role documentation, generated snippets, and AI run references with the actual worker implementation boundary.
+Inputs: apps/worker-heart, apps/worker-gpu, apps/worker-lora, docs/GPU_NODES.md, docs/WORKER_TICKETS.md, docs/ROLES_AND_SCHEDULING.md, docs/INTERFACES.md
+Changes:
+  - apps/worker-heart/src/kernel.rs + apps/worker-gpu/src/kernel.rs + apps/worker-lora/src/lib.rs — either implement scoped ticket/lease/telemetry loops or leave explicit no-op/stub status behind feature/profile gates.
+  - docs/GPU_NODES.md + docs/WORKER_TICKETS.md + docs/ROLES_AND_SCHEDULING.md — describe worker roles exactly as implemented, separating host scaffolding, root-task records, and real VM worker tasks.
+  - tools/coh-rtc/src/validate.rs — reject generated worker-spawn claims that do not match enabled worker implementation status.
+  - apps/root-task/tests/worker_docs_alignment.rs — guard documented worker paths and generated role state against implementation drift.
+Commands: cargo test -p worker-heart && cargo test -p worker-gpu && cargo test -p worker-lora && cargo test -p root-task --test worker_docs_alignment
+Checks: Docs no longer overclaim VM worker behavior; any full worker-role claim is backed by code, generated manifest state, and tests.
+Deliverables: Host-side AI orchestration has an honest worker boundary and cannot cite placeholder kernel stubs as live worker semantics.
+
+Title/ID: m28c-peft-registry-transactions
+Goal: Make PEFT/model registry import, activation, rollback, and evidence receipts transactional and provenance-complete.
+Inputs: apps/coh/src/peft, apps/coh/src/evidence.rs, apps/host-ticket-agent, docs/GPU_NODES.md, docs/SECURITY.md, docs/TEST_PLAN.md
+Changes:
+  - apps/coh/src/peft/mod.rs — registry lock, canonical-path confinement, unique temp files, fsync/rename ordering, adapter metadata validation, and rollback-safe transaction records.
+  - apps/coh/src/peft/activate.rs — record host-registry state and VM `/gpu/models/*` publish/ack state as one recoverable activation transaction.
+  - apps/host-ticket-agent/src/executors/peft.rs — require transaction/provenance receipts for `peft.import|activate|rollback` actions.
+  - apps/coh/src/evidence.rs + apps/coh/src/evidence_timeline.rs — include bounded PEFT transaction, provenance, activation, and rollback receipts.
+  - docs/GPU_NODES.md + docs/SECURITY.md + docs/TEST_PLAN.md — document PEFT transaction/provenance requirements and partial-failure recovery tests.
+Commands: cargo test -p coh --test peft && cargo test -p coh --test peft_registry_transactions && cargo test -p host-ticket-agent
+Checks: Partial import/activation failure is recoverable and visible; adapter provenance and hashes are verified before activation; evidence reconstructs host and VM publish state without relying on prompt transcripts.
+Deliverables: PEFT/model lifecycle becomes a governed host-side actuation path suitable for 28c AI run control.
 
 Title/ID: m28c-nemo-capability-probes
 Goal: Detect and classify optional NeMo runtime capabilities without making NeMo the source of truth.
