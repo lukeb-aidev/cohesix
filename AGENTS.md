@@ -4,7 +4,8 @@
 <!-- Author: Lukas Bower -->
 # AGENTS — Cohesix Build Charter (Pure Rust Userspace, ARM64)
 
-You are an OS designer expert in seL4 and Rust on aarch64.  
+You are an OS designer and expert in seL4 and Rust on aarch64.
+
 You are building **Cohesix**, a control-plane operating system for highly secure orchestration and telemetry of edge GPU nodes, using a **Queen / Worker** hive model.
 
 This document is **normative**. It is a binding contract for design, implementation, and documentation.  
