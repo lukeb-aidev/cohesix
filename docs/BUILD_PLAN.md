@@ -6787,7 +6787,7 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Driver-enabling HAL abstractions in 26c are limited to behavior-preserving cleanup of the driver-task model established by reopened 26a/26b. `SdioHostHal`-style seams may sit underneath the current CYW43 path, and USB platform/DMA seams may sit underneath the current local-seat/VL805 path, but 26c must not add support for new Wi-Fi chipsets, new USB controllers, new USB classes, or a second driver framework parallel to the 26a/26b driver-task substrate.
 - Milestone 26c must not collapse host-side `std` capability into the seL4 build. VM-side Cohesix remains `no_std`; any "convergence" under 26c is limited to contracts, fixtures, generated artifacts, and explicitly `no_std`-safe semantic helpers.
 - Runtime-boundary-sensitive surfaces include `apps/root-task/src/ninedoor.rs`, `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, `apps/root-task/src/net/**`, `apps/root-task/src/hal/**`, `apps/root-task/src/local_seat_pi4.rs`, `apps/pi4-driver-runtime/**`, `crates/pi4-driver-abi/**`, `apps/worker-heart/**`, `apps/worker-gpu/**`, `apps/worker-lora/**`, and `apps/nine-door/src/host/*`. 26c may structurally refactor these files only behind existing public contracts, with no adapter collapse, no host capability leakage, no new HAL bypass, and no external grammar drift.
-- The worker architecture task is the explicit 26c behavior-change exception required to close public Queen/Worker documentation drift: it must implement the already-documented worker ticket/lease/telemetry loops instead of inventing new protocols, roles, or namespace grammar.
+- The worker architecture and phase-1 cap-backed worker endpoint tasks are the explicit 26c behavior-change exceptions required to close public Queen/Worker documentation drift: they must implement the already-documented worker ticket/lease/telemetry loops and require badged seL4 endpoint caps for VM worker authority instead of inventing new protocols, roles, or namespace grammar.
 - Any new shared semantic helper must be `no_std` by construction, must have host and VM tests where it represents overlapping behavior, and must not import host transport, filesystem, process, network, or provider crates into VM closure profiles.
 - AI-assisted or model-generated Rust remains untrusted. 26c refactor PRs must include baseline command evidence, risk-ratchet review for `unsafe`, `unwrap`, `expect`, and `panic!`, and reviewer sign-off before merge.
 - `docs/snippets/*.md`, `docs/nist/REPORT.md`, tracked release-cut docs, and other generated or derived documentation remain update-by-source artifacts; they are not to be hand-edited as a shortcut.
@@ -8411,6 +8411,11 @@ As-built leverage:
 
 ### 8) Full Cap-Bundle Ticket Authority
 **Purpose:** Finish the authority conversion started in 26c by ensuring worker and driver tickets are backed by complete generated seL4 cap bundles, not only badged endpoint caps.
+
+Prerequisites:
+- Milestone 26c `m26c-cap-backed-worker-endpoints` completed, including generated role state for badged endpoint caps and negative metadata-only ticket tests.
+- Milestone 26d seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
+- Terminology remains strict: "cap-backed tickets" in this section means VM worker/driver tickets backed by seL4 caps. Host tickets, REST delegated tickets, and provider/PEFT tickets remain host authority records unless a VM projection explicitly maps them to generated seL4 caps.
 
 Implementation requirements:
 - Extend generated role state so each worker or driver ticket maps to an explicit cap bundle: endpoint caps, notification caps, fault endpoint caps, shared-ring frames, allowed data frames, declared MMIO frames, and DMA/shared-buffer frames where applicable.
