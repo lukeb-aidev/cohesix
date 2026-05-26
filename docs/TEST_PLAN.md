@@ -102,7 +102,9 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p cohsh --test ticket_mint`
 - `cargo test -p cohsh --test transcripts`
 - `cargo test -p cohsh --test control_plane`
+- `cargo test -p cohsh --test pooling`
 - `cargo test -p cohsh` (REST transport is enabled by default; use `--no-default-features` to verify minimal builds)
+- `cargo test -p secure9p-core --test session_limits`
 - `cargo check -p swarmui --bin swarmui` (Tauri 2 command/context wiring; SwarmUI keeps the Tauri binary out of Cargo test harnesses)
 - `python3 scripts/ci/check_swarmui_dependencies.py` (default REST projection may use `ureq`; `--no-default-features` must not pull HTTP clients)
 - `cargo test -p swarmui --test dependency_policy`
@@ -141,6 +143,7 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci`
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio`
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib ninedoor::tests`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::driver_task_net`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib net::stack`
@@ -177,6 +180,8 @@ Run in order. Skips produce INCOMPLETE markers and the stage will fail.
   - `COHESIX_WRITE_TRACE=1 cargo test -p swarmui --test trace`
 - Explicit scale proof (not part of the fast stage):
   - `cargo test -p nine-door --features scale-tests --test shard_scale sharded_attach_1k_scale_gate_exports_metrics -- --nocapture`
+
+Stage 02 includes host-safe 1000-worker pressure coverage for Secure9P tag/window/fid churn, `cohsh` session-pool fan-out, localhost TCP framed logical sessions, NineDoor worker namespace listing/telemetry retention, and mixed Pi 4 driver-task ring scheduling under serial/USB/HDMI plus GENET/CYW43 pressure. These tests are regression guards for bounded control-plane and scheduling behavior; they are not Pi 4 Wi-Fi/GENET hardware throughput proof and do not replace Stage 03/04 QEMU runs or fresh Pi 4 hardware benchmarks.
 
 Pi 4 trace evidence remains a post-capture host workflow. `scripts/pi4-image-build.sh` stages USB/Wi-Fi trace helpers, but fast host tests invoke `scripts/pi4_trace_normalize.py` and `scripts/pi4_gate_proof.sh` tests directly and do not require a flashed SD card or serial log. The same normalizer also provides `--gate-summary` plus repeated `--expect KEY=VALUE` checks for narrow USB/Wi-Fi hardware runs, so a serial capture can fail fast on regressions such as `USB_BLOCKER=cmd-submit-proof-timer-preempted`, `USB_BLOCKER=usbcmd-run-preserved-reset-bit`, `WIFI_BLOCKER=armcr4-prereset-fgc-cmd53-r5-rejected`, `WIFI_BLOCKER=ht-clock-timeout`, `BOOT_HALTED=yes`, `PANIC_SEEN=yes`, `PANIC_REASON=bootinfo-snapshot-corrupted`, or `TIMER_IRQ27_SEEN=yes`. The Pi 4 local-seat driver coverage module is part of Stage 02 because it owns USB keyboard input proof contracts, Caps/Num/Scroll LED bitmaps, post-seal LED-sync enablement, HDMI progress refresh cadence, and Wi-Fi progress suppression while USB boot activity is active.
 

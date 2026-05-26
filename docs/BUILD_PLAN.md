@@ -7817,12 +7817,216 @@ Deliverables:
   - Regression fixtures committed and referenced in docs/TEST_PLAN.md.
 ```
 
+## Milestone 27b — Formal Verification Baseline + Proof-Carrying Manifests <a id="27b"></a>
+[Milestones](#Milestones)
+
+**Why now (assurance):** After Milestone 27 gives Cohesix a persistent, manifest-bound Pi 4/QEMU substrate, later operator, production-authority, AI, and AWS milestones need stronger assurance than regression tests and evidence packs alone. Milestone 27b establishes the first formal-verification baseline around the actual Cohesix authority model: generated manifests, Secure9P/NineDoor bounds, HAL admission, driver-task ABI/resource grants, ticket/namespace confinement, and replayable state transitions. It does not claim full end-to-end formal verification of the whole OS or physical hardware behavior.
+
+**As-built alignment note:** Cohesix already has strong verification hooks: compiler-generated manifests, Secure9P red lines, no-unsafe protocol crates, HAL ownership rules, staged regression plans, evidence packs, and seL4 as the upstream kernel proof base. It does **not** yet have machine-checked Cohesix-specific proof artifacts, proof-carrying manifest witnesses, TLA+/PlusCal state models, Kani/Miri proof jobs, or a CI verification gate that binds those artifacts to generated Rust and docs. Milestone 27b introduces those surfaces; older prose must not describe Cohesix as formally verified until the claims in this milestone have passing evidence.
+
+**Non-negotiable constraints**
+- No proof claim may exceed the checked artifact. QEMU proof, Pi 4 hardware evidence, static analysis, bounded model checking, TLA+ state exploration, and inherited seL4 kernel assumptions must remain separate.
+- Do not claim full seL4-style refinement proof from Cohesix spec to binary unless that proof exists. The accepted claim for this milestone is bounded, machine-checked verification of selected Cohesix contracts plus explicit assumptions.
+- Formal models must describe generated/as-built interfaces, not desired future behavior. If a model and generated manifest disagree, the fix is IR/codegen/docs alignment, not weakening the model.
+- Verification tooling must be deterministic on macOS ARM64 and CI-friendly; heavyweight tools may be optional locally only if CI has a bounded equivalent or checked artifact.
+- No new runtime protocols, namespace roots, ticket semantics, or HAL bypasses are permitted under the banner of verification.
+- Verification witnesses are generated artifacts or generated-adjacent evidence; they must not become a hand-maintained second source of truth.
+- Physical Pi 4 hardware behavior remains evidence-based. Formal verification can prove the admission/resource/ABI contracts that precede hardware execution, not that a device actually behaves correctly on the board.
+
+### Prerequisite
+- Milestone **27** completed for the selected profile, including manifest-bound persistence, generated docs alignment, and deterministic regression evidence.
+- Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to the proof surface: driver-task substrate, HAL admission, linked runtime descriptors, target-qualified tests, and refreshed seL4 baseline evidence.
+
+### Goal
+Establish a machine-checkable verification baseline for the highest-value Cohesix contracts:
+1. manifest/compiler invariants and generated proof witnesses,
+2. Secure9P codec/session/path/fid/append-only bounds,
+3. ticket, namespace, and role confinement,
+4. HAL-only hardware authority and driver-task resource admission,
+5. pointer-free, bounded Pi 4 driver-task ABI descriptors,
+6. selected Queen/Worker, policy, audit, replay, and persistence state machines,
+7. explicit proof assumptions, residual gaps, and non-claims.
+
+### Deliverables
+
+#### A) Verification claim register
+- Add `docs/FORMAL_VERIFICATION.md` as the canonical register of checked claims, proof assumptions, trusted bases, non-claims, and residual gaps.
+- Distinguish:
+  - inherited upstream seL4 assumptions,
+  - Rust type/memory-safety assumptions,
+  - Cohesix static checks,
+  - bounded model-checking results,
+  - state-model exploration results,
+  - QEMU/staged evidence,
+  - fresh Pi 4 hardware evidence.
+- Define allowed external wording for Cohesix assurance claims so release docs, audit reports, and operator utilities do not overstate proof scope.
+
+#### B) Proof-carrying manifest witnesses
+- Extend `coh-rtc` to emit a deterministic verification witness for each resolved manifest profile, including:
+  - Secure9P `msize`, walk-depth, path, and fid constraints,
+  - namespace roots, mutability, role permissions, and append-only controls,
+  - ticket inventory and role/path/verb authority matrix,
+  - HAL storage, MMIO, DMA, IRQ, and driver-task resource grants,
+  - driver-image ABI bounds, runtime resource windows, and non-overlap checks,
+  - persistence bounds and data-at-rest identity binding.
+- Add a verifier that checks the witness against the resolved manifest and generated Rust tables, failing closed on drift.
+- Witnesses must be regenerated from IR; hand-editing witness output is invalid.
+
+#### C) Secure9P formal and bounded verification
+- Add bounded proofs for `secure9p-codec` and `secure9p-core` covering:
+  - length-prefix and `msize` handling,
+  - walk depth and path rejection (`..`, invalid UTF-8, NUL where rejected),
+  - fid creation, clunk retirement, and no reuse after clunk,
+  - tag/window/queue limits,
+  - append-only read/write bound helpers,
+  - deterministic error mapping for malformed frames.
+- Use Kani or an equivalent bounded model checker where practical, plus fuzz corpus regression for parser edge cases.
+- Keep existing Rust tests as regression evidence; proofs do not replace fixtures.
+
+#### D) HAL and driver-task authority checks
+- Add a static authority checker that rejects direct physical-address discovery, device-untyped retyping, DMA allocation/publish, IRQ binding, cache maintenance, or ad-hoc MMIO outside approved HAL modules.
+- Check that driver-task bootstrap grants only declared CSpace, VSpace, endpoint, notification, fault endpoint, stack, IPC, ring, MMIO, DMA, shared-buffer, and IRQ resources from generated manifests.
+- Check that driver tasks do not receive Secure9P authority, broad namespace state, ticket secrets, or catch-all `KernelHal` authority.
+- Verify `pi4-driver-abi` descriptors are pointer-free, layout-stable, bounded, and incapable of representing overlapping undeclared resource windows.
+
+#### E) State-machine models
+- Add small TLA+/PlusCal or equivalent models for:
+  - Secure9P session/fid lifecycle,
+  - ticket issuance, use, revoke, and denial,
+  - Queen/Worker lifecycle and namespace visibility,
+  - policy apply/rollback and audit/replay ordering,
+  - persistence spool append/read/ack crash behavior,
+  - driver-task admission and fail-closed service turns.
+- Model outputs must map back to generated manifest fields and checked Rust fixtures. Models that cannot be tied to as-built fields are design notes, not verification closure.
+
+#### F) CI verification gate and evidence archive
+- Add `scripts/ci/verification_gate.sh` to run the deterministic verification subset:
+  - generated-artifact drift guard,
+  - proof-witness generation and verification,
+  - Secure9P bounded proofs or CI-approved bounded substitutes,
+  - state-model checks at documented bounds,
+  - HAL/driver-task authority checker,
+  - fuzz corpus regression,
+  - existing Rust tests for touched proof surfaces.
+- Emit evidence under `out/verification/<run-id>/` with machine-readable summaries and human-readable logs.
+- Update `docs/TEST_PLAN.md` so formal verification augments, but does not replace, the staged Test Plan and hardware proof gates.
+
+### Commands
+- `scripts/check-generated.sh`
+- `cargo test -p coh-rtc`
+- `cargo test -p secure9p-codec`
+- `cargo test -p secure9p-core`
+- `cargo test -p pi4-driver-abi`
+- `scripts/ci/verification_gate.sh`
+
+### Checks (DoD)
+- `coh-rtc` emits verification witnesses for active QEMU and Pi 4 profiles, and the verifier proves they match generated Rust and resolved manifests.
+- Secure9P codec/core proofs or bounded checks pass for the documented contract set.
+- HAL/static authority checker has no bypass findings outside approved HAL modules and documented test fixtures.
+- Driver-task ABI/resource checks prove no undeclared resource windows, pointer-bearing descriptors, overlapping arenas, or broad authority grants.
+- State models run at documented bounds and any counterexample is either fixed or recorded as a blocker with a named later milestone.
+- `docs/FORMAL_VERIFICATION.md` states exact claims, assumptions, and non-claims, including that Pi 4 hardware behavior still requires fresh board evidence.
+- Verification evidence is reproducible and archived under `out/verification/<run-id>/`.
+
+### Compiler touchpoints
+- `coh-rtc` emits proof witnesses from the same IR used for generated Rust, docs snippets, policies, and manifests.
+- Manifest schema changes that affect authority, namespace layout, persistence, Secure9P bounds, or driver resources must update the witness schema and verifier in the same change.
+- Generated docs may summarize witness contents, but canonical proof truth is the resolved manifest plus generated witness plus verifier output.
+
+### Task Breakdown
+```
+Title/ID: m27b-claim-register
+Goal: Define Cohesix formal-verification claims, assumptions, and non-claims before adding proof tooling.
+Inputs: AGENTS.md, docs/BUILD_PLAN.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/TEST_PLAN.md.
+Changes:
+  - docs/FORMAL_VERIFICATION.md — proof scope, trusted bases, checked claims, non-claims, residual gaps, and acceptable release wording.
+Commands:
+  - git diff --check docs/FORMAL_VERIFICATION.md docs/BUILD_PLAN.md
+Checks:
+  - The document separates inherited seL4 assumptions, Cohesix machine checks, staged evidence, and Pi 4 hardware proof.
+Deliverables:
+  - Canonical assurance-claim register for later verification tasks.
+
+Title/ID: m27b-proof-witness-ir
+Goal: Generate and verify proof-carrying manifest witnesses from compiler IR.
+Inputs: tools/coh-rtc, configs/root_task*.toml, apps/root-task/src/generated, out/manifests/.
+Changes:
+  - tools/coh-rtc/src/verify.rs — witness schema and verifier.
+  - tools/coh-rtc/src/codegen/* — witness emission beside resolved manifests.
+  - docs/snippets/* — generated witness summaries where appropriate.
+Commands:
+  - cargo test -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - Witnesses match resolved manifests and generated Rust; hand-edited or stale witnesses fail closed.
+Deliverables:
+  - Proof-carrying manifest witness pipeline for QEMU and Pi 4 profiles.
+
+Title/ID: m27b-secure9p-proofs
+Goal: Add bounded machine checks for Secure9P codec/session invariants.
+Inputs: crates/secure9p-codec, crates/secure9p-core, scripts/cohsh/*, docs/USERLAND_AND_CLI.md.
+Changes:
+  - crates/secure9p-codec/proofs/ — bounded frame/decoder proof harnesses.
+  - crates/secure9p-core/proofs/ — fid/session/window/append-only proof harnesses.
+  - docs/FORMAL_VERIFICATION.md — Secure9P proof claim updates.
+Commands:
+  - cargo test -p secure9p-codec
+  - cargo test -p secure9p-core
+  - scripts/ci/verification_gate.sh --secure9p-only
+Checks:
+  - Secure9P red lines are machine-checked and regression fixtures still pass unchanged.
+Deliverables:
+  - Reproducible Secure9P proof evidence.
+
+Title/ID: m27b-hal-authority-checker
+Goal: Enforce HAL-only device authority and driver-task resource confinement statically.
+Inputs: apps/root-task/src/hal, apps/root-task/src/cspace, apps/root-task/src/kernel.rs, crates/pi4-driver-abi.
+Changes:
+  - tools/verify-cohesix/src/hal_authority.rs — static scanner/checker for HAL bypass and broad authority grants.
+  - crates/pi4-driver-abi/proofs/ — ABI layout/bounds checks.
+Commands:
+  - cargo test -p pi4-driver-abi
+  - cargo run -p verify-cohesix -- hal-authority --manifest out/manifests/root_task_resolved.json
+Checks:
+  - MMIO/DMA/IRQ/resource grants appear only through approved HAL paths; driver descriptors are pointer-free and bounded.
+Deliverables:
+  - HAL and driver-task authority verification gate.
+
+Title/ID: m27b-state-models
+Goal: Model and check selected Cohesix authority/state machines.
+Inputs: Secure9P session semantics, ticket policy, worker lifecycle, policy/audit/replay, persistence spool, driver-task admission.
+Changes:
+  - specs/secure9p_session.tla — session/fid lifecycle model.
+  - specs/ticket_authority.tla — issue/use/revoke/deny model.
+  - specs/driver_task_admission.tla — generated resource grant and fail-closed service model.
+  - specs/persistence_spool.tla — crash-safe append/read/ack model.
+Commands:
+  - scripts/ci/verification_gate.sh --models-only
+Checks:
+  - Models run at documented bounds and counterexamples are either fixed or recorded as blockers.
+Deliverables:
+  - State-machine model evidence tied to generated Cohesix fields.
+
+Title/ID: m27b-verification-ci
+Goal: Add the deterministic formal-verification gate to CI and the staged Test Plan.
+Inputs: scripts/ci/, docs/TEST_PLAN.md, proof harnesses, witness verifier, HAL checker, model runner.
+Changes:
+  - scripts/ci/verification_gate.sh — deterministic verification runner.
+  - docs/TEST_PLAN.md — formal-verification stage and evidence paths.
+Commands:
+  - scripts/ci/verification_gate.sh
+Checks:
+  - The gate emits stable evidence under `out/verification/<run-id>/` and fails closed on drift, proof failures, or unsupported proof claims.
+Deliverables:
+  - CI-ready verification baseline that later milestones can cite.
+```
+
 
 ## Milestone 28 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest <a id="28"></a>
 [Milestones](#Milestones)
 
 **Why now (operator & adoption):**  
-After Milestones 26c, 26d, and 27 close, Cohesix should have the Pi 4/seL4 baseline and persistence evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
+After Milestones 26c, 26d, 27, and 27b close, Cohesix should have the Pi 4/seL4 baseline, persistence evidence, and formal-verification claim register needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
 
 **As-built alignment note:** `coh evidence pack` and `coh evidence timeline` already exist and are reused here. `coh inspect`, a first-class trace diagnostics command, `coh diff`, `coh attest`, and any `coh bundle` alias are not implemented as of the 26c planning audit and must be added as thin, read-only projections over existing file-shaped state and evidence packs.
 

@@ -8822,6 +8822,59 @@ mod tests {
     }
 
     #[test]
+    fn thousand_worker_namespace_pressure_stays_bounded_and_recent() {
+        const WORKERS: usize = 1_000;
+
+        let mut bridge = NineDoorBridge::new();
+        for index in 0..WORKERS {
+            bridge
+                .spawn_worker(SpawnTarget::Heartbeat)
+                .unwrap_or_else(|_| panic!("spawn worker {}", index + 1));
+        }
+        assert_eq!(bridge.workers.len(), WORKERS);
+
+        let mut listing: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        bridge
+            .list_workers_into(&mut listing)
+            .expect("list worker namespace");
+        assert_eq!(listing.len(), MAX_STREAM_LINES.min(WORKERS));
+        assert_eq!(
+            listing.last().map(|line| line.as_str()),
+            Some("worker-1000")
+        );
+
+        let retained_first = WORKERS.saturating_sub(listing.len()).saturating_add(1);
+        let retained_first_id = format!("worker-{retained_first}");
+        assert_eq!(
+            listing.first().map(|line| line.as_str()),
+            Some(retained_first_id.as_str())
+        );
+
+        let worker = bridge
+            .workers
+            .iter_mut()
+            .find(|worker| worker.id.as_str() == "worker-1000")
+            .expect("latest worker exists");
+        worker
+            .ring
+            .append(b"heartbeat 1000")
+            .expect("append latest worker telemetry");
+        let worker = bridge
+            .workers
+            .iter()
+            .find(|worker| worker.id.as_str() == "worker-1000")
+            .expect("latest worker exists");
+        let telemetry = worker.ring.read_from(0, UI_MAX_STREAM_BYTES);
+        assert!(
+            core::str::from_utf8(telemetry.bytes.as_slice())
+                .expect("worker telemetry utf8")
+                .contains("heartbeat 1000"),
+            "latest worker telemetry missing from bounded namespace"
+        );
+    }
+
+    #[test]
     fn cas_manifest_reupload_is_idempotent() {
         let config = generated::cas_config();
         let key_bytes = config.signing_key.expect("signing key required");

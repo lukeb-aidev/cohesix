@@ -4627,6 +4627,232 @@ mod tests {
         assert!(saw_pcie);
     }
 
+    #[test]
+    fn mixed_console_display_and_network_pressure_keeps_input_prioritized() {
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        enum PressureKind {
+            SerialInput,
+            UsbInput,
+            SerialOutput,
+            HdmiOutput,
+            NetworkTx,
+            NetworkRx,
+        }
+
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        struct PressureTurn {
+            sequence: u32,
+            kind: PressureKind,
+            hot_path: DriverTaskHotPath,
+            frame_len: u16,
+        }
+
+        impl PressureTurn {
+            const fn input(self) -> bool {
+                matches!(
+                    self.kind,
+                    PressureKind::SerialInput | PressureKind::UsbInput
+                )
+            }
+
+            const fn network(self) -> bool {
+                matches!(self.kind, PressureKind::NetworkTx | PressureKind::NetworkRx)
+            }
+
+            fn command(self) -> DriverTaskCommandRecord {
+                let frame = if self.frame_len == 0 {
+                    DriverFrameDescriptor {
+                        offset: 0,
+                        len: 0,
+                        flags: 0,
+                    }
+                } else {
+                    DriverFrameDescriptor::new(
+                        DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                        self.frame_len,
+                        0,
+                    )
+                    .unwrap()
+                };
+                DriverTaskCommandRecord::pi4_hot_path(
+                    self.sequence,
+                    self.hot_path,
+                    DriverTaskBudgetGrant::from_contract(self.hot_path.contract()),
+                    frame,
+                )
+            }
+
+            fn completion(self, command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
+                match self.kind {
+                    PressureKind::SerialInput
+                    | PressureKind::UsbInput
+                    | PressureKind::NetworkRx => {
+                        let frame = DriverFrameDescriptor::new(
+                            DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                            self.frame_len,
+                            0,
+                        )
+                        .unwrap();
+                        DriverTaskCompletionRecord::frame_ready(command.sequence, frame)
+                    }
+                    PressureKind::SerialOutput
+                    | PressureKind::HdmiOutput
+                    | PressureKind::NetworkTx => DriverTaskCompletionRecord::progress(
+                        command.sequence,
+                        u32::from(self.frame_len.max(1)),
+                    ),
+                }
+            }
+        }
+
+        const ROUNDS: usize = 1_000;
+        const SERIAL_INPUT_PER_ROUND: usize = 2;
+        const USB_INPUT_PER_ROUND: usize = 2;
+        const SERIAL_OUTPUT_PER_ROUND: usize = 1;
+        const HDMI_OUTPUT_PER_ROUND: usize = 1;
+        const NET_TX_PER_ROUND: usize = 3;
+        const NET_RX_PER_ROUND: usize = 3;
+
+        let mut sequence = 1u32;
+        let mut serial_input = 0usize;
+        let mut usb_input = 0usize;
+        let mut serial_output = 0usize;
+        let mut hdmi_output = 0usize;
+        let mut network_tx = 0usize;
+        let mut network_rx = 0usize;
+        let mut max_input_service_index = 0usize;
+        let mut max_network_service_index = 0usize;
+
+        for round in 0..ROUNDS {
+            let mut pending = Vec::new();
+            for _ in 0..SERIAL_INPUT_PER_ROUND {
+                pending.push(PressureTurn {
+                    sequence,
+                    kind: PressureKind::SerialInput,
+                    hot_path: DriverTaskHotPath::SerialConsole,
+                    frame_len: 1,
+                });
+                sequence += 1;
+            }
+            for _ in 0..USB_INPUT_PER_ROUND {
+                pending.push(PressureTurn {
+                    sequence,
+                    kind: PressureKind::UsbInput,
+                    hot_path: DriverTaskHotPath::UsbKeyboard,
+                    frame_len: 8,
+                });
+                sequence += 1;
+            }
+            for _ in 0..SERIAL_OUTPUT_PER_ROUND {
+                pending.push(PressureTurn {
+                    sequence,
+                    kind: PressureKind::SerialOutput,
+                    hot_path: DriverTaskHotPath::SerialConsole,
+                    frame_len: 96,
+                });
+                sequence += 1;
+            }
+            for _ in 0..HDMI_OUTPUT_PER_ROUND {
+                pending.push(PressureTurn {
+                    sequence,
+                    kind: PressureKind::HdmiOutput,
+                    hot_path: DriverTaskHotPath::HdmiText,
+                    frame_len: 160,
+                });
+                sequence += 1;
+            }
+            for _ in 0..NET_TX_PER_ROUND {
+                pending.push(PressureTurn {
+                    sequence,
+                    kind: PressureKind::NetworkTx,
+                    hot_path: if round % 2 == 0 {
+                        DriverTaskHotPath::GenetNic
+                    } else {
+                        DriverTaskHotPath::Cyw43Wifi
+                    },
+                    frame_len: 512,
+                });
+                sequence += 1;
+            }
+            for _ in 0..NET_RX_PER_ROUND {
+                pending.push(PressureTurn {
+                    sequence,
+                    kind: PressureKind::NetworkRx,
+                    hot_path: if round % 2 == 0 {
+                        DriverTaskHotPath::Cyw43Wifi
+                    } else {
+                        DriverTaskHotPath::GenetNic
+                    },
+                    frame_len: 384,
+                });
+                sequence += 1;
+            }
+
+            pending.sort_by_key(|turn| (turn.hot_path.contract().service_order(), turn.sequence));
+
+            let last_input_index = pending.iter().rposition(|turn| turn.input()).unwrap();
+            let first_network_index = pending.iter().position(|turn| turn.network()).unwrap();
+            assert!(last_input_index < first_network_index);
+
+            for (service_index, turn) in pending.into_iter().enumerate() {
+                let command = turn.command();
+                assert_eq!(command.sequence, turn.sequence);
+                assert_eq!(command.opcode, turn.hot_path.opcode().as_u16());
+                assert_eq!(command.arg0, turn.hot_path.as_u32());
+                assert_eq!(command.arg1, turn.hot_path.role_bit() as u32);
+                assert!(command.owner_state_credit_eligible());
+                if command.frame.len != 0 {
+                    let offset = command.frame.offset as usize;
+                    let len = command.frame.len as usize;
+                    assert!(offset >= DRIVER_TASK_RING_FRAME_OFFSET);
+                    assert!(len <= MAX_DRIVER_TASK_FRAME_BYTES);
+                    assert!(offset + len <= DRIVER_TASK_RING_PAGE_BYTES);
+                }
+
+                let completion = turn.completion(command);
+                assert_eq!(completion.sequence, command.sequence);
+                assert_ne!(completion.code, DriverTaskCompletionCode::Fault.as_u16());
+                assert_ne!(
+                    completion.code,
+                    DriverTaskCompletionCode::BudgetExhausted.as_u16()
+                );
+                if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
+                    assert_ne!(completion.frame.len, 0);
+                    assert_eq!(completion.result, u32::from(completion.frame.len));
+                    assert!(!completion.frame.root_context_non_acceptance());
+                } else {
+                    assert_eq!(completion.code, DriverTaskCompletionCode::Progress.as_u16());
+                    assert_ne!(completion.result, 0);
+                }
+
+                if turn.input() {
+                    max_input_service_index = max_input_service_index.max(service_index);
+                }
+                if turn.network() {
+                    max_network_service_index = max_network_service_index.max(service_index);
+                }
+
+                match turn.kind {
+                    PressureKind::SerialInput => serial_input += 1,
+                    PressureKind::UsbInput => usb_input += 1,
+                    PressureKind::SerialOutput => serial_output += 1,
+                    PressureKind::HdmiOutput => hdmi_output += 1,
+                    PressureKind::NetworkTx => network_tx += 1,
+                    PressureKind::NetworkRx => network_rx += 1,
+                }
+            }
+        }
+
+        assert_eq!(serial_input, ROUNDS * SERIAL_INPUT_PER_ROUND);
+        assert_eq!(usb_input, ROUNDS * USB_INPUT_PER_ROUND);
+        assert_eq!(serial_output, ROUNDS * SERIAL_OUTPUT_PER_ROUND);
+        assert_eq!(hdmi_output, ROUNDS * HDMI_OUTPUT_PER_ROUND);
+        assert_eq!(network_tx, ROUNDS * NET_TX_PER_ROUND);
+        assert_eq!(network_rx, ROUNDS * NET_RX_PER_ROUND);
+        assert!(max_input_service_index < max_network_service_index);
+        assert!(max_input_service_index < SERIAL_INPUT_PER_ROUND + USB_INPUT_PER_ROUND);
+    }
+
     #[cfg(feature = "kernel")]
     #[test]
     fn sdio_and_pcie_bus_ring_handlers_are_pointer_free_and_fail_closed() {

@@ -186,6 +186,75 @@ fn pooled_throughput_exceeds_baseline() {
     assert!(pooled_ops_per_s > baseline_ops_per_s);
 }
 
+#[test]
+fn thousand_worker_pool_pressure_completes_without_exhaustion_or_loss() {
+    const WORKERS: usize = 1_000;
+    const POOL_SIZE: usize = 64;
+
+    let limits = load_secure9p_limits().expect("secure9p limits");
+    let payload = b"worker-fanout";
+    assert!(payload.len() < limits.msize as usize);
+
+    let writes = Arc::new(AtomicUsize::new(0));
+    let factory = Arc::new({
+        let writes = Arc::clone(&writes);
+        move || {
+            Ok(
+                Box::new(SleepyTransport::new(Duration::ZERO, Arc::clone(&writes)))
+                    as Box<dyn Transport + Send>,
+            )
+        }
+    });
+    let pool = SessionPool::new(POOL_SIZE as u16, POOL_SIZE as u16, factory);
+    pool.attach(Role::Queen, None).expect("attach session pool");
+
+    let shared_index = Arc::new(AtomicUsize::new(0));
+    let successes = Arc::new(AtomicUsize::new(0));
+    let failures = Arc::new(AtomicUsize::new(0));
+    let mut handles = Vec::with_capacity(POOL_SIZE);
+
+    for _ in 0..POOL_SIZE {
+        let pool = pool.clone();
+        let shared_index = Arc::clone(&shared_index);
+        let successes = Arc::clone(&successes);
+        let failures = Arc::clone(&failures);
+        handles.push(thread::spawn(move || {
+            let checkout = pool.checkout(PoolKind::Telemetry);
+            let Ok(mut lease) = checkout else {
+                failures.fetch_add(1, Ordering::SeqCst);
+                return;
+            };
+            loop {
+                let index = shared_index.fetch_add(1, Ordering::SeqCst);
+                if index >= WORKERS {
+                    break;
+                }
+                let session = lease.session().clone();
+                let path = format!("/worker/worker-{}/telemetry", index + 1);
+                match lease
+                    .transport_mut()
+                    .write(&session, path.as_str(), payload)
+                {
+                    Ok(()) => {
+                        successes.fetch_add(1, Ordering::SeqCst);
+                    }
+                    Err(_) => {
+                        failures.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        }));
+    }
+
+    for handle in handles {
+        handle.join().expect("join pool pressure worker");
+    }
+
+    assert_eq!(successes.load(Ordering::SeqCst), WORKERS);
+    assert_eq!(writes.load(Ordering::SeqCst), WORKERS);
+    assert_eq!(failures.load(Ordering::SeqCst), 0);
+}
+
 #[cfg(feature = "tcp")]
 fn write_frame(stream: &mut std::net::TcpStream, line: &str) {
     let total_len = line.len().saturating_add(4) as u32;
@@ -206,6 +275,76 @@ fn read_frame(reader: &mut BufReader<std::net::TcpStream>) -> Option<String> {
         return None;
     }
     String::from_utf8(payload).ok()
+}
+
+#[cfg(feature = "tcp")]
+#[test]
+fn tcp_thousand_logical_sessions_complete_without_frame_loss() {
+    const SESSIONS: usize = 1_000;
+    const CLIENT_THREADS: usize = 64;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind listener");
+    let port = listener.local_addr().expect("listener addr").port();
+    let handled = Arc::new(AtomicUsize::new(0));
+    let handled_by_server = Arc::clone(&handled);
+
+    let server = thread::spawn(move || {
+        for stream in listener.incoming().take(SESSIONS) {
+            let mut stream = stream.expect("accept stream");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let Some(line) = read_frame(&mut reader) else {
+                continue;
+            };
+            if line.starts_with("PING ") {
+                handled_by_server.fetch_add(1, Ordering::SeqCst);
+                write_frame(&mut stream, "OK PING");
+            }
+        }
+    });
+
+    let next_session = Arc::new(AtomicUsize::new(0));
+    let successes = Arc::new(AtomicUsize::new(0));
+    let failures = Arc::new(AtomicUsize::new(0));
+    let mut clients = Vec::with_capacity(CLIENT_THREADS);
+
+    for _ in 0..CLIENT_THREADS {
+        let next_session = Arc::clone(&next_session);
+        let successes = Arc::clone(&successes);
+        let failures = Arc::clone(&failures);
+        clients.push(thread::spawn(move || loop {
+            let session = next_session.fetch_add(1, Ordering::SeqCst);
+            if session >= SESSIONS {
+                break;
+            }
+            let Ok(mut stream) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+                failures.fetch_add(1, Ordering::SeqCst);
+                continue;
+            };
+            let Ok(reader_stream) = stream.try_clone() else {
+                failures.fetch_add(1, Ordering::SeqCst);
+                continue;
+            };
+            let mut reader = BufReader::new(reader_stream);
+            write_frame(&mut stream, &format!("PING {session}"));
+            match read_frame(&mut reader).as_deref() {
+                Some("OK PING") => {
+                    successes.fetch_add(1, Ordering::SeqCst);
+                }
+                _ => {
+                    failures.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        }));
+    }
+
+    for client in clients {
+        client.join().expect("join tcp pressure client");
+    }
+    server.join().expect("join tcp pressure server");
+
+    assert_eq!(handled.load(Ordering::SeqCst), SESSIONS);
+    assert_eq!(successes.load(Ordering::SeqCst), SESSIONS);
+    assert_eq!(failures.load(Ordering::SeqCst), 0);
 }
 
 #[cfg(feature = "tcp")]
