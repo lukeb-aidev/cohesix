@@ -6787,7 +6787,7 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - Driver-enabling HAL abstractions in 26c are limited to behavior-preserving cleanup of the driver-task model established by reopened 26a/26b. `SdioHostHal`-style seams may sit underneath the current CYW43 path, and USB platform/DMA seams may sit underneath the current local-seat/VL805 path, but 26c must not add support for new Wi-Fi chipsets, new USB controllers, new USB classes, or a second driver framework parallel to the 26a/26b driver-task substrate.
 - Milestone 26c must not collapse host-side `std` capability into the seL4 build. VM-side Cohesix remains `no_std`; any "convergence" under 26c is limited to contracts, fixtures, generated artifacts, and explicitly `no_std`-safe semantic helpers.
 - Runtime-boundary-sensitive surfaces include `apps/root-task/src/ninedoor.rs`, `apps/root-task/src/event/**`, `apps/root-task/src/console/**`, `apps/root-task/src/log_buffer.rs`, `apps/root-task/src/lib.rs`, `apps/root-task/src/net/**`, `apps/root-task/src/hal/**`, `apps/root-task/src/local_seat_pi4.rs`, `apps/pi4-driver-runtime/**`, `crates/pi4-driver-abi/**`, `apps/worker-heart/**`, `apps/worker-gpu/**`, `apps/worker-lora/**`, and `apps/nine-door/src/host/*`. 26c may structurally refactor these files only behind existing public contracts, with no adapter collapse, no host capability leakage, no new HAL bypass, and no external grammar drift.
-- The worker architecture and phase-1 cap-backed worker endpoint tasks are the explicit 26c behavior-change exceptions required to close public Queen/Worker documentation drift: they must implement the already-documented worker ticket/lease/telemetry loops and require badged seL4 endpoint caps for VM worker authority instead of inventing new protocols, roles, or namespace grammar.
+- The worker architecture, phase-1 cap-backed worker endpoint, notification-backed lifecycle, and profile-qualified MCS budget-evidence tasks are the explicit 26c behavior-change exceptions required to close public Queen/Worker documentation drift: they must implement the already-documented worker ticket/lease/telemetry loops, require badged seL4 endpoint caps for VM worker authority, deliver lifecycle events through generated notification objects where applicable, and bind worker/driver execution to generated scheduling budgets where the selected seL4 profile supports MCS instead of inventing new protocols, roles, or namespace grammar.
 - Any new shared semantic helper must be `no_std` by construction, must have host and VM tests where it represents overlapping behavior, and must not import host transport, filesystem, process, network, or provider crates into VM closure profiles.
 - AI-assisted or model-generated Rust remains untrusted. 26c refactor PRs must include baseline command evidence, risk-ratchet review for `unsafe`, `unwrap`, `expect`, and `panic!`, and reviewer sign-off before merge.
 - `docs/snippets/*.md`, `docs/nist/REPORT.md`, tracked release-cut docs, and other generated or derived documentation remain update-by-source artifacts; they are not to be hand-edited as a shortcut.
@@ -6815,8 +6815,9 @@ Refactor and humanize the authored Cohesix code and documentation surfaces witho
 10. auditing authored code, tests, and documentation for AI fingerprints before public-facing cleanup is accepted,
 11. replacing template-heavy comments and test naming with invariant-focused prose,
 12. keeping all shared semantic helpers explicitly `no_std`-safe when they cross host/VM conceptual boundaries, and
-13. replacing placeholder kernel-side worker-gpu/LoRA paths with real seL4 worker ticket/lease/telemetry loops that match public Queen/Worker docs, and
-14. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
+13. replacing placeholder kernel-side worker-gpu/LoRA paths with real seL4 worker ticket/lease/telemetry loops that match public Queen/Worker docs,
+14. making phase-1 VM worker authority cap-backed through badged endpoint caps, notification-backed lifecycle delivery, and profile-qualified MCS/non-MCS scheduling evidence, and
+15. requiring the full target-qualified staged Test Plan to pass on both QEMU and Pi 4 before closure.
 
 ### Markdown review scope (tracked `*.md` only)
 Milestone 26c must inventory every tracked Markdown file returned by:
@@ -6919,7 +6920,19 @@ For each inventory entry, 26c must record one of:
   - Make VM worker attach, telemetry, lease renewal, and revocation paths require badged seL4 endpoint capabilities, so ticket strings become audit metadata rather than standalone authority.
   - Root-task must mint role/lease/epoch-badged endpoint caps for worker control and telemetry paths and retain the parent capability needed to revoke derived lease caps.
   - Worker-heart, worker-gpu, and worker-lora must prove that forged ticket metadata without the corresponding endpoint cap cannot attach, emit accepted telemetry, renew a lease, or publish a valid receipt.
-  - Full frame, notification, shared-ring, fault-endpoint, DMA, and driver-resource cap bundles are deferred to the later authority-hardening phase; 26c must not claim complete cap-bundle isolation.
+  - Full frame, full notification cap-bundle authority, shared-ring, fault-endpoint, DMA, and driver-resource cap bundles are deferred to the later authority-hardening phase; 26c must not claim complete cap-bundle isolation.
+
+- **Notification-backed lifecycle signaling**
+  - Use seL4 notification objects for VM worker revoke, shutdown, lease-expiry wakeup, telemetry pressure, and driver IRQ delivery so lifecycle progress is event-driven instead of polling-loop-dependent.
+  - Generated notification badges must distinguish revoke, shutdown, lease, telemetry-pressure, and IRQ classes where the selected profile exposes those events.
+  - Worker-heart, worker-gpu, and worker-lora loops must block on endpoint IPC plus notification delivery for lifecycle changes; bounded hardware service turns may poll only where the driver contract explicitly allows it.
+  - Notification caps remain phase-1 lifecycle signals in 26c; full notification authority inside generated cap bundles is completed in the later authority-hardening phase.
+
+- **MCS scheduling-context budget evidence**
+  - Where the selected seL4 profile enables MCS, bind worker-heart, worker-gpu, worker-lora, and linked driver-runtime tasks to generated scheduling contexts with role-specific budget/period values.
+  - Emit timeout-fault and consumed-budget evidence for worker and driver tasks so bounded loop claims are backed by kernel-enforced CPU-time accounting instead of priority-only convention.
+  - Preserve the non-MCS compatibility posture already used by existing Pi 4/QEMU profiles: non-MCS builds must expose equivalent generated priority/domain and bounded IPC/poll-budget evidence without claiming MCS enforcement.
+  - Keep MCS adoption profile-qualified and docs-as-built; do not require a kernel-profile switch inside 26c unless the selected target profile already enables MCS.
 
 - **Low-risk surface cleanup**
   - Clean up public crate surfaces, tiny modules, tests, READMEs, and operator docs first.
@@ -7021,6 +7034,8 @@ For each inventory entry, 26c must record one of:
 - Pi 4 documentation, generated manifests, evidence packs, and diagrams use `bounded_no_iommu` or equivalent wording and never imply hardware-enforced SMMU/IOMMU isolation for BCM2711.
 - Worker-heart, worker-gpu, and worker-lora kernel-side implementations attach through scoped worker tickets, observe lease/lifecycle state, emit bounded telemetry, and handle revocation/shutdown without relying on host-only scaffolding or placeholder spin loops.
 - VM worker ticket strings are not accepted as standalone authority: attach, telemetry, lease-renewal, and revoke-sensitive worker paths require the matching badged seL4 endpoint cap, and forged metadata-only tickets fail deterministically.
+- Worker revoke, shutdown, lease-expiry wakeup, telemetry pressure, and driver IRQ paths use generated notification objects/badges where applicable; unbounded polling loops for lifecycle state are rejected.
+- Worker and driver bounded-execution claims are profile-qualified: MCS builds prove scheduling-context budget/period binding, timeout-fault routing, and consumed-budget evidence; non-MCS builds prove the documented priority/domain plus bounded service-turn fallback without claiming kernel-enforced CPU budgets.
 - Public Queen/Worker, GPU, LoRA, worker-ticket, and role/scheduling docs match the implemented VM worker architecture and generated manifest truth.
 - Release snapshots, generated snippets, generated compliance reports, seL4 mirrors, and vendored docs are handled according to their disposition rules; no ad-hoc edits hide provenance.
 - Low-risk code/comment cleanup lands with no console grammar, Secure9P semantics, manifest output, telemetry format, or release workflow drift.
@@ -7046,6 +7061,8 @@ For each inventory entry, 26c must record one of:
 - Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe, must not import host-side capabilities, transports, or provider crates into the VM build, and must be reviewed against the archived per-profile dependency trees.
 - Worker role/task manifests, ticket scopes, lease bindings, telemetry paths, and lifecycle gates are compiler-owned surfaces; any new worker implementation fields must enter `coh-rtc` IR and generated docs before code depends on them.
 - Cap-backed worker endpoint-ticket fields are compiler-owned surfaces in 26c. Generated role state must describe which badged endpoint caps are minted for attach/control/telemetry/revoke-sensitive paths and which stronger cap-bundle fields remain deferred.
+- Notification lifecycle fields are compiler-owned surfaces in 26c. Generated role state must describe notification badges for revoke, shutdown, lease, telemetry-pressure, and IRQ events where applicable, and must state which notification authority moves into the later full cap-bundle profile.
+- Worker and driver scheduling-context fields are compiler-owned and profile-qualified. MCS profiles must generate budget/period, timeout endpoint, and consumed-budget evidence fields; non-MCS profiles must generate the priority/domain and bounded service-turn fallback state instead.
 - Refactor-generated module boundaries must not become new public interfaces unless `docs/INTERFACES.md`, `docs/HOST_TOOLS.md`, or the relevant canonical doc is updated in the same change.
 - HAL/network decompositions must retain generated manifest authority for boot policy defaults and must not hand-code policy values that already belong in `root_task.toml` or `coh-rtc` outputs.
 
@@ -7283,6 +7300,57 @@ Checks:
   - Existing Secure9P grammar, console ACK/ERR/END behavior, and host-ticket schemas do not drift.
 Deliverables:
   - First-phase cap-backed VM worker ticket authority with concrete seL4 endpoint caps and negative tests, without overclaiming full frame/notification/DMA cap-bundle isolation.
+
+Title/ID: m26c-notification-backed-worker-lifecycle
+Goal: Replace lifecycle polling dependency with generated seL4 notification objects for worker revoke, shutdown, lease expiry, telemetry pressure, and driver IRQ wakeups.
+Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/pi4-driver-runtime/src/**, tools/coh-rtc/src/**, docs/ROLES_AND_SCHEDULING.md, docs/SECURITY.md, docs/INTERFACES.md, docs/TEST_PLAN.md
+Changes:
+  - tools/coh-rtc/src/** — add generated notification lifecycle fields and badge classes for revoke, shutdown, lease-expiry, telemetry-pressure, and IRQ events where applicable.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — publish notification caps/badges to worker loops and signal lifecycle changes without introducing new protocols or namespace grammar.
+  - apps/root-task/src/hal/** + apps/pi4-driver-runtime/src/** — keep driver IRQ delivery notification-backed and expose bounded evidence for notification badges and acknowledgement behavior.
+  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — wait on endpoint IPC plus notification delivery for lifecycle changes, and remove unbounded lifecycle polling from worker loops.
+  - docs/ROLES_AND_SCHEDULING.md + docs/SECURITY.md + docs/INTERFACES.md + docs/TEST_PLAN.md — document notification-backed lifecycle delivery, badge meanings, and the boundary between 26c lifecycle notifications and 28b full cap-bundle notification authority.
+Commands:
+  - cargo test -p root-task --tests worker
+  - cargo test -p root-task --tests notification
+  - cargo test -p worker-heart
+  - cargo test -p worker-gpu
+  - cargo test -p worker-lora
+  - cargo test -p pi4-driver-runtime
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+Checks:
+  - Revoke, shutdown, lease-expiry, telemetry-pressure, and applicable IRQ events are delivered through generated notification caps/badges rather than unbounded lifecycle polling.
+  - Worker loops block or yield deterministically while waiting for endpoint IPC or notification events and still handle lease expiry, revoke, telemetry backpressure, and shutdown.
+  - Driver IRQ notification behavior remains HAL-owned and does not create a new polling path or direct IRQ bypass outside generated descriptors.
+  - Generated docs distinguish 26c notification-backed lifecycle signaling from 28b full notification cap-bundle authority.
+Deliverables:
+  - Event-driven worker and driver lifecycle signaling with seL4 notification objects, bounded tests, and no new Cohesix protocol surface.
+
+Title/ID: m26c-worker-driver-mcs-budget-evidence
+Goal: Bind worker and linked driver-runtime bounded-execution claims to generated scheduling-context evidence on MCS profiles while preserving explicit non-MCS fallback evidence.
+Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/pi4-driver-runtime/src/**, tools/coh-rtc/src/**, docs/ROLES_AND_SCHEDULING.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
+Changes:
+  - tools/coh-rtc/src/** — add profile-qualified worker/driver scheduling fields for MCS budget, period, timeout endpoint, consumed-budget reporting, and non-MCS priority/domain fallback state.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — bind worker and driver TCBs to generated scheduling contexts on MCS profiles; on non-MCS profiles, emit the documented priority/domain and bounded service-turn evidence instead.
+  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** + apps/pi4-driver-runtime/src/** — surface bounded-loop progress, timeout, and shutdown evidence without changing protocol grammar or namespace layout.
+  - docs/ROLES_AND_SCHEDULING.md + docs/SECURITY.md + docs/TEST_PLAN.md — document profile-qualified MCS enforcement, timeout-fault behavior, consumed-budget evidence, and non-MCS fallback wording.
+  - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md — reject prose that claims kernel-enforced CPU budgets on profiles that only provide priority/domain and bounded service turns.
+Commands:
+  - cargo test -p root-task --tests scheduling
+  - cargo test -p worker-heart
+  - cargo test -p worker-gpu
+  - cargo test -p worker-lora
+  - cargo test -p pi4-driver-runtime
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+Checks:
+  - MCS profiles prove generated scheduling-context budget/period binding, timeout endpoint routing, and consumed-budget evidence for worker and driver tasks.
+  - Non-MCS profiles continue to pass with explicit priority/domain and bounded service-turn evidence and never claim MCS enforcement.
+  - Worker and driver loop tests cover budget exhaustion or service-turn exhaustion, telemetry backpressure, lease expiry, revoke, and shutdown without unbounded spin.
+  - Public docs, generated snippets, and test-plan gates distinguish MCS enforcement from non-MCS compatibility.
+Deliverables:
+  - Profile-qualified scheduling evidence strong enough for seL4 reviewers to audit bounded worker and driver execution claims.
 
 Title/ID: m26c-worker-architecture-implementation
 Goal: Replace placeholder kernel-side worker GPU/LoRA paths with real seL4 worker ticket, lease, telemetry, and revocation loops matching public Queen/Worker documentation.
@@ -8282,6 +8350,7 @@ Strengthen authority and failover guarantees while preserving current transport 
 7. Harden host-ticket execution so target/arg validation and replay durability are strong enough for host side effects.
 8. Harden host bridge and debug surfaces that can otherwise bypass the authority story: GPU bridge authentication/frame bounds and root-console memory diagnostics.
 9. Complete the second phase of cap-backed ticket authority by moving worker and driver resource grants from metadata-only policy into generated seL4 cap bundles.
+10. Treat worker and driver seL4 faults as structured lifecycle events that revoke affected authority and produce bounded evidence.
 
 ---
 
@@ -8429,6 +8498,20 @@ As-built leverage:
 
 ---
 
+### 9) Structured Fault Endpoint Lifecycle
+**Purpose:** Make worker and driver faults first-class authority/lifecycle events instead of ad-hoc crashes or serial-log-only diagnostics.
+
+Implementation requirements:
+- Every production worker and driver TCB receives a generated badged fault endpoint whose badge identifies role, instance, lease epoch, and cap-bundle generation.
+- Root-task records bounded fault evidence, revokes the affected cap bundle, marks the lease terminal or quarantined, and refuses late telemetry, shared-ring turns, or receipts from the old epoch.
+- Restart is allowed only through a new ticket/lease/cap-bundle path; fault recovery must not silently reuse stale caps, stale DMA mappings, or stale shared rings.
+- Fault records are exposed through bounded read-only observability paths and included in evidence packs without changing console grammar or Secure9P framing.
+
+As-built leverage:
+- Build on the 28b full cap-bundle ledger, existing fault endpoint slots from driver-task substrate work, worker lifecycle state, and audit/replay evidence exports.
+
+---
+
 ## Commands
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `cargo test -p hive-gateway`
@@ -8456,6 +8539,7 @@ As-built leverage:
 - `gpu-bridge-host` rejects placeholder auth in live mode and refuses oversized peer frames before allocation.
 - Root-console arbitrary memory diagnostics are unavailable in release/production profiles or constrained to HAL-classified diagnostic ranges.
 - Full cap-bundle production profiles prove that worker/driver tickets correspond to generated seL4 cap bundles, and stale metadata without live caps cannot exercise endpoint, notification, frame, shared-ring, MMIO, or DMA authority.
+- Worker and driver faults produce bounded, badged lifecycle evidence, revoke the affected cap bundle, and require a fresh lease/cap-bundle path before restart.
 - Milestone 28c host-side AI control cannot be enabled in target profiles unless delegated REST identity, writer-epoch fencing, and audit/replay requirements are all active.
 - Regression pack passes unchanged in compatibility mode; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
 
@@ -8472,6 +8556,7 @@ As-built leverage:
   - live host-bridge auth and frame-length limits,
   - profile-gated debug diagnostic policy,
   - full cap-bundle ticket authority profile, generated per-role cap inventories, revoke/recovery evidence, and production enablement gates,
+  - generated badged fault endpoint records, terminal/quarantine policy, and bounded fault evidence paths,
   - host-AI enablement dependency gates consumed by Milestone 28c and Milestone 29b.
 - Generated snippets refreshed in:
   - `docs/INTERFACES.md`
@@ -8605,6 +8690,31 @@ Checks:
   - Compatibility profiles may retain 26c endpoint-cap-only tickets only when docs and generated profile state explicitly say full cap bundles are disabled.
 Deliverables:
   - Production-grade cap-backed ticket authority with generated seL4 cap bundles and evidence strong enough to answer the seL4 criticism that tickets are only application metadata.
+
+Title/ID: m28b-structured-fault-lifecycle
+Goal: Convert worker and driver seL4 faults into structured lifecycle events that revoke stale authority and produce bounded evidence.
+Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/pi4-driver-runtime/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/coh/src/evidence.rs, tools/coh-rtc/src/**, docs/SECURITY.md, docs/INTERFACES.md, docs/TEST_PLAN.md
+Changes:
+  - tools/coh-rtc/src/** — emit generated badged fault endpoint records with role, instance, lease epoch, cap-bundle generation, terminal/quarantine policy, and bounded evidence paths.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — receive worker/driver fault IPC, record bounded evidence, revoke the affected cap bundle, and transition the lease to terminal or quarantined state.
+  - apps/root-task/src/hal/** + apps/pi4-driver-runtime/src/** — ensure driver faults cut off IRQ, shared-ring, MMIO, DMA/shared-buffer, and fault authority for the old epoch.
+  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — restart only through a fresh ticket/lease/cap-bundle path and refuse stale telemetry or receipts after a fault epoch.
+  - apps/coh/src/evidence.rs + docs/SECURITY.md + docs/INTERFACES.md + docs/TEST_PLAN.md — include bounded fault lifecycle records in evidence exports and document restart/quarantine semantics.
+Commands:
+  - cargo test -p root-task --tests fault
+  - cargo test -p pi4-driver-runtime
+  - cargo test -p worker-heart
+  - cargo test -p worker-gpu
+  - cargo test -p worker-lora
+  - cargo test -p coh --test evidence
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+Checks:
+  - Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
+  - Fault handling revokes old caps, rejects stale shared-ring turns and telemetry, and requires fresh lease/cap-bundle construction before restart.
+  - Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
+Deliverables:
+  - Production fault lifecycle evidence that lets seL4 reviewers audit how Cohesix contains and recovers from faulty workers and drivers.
 ```
 
 ---
@@ -8638,7 +8748,7 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 4. Reuse warmed prefixes and hotsets across related runs within bounded quotas and TTLs.
 5. Expose TTFT, decode, cache-hit, and resume metrics as first-class evidence.
 6. Represent multi-agent work as explicit task graphs and handoffs, not as an opaque shared transcript or hidden message bus.
-7. Resolve worker implementation boundaries before AI supervisors depend on worker claims: kernel-side worker stubs must either become real ticket/lease loops or be documented as host/root-task scaffolding.
+7. Verify worker implementation boundaries before AI supervisors depend on worker claims: VM worker roles must already have the real ticket/lease/telemetry loops, cap-backed endpoint authority, notification-backed lifecycle signaling, and generated scheduling evidence required by 26c, and AI supervisors may only reference those proven boundaries.
 8. Make PEFT/model registry import, activation, rollback, and provider receipts transactionally auditable before AI run control treats them as dependable actuation.
 
 **Non-Goals (Explicit)**
@@ -8752,13 +8862,11 @@ As-built leverage:
 ---
 
 ### 6) Worker Boundary and Documentation Closure
-**Purpose:** Prevent host-side AI orchestration from depending on stronger worker claims than the VM actually implements.
+**Purpose:** Prevent host-side AI orchestration from depending on stronger worker claims than the VM implementation and generated evidence actually support.
 
 Implementation requirements:
 - Audit worker-heart, worker-gpu, and worker-lora kernel entrypoints against README, GPU, worker-ticket, role/scheduling, and interface docs.
-- Choose one of two paths per worker role:
-  - implement the ticket attach, lease/telemetry, shutdown, and evidence loop expected by the docs, or
-  - rewrite docs and generated snippets to say the current role is root-task/host scaffolding until a later milestone authorizes full VM worker behavior.
+- Verify that each worker role's ticket attach, lease/telemetry, notification-backed shutdown/revoke, cap-backed endpoint authority, and generated scheduling evidence match the 26c implementation contract.
 - Add tests that prevent future docs from claiming worker spawn/lease semantics not backed by code and generated manifest truth.
 - Host-side AI run envelopes must reference host-ticket/provider receipts, not undocumented VM worker behavior.
 
@@ -8915,16 +9023,16 @@ Checks: Reference adapters use delegated tickets, explicit handoff/checkpoint re
 Deliverables: Cohesix remains the authority/evidence layer beneath supervisor frameworks instead of becoming one.
 
 Title/ID: m28c-worker-boundary-closure
-Goal: Align worker role documentation, generated snippets, and AI run references with the actual worker implementation boundary.
+Goal: Verify worker role documentation, generated snippets, and AI run references against the implemented 26c worker boundary.
 Inputs: apps/worker-heart, apps/worker-gpu, apps/worker-lora, docs/GPU_NODES.md, docs/WORKER_TICKETS.md, docs/ROLES_AND_SCHEDULING.md, docs/INTERFACES.md
 Changes:
-  - apps/worker-heart/src/kernel.rs + apps/worker-gpu/src/kernel.rs + apps/worker-lora/src/lib.rs — either implement scoped ticket/lease/telemetry loops or leave explicit no-op/stub status behind feature/profile gates.
-  - docs/GPU_NODES.md + docs/WORKER_TICKETS.md + docs/ROLES_AND_SCHEDULING.md — describe worker roles exactly as implemented, separating host scaffolding, root-task records, and real VM worker tasks.
+  - apps/worker-heart/src/kernel.rs + apps/worker-gpu/src/kernel.rs + apps/worker-lora/src/lib.rs — verify scoped ticket/lease/telemetry loops, cap-backed endpoint attach, notification-backed lifecycle handling, and generated scheduling evidence remain aligned with 26c contracts.
+  - docs/GPU_NODES.md + docs/WORKER_TICKETS.md + docs/ROLES_AND_SCHEDULING.md — describe worker roles exactly as implemented, separating VM control-plane workers from host GPU/PEFT execution and avoiding any restored stub/scaffolding language.
   - tools/coh-rtc/src/validate.rs — reject generated worker-spawn claims that do not match enabled worker implementation status.
   - apps/root-task/tests/worker_docs_alignment.rs — guard documented worker paths and generated role state against implementation drift.
 Commands: cargo test -p worker-heart && cargo test -p worker-gpu && cargo test -p worker-lora && cargo test -p root-task --test worker_docs_alignment
-Checks: Docs no longer overclaim VM worker behavior; any full worker-role claim is backed by code, generated manifest state, and tests.
-Deliverables: Host-side AI orchestration has an honest worker boundary and cannot cite placeholder kernel stubs as live worker semantics.
+Checks: Docs no longer overclaim or undercut VM worker behavior; every worker-role claim used by AI run control is backed by code, generated manifest state, cap-backed authority evidence, notification lifecycle evidence, scheduling evidence, and tests.
+Deliverables: Host-side AI orchestration has an honest worker boundary and cannot cite undocumented or stale worker semantics.
 
 Title/ID: m28c-peft-registry-transactions
 Goal: Make PEFT/model registry import, activation, rollback, and evidence receipts transactional and provenance-complete.
