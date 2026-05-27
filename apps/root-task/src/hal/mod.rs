@@ -1394,7 +1394,7 @@ fn runtime_mmio_candidate_bases(hot_path: driver_task::DriverTaskHotPath) -> &'s
         driver_task::DriverTaskHotPath::HdmiText => PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES,
         driver_task::DriverTaskHotPath::GenetNic => PI4_DRIVER_RUNTIME_GENET_MMIO_BASES,
         driver_task::DriverTaskHotPath::Cyw43Wifi => PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES,
-        driver_task::DriverTaskHotPath::SdioHost => PI4_DRIVER_RUNTIME_NO_MMIO_BASES,
+        driver_task::DriverTaskHotPath::SdioHost => PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES,
         driver_task::DriverTaskHotPath::PcieRoot => PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES,
     }
 }
@@ -3605,13 +3605,13 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pi4_runtime_mmio_candidates_make_cyw43_the_only_sdhci_owner() {
+    fn pi4_runtime_mmio_candidates_map_sdhci_to_cyw43_and_sdio_runtimes() {
         let cyw43 =
             super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::Cyw43Wifi);
         let sdio =
             super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::SdioHost);
         assert_eq!(cyw43, super::PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES);
-        assert!(sdio.is_empty());
+        assert_eq!(sdio, super::PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES);
     }
 
     #[cfg(feature = "kernel")]

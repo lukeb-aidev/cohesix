@@ -26,6 +26,8 @@ def _driver_task_owner_state_lines() -> list[str]:
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
         "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
         "owner_state=driver-owned descriptor=present root_pointer=no",
     ]
@@ -264,9 +266,10 @@ def test_gate_proof_rejects_dedicated_contracts_without_substrate_ready(
                 "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=40 observed_service_us=22",
                 "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=80 observed_service_us=44",
                 "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=120 observed_service_us=73",
+                "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=120 observed_service_us=91",
                 "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=80 observed_service_us=31",
                 "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=80 observed_service_us=36",
-                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=dedicated-sel4-substrate-not-active required=6 dedicated=6 compatibility=0",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=dedicated-sel4-substrate-not-active required=7 dedicated=7 compatibility=0",
                 "SERIAL_ECHO p95_us=800 max_gap_us=1200",
                 "USB_BURST bytes=256 drops=0 max_latency_us=900",
                 "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
@@ -292,7 +295,7 @@ def test_gate_proof_rejects_dedicated_contracts_without_substrate_ready(
     )
 
     assert result.returncode == 2
-    assert "DRIVER_TASK_DEDICATED=6" in result.stdout
+    assert "DRIVER_TASK_DEDICATED=7" in result.stdout
     assert "DRIVER_TASK_DEDICATED_READY=no" in result.stdout
     assert "DRIVER_TASK_SERIAL_DEDICATED=yes" in result.stdout
     assert "DRIVER_TASK_USB_DEDICATED=yes" in result.stdout
@@ -379,9 +382,10 @@ def test_gate_proof_rejects_isolated_vspace_without_pointer_free_ipc(
                 "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=22",
                 "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=44",
                 "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=91",
+                "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=73",
                 "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=31",
                 "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=36",
-                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=driver-task-pointer-free-ipc-not-proven substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=callback-pointer pointer_free_ipc=no owner_state=driver-owned required=6 dedicated=6 compatibility=0",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=driver-task-pointer-free-ipc-not-proven substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=callback-pointer pointer_free_ipc=no owner_state=driver-owned required=7 dedicated=7 compatibility=0",
                 "SERIAL_ECHO p95_us=800 max_gap_us=1200",
                 "USB_BURST bytes=256 drops=0 max_latency_us=900",
                 "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
@@ -431,9 +435,10 @@ def test_gate_proof_rejects_pointer_free_ring_without_owner_state(
                 "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=22",
                 "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=44",
                 "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=91",
+                "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=73",
                 "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=31",
                 "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=36",
-                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=driver-task-owner-state-not-proven substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=root-owned required=6 dedicated=6 compatibility=0",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=driver-task-owner-state-not-proven substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=root-owned required=7 dedicated=7 compatibility=0",
                 "SERIAL_ECHO p95_us=800 max_gap_us=1200",
                 "USB_BURST bytes=256 drops=0 max_latency_us=900",
                 "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
@@ -502,13 +507,15 @@ def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
         "live_tcb=yes hot_path=dedicated active_net=cyw43 observed_service_us=91",
         "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task "
         "live_tcb=yes hot_path=dedicated observed_service_us=73",
+        "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=31",
         "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
         "live_tcb=yes hot_path=dedicated observed_service_us=36",
         "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
         "substrate=active capset=pass fault=pass revoke=pass sched=pass "
         "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
-        "pointer_free_ipc=yes owner_state=driver-owned required=6 "
-        "dedicated=6 compatibility=0",
+        "pointer_free_ipc=yes owner_state=driver-owned required=7 "
+        "dedicated=7 compatibility=0",
         "SERIAL_ECHO p95_us=800 max_gap_us=1200",
         "USB_BURST bytes=256 drops=0 max_latency_us=900",
         "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
@@ -534,7 +541,7 @@ def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
     assert result.returncode == 0
     assert "DRIVER_TASK_OWNER_STATE_PROOF=yes" in result.stdout
     assert "DRIVER_TASK_DEDICATED_READY=yes" in result.stdout
-    assert "DRIVER_TASK_SDIO_DEDICATED=no" in result.stdout
+    assert "DRIVER_TASK_SDIO_DEDICATED=yes" in result.stdout
 
 
 def test_gate_proof_rejects_root_task_panic(tmp_path: pathlib.Path) -> None:

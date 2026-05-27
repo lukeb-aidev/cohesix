@@ -224,11 +224,10 @@ flowchart TD
 ```
 
 The diagram is intentionally split between runtime transport and owner-state
-proof. The generated manifest keeps six active Pi 4 runtime images
-acceptance-eligible and leaves standalone `sdio-host` non-acceptance with no
-SDHCI MMIO while CYW43 owns the current Wi-Fi boot path. Fresh Pi evidence must
-still prove the active hardware state machines make real progress from
-driver-local state. The transport boundary is no longer a one-page smoke loader:
+proof. The generated manifest keeps seven Pi 4 runtime images
+acceptance-eligible, including `sdio-host` with its HAL-declared SDHCI MMIO
+page. Fresh Pi evidence must still prove the active hardware state machines
+make real progress from driver-local state. The transport boundary is no longer a one-page smoke loader:
 root now maps bounded multi-page `PT_LOAD` runtime images and semantic
 MMIO/DMA/shared resource ranges before submitting the pointer-free init
 descriptor.
@@ -288,10 +287,10 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 | `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image requires a semantic xHCI MMIO range, DMA/shared pages, a physically contiguous DMA arena, the VL805 PCIe DMA bus alias, and a pointer-free USB-to-PCIe bus link before engine init; the runtime now owns a direct-root-port xHCI keyboard path with command/event/EP0/interrupt-IN rings, root-port reset, slot/address/configure-endpoint commands, HID boot-protocol setup, duplicate-key suppression, and DMA report polling; hub keyboards and VL805 timing still need Pi hardware proof |
 | `hdmi-text` | HDMI text mirror | `hdmi-text` | isolated child VSpace using the linked `pi4-driver-hdmi` image | linked image requires framebuffer metadata plus declared resources and renders bounded text frames directly into the mapped framebuffer |
 | `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | isolated child VSpace using the linked `pi4-driver-genet` image | linked image requires declared GENET MMIO/DMA/shared pages and a physically contiguous DMA arena before engine init; it programs UMAC/RGMII, MDIO PHY speed, MAC address, RX/TX descriptor rings, bounded TX submission, RX drain, and TX completion reclaim inside the runtime; useful link/DHCP progress still needs Pi hardware proof |
-| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image is the current SDHCI MMIO owner for the Wi-Fi boot path; it requires declared DMA/shared buffers plus the pointer-free CYW43-to-SDIO bus-link descriptor before engine init, then performs SDIO card/function bring-up, backplane windowing, firmware/NVRAM streaming, ARMCR4 release, bounded control-frame TX, Ethernet TX, and RX polling over SDPCM; Wi-Fi association/DHCP and WPA/EAPOL still need Pi hardware proof |
+| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image requires declared DMA/shared buffers plus the pointer-free CYW43-to-SDIO bus-link descriptor before engine init, then performs SDIO card/function bring-up, backplane windowing, firmware/NVRAM streaming, ARMCR4 release, bounded control-frame TX, Ethernet TX, and RX polling over SDPCM through the declared CYW43/SDIO boundary; Wi-Fi association/DHCP and WPA/EAPOL still need Pi hardware proof |
 | `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
-| `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | standalone SDIO no longer receives the SDHCI MMIO page while CYW43 owns the current Wi-Fi boot path; its generated image remains present for the future pointer-free CYW43-to-SDIO transport, but `hardware_state_migrated=false` keeps it out of owner-state acceptance until that bus transport exists |
+| `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | linked image receives the HAL-declared SDHCI MMIO page plus declared DMA/shared pages, services fixed-layout CMD52/CMD53/POLL_IRQ turns, and must report dedicated-role plus owner-state descriptor proof before 26b SDIO acceptance is credited |
 | `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | isolated child VSpace using the linked `pi4-driver-pcie` image | linked image requires declared PCIe MMIO/shared pages and services bounded 32-bit read/write/posted-write-flush turns inside the mapped aperture; broader root-complex/VL805 handoff still needs Pi proof and completion |
 
 The final isolated-image contract is now generated rather than hand-authored in
@@ -303,19 +302,17 @@ declare `root_task.driver_images` for `serial-console`, `usb-keyboard`,
 binaries, and `scripts/pi4-image-build.sh` packages those images into the Pi 4
 driver-runtime CPIO passed at U-Boot handoff. Those binaries now implement
 fixed command/completion ring service engines for the active Pi 4 hardware
-owners, while `sdio-host` remains a declared but non-acceptance bus split point,
-so physical Pi bootstrap debugs linked-image hardware turns instead of
-shared-root service TCBs. The serial image handles bounded mini-UART
+owners, including `sdio-host`, so physical Pi bootstrap debugs linked-image
+hardware turns instead of shared-root service TCBs. The serial image handles bounded mini-UART
 init/RX/TX. HDMI renders to a mapped framebuffer, PCIe services primitive MMIO
 read/write/flush operations, USB owns a direct-root-port xHCI
 boot-keyboard path, and GENET owns bounded descriptor-ring RX/TX programming
 with MDIO/MAC setup. CYW43 performs SDIO transport initialization, backplane
 windowing, firmware/NVRAM streaming, ARMCR4 release, SDPCM control/data TX, and
-RX polling through fixed CYW43 command records. The generated runtime specs for
-serial, USB, HDMI, GENET, CYW43, and PCIe report `root_context_required=false`
-and `hardware_state_migrated=true`; standalone `sdio-host` reports
-`hardware_state_migrated=false` because it does not own SDHCI MMIO in the
-current CYW43 boot path. Fresh Pi hardware proof is still required before
+RX polling through fixed CYW43 command records. SDIO services fixed-layout
+CMD52/CMD53/POLL_IRQ records from the isolated runtime. The generated runtime
+specs for serial, USB, HDMI, GENET, CYW43, SDIO, and PCIe report
+`root_context_required=false` and `hardware_state_migrated=true`. Fresh Pi hardware proof is still required before
 claiming the
 engines are production-proven: xHCI hub/timing, Wi-Fi association/DHCP, GENET
 DHCP, HDMI scanout, serial I/O, and VL805 handoff all have to be observed on the
@@ -415,7 +412,7 @@ Boot logs must expose the distinction with these breadcrumbs:
   is also emitted through the root console path during QEMU smoke runs so the
   proof remains visible after the boot logger switches away from early UART.
 - `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> owner_state=<driver-owned|root-owned> live_hot_paths=<yes|no>`
-- one `DRIVER_TASK_OWNER_STATE contract=<name> hot_path=<serial-console|usb-keyboard|hdmi-text|genet-nic|cyw43-wifi|pcie-root> owner_state=<driver-owned|missing> descriptor=<present|missing> root_pointer=<no|unknown>` line per current acceptance hot path; standalone `sdio-host` remains a generated non-acceptance diagnostic until a pointer-free CYW43-to-SDIO split owns SDHCI
+- one `DRIVER_TASK_OWNER_STATE contract=<name> hot_path=<serial-console|usb-keyboard|hdmi-text|genet-nic|cyw43-wifi|sdio-host|pcie-root> owner_state=<driver-owned|missing> descriptor=<present|missing> root_pointer=<no|unknown>` line per current acceptance hot path
 - one `SCHED_CONTRACT` line per built-in contract, including `live_tcb` and
   `hot_path`; role-specific dedicated proof is credited only when both fields
   prove live dedicated dispatch
@@ -463,16 +460,14 @@ up the linked runtime artifact in the boot payload CPIO, maps the executable
 ELF page plus stack/IPC/ring/MMIO/DMA/shared regions, and starts the fixed-ring
 runtime entry. The mapped pages are not full acceptance by themselves: the specs
 are acceptance-eligible only when the generated manifest says the hardware state
-has actually migrated. Standalone SDIO is intentionally non-acceptance in the
-current profile because CYW43 maps the SDHCI page directly; PCIe owner-queue
+has actually migrated. SDIO is now part of that 26b acceptance set; PCIe owner-queue
 records similarly are not closure until the composite local-seat bus state is
 proved from the linked runtimes on Pi hardware.
 Owner-state proof is per-hot-path: an aggregate `owner_state=driver-owned`
 field on `DRIVER_TASK_SUBSTRATE` or `DRIVER_TASK_ACCEPTANCE` is diagnostic until
-the six current acceptance hot paths report a present descriptor and
+the seven current acceptance hot paths report a present descriptor and
 `root_pointer=no`, the matching runtime-image specs are acceptance-eligible, and
-transport mapping is complete. Standalone `sdio-host` must continue to report
-non-acceptance until a pointer-free CYW43-to-SDIO transport exists. Descriptor
+transport mapping is complete. Descriptor
 registration is also rejected while the matching runtime-image spec is not
 acceptance-eligible, so proof cannot be forced by setting descriptor flags ahead
 of actual runtime migration.
@@ -595,9 +590,9 @@ Current Pi 4 examples:
 
 - GENET maps six 4 KiB pages from one HAL-selected alias and requires all pages
   to have device coverage before publishing registers.
-- Wi-Fi maps the SDHCI page only into the CYW43 linked runtime for the current
-  boot path; the standalone `sdio-host` runtime has no duplicate SDHCI MMIO
-  authority until a real pointer-free CYW43-to-SDIO bus transport exists.
+- Wi-Fi maps the SDHCI page through HAL-declared runtime resources for the
+  CYW43/SDIO boundary; `sdio-host` now receives its own SDHCI mapping and must
+  prove owner-state with pointer-free CMD52/CMD53/POLL_IRQ turns.
 - VL805 maps BCM2711 PCIe host pages in ascending order so the EXT_CFG DATA
   page at `0xfd508000` remains mappable before the EXT_CFG INDEX page and later
   root-complex registers are touched.
@@ -1591,10 +1586,9 @@ Stop conditions:
 All direct MMIO, physical-address selection, IRQHandler creation, PCI config,
 firmware power/reset services, and DMA admission/publication belong in HAL
 modules. Driver modules may manipulate device registers only through
-HAL-declared mapped regions. The current Pi 4 Wi-Fi path gives the CYW43
-runtime the HAL-declared SDHCI MMIO page; standalone `sdio-host` remains a
-generated non-acceptance runtime with no SDHCI MMIO until the CYW43-to-SDIO
-transport split owns that boundary explicitly.
+HAL-declared mapped regions. The current Pi 4 Wi-Fi path gives the CYW43/SDIO
+runtime boundary HAL-declared SDHCI authority, and `sdio-host` is now an
+acceptance-eligible owner-state hot path.
 
 The HAL must prove:
 
@@ -1749,11 +1743,10 @@ edge behavior.
 
 Required Cohesix shape:
 
-- CYW43 owns the current HAL-declared SDHCI MMIO page, GPIO/power/reset,
-  firmware bundle access, and SDIO CMD52/CMD53 transport for Wi-Fi bring-up.
-  Standalone `sdio-host` is generated as a no-MMIO, non-acceptance ABI guard
-  until CYW43-to-SDIO transport ownership is split behind an explicit HAL
-  boundary.
+- CYW43 owns GPIO/power/reset, firmware bundle access, and Wi-Fi protocol
+  state, while `sdio-host` owns the HAL-declared SDHCI MMIO page for
+  acceptance-eligible CMD52/CMD53/POLL_IRQ service turns behind the declared
+  CYW43-to-SDIO boundary.
 - Driver owns CYW43 protocol state: firmware/NVRAM/CLM staging, SDPCM, CDC/BDC,
   association, and Ethernet dataplane.
 - Function 2 traffic is forbidden until firmware release, real

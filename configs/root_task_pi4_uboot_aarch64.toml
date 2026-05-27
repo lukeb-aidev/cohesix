@@ -120,11 +120,11 @@ code-pages = 64
 stack-pages = 1
 ipc-pages = 1
 ring-pages = 1
-mmio-pages = 0
+mmio-pages = 1
 dma-pages = 64
 shared-buffer-pages = 32
 root-context-required = false
-hardware-state-migrated = false
+hardware-state-migrated = true
 
 [[root_task.driver_images.images]]
 id = "pi4-pcie-runtime"

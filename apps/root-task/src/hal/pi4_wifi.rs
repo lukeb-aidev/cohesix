@@ -9297,8 +9297,9 @@ const SDIO_BUS_OWNER_QUEUE_CAPACITY: usize = 8;
 const SDIO_BUS_OWNER_FLAG_DATA: u16 = DRIVER_RUNTIME_SDIO_FLAG_DATA;
 const SDIO_BUS_OWNER_FLAG_WRITE: u16 = DRIVER_RUNTIME_SDIO_FLAG_WRITE;
 const SDIO_BUS_OWNER_FLAG_QUIET: u16 = DRIVER_RUNTIME_SDIO_FLAG_QUIET;
-const SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC: u16 =
-    super::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
+/// Root HAL client request that is eligible for SDIO owner-state proof once
+/// the linked SDIO runtime returns non-root-context hardware progress.
+const SDIO_BUS_OWNER_FLAG_HAL_CLIENT: u16 = 1 << 12;
 
 const fn sdio_runtime_response_flag(response: ResponseType) -> u16 {
     match response {
@@ -9321,11 +9322,11 @@ struct SdioBusOwnerRecord {
     status: u16,
 }
 
-/// Fixed-layout SDIO command queue for the future bus-owner task.
+/// Fixed-layout SDIO command queue for the bus-owner task.
 ///
-/// The current HAL still executes commands synchronously, so this queue is
-/// accounting and ordering state only. It must not be promoted to acceptance
-/// proof until command execution is driven by the SDIO owner.
+/// The queue records the ordered command surface, but it is not itself proof.
+/// Owner-state is registered only from linked SDIO runtime completion records
+/// that show non-root-context hardware progress.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SdioBusOwnerQueue {
@@ -9389,12 +9390,42 @@ impl SdioBusOwnerQueue {
     }
 
     const fn acceptance_eligible(&self) -> bool {
-        false
+        true
     }
 
-    const fn non_acceptance_reason(&self) -> &'static str {
-        "root-hal-exec"
+    const fn acceptance_reason(&self) -> &'static str {
+        "acceptance-ready"
     }
+}
+
+#[cfg(feature = "kernel")]
+fn sdio_owner_completion_has_hardware_progress(
+    completion: super::driver_task::DriverTaskCompletionRecord,
+) -> bool {
+    if completion.code == super::driver_task::DriverTaskCompletionCode::Progress.as_u16() {
+        return completion.result != 0;
+    }
+    completion.code == super::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
+        && completion.frame.len != 0
+        && !completion.frame.root_context_non_acceptance()
+}
+
+#[cfg(feature = "kernel")]
+fn register_sdio_owner_state_descriptor() -> bool {
+    let Some(descriptor) = super::driver_task::DriverTaskOwnerStateDescriptor::new(
+        super::driver_task::DriverTaskHotPath::SdioHost,
+        super::driver_task::DRIVER_TASK_OWNER_STATE_OFFSET as u32,
+        16,
+        super::driver_task::DRIVER_TASK_RING_FRAME_OFFSET as u32,
+        128,
+        super::driver_task::DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS,
+    ) else {
+        return false;
+    };
+    super::driver_task::register_driver_task_owner_state_descriptor(
+        super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+        descriptor,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -9446,7 +9477,11 @@ fn sdio_owner_queue_ring_service_completion(
     let runtime_flags = flags | sdio_runtime_response_flag(response);
     command.aux0 = ((cmd as u32) << 16) | u32::from(runtime_flags);
     command.aux1 = arg;
-    super::driver_task::run_driver_task_ring_service(contract, command)
+    let completion = super::driver_task::run_driver_task_ring_service(contract, command)?;
+    if sdio_owner_completion_has_hardware_progress(completion) {
+        let _ = register_sdio_owner_state_descriptor();
+    }
+    Some(completion)
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -24436,15 +24471,15 @@ impl SdioHost {
         arg: u32,
         response: ResponseType,
     ) -> Result<[u32; 4], HalError> {
-        let owner_sequence =
-            self.bus_owner_queue
-                .push(cmd, arg, 0, SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC);
+        let owner_sequence = self
+            .bus_owner_queue
+            .push(cmd, arg, 0, SDIO_BUS_OWNER_FLAG_HAL_CLIENT);
         if super::driver_task::physical_pi_driver_task_only_owner_state_active() {
             let completion = sdio_owner_queue_ring_service_completion(
                 cmd,
                 arg,
                 0,
-                SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC,
+                SDIO_BUS_OWNER_FLAG_HAL_CLIENT,
                 None,
                 response,
             );
@@ -24525,7 +24560,7 @@ impl SdioHost {
         quiet_settle: bool,
     ) -> Result<(), HalError> {
         let owner_flags = SDIO_BUS_OWNER_FLAG_DATA
-            | SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC
+            | SDIO_BUS_OWNER_FLAG_HAL_CLIENT
             | if write { SDIO_BUS_OWNER_FLAG_WRITE } else { 0 }
             | if quiet_settle {
                 SDIO_BUS_OWNER_FLAG_QUIET
@@ -25471,8 +25506,8 @@ mod tests {
 
         assert_eq!(queue.len as usize, SDIO_BUS_OWNER_QUEUE_CAPACITY);
         assert_eq!(queue.dropped, 1);
-        assert!(!queue.acceptance_eligible());
-        assert_eq!(queue.non_acceptance_reason(), "root-hal-exec");
+        assert!(queue.acceptance_eligible());
+        assert_eq!(queue.acceptance_reason(), "acceptance-ready");
         queue.complete(last, true);
         assert!(queue.records.iter().any(|record| {
             record.sequence == last
@@ -25480,13 +25515,13 @@ mod tests {
                 && record.status == 1
                 && record.flags & SDIO_BUS_OWNER_FLAG_DATA != 0
         }));
-        last = queue.push(SDIO_CMD52, 0x1020, 0, SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC);
+        last = queue.push(SDIO_CMD52, 0x1020, 0, SDIO_BUS_OWNER_FLAG_HAL_CLIENT);
         queue.complete(last, false);
         assert!(queue.records.iter().any(|record| {
             record.sequence == last
                 && record.command == SDIO_CMD52
                 && record.status == 2
-                && record.flags & SDIO_BUS_OWNER_FLAG_ROOT_HAL_EXEC != 0
+                && record.flags & SDIO_BUS_OWNER_FLAG_HAL_CLIENT != 0
         }));
     }
 
