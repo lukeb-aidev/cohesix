@@ -9,8 +9,10 @@
 //! dedicated seL4 driver-task model. Drivers must declare the contract they
 //! consume before runtime code may service them.
 
+#[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
+use core::sync::atomic::AtomicU64;
 #[cfg(feature = "kernel")]
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use heapless::Deque;
 #[cfg(feature = "kernel")]
@@ -1560,6 +1562,27 @@ static DRIVER_TASK_SLOT_SDIO_HOST: DriverTaskCommandSlot = DriverTaskCommandSlot
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_SLOT_PCIE_ROOT: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
 
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OBSERVED_US_SERIAL: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OBSERVED_US_USB_LOCAL_SEAT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OBSERVED_US_HDMI_TEXT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OBSERVED_US_BCMGENET_V5: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OBSERVED_US_CYW43455: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OBSERVED_US_RTL8139: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OBSERVED_US_VIRTIO_NET: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OBSERVED_US_SDIO_HOST: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_OBSERVED_US_PCIE_ROOT: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
+static DRIVER_TASK_TEST_COUNTER_TICKS: AtomicU64 = AtomicU64::new(0);
+
 /// Return the stable driver-task key for a contract.
 #[must_use]
 pub fn driver_task_contract_key(contract: DriverTaskContract) -> Option<usize> {
@@ -1608,6 +1631,117 @@ fn slot_for_task_key(task_key: usize) -> Option<&'static DriverTaskCommandSlot> 
         DRIVER_TASK_KEY_PCIE_ROOT => Some(&DRIVER_TASK_SLOT_PCIE_ROOT),
         _ => None,
     }
+}
+
+#[cfg(feature = "kernel")]
+fn observed_service_us_cell(contract: DriverTaskContract) -> Option<&'static AtomicU32> {
+    match driver_task_contract_key(contract)? {
+        DRIVER_TASK_KEY_SERIAL => Some(&DRIVER_TASK_OBSERVED_US_SERIAL),
+        DRIVER_TASK_KEY_USB_LOCAL_SEAT => Some(&DRIVER_TASK_OBSERVED_US_USB_LOCAL_SEAT),
+        DRIVER_TASK_KEY_HDMI_TEXT => Some(&DRIVER_TASK_OBSERVED_US_HDMI_TEXT),
+        DRIVER_TASK_KEY_BCMGENET_V5 => Some(&DRIVER_TASK_OBSERVED_US_BCMGENET_V5),
+        DRIVER_TASK_KEY_CYW43455 => Some(&DRIVER_TASK_OBSERVED_US_CYW43455),
+        DRIVER_TASK_KEY_RTL8139 => Some(&DRIVER_TASK_OBSERVED_US_RTL8139),
+        DRIVER_TASK_KEY_VIRTIO_NET => Some(&DRIVER_TASK_OBSERVED_US_VIRTIO_NET),
+        DRIVER_TASK_KEY_SDIO_HOST => Some(&DRIVER_TASK_OBSERVED_US_SDIO_HOST),
+        DRIVER_TASK_KEY_PCIE_ROOT => Some(&DRIVER_TASK_OBSERVED_US_PCIE_ROOT),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn observed_service_us_for_contract(contract: DriverTaskContract) -> u32 {
+    observed_service_us_cell(contract)
+        .map(|cell| cell.load(Ordering::Acquire))
+        .unwrap_or(0)
+}
+
+#[cfg(not(feature = "kernel"))]
+const fn observed_service_us_for_contract(_contract: DriverTaskContract) -> u32 {
+    0
+}
+
+#[must_use]
+const fn driver_task_elapsed_us(start_ticks: u64, end_ticks: u64, counter_frequency: u64) -> u32 {
+    if counter_frequency == 0 {
+        return 1;
+    }
+    let delta = end_ticks.saturating_sub(start_ticks);
+    let micros = (delta as u128)
+        .saturating_mul(1_000_000u128)
+        .saturating_div(counter_frequency as u128);
+    if micros == 0 {
+        1
+    } else if micros > u32::MAX as u128 {
+        u32::MAX
+    } else {
+        micros as u32
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn record_observed_service_us(contract: DriverTaskContract, observed_us: u32) {
+    let Some(cell) = observed_service_us_cell(contract) else {
+        return;
+    };
+    let mut current = cell.load(Ordering::Acquire);
+    while observed_us > current {
+        match cell.compare_exchange(current, observed_us, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => break,
+            Err(next) => current = next,
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[inline]
+fn driver_task_counter_frequency() -> u64 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        read_cntfrq()
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        1_000_000
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[inline]
+fn driver_task_counter_ticks() -> u64 {
+    #[cfg(target_arch = "aarch64")]
+    {
+        read_cntpct()
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        DRIVER_TASK_TEST_COUNTER_TICKS.fetch_add(1, Ordering::Relaxed)
+    }
+}
+
+#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+#[inline]
+fn read_cntpct() -> u64 {
+    let value: u64;
+    // SAFETY: The Pi 4 root task already uses the architectural physical
+    // counter as a read-only timing source. This reads CNTPCT_EL0 state only;
+    // it does not change device, kernel, or capability authority.
+    unsafe {
+        core::arch::asm!("mrs {value}, cntpct_el0", value = out(reg) value);
+    }
+    value
+}
+
+#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+#[inline]
+fn read_cntfrq() -> u64 {
+    let value: u64;
+    // SAFETY: CNTFRQ_EL0 is a read-only architectural frequency register. The
+    // value is used only to convert local service timing into proof telemetry.
+    unsafe {
+        core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value);
+    }
+    value
 }
 
 /// Publish the root-side command endpoint for a created driver TCB.
@@ -1989,6 +2123,7 @@ pub fn run_driver_task_ring_command(
 
     let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
     let mut completion = completion_reset;
+    let start_ticks = driver_task_counter_ticks();
     for _ in 0..256 {
         crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
         crate::sel4::yield_now();
@@ -2002,7 +2137,15 @@ pub fn run_driver_task_ring_command(
     }
 
     slot.active.store(0, Ordering::Release);
-    (completion.sequence == request as u32).then_some(completion)
+    if completion.sequence == request as u32 {
+        let end_ticks = driver_task_counter_ticks();
+        let elapsed_us =
+            driver_task_elapsed_us(start_ticks, end_ticks, driver_task_counter_frequency());
+        record_observed_service_us(contract, elapsed_us);
+        Some(completion)
+    } else {
+        None
+    }
 }
 
 /// Execute one registered driver service turn through the shared-ring ABI.
@@ -3686,7 +3829,7 @@ pub fn emit_boot_contract_proof() {
     crate::bootstrap::log::force_uart_line(line.as_str());
 
     for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
-        let mut line = String::<320>::new();
+        let mut line = String::<384>::new();
         let status = if contract.validate().is_ok() {
             "valid"
         } else {
@@ -3695,34 +3838,67 @@ pub fn emit_boot_contract_proof() {
         let role_bit = driver_task_role_bit(contract.kind);
         let live_tcb = role_bit != 0 && proof.live_tcb_role_mask & role_bit != 0;
         let hot_path = role_bit != 0 && proof.hot_path_role_mask & role_bit != 0;
-        let _ = write!(
-            line,
-            "SCHED_CONTRACT contract={} status={} service_class={} isolation={} requested_isolation={} live_tcb={} hot_path={} priority={} service_order={} max_ops={} max_bytes={} max_frames={} max_service_us={} vspace={} ipc_abi={} pointer_free_ipc={}",
-            contract.name,
-            status,
-            contract.class.as_str(),
-            contract.isolation.as_str(),
-            contract.requested_isolation().as_str(),
-            if live_tcb { "yes" } else { "no" },
-            if hot_path { "dedicated" } else { "root-task-compatibility" },
-            contract.sel4_priority(),
-            contract.service_order(),
-            contract.budget.max_ops_per_turn,
-            contract.budget.max_bytes_per_turn,
-            contract.budget.max_frames_per_turn,
-            contract.max_service_us(),
-            if proof.vspace_proof {
-                "isolated"
-            } else {
-                "shared-root"
-            },
-            proof_ipc_abi.as_str(),
-            if proof.pointer_free_ipc_proof {
-                "yes"
-            } else {
-                "no"
-            },
-        );
+        let observed_service_us = observed_service_us_for_contract(*contract);
+        if observed_service_us == 0 {
+            let _ = write!(
+                line,
+                "SCHED_CONTRACT contract={} status={} service_class={} isolation={} requested_isolation={} live_tcb={} hot_path={} priority={} service_order={} max_ops={} max_bytes={} max_frames={} max_service_us={} vspace={} ipc_abi={} pointer_free_ipc={}",
+                contract.name,
+                status,
+                contract.class.as_str(),
+                contract.isolation.as_str(),
+                contract.requested_isolation().as_str(),
+                if live_tcb { "yes" } else { "no" },
+                if hot_path { "dedicated" } else { "root-task-compatibility" },
+                contract.sel4_priority(),
+                contract.service_order(),
+                contract.budget.max_ops_per_turn,
+                contract.budget.max_bytes_per_turn,
+                contract.budget.max_frames_per_turn,
+                contract.max_service_us(),
+                if proof.vspace_proof {
+                    "isolated"
+                } else {
+                    "shared-root"
+                },
+                proof_ipc_abi.as_str(),
+                if proof.pointer_free_ipc_proof {
+                    "yes"
+                } else {
+                    "no"
+                },
+            );
+        } else {
+            let _ = write!(
+                line,
+                "SCHED_CONTRACT contract={} status={} service_class={} isolation={} requested_isolation={} live_tcb={} hot_path={} priority={} service_order={} max_ops={} max_bytes={} max_frames={} max_service_us={} observed_service_us={} vspace={} ipc_abi={} pointer_free_ipc={}",
+                contract.name,
+                status,
+                contract.class.as_str(),
+                contract.isolation.as_str(),
+                contract.requested_isolation().as_str(),
+                if live_tcb { "yes" } else { "no" },
+                if hot_path { "dedicated" } else { "root-task-compatibility" },
+                contract.sel4_priority(),
+                contract.service_order(),
+                contract.budget.max_ops_per_turn,
+                contract.budget.max_bytes_per_turn,
+                contract.budget.max_frames_per_turn,
+                contract.max_service_us(),
+                observed_service_us,
+                if proof.vspace_proof {
+                    "isolated"
+                } else {
+                    "shared-root"
+                },
+                proof_ipc_abi.as_str(),
+                if proof.pointer_free_ipc_proof {
+                    "yes"
+                } else {
+                    "no"
+                },
+            );
+        }
         crate::bootstrap::log::force_uart_line(line.as_str());
 
         let mut line = String::<320>::new();
@@ -4068,6 +4244,15 @@ mod tests {
             DriverServiceBudgetError::BlockingForbidden.reason(),
             "driver-service-budget-blocking-forbidden"
         );
+    }
+
+    #[test]
+    fn driver_task_elapsed_us_never_reports_zero_for_completed_service() {
+        assert_eq!(driver_task_elapsed_us(100, 100, 1_000_000), 1);
+        assert_eq!(driver_task_elapsed_us(100, 101, 1_000_000), 1);
+        assert_eq!(driver_task_elapsed_us(100, 200, 1_000_000), 100);
+        assert_eq!(driver_task_elapsed_us(200, 100, 1_000_000), 1);
+        assert_eq!(driver_task_elapsed_us(100, 200, 0), 1);
     }
 
     #[test]
