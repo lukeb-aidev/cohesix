@@ -15120,7 +15120,7 @@ impl SeatDma {
     ) -> Result<(), DmaShareError> {
         let end = vaddr.checked_add(len).ok_or(DmaShareError)?;
         for region in &mut state.regions {
-            let RegionBacking::Dma(_) = &region.backing else {
+            let RegionBacking::Dma(frames) = &region.backing else {
                 continue;
             };
             let start = region.virt_start;
@@ -15130,9 +15130,9 @@ impl SeatDma {
             if vaddr < start || end > region_end {
                 continue;
             }
-            let offset = vaddr.checked_sub(start).ok_or(DmaShareError)?;
-            let phys = region.phys_start.checked_add(offset).ok_or(DmaShareError)?;
-            let range = dma::pin(vaddr, phys, len, label).map_err(|_| DmaShareError)?;
+            let range = dma::HalDmaRange::from_contiguous_frames(frames.as_slice(), vaddr, len)
+                .and_then(|range| dma::pin(range, label))
+                .map_err(|_| DmaShareError)?;
             if !region.shares.iter().any(|existing| {
                 existing.vaddr() == range.vaddr()
                     && existing.paddr() == range.paddr()
@@ -15171,7 +15171,7 @@ impl SeatDma {
     ) -> Result<(), DmaShareError> {
         let end = vaddr.checked_add(len).ok_or(DmaShareError)?;
         for region in &state.regions {
-            let RegionBacking::Dma(_) = &region.backing else {
+            let RegionBacking::Dma(frames) = &region.backing else {
                 continue;
             };
             let start = region.virt_start;
@@ -15181,9 +15181,9 @@ impl SeatDma {
             if vaddr < start || end > region_end {
                 continue;
             }
-            let offset = vaddr.checked_sub(start).ok_or(DmaShareError)?;
-            let phys = region.phys_start.checked_add(offset).ok_or(DmaShareError)?;
-            dma::sync_for_cpu(vaddr, phys, len, label).map_err(|_| DmaShareError)?;
+            let range = dma::HalDmaRange::from_contiguous_frames(frames.as_slice(), vaddr, len)
+                .map_err(|_| DmaShareError)?;
+            dma::sync_for_cpu(range, label).map_err(|_| DmaShareError)?;
             return Ok(());
         }
         Err(DmaShareError)
@@ -21533,9 +21533,8 @@ mod tests {
             shares: Vec::new(),
         };
         let range = dma::pin(
-            region.virt_start,
-            region.phys_start,
-            128,
+            dma::HalDmaRange::for_test(region.virt_start, region.phys_start, 128)
+                .expect("test DMA range"),
             "seat-dma-reclaim-test",
         )
         .expect("test DMA range should pin");

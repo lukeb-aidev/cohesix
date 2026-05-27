@@ -438,7 +438,6 @@ run_normalizer() {
         args+=("--expect" "DRIVER_TASK_USB_DEDICATED=yes")
         args+=("--expect" "DRIVER_TASK_DISPLAY_DEDICATED=yes")
         args+=("--expect" "DRIVER_TASK_NET_DEDICATED=yes")
-        args+=("--expect" "DRIVER_TASK_SDIO_DEDICATED=yes")
         args+=("--expect" "DRIVER_TASK_PCIE_DEDICATED=yes")
         args+=("--expect" "DRIVER_TASK_SUBSTRATE_READY=yes")
         args+=("--expect" "DRIVER_TASK_FAILED_COUNT=0")

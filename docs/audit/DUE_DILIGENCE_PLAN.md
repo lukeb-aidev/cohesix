@@ -39,7 +39,7 @@ The process is aligned to these references:
 
 2. Design and Architecture
 - Cohesix charter red lines are preserved.
-- HAL boundaries are intact (no direct MMIO/unsafe bypass).
+- HAL boundaries are intact (no direct MMIO, physical-address/DMA publication, IRQ binding, or unsafe device bypass).
 - Protocol behavior remains consistent with canonical docs/fixtures.
 - Privilege boundaries and role ownership remain explicit and test-backed.
 

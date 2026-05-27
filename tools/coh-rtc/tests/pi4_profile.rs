@@ -134,15 +134,35 @@ fn pi4_uboot_profile_emits_network_policy() {
         runtime_pages(images, "cyw43-wifi", "shared-buffer-pages"),
         64
     );
+    assert_eq!(runtime_pages(images, "cyw43-wifi", "mmio-pages"), 1);
+    assert_eq!(
+        runtime_bool(images, "cyw43-wifi", "hardware-state-migrated"),
+        true
+    );
+    assert_eq!(runtime_pages(images, "sdio-host", "mmio-pages"), 0);
     assert_eq!(runtime_pages(images, "sdio-host", "dma-pages"), 64);
     assert_eq!(
         runtime_pages(images, "sdio-host", "shared-buffer-pages"),
         32
     );
     assert_eq!(
+        runtime_bool(images, "sdio-host", "hardware-state-migrated"),
+        false
+    );
+    assert_eq!(
         runtime_pages(images, "pcie-root", "shared-buffer-pages"),
         16
     );
+}
+
+fn runtime_bool(images: &[Value], hot_path: &str, field: &str) -> bool {
+    images
+        .iter()
+        .find(|image| image["hot-path"] == hot_path)
+        .unwrap_or_else(|| panic!("runtime image for {hot_path}"))
+        .get(field)
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| panic!("{field} for {hot_path}"))
 }
 
 fn runtime_pages(images: &[Value], hot_path: &str, field: &str) -> u64 {

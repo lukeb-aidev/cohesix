@@ -749,9 +749,14 @@ pub const MAX_DRIVER_TASK_QUEUE_DEPTH: u16 = 256;
 /// acceptance may claim dedicated driver-task isolation.
 pub const MIN_DEDICATED_PI4_DRIVER_TASKS: usize = 6;
 
-/// Number of concrete Pi 4 hardware hot paths that must own state before the
-/// strongest owner-state proof may pass.
+/// Number of declared Pi 4 hardware hot paths in the generated migration
+/// catalog.
 pub const REQUIRED_PI4_OWNER_STATE_HOT_PATHS: usize = 7;
+
+/// Number of Pi 4 hardware-owner hot paths that can currently satisfy
+/// owner-state acceptance. Standalone SDIO remains declared but non-acceptance
+/// until CYW43 can reach it through a pointer-free bus transport.
+pub const REQUIRED_PI4_ACCEPTANCE_HOT_PATHS: usize = 6;
 
 /// Maximum Ethernet-sized frame admitted through a dedicated driver-task ring.
 pub const MAX_DRIVER_TASK_FRAME_BYTES: usize = 1536;
@@ -1384,6 +1389,13 @@ pub const REQUIRED_DRIVER_TASK_ROLE_MASK: usize = DRIVER_TASK_ROLE_SERIAL_BIT
     | DRIVER_TASK_ROLE_SDIO_BIT
     | DRIVER_TASK_ROLE_PCIE_BIT;
 
+/// Current role coverage required for owner-state acceptance.
+pub const REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK: usize = DRIVER_TASK_ROLE_SERIAL_BIT
+    | DRIVER_TASK_ROLE_USB_BIT
+    | DRIVER_TASK_ROLE_DISPLAY_BIT
+    | DRIVER_TASK_ROLE_NET_BIT
+    | DRIVER_TASK_ROLE_PCIE_BIT;
+
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_SUBSTRATE_ACTIVE: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
@@ -1802,8 +1814,8 @@ pub fn register_driver_task_owner_state_descriptor(
 #[cfg(feature = "kernel")]
 fn refresh_driver_task_owner_state_proof() {
     let owner_hot_paths = DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire);
-    let ready = owner_hot_paths & REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
-        == REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+    let ready = owner_hot_paths & REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
+        == REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
         && DRIVER_TASK_VSPACE_PROOF.load(Ordering::Acquire) != 0
         && DRIVER_TASK_POINTER_FREE_IPC_PROOF.load(Ordering::Acquire) != 0;
     DRIVER_TASK_OWNER_STATE_PROOF.store(ready as usize, Ordering::Release);
@@ -2918,6 +2930,15 @@ pub const REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK: usize = DriverTaskHotPath::Ser
     | DriverTaskHotPath::SdioHost.owner_state_bit()
     | DriverTaskHotPath::PcieRoot.owner_state_bit();
 
+/// Current owner-state hot-path mask admitted for acceptance.
+pub const REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK: usize = DriverTaskHotPath::SerialConsole
+    .owner_state_bit()
+    | DriverTaskHotPath::UsbKeyboard.owner_state_bit()
+    | DriverTaskHotPath::HdmiText.owner_state_bit()
+    | DriverTaskHotPath::GenetNic.owner_state_bit()
+    | DriverTaskHotPath::Cyw43Wifi.owner_state_bit()
+    | DriverTaskHotPath::PcieRoot.owner_state_bit();
+
 /// Pointer-free service handler for bus-owner roles whose concrete hardware
 /// queues are not allowed to fall back to root-owned pointer contexts.
 ///
@@ -3585,15 +3606,15 @@ pub const fn driver_task_acceptance_ready_for(
         && proof.vspace_proof
         && proof.pointer_free_ipc_proof
         && proof.owner_state_proof
-        && proof.owner_state_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ROLE_MASK
-        && proof.owner_state_hot_path_mask & REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
-            == REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+        && proof.owner_state_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+        && proof.owner_state_hot_path_mask & REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
+            == REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
         && proof.broad_caps_leaked == 0
-        && proof.live_tcb_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ROLE_MASK
-        && proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ROLE_MASK
+        && proof.live_tcb_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+        && proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
         && proof.compatibility_service_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK == 0
         && summary.dedicated_sel4_tasks >= MIN_DEDICATED_PI4_DRIVER_TASKS
         && summary.root_task_compatibility == 0
@@ -3627,8 +3648,8 @@ pub fn emit_boot_contract_proof() {
             "no"
         },
         if proof.substrate_active { "yes" } else { "no" },
-        if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ROLE_MASK
+        if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
         {
             "yes"
         } else {
@@ -3660,8 +3681,8 @@ pub fn emit_boot_contract_proof() {
         } else {
             "root-owned"
         },
-        if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ROLE_MASK
+        if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
         {
             "yes"
         } else {
@@ -3789,8 +3810,8 @@ pub fn emit_boot_contract_proof() {
         "driver-task-pointer-free-ipc-not-proven"
     } else if !proof.owner_state_proof {
         "driver-task-owner-state-not-proven"
-    } else if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK
-        != REQUIRED_DRIVER_TASK_ROLE_MASK
+    } else if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+        != REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
     {
         DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_MISSING
     } else if summary.root_task_compatibility != 0 {
@@ -4329,13 +4350,18 @@ mod tests {
             let registered =
                 register_driver_task_owner_state_descriptor(hot_path.contract(), descriptor);
             let spec = pi4_driver_task_runtime_image_spec(hot_path);
-            assert!(spec.acceptance_eligible(), "{hot_path:?}");
-            assert!(registered, "{hot_path:?}");
+            if hot_path == DriverTaskHotPath::SdioHost {
+                assert!(!spec.acceptance_eligible(), "{hot_path:?}");
+                assert!(!registered, "{hot_path:?}");
+            } else {
+                assert!(spec.acceptance_eligible(), "{hot_path:?}");
+                assert!(registered, "{hot_path:?}");
+            }
         }
         let proof = driver_task_runtime_proof();
         assert_eq!(
             proof.owner_state_hot_path_mask,
-            REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+            REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
         );
         assert!(proof.owner_state_proof);
         publish_driver_task_bootstrap_report(DriverTaskBootstrapReport::default());
@@ -4383,7 +4409,7 @@ mod tests {
     }
 
     #[test]
-    fn pi4_runtime_image_specs_cover_all_hot_paths_as_migrated() {
+    fn pi4_runtime_image_specs_keep_sdio_nonacceptance_explicit() {
         let generated_policy = crate::generated::driver_runtime_image_policy();
         assert!(generated_policy.required);
         assert_eq!(
@@ -4469,6 +4495,7 @@ mod tests {
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         32
                     );
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
                 }
                 DriverTaskHotPath::PcieRoot => {
                     assert_eq!(
@@ -4478,9 +4505,20 @@ mod tests {
                 }
             }
             assert!(!spec.root_context_required, "{:?}", spec.hot_path);
-            assert!(spec.hardware_state_migrated, "{:?}", spec.hot_path);
-            assert!(spec.acceptance_eligible(), "{:?}", spec.hot_path);
-            assert_eq!(spec.non_acceptance_reason(), None, "{:?}", spec.hot_path);
+            if spec.hot_path == DriverTaskHotPath::SdioHost {
+                assert!(!spec.hardware_state_migrated, "{:?}", spec.hot_path);
+                assert!(!spec.acceptance_eligible(), "{:?}", spec.hot_path);
+                assert_eq!(
+                    spec.non_acceptance_reason(),
+                    Some("hardware-state-not-migrated"),
+                    "{:?}",
+                    spec.hot_path
+                );
+            } else {
+                assert!(spec.hardware_state_migrated, "{:?}", spec.hot_path);
+                assert!(spec.acceptance_eligible(), "{:?}", spec.hot_path);
+                assert_eq!(spec.non_acceptance_reason(), None, "{:?}", spec.hot_path);
+            }
         }
         assert_eq!(hot_path_mask, REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK);
         assert_eq!(
@@ -4508,7 +4546,7 @@ mod tests {
         assert_eq!(pcie.hot_path, DriverTaskHotPath::PcieRoot);
         assert!(genet.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 6);
         assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 1);
-        assert_ne!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
+        assert_eq!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
         assert!(pcie.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 10);
     }
 

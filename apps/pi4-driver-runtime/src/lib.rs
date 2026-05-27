@@ -5789,6 +5789,68 @@ mod tests {
     }
 
     #[test]
+    fn sdio_runtime_without_mmio_rejects_engine_init_before_register_access() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = HOT_PATH_SDIO_HOST;
+        descriptor.role_bit = ROLE_SDIO;
+        descriptor.flags = pi4_driver_abi::DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            | pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = pi4_driver_abi::DriverRuntimePageDescriptor::new(0x4000_0000);
+        descriptor.resource_range_count = 1;
+        descriptor.resource_ranges[0] = DriverRuntimeResourceRangeDescriptor::new(
+            DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+            DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE
+                | DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+            DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+            DRIVER_TASK_SHARED_BUFFER_VADDR as u64,
+            0x4000_0000,
+            DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+            1,
+            0,
+        );
+        let runtime_init = DriverTaskCommandRecord {
+            sequence: 70,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: DRIVER_RUNTIME_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+                flags: 0,
+            },
+        };
+        assert_eq!(
+            service_runtime_init_for_test(runtime_init, descriptor),
+            DriverTaskCompletionRecord::progress(70, HOT_PATH_SDIO_HOST)
+        );
+
+        let engine_init = DriverTaskCommandRecord {
+            sequence: 71,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_command(0, engine_init),
+            DriverTaskCompletionRecord::fault(71, FAULT_DEVICE_UNAVAILABLE)
+        );
+    }
+
+    #[test]
     fn sdio_descriptor_helpers_encode_cmd52_and_cmd53_arguments() {
         assert_eq!(
             sdio_cmd52_arg(false, 1, 0x1234, 0),

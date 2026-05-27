@@ -16,7 +16,7 @@
 - [x] Capability discipline preserved: no implicit authority transfer, no ad-hoc RPC bypass.
 - [x] Secure9P constraints enforced (`msize <= 8192`, walk depth <= 8, no `..`, fid lifecycle discipline).
 - [x] No unauthorized in-VM TCP listener beyond approved console exception.
-- [x] HAL boundary preserved: no direct MMIO/unsafe access outside HAL-owned layers.
+- [x] HAL boundary preserved: no direct MMIO, physical-address/DMA publication, IRQ binding, or unsafe device access outside HAL-owned layers.
 - [x] Queen/worker lifecycle semantics align with `docs/ROLES_AND_SCHEDULING.md`.
 - [x] Namespace layout and control paths align with `docs/INTERFACES.md`.
 - [x] Generated manifest and docs snippets align with code behavior (`scripts/check-generated.sh`).

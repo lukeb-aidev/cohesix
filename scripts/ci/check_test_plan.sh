@@ -58,7 +58,7 @@ required_snippets = [
     "scripts/ci/due_diligence_gate.sh",
     "TP_STAGE4_GATEWAY_BIND",
     "self-contained local QEMU by default",
-    "scripts/pi4-image-build.sh --manifest out/manifests/root_task_resolved.json",
+    "scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml",
     "scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-usb-ready --require-wired-ready --require-driver-task-proof --require-input-responsive",
     "scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-ready",
     "DRIVER_TASK_CONTRACTS",

@@ -23,6 +23,7 @@ Open-source releases are available in [releases/](releases/).
 - AWS g5g.xlarge (Queen VM, host tools, GPU integration, API integration)
 - AWS t4g.small (arm64 build host)
 - NVIDIA JetPack 6.2.1 (worker VM path, GPU integration)
+- Raspberry Pi 4 version B (Queen, local-seat HDMI and USB keyboard, GENET NIC, CYW43 WiFi)
 
 **Models Tested**:
 - HuggingFaceTB/SmolVLM-500M-Instruct
@@ -286,6 +287,7 @@ See below for detailed design, interfaces, and milestone tracking:
 - [docs/INTERFACES.md](docs/INTERFACES.md)
 - [docs/SECURE9P.md](docs/SECURE9P.md)
 - [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md)
+- [docs/DRIVERS.md](docs/DRIVERS.md)
 - [docs/GPU_NODES.md](docs/GPU_NODES.md)
 - [docs/HOST_TOOLS.md](docs/HOST_TOOLS.md)
 - [docs/API_GUIDELINES.md](docs/API_GUIDELINES.md)

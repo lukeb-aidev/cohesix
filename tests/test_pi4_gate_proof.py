@@ -26,8 +26,6 @@ def _driver_task_owner_state_lines() -> list[str]:
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
         "owner_state=driver-owned descriptor=present root_pointer=no",
-        "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
-        "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
         "owner_state=driver-owned descriptor=present root_pointer=no",
     ]
@@ -469,7 +467,7 @@ def test_gate_proof_rejects_pointer_free_ring_without_owner_state(
 def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Strong driver-task proof needs every concrete owner-state descriptor."""
+    """Strong driver-task proof needs every current acceptance descriptor."""
 
     venv_dir = REPO_ROOT / ".venv"
     if not (venv_dir / "bin" / "python").is_file():
@@ -502,8 +500,8 @@ def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
         "live_tcb=yes hot_path=dedicated observed_service_us=44",
         "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
         "live_tcb=yes hot_path=dedicated active_net=cyw43 observed_service_us=91",
-        "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task "
-        "live_tcb=yes hot_path=dedicated observed_service_us=31",
+        "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=73",
         "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
         "live_tcb=yes hot_path=dedicated observed_service_us=36",
         "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
@@ -536,6 +534,7 @@ def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
     assert result.returncode == 0
     assert "DRIVER_TASK_OWNER_STATE_PROOF=yes" in result.stdout
     assert "DRIVER_TASK_DEDICATED_READY=yes" in result.stdout
+    assert "DRIVER_TASK_SDIO_DEDICATED=no" in result.stdout
 
 
 def test_gate_proof_rejects_root_task_panic(tmp_path: pathlib.Path) -> None:

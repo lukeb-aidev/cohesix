@@ -7,9 +7,9 @@
 The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 4 U-Boot chain (`Pi firmware -> U-Boot -> seL4 image -> root-task`); QEMU `aarch64/virt` serves as the development/CI harness and mirrors the same control-plane attack surface where profile-gated behavior allows.
 
 ## 1. Deterministic Memory Envelope
-- `root-task::net::NetStack` binds smoltcp to HAL-provided NICs (RTL8139/virtio on QEMU profiles and GENETv5 on Pi 4 profiles). DMA
-  frames are allocated once via `KernelHal::alloc_dma_frame` and device mappings flow through HAL coverage checks so drivers never
-  bypass allocator accounting.
+- `root-task::net::NetStack` binds smoltcp to HAL-provided NICs (RTL8139/virtio on QEMU profiles and GENETv5 or CYW43455 on Pi 4 profiles). DMA
+  frames are admitted through HAL-owned ranges and device mappings flow through HAL coverage checks so drivers never
+  bypass allocator accounting, cache policy, or no-IOMMU quarantine rules.
 - A monotonic `NetworkClock` backed by `portable_atomic::AtomicU64` bounds timestamp arithmetic while avoiding wrap for the
   lifetime of the Cohesix instance. Pollers advance the clock using explicit millisecond timestamps supplied by the event pump so the heapless
   queues never rely on wall-clock drift.
@@ -44,7 +44,7 @@ The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 
 - Boot logs include deterministic network evidence lines (`manifest.hw.network.enabled`, `manifest.hw.network.backend`, `manifest.hw.network.mode`, `manifest.hw.network.interface`, `manifest.hw.networking=...`) for audited before/after proofs.
 - The DHCP client path is bounded and client-only: DHCPv4 DISCOVER/OFFER/REQUEST/ACK, fixed buffers, bounded retry/timeouts, strict packet validation, and no new listeners or protocol surfaces.
 - Pi 4 boot scripts may persist only Cohesix policy fields in `cohesix.env`, reload them on boot, mirror `coh_net_mode`, `coh_net_interface`, `coh_static_ip`, `coh_static_prefix_len`, `coh_static_gateway`, `coh_wifi_ssid`, and `coh_wifi_psk` into a staged padded DTB under `/chosen/cohesix,*`, and hand that DTB to the elfloader through the U-Boot `uImage`/`bootm` path. Root-task accepts only bounded values and falls back to manifest defaults when the DTB handoff is absent or invalid; the build-time manifest is never rewritten on the SD card.
-- The runtime now routes Pi 4 `wifi` policy through the HAL-backed CYW43455 SDIO path. Explicit `wifi` accepts bounded `static` or `dhcp`; SSIDs are limited to 1-32 printable ASCII bytes, and PSKs are empty for open networks, 8-63 printable ASCII bytes, or exactly 64 ASCII hex digits. `auto` remains DHCP-only and keeps single-active-interface behavior by attempting Wi-Fi first only when bounded credentials are present, then falling back to wired only after an explicit CYW43455 attach/join setup failure before DHCP ownership transfers to the active Wi-Fi stack.
+- The runtime now routes Pi 4 `wifi` policy through the HAL-backed CYW43455 SDIO path. Explicit `wifi` accepts bounded `static` or `dhcp`; SSIDs are limited to 1-32 printable ASCII bytes, and PSKs are empty for open networks, 8-63 printable ASCII bytes, or exactly 64 ASCII hex digits. `auto` remains DHCP-only and single-active-interface: the physical driver-task profile selects CYW43 when bounded credentials are present and GENET otherwise, and a selected CYW43 attach/join/runtime failure is fatal driver evidence rather than an implicit wired fallback. QEMU/host compatibility profiles may retain absent-device fallback coverage for virtual-device tests.
 - Attestation policy is manifest-gated through `hw.attestation.*`:
 - `tpm-only` requires a TPM declaration.
 - `tpm-or-dice` and `dice-only` are encoded deterministically and bound to the manifest fingerprint.

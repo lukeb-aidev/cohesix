@@ -4048,7 +4048,6 @@ REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS = {
     "hdmi-text",
     "genet-nic",
     "cyw43-wifi",
-    "sdio-host",
     "pcie-root",
 }
 
@@ -4326,7 +4325,7 @@ def summarize_driver_task_proofs(
             usb_burst_drops = 0 if drops is None else drops
         if line_has_hdmi_responsiveness(raw, fields):
             hdmi_responsive = True
-    required_roles = {"serial", "usb", "display", "net", "sdio", "pcie"}
+    required_roles = {"serial", "usb", "display", "net", "pcie"}
     owner_state_proof = REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS.issubset(owner_state_hot_paths)
     compatibility_free = not compatibility_contracts and (
         acceptance_compatibility_count in {None, 0}

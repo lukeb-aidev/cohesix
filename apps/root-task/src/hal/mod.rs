@@ -12,6 +12,8 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(feature = "kernel")]
+use core::sync::atomic::AtomicBool;
 use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "kernel")]
 use core::{
@@ -54,8 +56,11 @@ use crate::hal::driver_task::{
     VIRTIO_NET_DRIVER_TASK_CONTRACT,
 };
 #[cfg(feature = "kernel")]
+use crate::rust_alloc::vec::Vec as AllocVec;
+#[cfg(feature = "kernel")]
 use crate::sel4::{
-    self, DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame, VSpaceTableTracker,
+    self, DeviceCoverage, DeviceFrame, KernelEnv, KernelEnvSnapshot, RamFrame, UnmappedRamFrame,
+    VSpaceTableTracker,
 };
 #[cfg(feature = "kernel")]
 use pci::{PciAddress, PciTopology};
@@ -777,6 +782,20 @@ impl<const N: usize> MappedRegisterPages<N> {
         if pages.is_empty() {
             return Err(HalError::Unsupported("empty-register-pages"));
         }
+        if base_paddr & (HAL_PAGE_SIZE - 1) != 0 {
+            return Err(HalError::Unsupported("register-pages-base-unaligned"));
+        }
+        for (index, frame) in pages.iter().enumerate() {
+            let Some(offset) = index.checked_mul(HAL_PAGE_SIZE) else {
+                return Err(HalError::Unsupported("register-pages-offset-overflow"));
+            };
+            let Some(expected_paddr) = base_paddr.checked_add(offset) else {
+                return Err(HalError::Unsupported("register-pages-paddr-overflow"));
+            };
+            if frame.paddr() != expected_paddr {
+                return Err(HalError::Unsupported("register-pages-noncontiguous"));
+            }
+        }
         Ok(Self { base_paddr, pages })
     }
 
@@ -787,7 +806,7 @@ impl<const N: usize> MappedRegisterPages<N> {
         pages
             .push(frame)
             .map_err(|_| HalError::Unsupported("register-page-capacity"))?;
-        Ok(Self { base_paddr, pages })
+        Self::new(base_paddr, pages)
     }
 
     /// Returns the physical base address for the first register page.
@@ -1363,6 +1382,8 @@ const PI4_DRIVER_RUNTIME_GENET_MMIO_BASES: &[usize] = &[0xFD58_0000, 0x7D58_0000
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES: &[usize] = &[0xFE30_0000, 0x7E30_0000];
 #[cfg(feature = "kernel")]
+const PI4_DRIVER_RUNTIME_NO_MMIO_BASES: &[usize] = &[];
+#[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES: &[usize] = &[0xFD50_0000];
 
 #[cfg(feature = "kernel")]
@@ -1373,7 +1394,7 @@ fn runtime_mmio_candidate_bases(hot_path: driver_task::DriverTaskHotPath) -> &'s
         driver_task::DriverTaskHotPath::HdmiText => PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES,
         driver_task::DriverTaskHotPath::GenetNic => PI4_DRIVER_RUNTIME_GENET_MMIO_BASES,
         driver_task::DriverTaskHotPath::Cyw43Wifi => PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES,
-        driver_task::DriverTaskHotPath::SdioHost => PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES,
+        driver_task::DriverTaskHotPath::SdioHost => PI4_DRIVER_RUNTIME_NO_MMIO_BASES,
         driver_task::DriverTaskHotPath::PcieRoot => PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES,
     }
 }
@@ -1932,13 +1953,13 @@ fn finalize_driver_task_bootstrap_report(
     report.pointer_free_ipc_proof =
         report.vspace_proof && report.pointer_free_ipc_count == expected_count;
     let owner_hot_paths_complete = report.owner_state_hot_path_mask
-        & driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
-        == driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
+        & driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
+        == driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK;
     let runtime_images_acceptance_ready = report.runtime_image_acceptance_count
-        == driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATHS
+        == driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATHS
         && report.runtime_image_transport_mapped_hot_path_mask
-            & driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
-            == driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
+            & driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
+            == driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK;
     report.owner_state_proof = report.vspace_proof
         && report.pointer_free_ipc_proof
         && owner_hot_paths_complete
@@ -1967,6 +1988,19 @@ fn driver_affinity_target(contract: DriverTaskContract) -> Option<DriverAffinity
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct KernelWifiDebugHandle {
     hal_ptr: usize,
+}
+
+#[cfg(feature = "kernel")]
+static WIFI_DEBUG_HAL_BORROWED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "kernel")]
+struct KernelWifiDebugBorrow;
+
+#[cfg(feature = "kernel")]
+impl Drop for KernelWifiDebugBorrow {
+    fn drop(&mut self) {
+        WIFI_DEBUG_HAL_BORROWED.store(false, Ordering::Release);
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -2669,11 +2703,14 @@ impl<'a> KernelHal<'a> {
             })
             .unwrap_or(0);
         let mut first_paddr = 0usize;
-        let mut physically_contiguous = true;
-        for page in 0..pages {
-            let vaddr = runtime_region_page_vaddr(region, page)
-                .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?;
-            if dma_owned {
+        if dma_owned {
+            let mut frames: AllocVec<UnmappedRamFrame> = AllocVec::new();
+            frames
+                .try_reserve_exact(pages)
+                .map_err(|_| HalError::Unsupported("driver-runtime-dma-plan-oom"))?;
+            for page in 0..pages {
+                let _ = runtime_region_page_vaddr(region, page)
+                    .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?;
                 let frame = self
                     .env
                     .alloc_unmapped_ram_frame_attr(attr)
@@ -2683,15 +2720,40 @@ impl<'a> KernelHal<'a> {
                     first_paddr = paddr;
                 } else if !runtime_region_paddr_is_contiguous(first_paddr, page, page_bytes, paddr)
                 {
-                    physically_contiguous = false;
+                    return Err(HalError::Unsupported("driver-runtime-dma-noncontiguous"));
                 }
-                self.env
-                    .map_page_cap_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
-                    .map_err(HalError::Sel4)?;
-                if let Some(builder) = init_descriptor.as_deref_mut() {
-                    builder.add_dma_page(paddr)?;
+                frames.push(frame);
+            }
+
+            let mut mapped_frames = 0usize;
+            for (page, frame) in frames.iter().enumerate() {
+                let vaddr = runtime_region_page_vaddr(region, page)
+                    .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?;
+                if let Err(err) = self.env.map_page_cap_into_vspace(
+                    frame.cap(),
+                    vspace,
+                    vaddr,
+                    rights,
+                    attr,
+                    tracker,
+                ) {
+                    for mapped in frames.iter().take(mapped_frames) {
+                        let _ = self.env.unmap_page_cap(mapped.cap());
+                    }
+                    return Err(HalError::Sel4(err));
                 }
-            } else {
+                mapped_frames = mapped_frames.saturating_add(1);
+            }
+
+            if let Some(builder) = init_descriptor.as_deref_mut() {
+                for frame in &frames {
+                    builder.add_dma_page(frame.paddr())?;
+                }
+            }
+        } else {
+            for page in 0..pages {
+                let vaddr = runtime_region_page_vaddr(region, page)
+                    .ok_or(HalError::Unsupported("driver-runtime-buffer-vaddr"))?;
                 let frame = self
                     .env
                     .alloc_dma_frame_attr(attr)
@@ -2707,9 +2769,6 @@ impl<'a> KernelHal<'a> {
                     builder.add_shared_page(paddr)?;
                 }
             }
-        }
-        if dma_owned && !physically_contiguous {
-            return Err(HalError::Unsupported("driver-runtime-dma-noncontiguous"));
         }
         if let Some(builder) = init_descriptor.as_deref_mut() {
             builder.add_buffer_resource_range(
@@ -3235,61 +3294,79 @@ impl KernelWifiDebugHandle {
         }
     }
 
-    #[allow(unsafe_code)]
-    fn hal_mut(&mut self) -> Result<&'static mut KernelHal<'static>, HalError> {
+    fn borrow_hal(&mut self) -> Result<KernelWifiDebugBorrow, HalError> {
         if self.hal_ptr == 0 {
             return Err(HalError::Unsupported("wifi-debug-handle"));
         }
+        WIFI_DEBUG_HAL_BORROWED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map(|_| KernelWifiDebugBorrow)
+            .map_err(|_| HalError::Unsupported("wifi-debug-handle-busy"))
+    }
 
+    #[allow(unsafe_code)]
+    fn with_hal<R>(
+        &mut self,
+        f: impl FnOnce(&mut KernelHal<'static>) -> Result<R, HalError>,
+    ) -> Result<R, HalError> {
+        let _borrow = self.borrow_hal()?;
         // SAFETY: `hal_ptr` is derived from the leaked bootstrap `KernelHal`
-        // and remains valid for the process lifetime. The handle only
-        // materializes a temporary mutable reference while servicing a single
-        // root-console Wi-Fi debug command.
-        Ok(unsafe { &mut *(self.hal_ptr as *mut KernelHal<'static>) })
+        // and remains valid for the process lifetime. `borrow_hal` enforces that
+        // only one Wi-Fi debug turn materializes a mutable HAL reference at a
+        // time; the root event loop remains the owner of when this adapter runs.
+        let hal = unsafe { &mut *(self.hal_ptr as *mut KernelHal<'static>) };
+        f(hal)
     }
 }
 
 #[cfg(feature = "kernel")]
 impl WifiDebugOps for KernelWifiDebugHandle {
     fn dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
-        self.hal_mut()?.pi4_wifi_state()?.debug_dump_state(stage)
+        self.with_hal(|hal| hal.pi4_wifi_state()?.debug_dump_state(stage))
     }
 
     fn firmware_contract_trace(&mut self) -> Option<WifiFirmwareContractTrace> {
-        self.hal_mut()
-            .ok()
-            .and_then(|hal| hal.pi4_wifi_state().ok())
-            .map(|state| state.debug_firmware_contract_trace())
+        self.with_hal(|hal| {
+            hal.pi4_wifi_state()
+                .map(|state| state.debug_firmware_contract_trace())
+        })
+        .ok()
     }
 
     fn sdhci_contract_trace(&mut self) -> Option<WifiSdhciContractTrace> {
-        self.hal_mut()
-            .ok()
-            .and_then(|hal| hal.pi4_wifi_state().ok())
-            .map(|state| state.debug_sdhci_contract_trace())
+        self.with_hal(|hal| {
+            hal.pi4_wifi_state()
+                .map(|state| state.debug_sdhci_contract_trace())
+        })
+        .ok()
     }
 
     fn control_plane_trace(&mut self) -> Option<WifiControlPlaneTrace> {
-        self.hal_mut()
-            .ok()
-            .and_then(|hal| hal.pi4_wifi_state().ok())
-            .map(|state| state.debug_control_plane_trace())
+        self.with_hal(|hal| {
+            hal.pi4_wifi_state()
+                .map(|state| state.debug_control_plane_trace())
+        })
+        .ok()
     }
 
     fn probe_ht_clock(&mut self) -> Result<bool, HalError> {
-        self.hal_mut()?.pi4_wifi_state()?.debug_probe_ht_clock()
+        self.with_hal(|hal| hal.pi4_wifi_state()?.debug_probe_ht_clock())
     }
 
     fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
-        let state = self.hal_mut()?.pi4_wifi_state()?;
-        cyw43::debug_load_firmware_from_transport(state)?;
-        state.debug_dump_state("console-load-fw")
+        self.with_hal(|hal| {
+            let state = hal.pi4_wifi_state()?;
+            cyw43::debug_load_firmware_from_transport(state)?;
+            state.debug_dump_state("console-load-fw")
+        })
     }
 
     fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
-        let state = self.hal_mut()?.pi4_wifi_state()?;
-        cyw43::debug_retry_transport_and_firmware(state)?;
-        state.debug_dump_state("console-retry")
+        self.with_hal(|hal| {
+            let state = hal.pi4_wifi_state()?;
+            cyw43::debug_retry_transport_and_firmware(state)?;
+            state.debug_dump_state("console-retry")
+        })
     }
 }
 
@@ -3528,6 +3605,17 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn pi4_runtime_mmio_candidates_make_cyw43_the_only_sdhci_owner() {
+        let cyw43 =
+            super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::Cyw43Wifi);
+        let sdio =
+            super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::SdioHost);
+        assert_eq!(cyw43, super::PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES);
+        assert!(sdio.is_empty());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn runtime_region_paddr_contiguity_checks_exact_page_stride() {
         assert!(super::runtime_region_paddr_is_contiguous(
             0x4000_0000,
@@ -3540,6 +3628,34 @@ mod tests {
             3,
             0x1000,
             0x4000_4000
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn mapped_register_pages_rejects_noncontiguous_physical_frames() {
+        let mut pages = heapless::Vec::<super::DeviceFrame, 2>::new();
+        assert!(pages
+            .push(super::DeviceFrame::for_test(
+                core::ptr::NonNull::dangling(),
+                0xFE30_0000,
+            ))
+            .is_ok());
+        assert!(pages
+            .push(super::DeviceFrame::for_test(
+                core::ptr::NonNull::dangling(),
+                0xFE30_3000,
+            ))
+            .is_ok());
+
+        let err = match super::MappedRegisterPages::new(0xFE30_0000, pages) {
+            Ok(_) => panic!("noncontiguous page should be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(
+            err,
+            super::HalError::Unsupported("register-pages-noncontiguous")
         ));
     }
 
@@ -3932,7 +4048,7 @@ mod tests {
         assert_eq!(report.runtime_image_transport_mapped_count, 0);
         assert_eq!(
             report.runtime_image_acceptance_count,
-            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATHS
+            super::driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATHS
         );
         assert_eq!(
             report.runtime_image_declared_hot_path_mask,
@@ -3967,11 +4083,12 @@ mod tests {
         assert_eq!(report.runtime_image_transport_mapped_count, 7);
         assert_eq!(
             report.runtime_image_acceptance_count,
-            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATHS
+            super::driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATHS
         );
         assert_eq!(
-            report.runtime_image_transport_mapped_hot_path_mask,
-            super::driver_task::REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK
+            report.runtime_image_transport_mapped_hot_path_mask
+                & super::driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK,
+            super::driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
         );
         assert!(report.vspace_proof);
         assert!(report.pointer_free_ipc_proof);

@@ -1144,9 +1144,8 @@ impl BcmGenetDevice {
     }
 
     fn share_dma_for_device(
-        &self,
-        vaddr: usize,
-        paddr: usize,
+        frame: &RamFrame,
+        offset: usize,
         len: usize,
         label: &'static str,
     ) -> Result<dma::PinnedDmaRange, DriverError> {
@@ -1155,7 +1154,11 @@ impl BcmGenetDevice {
         }
         // Ensure payload writes are not reordered past descriptor publication.
         compiler_fence(Ordering::Release);
-        dma::pin(vaddr, paddr, len, label).map_err(|err| {
+        dma::HalDmaRange::from_frame(frame, offset, len)
+            .and_then(|range| dma::pin(range, label))
+            .map_err(|err| {
+                let vaddr = frame.ptr().as_ptr() as usize;
+                let paddr = frame.paddr();
             warn!(
                 "[bcmgenet] DMA share failed label={label} vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} len={len} err={err:?}"
             );
@@ -1188,9 +1191,8 @@ impl BcmGenetDevice {
     }
 
     fn sync_dma_for_cpu(
-        &self,
-        vaddr: usize,
-        paddr: usize,
+        frame: &RamFrame,
+        offset: usize,
         len: usize,
         label: &'static str,
     ) -> Result<(), DriverError> {
@@ -1198,7 +1200,17 @@ impl BcmGenetDevice {
             return Ok(());
         }
         compiler_fence(Ordering::SeqCst);
-        if let Err(err) = dma::sync_for_cpu(vaddr, paddr, len, label) {
+        let range = dma::HalDmaRange::from_frame(frame, offset, len).map_err(|err| {
+            let vaddr = frame.ptr().as_ptr() as usize;
+            let paddr = frame.paddr();
+            warn!(
+                "[bcmgenet] DMA sync failed label={label} vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} len={len} err={err:?}"
+            );
+            DriverError::QueueInit
+        })?;
+        if let Err(err) = dma::sync_for_cpu(range, label) {
+            let vaddr = frame.ptr().as_ptr() as usize;
+            let paddr = frame.paddr();
             warn!(
                 "[bcmgenet] DMA sync failed label={label} vaddr=0x{vaddr:016x} paddr=0x{paddr:016x} len={len} err={err:?}"
             );
@@ -1213,10 +1225,8 @@ impl BcmGenetDevice {
         let Some(frame) = self.rx_frames.get(slot) else {
             return;
         };
-        let frame_ptr = frame.ptr().as_ptr() as usize;
         let frame_paddr = frame.paddr();
-        let Ok(range) =
-            self.share_dma_for_device(frame_ptr, frame_paddr, RX_BUF_LENGTH, "bcmgenet-rx-rearm")
+        let Ok(range) = Self::share_dma_for_device(frame, 0, RX_BUF_LENGTH, "bcmgenet-rx-rearm")
         else {
             return;
         };
@@ -1266,20 +1276,14 @@ impl BcmGenetDevice {
 
         let slot = ring_slot(self.owner.tx_prod_index, self.tx_ring_len());
         self.unshare_tx_slot(slot);
-        let (frame_ptr, frame_paddr) = {
+        let (range, frame_paddr) = {
             let frame = self.tx_frames.get_mut(slot).ok_or(DriverError::QueueInit)?;
-            let frame_ptr = frame.ptr().as_ptr() as usize;
             let frame_paddr = frame.paddr() as u64;
             let buf = frame.as_mut_slice();
             buf[..packet.len()].copy_from_slice(packet);
-            (frame_ptr, frame_paddr)
+            let range = Self::share_dma_for_device(frame, 0, packet.len(), "bcmgenet-tx-submit")?;
+            (range, frame_paddr)
         };
-        let range = self.share_dma_for_device(
-            frame_ptr,
-            frame_paddr as usize,
-            packet.len(),
-            "bcmgenet-tx-submit",
-        )?;
         let Some(share) = self.tx_dma_shares.get_mut(slot) else {
             Self::unshare_dma_range(range);
             return Err(DriverError::QueueInit);
@@ -1348,16 +1352,7 @@ impl BcmGenetDevice {
             } else {
                 let mut frame = HeaplessVec::<u8, MAX_FRAME_LEN>::new();
                 if let Some(source) = self.rx_frames.get(slot) {
-                    let source_ptr = source.ptr().as_ptr() as usize;
-                    if self
-                        .sync_dma_for_cpu(
-                            source_ptr,
-                            source.paddr(),
-                            length,
-                            "bcmgenet-rx-complete",
-                        )
-                        .is_ok()
-                    {
+                    if Self::sync_dma_for_cpu(source, 0, length, "bcmgenet-rx-complete").is_ok() {
                         let payload_len = length.saturating_sub(RX_BUF_OFFSET).min(MAX_FRAME_LEN);
                         let payload_start = RX_BUF_OFFSET;
                         let payload_end = payload_start.saturating_add(payload_len);

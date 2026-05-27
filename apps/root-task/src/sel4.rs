@@ -3915,6 +3915,13 @@ impl DeviceFrame {
     pub fn paddr(&self) -> usize {
         self.paddr
     }
+
+    /// Builds a bounded dummy device frame for host-side unit tests.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn for_test(ptr: NonNull<u8>, paddr: usize) -> Self {
+        Self { cap: 0, paddr, ptr }
+    }
 }
 
 /// Virtual mapping of DMA-capable RAM used for driver buffers.

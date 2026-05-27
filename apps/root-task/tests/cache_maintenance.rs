@@ -12,6 +12,10 @@ use std::sync::Mutex;
 
 static DMA_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+fn test_dma_range(vaddr: usize, paddr: usize, len: usize) -> dma::HalDmaRange {
+    dma::HalDmaRange::for_test(vaddr, paddr, len).expect("test DMA range")
+}
+
 #[test]
 fn cache_maintenance_helpers_surface_success_and_error_paths() {
     let _guard = DMA_TEST_LOCK.lock().expect("cache test lock");
@@ -41,7 +45,7 @@ fn cache_maintenance_dma_audit_logs_flush_before_share_ready() {
     let _ = dma::take_audit_log();
     set_test_error(None);
 
-    let range = dma::pin(0x2000, 0x4000, 0x80, "test-share").expect("pin");
+    let range = dma::pin(test_dma_range(0x2000, 0x4000, 0x80), "test-share").expect("pin");
     let lines = dma::take_audit_log();
     let clean_idx = lines
         .iter()
@@ -82,7 +86,8 @@ fn cache_maintenance_dma_sync_for_cpu_invalidates_before_ready() {
     let _ = dma::take_audit_log();
     set_test_error(None);
 
-    let _range = dma::sync_for_cpu(0x3000, 0x5000, 0x40, "test-cpu-sync").expect("sync for cpu");
+    let _range = dma::sync_for_cpu(test_dma_range(0x3000, 0x5000, 0x40), "test-cpu-sync")
+        .expect("sync for cpu");
     let lines = dma::take_audit_log();
     let sync_idx = lines
         .iter()
@@ -102,7 +107,7 @@ fn cache_maintenance_dma_sync_for_cpu_invalidates_before_ready() {
     );
 
     set_test_error(Some(seL4_InvalidArgument));
-    let err = dma::sync_for_cpu(0x3000, 0x5000, 0x40, "test-cpu-sync-error")
+    let err = dma::sync_for_cpu(test_dma_range(0x3000, 0x5000, 0x40), "test-cpu-sync-error")
         .expect_err("expected injected cache failure");
     assert_eq!(
         err,
@@ -117,8 +122,11 @@ fn cache_maintenance_dma_sync_for_cpu_can_suppress_hot_poll_audit() {
     let _ = dma::take_audit_log();
     set_test_error(None);
 
-    let range =
-        dma::sync_for_cpu(0x3000, 0x5000, 0x40, "xhci-event-ring-poll-fast").expect("sync for cpu");
+    let range = dma::sync_for_cpu(
+        test_dma_range(0x3000, 0x5000, 0x40),
+        "xhci-event-ring-poll-fast",
+    )
+    .expect("sync for cpu");
     assert_eq!(range.label(), "xhci-event-ring-poll-fast");
 
     let lines = dma::take_audit_log();
@@ -134,15 +142,22 @@ fn cache_maintenance_dma_pin_handles_xhci_audit_profiles() {
     let _ = dma::take_audit_log();
     set_test_error(None);
 
-    let range = dma::pin(0x4000, 0x6000, 0x1000, "xhci-scratchpad-page").expect("scratchpad pin");
+    let range = dma::pin(
+        test_dma_range(0x4000, 0x6000, 0x1000),
+        "xhci-scratchpad-page",
+    )
+    .expect("scratchpad pin");
     assert_eq!(range.label(), "xhci-scratchpad-page");
     assert!(
         dma::take_audit_log().is_empty(),
         "xHCI scratchpad page sharing keeps cache maintenance but suppresses repetitive UART audit lines"
     );
 
-    let range = dma::pin(0x5000, 0x7000, 0x1000, "xhci-cmd-ring-submit-full")
-        .expect("command ring submit pin");
+    let range = dma::pin(
+        test_dma_range(0x5000, 0x7000, 0x1000),
+        "xhci-cmd-ring-submit-full",
+    )
+    .expect("command ring submit pin");
     assert_eq!(range.label(), "xhci-cmd-ring-submit-full");
     let lines = dma::take_audit_log();
     assert!(

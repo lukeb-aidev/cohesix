@@ -415,8 +415,6 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
             "owner_state=driver-owned descriptor=present root_pointer=no",
             "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
             "owner_state=driver-owned descriptor=present root_pointer=no",
-            "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
-            "owner_state=driver-owned descriptor=present root_pointer=no",
             "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
             "owner_state=driver-owned descriptor=present root_pointer=no",
             "DRIVER_TASK role=serial contract=driver-serial isolation=dedicated-sel4-task "
@@ -435,10 +433,10 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
             "live_tcb=yes hot_path=dedicated "
             "active_net=cyw43 capset=network-frame-transport unexpected_caps=0 "
             "fault_probe=pass revoke_ready=yes priority=160 observed_service_us=73",
-            "DRIVER_TASK role=sdio contract=sdio-host isolation=dedicated-sel4-task "
+            "DRIVER_TASK role=net contract=driver-genet isolation=dedicated-sel4-task "
             "live_tcb=yes hot_path=dedicated "
-            "capset=device-only unexpected_caps=0 fault_probe=pass revoke_ready=yes "
-            "priority=180 observed_service_us=47",
+            "capset=network-frame-transport unexpected_caps=0 fault_probe=pass revoke_ready=yes "
+            "priority=160 observed_service_us=69",
             "DRIVER_TASK role=pcie contract=pcie-root isolation=dedicated-sel4-task "
             "live_tcb=yes hot_path=dedicated "
             "capset=device-only unexpected_caps=0 fault_probe=pass revoke_ready=yes "
@@ -467,7 +465,7 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
     assert record["DRIVER_TASK_POINTER_FREE_IPC_PROOF"] == "yes"
     assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
     assert record["DRIVER_TASK_LIVE_HOT_PATHS"] == "yes"
-    assert record["DRIVER_TASK_SDIO_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_SDIO_DEDICATED"] == "no"
     assert record["DRIVER_TASK_PCIE_DEDICATED"] == "yes"
     assert record["DRIVER_TASK_ACTIVE_NET"] == "cyw43"
 

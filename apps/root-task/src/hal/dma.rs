@@ -8,6 +8,8 @@
 #[cfg(feature = "kernel")]
 use crate::bootstrap::log as boot_log;
 use crate::hal::cache::{CacheError, CacheMaintenance};
+#[cfg(feature = "kernel")]
+use crate::sel4::RamFrame;
 
 #[cfg(all(not(target_os = "none"), any(test, not(feature = "kernel"))))]
 use std::{string::String, sync::Mutex, vec::Vec};
@@ -21,8 +23,104 @@ pub enum PinError {
     NullPaddr,
     /// The supplied range length was zero.
     EmptyRange,
+    /// The supplied range overflowed address arithmetic.
+    RangeOverflow,
+    /// The requested subrange is outside the HAL-owned DMA frame set.
+    OutsideHalDmaRange,
+    /// The supplied frame set is not virtually and physically contiguous.
+    NonContiguousFrames,
     /// Cache maintenance failed while preparing the shared range.
     CacheFailure(CacheError),
+}
+
+const DMA_PAGE_BYTES: usize = 4096;
+
+/// HAL-admitted DMA memory span that can be shared with a device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HalDmaRange {
+    vaddr: usize,
+    paddr: usize,
+    len: usize,
+}
+
+impl HalDmaRange {
+    #[cfg(feature = "kernel")]
+    pub(crate) fn from_frame(
+        frame: &RamFrame,
+        offset: usize,
+        len: usize,
+    ) -> Result<Self, PinError> {
+        let end = offset.checked_add(len).ok_or(PinError::RangeOverflow)?;
+        if end > DMA_PAGE_BYTES {
+            return Err(PinError::OutsideHalDmaRange);
+        }
+        let vaddr = (frame.ptr().as_ptr() as usize)
+            .checked_add(offset)
+            .ok_or(PinError::RangeOverflow)?;
+        let paddr = frame
+            .paddr()
+            .checked_add(offset)
+            .ok_or(PinError::RangeOverflow)?;
+        Self::new_checked(vaddr, paddr, len)
+    }
+
+    #[cfg(feature = "kernel")]
+    pub(crate) fn from_contiguous_frames(
+        frames: &[RamFrame],
+        vaddr: usize,
+        len: usize,
+    ) -> Result<Self, PinError> {
+        let Some(first) = frames.first() else {
+            return Err(PinError::OutsideHalDmaRange);
+        };
+        let first_vaddr = first.ptr().as_ptr() as usize;
+        let first_paddr = first.paddr();
+        for (index, frame) in frames.iter().enumerate() {
+            let offset = index
+                .checked_mul(DMA_PAGE_BYTES)
+                .ok_or(PinError::RangeOverflow)?;
+            let expected_vaddr = first_vaddr
+                .checked_add(offset)
+                .ok_or(PinError::RangeOverflow)?;
+            let expected_paddr = first_paddr
+                .checked_add(offset)
+                .ok_or(PinError::RangeOverflow)?;
+            if frame.ptr().as_ptr() as usize != expected_vaddr || frame.paddr() != expected_paddr {
+                return Err(PinError::NonContiguousFrames);
+            }
+        }
+        let range_end = vaddr.checked_add(len).ok_or(PinError::RangeOverflow)?;
+        let backing_len = frames
+            .len()
+            .checked_mul(DMA_PAGE_BYTES)
+            .ok_or(PinError::RangeOverflow)?;
+        let backing_end = first_vaddr
+            .checked_add(backing_len)
+            .ok_or(PinError::RangeOverflow)?;
+        if vaddr < first_vaddr || range_end > backing_end {
+            return Err(PinError::OutsideHalDmaRange);
+        }
+        let offset = vaddr
+            .checked_sub(first_vaddr)
+            .ok_or(PinError::OutsideHalDmaRange)?;
+        let paddr = first_paddr
+            .checked_add(offset)
+            .ok_or(PinError::RangeOverflow)?;
+        Self::new_checked(vaddr, paddr, len)
+    }
+
+    #[cfg(all(
+        not(target_os = "none"),
+        any(test, all(feature = "cache-maintenance", not(feature = "kernel")))
+    ))]
+    pub fn for_test(vaddr: usize, paddr: usize, len: usize) -> Result<Self, PinError> {
+        Self::new_checked(vaddr, paddr, len)
+    }
+
+    fn new_checked(vaddr: usize, paddr: usize, len: usize) -> Result<Self, PinError> {
+        validate_range(vaddr, paddr, len)?;
+        Ok(Self { vaddr, paddr, len })
+    }
 }
 
 /// Describes a DMA-capable memory span shared with a device or host surface.
@@ -148,29 +246,11 @@ pub fn take_audit_log() -> Vec<String> {
 
 /// Validate and record a DMA-capable range.
 #[inline(always)]
-pub fn pin(
-    vaddr: usize,
-    paddr: usize,
-    len: usize,
-    label: &'static str,
-) -> Result<PinnedDmaRange, PinError> {
-    if vaddr == 0 {
-        log_pin_error(label, "null-vaddr");
-        return Err(PinError::NullVaddr);
-    }
-    if paddr == 0 {
-        log_pin_error(label, "null-paddr");
-        return Err(PinError::NullPaddr);
-    }
-    if len == 0 {
-        log_pin_error(label, "empty-range");
-        return Err(PinError::EmptyRange);
-    }
-
+pub fn pin(range: HalDmaRange, label: &'static str) -> Result<PinnedDmaRange, PinError> {
     let range = PinnedDmaRange {
-        vaddr,
-        paddr,
-        len,
+        vaddr: range.vaddr,
+        paddr: range.paddr,
+        len: range.len,
         label,
     };
 
@@ -252,29 +332,11 @@ pub fn pin(
 
 /// Synchronize a DMA-capable range for CPU reads after device writes.
 #[inline(always)]
-pub fn sync_for_cpu(
-    vaddr: usize,
-    paddr: usize,
-    len: usize,
-    label: &'static str,
-) -> Result<PinnedDmaRange, PinError> {
-    if vaddr == 0 {
-        log_pin_error(label, "null-vaddr");
-        return Err(PinError::NullVaddr);
-    }
-    if paddr == 0 {
-        log_pin_error(label, "null-paddr");
-        return Err(PinError::NullPaddr);
-    }
-    if len == 0 {
-        log_pin_error(label, "empty-range");
-        return Err(PinError::EmptyRange);
-    }
-
+pub fn sync_for_cpu(range: HalDmaRange, label: &'static str) -> Result<PinnedDmaRange, PinError> {
     let range = PinnedDmaRange {
-        vaddr,
-        paddr,
-        len,
+        vaddr: range.vaddr,
+        paddr: range.paddr,
+        len: range.len,
         label,
     };
 
@@ -376,6 +438,22 @@ fn log_pin_error(label: &'static str, reason: &str) {
     emit_audit_line(line.as_str());
 }
 
+fn validate_range(vaddr: usize, paddr: usize, len: usize) -> Result<(), PinError> {
+    if vaddr == 0 {
+        return Err(PinError::NullVaddr);
+    }
+    if paddr == 0 {
+        return Err(PinError::NullPaddr);
+    }
+    if len == 0 {
+        return Err(PinError::EmptyRange);
+    }
+    if vaddr.checked_add(len).is_none() || paddr.checked_add(len).is_none() {
+        return Err(PinError::RangeOverflow);
+    }
+    Ok(())
+}
+
 fn emit_cache_line(stage: &str, range: &PinnedDmaRange) {
     let mut line = heapless::String::<192>::new();
     let _ = core::fmt::write(
@@ -408,7 +486,9 @@ fn emit_cache_error(stage: &str, range: &PinnedDmaRange, err: CacheError) {
 
 #[cfg(test)]
 mod tests {
-    use super::{audit_suppressed_for_label, pin, sync_for_cpu, take_audit_log, unpin};
+    use super::{
+        audit_suppressed_for_label, pin, sync_for_cpu, take_audit_log, unpin, HalDmaRange, PinError,
+    };
     use std::sync::Mutex as StdMutex;
 
     static DMA_AUDIT_TEST_LOCK: StdMutex<()> = StdMutex::new(());
@@ -427,6 +507,10 @@ mod tests {
         }
     }
 
+    fn test_range(vaddr: usize, paddr: usize, len: usize) -> HalDmaRange {
+        HalDmaRange::for_test(vaddr, paddr, len).expect("test DMA range")
+    }
+
     #[test]
     fn prompt_safe_event_ring_polling_uses_summary_breadcrumbs_not_dma_spam() {
         assert!(audit_suppressed_for_label("xhci-event-ring-prompt-safe"));
@@ -443,7 +527,8 @@ mod tests {
         let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
         let _ = take_audit_log();
 
-        let range = pin(0x1000, 0x2000, 0x80, "wifi-sdio-audit-order").expect("pin succeeds");
+        let range =
+            pin(test_range(0x1000, 0x2000, 0x80), "wifi-sdio-audit-order").expect("pin succeeds");
 
         assert_eq!(range.vaddr(), 0x1000);
         assert_eq!(range.paddr(), 0x2000);
@@ -456,7 +541,11 @@ mod tests {
         let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
         let _ = take_audit_log();
 
-        let range = pin(0x7000, 0x8000, 0x400, "xhci-cmd-ring-submit-full").expect("pin succeeds");
+        let range = pin(
+            test_range(0x7000, 0x8000, 0x400),
+            "xhci-cmd-ring-submit-full",
+        )
+        .expect("pin succeeds");
 
         assert_eq!(range.len(), 0x400);
         let lines = take_audit_log();
@@ -475,8 +564,8 @@ mod tests {
         let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
         let _ = take_audit_log();
 
-        let range =
-            sync_for_cpu(0x3000, 0x4000, 0x100, "wifi-sdio-cpu-sync").expect("sync succeeds");
+        let range = sync_for_cpu(test_range(0x3000, 0x4000, 0x100), "wifi-sdio-cpu-sync")
+            .expect("sync succeeds");
 
         assert_eq!(range.len(), 0x100);
         let lines = take_audit_log();
@@ -490,7 +579,8 @@ mod tests {
     fn dma_unpin_audit_orders_reclaim_invalidate_and_reclaimed() {
         let _guard = DMA_AUDIT_TEST_LOCK.lock().expect("dma audit test lock");
         let _ = take_audit_log();
-        let range = pin(0x5000, 0x6000, 0x40, "wifi-sdio-reclaim").expect("pin succeeds");
+        let range =
+            pin(test_range(0x5000, 0x6000, 0x40), "wifi-sdio-reclaim").expect("pin succeeds");
         let _ = take_audit_log();
 
         unpin(&range).expect("unpin succeeds");
@@ -499,6 +589,26 @@ mod tests {
         assert_stage_order(
             &lines,
             &["reclaim", "invalidate-after-reclaim", "reclaimed"],
+        );
+    }
+
+    #[test]
+    fn dma_owned_range_rejects_unadmitted_shapes() {
+        assert_eq!(
+            HalDmaRange::for_test(0, 0x2000, 0x40),
+            Err(PinError::NullVaddr)
+        );
+        assert_eq!(
+            HalDmaRange::for_test(0x1000, 0, 0x40),
+            Err(PinError::NullPaddr)
+        );
+        assert_eq!(
+            HalDmaRange::for_test(0x1000, 0x2000, 0),
+            Err(PinError::EmptyRange)
+        );
+        assert_eq!(
+            HalDmaRange::for_test(usize::MAX - 1, 0x2000, 4),
+            Err(PinError::RangeOverflow)
         );
     }
 }

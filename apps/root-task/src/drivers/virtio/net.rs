@@ -10125,7 +10125,8 @@ impl VirtQueue {
             unsafe { NonNull::new_unchecked(frame_ptr.as_ptr().add(base_offset) as *mut u8) };
         let base_vaddr = base_ptr.as_ptr() as usize;
 
-        let dma = match dma::pin(base_vaddr, base_paddr, layout.total_len, "virtq") {
+        let dma_range = dma::HalDmaRange::from_frame(&frame, base_offset, layout.total_len);
+        let dma = match dma_range.and_then(|range| dma::pin(range, "virtq")) {
             Ok(range) => Some(range),
             Err(err) => {
                 warn!(
