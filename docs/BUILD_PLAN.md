@@ -111,6 +111,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
 | [28c](#28c) | Host-Side AI Run Control: Delegated Agents, Durable Context, Attention Budgets | Pending |
+| [28d](#28d) | Hive Gateway MCP + A2A Interop (Existing Grammar Projection) | Pending |
 | [29](#29) | Edge Local Status (Pi 4 Host Tool) | Pending |
 | [29b](#29b) | AI-Native Namespace Surfaces (Control-Plane Only) | Pending |
 | [30](#30) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
@@ -8956,6 +8957,474 @@ After Milestone 28c:
 - Optional NeMo capabilities can be used where they materially improve guardrails, evaluation, deployment, or retrieval workflows, without becoming a second control plane or displacing Cohesix authority.
 - Milestone 29b can expose stable AI namespace roots based on proven host-side semantics rather than speculation.
 
+## Milestone 28d — Hive Gateway MCP + A2A Interop (Existing Grammar Projection) <a id="28d"></a>
+[Milestones](#Milestones)
+
+**Why now (ecosystem boundary):**
+Milestone 28b gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 28c defines the host-side AI/provider model for delegated runs, PEFT/model lifecycle, optional NeMo providers, GPU leases, and evidence receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane or a new VM grammar to satisfy them.
+
+MCP support belongs inside or immediately beside `hive-gateway` because the gateway is already the host-only multiplexer over existing Cohesix file semantics. This milestone makes MCP a client-facing projection over the same `LS`, `CAT`, `TAIL`, and `ECHO` paths, plus the existing `/host/tickets/spec` actuation lane. It is not a new runtime, not an in-VM endpoint, and not an excuse to expose `systemctl`, `docker`, `kubectl`, CUDA, PEFT, or NeMo APIs directly to an agent.
+
+A2A belongs in the same gateway milestone only as a companion agent-delegation facade. MCP answers "what tools/resources can this agent host use?"; A2A answers "what task can one external agent delegate to Cohesix and how is progress/artifact state observed?" Cohesix should support that distinction because 28c already defines durable run/task/checkpoint/evidence records, but A2A must project those records rather than introduce an opaque agent bus.
+
+**As-built alignment note:** There is no MCP server or A2A facade in `hive-gateway` today. Current gateway behavior is REST/OpenAPI over `LS`/`CAT`/`ECHO`, and the host ecosystem already has bounded providers for CUDA/NVIDIA discovery, GPU leases, PEFT, systemd, Docker, and K8s through Cohesix host tools and `/host/tickets/*`. `coh mount --rest-url` already mounts through `hive-gateway` and is the primary FUSE path for the live Cohesix namespace; Milestone 28d must not rebuild that through MCP or A2A. Milestone 28d adds MCP-compatible and A2A-compatible surfaces only after those existing flows are the implementation substrate. Older prose must not claim MCP or A2A support until the gateway exposes lifecycle/discovery/execution/authorization/conformance evidence for the relevant protocol.
+
+**Goal**
+Expose Cohesix to MCP clients through standard MCP server primitives and to A2A peers through task/artifact protocol primitives while preserving Cohesix's existing grammar and authority model:
+1. MCP resources provide bounded read-only context from existing Cohesix paths and evidence artifacts.
+2. MCP tools either read existing files or submit existing host tickets; mutating tools never call host executors directly.
+3. MCP prompts encode safe operational playbooks for CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker workflows without becoming authority.
+4. All writes inherit Milestone 28b delegated ticket, idempotency, writer-epoch, audit/replay, and request-auth rules.
+5. The shared `cohsh-core` console grammar, NineDoor semantics, and generated manifest bounds remain byte-stable.
+6. `coh mount --rest-url` remains the canonical gateway-backed namespace mount; any MCP-backed mount mode is a read-only MCP resource/catalog view for MCP-admitted context, not a replacement write path.
+7. A2A Agent Cards, messages, tasks, artifacts, and streaming updates are projections of 28c run/checkpoint/evidence records and existing host-ticket receipts, not a separate scheduler or agent memory.
+
+**Non-Goals (Explicit)**
+- No in-VM MCP endpoint, MCP listener, MCP filesystem root, or MCP-specific root-task parser.
+- No new console verbs, no new 9P verbs, no ACK/ERR/END grammar changes, and no hidden RPC behind MCP tool names.
+- No direct execution of `systemctl`, `docker`, `kubectl`, CUDA/NVML, PEFT, or NeMo provider APIs from the MCP server. Side effects go through delegated REST and/or `/host/tickets/spec`.
+- No MCP tool that bypasses role-scoped tickets, policy approval, writer-epoch fencing, host-ticket allowlists, or evidence exports.
+- No model-controlled prompt or MCP client metadata is trusted as authorization. Tool descriptions, prompts, and annotations are documentation only.
+- No CUDA/NVML, PEFT, NeMo, Kubernetes, systemd, or Docker code enters the VM TCB.
+- No implicit translation from arbitrary FUSE writes into MCP `tools/call`. Write-capable Cohesix mounts continue to use existing console/REST `ECHO` semantics and the existing append-only control files.
+- No in-VM A2A endpoint, no A2A-specific root-task queue, no A2A peer mesh, no opaque inter-agent mailbox, and no direct A2A-to-provider execution path.
+- No A2A push notification callback is accepted without SSRF-safe URL validation, explicit allowlist policy, per-task auth material, bounded retry policy, and audit evidence.
+
+**Deliverables**
+
+### 1) MCP protocol endpoint and lifecycle in `hive-gateway`
+**Purpose:** Let standard MCP hosts connect to Cohesix without client-specific shims while keeping the gateway's loopback/auth defaults.
+
+Implementation requirements:
+- Add an MCP server mode to `apps/hive-gateway` with:
+  - stdio transport for local MCP hosts that launch the gateway as a subprocess,
+  - Streamable HTTP endpoint for remote-capable MCP clients, sharing the gateway's loopback-only default and non-loopback risk override,
+  - protocol revision and capability negotiation pinned in `docs/HOST_API.md` and generated gateway metadata,
+  - HTTP `MCP-Protocol-Version` handling, optional `Mcp-Session-Id` lifecycle, explicit session termination behavior, and deterministic unsupported-version errors,
+  - `tools`, `resources`, and `prompts` capabilities with paginated discovery where needed,
+  - optional list-change notifications only when the implementation has deterministic change detection.
+- Remote MCP transport must validate `Origin`, require gateway request auth, and require delegated tickets for mutating tools.
+- Stdio mode must read credentials only from environment/config, never from prompts or tool arguments.
+- MCP stdout/stdin must carry only valid MCP JSON-RPC messages; logs go to stderr or the existing gateway log path.
+- Streamable HTTP mode must support the accepted request/response content types, bounded SSE streams when enabled, explicit cancellation handling, and no broadcast of one client's server messages to another client.
+- The gateway must expose enough server metadata for common MCP clients and inspectors to identify the server, protocol revision, tool names, resource URI scheme, and auth requirements.
+
+As-built leverage:
+- Reuse `hive-gateway` broker queues, request-auth checks, loopback binding policy, OpenAPI bounds, and existing `cohsh` REST transport code.
+
+---
+
+### 2) Resource catalog over existing Cohesix paths
+**Purpose:** Give MCP clients context without giving them a new read model.
+
+Implementation requirements:
+- Define `cohesix://` resource URIs that map one-to-one to existing bounded reads:
+  - `/proc/boot`, `/proc/root/*`, `/proc/9p/*`, `/proc/lease/*`, `/proc/schedule/*`, `/proc/spool/*`, `/proc/attest/*`
+  - `/gpu/*`, `/gpu/models/*`, `/gpu/telemetry/schema.json`
+  - `/host/tickets/status`, `/host/tickets/deadletter`, and provider status under `/host/systemd/*`, `/host/docker/*`, and `/host/k8s/*`
+  - evidence-pack and timeline summaries when Milestone 28/28b/28c evidence is available
+  - NeMo capability, guardrail, evaluator, and provider receipt summaries only when the 28c optional provider family is enabled.
+- Resource reads must use only `LS`, `CAT`, or `TAIL` through the existing gateway/session machinery and must enforce manifest-derived path, line, byte, and walk-depth bounds.
+- Resource templates may expose common path families, but template expansion must reject `..`, absolute host filesystem paths, overlong components, and undeclared provider roots.
+- Resource contents must be redacted with the same rules as evidence packs: no raw tickets, auth tokens, provider credentials, or secret refs.
+
+As-built leverage:
+- Reuse `coh evidence pack`, `coh evidence timeline`, generated Cohesix path defaults, and the existing `/host` provider status surfaces.
+
+---
+
+### 3) Tool catalog for real Cohesix operations
+**Purpose:** Support useful MCP automation while preserving the Cohesix write path.
+
+Implementation requirements:
+- Read-only tools:
+  - `cohesix.fs.ls`, `cohesix.fs.cat`, `cohesix.fs.tail`
+  - `cohesix.cuda.inventory` for bounded host CUDA/NVIDIA capability and GPU inventory summaries
+  - `cohesix.evidence.timeline` for bounded evidence/timeline summaries.
+- Mutating or side-effect-capable tools must produce existing Cohesix writes only:
+  - `cohesix.host_ticket.submit` appends a validated `host-ticket/v1` line to `/host/tickets/spec`.
+  - `cohesix.gpu.lease_grant`, `cohesix.gpu.lease_renew`, and `cohesix.gpu.lease_release` map to existing GPU lease actions.
+  - `cohesix.peft.import`, `cohesix.peft.activate`, and `cohesix.peft.rollback` map to existing PEFT ticket/action flows and 28c transaction receipts.
+  - `cohesix.nemo.probe`, `cohesix.nemo.infer`, `cohesix.nemo.guardrails`, and `cohesix.nemo.evaluate` map to 28c optional provider actions or deterministically return unavailable when NeMo is not enabled.
+  - `cohesix.k8s.cordon`, `cohesix.k8s.drain`, and `cohesix.k8s.lease_sync` map to existing K8s host-ticket actions.
+  - `cohesix.systemd.status_check`, `cohesix.systemd.start`, `cohesix.systemd.stop`, and `cohesix.systemd.restart` map to existing systemd host-ticket actions.
+  - `cohesix.docker.status_check`, `cohesix.docker.stop`, and `cohesix.docker.restart` map to existing Docker host-ticket actions.
+- MCP tool schemas and A2A skill schemas must derive from a shared manifest/provider action registry. Provider action names, target selectors, dry-run flags, idempotency keys, and receipt fields must not be hand-maintained separately for the two protocols.
+- Every tool schema must be generated or checked against manifest/provider policy:
+  - bounded string lengths,
+  - explicit enum values for actions and providers,
+  - no free-form shell command field,
+  - id/idempotency-key/writer-epoch requirements for mutating calls,
+  - target path validation using existing Cohesix path rules.
+- Tool results must return structured MCP output plus a text fallback containing the Cohesix receipt id, ticket id, action, target, state path, and evidence refs. They must not expose raw tickets or provider credentials.
+
+As-built leverage:
+- Reuse `host-ticket-agent` executors, `coh peft`, `host-cuda`, generated policy defaults, delegated REST identity, writer-epoch fencing, and evidence/timeline redaction.
+
+---
+
+### 4) Prompt templates for safe operator workflows
+**Purpose:** Provide MCP-native workflows without making prompts authoritative.
+
+Implementation requirements:
+- Add prompt templates that assemble existing tools/resources for common Cohesix tasks:
+  - CUDA capacity triage before a GPU lease,
+  - PEFT import/promotion/rollback review,
+  - NeMo provider readiness and guardrail/evaluator receipt review,
+  - K8s cordon/drain with lease and evidence checks,
+  - systemd service recovery with Docker workload status,
+  - Docker remediation with post-action evidence collection.
+- Prompts must require explicit user approval for side-effecting tools and must name the exact host-ticket action that would be submitted.
+- Prompt text must not embed secrets, tickets, endpoint auth, or unbounded host paths.
+- Prompt outputs are guidance only; only existing Cohesix tickets, receipts, and evidence determine state.
+
+As-built leverage:
+- Reuse Milestone 28 operator utilities, 28b audit/replay/fencing, 28c run envelopes/checkpoints, and existing host-ticket provider receipts.
+
+---
+
+### 5) A2A Agent Card and task facade over existing runs
+**Purpose:** Let external A2A peers delegate bounded Cohesix operational tasks and observe status/artifacts without making A2A a coordination plane.
+
+Implementation requirements:
+- Add an A2A-compatible HTTP facade in `hive-gateway` behind existing gateway request auth, loopback default, non-loopback exposure override, rate limits, and broker backpressure.
+- Record the accepted A2A protocol revision, Agent Card `protocolVersion`, endpoint paths, supported binding, media type, extension policy, unsupported-version errors, and streaming/push support in `docs/HOST_API.md` and generated gateway metadata.
+- Publish an Agent Card from `/.well-known/agent-card.json` when A2A is enabled; alternate generated paths may exist only as additional configured aliases. The card must advertise only enabled Cohesix skills, authentication requirements, endpoint interfaces, and safe capability summaries; it must not expose raw tickets, secrets, host paths, or executor internals.
+- Provide the authenticated extended Agent Card endpoint only when policy enables it, and ensure the extended card obeys stricter access checks than the public discovery card.
+- A2A skills map to the same real-world operational families as MCP tools: CUDA/GPU inventory and leases, PEFT import/activate/rollback, optional NeMo probe/infer/guardrail/evaluator actions, K8s cordon/drain/lease sync, systemd status/start/stop/restart, Docker status/stop/restart, and evidence/timeline inspection.
+- A2A JSON-RPC `message/send` and `message/stream` create or resume 28c run/task envelopes only after fixed skill/action/input schema validation. Free-form natural language is never translated directly into host execution.
+- A2A task query, cancel, resubscribe, push-notification config, and streaming update methods are projections of existing run/checkpoint/evidence records, host-ticket receipt state, and gateway audit state. Cancellation may append a validated Cohesix cancel/control request when one exists; it must not kill provider executors directly.
+- A2A artifacts are bounded, redacted references to evidence packs, timelines, checkpoint summaries, provider receipts, and MCP/Cohesix resource refs. Large files, secrets, raw ticket material, and provider credentials are never embedded in artifacts.
+- A2A push notification configs are disabled by default. If enabled, they require SSRF-safe URL validation, generated allowlists, per-task auth material, bounded retry/backoff, signed or authenticated delivery where configured, and audit evidence for every callback attempt.
+
+As-built leverage:
+- Reuse Milestone 28c run envelopes, checkpoints, provider receipts, evidence exports, `host-ticket-agent` state, gateway request auth, and delegated REST identity.
+
+---
+
+### 6) Security, audit, and confused-deputy controls
+**Purpose:** Keep model-controlled MCP and A2A calls inside Cohesix's existing capability discipline.
+
+Implementation requirements:
+- Mutating MCP tools require:
+  - gateway request auth,
+  - delegated capability ticket with matching path/action scope,
+  - id/idempotency_key,
+  - writer_epoch when the target profile enables fencing,
+  - policy approval where the underlying Cohesix path already requires it.
+- A2A task-creating or task-mutating calls require the same gateway request auth, delegated scope, id/idempotency key, writer epoch, and policy approval as the underlying Cohesix ticket/control action.
+- Gateway audit lines must record protocol (`mcp` or `a2a`), method, tool/resource/prompt/skill/task name, delegated ticket hash, Cohesix path/action, idempotency key, writer epoch, upstream ACK/ERR, task state, and evidence refs.
+- MCP clients cannot supply arbitrary upstream paths for provider-specific mutating tools; provider tools must expand from checked target fields into manifest-allowlisted Cohesix paths/actions.
+- A2A clients cannot supply arbitrary provider targets, host paths, or executor commands through message text or metadata; A2A skill inputs must expand only into manifest-allowlisted Cohesix paths/actions.
+- Tool listing, prompt listing, Agent Cards, and A2A skills are not authorization. Calls fail closed if the current request lacks the required delegated scope.
+- Remote MCP and A2A transports inherit loopback default, non-loopback exposure warning, origin validation, request-auth, rate limits, broker backpressure, and bounded response sizes.
+- MCP and A2A conformance tests must include prompt-injection and confused-deputy negative cases: a resource, prompt, Agent Card, or peer message that asks the model to bypass tickets must not change server-side authorization.
+
+As-built leverage:
+- Reuse REST delegated identity from 28b, host-ticket WAL/replay, evidence redaction, policy rules, and gateway queue/backpressure controls.
+
+---
+
+### 7) Ecosystem conformance and client configuration
+**Purpose:** Make Cohesix usable from standard MCP hosts and A2A peers without custom client forks.
+
+Implementation requirements:
+- Add checked examples for:
+  - local stdio MCP server config,
+  - remote Streamable HTTP MCP endpoint config,
+  - read-only resource browsing,
+  - delegated mutating tool calls with explicit ticket/auth configuration,
+  - A2A Agent Card discovery,
+  - A2A task submission, streaming status, artifact retrieval, and cancellation against mock/dry-run providers.
+- Add checked protocol fixtures/schemas for MCP JSON-RPC messages, A2A HTTP+JSON requests, gateway REST/OpenAPI compatibility, and generated provider action schemas so future client regressions are reviewable as data.
+- Validate with at least one MCP inspector/client conformance path and archive the transcript/output under the milestone evidence directory.
+- Validate with at least one A2A-compatible client/conformance path and archive the transcript/output under the milestone evidence directory.
+- Document how MCP clients should treat Cohesix resources, tools, prompts, approval prompts, and errors.
+- Document how A2A peers should treat Cohesix Agent Cards, skills, task status, artifacts, push notification limits, and errors.
+- Expose deterministic error mapping from Cohesix `ERR` lines and REST gateway errors into MCP errors without losing the original Cohesix reason.
+- Expose deterministic error mapping from Cohesix `ERR` lines, host-ticket refusals, and REST gateway errors into A2A task/error states without losing the original Cohesix reason.
+
+As-built leverage:
+- Reuse `docs/HOST_API.md`, `docs/API_GUIDELINES.md`, `docs/HOST_TOOLS.md`, `resources/openapi/hive-gateway.yaml`, and existing gateway status counters.
+
+---
+
+### 8) `coh mount` interoperability: REST primary, MCP context view optional
+**Purpose:** Keep `coh mount --rest-url` as the direct gateway-backed namespace mount, while adding a useful MCP-facing filesystem view only where MCP resource discovery brings additional value.
+
+Implementation requirements:
+- Preserve the existing `coh mount --rest-url` behavior as the canonical FUSE view over Cohesix namespaces through `hive-gateway`; it remains the path for normal file-shaped reads and append-only writes.
+- Add an optional MCP resource mount mode only if the MCP server exposes a resource/tool/prompt catalog that a local filesystem consumer cannot get from the existing mount without speaking MCP:
+  - `coh mount --mcp-url <endpoint> --read-only --at <path>` mounts MCP-admitted context, not the full Cohesix namespace.
+  - The mounted tree exposes bounded MCP resources, resource templates, tool schemas, prompt templates, and evidence/resource links as files.
+  - Resource file reads call MCP `resources/list`, `resources/templates/list`, and `resources/read`; tool and prompt catalog files are generated from `tools/list`, `prompts/list`, and `prompts/get`.
+  - The tree must make the Cohesix backing path or action explicit for every resource/tool entry so reviewers can trace MCP context back to existing `LS`/`CAT`/`TAIL`/`ECHO` or `/host/tickets/spec` semantics.
+- The MCP mount is read-only by default and in the milestone acceptance path. Writes, renames, chmod, symlink creation, and host filesystem path escapes fail deterministically with no MCP `tools/call`.
+- If a later task proposes write-capable MCP mount nodes, it must be a separate breaking-risk review and may only append a fully validated `host-ticket/v1` line with delegated ticket, idempotency key, writer epoch, policy approval, and local operator confirmation. It must never map arbitrary file writes to arbitrary MCP tools.
+- A2A does not get a FUSE mode in this milestone. A2A task status and artifact links may appear as read-only MCP/evidence files, but task creation remains an A2A HTTP operation or an existing Cohesix ticket/control write.
+- `coh doctor` and mount validation should report whether the REST mount, MCP resource mount, both, or neither are available, and should distinguish FUSE availability from MCP protocol availability.
+- MCP resource mount caches must be bounded, TTL-governed, and invalidated on MCP list-change notifications when enabled; stale cache reads must be marked as stale rather than silently presented as live state.
+
+As-built leverage:
+- Reuse `coh mount` FUSE validators, REST mount exclusivity, `CohAccess` read helpers, gateway MCP resource catalog, and evidence redaction rules.
+
+---
+
+### 9) Operator walkthrough and docs-as-built alignment
+**Purpose:** Keep operator-facing guidance accurate as MCP, A2A, gateway REST, and mount modes become adjacent surfaces.
+
+Implementation requirements:
+- Audit and update `docs/OPERATOR_WALKTHROUGH.md` so the happy path, prerequisites, command ordering, failure handling, and expected evidence match the as-built gateway/MCP/A2A/mount behavior.
+- Audit and update related canonical docs in the same milestone work:
+  - `docs/HOST_API.md` for REST, MCP, and A2A endpoint/auth behavior,
+  - `docs/HOST_TOOLS.md` for `coh mount --rest-url`, optional `coh mount --mcp-url`, `hive-gateway`, A2A Agent Card/task facade, host-ticket-agent, GPU bridge, and sidecar workflows,
+  - `docs/API_GUIDELINES.md` for transport choice and MCP-vs-A2A-vs-REST-vs-filesystem guidance,
+  - `docs/USERLAND_AND_CLI.md` for operator-visible commands and grammar-stability wording,
+  - `docs/INTERFACES.md` for path/action mappings and refusal semantics,
+  - `docs/ARCHITECTURE.md` for host-only MCP/A2A projections and the VM/host boundary,
+  - `docs/SECURITY.md` for delegated ticket, prompt-injection, confused-deputy, redaction, and non-loopback exposure guidance,
+  - `docs/TEST_PLAN.md` for the MCP, A2A, and mount evidence matrix.
+- The audit must start from as-built code and generated truth:
+  - `apps/hive-gateway/src/**`,
+  - `apps/coh/src/mount.rs`,
+  - `apps/coh/src/doctor.rs`,
+  - `apps/host-ticket-agent/src/executors/**`,
+  - `docs/snippets/*`,
+  - generated manifests and `coh-rtc` outputs.
+- Documentation must distinguish:
+  - direct TCP `cohsh` proof,
+  - REST/gateway proof,
+  - gateway-backed `coh mount --rest-url`,
+  - optional read-only MCP resource mount,
+  - MCP tools/prompts that submit Cohesix tickets rather than executing host commands directly,
+  - A2A Agent Card discovery, task submission, streaming status, artifact retrieval, and refusal behavior.
+- Generated snippets and derived docs must be refreshed through `coh-rtc` or their owning generator; hand-editing generated blocks is invalid.
+
+As-built leverage:
+- Reuse 26c docs-as-built audit discipline, existing host-tool docs, generated snippets, and the 28d MCP/A2A conformance evidence.
+
+**Commands**
+- `cargo test -p hive-gateway`
+- `cargo test -p hive-gateway --test mcp_protocol`
+- `cargo test -p hive-gateway --test mcp_resources`
+- `cargo test -p hive-gateway --test mcp_tools`
+- `cargo test -p hive-gateway --test mcp_prompts`
+- `cargo test -p hive-gateway --test mcp_security`
+- `cargo test -p hive-gateway --test gateway_action_registry`
+- `cargo test -p hive-gateway --test a2a_protocol`
+- `cargo test -p hive-gateway --test a2a_tasks`
+- `cargo test -p hive-gateway --test a2a_security`
+- `cargo test -p coh --test mount_mcp`
+- `cargo test -p host-ticket-agent`
+- `cargo test -p coh --test evidence_pack`
+- `cargo test -p coh --test evidence_timeline`
+- `cargo test -p coh-rtc`
+- `git diff --check -- docs/BUILD_PLAN.md docs/OPERATOR_WALKTHROUGH.md docs/HOST_API.md docs/HOST_TOOLS.md docs/API_GUIDELINES.md docs/USERLAND_AND_CLI.md docs/INTERFACES.md docs/ARCHITECTURE.md docs/SECURITY.md docs/TEST_PLAN.md`
+- `scripts/check-generated.sh`
+- `scripts/cohsh/run_regression_batch.sh`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28d-qemu-gateway-agents`
+
+**Checks (Definition of Done)**
+- MCP lifecycle, `MCP-Protocol-Version`, optional `Mcp-Session-Id`, cancellation, `tools/list`, `tools/call`, `resources/list`, `resources/templates/list`, `resources/read`, `prompts/list`, and `prompts/get` pass against the accepted protocol revision recorded in the docs.
+- A2A Agent Card discovery, Agent Card `protocolVersion`, optional authenticated extended Agent Card, JSON-RPC `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`, `tasks/resubscribe`, push-notification config, artifact updates, and streaming updates pass against the accepted protocol revision recorded in the docs.
+- `crates/cohsh-core/fixtures/grammar.sha256` and generated `docs/snippets/cohsh_grammar.md` remain unchanged unless a separately approved breaking grammar milestone changes them.
+- Every MCP read maps to existing `LS`, `CAT`, or `TAIL`; every MCP write maps to existing `ECHO` into a documented Cohesix control file or `/host/tickets/spec`.
+- Every A2A task maps to an existing 28c run/checkpoint/evidence record and, when mutating, an existing Cohesix host-ticket/control action. No A2A message text or metadata becomes authorization.
+- MCP tool schemas and A2A skill schemas are generated from the same provider action registry; parity tests fail if CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, or evidence actions drift between protocols.
+- No MCP tool directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
+- No A2A skill directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
+- CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker scenarios have deterministic mock tests and at least one live-safe dry-run/conformance transcript.
+- Mutating tools and A2A task actions fail without delegated scope and leave no side effects; duplicate mutating calls with the same id/idempotency key do not duplicate side effects.
+- Remote MCP and A2A endpoints validate `Origin`, enforce auth, respect loopback defaults, and return bounded protocol errors under gateway backpressure.
+- Evidence packs and timelines can reconstruct the MCP call or A2A task, delegated ticket hash, underlying Cohesix path/action, provider receipt, and final state without raw secret leakage.
+- Standard MCP clients can discover resources/tools/prompts and call read-only tools without Cohesix-specific patches.
+- Standard A2A clients can discover the Agent Card, submit a dry-run task, observe status/artifacts, and handle refusals without Cohesix-specific patches.
+- Existing `coh mount --rest-url` semantics remain unchanged, including REST mount exclusivity and append-only write behavior.
+- `coh mount --mcp-url` exposes only MCP-admitted resources/tool schemas/prompt templates/evidence links, is read-only in the acceptance path, and never invokes MCP tools during filesystem metadata or write operations.
+- There is no A2A FUSE mode; A2A task/artifact state appears through gateway protocol responses and read-only evidence/resource projections only.
+- MCP-mounted resource contents match the corresponding MCP `resources/read` output and, for Cohesix namespace-backed resources, the corresponding REST/console read within documented bounds.
+- A2A artifacts and push notification attempts are bounded, redacted, policy-gated, and reconstructable from audit/evidence without raw secret leakage.
+- `docs/OPERATOR_WALKTHROUGH.md` and related canonical docs describe the as-built transport, mount, MCP, A2A, host-ticket, provider, and evidence behavior without claiming implemented support before code/tests/generated outputs exist.
+
+**Compiler touchpoints**
+- `coh-rtc` emits `gateway.mcp.*` policy:
+  - enabled transports (`stdio`, `streamable_http`),
+  - accepted MCP protocol revision,
+  - HTTP protocol-version header policy, optional session-id policy, cancellation policy, and SSE enablement/bounds,
+  - endpoint path,
+  - resource URI roots and path allowlists,
+  - tool allowlists and provider action mappings,
+  - prompt template ids,
+  - MCP resource-mount enablement, read-only requirement, cache TTL, and synthetic tree bounds,
+  - per-tool max input/output bytes,
+  - delegated-ticket and writer-epoch requirements,
+  - redaction and evidence-export flags.
+- Manifest validation rejects MCP enablement when Milestone 28b delegated write identity or required audit/replay/fencing prerequisites are disabled for mutating tools.
+- Manifest validation rejects NeMo MCP tools unless the 28c optional NeMo provider family and parity checks are enabled.
+- `coh-rtc` emits a shared `gateway.provider_actions.*` registry for every provider operation exposed through MCP tools or A2A skills, including action ids, target schema refs, dry-run support, idempotency requirements, writer-epoch requirements, receipt schema refs, and evidence-export behavior.
+- Manifest validation rejects any MCP tool or A2A skill whose provider action mapping is absent from the shared registry or whose schema diverges between the two protocol projections.
+- `coh-rtc` emits `gateway.a2a.*` policy:
+  - enabled endpoint/binding,
+  - accepted A2A protocol revision,
+  - Agent Card `protocolVersion` and extension policy,
+  - Agent Card path, provider metadata, skill ids, and interface declarations,
+  - task, artifact, stream, and push-notification bounds,
+  - skill allowlists and provider action mappings,
+  - per-skill max input/output bytes,
+  - delegated-ticket, idempotency, and writer-epoch requirements,
+  - redaction, evidence-export, and callback allowlist flags.
+- Manifest validation rejects A2A enablement when Milestone 28b/28c delegated authority, durable run/task state, audit/replay, evidence export, or fencing prerequisites are disabled for task-creating or task-mutating skills.
+- Manifest validation rejects NeMo A2A skills unless the 28c optional NeMo provider family and parity checks are enabled.
+- Generated docs refresh:
+  - `docs/HOST_API.md`
+  - `docs/API_GUIDELINES.md`
+  - `docs/HOST_TOOLS.md`
+  - `docs/INTERFACES.md`
+  - `docs/ARCHITECTURE.md`
+  - `docs/SECURITY.md`
+  - `docs/TEST_PLAN.md`
+  - `docs/USERLAND_AND_CLI.md`
+- Human-authored as-built docs refreshed in:
+  - `docs/OPERATOR_WALKTHROUGH.md`
+
+**Task Breakdown**
+```
+Title/ID: m28d-mcp-policy-ir
+Goal: Admit MCP gateway policy in compiler IR without changing Cohesix console or NineDoor grammar.
+Inputs: tools/coh-rtc, configs/root_task.toml, docs/HOST_API.md, docs/SECURITY.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — `gateway.mcp.*` schema for transports, endpoint, resource roots, tool allowlists, prompt ids, bounds, and prerequisite gates.
+  - tools/coh-rtc/src/validate.rs — reject mutating MCP tools without delegated identity, audit/replay, and provider action prerequisites.
+  - tools/coh-rtc/src/codegen/* — generated gateway MCP defaults and docs snippets.
+Commands: cargo test -p coh-rtc && scripts/check-generated.sh
+Checks: MCP policy is compiler-owned, profile-gated, and does not touch `cohsh-core` grammar specs.
+Deliverables: Generated MCP gateway policy and validation gates.
+
+Title/ID: m28d-a2a-policy-ir
+Goal: Admit A2A gateway policy in compiler IR without changing Cohesix console or NineDoor grammar.
+Inputs: tools/coh-rtc, configs/root_task.toml, docs/HOST_API.md, docs/SECURITY.md, docs/TEST_PLAN.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — `gateway.a2a.*` schema for endpoint/binding, accepted revision, Agent Card path, skill ids, task/artifact/stream/push bounds, callback allowlists, and prerequisite gates.
+  - tools/coh-rtc/src/validate.rs — reject A2A task-creating or task-mutating skills without 28b delegated authority, 28c durable run/task state, audit/replay, evidence export, and provider action prerequisites.
+  - tools/coh-rtc/src/codegen/* — generated A2A gateway defaults, Agent Card metadata, and docs snippets.
+Commands: cargo test -p coh-rtc && scripts/check-generated.sh
+Checks: A2A policy is compiler-owned, profile-gated, and does not touch `cohsh-core` grammar specs or NineDoor semantics.
+Deliverables: Generated A2A gateway policy, Agent Card metadata, and validation gates.
+
+Title/ID: m28d-provider-action-registry
+Goal: Create the shared provider action registry that keeps MCP tools and A2A skills aligned with existing Cohesix host-ticket semantics.
+Inputs: tools/coh-rtc, apps/hive-gateway, apps/host-ticket-agent, crates/host-cuda, docs/INTERFACES.md, docs/HOST_API.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — `gateway.provider_actions.*` schema for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence actions with target schemas, dry-run capability, idempotency, writer-epoch, receipt, and evidence metadata.
+  - tools/coh-rtc/src/validate.rs — reject MCP/A2A projections that reference undeclared provider actions or drift from shared target/receipt schemas.
+  - apps/hive-gateway/src/actions/registry.rs — generated provider action registry consumed by MCP tools, A2A skills, evidence mapping, and security checks.
+  - apps/hive-gateway/tests/gateway_action_registry.rs — parity fixtures proving MCP and A2A expose the same allowed actions, bounds, receipt refs, and refusal semantics where the same provider operation exists.
+Commands: cargo test -p coh-rtc && cargo test -p hive-gateway --test gateway_action_registry && scripts/check-generated.sh
+Checks: Provider action metadata is generated once, protocol-neutral, and rejects action drift between MCP tools, A2A skills, host-ticket lines, and evidence receipts.
+Deliverables: Shared action registry and parity tests for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence operations.
+
+Title/ID: m28d-gateway-mcp-transport
+Goal: Implement MCP lifecycle and stdio/Streamable HTTP transport in `hive-gateway`.
+Inputs: apps/hive-gateway/src/main.rs, gateway auth/broker code, docs/HOST_API.md.
+Changes:
+  - apps/hive-gateway/src/mcp/protocol.rs — MCP JSON-RPC lifecycle, capability negotiation, pagination, and error mapping.
+  - apps/hive-gateway/src/mcp/transport.rs — stdio and Streamable HTTP endpoint handling with stdout/stderr separation and Origin validation.
+  - apps/hive-gateway/src/main.rs — CLI/env flags for MCP enablement and endpoint selection.
+Commands: cargo test -p hive-gateway --test mcp_protocol
+Checks: Standard lifecycle and discovery requests work over both transports; invalid JSON-RPC, bad Origin, missing auth, and oversize messages fail deterministically.
+Deliverables: MCP-capable gateway process with safe defaults.
+
+Title/ID: m28d-mcp-resource-catalog
+Goal: Expose Cohesix state as MCP resources backed only by bounded existing reads.
+Inputs: apps/hive-gateway, apps/coh/src/evidence.rs, generated path defaults.
+Changes:
+  - apps/hive-gateway/src/mcp/resources.rs — `cohesix://` URI catalog, templates, path validation, and read dispatch through existing `LS`/`CAT`/`TAIL`.
+  - apps/hive-gateway/tests/mcp_resources.rs — resource list/read fixtures for `/proc`, `/gpu`, `/host`, and evidence summaries.
+Commands: cargo test -p hive-gateway --test mcp_resources
+Checks: Resource reads enforce manifest bounds, reject undeclared paths, redact secrets, and match existing REST/console output for canonical fixtures.
+Deliverables: MCP resource catalog that is a faithful read-only projection of Cohesix state.
+
+Title/ID: m28d-mcp-tool-catalog
+Goal: Expose real Cohesix operations as MCP tools without direct host execution.
+Inputs: apps/hive-gateway, apps/host-ticket-agent, apps/coh, crates/host-cuda, docs/INTERFACES.md.
+Changes:
+  - apps/hive-gateway/src/mcp/tools.rs — schema-defined tools for file reads, CUDA/GPU inventory, host-ticket submission, GPU leases, PEFT, NeMo, K8s, systemd, Docker, and evidence summaries.
+  - apps/hive-gateway/src/mcp/tickets.rs — host-ticket line builder with id/idempotency/writer-epoch validation and provider action mapping.
+  - apps/hive-gateway/tests/mcp_tools.rs — success and refusal fixtures for read-only, delegated mutating, duplicate, and unauthorized calls.
+Commands: cargo test -p hive-gateway --test mcp_tools && cargo test -p host-ticket-agent
+Checks: Mutating tools append only validated Cohesix ticket/control lines; provider executors are never called directly by the MCP server.
+Deliverables: Tool catalog covering CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker under existing Cohesix authority.
+
+Title/ID: m28d-mcp-prompts
+Goal: Add MCP prompt templates for safe operational workflows over existing Cohesix tools/resources.
+Inputs: apps/hive-gateway/src/mcp, docs/HOST_TOOLS.md, docs/SECURITY.md.
+Changes:
+  - apps/hive-gateway/src/mcp/prompts.rs — prompt templates for CUDA triage, PEFT promotion, NeMo readiness, K8s drain, systemd recovery, and Docker remediation.
+  - docs/HOST_TOOLS.md — operator guidance for MCP prompt use, approval expectations, and non-authority status.
+Commands: cargo test -p hive-gateway --test mcp_prompts
+Checks: Prompts contain no secrets, name exact Cohesix tools/actions, and require user approval before side-effecting tool calls.
+Deliverables: MCP prompt catalog that improves operator ergonomics without becoming control state.
+
+Title/ID: m28d-a2a-agent-facade
+Goal: Implement A2A Agent Card discovery and task/message/artifact projection over existing Cohesix run and ticket state.
+Inputs: apps/hive-gateway, apps/host-ticket-agent, apps/coh/src/evidence.rs, generated provider action registry, docs/HOST_API.md, docs/API_GUIDELINES.md, accepted A2A protocol revision.
+Changes:
+  - apps/hive-gateway/src/a2a/agent_card.rs — generated Agent Card publication with enabled skills, auth requirements, supported interfaces, and no secret/internal executor data.
+  - apps/hive-gateway/src/a2a/tasks.rs — `message/send`, `message/stream`, `tasks/get`, `tasks/cancel`, `tasks/resubscribe`, push-notification config, status mapping, idempotency, and refusal handling backed by 28c run/checkpoint/evidence records.
+  - apps/hive-gateway/src/a2a/artifacts.rs — bounded redacted artifact references for evidence packs, timelines, checkpoints, provider receipts, and Cohesix resource refs.
+  - apps/hive-gateway/src/a2a/push.rs — disabled-by-default push notification config with allowlist, SSRF validation, per-task auth material, bounded retry, and audit evidence.
+  - apps/hive-gateway/tests/a2a_protocol.rs + apps/hive-gateway/tests/a2a_tasks.rs — Agent Card, message, stream, task, artifact, cancel, push-refusal, duplicate, and unauthorized fixtures.
+Commands: cargo test -p hive-gateway --test a2a_protocol && cargo test -p hive-gateway --test a2a_tasks
+Checks: A2A clients can discover Cohesix skills, submit dry-run tasks, observe status/artifacts, and receive deterministic refusals; no A2A path bypasses Cohesix tickets, run records, gateway auth, or provider allowlists.
+Deliverables: A2A-compatible gateway facade for bounded Cohesix delegation and observation.
+
+Title/ID: m28d-coh-mount-mcp-resource-view
+Goal: Add an optional read-only `coh mount --mcp-url` mode for MCP-admitted resources, schemas, prompts, and evidence links without replacing the existing REST-backed Cohesix namespace mount.
+Inputs: apps/coh/src/mount.rs, apps/coh/src/doctor.rs, apps/hive-gateway/src/mcp/resources.rs, apps/hive-gateway/src/mcp/tools.rs, docs/HOST_TOOLS.md, docs/API_GUIDELINES.md.
+Changes:
+  - apps/coh/src/mount.rs — read-only MCP resource/catalog FUSE adapter with bounded readdir/read, no write-to-tool translation, no symlink/rename/chmod support, and explicit stale-cache markers.
+  - apps/coh/src/main.rs — `coh mount --mcp-url <endpoint> --read-only --at <path>` flags that are mutually exclusive with write-capable REST/console mount modes.
+  - apps/coh/src/doctor.rs — report REST mount availability separately from MCP resource-mount protocol/FUSE availability.
+  - apps/coh/tests/mount_mcp.rs — fixtures for resource reads, tool schema files, prompt template files, cache invalidation, write denial, and parity with MCP `resources/read`.
+  - docs/HOST_TOOLS.md + docs/API_GUIDELINES.md — document when to use REST mount versus MCP resource mount and why MCP mount is read-only by default.
+Commands: cargo test -p coh --test mount_mcp && cargo test -p hive-gateway --test mcp_resources
+Checks: Existing `coh mount --rest-url` behavior is unchanged; MCP mount reads only MCP-admitted context, refuses all filesystem mutations by default, never calls MCP tools from FUSE operations, and traces every mounted file back to a Cohesix path/action or MCP catalog entry.
+Deliverables: Agent- and filesystem-friendly MCP context mount that adds discovery/schema/prompt value without adding a new Cohesix write path.
+
+Title/ID: m28d-operator-docs-as-built-audit
+Goal: Audit and update the Operator Walkthrough plus related canonical docs so gateway, MCP, A2A, mount, provider, and evidence guidance matches the as-built implementation.
+Inputs: docs/OPERATOR_WALKTHROUGH.md, docs/HOST_API.md, docs/HOST_TOOLS.md, docs/API_GUIDELINES.md, docs/USERLAND_AND_CLI.md, docs/INTERFACES.md, docs/ARCHITECTURE.md, docs/SECURITY.md, docs/TEST_PLAN.md, resources/openapi/hive-gateway.yaml, apps/hive-gateway/src/**, apps/coh/src/mount.rs, apps/coh/src/doctor.rs, apps/host-ticket-agent/src/executors/**, docs/snippets/**.
+Changes:
+  - docs/OPERATOR_WALKTHROUGH.md — operator sequence for direct TCP, REST/gateway, `coh mount --rest-url`, MCP resources/tools/prompts, A2A Agent Card/task flow, optional read-only MCP resource mount, evidence capture, and deterministic failure handling.
+  - docs/HOST_API.md + docs/API_GUIDELINES.md — MCP and A2A endpoint/auth/error semantics and transport-choice guidance aligned with the REST gateway contract.
+  - docs/HOST_TOOLS.md + docs/USERLAND_AND_CLI.md — command references and prerequisites for `hive-gateway`, `coh mount`, MCP resource mount, A2A task facade, host-ticket-agent, GPU bridge, sidecar bridge, and grammar-stability constraints.
+  - docs/INTERFACES.md + docs/ARCHITECTURE.md + docs/SECURITY.md + docs/TEST_PLAN.md — as-built path/action/task/artifact mappings, VM/host boundary, delegated ticket/security posture, and evidence matrix.
+  - resources/openapi/hive-gateway.yaml — keep REST/OpenAPI routes aligned with any gateway endpoint additions and document that MCP/A2A are adjacent protocol surfaces, not REST authority replacements.
+Commands: git diff --check -- docs/OPERATOR_WALKTHROUGH.md docs/HOST_API.md docs/HOST_TOOLS.md docs/API_GUIDELINES.md docs/USERLAND_AND_CLI.md docs/INTERFACES.md docs/ARCHITECTURE.md docs/SECURITY.md docs/TEST_PLAN.md && scripts/check-generated.sh
+Checks: Documentation distinguishes direct TCP proof, REST gateway proof, gateway-backed FUSE mount, optional read-only MCP resource mount, MCP ticket-submission tools, and A2A task/artifact/status behavior; no doc claims MCP, A2A, mount, provider, or host-ticket behavior that lacks code/tests/generated evidence.
+Deliverables: Operator-facing documentation that is coherent with as-built 28d behavior and usable for live, mock, and dry-run workflows.
+
+Title/ID: m28d-gateway-agent-security-conformance
+Goal: Prove MCP/A2A ecosystem compatibility and preserve Cohesix security boundaries.
+Inputs: apps/hive-gateway, docs/SECURITY.md, docs/TEST_PLAN.md, accepted MCP protocol revision, accepted A2A protocol revision.
+Changes:
+  - apps/hive-gateway/tests/mcp_security.rs — confused-deputy, prompt-injection, auth, Origin, backpressure, duplicate, and redaction negative tests.
+  - apps/hive-gateway/tests/a2a_security.rs — Agent Card disclosure, message injection, task idempotency, artifact redaction, push callback, cancellation, auth, Origin, and backpressure negative tests.
+  - docs/TEST_PLAN.md — MCP/A2A conformance and security evidence stage.
+  - docs/HOST_API.md + docs/API_GUIDELINES.md — MCP/A2A endpoint, transport, auth, error, and client configuration guidance.
+Commands: cargo test -p hive-gateway --test mcp_security && cargo test -p hive-gateway --test a2a_security && scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28d-qemu-gateway-agents
+Checks: Standard MCP clients and A2A peers can discover and call allowed read-only/dry-run flows; unauthorized, prompt-injected, forged callback, duplicate, or overbroad calls cannot bypass delegated tickets or Cohesix policy.
+Deliverables: Archived MCP/A2A conformance and security evidence.
+```
+
+**Outcome**
+After Milestone 28d:
+- Cohesix can be used from standard MCP-capable agent hosts and A2A-capable peer agents through `hive-gateway`.
+- MCP clients see useful resources, tools, and prompts for CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker operations.
+- A2A peers can discover Cohesix skills, submit bounded dry-run or delegated tasks, observe task status, and retrieve redacted artifacts for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence workflows.
+- All side effects still flow through Cohesix tickets, files, policy, audit, and evidence.
+- The VM grammar, Secure9P semantics, and generated manifest authority remain unchanged.
+
 ## Milestone 29 — Edge Local Status (Pi 4 Host Tool)  <a id="29"></a> 
 [Milestones](#Milestones)
 
@@ -9059,16 +9528,17 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (positioning):**  
-Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28c proves the host-side AI operating model first: delegated agent authority, durable checkpoints/evidence, explicit context budgets, and host-ticket-based actuation. The next strategic step is to make that AI fleet state legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS or creating a second executor.
+Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28c proves the host-side AI operating model first: delegated agent authority, durable checkpoints/evidence, explicit context budgets, and host-ticket-based actuation. Milestone 28d then proves that standard MCP clients and A2A peers can consume those semantics through `hive-gateway` without a new Cohesix grammar. The next strategic step is to make that AI fleet state legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS or creating a second executor.
 
 **Goal**  
 Add a manifest-defined, role-scoped AI control namespace that lets operators and automation inspect and drive AI lifecycle state through existing Secure9P semantics. This milestone is limited to **control-plane surfaces only**: no in-VM application runtime, no general UI stack, no mutable POSIX-like filesystem, and no new transport or RPC model.
 
-**As-built alignment note:** There is no `ecosystem.ai.*` manifest IR and no `/jobs`, `/datasets`, `/experiments`, `/infer`, or `/metrics` AI namespace provider in the host or VM NineDoor implementations as of the 26c planning audit. Milestone 29b adds those roots only after 28b and 28c prove delegated authority, host-ticket AI actions, checkpoints, and evidence semantics.
+**As-built alignment note:** There is no `ecosystem.ai.*` manifest IR and no `/jobs`, `/datasets`, `/experiments`, `/infer`, or `/metrics` AI namespace provider in the host or VM NineDoor implementations as of the 26c planning audit. Milestone 29b adds those roots only after 28b, 28c, and 28d prove delegated authority, host-ticket AI actions, checkpoints/evidence semantics, and MCP/A2A gateway projection without grammar drift.
 
 ### Prerequisites
 - Milestone **28b** completed (delegated REST identity, idempotent queen intents, writer-epoch fencing, audit/replay baseline).
 - Milestone **28c** completed (host-side AI run envelopes, checkpoint/evidence model, and `/host/tickets/spec` AI actuation semantics).
+- Milestone **28d** completed (MCP/A2A gateway projection over existing Cohesix grammar, with no new VM protocol, agent bus, or host-executor bypass).
 
 **Non-Goals**
 - No app runtime, package manager, bundle loader, or process model beyond the existing Queen/worker control model.
