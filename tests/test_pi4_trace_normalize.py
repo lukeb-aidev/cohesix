@@ -330,6 +330,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_AFFINITY_PROOF": "no",
         "DRIVER_TASK_AFFINITY_CONFIGURED": 0,
         "DRIVER_TASK_AFFINITY_APPLIED": 0,
+        "DRIVER_TASK_NOTIFICATION_BIND_DEFERRED": "no",
         "DRIVER_TASK_VSPACE_PROOF": "no",
         "DRIVER_TASK_POINTER_FREE_IPC_PROOF": "no",
         "DRIVER_TASK_OWNER_STATE_PROOF": "no",
@@ -655,6 +656,19 @@ def test_gate_summary_counts_driver_task_budget_overruns() -> None:
     assert record["DRIVER_TASK_CONTRACTS"] == 1
     assert record["DRIVER_TASK_BUDGET_OVERRUNS"] == 1
     assert record["DRIVER_TASK_LATENCY_PROOFS"] == 1
+
+
+def test_gate_summary_tracks_driver_task_notification_bind_deferral() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_NOTIFICATION_BIND_DEFERRED contract=serial tcb=0x05ad "
+            "notification=0x05a8 reason=pi4-early-tcb-notification-bind-boot-stall-guard",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_NOTIFICATION_BIND_DEFERRED"] == "yes"
+    assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
 
 
 def test_gate_summary_tracks_root_console_readiness() -> None:

@@ -1150,6 +1150,11 @@ pub const PI4_DRIVER_TASK_RUNTIME_IMAGE_SPEC_COUNT: usize = 7;
 static DRIVER_RUNTIME_PAYLOAD_PTR: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static DRIVER_RUNTIME_PAYLOAD_LEN: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "kernel")]
+mod embedded_runtime_payload {
+    include!(concat!(env!("OUT_DIR"), "/pi4_driver_runtime_payload.rs"));
+}
 #[cfg(feature = "kernel")]
 static HDMI_RUNTIME_FRAMEBUFFER_PADDR: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
@@ -1212,6 +1217,12 @@ fn driver_runtime_payload() -> Option<&'static [u8]> {
     // the kernel-provided bootinfo extra slice, which is mapped for the root
     // task lifetime. The atomics are write-once during early boot.
     Some(unsafe { core::slice::from_raw_parts(ptr as *const u8, len) })
+}
+
+#[cfg(feature = "kernel")]
+fn embedded_driver_runtime_payload() -> Option<&'static [u8]> {
+    let payload = embedded_runtime_payload::EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD;
+    (!payload.is_empty()).then_some(payload)
 }
 
 #[cfg(feature = "kernel")]
@@ -1295,8 +1306,49 @@ fn cpio_entry_data_with_optional_wrapper<'a>(payload: &'a [u8], name: &str) -> O
 #[cfg(feature = "kernel")]
 pub fn driver_runtime_image_bytes(hot_path: DriverTaskHotPath) -> Option<&'static [u8]> {
     let generated = generated_runtime_image_spec_for_hot_path(hot_path)?;
-    let payload = driver_runtime_payload()?;
-    cpio_entry_data_with_optional_wrapper(payload, generated.artifact)
+    let physical_pi = physical_pi_driver_task_only_owner_state_active();
+    driver_runtime_image_bytes_from_payloads(
+        generated.artifact,
+        if physical_pi {
+            None
+        } else {
+            driver_runtime_payload()
+        },
+        embedded_driver_runtime_payload(),
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_image_bytes_from_payloads<'a>(
+    artifact: &str,
+    bootinfo_payload: Option<&'a [u8]>,
+    embedded_payload: Option<&'a [u8]>,
+) -> Option<&'a [u8]> {
+    driver_runtime_image_bytes_from_payloads_for_profile(
+        artifact,
+        bootinfo_payload,
+        embedded_payload,
+        physical_pi_driver_task_only_owner_state_active(),
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn driver_runtime_image_bytes_from_payloads_for_profile<'a>(
+    artifact: &str,
+    bootinfo_payload: Option<&'a [u8]>,
+    embedded_payload: Option<&'a [u8]>,
+    require_embedded_payload: bool,
+) -> Option<&'a [u8]> {
+    if require_embedded_payload {
+        return embedded_payload
+            .and_then(|payload| cpio_entry_data_with_optional_wrapper(payload, artifact));
+    }
+    if let Some(payload) = bootinfo_payload {
+        if let Some(image) = cpio_entry_data_with_optional_wrapper(payload, artifact) {
+            return Some(image);
+        }
+    }
+    embedded_payload.and_then(|payload| cpio_entry_data_with_optional_wrapper(payload, artifact))
 }
 
 fn generated_runtime_image_spec_for_hot_path(
@@ -2121,18 +2173,34 @@ pub fn run_driver_task_ring_command(
         sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
     }
 
-    let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
     let mut completion = completion_reset;
     let start_ticks = driver_task_counter_ticks();
-    for _ in 0..256 {
-        crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
-        crate::sel4::yield_now();
+
+    if physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs)) {
+        // A blocking call is required on physical Pi builds so lower-priority
+        // driver TCBs receive CPU without relying on cross-priority yield
+        // behavior; the linked runtime replies after publishing the primitive
+        // completion record.
+        let _ = crate::sel4::call_unchecked(
+            endpoint as sel4_sys::seL4_CPtr,
+            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+        );
         // SAFETY: The completion pointer addresses the same validated ring
-        // page; a matching sequence means the isolated trampoline observed the
-        // command through the shared frame.
+        // page; the reply boundary guarantees the isolated runtime had a chance
+        // to publish the shared-frame result.
         completion = unsafe { core::ptr::read_volatile(completion_ptr) };
-        if completion.sequence == request as u32 {
-            break;
+    } else {
+        let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
+        for _ in 0..256 {
+            crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
+            crate::sel4::yield_now();
+            // SAFETY: The completion pointer addresses the same validated ring
+            // page; a matching sequence means the isolated trampoline observed the
+            // command through the shared frame.
+            completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+            if completion.sequence == request as u32 {
+                break;
+            }
         }
     }
 
@@ -4762,6 +4830,104 @@ mod tests {
         );
         assert_eq!(
             cpio_entry_data_with_optional_wrapper(&archive, "cohesix/bin/missing"),
+            None
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn physical_pi_runtime_payload_lookup_requires_embedded_cpio() {
+        fn pad4(bytes: &mut Vec<u8>) {
+            while bytes.len() % 4 != 0 {
+                bytes.push(0);
+            }
+        }
+
+        fn append_entry(bytes: &mut Vec<u8>, name: &str, data: &[u8]) {
+            let namesize = name.len() + 1;
+            let header = format!(
+                "070701{ino:08x}{mode:08x}{uid:08x}{gid:08x}{nlink:08x}{mtime:08x}{filesize:08x}{devmajor:08x}{devminor:08x}{rdevmajor:08x}{rdevminor:08x}{namesize:08x}{check:08x}",
+                ino = 1,
+                mode = 0o100755,
+                uid = 0,
+                gid = 0,
+                nlink = 1,
+                mtime = 0,
+                filesize = data.len(),
+                devmajor = 0,
+                devminor = 0,
+                rdevmajor = 0,
+                rdevminor = 0,
+                namesize = namesize,
+                check = 0,
+            );
+            bytes.extend_from_slice(header.as_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(0);
+            pad4(bytes);
+            bytes.extend_from_slice(data);
+            pad4(bytes);
+        }
+
+        let mut primary = Vec::new();
+        append_entry(
+            &mut primary,
+            "cohesix/bin/pi4-driver-serial",
+            b"serial-runtime-elf",
+        );
+        append_entry(&mut primary, "TRAILER!!!", &[]);
+
+        let mut embedded = Vec::new();
+        append_entry(
+            &mut embedded,
+            "cohesix/bin/pi4-driver-sdio",
+            b"sdio-runtime-elf",
+        );
+        append_entry(&mut embedded, "TRAILER!!!", &[]);
+
+        assert_eq!(
+            driver_runtime_image_bytes_from_payloads_for_profile(
+                "cohesix/bin/pi4-driver-serial",
+                Some(&primary),
+                Some(&embedded),
+                false,
+            ),
+            Some(&b"serial-runtime-elf"[..])
+        );
+        assert_eq!(
+            driver_runtime_image_bytes_from_payloads_for_profile(
+                "cohesix/bin/pi4-driver-sdio",
+                Some(&primary),
+                Some(&embedded),
+                false,
+            ),
+            Some(&b"sdio-runtime-elf"[..])
+        );
+        assert_eq!(
+            driver_runtime_image_bytes_from_payloads_for_profile(
+                "cohesix/bin/pi4-driver-serial",
+                Some(&primary),
+                Some(&embedded),
+                true,
+            ),
+            None
+        );
+        assert_eq!(
+            driver_runtime_image_bytes_from_payloads_for_profile(
+                "cohesix/bin/pi4-driver-sdio",
+                Some(&primary),
+                Some(&embedded),
+                true,
+            ),
+            Some(&b"sdio-runtime-elf"[..])
+        );
+        assert_eq!(
+            driver_runtime_image_bytes_from_payloads_for_profile(
+                "cohesix/bin/pi4-driver-missing",
+                Some(&primary),
+                Some(&embedded),
+                true,
+            ),
             None
         );
     }

@@ -103,6 +103,9 @@ fn main() {
     if let Err(err) = emit_pi4_wifi_firmware() {
         panic!("failed to stage pi4 wifi firmware bundle: {err}");
     }
+    if let Err(err) = emit_pi4_driver_runtime_payload() {
+        panic!("failed to stage pi4 driver runtime payload: {err}");
+    }
 
     println!("cargo:rerun-if-env-changed=SEL4_LD");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
@@ -333,6 +336,79 @@ const PI4_WIFI_KNOWN_CLM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     expected_len: 2_676,
     expected_sha256: "9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1",
 };
+const PI4_DRIVER_RUNTIME_PAYLOAD_ENV: &str = "COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD";
+
+fn emit_pi4_driver_runtime_payload() -> io::Result<()> {
+    println!("cargo:rerun-if-env-changed={PI4_DRIVER_RUNTIME_PAYLOAD_ENV}");
+
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(io::Error::other)?);
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(|parent| parent.parent())
+        .ok_or_else(|| io::Error::other("unable to locate repo root"))?;
+    let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
+    let staged = out_dir.join("pi4_driver_runtime_payload.rs");
+
+    let mut contents = String::from(
+        "// Copyright 2026 Lukas Bower\n\
+// SPDX-License-Identifier: Apache-2.0\n\
+// Purpose: Stage the embedded Pi 4 driver runtime CPIO payload.\n\
+// Author: Lukas Bower\n\n",
+    );
+
+    match env::var(PI4_DRIVER_RUNTIME_PAYLOAD_ENV) {
+        Ok(value) if !value.trim().is_empty() => {
+            let configured = PathBuf::from(value);
+            let payload = if configured.is_absolute() {
+                configured
+            } else {
+                repo_root.join(configured)
+            };
+            validate_pi4_driver_runtime_payload(&payload)?;
+            println!("cargo:rerun-if-changed={}", payload.display());
+            contents.push_str(&format!(
+                "pub(crate) static EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD: &[u8] = include_bytes!(r#\"{}\"#);\n",
+                payload.display(),
+            ));
+        }
+        _ => {
+            contents
+                .push_str("pub(crate) static EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD: &[u8] = &[];\n");
+        }
+    }
+
+    fs::write(staged, contents)?;
+    Ok(())
+}
+
+fn validate_pi4_driver_runtime_payload(path: &Path) -> io::Result<()> {
+    let data = fs::read(path).map_err(|err| {
+        io::Error::other(format!(
+            "failed to read {} from {PI4_DRIVER_RUNTIME_PAYLOAD_ENV}: {err}",
+            path.display()
+        ))
+    })?;
+    if data.is_empty() {
+        return Err(io::Error::other(format!(
+            "{} from {PI4_DRIVER_RUNTIME_PAYLOAD_ENV} is empty",
+            path.display()
+        )));
+    }
+    if !payload_contains_cpio_magic(&data) {
+        return Err(io::Error::other(format!(
+            "{} from {PI4_DRIVER_RUNTIME_PAYLOAD_ENV} does not contain a newc CPIO archive in the first 4096 bytes",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn payload_contains_cpio_magic(data: &[u8]) -> bool {
+    let search_len = data.len().min(4096);
+    data[..search_len]
+        .windows(6)
+        .any(|window| window == b"070701")
+}
 
 fn find_pi4_wifi_firmware(repo_root: &Path) -> Result<Option<Pi4WifiFirmwareSearch>, String> {
     println!("cargo:rerun-if-env-changed={PI4_WIFI_FIRMWARE_DIR_ENV}");

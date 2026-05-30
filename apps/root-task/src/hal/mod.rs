@@ -1982,6 +1982,57 @@ fn driver_affinity_target(contract: DriverTaskContract) -> Option<DriverAffinity
     }
 }
 
+#[cfg(feature = "kernel")]
+fn apply_driver_tcb_affinity_for_boot(
+    contract: DriverTaskContract,
+    tcb: seL4_CPtr,
+) -> Result<Option<u8>, HalError> {
+    let affinity_target =
+        driver_affinity_target(contract).ok_or(HalError::Unsupported("driver-affinity"))?;
+    let affinity_policy = affinity::policy();
+    if driver_task::physical_pi_driver_task_only_owner_state_active() {
+        let mut line = heapless::String::<192>::new();
+        let selected_core = affinity::select_driver_core(&affinity_policy, affinity_target);
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_AFFINITY_DEFERRED contract={} target={} selected_core={} reason=pi4-child-tcb-affinity-boot-stall-guard",
+                contract.name,
+                affinity_target.label(),
+                selected_core.map(i32::from).unwrap_or(-1),
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        return Ok(None);
+    }
+    affinity::apply_driver_tcb_affinity(tcb, affinity_target, &affinity_policy)
+        .map_err(HalError::Affinity)
+}
+
+#[cfg(feature = "kernel")]
+fn bind_driver_tcb_notification_for_boot(
+    contract: DriverTaskContract,
+    tcb: seL4_CPtr,
+    notification: seL4_CPtr,
+) -> Result<bool, HalError> {
+    if driver_task::physical_pi_driver_task_only_owner_state_active() {
+        let mut line = heapless::String::<192>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_NOTIFICATION_BIND_DEFERRED contract={} tcb=0x{:04x} notification=0x{:04x} reason=pi4-early-tcb-notification-bind-boot-stall-guard",
+                contract.name,
+                tcb,
+                notification,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        return Ok(false);
+    }
+    sel4::bind_tcb_notification(tcb, notification).map_err(HalError::Sel4)?;
+    Ok(true)
+}
+
 /// Raw-pointer Wi-Fi debug adapter used by the root console without borrowing
 /// the leaked kernel HAL for the entire runtime.
 #[cfg(feature = "kernel")]
@@ -2398,14 +2449,10 @@ impl<'a> KernelHal<'a> {
         sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, priority)
             .map_err(HalError::Sel4)?;
 
-        let affinity_target =
-            driver_affinity_target(contract).ok_or(HalError::Unsupported("driver-affinity"))?;
-        let affinity_policy = affinity::policy();
-        let affinity_core =
-            affinity::apply_driver_tcb_affinity(tcb, affinity_target, &affinity_policy)
-                .map_err(HalError::Affinity)?;
+        let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
-        sel4::bind_tcb_notification(tcb, notification).map_err(HalError::Sel4)?;
+        let _notification_bound =
+            bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
 
         let stack_top = (stack_frame.ptr().as_ptr() as usize + (1usize << sel4::PAGE_BITS)) & !0xf;
         sel4::write_tcb_registers(
@@ -3015,14 +3062,10 @@ impl<'a> KernelHal<'a> {
         sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, priority)
             .map_err(HalError::Sel4)?;
 
-        let affinity_target =
-            driver_affinity_target(contract).ok_or(HalError::Unsupported("driver-affinity"))?;
-        let affinity_policy = affinity::policy();
-        let affinity_core =
-            affinity::apply_driver_tcb_affinity(tcb, affinity_target, &affinity_policy)
-                .map_err(HalError::Affinity)?;
+        let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
-        sel4::bind_tcb_notification(tcb, notification).map_err(HalError::Sel4)?;
+        let _notification_bound =
+            bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
         sel4::write_tcb_registers(
             tcb,
             runtime_load.entry,

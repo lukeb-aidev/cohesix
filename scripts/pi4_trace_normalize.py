@@ -271,6 +271,7 @@ class GateSummary:
     driver_task_affinity_proof: bool = False
     driver_task_affinity_configured: int = 0
     driver_task_affinity_applied: int = 0
+    driver_task_notification_bind_deferred: bool = False
     driver_task_vspace_proof: bool = False
     driver_task_pointer_free_ipc_proof: bool = False
     driver_task_owner_state_proof: bool = False
@@ -368,6 +369,9 @@ class GateSummary:
             ),
             "DRIVER_TASK_AFFINITY_CONFIGURED": self.driver_task_affinity_configured,
             "DRIVER_TASK_AFFINITY_APPLIED": self.driver_task_affinity_applied,
+            "DRIVER_TASK_NOTIFICATION_BIND_DEFERRED": (
+                "yes" if self.driver_task_notification_bind_deferred else "no"
+            ),
             "DRIVER_TASK_VSPACE_PROOF": (
                 "yes" if self.driver_task_vspace_proof else "no"
             ),
@@ -4530,6 +4534,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_burst_drops,
         hdmi_responsive_proof,
     ) = summarize_driver_task_proofs(event_list)
+    driver_task_notification_bind_deferred = any(
+        "driver_task_notification_bind_deferred" in event.raw.lower()
+        for event in event_list
+    )
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -4579,6 +4587,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_affinity_proof=driver_task_affinity_proof,
         driver_task_affinity_configured=driver_task_affinity_configured,
         driver_task_affinity_applied=driver_task_affinity_applied,
+        driver_task_notification_bind_deferred=driver_task_notification_bind_deferred,
         driver_task_vspace_proof=driver_task_vspace_proof,
         driver_task_pointer_free_ipc_proof=driver_task_pointer_free_ipc_proof,
         driver_task_owner_state_proof=driver_task_owner_state_proof,

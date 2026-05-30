@@ -4973,6 +4973,15 @@ pub fn runtime_main(task_key: usize) -> ! {
                 completion,
             );
         }
+        #[cfg(not(sel4_config_kernel_mcs))]
+        unsafe {
+            // SAFETY: The command was delivered by `seL4_Call` in the physical
+            // Pi profile, so the kernel installed a reply cap for this TCB. The
+            // completion record is already visible in the shared ring before the
+            // reply releases root.
+            sel4_sys::seL4_SetMR(0, completion.result as sel4_sys::seL4_Word);
+            sel4_sys::seL4_Reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1));
+        }
     }
 }
 

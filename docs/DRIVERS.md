@@ -299,9 +299,11 @@ declare `root_task.driver_images` for `serial-console`, `usb-keyboard`,
 `hdmi-text`, `genet-nic`, `cyw43-wifi`, `sdio-host`, and `pcie-root`;
 `coh-rtc` emits those records into `apps/root-task/src/generated`; and
 `scripts/cohesix-build-run.sh` stages linked `pi4-driver-*` runtime image
-binaries, and `scripts/pi4-image-build.sh` packages those images into the Pi 4
-driver-runtime CPIO passed at U-Boot handoff. Those binaries now implement
-fixed command/completion ring service engines for the active Pi 4 hardware
+binaries, and `scripts/pi4-image-build.sh` packages those images into the raw
+driver-runtime CPIO embedded in the Pi 4 root-task image. The U-Boot-staged CPIO
+is audit/packaging evidence only for physical Pi owner-state boots. Those
+binaries now implement fixed command/completion ring service engines for the
+active Pi 4 hardware
 owners, including `sdio-host`, so physical Pi bootstrap debugs linked-image
 hardware turns instead of shared-root service TCBs. The serial image handles bounded mini-UART
 init/RX/TX. HDMI renders to a mapped framebuffer, PCIe services primitive MMIO
@@ -322,10 +324,15 @@ The Pi 4 manifest default pins both network dataplane driver contracts to the
 fourth core (`core=3`): `root_task.affinity.drivers.bcmgenet-v5=3` and
 `root_task.affinity.drivers.cyw43455=3`. `coh-rtc` emits those fields into the
 generated `DRIVER_AFFINITY_POLICY`; HAL maps the `bcmgenet-v5` and `cyw43455`
-contracts to `DriverAffinityTarget::BcmGenetV5` / `DriverAffinityTarget::Cyw43455`
-and calls `seL4_TCB_SetAffinity` before the driver TCB is resumed. A boot may
-claim the fourth-core placement only when the corresponding `DRIVER_TASK_BOOT`
-line reports `affinity_core=3` and the aggregate affinity proof remains applied.
+contracts to `DriverAffinityTarget::BcmGenetV5` / `DriverAffinityTarget::Cyw43455`.
+Profiles where child-TCB affinity is enabled call `seL4_TCB_SetAffinity` before
+the driver TCB is resumed. Physical Pi 4 owner-state boots currently defer
+early child-TCB affinity after the May 30 stall evidence and emit
+`DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard`
+instead. A boot may claim the fourth-core placement only when the corresponding
+`DRIVER_TASK_BOOT` line reports `affinity_core=3` and the aggregate affinity
+proof remains applied; a deferred-affinity line is a placement blocker, not a
+runtime-image or hardware-service success.
 The same Pi 4 manifest now defaults the first boot to DHCP/`auto` networking and
 requires the local-seat path, so a no-saved-policy boot exercises GENET DHCP and
 fails visibly if the HDMI/USB runtime cannot initialize.
@@ -334,8 +341,9 @@ For each successfully created physical Pi driver TCB, the HAL allocates the TCB
 object, child CNode, command endpoint, notification, IPC frame, stack frame,
 ring frame, and fault endpoint slot; installs a restricted child CSpace; binds
 the remote IPC buffer; applies the contract priority; applies
-manifest-selected per-driver affinity through `seL4_TCB_SetAffinity`; binds the
-notification; maps every bounded `PT_LOAD` page from the linked runtime ELF plus
+manifest-selected per-driver affinity through `seL4_TCB_SetAffinity` on enabled
+profiles or emits the physical-Pi deferral marker; binds the notification; maps
+every bounded `PT_LOAD` page from the linked runtime ELF plus
 declared runtime regions; and resumes the TCB. Generated `code-pages=64`
 currently covers the observed ~35 KiB runtime images and the 64 KiB linker
 alignment gaps between RO, RX, and RW load segments. The generated runtime
@@ -353,9 +361,12 @@ counts when the fixed descriptor page arrays are intentionally capped. The
 physical Pi
 linked-runtime entry dispatches only
 fixed-layout command/completion records; callback-pointer dispatch is compiled
-out for that profile. QEMU smoke can additionally allocate isolated VSpaces and
-map the minimal trampoline transport set, but that remains transport proof
-rather than the functional Pi hardware path.
+out for that profile. Physical Pi root submits those ring turns with a blocking
+`seL4_Call`, and the linked runtime replies only after publishing the primitive
+completion record, so lower-priority driver TCBs do not depend on `Yield` for
+service time. QEMU smoke can additionally allocate isolated VSpaces and map the
+minimal trampoline transport set, but that remains transport proof rather than
+the functional Pi hardware path.
 
 Before any linked runtime can accept hardware service, root now stages a
 pointer-free `DriverRuntimeInitDescriptor` from the shared `pi4-driver-abi`
@@ -392,6 +403,13 @@ Boot logs must expose the distinction with these breadcrumbs:
 
 - `DRIVER_TASK_DEFAULT requested=dedicated required=yes substrate_active=<yes|no> live_hot_paths=<yes|no>`
 - `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=<isolated|shared-root> vspace_cap=<cap> code_vaddr=<addr> ring_vaddr=<addr> ipc_abi=<abi> pointer_free_ipc=<yes|no> runtime_image=<transport-mapped|declared-only|none> runtime_declared=<mask> runtime_mapped=<mask> runtime_acceptance=<yes|no> owner_state=<driver-owned|root-owned|not-proven> owner_state_reason=<reason>`
+- `DRIVER_TASK_AFFINITY_DEFERRED contract=<name> target=<target> selected_core=<n> reason=pi4-child-tcb-affinity-boot-stall-guard`
+  on physical Pi owner-state boots while early child-TCB affinity remains
+  guarded; this line intentionally leaves affinity proof red
+- `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED contract=<name> tcb=<cap> notification=<cap> reason=pi4-early-tcb-notification-bind-boot-stall-guard`
+  on physical Pi owner-state boots while the optional early TCB-bound
+  notification syscall remains guarded; endpoint-backed command-ring startup is
+  still allowed, but notification lifecycle proof remains red
 - `DRIVER_TASK_BOOT contract=<name> role=<role> status=failed err=<reason>` for any failed creation path
 - `DRIVER_TASK_BOOT status=skipped reason=qemu-virtio-pre-net-resource-guard`
   for QEMU virtio compatibility boots that preserve pre-network resources for
@@ -430,7 +448,12 @@ requires the expected nine-task count, `failed_count=0`, live TCB count,
 required role mask, per-driver affinity count, zero leaked broad caps, all
 proof booleans demanded by `scripts/pi4_gate_proof.sh --require-driver-task-proof`,
 `DRIVER_TASK_POINTER_FREE_IPC_PROOF=yes`, and
-`DRIVER_TASK_OWNER_STATE_PROOF=yes`. Pointer callbacks into root-task
+`DRIVER_TASK_OWNER_STATE_PROOF=yes`. A physical Pi
+`DRIVER_TASK_AFFINITY_DEFERRED` line is therefore expected to fail fourth-core
+placement closure until child-TCB affinity is re-enabled and reproved. A
+`DRIVER_TASK_NOTIFICATION_BIND_DEFERRED` line similarly blocks notification
+lifecycle closure until the TCB-bound notification setup is re-enabled and
+reproved. Pointer callbacks into root-task
 memory are compatibility evidence only; full VSpace isolation requires a
 pointer-free shared command/completion ABI. The code-level ABI contract is now
 spelled as fixed-layout `DriverTaskCommandRecord` and
@@ -456,7 +479,7 @@ transport turn cannot later be promoted into owner-state proof by accident.
 Runtime-image specs declare the intended per-hot-path mapping contract for code,
 stack, IPC, ring, MMIO, DMA, and shared buffers. Physical Pi 4 bootstrap now
 selects the isolated VSpace constructor; for generated Pi 4 hot paths it looks
-up the linked runtime artifact in the boot payload CPIO, maps the executable
+up the linked runtime artifact in the embedded root-task CPIO, maps the executable
 ELF page plus stack/IPC/ring/MMIO/DMA/shared regions, and starts the fixed-ring
 runtime entry. The mapped pages are not full acceptance by themselves: the specs
 are acceptance-eligible only when the generated manifest says the hardware state

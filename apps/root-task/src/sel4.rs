@@ -1967,6 +1967,19 @@ pub fn write_tcb_registers(
 ) -> Result<(), seL4_Error> {
     let guard_stage = "TCB.WriteRegisters";
     let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let mut breadcrumb = HeaplessString::<128>::new();
+    let _ = fmt::write(
+        &mut breadcrumb,
+        format_args!(
+            "tcb=0x{tcb:04x} entry=0x{entry:016x} sp=0x{sp:016x} arg0=0x{arg0:x} resume={resume}",
+            tcb = guarded_tcb,
+            entry = entry,
+            sp = stack_top,
+            arg0 = arg0,
+            resume = if resume_target { 1 } else { 0 },
+        ),
+    );
+    sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_WriteRegisters", breadcrumb.as_str());
     let regs = sel4_sys::seL4_UserContext {
         pc: entry as seL4_Word,
         sp: stack_top as seL4_Word,
@@ -2050,6 +2063,12 @@ pub fn suspend_tcb(tcb_cap: seL4_CPtr) -> Result<(), seL4_Error> {
 pub fn resume_tcb(tcb_cap: seL4_CPtr) -> Result<(), seL4_Error> {
     let guard_stage = "TCB.Resume";
     let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let mut breadcrumb = HeaplessString::<64>::new();
+    let _ = fmt::write(
+        &mut breadcrumb,
+        format_args!("tcb=0x{tcb:04x}", tcb = guarded_tcb),
+    );
+    sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_Resume", breadcrumb.as_str());
     // SAFETY: The guarded CPtr is a TCB capability; seL4 validates the operation.
     let result = unsafe { sel4_sys::seL4_TCB_Resume(guarded_tcb) };
     if result == seL4_NoError {
@@ -2075,6 +2094,20 @@ pub fn bind_tcb_notification(
     let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
     let guarded_notification =
         sel4_guard::guard_cptr(guard_stage, "notification_cap", notification_cap);
+    let mut breadcrumb = HeaplessString::<96>::new();
+    let _ = fmt::write(
+        &mut breadcrumb,
+        format_args!(
+            "tcb=0x{tcb:04x} notification=0x{notification:04x}",
+            tcb = guarded_tcb,
+            notification = guarded_notification,
+        ),
+    );
+    sel4_guard::uart_breadcrumb(
+        guard_stage,
+        "seL4_TCB_BindNotification",
+        breadcrumb.as_str(),
+    );
     // SAFETY: The guarded CPtrs are kernel capabilities supplied by bootstrap code; seL4
     // validates object types and binding state.
     let result = unsafe { sel4_sys::seL4_TCB_BindNotification(guarded_tcb, guarded_notification) };

@@ -24,6 +24,8 @@ BOOTSTD_LOGO_STAGE_NAME="boot.bmp"
 BRCMFMAC_CMDLINE_STAGE_NAME="brcmfmac-dyndbg.cmdline"
 BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME="brcmfmac-dyndbg.sh"
 DRIVER_RUNTIME_CPIO_STAGE_NAME="cohesix-driver-runtimes.cpio.uimg"
+DRIVER_RUNTIME_EMBED_DIR="${ROOT_DIR}/out/pi4-driver-runtime-embed"
+DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"
@@ -42,6 +44,7 @@ Builds and stages a Pi 4 SD payload with:
   - Raspberry Pi firmware files (start4.elf, fixup4.dat, DTB + overlays)
   - U-Boot (u-boot.bin)
   - seL4 image (upstream output copied as cohesix-image-arm-bcm2711)
+  - Embedded Pi 4 driver-runtime CPIO used by physical driver-task boots
   - Cohesix autoboot script (boot.scr.uimg)
   - Optional Cohesix HDMI logo (cohesix-logo.bmp for U-Boot video)
   - Linux brcmfmac dynamic-debug helpers for known-good Wi-Fi trace capture
@@ -699,19 +702,24 @@ build_pi4_image() {
         fail "unsupported --manifest extension (expected .toml or .json): ${MANIFEST_PATH}"
     fi
 
-    log "Building root-task (${ROOT_TASK_FEATURES})"
-    cargo build \
-      --target aarch64-unknown-none \
-      --release \
-      -p root-task \
-      --no-default-features \
-      --features "$ROOT_TASK_FEATURES"
-
     log "Building Pi4 isolated driver runtime images"
     cargo build \
       --target aarch64-unknown-none \
       --release \
       -p pi4-driver-runtime
+
+    mkdir -p "${DRIVER_RUNTIME_EMBED_DIR}"
+    local embedded_runtime_cpio="${DRIVER_RUNTIME_EMBED_DIR}/${DRIVER_RUNTIME_EMBED_CPIO_NAME}"
+    package_driver_runtime_raw_cpio "${embedded_runtime_cpio}"
+
+    log "Building root-task (${ROOT_TASK_FEATURES})"
+    COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="${embedded_runtime_cpio}" \
+      cargo build \
+        --target aarch64-unknown-none \
+        --release \
+        -p root-task \
+        --no-default-features \
+        --features "$ROOT_TASK_FEATURES"
 
     jobs="$(sysctl -n hw.ncpu)"
     require_file "$root_task_elf"
@@ -926,17 +934,16 @@ EOF
     grep -q 'dynamic_debug/control' "${script_path}" || fail "brcmfmac dynamic debug helper missing debugfs control path"
 }
 
-stage_driver_runtime_payload() {
-    local mkimage_bin="$1"
-    mkdir -p "$STAGE_DIR"
-    local stage_dir_abs
-    stage_dir_abs="$(cd "$STAGE_DIR" && pwd)"
-    local runtime_root="${stage_dir_abs}/driver-runtime-root"
+package_driver_runtime_raw_cpio() {
+    local raw_cpio="$1"
+    local raw_dir
+    raw_dir="$(dirname "$raw_cpio")"
+    local runtime_root="${raw_dir}/driver-runtime-root"
     local runtime_bin="${runtime_root}/cohesix/bin"
-    local raw_cpio="${stage_dir_abs}/cohesix-driver-runtimes.cpio"
     local runtime_artifact_dir="${ROOT_DIR}/target/aarch64-unknown-none/release"
     local bin
 
+    mkdir -p "$raw_dir"
     rm -rf "$runtime_root"
     mkdir -p "$runtime_bin"
     for bin in \
@@ -957,6 +964,18 @@ stage_driver_runtime_payload() {
         cd "$runtime_root"
         find cohesix -print | LC_ALL=C sort | cpio --reproducible -o -H newc > "$raw_cpio"
     )
+    require_file "$raw_cpio"
+    log "Packaged Pi4 driver runtime raw CPIO at ${raw_cpio}"
+}
+
+stage_driver_runtime_payload() {
+    local mkimage_bin="$1"
+    mkdir -p "$STAGE_DIR"
+    local stage_dir_abs
+    stage_dir_abs="$(cd "$STAGE_DIR" && pwd)"
+    local raw_cpio="${stage_dir_abs}/cohesix-driver-runtimes.cpio"
+
+    package_driver_runtime_raw_cpio "$raw_cpio"
     "$mkimage_bin" \
       -A arm64 \
       -T ramdisk \
