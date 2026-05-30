@@ -26,6 +26,7 @@ BRCMFMAC_DYNAMIC_DEBUG_STAGE_NAME="brcmfmac-dyndbg.sh"
 DRIVER_RUNTIME_CPIO_STAGE_NAME="cohesix-driver-runtimes.cpio.uimg"
 DRIVER_RUNTIME_EMBED_DIR="${ROOT_DIR}/out/pi4-driver-runtime-embed"
 DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"
+ROOT_TASK_STRIP_DIR="${ROOT_DIR}/out/pi4-root-task-stripped"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"
@@ -94,6 +95,43 @@ require_file() {
 require_dir() {
     local path="$1"
     [[ -d "$path" ]] || fail "required directory missing: ${path}"
+}
+
+find_aarch64_strip() {
+    local candidate
+    for candidate in \
+        /opt/homebrew/opt/aarch64-elf-binutils/bin/aarch64-elf-strip \
+        /opt/homebrew/bin/aarch64-elf-strip \
+        /opt/homebrew/bin/aarch64-linux-gnu-strip \
+        "$(command -v aarch64-elf-strip 2>/dev/null || true)" \
+        "$(command -v aarch64-linux-gnu-strip 2>/dev/null || true)"; do
+        [[ -n "$candidate" && -x "$candidate" ]] || continue
+        printf '%s\n' "$candidate"
+        return 0
+    done
+    return 1
+}
+
+STRIPPED_ROOT_TASK_ELF=""
+strip_root_task_for_pi_image() {
+    local src="$1"
+    local strip_tool
+    local src_bytes
+    local dst_bytes
+
+    strip_tool="$(find_aarch64_strip || true)"
+    [[ -n "$strip_tool" ]] || fail "aarch64 strip tool not found"
+
+    mkdir -p "$ROOT_TASK_STRIP_DIR"
+    STRIPPED_ROOT_TASK_ELF="${ROOT_TASK_STRIP_DIR}/root-task"
+    cp -f "$src" "$STRIPPED_ROOT_TASK_ELF"
+    "$strip_tool" --strip-all "$STRIPPED_ROOT_TASK_ELF"
+    require_file "$STRIPPED_ROOT_TASK_ELF"
+    [[ -s "$STRIPPED_ROOT_TASK_ELF" ]] || fail "stripped root-task ELF is empty"
+
+    src_bytes="$(stat -f '%z' "$src")"
+    dst_bytes="$(stat -f '%z' "$STRIPPED_ROOT_TASK_ELF")"
+    log "Using stripped root-task ELF: ${STRIPPED_ROOT_TASK_ELF} (${src_bytes} -> ${dst_bytes} bytes)"
 }
 
 verify_u_boot_pi4_target() {
@@ -723,14 +761,15 @@ build_pi4_image() {
 
     jobs="$(sysctl -n hw.ncpu)"
     require_file "$root_task_elf"
-    log "Using root-task ELF: ${root_task_elf}"
+    log "Built root-task ELF: ${root_task_elf}"
+    strip_root_task_for_pi_image "$root_task_elf"
     log "Rebuilding Pi4 seL4 image in ${SEL4_BUILD_DIR}"
     cmake --build "$SEL4_BUILD_DIR" \
       --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
       -j"$jobs"
 
     require_file "$embedded_rootserver"
-    cp -f "$root_task_elf" "$embedded_rootserver"
+    cp -f "$STRIPPED_ROOT_TASK_ELF" "$embedded_rootserver"
     log "Injected root-task into ${embedded_rootserver}"
 
     # Repack the image after injection. The second build should not regenerate
@@ -739,7 +778,7 @@ build_pi4_image() {
       --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
       -j"$jobs"
 
-    root_hash_expected="$(shasum -a 256 "$root_task_elf" | awk '{print $1}')"
+    root_hash_expected="$(shasum -a 256 "$STRIPPED_ROOT_TASK_ELF" | awk '{print $1}')"
     root_hash_actual="$(shasum -a 256 "$embedded_rootserver" | awk '{print $1}')"
     [[ "$root_hash_actual" == "$root_hash_expected" ]] || \
       fail "embedded rootserver was regenerated after root-task injection"

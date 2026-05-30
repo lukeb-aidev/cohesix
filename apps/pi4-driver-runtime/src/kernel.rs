@@ -17,8 +17,8 @@ pub extern "C" fn cohesix_pi4_driver_runtime_entry(task_key: usize) -> ! {
 /// Minimal seL4 binary entrypoint for standalone driver image artifacts.
 #[allow(unsafe_code)]
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
-    cohesix_pi4_driver_runtime_entry(usize::MAX)
+pub extern "C" fn _start(task_key: usize) -> ! {
+    cohesix_pi4_driver_runtime_entry(task_key)
 }
 
 /// Panic handler that traps execution until root revokes the driver task.

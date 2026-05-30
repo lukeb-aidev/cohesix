@@ -28,7 +28,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "599f1e17e143bdda07fd2fe74b42ebdb3fec9c9ad248d835de6e18dbb8bd8608";
+    "b78628153e8636dfe9ee028f39808fa338f1e495cea9d667b7a52a0e81ace583";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -169,7 +169,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         ipc_pages: 1,
         ring_pages: 1,
         mmio_pages: 16,
-        dma_pages: 128,
+        dma_pages: 64,
         shared_buffer_pages: 32,
         root_context_required: false,
         hardware_state_migrated: true,
@@ -184,8 +184,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         stack_pages: 1,
         ipc_pages: 1,
         ring_pages: 1,
-        mmio_pages: 1,
-        dma_pages: 16,
+        mmio_pages: 0,
+        dma_pages: 0,
         shared_buffer_pages: 16,
         root_context_required: false,
         hardware_state_migrated: true,
@@ -201,7 +201,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         ipc_pages: 1,
         ring_pages: 1,
         mmio_pages: 6,
-        dma_pages: 512,
+        dma_pages: 64,
         shared_buffer_pages: 32,
         root_context_required: false,
         hardware_state_migrated: true,
@@ -216,8 +216,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         stack_pages: 1,
         ipc_pages: 1,
         ring_pages: 1,
-        mmio_pages: 1,
-        dma_pages: 128,
+        mmio_pages: 0,
+        dma_pages: 0,
         shared_buffer_pages: 64,
         root_context_required: false,
         hardware_state_migrated: true,
@@ -233,7 +233,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         ipc_pages: 1,
         ring_pages: 1,
         mmio_pages: 1,
-        dma_pages: 64,
+        dma_pages: 0,
         shared_buffer_pages: 32,
         root_context_required: false,
         hardware_state_migrated: true,
@@ -651,7 +651,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 36] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=3b19c14c97f59749a1b5b06dcd90af57e97f79a2c98964fe25fca9c2f41b8b65",
+    "manifest.sha256=ac8a74310d19e0526b0353c754e42ef2e87dde69e3f406132e3ce97dc6b3c745",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

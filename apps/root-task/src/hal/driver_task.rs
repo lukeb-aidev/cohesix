@@ -18,6 +18,7 @@ use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
     DRIVER_RUNTIME_INIT_AUX,
 };
@@ -817,6 +818,11 @@ pub const DRIVER_TASK_CHILD_COMMAND_SLOT: sel4_sys::seL4_CPtr = 2;
 #[cfg(feature = "kernel")]
 pub const DRIVER_TASK_CHILD_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr = 3;
 
+/// Child CSpace slot used by CYW43 to call the SDIO bus-owner runtime.
+#[cfg(feature = "kernel")]
+pub const DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT as sel4_sys::seL4_CPtr;
+
 /// Fixed driver-local virtual address for the root/driver command page.
 pub const DRIVER_TASK_RING_VADDR: usize = 0x7000_0000;
 
@@ -839,6 +845,9 @@ pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7080_0000;
 /// buffers outside the command ring page.
 pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x70c0_0000;
 
+/// Fixed CYW43-local virtual address for the SDIO owner command ring page.
+pub const DRIVER_TASK_SDIO_BUS_RING_VADDR: usize = DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR as usize;
+
 /// Offset of the first fixed-layout completion record within the ring page.
 pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
 
@@ -853,6 +862,8 @@ pub const DRIVER_TASK_OWNER_STATE_OFFSET: usize = 128;
 
 /// Bytes reserved for owner-state descriptors in the ring page.
 pub const DRIVER_TASK_OWNER_STATE_BYTES: usize = 128;
+/// Default primitive metadata bytes reserved for linked-runtime owner proof.
+pub const DRIVER_TASK_OWNER_STATE_METADATA_BYTES: u16 = 16;
 
 /// Owner-state descriptor flag: the hot path runs from a driver-local runtime
 /// image rather than a root-owned callback handler.
@@ -1520,11 +1531,14 @@ pub const DRIVER_TASK_KEY_PCIE_ROOT: usize = 8;
 
 /// Number of built-in driver TCBs expected for full substrate bootstrap.
 pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
+/// Bounded send/yield attempts for the first linked-runtime ring handshake.
+pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 
 #[cfg(feature = "kernel")]
 struct DriverTaskCommandSlot {
     endpoint: AtomicUsize,
     ring_root_ptr: AtomicUsize,
+    ring_frame_cap: AtomicUsize,
     request_seq: AtomicUsize,
     active: AtomicUsize,
     ring_handler: AtomicUsize,
@@ -1562,6 +1576,7 @@ impl DriverTaskCommandSlot {
         Self {
             endpoint: AtomicUsize::new(0),
             ring_root_ptr: AtomicUsize::new(0),
+            ring_frame_cap: AtomicUsize::new(0),
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             ring_handler: AtomicUsize::new(0),
@@ -1820,6 +1835,53 @@ pub fn publish_driver_task_ring(contract: DriverTaskContract, ring_root_ptr: usi
     slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
 }
 
+/// Publish the root CSpace cap for the frame backing a driver command ring.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_ring_frame_cap(contract: DriverTaskContract, ring_frame_cap: usize) {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.ring_frame_cap.store(ring_frame_cap, Ordering::Release);
+}
+
+/// Return the endpoint and ring-frame caps for a linked bus-owner runtime.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_bus_owner_transport_caps(
+    contract: DriverTaskContract,
+) -> Option<(sel4_sys::seL4_CPtr, sel4_sys::seL4_CPtr)> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let endpoint = slot.endpoint.load(Ordering::Acquire);
+    let ring_frame_cap = slot.ring_frame_cap.load(Ordering::Acquire);
+    if endpoint == 0 || ring_frame_cap == 0 {
+        return None;
+    }
+    Some((
+        endpoint as sel4_sys::seL4_CPtr,
+        ring_frame_cap as sel4_sys::seL4_CPtr,
+    ))
+}
+
+/// Clear a partially published driver-task transport after bootstrap failure.
+#[cfg(feature = "kernel")]
+pub fn clear_driver_task_transport(contract: DriverTaskContract) {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.endpoint.store(0, Ordering::Release);
+    slot.ring_root_ptr.store(0, Ordering::Release);
+    slot.ring_frame_cap.store(0, Ordering::Release);
+    slot.active.store(0, Ordering::Release);
+    slot.request_seq.store(0, Ordering::Release);
+}
+
 #[cfg(feature = "kernel")]
 fn register_driver_task_ring_service_with_kind(
     contract: DriverTaskContract,
@@ -1993,8 +2055,26 @@ pub fn register_driver_task_owner_state_descriptor(
     DRIVER_TASK_OWNER_STATE_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
     DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK
         .fetch_or(descriptor.hot_path.owner_state_bit(), Ordering::AcqRel);
+    DRIVER_TASK_SHARED_RING_SERVICE_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
+    DRIVER_TASK_HOT_PATH_ROLE_MASK.fetch_or(role_bit, Ordering::AcqRel);
     refresh_driver_task_owner_state_proof();
     true
+}
+
+/// Register the standard linked-runtime owner-state descriptor after hardware progress.
+#[cfg(feature = "kernel")]
+pub fn register_driver_task_runtime_owner_state(hot_path: DriverTaskHotPath) -> bool {
+    let Some(descriptor) = DriverTaskOwnerStateDescriptor::new(
+        hot_path,
+        DRIVER_TASK_OWNER_STATE_OFFSET as u32,
+        DRIVER_TASK_OWNER_STATE_METADATA_BYTES,
+        DRIVER_TASK_RING_FRAME_OFFSET as u32,
+        MAX_DRIVER_TASK_FRAME_BYTES as u16,
+        DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS,
+    ) else {
+        return false;
+    };
+    register_driver_task_owner_state_descriptor(hot_path.contract(), descriptor)
 }
 
 #[cfg(feature = "kernel")]
@@ -2130,6 +2210,75 @@ pub fn driver_task_ring_frame_bytes(
     })
 }
 
+#[cfg(feature = "kernel")]
+fn emit_driver_task_ring_call_begin(
+    contract: DriverTaskContract,
+    endpoint: usize,
+    request: usize,
+    command: DriverTaskCommandRecord,
+) {
+    use core::fmt::Write;
+    use heapless::String;
+
+    let mut line = String::<256>::new();
+    let _ = write!(
+        line,
+        "DRIVER_TASK_RING_CALL_BEGIN contract={} endpoint=0x{:04x} request={} opcode={} flags=0x{:04x} arg0={} arg1={}",
+        contract.name, endpoint, request, command.opcode, command.flags, command.arg0, command.arg1,
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_ring_call_return(
+    contract: DriverTaskContract,
+    endpoint: usize,
+    request: usize,
+    completion: DriverTaskCompletionRecord,
+) {
+    use core::fmt::Write;
+    use heapless::String;
+
+    let mut line = String::<256>::new();
+    let _ = write!(
+        line,
+        "DRIVER_TASK_RING_CALL_RETURN contract={} endpoint=0x{:04x} request={} sequence={} code={} detail={} result={}",
+        contract.name,
+        endpoint,
+        request,
+        completion.sequence,
+        completion.code,
+        completion.detail,
+        completion.result,
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_ring_call_timeout(
+    contract: DriverTaskContract,
+    endpoint: usize,
+    request: usize,
+) {
+    use core::fmt::Write;
+    use heapless::String;
+
+    let mut line = String::<192>::new();
+    let _ = write!(
+        line,
+        "DRIVER_TASK_RING_CALL_TIMEOUT contract={} endpoint=0x{:04x} request={} attempts={}",
+        contract.name, endpoint, request, DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS,
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DriverTaskRingCommandMode {
+    Steady,
+    Bootstrap,
+}
+
 /// Execute a fixed-layout command over the pointer-free shared-ring ABI.
 ///
 /// This transport is intentionally narrower than the transitional callback
@@ -2139,7 +2288,25 @@ pub fn driver_task_ring_frame_bytes(
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_command(
     contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode(contract, command, DriverTaskRingCommandMode::Steady)
+}
+
+/// Execute the first linked-runtime command without letting root block forever.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_command_bootstrap(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_ring_command_with_mode(
+    contract: DriverTaskContract,
     mut command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
 ) -> Option<DriverTaskCompletionRecord> {
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
@@ -2176,11 +2343,44 @@ pub fn run_driver_task_ring_command(
     let mut completion = completion_reset;
     let start_ticks = driver_task_counter_ticks();
 
-    if physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs)) {
+    if mode == DriverTaskRingCommandMode::Bootstrap
+        && physical_pi_driver_task_only_owner_state_active()
+        && cfg!(not(sel4_config_kernel_mcs))
+    {
+        emit_driver_task_ring_call_begin(contract, endpoint, request, command);
+        // SAFETY: The fixed ABI uses MR0 as the request sequence. The physical
+        // Pi bootstrap path uses a blocking call so the lower-priority runtime
+        // TCB can run and reply before root continues toward userland.
+        unsafe {
+            sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
+        }
+        let _ = crate::sel4::call_unchecked(
+            endpoint as sel4_sys::seL4_CPtr,
+            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+        );
+        // SAFETY: The completion pointer addresses the same validated ring page;
+        // a matching sequence means the linked runtime observed the command and
+        // published a primitive completion record before replying.
+        completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+        if completion.sequence == request as u32 {
+            emit_driver_task_ring_call_return(contract, endpoint, request, completion);
+        }
+        if completion.sequence != request as u32 {
+            emit_driver_task_ring_call_timeout(contract, endpoint, request);
+        }
+    } else if physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs))
+    {
         // A blocking call is required on physical Pi builds so lower-priority
         // driver TCBs receive CPU without relying on cross-priority yield
         // behavior; the linked runtime replies after publishing the primitive
         // completion record.
+        emit_driver_task_ring_call_begin(contract, endpoint, request, command);
+        // SAFETY: The fixed ABI uses MR0 as the request sequence. Re-writing it
+        // immediately before the blocking call keeps diagnostic UART emission
+        // out of the message-register contract.
+        unsafe {
+            sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
+        }
         let _ = crate::sel4::call_unchecked(
             endpoint as sel4_sys::seL4_CPtr,
             sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
@@ -2189,6 +2389,7 @@ pub fn run_driver_task_ring_command(
         // page; the reply boundary guarantees the isolated runtime had a chance
         // to publish the shared-frame result.
         completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+        emit_driver_task_ring_call_return(contract, endpoint, request, completion);
     } else {
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
         for _ in 0..256 {
@@ -2673,6 +2874,17 @@ impl DriverTaskContract {
         self.class.sel4_priority()
     }
 
+    /// seL4 priority used before the child runtime has proved it can receive.
+    #[must_use]
+    pub const fn bootstrap_priority(self, profile: DriverTaskRuntimeProfile) -> u8 {
+        match profile {
+            DriverTaskRuntimeProfile::Pi4Hardware => self.sel4_priority(),
+            DriverTaskRuntimeProfile::QemuCompatibility | DriverTaskRuntimeProfile::HostTest => {
+                self.sel4_priority()
+            }
+        }
+    }
+
     /// Cooperative root-task service order for this contract's class.
     #[must_use]
     pub const fn service_order(self) -> u8 {
@@ -2745,6 +2957,12 @@ impl DriverTaskContract {
                 )
         )
     }
+}
+
+/// seL4 priority used while a newly resumed driver runtime reaches `Recv`.
+#[must_use]
+pub const fn driver_task_bootstrap_priority(contract: DriverTaskContract) -> u8 {
+    contract.bootstrap_priority(CURRENT_DRIVER_TASK_RUNTIME_PROFILE)
 }
 
 /// Contract validation failures.
@@ -3736,14 +3954,14 @@ pub const PCIE_ROOT_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContrac
 /// Built-in hardware contracts that must remain valid before driver service.
 pub const BUILTIN_DRIVER_TASK_CONTRACTS: &[DriverTaskContract] = &[
     SERIAL_DRIVER_TASK_CONTRACT,
+    SDIO_HOST_DRIVER_TASK_CONTRACT,
+    PCIE_ROOT_DRIVER_TASK_CONTRACT,
     USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
     HDMI_TEXT_DRIVER_TASK_CONTRACT,
     GENET_DRIVER_TASK_CONTRACT,
     CYW43_WIFI_DRIVER_TASK_CONTRACT,
     RTL8139_DRIVER_TASK_CONTRACT,
     VIRTIO_NET_DRIVER_TASK_CONTRACT,
-    SDIO_HOST_DRIVER_TASK_CONTRACT,
-    PCIE_ROOT_DRIVER_TASK_CONTRACT,
 ];
 
 /// Snapshot of built-in driver-task isolation mode counts.
@@ -4132,6 +4350,39 @@ mod tests {
         assert!(SDIO_HOST_DRIVER_TASK_CONTRACT.preempts_network_data());
         assert!(!CYW43_WIFI_DRIVER_TASK_CONTRACT.preempts_network_data());
         assert!(!GENET_DRIVER_TASK_CONTRACT.preempts_network_data());
+    }
+
+    #[test]
+    fn pi4_bootstrap_priority_never_preempts_root_before_shell() {
+        assert_eq!(
+            SERIAL_DRIVER_TASK_CONTRACT.bootstrap_priority(DriverTaskRuntimeProfile::Pi4Hardware),
+            SERIAL_DRIVER_TASK_CONTRACT.sel4_priority()
+        );
+        assert_eq!(
+            SERIAL_DRIVER_TASK_CONTRACT
+                .bootstrap_priority(DriverTaskRuntimeProfile::QemuCompatibility),
+            SERIAL_DRIVER_TASK_CONTRACT.sel4_priority()
+        );
+        assert_eq!(
+            SERIAL_DRIVER_TASK_CONTRACT.bootstrap_priority(DriverTaskRuntimeProfile::HostTest),
+            SERIAL_DRIVER_TASK_CONTRACT.sel4_priority()
+        );
+    }
+
+    #[test]
+    fn clear_driver_task_transport_removes_partial_bootstrap_endpoint() {
+        let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
+        publish_driver_task_command_endpoint(contract, 0x1234);
+        publish_driver_task_ring(contract, 0x7000_0000);
+
+        clear_driver_task_transport(contract);
+
+        let task_key = driver_task_contract_key(contract).expect("task key");
+        let slot = slot_for_task_key(task_key).expect("slot");
+        assert_eq!(slot.endpoint.load(Ordering::Acquire), 0);
+        assert_eq!(slot.ring_root_ptr.load(Ordering::Acquire), 0);
+        assert_eq!(slot.active.load(Ordering::Acquire), 0);
+        assert_eq!(slot.request_seq.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -4704,35 +4955,35 @@ mod tests {
                     );
                 }
                 DriverTaskHotPath::UsbKeyboard => {
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 128);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 64);
                     assert_eq!(
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         32
                     );
                 }
                 DriverTaskHotPath::HdmiText => {
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 16);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 0);
                     assert_eq!(
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         16
                     );
                 }
                 DriverTaskHotPath::GenetNic => {
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 512);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 64);
                     assert_eq!(
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         32
                     );
                 }
                 DriverTaskHotPath::Cyw43Wifi => {
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 128);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 0);
                     assert_eq!(
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         64
                     );
                 }
                 DriverTaskHotPath::SdioHost => {
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 64);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 0);
                     assert_eq!(
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         32
@@ -4776,7 +5027,7 @@ mod tests {
         assert_eq!(sdio.hot_path, DriverTaskHotPath::SdioHost);
         assert_eq!(pcie.hot_path, DriverTaskHotPath::PcieRoot);
         assert!(genet.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 6);
-        assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 1);
+        assert_eq!(cyw43.region_pages(DriverTaskRuntimeRegionKind::Mmio), 0);
         assert_eq!(sdio.region_pages(DriverTaskRuntimeRegionKind::Mmio), 1);
         assert!(pcie.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 10);
     }

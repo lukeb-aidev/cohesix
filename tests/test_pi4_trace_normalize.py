@@ -337,6 +337,11 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_ACTIVE_NET": "unknown",
         "DRIVER_TASK_BUDGET_OVERRUNS": 0,
         "DRIVER_TASK_LATENCY_PROOFS": 0,
+        "DRIVER_TASK_RING_CALL_BEGIN": 0,
+        "DRIVER_TASK_RING_CALL_RETURN": 0,
+        "DRIVER_TASK_RING_CALL_OUTSTANDING": 0,
+        "DRIVER_TASK_RING_CALL_TIMEOUT": 0,
+        "DRIVER_TASK_BOOTSTRAP_DEFERRED": 0,
         "SERIAL_RESPONSIVE_PROOF": "no",
         "USB_BURST_PROOF": "no",
         "USB_BURST_DROPS": -1,
@@ -669,6 +674,65 @@ def test_gate_summary_tracks_driver_task_notification_bind_deferral() -> None:
     record = normalizer.summarize_gates(events).to_record()
     assert record["DRIVER_TASK_NOTIFICATION_BIND_DEFERRED"] == "yes"
     assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
+
+
+def test_gate_summary_tracks_driver_task_ring_call_no_reply_frontier() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RING_CALL_BEGIN contract=serial endpoint=0x05ae "
+            "request=1 opcode=1 flags=0x4000 arg0=1 arg1=1",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_RING_CALL_BEGIN"] == 1
+    assert record["DRIVER_TASK_RING_CALL_RETURN"] == 0
+    assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 1
+
+
+def test_gate_summary_tracks_driver_task_ring_call_return() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RING_CALL_BEGIN contract=serial endpoint=0x05ae "
+            "request=1 opcode=1 flags=0x4000 arg0=1 arg1=1",
+            "DRIVER_TASK_RING_CALL_RETURN contract=serial endpoint=0x05ae "
+            "request=1 sequence=1 code=1 detail=0 result=1",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_RING_CALL_BEGIN"] == 1
+    assert record["DRIVER_TASK_RING_CALL_RETURN"] == 1
+    assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 0
+
+
+def test_gate_summary_tracks_driver_task_ring_call_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RING_CALL_BEGIN contract=serial endpoint=0x05ae "
+            "request=1 opcode=1 flags=0x4000 arg0=1 arg1=1",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=serial endpoint=0x05ae "
+            "request=1 attempts=4096",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_RING_CALL_BEGIN"] == 1
+    assert record["DRIVER_TASK_RING_CALL_RETURN"] == 0
+    assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 1
+    assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
+
+
+def test_gate_summary_tracks_driver_task_bootstrap_deferred() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=serial tcb=0x05b1 "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_BOOTSTRAP_DEFERRED"] == 1
 
 
 def test_gate_summary_tracks_root_console_readiness() -> None:

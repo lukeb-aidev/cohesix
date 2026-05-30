@@ -626,6 +626,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn runtime_transport_drops_when_endpoint_missing() {
+        let _guard = LOGGER_STATE_TEST_LOCK.lock();
         LOG_DROPS.store(0, Ordering::Release);
         let mut invoked = false;
         let result = send_frame_with_stub(b"stub", None, &mut |_, _, _| {
@@ -638,6 +639,7 @@ mod tests {
 
     #[test]
     fn runtime_transport_drops_without_panicking_when_not_ready() {
+        let _guard = LOGGER_STATE_TEST_LOCK.lock();
         LOG_DROPS.store(0, Ordering::Release);
         POST_COMMIT_IPC_UNLOCKED.store(true, Ordering::Release);
         sel4::set_ep(0x1234);

@@ -1131,7 +1131,16 @@ fn init_local_seat_driver_runtime_on_service(
                 && completion.result == 1
         });
 
-        if usb_ok && hdmi_ok {
+        let usb_owner = usb_ok
+            && crate::hal::driver_task::register_driver_task_runtime_owner_state(
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+            );
+        let hdmi_owner = hdmi_ok
+            && crate::hal::driver_task::register_driver_task_runtime_owner_state(
+                crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+            );
+
+        if usb_owner && hdmi_owner {
             LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.store(true, Ordering::Release);
             let _ = hints;
             let _ = hal;

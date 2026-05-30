@@ -1265,14 +1265,14 @@ const MAX_KERNEL_DRIVER_TASKS: usize = 9;
 #[cfg(feature = "kernel")]
 const DRIVER_TASK_BOOTSTRAP_CONTRACTS: &[DriverTaskContract] = &[
     SERIAL_DRIVER_TASK_CONTRACT,
+    SDIO_HOST_DRIVER_TASK_CONTRACT,
+    PCIE_ROOT_DRIVER_TASK_CONTRACT,
     USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
     HDMI_TEXT_DRIVER_TASK_CONTRACT,
     GENET_DRIVER_TASK_CONTRACT,
     CYW43_WIFI_DRIVER_TASK_CONTRACT,
     RTL8139_DRIVER_TASK_CONTRACT,
     VIRTIO_NET_DRIVER_TASK_CONTRACT,
-    SDIO_HOST_DRIVER_TASK_CONTRACT,
-    PCIE_ROOT_DRIVER_TASK_CONTRACT,
 ];
 
 #[cfg(feature = "kernel")]
@@ -1376,7 +1376,7 @@ const PI4_DRIVER_RUNTIME_SERIAL_MMIO_BASES: &[usize] = &[uart::PI4_MINI_UART_PAD
 const PI4_DRIVER_RUNTIME_USB_XHCI_MMIO_BASES: &[usize] =
     &[0x0000_0006_0000_0000, 0xFE98_0000, 0x7E98_0000];
 #[cfg(feature = "kernel")]
-const PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES: &[usize] = &[0xFE00_B000, 0x7E00_B000];
+const PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES: &[usize] = &[];
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_GENET_MMIO_BASES: &[usize] = &[0xFD58_0000, 0x7D58_0000, 0xFE58_0000];
 #[cfg(feature = "kernel")]
@@ -1384,7 +1384,7 @@ const PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES: &[usize] = &[0xFE30_0000, 0x7E30_0000]
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_NO_MMIO_BASES: &[usize] = &[];
 #[cfg(feature = "kernel")]
-const PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES: &[usize] = &[0xFD50_0000];
+const PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES: &[usize] = &[0xFD50_0000, 0xFE50_0000, 0x7D50_0000];
 
 #[cfg(feature = "kernel")]
 fn runtime_mmio_candidate_bases(hot_path: driver_task::DriverTaskHotPath) -> &'static [usize] {
@@ -1393,7 +1393,7 @@ fn runtime_mmio_candidate_bases(hot_path: driver_task::DriverTaskHotPath) -> &'s
         driver_task::DriverTaskHotPath::UsbKeyboard => PI4_DRIVER_RUNTIME_USB_XHCI_MMIO_BASES,
         driver_task::DriverTaskHotPath::HdmiText => PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES,
         driver_task::DriverTaskHotPath::GenetNic => PI4_DRIVER_RUNTIME_GENET_MMIO_BASES,
-        driver_task::DriverTaskHotPath::Cyw43Wifi => PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES,
+        driver_task::DriverTaskHotPath::Cyw43Wifi => PI4_DRIVER_RUNTIME_NO_MMIO_BASES,
         driver_task::DriverTaskHotPath::SdioHost => PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES,
         driver_task::DriverTaskHotPath::PcieRoot => PI4_DRIVER_RUNTIME_PCIE_MMIO_BASES,
     }
@@ -1589,16 +1589,19 @@ impl RuntimeInitDescriptorBuilder {
         first_paddr: usize,
         pages: usize,
         first_page_index: u16,
+        paddr_contiguous: bool,
     ) -> Result<(), HalError> {
         let page_count = u16::try_from(pages)
             .map_err(|_| HalError::Unsupported("driver-runtime-init-buffer-range-pages"))?;
         let (tag, flags) = match kind {
-            DRIVER_RUNTIME_RESOURCE_KIND_DMA => (
-                DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-                DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
-                    | DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
-                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
-            ),
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA => {
+                let mut flags = DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS
+                    | DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE;
+                if paddr_contiguous {
+                    flags |= DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS;
+                }
+                (DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, flags)
+            }
             DRIVER_RUNTIME_RESOURCE_KIND_SHARED => (
                 if hot_path == driver_task::DriverTaskHotPath::Cyw43Wifi {
                     DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL
@@ -2033,6 +2036,99 @@ fn bind_driver_tcb_notification_for_boot(
     Ok(true)
 }
 
+#[cfg(feature = "kernel")]
+fn configure_driver_tcb_priority_for_boot(
+    contract: DriverTaskContract,
+    tcb: seL4_CPtr,
+) -> Result<(u8, u8), HalError> {
+    let steady_priority = contract.sel4_priority();
+    let bootstrap_priority = driver_task::driver_task_bootstrap_priority(contract);
+    sel4::set_tcb_sched_params(
+        tcb,
+        sel4_sys::seL4_CapInitThreadTCB,
+        bootstrap_priority,
+        bootstrap_priority,
+    )
+    .map_err(HalError::Sel4)?;
+    sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, bootstrap_priority)
+        .map_err(HalError::Sel4)?;
+
+    let mut line = heapless::String::<192>::new();
+    let _ = fmt::write(
+        &mut line,
+        format_args!(
+            "DRIVER_TASK_START_PRIORITY contract={} tcb=0x{:04x} bootstrap={} steady={}",
+            contract.name, tcb, bootstrap_priority, steady_priority,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+    Ok((bootstrap_priority, steady_priority))
+}
+
+#[cfg(feature = "kernel")]
+fn restore_driver_tcb_steady_priority(
+    contract: DriverTaskContract,
+    tcb: seL4_CPtr,
+    bootstrap_priority: u8,
+    steady_priority: u8,
+) -> Result<(), HalError> {
+    if bootstrap_priority == steady_priority {
+        return Ok(());
+    }
+    sel4::set_tcb_sched_params(
+        tcb,
+        sel4_sys::seL4_CapInitThreadTCB,
+        steady_priority,
+        steady_priority,
+    )
+    .map_err(HalError::Sel4)?;
+    sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, steady_priority)
+        .map_err(HalError::Sel4)?;
+
+    let mut line = heapless::String::<192>::new();
+    let _ = fmt::write(
+        &mut line,
+        format_args!(
+            "DRIVER_TASK_STEADY_PRIORITY contract={} tcb=0x{:04x} priority={}",
+            contract.name, tcb, steady_priority,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+    Ok(())
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_tcb_resume_return(contract: DriverTaskContract, tcb: seL4_CPtr, mode: &str) {
+    let mut line = heapless::String::<192>::new();
+    let _ = fmt::write(
+        &mut line,
+        format_args!(
+            "DRIVER_TASK_RESUME_RETURN contract={} tcb=0x{:04x} mode={}",
+            contract.name, tcb, mode,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_bootstrap_deferred(
+    contract: DriverTaskContract,
+    tcb: seL4_CPtr,
+    runtime_descriptor_staged: bool,
+) {
+    let mut line = heapless::String::<224>::new();
+    let _ = fmt::write(
+        &mut line,
+        format_args!(
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract={} tcb=0x{:04x} runtime_descriptor={} reason=root-shell-before-first-service-proof",
+            contract.name,
+            tcb,
+            if runtime_descriptor_staged { "yes" } else { "no" },
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
 /// Raw-pointer Wi-Fi debug adapter used by the root console without borrowing
 /// the leaked kernel HAL for the entire runtime.
 #[cfg(feature = "kernel")]
@@ -2180,6 +2276,7 @@ impl<'a> KernelHal<'a> {
                     crate::bootstrap::log::force_uart_line(line.as_str());
                 }
                 Err(err) => {
+                    driver_task::clear_driver_task_transport(*contract);
                     report.failed_count = report.failed_count.saturating_add(1);
                     let mut line = heapless::String::<192>::new();
                     let _ = fmt::write(
@@ -2316,6 +2413,7 @@ impl<'a> KernelHal<'a> {
                     crate::bootstrap::log::force_uart_line(line.as_str());
                 }
                 Err(err) => {
+                    driver_task::clear_driver_task_transport(*contract);
                     report.failed_count = report.failed_count.saturating_add(1);
                     let mut line = heapless::String::<192>::new();
                     let _ = fmt::write(
@@ -2443,11 +2541,8 @@ impl<'a> KernelHal<'a> {
             .bind_remote_ipc_buffer(tcb, ipc_frame.cap(), ipc_vaddr)
             .map_err(HalError::Sel4)?;
 
-        let priority = contract.sel4_priority();
-        sel4::set_tcb_sched_params(tcb, sel4_sys::seL4_CapInitThreadTCB, priority, priority)
-            .map_err(HalError::Sel4)?;
-        sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, priority)
-            .map_err(HalError::Sel4)?;
+        let (bootstrap_priority, steady_priority) =
+            configure_driver_tcb_priority_for_boot(contract, tcb)?;
 
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
@@ -2460,11 +2555,12 @@ impl<'a> KernelHal<'a> {
             driver_task::driver_task_entry as *const () as usize,
             stack_top,
             task_key as seL4_Word,
-            false,
+            true,
         )
         .map_err(HalError::Sel4)?;
-        sel4::resume_tcb(tcb).map_err(HalError::Sel4)?;
+        emit_driver_tcb_resume_return(contract, tcb, "write-registers");
         let started = driver_task::wait_for_driver_task_start(task_key, 256);
+        restore_driver_tcb_steady_priority(contract, tcb, bootstrap_priority, steady_priority)?;
 
         Ok(KernelDriverTaskHandle {
             contract,
@@ -2750,6 +2846,7 @@ impl<'a> KernelHal<'a> {
             })
             .unwrap_or(0);
         let mut first_paddr = 0usize;
+        let mut paddr_contiguous = true;
         if dma_owned {
             let mut frames: AllocVec<UnmappedRamFrame> = AllocVec::new();
             frames
@@ -2765,9 +2862,10 @@ impl<'a> KernelHal<'a> {
                 let paddr = frame.paddr();
                 if page == 0 {
                     first_paddr = paddr;
-                } else if !runtime_region_paddr_is_contiguous(first_paddr, page, page_bytes, paddr)
+                } else if paddr_contiguous
+                    && !runtime_region_paddr_is_contiguous(first_paddr, page, page_bytes, paddr)
                 {
-                    return Err(HalError::Unsupported("driver-runtime-dma-noncontiguous"));
+                    paddr_contiguous = false;
                 }
                 frames.push(frame);
             }
@@ -2829,9 +2927,57 @@ impl<'a> KernelHal<'a> {
                 first_paddr,
                 pages,
                 first_page_index,
+                paddr_contiguous,
             )?;
         }
         Ok(true)
+    }
+
+    fn install_cyw43_sdio_bus_link(
+        &mut self,
+        contract: DriverTaskContract,
+        child_cnode: seL4_CPtr,
+        child_depth: u8,
+        vspace: seL4_CPtr,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<(), HalError> {
+        if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
+            return Ok(());
+        }
+        let (sdio_endpoint, sdio_ring_frame) =
+            driver_task::driver_task_bus_owner_transport_caps(SDIO_HOST_DRIVER_TASK_CONTRACT)
+                .ok_or(HalError::Unsupported(
+                    "driver-runtime-sdio-bus-link-missing",
+                ))?;
+        let root_cnode = self.env.init_cnode_cap();
+        let root_depth = sel4::word_bits() as u8;
+        let endpoint_err = sel4::cnode_mint_depth(
+            child_cnode,
+            driver_task::DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT,
+            child_depth,
+            root_cnode,
+            sdio_endpoint,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+            0,
+        );
+        if endpoint_err != seL4_NoError {
+            return Err(HalError::Sel4(endpoint_err));
+        }
+        self.env
+            .map_page_copy_into_vspace(
+                sdio_ring_frame,
+                vspace,
+                driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR,
+                sel4_sys::seL4_CapRights_ReadWrite,
+                sel4_sys::seL4_ARM_Page_Default,
+                tracker,
+            )
+            .map_err(HalError::Sel4)?;
+        crate::bootstrap::log::force_uart_line(
+            "DRIVER_TASK_BUS_LINK contract=cyw43455 owner=sdio-host channel=cyw43-sdio endpoint_slot=0x0008 ring_vaddr=0x70e00000",
+        );
+        Ok(())
     }
 
     fn create_isolated_driver_task(
@@ -2943,6 +3089,7 @@ impl<'a> KernelHal<'a> {
         }
         driver_task::publish_driver_task_command_endpoint(contract, command_endpoint as usize);
         driver_task::publish_driver_task_ring(contract, ring_frame.ptr().as_ptr() as usize);
+        driver_task::publish_driver_task_ring_frame_cap(contract, ring_frame.cap() as usize);
 
         let notification_err = sel4::cnode_mint_depth(
             child_cnode,
@@ -3024,6 +3171,7 @@ impl<'a> KernelHal<'a> {
                 &mut tracker,
             )
             .map_err(HalError::Sel4)?;
+        self.install_cyw43_sdio_bus_link(contract, child_cnode, child_depth, vspace, &mut tracker)?;
 
         let mut runtime_init_descriptor =
             runtime_image_spec.map(|spec| RuntimeInitDescriptorBuilder::new(spec, role_bit));
@@ -3056,11 +3204,8 @@ impl<'a> KernelHal<'a> {
             .bind_remote_ipc_buffer(tcb, ipc_frame.cap(), driver_task::DRIVER_TASK_IPC_VADDR)
             .map_err(HalError::Sel4)?;
 
-        let priority = contract.sel4_priority();
-        sel4::set_tcb_sched_params(tcb, sel4_sys::seL4_CapInitThreadTCB, priority, priority)
-            .map_err(HalError::Sel4)?;
-        sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, priority)
-            .map_err(HalError::Sel4)?;
+        let (bootstrap_priority, steady_priority) =
+            configure_driver_tcb_priority_for_boot(contract, tcb)?;
 
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
@@ -3071,10 +3216,10 @@ impl<'a> KernelHal<'a> {
             runtime_load.entry,
             driver_task::DRIVER_TASK_STACK_TOP_VADDR,
             task_key as seL4_Word,
-            false,
+            true,
         )
         .map_err(HalError::Sel4)?;
-        sel4::resume_tcb(tcb).map_err(HalError::Sel4)?;
+        emit_driver_tcb_resume_return(contract, tcb, "write-registers");
 
         let runtime_init_ok = if let Some(descriptor) = runtime_init_descriptor.as_ref() {
             let spec =
@@ -3087,26 +3232,68 @@ impl<'a> KernelHal<'a> {
                 frame,
             );
             matches!(
-                driver_task::run_driver_task_ring_command(contract, command),
+                driver_task::run_driver_task_ring_command_bootstrap(contract, command),
                 Some(done)
                     if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
                         && done.result == spec.hot_path.as_u32()
             )
         } else {
-            true
+            !driver_task::physical_pi_driver_task_only_owner_state_active()
         };
 
-        let command = driver_task::DriverTaskCommandRecord::service(
-            0,
-            driver_task::DriverTaskBudgetGrant::from_contract(contract),
-        );
-        let completion = driver_task::run_driver_task_ring_command(contract, command);
-        let pointer_free_ipc = matches!(
-            completion,
-            Some(done)
-                if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                    && done.result == task_key as u32
-        ) && runtime_init_ok;
+        let pointer_free_ipc = if driver_task::physical_pi_driver_task_only_owner_state_active() {
+            restore_driver_tcb_steady_priority(contract, tcb, bootstrap_priority, steady_priority)?;
+            if !runtime_init_ok {
+                emit_driver_task_bootstrap_deferred(
+                    contract,
+                    tcb,
+                    runtime_init_descriptor.is_some(),
+                );
+            }
+            runtime_init_ok
+        } else {
+            let completion = if runtime_init_ok {
+                let command = driver_task::DriverTaskCommandRecord::service(
+                    0,
+                    driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                );
+                driver_task::run_driver_task_ring_command_bootstrap(contract, command)
+            } else {
+                None
+            };
+            let pointer_free_ipc = matches!(
+                completion,
+                Some(done)
+                    if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                        && done.result == task_key as u32
+            ) && runtime_init_ok;
+            if pointer_free_ipc {
+                restore_driver_tcb_steady_priority(
+                    contract,
+                    tcb,
+                    bootstrap_priority,
+                    steady_priority,
+                )?;
+            } else {
+                let _ = restore_driver_tcb_steady_priority(
+                    contract,
+                    tcb,
+                    bootstrap_priority,
+                    steady_priority,
+                );
+                let _ = sel4::suspend_tcb(tcb);
+                let mut line = heapless::String::<192>::new();
+                let _ = fmt::write(
+                    &mut line,
+                    format_args!(
+                        "DRIVER_TASK_BOOTSTRAP_SUSPENDED contract={} tcb=0x{:04x} reason=pointer-free-ipc-not-proved",
+                        contract.name, tcb,
+                    ),
+                );
+                crate::bootstrap::log::force_uart_line(line.as_str());
+            }
+            pointer_free_ipc
+        };
         if let Some(code_frame) = mapped_code_frame {
             self.env
                 .unmap_page_cap(code_frame)
@@ -3648,12 +3835,12 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pi4_runtime_mmio_candidates_map_sdhci_to_cyw43_and_sdio_runtimes() {
+    fn pi4_runtime_mmio_candidates_keep_cyw43_behind_sdio_runtime() {
         let cyw43 =
             super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::Cyw43Wifi);
         let sdio =
             super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::SdioHost);
-        assert_eq!(cyw43, super::PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES);
+        assert!(cyw43.is_empty());
         assert_eq!(sdio, super::PI4_DRIVER_RUNTIME_SDIO_MMIO_BASES);
     }
 
@@ -3817,6 +4004,7 @@ mod tests {
                 0x4000_0000,
                 16,
                 0,
+                true,
             )
             .unwrap();
         for index in 0..2 {
@@ -3832,6 +4020,7 @@ mod tests {
                 0x5000_0000,
                 2,
                 0,
+                true,
             )
             .unwrap();
 
@@ -3912,6 +4101,7 @@ mod tests {
                 0x4000_0000,
                 512,
                 0,
+                true,
             )
             .unwrap();
         for index in 0..32 {
@@ -3927,6 +4117,7 @@ mod tests {
                 0x5000_0000,
                 32,
                 0,
+                true,
             )
             .unwrap();
 
@@ -4228,6 +4419,23 @@ mod tests {
                 contract.name
             );
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_task_bootstrap_order_creates_bus_owners_before_clients() {
+        let sdio_index = super::DRIVER_TASK_BOOTSTRAP_CONTRACTS
+            .iter()
+            .position(|contract| *contract == super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT)
+            .expect("sdio-host contract is bootstrapped");
+        let cyw_index = super::DRIVER_TASK_BOOTSTRAP_CONTRACTS
+            .iter()
+            .position(|contract| *contract == super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT)
+            .expect("cyw43 contract is bootstrapped");
+        assert!(
+            sdio_index < cyw_index,
+            "sdio-host must publish transport caps before cyw43 is created"
+        );
     }
 
     #[cfg(feature = "kernel")]

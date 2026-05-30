@@ -278,6 +278,11 @@ class GateSummary:
     driver_task_active_net: str = "unknown"
     driver_task_budget_overruns: int = 0
     driver_task_latency_proofs: int = 0
+    driver_task_ring_call_begin: int = 0
+    driver_task_ring_call_return: int = 0
+    driver_task_ring_call_outstanding: int = 0
+    driver_task_ring_call_timeout: int = 0
+    driver_task_bootstrap_deferred: int = 0
     serial_responsive_proof: bool = False
     usb_burst_proof: bool = False
     usb_burst_drops: int = -1
@@ -384,6 +389,11 @@ class GateSummary:
             "DRIVER_TASK_ACTIVE_NET": self.driver_task_active_net,
             "DRIVER_TASK_BUDGET_OVERRUNS": self.driver_task_budget_overruns,
             "DRIVER_TASK_LATENCY_PROOFS": self.driver_task_latency_proofs,
+            "DRIVER_TASK_RING_CALL_BEGIN": self.driver_task_ring_call_begin,
+            "DRIVER_TASK_RING_CALL_RETURN": self.driver_task_ring_call_return,
+            "DRIVER_TASK_RING_CALL_OUTSTANDING": self.driver_task_ring_call_outstanding,
+            "DRIVER_TASK_RING_CALL_TIMEOUT": self.driver_task_ring_call_timeout,
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED": self.driver_task_bootstrap_deferred,
             "SERIAL_RESPONSIVE_PROOF": (
                 "yes" if self.serial_responsive_proof else "no"
             ),
@@ -4538,6 +4548,29 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         "driver_task_notification_bind_deferred" in event.raw.lower()
         for event in event_list
     )
+    driver_task_ring_call_begin = sum(
+        1
+        for event in event_list
+        if "driver_task_ring_call_begin" in event.raw.lower()
+    )
+    driver_task_ring_call_return = sum(
+        1
+        for event in event_list
+        if "driver_task_ring_call_return" in event.raw.lower()
+    )
+    driver_task_ring_call_outstanding = max(
+        0, driver_task_ring_call_begin - driver_task_ring_call_return
+    )
+    driver_task_ring_call_timeout = sum(
+        1
+        for event in event_list
+        if "driver_task_ring_call_timeout" in event.raw.lower()
+    )
+    driver_task_bootstrap_deferred = sum(
+        1
+        for event in event_list
+        if "driver_task_bootstrap_deferred" in event.raw.lower()
+    )
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -4594,6 +4627,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_active_net=driver_task_active_net,
         driver_task_budget_overruns=driver_task_budget_overruns,
         driver_task_latency_proofs=driver_task_latency_proofs,
+        driver_task_ring_call_begin=driver_task_ring_call_begin,
+        driver_task_ring_call_return=driver_task_ring_call_return,
+        driver_task_ring_call_outstanding=driver_task_ring_call_outstanding,
+        driver_task_ring_call_timeout=driver_task_ring_call_timeout,
+        driver_task_bootstrap_deferred=driver_task_bootstrap_deferred,
         serial_responsive_proof=serial_responsive_proof,
         usb_burst_proof=usb_burst_proof,
         usb_burst_drops=usb_burst_drops,

@@ -312,13 +312,24 @@ fn pcie_owner_queue_runtime_read(offset: usize) -> Option<u32> {
         .filter(|completion| {
             completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
         })
-        .map(|completion| completion.result)
+        .map(|completion| {
+            let _ = super::driver_task::register_driver_task_runtime_owner_state(
+                super::driver_task::DriverTaskHotPath::PcieRoot,
+            );
+            completion.result
+        })
 }
 
 #[cfg(feature = "kernel")]
 fn pcie_owner_queue_runtime_write(op: u16, stage: u16, offset: usize, value: u32) -> bool {
     pcie_owner_queue_ring_service_completion(op, stage, offset, value).is_some_and(|completion| {
-        completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        let ok = completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16();
+        if ok {
+            let _ = super::driver_task::register_driver_task_runtime_owner_state(
+                super::driver_task::DriverTaskHotPath::PcieRoot,
+            );
+        }
+        ok
     })
 }
 

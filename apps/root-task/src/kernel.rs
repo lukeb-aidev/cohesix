@@ -2711,26 +2711,12 @@ fn init_local_seat_runtime<P: Platform>(
                     boot_log::force_uart_line(line.as_str());
                 }
                 Err(backend_err) => {
-                    if local_seat_required {
-                        let mut line = heapless::String::<192>::new();
-                        let _ = write!(
-                            line,
-                            "[local-seat] abort required=true reason=backend-unavailable detail={}",
-                            backend_err.as_str()
-                        );
-                        console.writeln_prefixed(line.as_str());
-                        boot_log::force_uart_line(line.as_str());
-                        return Err(BootError::Fatal(format!(
-                            "local-seat required backend failed: {}",
-                            backend_err.as_str()
-                        )));
-                    }
-
                     let mut line = heapless::String::<192>::new();
                     let _ = write!(
                         line,
-                        "[local-seat] degraded reason=backend-unavailable detail={}",
-                        backend_err.as_str()
+                        "[local-seat] degraded reason=backend-unavailable detail={} required={} action=serial-shell",
+                        backend_err.as_str(),
+                        if local_seat_required { "yes" } else { "no" }
                     );
                     console.writeln_prefixed(line.as_str());
                     boot_log::force_uart_line(line.as_str());
@@ -4457,6 +4443,28 @@ fn bootstrap<P: Platform>(
     let mut uart_map_error: Option<sel4_sys::seL4_Error> = None;
     for candidate in UART_CANDIDATES {
         let paddr = candidate.paddr();
+        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            if !physical_pi_linked_serial_runtime_candidate(candidate) {
+                let mut skip_line = heapless::String::<160>::new();
+                let _ = write!(
+                    skip_line,
+                    "[uart] root mapping skipped backend={} reason=linked-serial-runtime-mini-uart-only",
+                    candidate.label(),
+                );
+                console.writeln_prefixed(skip_line.as_str());
+                continue;
+            }
+            boot_log::force_uart_line("[uart] driver-task runtime init begin owner=serial");
+            if !crate::serial::init_serial_driver_task_runtime() {
+                boot_log::force_uart_line("[uart] driver-task runtime init failed owner=serial");
+                return Err(BootError::Fatal(
+                    "serial driver-task runtime init failed".to_owned(),
+                ));
+            }
+            boot_log::force_uart_line("[uart] driver-task runtime init ok owner=serial");
+            break;
+        }
+
         let coverage = hal.device_coverage(paddr, DEVICE_FRAME_BITS);
         let Some(coverage) = coverage else {
             let mut line = heapless::String::<192>::new();
@@ -4481,28 +4489,6 @@ fn bootstrap<P: Platform>(
                 limit = coverage.limit,
         );
         console.writeln_prefixed(line.as_str());
-
-        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-            if !physical_pi_linked_serial_runtime_candidate(candidate) {
-                let mut skip_line = heapless::String::<160>::new();
-                let _ = write!(
-                    skip_line,
-                    "[uart] root mapping skipped backend={} reason=linked-serial-runtime-mini-uart-only",
-                    candidate.label(),
-                );
-                console.writeln_prefixed(skip_line.as_str());
-                continue;
-            }
-            boot_log::force_uart_line("[uart] driver-task runtime init begin owner=serial");
-            if !crate::serial::init_serial_driver_task_runtime() {
-                boot_log::force_uart_line("[uart] driver-task runtime init failed owner=serial");
-                return Err(BootError::Fatal(
-                    "serial driver-task runtime init failed".to_owned(),
-                ));
-            }
-            boot_log::force_uart_line("[uart] driver-task runtime init ok owner=serial");
-            break;
-        }
 
         match hal.map_device(paddr) {
             Ok(region) => {

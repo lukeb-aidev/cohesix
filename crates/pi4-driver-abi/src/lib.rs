@@ -103,6 +103,10 @@ pub const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
 pub const DRIVER_RUNTIME_RING_PAGE_BYTES: u16 = 4096;
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
+/// Child CSpace slot where CYW43 receives the SDIO bus-owner endpoint cap.
+pub const DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT: u32 = 8;
+/// CYW43-local virtual address where root maps the SDIO owner command ring.
+pub const DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR: u64 = 0x70e0_0000;
 
 /// Resource range kind: memory-mapped device registers.
 pub const DRIVER_RUNTIME_RESOURCE_KIND_MMIO: u16 = 1;

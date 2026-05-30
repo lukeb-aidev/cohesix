@@ -27,7 +27,7 @@ use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
     DriverTaskCompletionCode, DriverTaskCompletionRecord, DriverTaskContract, DriverTaskFaultCode,
     DriverTaskHotPath, CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT,
-    MAX_DRIVER_TASK_FRAME_BYTES,
+    MAX_DRIVER_TASK_FRAME_BYTES, SDIO_HOST_DRIVER_TASK_CONTRACT,
 };
 use crate::hal::{HalError, Hardware};
 use crate::net::{
@@ -37,6 +37,7 @@ use pi4_driver_abi::{
     DriverRuntimeCyw43CommandDescriptor, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK, DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
     DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL, DRIVER_RUNTIME_CYW43_OP_RELEASE,
+    DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT, DRIVER_RUNTIME_ENGINE_INIT_AUX,
     DRIVER_RUNTIME_NET_INIT_AUX,
 };
 
@@ -181,10 +182,18 @@ where
         if initialized {
             match hot_path {
                 DriverTaskHotPath::GenetNic => {
+                    if !crate::hal::driver_task::register_driver_task_runtime_owner_state(hot_path)
+                    {
+                        return Err(DriverTaskNetError::RuntimeInit("genet-owner-state"));
+                    }
                     GENET_LINKED_RUNTIME_READY.store(1, Ordering::Release);
                 }
                 DriverTaskHotPath::Cyw43Wifi => {
                     complete_cyw43_linked_runtime_firmware(hal, contract)?;
+                    if !crate::hal::driver_task::register_driver_task_runtime_owner_state(hot_path)
+                    {
+                        return Err(DriverTaskNetError::RuntimeInit("cyw43-owner-state"));
+                    }
                     CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
                 }
                 _ => {}
@@ -244,6 +253,15 @@ where
         .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
     let reset_vector = firmware_reset_vector(bundle.firmware)
         .ok_or(DriverTaskNetError::RuntimeInit("cyw43-rstvec"))?;
+    init_sdio_host_linked_runtime()?;
+    submit_cyw43_runtime_command(
+        contract,
+        DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        },
+        &[],
+    )?;
     stream_cyw43_runtime_payload(
         contract,
         DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
@@ -293,6 +311,35 @@ where
         &[],
     )?;
     Ok(())
+}
+
+#[cfg(feature = "kernel")]
+fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
+    let contract = SDIO_HOST_DRIVER_TASK_CONTRACT;
+    let mut command = DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        DriverTaskHotPath::SdioHost,
+        DriverTaskBudgetGrant::from_contract(contract),
+        DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    );
+    command.aux0 = DRIVER_RUNTIME_ENGINE_INIT_AUX;
+    let initialized = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+        .is_some_and(|completion| {
+            completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
+        });
+    if initialized
+        && crate::hal::driver_task::register_driver_task_runtime_owner_state(
+            DriverTaskHotPath::SdioHost,
+        )
+    {
+        Ok(())
+    } else {
+        Err(DriverTaskNetError::RuntimeInit("sdio-host-linked-runtime"))
+    }
 }
 
 #[cfg(not(feature = "kernel"))]

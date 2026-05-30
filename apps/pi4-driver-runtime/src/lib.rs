@@ -17,6 +17,7 @@ use pi4_driver_abi::{
     DriverRuntimeCyw43CommandDescriptor, DriverRuntimeInitDescriptor,
     DriverRuntimeResourceRangeDescriptor, DriverRuntimeSdioCommandDescriptor,
     DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
     DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
     DRIVER_RUNTIME_CYW43_OP_ETH_TX, DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
     DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK, DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL,
@@ -28,25 +29,30 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_PCIE_OP_PORT_WRITE, DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH,
     DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
     DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
-    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
-    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
-    DRIVER_RUNTIME_SDIO_FLAG_DATA, DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG,
-    DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE, DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
-    DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT, DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
-    DRIVER_RUNTIME_SDIO_FLAG_WRITE, DRIVER_RUNTIME_SDIO_OP_CMD52_READ,
-    DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE, DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
-    DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE, DRIVER_RUNTIME_SDIO_OP_POLL_IRQ,
-    DRIVER_RUNTIME_SDIO_RESP_LONG, DRIVER_RUNTIME_SDIO_RESP_NONE, DRIVER_RUNTIME_SDIO_RESP_OCR,
-    DRIVER_RUNTIME_SDIO_RESP_SHORT, DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY, HOT_PATH_CYW43_WIFI,
-    HOT_PATH_GENET_NIC, HOT_PATH_HDMI_TEXT, HOT_PATH_PCIE_ROOT, HOT_PATH_SDIO_HOST,
-    HOT_PATH_SERIAL_CONSOLE, HOT_PATH_USB_KEYBOARD,
+    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_SDIO_FLAG_DATA,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR, DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_FLAG_WRITE,
+    DRIVER_RUNTIME_SDIO_OP_CMD52_READ, DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,
+    DRIVER_RUNTIME_SDIO_OP_CMD53_READ, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+    DRIVER_RUNTIME_SDIO_OP_POLL_IRQ, DRIVER_RUNTIME_SDIO_RESP_LONG, DRIVER_RUNTIME_SDIO_RESP_NONE,
+    DRIVER_RUNTIME_SDIO_RESP_OCR, DRIVER_RUNTIME_SDIO_RESP_SHORT,
+    DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY, HOT_PATH_CYW43_WIFI, HOT_PATH_GENET_NIC,
+    HOT_PATH_HDMI_TEXT, HOT_PATH_PCIE_ROOT, HOT_PATH_SDIO_HOST, HOT_PATH_SERIAL_CONSOLE,
+    HOT_PATH_USB_KEYBOARD,
 };
 
 /// Child CSpace slot containing the root-to-driver command endpoint.
 pub const DRIVER_TASK_CHILD_COMMAND_SLOT: sel4_sys::seL4_CPtr = 2;
+/// Child CSpace slot containing the linked SDIO bus-owner endpoint.
+pub const DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT as sel4_sys::seL4_CPtr;
+/// Driver-local fixed virtual address for the child IPC buffer page.
+pub const DRIVER_TASK_IPC_VADDR: usize = 0x7000_1000;
 /// Driver-local fixed virtual address for the command/completion ring.
 pub const DRIVER_TASK_RING_VADDR: usize = 0x7000_0000;
 /// First fixed driver-local virtual address reserved for explicit MMIO pages.
@@ -55,6 +61,8 @@ pub const DRIVER_TASK_DEVICE_MMIO_VADDR: usize = 0x7020_0000;
 pub const DRIVER_TASK_DMA_BUFFER_VADDR: usize = 0x7080_0000;
 /// First fixed driver-local virtual address reserved for shared control pages.
 pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x70c0_0000;
+/// CYW43-local fixed virtual address for the linked SDIO owner ring.
+pub const DRIVER_TASK_SDIO_BUS_RING_VADDR: usize = DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR as usize;
 /// Offset of the completion record in the command/completion ring page.
 pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
 /// Offset of the shared payload area in the command/completion ring page.
@@ -139,19 +147,19 @@ const SDHCI_INT_COMMAND_DATA_CLEAR_MASK: u32 = u32::MAX;
 const SDHCI_CMD_WAIT_LOOPS: usize = 100_000;
 
 const USB_REQUIRED_MMIO_PAGES: u16 = 16;
-const USB_REQUIRED_DMA_PAGES: u16 = 128;
+const USB_REQUIRED_DMA_PAGES: u16 = 64;
 const USB_REQUIRED_SHARED_PAGES: u16 = 32;
-const HDMI_REQUIRED_MMIO_PAGES: u16 = 1;
-const HDMI_REQUIRED_DMA_PAGES: u16 = 16;
+const HDMI_REQUIRED_MMIO_PAGES: u16 = 0;
+const HDMI_REQUIRED_DMA_PAGES: u16 = 0;
 const HDMI_REQUIRED_SHARED_PAGES: u16 = 16;
 const GENET_REQUIRED_MMIO_PAGES: u16 = 6;
-const GENET_REQUIRED_DMA_PAGES: u16 = 512;
+const GENET_REQUIRED_DMA_PAGES: u16 = 64;
 const GENET_REQUIRED_SHARED_PAGES: u16 = 32;
-const CYW43_REQUIRED_MMIO_PAGES: u16 = 1;
-const CYW43_REQUIRED_DMA_PAGES: u16 = 128;
+const CYW43_REQUIRED_MMIO_PAGES: u16 = 0;
+const CYW43_REQUIRED_DMA_PAGES: u16 = 0;
 const CYW43_REQUIRED_SHARED_PAGES: u16 = 64;
 const SDIO_REQUIRED_MMIO_PAGES: u16 = 1;
-const SDIO_REQUIRED_DMA_PAGES: u16 = 64;
+const SDIO_REQUIRED_DMA_PAGES: u16 = 0;
 const SDIO_REQUIRED_SHARED_PAGES: u16 = 32;
 const PCIE_REQUIRED_MMIO_PAGES: u16 = 10;
 const PCIE_REQUIRED_SHARED_PAGES: u16 = 16;
@@ -237,7 +245,7 @@ const GENET_DMA_MAX_BURST_LENGTH: u32 = 0x8;
 const GENET_DMA_DESC_SIZE: usize = 12;
 const GENET_DMA_RING_SIZE: usize = 0x40;
 const GENET_DEFAULT_Q: u32 = 16;
-const GENET_HW_TOTAL_DESCS: usize = 256;
+const GENET_HW_TOTAL_DESCS: usize = 32;
 const GENET_RDMA_REG_OFF: usize = GENET_RX_OFF + GENET_HW_TOTAL_DESCS * GENET_DMA_DESC_SIZE;
 const GENET_TDMA_REG_OFF: usize = GENET_TX_OFF + GENET_HW_TOTAL_DESCS * GENET_DMA_DESC_SIZE;
 const GENET_DMA_RINGS_SIZE: usize = GENET_DMA_RING_SIZE * ((GENET_DEFAULT_Q as usize) + 1);
@@ -342,7 +350,7 @@ const XHCI_DMA_COMMAND_RING_OFFSET: usize = 0x1000;
 const XHCI_DMA_EVENT_RING_OFFSET: usize = 0x2000;
 const XHCI_DMA_ERST_OFFSET: usize = 0x3000;
 const XHCI_DMA_SCRATCHPAD_ARRAY_OFFSET: usize = 0x4000;
-const XHCI_DMA_SCRATCHPAD_OFFSET: usize = 0x5000;
+const XHCI_DMA_SCRATCHPAD_OFFSET: usize = 0x20000;
 const XHCI_DMA_INPUT_CONTEXT_OFFSET: usize = 0x10000;
 const XHCI_DMA_DEVICE_CONTEXT_OFFSET: usize = 0x12000;
 const XHCI_DMA_EP0_RING_OFFSET: usize = 0x14000;
@@ -350,6 +358,7 @@ const XHCI_DMA_KBD_RING_OFFSET: usize = 0x15000;
 const XHCI_DMA_CONTROL_BUFFER_OFFSET: usize = 0x16000;
 const XHCI_DMA_CONFIG_BUFFER_OFFSET: usize = 0x17000;
 const XHCI_DMA_REPORT_BUFFER_OFFSET: usize = 0x18000;
+const XHCI_DMA_ZERO_BYTES: usize = XHCI_DMA_SCRATCHPAD_OFFSET + 16 * DRIVER_TASK_RING_PAGE_BYTES;
 const XHCI_COMMAND_RING_TRBS: usize = 256;
 const XHCI_EVENT_RING_TRBS: usize = 256;
 const XHCI_TRB_BYTES: usize = 16;
@@ -750,6 +759,7 @@ static GENET_TX_COUNT: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_COUNT: AtomicU32 = AtomicU32::new(0);
+static CYW43_SDIO_BUS_LINK_SEQ: AtomicU32 = AtomicU32::new(0);
 static SDIO_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static SDIO_CMD_COUNT: AtomicU32 = AtomicU32::new(0);
 static PCIE_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
@@ -892,6 +902,20 @@ impl DriverTaskCompletionRecord {
             result: len as u32,
             frame: DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len,
+                flags: 0,
+            },
+        }
+    }
+
+    const fn frame_ready_at(sequence: u32, offset: u32, len: u16) -> Self {
+        Self {
+            sequence,
+            code: COMPLETION_FRAME_READY,
+            detail: FAULT_NONE,
+            result: len as u32,
+            frame: DriverFrameDescriptor {
+                offset,
                 len,
                 flags: 0,
             },
@@ -1117,12 +1141,11 @@ fn descriptor_resources_ready(descriptor: DriverRuntimeInitDescriptor, hot_path:
                     DRIVER_TASK_DEVICE_MMIO_VADDR as u64,
                     USB_REQUIRED_MMIO_PAGES,
                 )
-                && descriptor.has_resource_range_at_with_flags(
+                && descriptor.has_resource_range_at(
                     DRIVER_RUNTIME_RESOURCE_KIND_DMA,
                     DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
                     DRIVER_TASK_DMA_BUFFER_VADDR as u64,
                     USB_REQUIRED_DMA_PAGES,
-                    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
                 )
                 && descriptor.has_pointer_free_bus_link(
                     HOT_PATH_PCIE_ROOT,
@@ -1134,12 +1157,11 @@ fn descriptor_resources_ready(descriptor: DriverRuntimeInitDescriptor, hot_path:
                 && dma_pages >= HDMI_REQUIRED_DMA_PAGES
                 && shared_pages >= HDMI_REQUIRED_SHARED_PAGES
                 && descriptor.hdmi_ready()
-                && descriptor.has_resource_range_at_with_flags(
+                && descriptor.has_resource_range_at(
                     DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
                     DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
                     DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
                     1,
-                    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
                 )
         }
         HOT_PATH_GENET_NIC => {
@@ -1152,24 +1174,17 @@ fn descriptor_resources_ready(descriptor: DriverRuntimeInitDescriptor, hot_path:
                     DRIVER_TASK_DEVICE_MMIO_VADDR as u64,
                     GENET_REQUIRED_MMIO_PAGES,
                 )
-                && descriptor.has_resource_range_at_with_flags(
+                && descriptor.has_resource_range_at(
                     DRIVER_RUNTIME_RESOURCE_KIND_DMA,
                     DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
                     DRIVER_TASK_DMA_BUFFER_VADDR as u64,
                     GENET_REQUIRED_DMA_PAGES,
-                    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
                 )
         }
         HOT_PATH_CYW43_WIFI => {
             mmio_pages >= CYW43_REQUIRED_MMIO_PAGES
                 && dma_pages >= CYW43_REQUIRED_DMA_PAGES
                 && shared_pages >= CYW43_REQUIRED_SHARED_PAGES
-                && descriptor.has_resource_range_at(
-                    DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
-                    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
-                    DRIVER_TASK_DEVICE_MMIO_VADDR as u64,
-                    CYW43_REQUIRED_MMIO_PAGES,
-                )
                 && descriptor.has_resource_range_at(
                     DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
                     DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
@@ -1190,13 +1205,6 @@ fn descriptor_resources_ready(descriptor: DriverRuntimeInitDescriptor, hot_path:
                     DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
                     DRIVER_TASK_DEVICE_MMIO_VADDR as u64,
                     SDIO_REQUIRED_MMIO_PAGES,
-                )
-                && descriptor.has_resource_range_at_with_flags(
-                    DRIVER_RUNTIME_RESOURCE_KIND_DMA,
-                    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-                    DRIVER_TASK_DMA_BUFFER_VADDR as u64,
-                    SDIO_REQUIRED_DMA_PAGES,
-                    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
                 )
         }
         HOT_PATH_PCIE_ROOT => {
@@ -1241,6 +1249,41 @@ fn runtime_resource_range(
 
 fn runtime_bus_addr(descriptor: DriverRuntimeInitDescriptor, paddr: u64) -> u64 {
     (paddr & descriptor.bus_alias_and) | descriptor.bus_alias_or
+}
+
+fn runtime_resource_paddr_at(
+    descriptor: DriverRuntimeInitDescriptor,
+    range: DriverRuntimeResourceRangeDescriptor,
+    offset: usize,
+) -> Option<u64> {
+    let page = offset / DRIVER_TASK_RING_PAGE_BYTES;
+    if page >= usize::from(range.page_count) {
+        return None;
+    }
+    let page_offset = offset % DRIVER_TASK_RING_PAGE_BYTES;
+    if range.flags & DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS != 0 {
+        return range.paddr.checked_add(offset as u64);
+    }
+    let index = usize::from(range.first_page_index).checked_add(page)?;
+    let paddr = match range.kind {
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA => descriptor.dma_pages.get(index)?.paddr,
+        DRIVER_RUNTIME_RESOURCE_KIND_SHARED => descriptor.shared_pages.get(index)?.paddr,
+        DRIVER_RUNTIME_RESOURCE_KIND_MMIO => descriptor.mmio_pages.get(index)?.paddr,
+        _ => 0,
+    };
+    if paddr == 0 {
+        return None;
+    }
+    paddr.checked_add(page_offset as u64)
+}
+
+fn runtime_resource_bus_addr_at(
+    descriptor: DriverRuntimeInitDescriptor,
+    range: DriverRuntimeResourceRangeDescriptor,
+    offset: usize,
+) -> Option<u64> {
+    runtime_resource_paddr_at(descriptor, range, offset)
+        .map(|paddr| runtime_bus_addr(descriptor, paddr))
 }
 
 fn ring_slot(index: u16, slots: usize) -> usize {
@@ -1427,19 +1470,18 @@ fn cyw43_runtime_init(
     state.initialized = state.bus_link_ready
         && runtime_resource_range(
             descriptor,
-            DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
-            DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
-        )
-        .is_some()
-        && runtime_resource_range(
-            descriptor,
             DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
             DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
         )
         .is_some();
-    if state.initialized {
+    let has_direct_sdio_mmio = runtime_resource_range(
+        descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+        DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+    )
+    .is_some();
+    if state.initialized && (has_direct_sdio_mmio || cfg!(not(target_os = "none"))) {
         state.transport_ready = cyw43_transport_init(state);
-        state.initialized = state.transport_ready;
     }
     state.initialized
 }
@@ -1676,10 +1718,14 @@ fn service_sdio_descriptor_command(command: DriverTaskCommandRecord) -> DriverTa
     match desc.op {
         DRIVER_RUNTIME_SDIO_OP_CMD52_READ | DRIVER_RUNTIME_SDIO_OP_POLL_IRQ => {
             write_ring_byte(usize::from(desc.data_offset), (response0 & 0xff) as u8);
-            DriverTaskCompletionRecord::frame_ready(command.sequence, 1)
+            DriverTaskCompletionRecord::frame_ready_at(
+                command.sequence,
+                u32::from(desc.data_offset),
+                1,
+            )
         }
         DRIVER_RUNTIME_SDIO_OP_CMD53_READ => {
-            DriverTaskCompletionRecord::frame_ready(command.sequence, frame.len)
+            DriverTaskCompletionRecord::frame_ready_at(command.sequence, frame.offset, frame.len)
         }
         DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE | DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE => {
             DriverTaskCompletionRecord::progress(command.sequence, u32::from(frame.len))
@@ -1880,6 +1926,22 @@ fn sdio_response_flag_count(flags: u16) -> u32 {
     response_flags.count_ones()
 }
 
+const fn sdio_response_kind_from_flags(flags: u16) -> Option<u8> {
+    if flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE != 0 {
+        Some(DRIVER_RUNTIME_SDIO_RESP_NONE)
+    } else if flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR != 0 {
+        Some(DRIVER_RUNTIME_SDIO_RESP_OCR)
+    } else if flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT != 0 {
+        Some(DRIVER_RUNTIME_SDIO_RESP_SHORT)
+    } else if flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY != 0 {
+        Some(DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY)
+    } else if flags & DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG != 0 {
+        Some(DRIVER_RUNTIME_SDIO_RESP_LONG)
+    } else {
+        None
+    }
+}
+
 #[cfg(target_os = "none")]
 fn sdio_execute_command(
     cmd: u16,
@@ -1899,6 +1961,9 @@ fn sdio_execute_transfer(
     block_size: u16,
     block_count: u16,
 ) -> Option<u32> {
+    if cyw43_uses_sdio_bus_link() {
+        return sdio_execute_via_bus_link(cmd, arg, flags, frame, block_size, block_count);
+    }
     let has_data = flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0;
     let write = flags & DRIVER_RUNTIME_SDIO_FLAG_WRITE != 0;
     if !sdio_wait_inhibit_clear(has_data) {
@@ -1932,6 +1997,239 @@ fn sdio_execute_transfer(
     } else {
         Some(sdio_read32(SDHCI_RESPONSE))
     }
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_uses_sdio_bus_link() -> bool {
+    RUNTIME_INIT_HOT_PATH.load(Ordering::Acquire) == HOT_PATH_CYW43_WIFI
+        && RUNTIME_DESCRIPTOR.load().has_pointer_free_bus_link(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+        )
+}
+
+#[cfg(not(target_os = "none"))]
+fn cyw43_uses_sdio_bus_link() -> bool {
+    false
+}
+
+#[cfg(target_os = "none")]
+fn sdio_execute_via_bus_link(
+    cmd: u16,
+    arg: u32,
+    flags: u16,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+) -> Option<u32> {
+    if sdio_response_flag_count(flags) != 1 {
+        return None;
+    }
+    let has_data = flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0;
+    let write = flags & DRIVER_RUNTIME_SDIO_FLAG_WRITE != 0;
+    let sequence = CYW43_SDIO_BUS_LINK_SEQ
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1)
+        .max(1);
+    let mut command = DriverTaskCommandRecord {
+        sequence,
+        opcode: OPCODE_SERVICE,
+        flags,
+        arg0: HOT_PATH_SDIO_HOST,
+        arg1: ROLE_SDIO,
+        aux0: ((cmd as u32) << 16) | u32::from(flags),
+        aux1: arg,
+        budget: DriverTaskBudgetGrant {
+            max_ops: 1,
+            max_frames: 1,
+            max_bytes: u32::from(frame.len),
+        },
+        frame: DriverFrameDescriptor::empty(),
+    };
+    if has_data {
+        command = sdio_bus_link_descriptor_command(
+            sequence,
+            cmd,
+            arg,
+            flags,
+            frame,
+            block_size,
+            block_count,
+        )?;
+        if write {
+            sdio_bus_link_copy_to_owner_ring(frame, CYW43_SDIO_BUS_LINK_DATA_OFFSET)?;
+        }
+    }
+    let completion = sdio_bus_link_call(command)?;
+    if completion.sequence != sequence || completion.code == COMPLETION_FAULT {
+        return None;
+    }
+    if has_data && !write {
+        if completion.code != COMPLETION_FRAME_READY || !completion.frame.in_ring_payload() {
+            return None;
+        }
+        let copy_len = usize::from(completion.frame.len).min(usize::from(frame.len));
+        sdio_bus_link_copy_from_owner_ring(completion.frame.offset as usize, frame, copy_len)?;
+    }
+    Some(completion.result)
+}
+
+#[cfg(target_os = "none")]
+const CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET: usize = DRIVER_TASK_RING_FRAME_OFFSET;
+#[cfg(target_os = "none")]
+const CYW43_SDIO_BUS_LINK_DATA_OFFSET: usize = DRIVER_TASK_RING_FRAME_OFFSET + 64;
+
+#[cfg(target_os = "none")]
+fn sdio_bus_link_descriptor_command(
+    sequence: u32,
+    cmd: u16,
+    arg: u32,
+    flags: u16,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+) -> Option<DriverTaskCommandRecord> {
+    if cmd != SDIO_CMD53 || !frame.in_ring_payload() || frame.len == 0 {
+        return None;
+    }
+    let response_kind = sdio_response_kind_from_flags(flags)?;
+    let write = flags & DRIVER_RUNTIME_SDIO_FLAG_WRITE != 0;
+    let block_mode = arg & (1 << 27) != 0;
+    let desc = DriverRuntimeSdioCommandDescriptor {
+        op: if write {
+            DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+        } else {
+            DRIVER_RUNTIME_SDIO_OP_CMD53_READ
+        },
+        function: ((arg >> 28) & 0x7) as u8,
+        response_kind,
+        addr: (arg >> 9) & 0x1ffff,
+        data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+        len: frame.len,
+        block_size: if block_mode { block_size } else { 0 },
+        block_count: if block_mode { block_count } else { 0 },
+        flags: if arg & (1 << 26) != 0 {
+            DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT
+        } else {
+            0
+        },
+        reserved: 0,
+        timeout_us: 100_000,
+    };
+    if !desc.valid() {
+        return None;
+    }
+    sdio_bus_link_write_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET, desc);
+    Some(DriverTaskCommandRecord {
+        sequence,
+        opcode: OPCODE_SERVICE,
+        flags,
+        arg0: HOT_PATH_SDIO_HOST,
+        arg1: ROLE_SDIO,
+        aux0: 0,
+        aux1: 0,
+        budget: DriverTaskBudgetGrant {
+            max_ops: 1,
+            max_frames: 1,
+            max_bytes: u32::from(frame.len),
+        },
+        frame: DriverFrameDescriptor {
+            offset: CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET as u32,
+            len: core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>() as u16,
+            flags: 0,
+        },
+    })
+}
+
+#[cfg(target_os = "none")]
+fn sdio_bus_link_call(command: DriverTaskCommandRecord) -> Option<DriverTaskCompletionRecord> {
+    let completion_reset = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
+    // SAFETY: Root maps the SDIO owner command ring into CYW43 at this fixed
+    // address and mints the SDIO endpoint cap into the fixed child slot before
+    // the CYW43 runtime can be resumed.
+    unsafe {
+        core::ptr::write_volatile(
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                as *mut DriverTaskCompletionRecord,
+            completion_reset,
+        );
+        core::ptr::write_volatile(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR as *mut DriverTaskCommandRecord,
+            command,
+        );
+        sel4_sys::seL4_SetMR(0, command.sequence as sel4_sys::seL4_Word);
+        let _ = sel4_sys::seL4_Call(
+            DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT,
+            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+        );
+        Some(core::ptr::read_volatile(
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                as *const DriverTaskCompletionRecord,
+        ))
+    }
+}
+
+#[cfg(target_os = "none")]
+fn sdio_bus_link_write_descriptor(offset: usize, desc: DriverRuntimeSdioCommandDescriptor) {
+    // SAFETY: The descriptor offset is page-local, aligned, and reserved for
+    // CYW43-to-SDIO bus-link commands in the mapped SDIO owner ring.
+    unsafe {
+        core::ptr::write_volatile(
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + offset) as *mut DriverRuntimeSdioCommandDescriptor,
+            desc,
+        );
+    }
+}
+
+#[cfg(target_os = "none")]
+fn sdio_bus_link_copy_to_owner_ring(frame: DriverFrameDescriptor, dst_offset: usize) -> Option<()> {
+    let len = usize::from(frame.len);
+    if !frame.in_ring_payload()
+        || dst_offset
+            .checked_add(len)
+            .is_none_or(|end| end > DRIVER_TASK_RING_PAGE_BYTES)
+    {
+        return None;
+    }
+    // SAFETY: Both source and destination are fixed, page-local ring payloads
+    // validated above. CYW43 owns the source ring turn and the linked SDIO ring
+    // turn is private to this synchronous call.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            (DRIVER_TASK_RING_VADDR + frame.offset as usize) as *const u8,
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + dst_offset) as *mut u8,
+            len,
+        );
+    }
+    Some(())
+}
+
+#[cfg(target_os = "none")]
+fn sdio_bus_link_copy_from_owner_ring(
+    src_offset: usize,
+    frame: DriverFrameDescriptor,
+    len: usize,
+) -> Option<()> {
+    if !frame.in_ring_payload()
+        || src_offset
+            .checked_add(len)
+            .is_none_or(|end| end > DRIVER_TASK_RING_PAGE_BYTES)
+        || (frame.offset as usize)
+            .checked_add(len)
+            .is_none_or(|end| end > DRIVER_TASK_RING_PAGE_BYTES)
+    {
+        return None;
+    }
+    // SAFETY: The SDIO runtime returned a bounded ring payload; CYW43 copies it
+    // into its own validated command ring frame before resuming protocol logic.
+    unsafe {
+        core::ptr::copy_nonoverlapping(
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + src_offset) as *const u8,
+            (DRIVER_TASK_RING_VADDR + frame.offset as usize) as *mut u8,
+            len,
+        );
+    }
+    Some(())
 }
 
 #[cfg(not(target_os = "none"))]
@@ -2124,7 +2422,7 @@ fn cyw43_transport_init(state: &mut Cyw43RuntimeState) -> bool {
     if !state.bus_link_ready {
         return false;
     }
-    if !sdio_runtime_init_hw() {
+    if !cyw43_uses_sdio_bus_link() && !sdio_runtime_init_hw() {
         return false;
     }
     state.backplane_window_valid = false;
@@ -2618,10 +2916,11 @@ fn genet_runtime_submit_tx(state: &mut GenetRuntimeState, frame: DriverFrameDesc
     else {
         return 0;
     };
-    let Some(dma_paddr) = dma_range
-        .paddr
-        .checked_add((dma_slot as u64).saturating_mul(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES))
-    else {
+    let Some(dma_bus_addr) = runtime_resource_bus_addr_at(
+        descriptor,
+        dma_range,
+        dma_slot.saturating_mul(DRIVER_TASK_RING_PAGE_BYTES),
+    ) else {
         return 0;
     };
     for index in 0..frame.len as usize {
@@ -2631,11 +2930,7 @@ fn genet_runtime_submit_tx(state: &mut GenetRuntimeState, frame: DriverFrameDesc
         );
     }
     dma_store_barrier();
-    genet_write_tx_desc(
-        slot,
-        runtime_bus_addr(descriptor, dma_paddr),
-        genet_tx_len_status(frame.len as usize),
-    );
+    genet_write_tx_desc(slot, dma_bus_addr, genet_tx_len_status(frame.len as usize));
     dma_store_barrier();
     state.tx_prod_index = state.tx_prod_index.wrapping_add(1);
     genet_write32(GENET_TDMA_PROD_INDEX, state.tx_prod_index as u32);
@@ -3005,14 +3300,14 @@ fn genet_rearm_rx_slot(
     dma_range: DriverRuntimeResourceRangeDescriptor,
     slot: usize,
 ) {
-    let dma_paddr = dma_range
-        .paddr
-        .saturating_add((slot as u64).saturating_mul(DRIVER_RUNTIME_RESOURCE_PAGE_BYTES));
-    genet_write_rx_desc(
-        slot,
-        runtime_bus_addr(descriptor, dma_paddr),
-        genet_rx_owned_len_status(),
-    );
+    let Some(dma_bus_addr) = runtime_resource_bus_addr_at(
+        descriptor,
+        dma_range,
+        slot.saturating_mul(DRIVER_TASK_RING_PAGE_BYTES),
+    ) else {
+        return;
+    };
+    genet_write_rx_desc(slot, dma_bus_addr, genet_rx_owned_len_status());
 }
 
 fn genet_write_tx_desc(slot: usize, paddr: u64, len_status: u32) {
@@ -3676,10 +3971,10 @@ fn xhci_cycle_bit(cycle: bool) -> u32 {
 
 fn xhci_dma_bus_addr(
     descriptor: DriverRuntimeInitDescriptor,
-    dma_range_paddr: u64,
+    dma_range: DriverRuntimeResourceRangeDescriptor,
     offset: usize,
-) -> u64 {
-    runtime_bus_addr(descriptor, dma_range_paddr.saturating_add(offset as u64))
+) -> Option<u64> {
+    runtime_resource_bus_addr_at(descriptor, dma_range, offset)
 }
 
 fn xhci_ring_doorbell(state: &UsbRuntimeState, slot: u8, endpoint_id: u8) {
@@ -3706,12 +4001,14 @@ fn xhci_ack_event_dequeue(state: &UsbRuntimeState, descriptor: DriverRuntimeInit
     ) else {
         return;
     };
-    let event = xhci_dma_bus_addr(
+    let Some(event) = xhci_dma_bus_addr(
         descriptor,
-        dma_range.paddr,
+        dma_range,
         XHCI_DMA_EVENT_RING_OFFSET
             + usize::from(state.event_dequeue).saturating_mul(XHCI_TRB_BYTES),
-    );
+    ) else {
+        return;
+    };
     usb_write64(
         state.rt_offset as usize + 0x20 + XHCI_ERDP,
         event | (1 << 3),
@@ -3834,7 +4131,7 @@ fn xhci_prepare_contexts(
     port: u8,
     speed: u32,
     endpoint_id: u8,
-) {
+) -> bool {
     let dma_base = dma_range.vaddr as usize;
     zero_dma_range(dma_base + XHCI_DMA_INPUT_CONTEXT_OFFSET, 0x2000);
     let add_flags = if endpoint_id == 0 {
@@ -3864,7 +4161,9 @@ fn xhci_prepare_contexts(
         1,
         u32::from(port) << XHCI_SLOT_ROOT_HUB_PORT_SHIFT,
     );
-    let ep0_ring = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_EP0_RING_OFFSET);
+    let Some(ep0_ring) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_EP0_RING_OFFSET) else {
+        return false;
+    };
     xhci_write_context_u32(
         dma_base,
         XHCI_DMA_INPUT_CONTEXT_OFFSET,
@@ -3899,7 +4198,10 @@ fn xhci_prepare_contexts(
         8,
     );
     if endpoint_id != 0 {
-        let kbd_ring = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_KBD_RING_OFFSET);
+        let Some(kbd_ring) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET)
+        else {
+            return false;
+        };
         xhci_write_context_u32(
             dma_base,
             XHCI_DMA_INPUT_CONTEXT_OFFSET,
@@ -3942,20 +4244,24 @@ fn xhci_prepare_contexts(
             u32::from(state.keyboard_ep_max_packet),
         );
     }
+    true
 }
 
 fn xhci_prepare_dma_structures(
     state: &mut UsbRuntimeState,
     descriptor: DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
-) {
+) -> bool {
     let dma_base = dma_range.vaddr as usize;
-    zero_dma_range(
-        dma_base,
-        XHCI_DMA_REPORT_BUFFER_OFFSET + DRIVER_TASK_RING_PAGE_BYTES,
-    );
-    let cmd_ring_bus = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_COMMAND_RING_OFFSET);
-    let event_ring_bus = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_EVENT_RING_OFFSET);
+    zero_dma_range(dma_base, XHCI_DMA_ZERO_BYTES);
+    let Some(cmd_ring_bus) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET)
+    else {
+        return false;
+    };
+    let Some(event_ring_bus) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_EVENT_RING_OFFSET)
+    else {
+        return false;
+    };
     let event_base = dma_base + XHCI_DMA_EVENT_RING_OFFSET;
     let cmd_base = dma_base + XHCI_DMA_COMMAND_RING_OFFSET;
     write_xhci_trb(
@@ -3971,7 +4277,10 @@ fn xhci_prepare_dma_structures(
         dma_base + XHCI_DMA_EP0_RING_OFFSET,
         XHCI_COMMAND_RING_TRBS - 1,
         XhciTrb {
-            parameter: xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_EP0_RING_OFFSET),
+            parameter: match xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_EP0_RING_OFFSET) {
+                Some(addr) => addr,
+                None => return false,
+            },
             status: 0,
             control: (XHCI_TRB_TYPE_LINK << 10) | XHCI_TRB_ENT,
         },
@@ -3980,7 +4289,10 @@ fn xhci_prepare_dma_structures(
         dma_base + XHCI_DMA_KBD_RING_OFFSET,
         XHCI_COMMAND_RING_TRBS - 1,
         XhciTrb {
-            parameter: xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_KBD_RING_OFFSET),
+            parameter: match xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET) {
+                Some(addr) => addr,
+                None => return false,
+            },
             status: 0,
             control: (XHCI_TRB_TYPE_LINK << 10) | XHCI_TRB_ENT,
         },
@@ -3991,19 +4303,21 @@ fn xhci_prepare_dma_structures(
         XHCI_EVENT_RING_TRBS as u32,
     );
     if state.scratchpad_count != 0 {
-        let array_bus = xhci_dma_bus_addr(
-            descriptor,
-            dma_range.paddr,
-            XHCI_DMA_SCRATCHPAD_ARRAY_OFFSET,
-        );
+        let array_bus = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_SCRATCHPAD_ARRAY_OFFSET);
+        let Some(array_bus) = array_bus else {
+            return false;
+        };
         write_dma_u64(dma_base, array_bus);
         let count = state.scratchpad_count.min(16);
         for index in 0..count {
             let scratch_bus = xhci_dma_bus_addr(
                 descriptor,
-                dma_range.paddr,
+                dma_range,
                 XHCI_DMA_SCRATCHPAD_OFFSET + index * DRIVER_TASK_RING_PAGE_BYTES,
             );
+            let Some(scratch_bus) = scratch_bus else {
+                return false;
+            };
             write_dma_u64(
                 dma_base + XHCI_DMA_SCRATCHPAD_ARRAY_OFFSET + index.saturating_mul(8),
                 scratch_bus,
@@ -4019,6 +4333,7 @@ fn xhci_prepare_dma_structures(
     state.kbd_enqueue = 0;
     state.kbd_cycle = true;
     let _ = event_base;
+    true
 }
 
 fn xhci_reset_root_port(state: &UsbRuntimeState, port: u8) -> Option<u32> {
@@ -4080,9 +4395,17 @@ fn xhci_address_device(
         dma_range.vaddr as usize + XHCI_DMA_DEVICE_CONTEXT_OFFSET,
         0x2000,
     );
-    xhci_prepare_contexts(state, descriptor, dma_range, port, speed, 0);
-    let input_ctx = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_INPUT_CONTEXT_OFFSET);
-    let device_ctx = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_DEVICE_CONTEXT_OFFSET);
+    if !xhci_prepare_contexts(state, descriptor, dma_range, port, speed, 0) {
+        return false;
+    }
+    let Some(input_ctx) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_INPUT_CONTEXT_OFFSET)
+    else {
+        return false;
+    };
+    let Some(device_ctx) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_DEVICE_CONTEXT_OFFSET)
+    else {
+        return false;
+    };
     write_dma_u64(
         dma_range.vaddr as usize + usize::from(slot).saturating_mul(8),
         device_ctx,
@@ -4115,7 +4438,9 @@ fn xhci_control_transfer(
         return false;
     };
     let base = dma_range.vaddr as usize + XHCI_DMA_EP0_RING_OFFSET;
-    let data_bus = xhci_dma_bus_addr(descriptor, dma_range.paddr, data_offset);
+    let Some(data_bus) = xhci_dma_bus_addr(descriptor, dma_range, data_offset) else {
+        return false;
+    };
     let setup_value = u64::from(setup[0])
         | (u64::from(setup[1]) << 8)
         | (u64::from(setup[2]) << 16)
@@ -4344,15 +4669,20 @@ fn xhci_configure_keyboard_endpoint(
     dma_range: DriverRuntimeResourceRangeDescriptor,
     speed: u32,
 ) -> bool {
-    xhci_prepare_contexts(
+    if !xhci_prepare_contexts(
         state,
         descriptor,
         dma_range,
         state.keyboard_port,
         speed,
         state.keyboard_endpoint_id,
-    );
-    let input_ctx = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_INPUT_CONTEXT_OFFSET);
+    ) {
+        return false;
+    }
+    let Some(input_ctx) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_INPUT_CONTEXT_OFFSET)
+    else {
+        return false;
+    };
     xhci_enqueue_command(
         state,
         descriptor,
@@ -4454,7 +4784,10 @@ fn xhci_queue_keyboard_interrupt_in(
         return false;
     };
     let base = dma_range.vaddr as usize + XHCI_DMA_KBD_RING_OFFSET;
-    let report_bus = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_REPORT_BUFFER_OFFSET);
+    let Some(report_bus) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_REPORT_BUFFER_OFFSET)
+    else {
+        return false;
+    };
     zero_dma_range(
         dma_range.vaddr as usize + XHCI_DMA_REPORT_BUFFER_OFFSET,
         XHCI_BOOT_REPORT_BYTES,
@@ -4556,11 +4889,23 @@ fn usb_runtime_init_hw(
     if !usb_wait_status(op_base, XHCI_USBSTS_CNR, 0) {
         return false;
     }
-    xhci_prepare_dma_structures(state, descriptor, dma_range);
-    let dcbaa = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_DCBBA_OFFSET);
-    let cmd_ring = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_COMMAND_RING_OFFSET);
-    let event_ring = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_EVENT_RING_OFFSET);
-    let erst = xhci_dma_bus_addr(descriptor, dma_range.paddr, XHCI_DMA_ERST_OFFSET);
+    if !xhci_prepare_dma_structures(state, descriptor, dma_range) {
+        return false;
+    }
+    let Some(dcbaa) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_DCBBA_OFFSET) else {
+        return false;
+    };
+    let Some(cmd_ring) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET)
+    else {
+        return false;
+    };
+    let Some(event_ring) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_EVENT_RING_OFFSET)
+    else {
+        return false;
+    };
+    let Some(erst) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_ERST_OFFSET) else {
+        return false;
+    };
     dma_store_barrier();
     usb_write64(op_base + XHCI_DCBAAP, dcbaa);
     usb_write64(op_base + XHCI_CRCR, cmd_ring | 1);
@@ -4948,6 +5293,12 @@ fn serial_write_frame(frame: DriverFrameDescriptor) -> usize {
 /// Run the isolated driver runtime receive/service loop.
 #[cfg(target_os = "none")]
 pub fn runtime_main(task_key: usize) -> ! {
+    // SAFETY: Root installs the child IPC buffer cap and maps the frame at this
+    // fixed driver-local virtual address before resuming the linked runtime.
+    unsafe {
+        sel4_sys::seL4_SetIPCBuffer(DRIVER_TASK_IPC_VADDR as *mut sel4_sys::seL4_IPCBuffer);
+    }
+
     loop {
         let mut badge: sel4_sys::seL4_Word = 0;
         // SAFETY: The root task minted `DRIVER_TASK_CHILD_COMMAND_SLOT` into
@@ -4978,9 +5329,16 @@ pub fn runtime_main(task_key: usize) -> ! {
             // SAFETY: The command was delivered by `seL4_Call` in the physical
             // Pi profile, so the kernel installed a reply cap for this TCB. The
             // completion record is already visible in the shared ring before the
-            // reply releases root.
-            sel4_sys::seL4_SetMR(0, completion.result as sel4_sys::seL4_Word);
-            sel4_sys::seL4_Reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1));
+            // reply releases root. ReplyWithMRs avoids depending on IPC-buffer
+            // message-register writes for the single primitive result word.
+            let reply0 = completion.result as sel4_sys::seL4_Word;
+            sel4_sys::seL4_ReplyWithMRs(
+                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+                &reply0,
+                core::ptr::null(),
+                core::ptr::null(),
+                core::ptr::null(),
+            );
         }
     }
 }
@@ -5024,6 +5382,7 @@ mod tests {
         GENET_RX_COUNT.store(0, Ordering::Release);
         CYW43_RUNTIME_FLAGS.store(0, Ordering::Release);
         CYW43_TX_COUNT.store(0, Ordering::Release);
+        CYW43_SDIO_BUS_LINK_SEQ.store(0, Ordering::Release);
         SDIO_RUNTIME_FLAGS.store(0, Ordering::Release);
         SDIO_CMD_COUNT.store(0, Ordering::Release);
         PCIE_RUNTIME_FLAGS.store(0, Ordering::Release);
@@ -5877,6 +6236,82 @@ mod tests {
             sdio_descriptor_response_flags(DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY),
             DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY
         );
+    }
+
+    #[test]
+    fn sdio_descriptor_read_completion_reports_payload_offset() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_SDIO_HOST, ROLE_SDIO);
+        let init = DriverTaskCommandRecord {
+            sequence: 72,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_command(0, init),
+            DriverTaskCompletionRecord::progress(72, 1)
+        );
+        let desc_offset = DRIVER_TASK_RING_FRAME_OFFSET;
+        let data_offset = DRIVER_TASK_RING_FRAME_OFFSET + 64;
+        write_sdio_descriptor_for_test(
+            desc_offset,
+            DriverRuntimeSdioCommandDescriptor {
+                op: DRIVER_RUNTIME_SDIO_OP_CMD52_READ,
+                function: 1,
+                response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+                addr: 0x20,
+                data_offset: data_offset as u16,
+                len: 1,
+                ..DriverRuntimeSdioCommandDescriptor::empty()
+            },
+        );
+        let completion = service_sdio_host(DriverTaskCommandRecord {
+            sequence: 73,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor {
+                offset: desc_offset as u32,
+                len: core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>() as u16,
+                flags: 0,
+            },
+        });
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::frame_ready_at(73, data_offset as u32, 1)
+        );
+    }
+
+    fn write_sdio_descriptor_for_test(offset: usize, desc: DriverRuntimeSdioCommandDescriptor) {
+        write_ring_byte(offset, (desc.op & 0xff) as u8);
+        write_ring_byte(offset + 1, (desc.op >> 8) as u8);
+        write_ring_byte(offset + 2, desc.function);
+        write_ring_byte(offset + 3, desc.response_kind);
+        write_ring_u32(offset + 4, desc.addr);
+        write_ring_byte(offset + 8, (desc.data_offset & 0xff) as u8);
+        write_ring_byte(offset + 9, (desc.data_offset >> 8) as u8);
+        write_ring_byte(offset + 10, (desc.len & 0xff) as u8);
+        write_ring_byte(offset + 11, (desc.len >> 8) as u8);
+        write_ring_byte(offset + 12, (desc.block_size & 0xff) as u8);
+        write_ring_byte(offset + 13, (desc.block_size >> 8) as u8);
+        write_ring_byte(offset + 14, (desc.block_count & 0xff) as u8);
+        write_ring_byte(offset + 15, (desc.block_count >> 8) as u8);
+        write_ring_byte(offset + 16, (desc.flags & 0xff) as u8);
+        write_ring_byte(offset + 17, (desc.flags >> 8) as u8);
+        write_ring_byte(offset + 18, (desc.reserved & 0xff) as u8);
+        write_ring_byte(offset + 19, (desc.reserved >> 8) as u8);
+        write_ring_u32(offset + 20, desc.timeout_us);
     }
 
     #[test]

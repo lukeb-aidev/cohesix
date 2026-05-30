@@ -8484,10 +8484,12 @@ mod tests {
             rendered.contains("[smp] activity rates sample=first run_again=yes"),
             "{rendered}"
         );
-        assert!(
-            rendered.contains("[smp] activity affinity unavailable=host-test"),
-            "{rendered}"
-        );
+        let affinity_line = if cfg!(feature = "kernel") {
+            "[smp] activity affinity enabled="
+        } else {
+            "[smp] activity affinity unavailable=host-test"
+        };
+        assert!(rendered.contains(affinity_line), "{rendered}");
         assert!(rendered.contains("OK SMP mode=activity"), "{rendered}");
         assert!(
             !rendered.contains("debug scheduler dump begin"),
@@ -8535,10 +8537,12 @@ mod tests {
         let transcript = pump.serial_mut().driver_mut().drain_tx();
         let rendered = String::from_utf8(transcript.into_iter().collect())
             .expect("serial output must be utf8");
-        assert!(
-            rendered.contains("[smp] activity core c=n/a tasks=host-test win=1000"),
-            "{rendered}"
-        );
+        let core_rate_line = if cfg!(feature = "kernel") {
+            "[smp] activity core c=0 tasks=authority win=1000"
+        } else {
+            "[smp] activity core c=n/a tasks=host-test win=1000"
+        };
+        assert!(rendered.contains(core_rate_line), "{rendered}");
         assert!(rendered.contains("cmd_s=3"), "{rendered}");
         assert!(rendered.contains("line_s=4"), "{rendered}");
         assert!(rendered.contains("tick_s=2"), "{rendered}");
