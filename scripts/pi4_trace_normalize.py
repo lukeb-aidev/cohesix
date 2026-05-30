@@ -793,7 +793,7 @@ def parse_events(lines: Iterable[str], line_base: int = 0) -> list[TraceEvent]:
                     domain="console",
                     source="cohesix",
                     message="prompt",
-                    raw=raw_clean,
+                    raw="cohesix>",
                     fields={"prompt": "yes"},
                     stage="prompt",
                 )

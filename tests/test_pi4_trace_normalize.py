@@ -706,6 +706,21 @@ def test_gate_summary_tracks_driver_task_ring_call_return() -> None:
     assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 0
 
 
+def test_gate_summary_does_not_double_count_prompt_line_driver_task_return() -> None:
+    events = normalizer.parse_events(
+        [
+            "cohesix> DRIVER_TASK_RING_CALL_RETURN contract=serial endpoint=0x05ae "
+            "request=1 sequence=1 code=1 detail=0 result=1",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["ROOT_PROMPT_SEEN"] == "yes"
+    assert record["DRIVER_TASK_RING_CALL_BEGIN"] == 0
+    assert record["DRIVER_TASK_RING_CALL_RETURN"] == 1
+    assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 0
+
+
 def test_gate_summary_tracks_driver_task_ring_call_timeout() -> None:
     events = normalizer.parse_events(
         [

@@ -783,6 +783,32 @@ fn pi4_local_usb_boot_wifi_defer_detail(reason: &str) -> HeaplessString<192> {
     detail
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn pi4_pre_root_net_bootstrap_selection(
+    hardware: generated::HardwareConfig,
+    config: &crate::net::ConsoleNetConfig,
+    rejected_policy_reason: Option<&'static str>,
+) -> crate::hal::driver_task::Pi4PreRootNetBootstrapSelection {
+    use crate::hal::driver_task::Pi4PreRootNetBootstrapSelection;
+
+    if hardware.no_nic
+        || matches!(config.policy.mode, crate::net::NetMode::Off)
+        || rejected_policy_reason.is_some()
+        || !matches!(config.backend, crate::net::NetBackend::BcmGenet)
+    {
+        return Pi4PreRootNetBootstrapSelection::Disabled;
+    }
+
+    match config.policy.interface {
+        crate::net::NetInterfacePolicy::Wired => Pi4PreRootNetBootstrapSelection::Wired,
+        crate::net::NetInterfacePolicy::Wifi => Pi4PreRootNetBootstrapSelection::Wifi,
+        crate::net::NetInterfacePolicy::Auto if config.wifi_credentials.is_some() => {
+            Pi4PreRootNetBootstrapSelection::Wifi
+        }
+        crate::net::NetInterfacePolicy::Auto => Pi4PreRootNetBootstrapSelection::Wired,
+    }
+}
+
 fn required_local_seat_probe_should_abort(
     required: bool,
     result: local_seat::LocalSeatKeyboardProbeResult,
@@ -4382,6 +4408,16 @@ fn bootstrap<P: Platform>(
             );
         }
     }
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    let pre_root_net_boot_policy = {
+        let boot_policy = resolve_pi4_boot_net_policy(extra_bytes, extra_range.clone(), hardware);
+        let config = crate::net::console_net_config_with_runtime_policy(boot_policy.policy);
+        let rejected_policy_reason = dtb_rejected_net_policy_reason(boot_policy.source);
+        crate::hal::driver_task::publish_pi4_pre_root_net_bootstrap_selection(
+            pi4_pre_root_net_bootstrap_selection(hardware, &config, rejected_policy_reason),
+        );
+        boot_policy
+    };
 
     let empty_start = bootinfo_ref.empty_first_slot();
     let empty_end = bootinfo_ref.empty_last_slot_excl();
@@ -4770,8 +4806,7 @@ fn bootstrap<P: Platform>(
                 console_net_config_with_runtime_policy, init_net_console, NetConsoleError, NetMode,
                 NetPoller,
             };
-            let boot_policy =
-                resolve_pi4_boot_net_policy(extra_bytes, extra_range.clone(), hardware);
+            let boot_policy = pre_root_net_boot_policy.clone();
             let config = console_net_config_with_runtime_policy(boot_policy.policy);
             let net_backend_label = config.backend.label();
             let rejected_policy_reason = dtb_rejected_net_policy_reason(boot_policy.source);
@@ -7451,6 +7486,48 @@ mod tests {
         assert_eq!(
             super::pi4_local_usb_boot_wifi_defer_detail("pi4-local-seat-explicit-wifi").as_str(),
             "wifi-net-console-pending-before-root-console:pi4-local-seat-explicit-wifi"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn pi4_pre_root_net_bootstrap_selection_tracks_selected_nic() {
+        use crate::hal::driver_task::Pi4PreRootNetBootstrapSelection;
+
+        let mut hardware = crate::generated::hardware_config();
+        hardware.no_nic = false;
+        let mut config = crate::net::ConsoleNetConfig::default();
+        config.backend = crate::net::NetBackend::BcmGenet;
+        config.policy.mode = crate::net::NetMode::Dhcp;
+        config.policy.interface = crate::net::NetInterfacePolicy::Wifi;
+        assert_eq!(
+            super::pi4_pre_root_net_bootstrap_selection(hardware, &config, None),
+            Pi4PreRootNetBootstrapSelection::Wifi
+        );
+
+        config.policy.interface = crate::net::NetInterfacePolicy::Wired;
+        assert_eq!(
+            super::pi4_pre_root_net_bootstrap_selection(hardware, &config, None),
+            Pi4PreRootNetBootstrapSelection::Wired
+        );
+
+        config.policy.interface = crate::net::NetInterfacePolicy::Auto;
+        config.wifi_credentials = None;
+        assert_eq!(
+            super::pi4_pre_root_net_bootstrap_selection(hardware, &config, None),
+            Pi4PreRootNetBootstrapSelection::Wired
+        );
+
+        config.wifi_credentials =
+            Some(crate::net::WifiCredentials::new("cohesix", "passphrase").unwrap());
+        assert_eq!(
+            super::pi4_pre_root_net_bootstrap_selection(hardware, &config, None),
+            Pi4PreRootNetBootstrapSelection::Wifi
+        );
+
+        assert_eq!(
+            super::pi4_pre_root_net_bootstrap_selection(hardware, &config, Some("bad-policy")),
+            Pi4PreRootNetBootstrapSelection::Disabled
         );
     }
 

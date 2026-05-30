@@ -219,7 +219,26 @@ pub fn main(ctx: BootContext) -> ! {
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         {
             if net_stack.is_none() {
-                if let Some(config) = net_deferred_config.take() {
+                let resume_deferred_net_before_root =
+                    deferred_net_console_resume_before_root_allowed(
+                        crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+                        crate::hal::driver_task::driver_task_runtime_proof().pointer_free_ipc_proof,
+                    );
+                if !resume_deferred_net_before_root && net_deferred_config.is_some() {
+                    boot_log::force_uart_line(
+                        "[net-console] deferred resume skipped reason=driver-task-net-runtime-unproved action=root-shell-first",
+                    );
+                    log::warn!(
+                        target: "net-console",
+                        "[net-console] deferred resume skipped before root console: driver-task pointer-free IPC proof is incomplete"
+                    );
+                    let mut detail = HeaplessString::<192>::new();
+                    let _ = write!(
+                        detail,
+                        "deferred until root shell: driver-task net runtime proof missing",
+                    );
+                    net_unavailable_detail = Some(detail);
+                } else if let Some(config) = net_deferred_config.take() {
                     boot_log::force_uart_line(
                         "[net-console] deferred resume reason=pre-root-console action=start-wifi",
                     );
@@ -303,12 +322,12 @@ pub fn main(ctx: BootContext) -> ! {
             "[boot] TimersAndIPC: root-console.start.begin"
         );
         log::info!(target: "boot", "[boot] before starting root shell");
-        pump.announce_console_ready();
         log::info!(target: "boot", "[boot] root shell starting");
         log::info!(target: "console", "[console] starting root CLI");
-        boot_log::force_uart_line("[mark] root-console.start.begin");
+        boot_log::force_uart_line_raw("[mark] root-console.start.begin");
         pump.start_cli();
-        boot_log::force_uart_line("[mark] root-console.start.ok");
+        boot_log::force_uart_line_raw("[mark] root-console.start.ok");
+        pump.announce_console_ready();
         #[cfg(feature = "kernel")]
         {
             let now_ms = crate::hal::timebase().now_ms();
@@ -517,6 +536,14 @@ fn init_deferred_net_console(
     // so no other mutable HAL access is active while the net stack is created.
     let hal = unsafe { &mut *(hal_ptr as *mut KernelHal<'static>) };
     crate::net::init_net_console(hal, config)
+}
+
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+fn deferred_net_console_resume_before_root_allowed(
+    physical_pi_owner_state: bool,
+    pointer_free_ipc_proof: bool,
+) -> bool {
+    !physical_pi_owner_state || pointer_free_ipc_proof
 }
 
 #[cfg(all(feature = "net-console", feature = "kernel"))]
@@ -875,6 +902,20 @@ fn read_cntfrq() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(all(feature = "net-console", feature = "kernel"))]
+    #[test]
+    fn deferred_net_console_waits_for_driver_task_ring_proof_on_pi() {
+        assert!(!super::deferred_net_console_resume_before_root_allowed(
+            true, false
+        ));
+        assert!(super::deferred_net_console_resume_before_root_allowed(
+            true, true
+        ));
+        assert!(super::deferred_net_console_resume_before_root_allowed(
+            false, false
+        ));
+    }
+
     #[cfg(all(feature = "serial-console", feature = "kernel"))]
     #[test]
     fn serial_console_uart_status_names_driver_task_ownership() {

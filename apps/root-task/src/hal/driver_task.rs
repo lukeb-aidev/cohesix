@@ -55,6 +55,37 @@ pub enum DriverTaskRuntimeProfile {
     HostTest,
 }
 
+/// Network driver selected for pre-root physical Pi proof.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Pi4PreRootNetBootstrapSelection {
+    /// No network driver is selected for pre-root proof.
+    Disabled,
+    /// Wired GENET is the selected pre-root NIC.
+    Wired,
+    /// CYW43 Wi-Fi is the selected pre-root NIC.
+    Wifi,
+}
+
+impl Pi4PreRootNetBootstrapSelection {
+    #[cfg(feature = "kernel")]
+    const fn as_u32(self) -> u32 {
+        match self {
+            Self::Disabled => 0,
+            Self::Wired => 1,
+            Self::Wifi => 2,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn from_u32(value: u32) -> Self {
+        match value {
+            1 => Self::Wired,
+            2 => Self::Wifi,
+            _ => Self::Disabled,
+        }
+    }
+}
+
 impl DriverTaskRuntimeProfile {
     /// Stable diagnostic label.
     #[must_use]
@@ -97,6 +128,25 @@ pub const STEADY_STATE_COMPAT_SERVICE_COMPILED: bool = cfg!(any(
     not(target_os = "none"),
     feature = "net-backend-virtio"
 ));
+
+#[cfg(feature = "kernel")]
+static PI4_PRE_ROOT_NET_BOOTSTRAP_SELECTION: AtomicU32 =
+    AtomicU32::new(Pi4PreRootNetBootstrapSelection::Disabled.as_u32());
+
+/// Publish the U-Boot/manifest-selected NIC for physical Pi diagnostics.
+#[cfg(feature = "kernel")]
+pub fn publish_pi4_pre_root_net_bootstrap_selection(selection: Pi4PreRootNetBootstrapSelection) {
+    PI4_PRE_ROOT_NET_BOOTSTRAP_SELECTION.store(selection.as_u32(), Ordering::Release);
+}
+
+/// Return the selected NIC advertised by U-Boot/manifest policy.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn pi4_pre_root_net_bootstrap_selection() -> Pi4PreRootNetBootstrapSelection {
+    Pi4PreRootNetBootstrapSelection::from_u32(
+        PI4_PRE_ROOT_NET_BOOTSTRAP_SELECTION.load(Ordering::Acquire),
+    )
+}
 
 /// Whether this build is the physical Pi 4 owner-state cutover profile.
 ///
@@ -397,6 +447,38 @@ pub const fn root_fallback_allowed_for_profile(profile: DriverTaskRuntimeProfile
     }
 }
 
+/// Returns whether a pre-root physical-Pi bootstrap must defer runtime-init service.
+///
+/// The physical Pi 4 path uses a blocking seL4 call for linked-runtime service
+/// turns. Network runtimes are allowed to make progress only after the root
+/// shell is available, so a selected or fallback NIC cannot starve serial,
+/// local-seat, and display console availability.
+#[must_use]
+pub const fn pre_root_runtime_init_deferred_for_profile(
+    profile: DriverTaskRuntimeProfile,
+    _selection: Pi4PreRootNetBootstrapSelection,
+    contract: DriverTaskContract,
+) -> bool {
+    if !matches!(profile, DriverTaskRuntimeProfile::Pi4Hardware) {
+        return false;
+    }
+    matches!(
+        contract.kind,
+        DriverTaskKind::WiredNic | DriverTaskKind::WifiNic
+    )
+}
+
+/// Current-build pre-root runtime-init deferral policy.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn pre_root_runtime_init_deferred_for_shell(contract: DriverTaskContract) -> bool {
+    pre_root_runtime_init_deferred_for_profile(
+        CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
+        pi4_pre_root_net_bootstrap_selection(),
+        contract,
+    )
+}
+
 /// Current-build admission for callback-pointer steady-state service turns.
 #[must_use]
 pub const fn steady_state_callback_dispatch_allowed(_contract: DriverTaskContract) -> bool {
@@ -542,6 +624,13 @@ pub const CURRENT_DRIVER_TASK_IPC_ABI: DriverTaskIpcAbi = if STEADY_STATE_COMPAT
 } else {
     DriverTaskIpcAbi::SharedRingCommand
 };
+
+/// Temporary priority for Pi 4 linked runtimes before root has reached shell.
+///
+/// The child TCB keeps its full contract MCP, but its runnable priority stays
+/// below root until the first endpoint-backed ring turn proves that it blocks
+/// and replies correctly.
+pub const PI4_SHELL_SAFE_BOOTSTRAP_PRIORITY: u8 = 1;
 
 /// Entry point for bootstrap-created driver TCBs.
 #[cfg(feature = "kernel")]
@@ -1762,39 +1851,47 @@ fn record_observed_service_us(contract: DriverTaskContract, observed_us: u32) {
 
 #[cfg(feature = "kernel")]
 #[inline]
-fn driver_task_counter_frequency() -> u64 {
-    #[cfg(target_arch = "aarch64")]
+fn driver_task_counter_frequency() -> Option<u64> {
+    #[cfg(all(target_arch = "aarch64", feature = "timers-arch-counter"))]
     {
-        read_cntfrq()
+        Some(read_cntfrq())
+    }
+    #[cfg(all(target_arch = "aarch64", not(feature = "timers-arch-counter")))]
+    {
+        None
     }
     #[cfg(not(target_arch = "aarch64"))]
     {
-        1_000_000
+        Some(1_000_000)
     }
 }
 
 #[cfg(feature = "kernel")]
 #[inline]
-fn driver_task_counter_ticks() -> u64 {
-    #[cfg(target_arch = "aarch64")]
+fn driver_task_counter_ticks() -> Option<u64> {
+    #[cfg(all(target_arch = "aarch64", feature = "timers-arch-counter"))]
     {
-        read_cntpct()
+        Some(read_cntvct())
+    }
+    #[cfg(all(target_arch = "aarch64", not(feature = "timers-arch-counter")))]
+    {
+        None
     }
     #[cfg(not(target_arch = "aarch64"))]
     {
-        DRIVER_TASK_TEST_COUNTER_TICKS.fetch_add(1, Ordering::Relaxed)
+        Some(DRIVER_TASK_TEST_COUNTER_TICKS.fetch_add(1, Ordering::Relaxed))
     }
 }
 
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
 #[inline]
-fn read_cntpct() -> u64 {
+fn read_cntvct() -> u64 {
     let value: u64;
-    // SAFETY: The Pi 4 root task already uses the architectural physical
-    // counter as a read-only timing source. This reads CNTPCT_EL0 state only;
-    // it does not change device, kernel, or capability authority.
+    // SAFETY: CNTVCT_EL0 is the EL0-readable architectural virtual counter
+    // exposed by seL4 for userspace timing. This is read-only telemetry and
+    // does not change device, kernel, or capability authority.
     unsafe {
-        core::arch::asm!("mrs {value}, cntpct_el0", value = out(reg) value);
+        core::arch::asm!("mrs {value}, cntvct_el0", value = out(reg) value);
     }
     value
 }
@@ -2077,6 +2174,13 @@ pub fn register_driver_task_runtime_owner_state(hot_path: DriverTaskHotPath) -> 
     register_driver_task_owner_state_descriptor(hot_path.contract(), descriptor)
 }
 
+/// Return whether one runtime hot path has registered pointer-free owner state.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_runtime_owner_state_registered(hot_path: DriverTaskHotPath) -> bool {
+    DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire) & hot_path.owner_state_bit() != 0
+}
+
 #[cfg(feature = "kernel")]
 fn refresh_driver_task_owner_state_proof() {
     let owner_hot_paths = DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire);
@@ -2277,6 +2381,7 @@ fn emit_driver_task_ring_call_timeout(
 enum DriverTaskRingCommandMode {
     Steady,
     Bootstrap,
+    NonBlocking,
 }
 
 /// Execute a fixed-layout command over the pointer-free shared-ring ABI.
@@ -2300,6 +2405,19 @@ pub fn run_driver_task_ring_command_bootstrap(
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
     run_driver_task_ring_command_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
+}
+
+/// Execute a linked-runtime command with bounded nonblocking sends.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_command_nonblocking(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode(
+        contract,
+        command,
+        DriverTaskRingCommandMode::NonBlocking,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -2341,9 +2459,28 @@ fn run_driver_task_ring_command_with_mode(
     }
 
     let mut completion = completion_reset;
-    let start_ticks = driver_task_counter_ticks();
+    let mut start_ticks = None;
 
-    if mode == DriverTaskRingCommandMode::Bootstrap
+    if mode == DriverTaskRingCommandMode::NonBlocking {
+        emit_driver_task_ring_call_begin(contract, endpoint, request, command);
+        start_ticks = driver_task_counter_ticks();
+        let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
+        for _ in 0..DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS {
+            crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
+            crate::sel4::yield_now();
+            // SAFETY: The completion pointer addresses the same validated ring
+            // page. A matching sequence means the isolated runtime observed the
+            // nonblocking send and published the primitive completion record.
+            completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+            if completion.sequence == request as u32 {
+                emit_driver_task_ring_call_return(contract, endpoint, request, completion);
+                break;
+            }
+        }
+        if completion.sequence != request as u32 {
+            emit_driver_task_ring_call_timeout(contract, endpoint, request);
+        }
+    } else if mode == DriverTaskRingCommandMode::Bootstrap
         && physical_pi_driver_task_only_owner_state_active()
         && cfg!(not(sel4_config_kernel_mcs))
     {
@@ -2375,6 +2512,7 @@ fn run_driver_task_ring_command_with_mode(
         // behavior; the linked runtime replies after publishing the primitive
         // completion record.
         emit_driver_task_ring_call_begin(contract, endpoint, request, command);
+        start_ticks = driver_task_counter_ticks();
         // SAFETY: The fixed ABI uses MR0 as the request sequence. Re-writing it
         // immediately before the blocking call keeps diagnostic UART emission
         // out of the message-register contract.
@@ -2391,6 +2529,7 @@ fn run_driver_task_ring_command_with_mode(
         completion = unsafe { core::ptr::read_volatile(completion_ptr) };
         emit_driver_task_ring_call_return(contract, endpoint, request, completion);
     } else {
+        start_ticks = driver_task_counter_ticks();
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
         for _ in 0..256 {
             crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
@@ -2407,10 +2546,14 @@ fn run_driver_task_ring_command_with_mode(
 
     slot.active.store(0, Ordering::Release);
     if completion.sequence == request as u32 {
-        let end_ticks = driver_task_counter_ticks();
-        let elapsed_us =
-            driver_task_elapsed_us(start_ticks, end_ticks, driver_task_counter_frequency());
-        record_observed_service_us(contract, elapsed_us);
+        if let (Some(start_ticks), Some(end_ticks), Some(counter_frequency)) = (
+            start_ticks,
+            driver_task_counter_ticks(),
+            driver_task_counter_frequency(),
+        ) {
+            let elapsed_us = driver_task_elapsed_us(start_ticks, end_ticks, counter_frequency);
+            record_observed_service_us(contract, elapsed_us);
+        }
         Some(completion)
     } else {
         None
@@ -2421,7 +2564,38 @@ fn run_driver_task_ring_command_with_mode(
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_service(
     contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode(contract, command, DriverTaskRingCommandMode::Steady)
+}
+
+/// Execute a pre-root service turn without sampling hardware timing registers.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_bootstrap(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
+}
+
+/// Execute one registered driver service turn through bounded nonblocking IPC.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_nonblocking(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode(
+        contract,
+        command,
+        DriverTaskRingCommandMode::NonBlocking,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_ring_service_with_mode(
+    contract: DriverTaskContract,
     mut command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
 ) -> Option<DriverTaskCompletionRecord> {
     let service_kind = driver_task_ring_service_kind(contract);
     if service_kind == DriverTaskRingServiceKind::RootContextDiagnostic {
@@ -2430,7 +2604,7 @@ pub fn run_driver_task_ring_service(
     }
     let owner_state_credit_eligible =
         driver_task_ring_service_owner_state_credit_eligible(service_kind, command);
-    let completion = run_driver_task_ring_command(contract, command)?;
+    let completion = run_driver_task_ring_command_with_mode(contract, command, mode)?;
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
         record_driver_task_ring_service(
             contract,
@@ -2878,7 +3052,7 @@ impl DriverTaskContract {
     #[must_use]
     pub const fn bootstrap_priority(self, profile: DriverTaskRuntimeProfile) -> u8 {
         match profile {
-            DriverTaskRuntimeProfile::Pi4Hardware => self.sel4_priority(),
+            DriverTaskRuntimeProfile::Pi4Hardware => PI4_SHELL_SAFE_BOOTSTRAP_PRIORITY,
             DriverTaskRuntimeProfile::QemuCompatibility | DriverTaskRuntimeProfile::HostTest => {
                 self.sel4_priority()
             }
@@ -4356,7 +4530,11 @@ mod tests {
     fn pi4_bootstrap_priority_never_preempts_root_before_shell() {
         assert_eq!(
             SERIAL_DRIVER_TASK_CONTRACT.bootstrap_priority(DriverTaskRuntimeProfile::Pi4Hardware),
-            SERIAL_DRIVER_TASK_CONTRACT.sel4_priority()
+            PI4_SHELL_SAFE_BOOTSTRAP_PRIORITY
+        );
+        assert!(
+            SERIAL_DRIVER_TASK_CONTRACT.bootstrap_priority(DriverTaskRuntimeProfile::Pi4Hardware)
+                < DriverTaskClass::Background.sel4_priority()
         );
         assert_eq!(
             SERIAL_DRIVER_TASK_CONTRACT
@@ -4367,6 +4545,45 @@ mod tests {
             SERIAL_DRIVER_TASK_CONTRACT.bootstrap_priority(DriverTaskRuntimeProfile::HostTest),
             SERIAL_DRIVER_TASK_CONTRACT.sel4_priority()
         );
+    }
+
+    #[test]
+    fn pi4_pre_root_runtime_init_defers_network_before_shell() {
+        assert!(pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware,
+            Pi4PreRootNetBootstrapSelection::Wifi,
+            GENET_DRIVER_TASK_CONTRACT
+        ));
+        assert!(pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware,
+            Pi4PreRootNetBootstrapSelection::Wifi,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert!(pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware,
+            Pi4PreRootNetBootstrapSelection::Wired,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert!(pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware,
+            Pi4PreRootNetBootstrapSelection::Wired,
+            GENET_DRIVER_TASK_CONTRACT
+        ));
+        assert!(!pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware,
+            Pi4PreRootNetBootstrapSelection::Wifi,
+            SDIO_HOST_DRIVER_TASK_CONTRACT
+        ));
+        assert!(!pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::QemuCompatibility,
+            Pi4PreRootNetBootstrapSelection::Wifi,
+            GENET_DRIVER_TASK_CONTRACT
+        ));
+        assert!(!pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::HostTest,
+            Pi4PreRootNetBootstrapSelection::Wired,
+            GENET_DRIVER_TASK_CONTRACT
+        ));
     }
 
     #[test]

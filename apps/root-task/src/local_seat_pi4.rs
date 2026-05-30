@@ -2172,6 +2172,12 @@ impl Pi4LocalSeat {
         }
     }
 
+    /// Returns whether the HDMI text backend is currently available.
+    #[must_use]
+    pub const fn display_attached(&self) -> bool {
+        self.display.is_some()
+    }
+
     /// Publish the stable HDMI sink used for boot-progress banners.
     pub(crate) fn register_boot_progress_display(&mut self) {
         if let Some(display) = self.display.as_mut() {

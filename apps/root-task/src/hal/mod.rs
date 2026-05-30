@@ -69,21 +69,22 @@ use pi4_driver_abi::{
     DriverRuntimeBusLinkDescriptor, DriverRuntimeInitDescriptor, DriverRuntimePageDescriptor,
     DriverRuntimeResourceRangeDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
     DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
-    DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
-    DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
-    DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
-    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
-    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
-    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
-    DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
-    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
-    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
-    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_ENGINE_INIT_AUX,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING,
+    DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
+    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED,
+    DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
+    DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN, DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS,
+    DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
+    DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED, DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS,
+    DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
+    DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
+    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
+    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1276,6 +1277,41 @@ const DRIVER_TASK_BOOTSTRAP_CONTRACTS: &[DriverTaskContract] = &[
 ];
 
 #[cfg(feature = "kernel")]
+const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST: &[DriverTaskContract] = &[
+    SERIAL_DRIVER_TASK_CONTRACT,
+    SDIO_HOST_DRIVER_TASK_CONTRACT,
+    PCIE_ROOT_DRIVER_TASK_CONTRACT,
+    USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+    HDMI_TEXT_DRIVER_TASK_CONTRACT,
+    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+    GENET_DRIVER_TASK_CONTRACT,
+];
+
+#[cfg(feature = "kernel")]
+const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST: &[DriverTaskContract] = &[
+    SERIAL_DRIVER_TASK_CONTRACT,
+    SDIO_HOST_DRIVER_TASK_CONTRACT,
+    PCIE_ROOT_DRIVER_TASK_CONTRACT,
+    USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+    HDMI_TEXT_DRIVER_TASK_CONTRACT,
+    GENET_DRIVER_TASK_CONTRACT,
+    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+];
+
+#[cfg(feature = "kernel")]
+fn physical_pi_driver_task_bootstrap_contracts() -> &'static [DriverTaskContract] {
+    match driver_task::pi4_pre_root_net_bootstrap_selection() {
+        driver_task::Pi4PreRootNetBootstrapSelection::Wired => {
+            PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST
+        }
+        driver_task::Pi4PreRootNetBootstrapSelection::Wifi
+        | driver_task::Pi4PreRootNetBootstrapSelection::Disabled => {
+            PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug)]
 struct KernelDriverTaskHandle {
     contract: DriverTaskContract,
@@ -1655,6 +1691,77 @@ impl RuntimeInitDescriptorBuilder {
             Err(HalError::Unsupported("driver-runtime-init-invalid"))
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+fn bootstrap_linked_runtime_engine_for_early_console(
+    contract: DriverTaskContract,
+    spec: driver_task::DriverTaskRuntimeImageSpec,
+) -> Result<bool, HalError> {
+    if spec.hot_path != driver_task::DriverTaskHotPath::HdmiText
+        || !driver_task::physical_pi_driver_task_only_owner_state_active()
+    {
+        return Ok(false);
+    }
+
+    let mut command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        spec.hot_path,
+        driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        driver_task::DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    );
+    command.aux0 = DRIVER_RUNTIME_ENGINE_INIT_AUX;
+    let engine_ready = matches!(
+        driver_task::run_driver_task_ring_command_bootstrap(contract, command),
+        Some(done)
+            if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && done.result == 1
+    );
+    if !engine_ready {
+        crate::bootstrap::log::force_uart_line(
+            "DRIVER_TASK_HDMI_EARLY_READY contract=hdmi-text engine_init=no owner_state=no banner=no action=serial-continues",
+        );
+        return Ok(false);
+    }
+
+    let owner_state = driver_task::register_driver_task_runtime_owner_state(
+        driver_task::DriverTaskHotPath::HdmiText,
+    );
+    let banner = if owner_state {
+        let frame = driver_task::stage_driver_task_ring_frame(contract, b"Starting HDMI", 0)
+            .ok_or(HalError::Unsupported(
+                "driver-runtime-hdmi-early-banner-stage",
+            ))?;
+        let command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            spec.hot_path,
+            driver_task::DriverTaskBudgetGrant::from_contract(contract),
+            frame,
+        );
+        matches!(
+            driver_task::run_driver_task_ring_command_bootstrap(contract, command),
+            Some(done)
+                if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                    && done.result != 0
+        )
+    } else {
+        false
+    };
+    let mut line = heapless::String::<160>::new();
+    let _ = fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "DRIVER_TASK_HDMI_EARLY_READY contract=hdmi-text engine_init=yes owner_state={} banner={} action=boot-progress-mirror",
+            if owner_state { "yes" } else { "no" },
+            if banner { "yes" } else { "no" },
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+    Ok(owner_state)
 }
 
 #[cfg(feature = "kernel")]
@@ -2046,7 +2153,7 @@ fn configure_driver_tcb_priority_for_boot(
     sel4::set_tcb_sched_params(
         tcb,
         sel4_sys::seL4_CapInitThreadTCB,
-        bootstrap_priority,
+        steady_priority,
         bootstrap_priority,
     )
     .map_err(HalError::Sel4)?;
@@ -2201,7 +2308,14 @@ impl<'a> KernelHal<'a> {
         let use_isolated_vspace =
             driver_task::physical_pi_driver_task_bootstrap_requires_isolated_vspace();
 
-        for contract in DRIVER_TASK_BOOTSTRAP_CONTRACTS {
+        let bootstrap_contracts = if driver_task::physical_pi_driver_task_only_owner_state_active()
+        {
+            physical_pi_driver_task_bootstrap_contracts()
+        } else {
+            DRIVER_TASK_BOOTSTRAP_CONTRACTS
+        };
+
+        for contract in bootstrap_contracts {
             let created = if use_isolated_vspace {
                 self.create_isolated_driver_task(*contract, fault_endpoint)
             } else {
@@ -2263,7 +2377,7 @@ impl<'a> KernelHal<'a> {
                             } else {
                                 "no"
                             },
-                            if handle.runtime_image_acceptance_eligible {
+                            if handle.pointer_free_ipc && handle.runtime_image_acceptance_eligible {
                                 "driver-owned"
                             } else if handle.vspace_isolated {
                                 "not-proven"
@@ -2293,7 +2407,7 @@ impl<'a> KernelHal<'a> {
             }
         }
 
-        finalize_driver_task_bootstrap_report(&mut report, DRIVER_TASK_BOOTSTRAP_CONTRACTS.len());
+        finalize_driver_task_bootstrap_report(&mut report, bootstrap_contracts.len());
         self.driver_task_report = report;
         driver_task::publish_driver_task_bootstrap_report(report);
         report
@@ -3221,7 +3335,12 @@ impl<'a> KernelHal<'a> {
         .map_err(HalError::Sel4)?;
         emit_driver_tcb_resume_return(contract, tcb, "write-registers");
 
-        let runtime_init_ok = if let Some(descriptor) = runtime_init_descriptor.as_ref() {
+        let runtime_init_deferred = runtime_init_descriptor.is_some()
+            && driver_task::pre_root_runtime_init_deferred_for_shell(contract);
+        let runtime_init_ok = if runtime_init_deferred {
+            emit_driver_task_bootstrap_deferred(contract, tcb, true);
+            false
+        } else if let Some(descriptor) = runtime_init_descriptor.as_ref() {
             let spec =
                 runtime_image_spec.ok_or(HalError::Unsupported("driver-runtime-init-spec"))?;
             let frame = driver_task::stage_driver_runtime_init_descriptor(contract, descriptor)
@@ -3240,10 +3359,15 @@ impl<'a> KernelHal<'a> {
         } else {
             !driver_task::physical_pi_driver_task_only_owner_state_active()
         };
+        if runtime_init_ok {
+            if let Some(spec) = runtime_image_spec {
+                let _ = bootstrap_linked_runtime_engine_for_early_console(contract, spec)?;
+            }
+        }
 
         let pointer_free_ipc = if driver_task::physical_pi_driver_task_only_owner_state_active() {
             restore_driver_tcb_steady_priority(contract, tcb, bootstrap_priority, steady_priority)?;
-            if !runtime_init_ok {
+            if !runtime_init_ok && !runtime_init_deferred {
                 emit_driver_task_bootstrap_deferred(
                     contract,
                     tcb,
@@ -3337,7 +3461,7 @@ impl<'a> KernelHal<'a> {
             affinity_core,
             vspace_isolated: true,
             pointer_free_ipc,
-            started: pointer_free_ipc,
+            started: pointer_free_ipc || runtime_init_deferred,
         })
     }
 
@@ -4386,6 +4510,56 @@ mod tests {
                 contract.name
             );
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn physical_pi_bootstrap_contracts_match_generated_runtime_hot_paths() {
+        for contracts in [
+            super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST,
+            super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST,
+        ] {
+            assert_eq!(
+                contracts.len(),
+                super::driver_task::PI4_DRIVER_TASK_HOT_PATHS.len()
+            );
+            for hot_path in super::driver_task::PI4_DRIVER_TASK_HOT_PATHS {
+                let contract = hot_path.contract();
+                assert!(contracts.contains(&contract), "{}", contract.name);
+                assert!(
+                    super::driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract)
+                        .is_some(),
+                    "{}",
+                    contract.name
+                );
+            }
+            assert!(!contracts.contains(&super::driver_task::RTL8139_DRIVER_TASK_CONTRACT));
+            assert!(!contracts.contains(&super::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT));
+        }
+        let cyw43_index = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST
+            .iter()
+            .position(|contract| *contract == super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT)
+            .expect("CYW43 contract must be present");
+        let genet_index = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST
+            .iter()
+            .position(|contract| *contract == super::driver_task::GENET_DRIVER_TASK_CONTRACT)
+            .expect("GENET contract must be present");
+        assert!(
+            cyw43_index < genet_index,
+            "Wi-Fi-selected boots must expose CYW breadcrumbs before deferred GENET"
+        );
+        let wired_genet_index = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST
+            .iter()
+            .position(|contract| *contract == super::driver_task::GENET_DRIVER_TASK_CONTRACT)
+            .expect("GENET contract must be present");
+        let wired_cyw43_index = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST
+            .iter()
+            .position(|contract| *contract == super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT)
+            .expect("CYW43 contract must be present");
+        assert!(
+            wired_genet_index < wired_cyw43_index,
+            "wired-selected boots must expose GENET breadcrumbs before deferred CYW"
+        );
     }
 
     #[cfg(feature = "kernel")]

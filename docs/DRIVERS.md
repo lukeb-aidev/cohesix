@@ -338,10 +338,14 @@ The same Pi 4 manifest now defaults the first boot to DHCP/`auto` networking and
 requires the local-seat path, so a no-saved-policy boot exercises GENET DHCP and
 fails visibly if the HDMI/USB runtime cannot initialize.
 
-For each successfully created physical Pi driver TCB, the HAL allocates the TCB
+Physical Pi bootstrap creates only the seven generated linked-runtime hardware
+contracts: serial, SDIO, PCIe, USB/local-seat, HDMI text, CYW43, and GENET.
+RTL8139 and virtio-net remain QEMU compatibility contracts, not physical Pi
+trampoline work. For each successfully created physical Pi driver TCB, the HAL allocates the TCB
 object, child CNode, command endpoint, notification, IPC frame, stack frame,
 ring frame, and fault endpoint slot; installs a restricted child CSpace; binds
-the remote IPC buffer; applies the contract priority; applies
+the remote IPC buffer; applies the contract MCP plus shell-safe bootstrap
+priority; applies
 manifest-selected per-driver affinity through `seL4_TCB_SetAffinity` on enabled
 profiles or emits the physical-Pi deferral marker; binds the notification; maps
 every bounded `PT_LOAD` page from the linked runtime ELF plus
@@ -361,14 +365,33 @@ counts when the fixed descriptor page arrays are intentionally capped. The
 physical Pi linked-runtime `_start` entry preserves the root-supplied task key,
 installs the root-mapped driver-local IPC buffer at `0x70001000`, and dispatches
 only fixed-layout command/completion records; callback-pointer dispatch is
-compiled out for that profile. During first receive/bootstrap, root resumes the
-driver with `TCB.WriteRegisters(resume=1)` at its contract priority and defers
-the first linked-runtime service proof until after the root shell path is no
-longer hostage to a freshly resumed child. A deferred proof emits
+compiled out for that profile. During first receive/bootstrap, root gives the
+driver its contract MCP but resumes it with `TCB.WriteRegisters(resume=1)` at the
+shell-safe Pi bootstrap priority, then raises it to contract priority only after
+ring receive/reply proof. A deferred proof emits
 `DRIVER_TASK_BOOTSTRAP_DEFERRED`; it is fail-closed acceptance evidence, not a
-root-task fallback. Steady physical Pi service turns use blocking `seL4_Call`,
+root-task fallback. GENET and CYW43 are both deferred before the root shell
+because their network runtime-init service currently uses blocking `seL4_Call`;
+their TCBs still start and leave `DRIVER_TASK_BOOTSTRAP_DEFERRED` breadcrumbs,
+while network owner-state acceptance remains red until a later service proof
+returns. USB/local-seat applies the same shell-first boundary to local-seat
+service turns: HDMI text runtime init, HDMI mirroring, USB keyboard runtime init,
+and background keyboard polling defer with explicit local-seat breadcrumbs until
+the serial prompt is live and a prompt-side diagnostic or later proof-safe path
+submits the steady `seL4_Call` service turn. That keeps HDMI/USB from entering
+the pre-prompt dependency chain while still giving lower-priority driver TCBs CPU
+after the serial shell is visible.
+Root-console startup publishes its raw UART start/end markers and the serial
+prompt before the `/log/queen.log`/NineDoor log-stream handoff, so log-buffer
+attachment is also shell-first. After the prompt and successful USB arming,
+serial UART and USB keyboard input remain concurrent sources for the shared
+root-console parser.
+Steady physical Pi service turns use blocking `seL4_Call`,
 and the linked runtime replies only after publishing the primitive completion
-record. The ring transport emits
+record. Pre-root bootstrap turns do not sample timer registers, and dummy-timer
+Pi profiles suppress service-latency proof instead of reading CNT registers;
+later steady ring latency telemetry uses the EL0 virtual counter only when the
+profile enables the architected-counter timer. The ring transport emits
 `DRIVER_TASK_RING_CALL_BEGIN` before the submit, `DRIVER_TASK_RING_CALL_RETURN`
 after completion, and `DRIVER_TASK_RING_CALL_TIMEOUT` if a bounded diagnostic
 bootstrap handshake cannot prove receive/reply progress. QEMU smoke can
@@ -1163,15 +1186,15 @@ power/reset state.
   buffer. After the USB keyboard transport reaches the runtime `keyboard-ready`
   proof, Wi-Fi still keeps raw HAL breadcrumbs off UART so log volume cannot
   prevent the first user byte from reaching the root shell.
-- Wi-Fi net-console bring-up must precede the serial root console on Pi 4 when
+- Wi-Fi net-console bring-up must not precede the serial root console on Pi 4
+  while linked-runtime pointer-free IPC proof is incomplete, even when
   local-seat is enabled and the selected net-console interface is Wi-Fi.
   Cohesix emits `action=root-console-wait-for-wifi`, preserves the Wi-Fi
-  configuration for operator diagnostics, resumes CYW43455 bring-up before the
-  prompt, and publishes the serial shell after Wi-Fi is reachable, terminally
-  failed, reaches bounded `wifi-host-eapol-pending`, or hits the pre-root wait
-  timeout. `wifi-host-eapol-pending` is not a data-path success; it exists to
-  release `cohesix>` while DHCP/data stay blocked and prompt-side `wifi diag` /
-  `nettest` can report the exact WPA/EAPOL boundary. While that state is live,
+  configuration for operator diagnostics, skips pre-prompt CYW43455 resume with
+  `action=root-shell-first`, and publishes the serial shell before DHCP/data
+  work. `wifi-host-eapol-pending` is not a data-path success; it exists to keep
+  DHCP/data blocked while prompt-side `wifi diag` / `nettest` can report the
+  exact WPA/EAPOL boundary after the shell is reachable. While that state is live,
   root-task performs bounded pre-root host-EAPOL burst polls, then post-root
   runtime polling yields after one Wi-Fi poll per event turn. Serial RX is
   sampled, but local-seat USB keyboard input is drained before serial command

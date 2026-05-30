@@ -350,12 +350,11 @@ pub fn init_serial_driver_task_runtime() -> bool {
         },
     );
     command.aux0 = SERIAL_RUNTIME_AUX_INIT;
-    let ok = crate::hal::driver_task::run_driver_task_ring_service(contract, command).is_some_and(
-        |completion| {
+    let ok = crate::hal::driver_task::run_driver_task_ring_service_bootstrap(contract, command)
+        .is_some_and(|completion| {
             completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                 && completion.result == 1
-        },
-    );
+        });
     if ok {
         let owner_state_registered = serial_owner_state_descriptor().is_some_and(|descriptor| {
             crate::hal::driver_task::register_driver_task_owner_state_descriptor(

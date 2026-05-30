@@ -1950,6 +1950,16 @@ where
         debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
         self.emit_prompt();
         self.serial.poll_io();
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.mark_root_console_ready();
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
+            runtime.mirror_line(CONSOLE_PROMPT);
+        }
         if !self.banner_emitted {
             log::info!(target: "event", "[event] root console banner emitted");
             self.banner_emitted = true;
@@ -2087,10 +2097,6 @@ where
 
     fn emit_serial_line(&mut self, line: &str) {
         self.service_local_seat_keyboard_during_output();
-        if let Some(runtime) = self.local_seat.as_mut() {
-            runtime.mirror_line(line);
-        }
-        self.service_local_seat_keyboard_during_output();
         if self.last_input_source == ConsoleInputSource::LocalSeat {
             self.serial.flush_tx();
             self.serial.enqueue_tx_best_effort(line.as_bytes());
@@ -2103,13 +2109,13 @@ where
             self.serial.write_line_blocking(line);
         }
         self.service_local_seat_keyboard_during_output();
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.mirror_line(line);
+        }
+        self.service_local_seat_keyboard_during_output();
     }
 
     fn emit_prompt(&mut self) {
-        self.service_local_seat_keyboard_during_output();
-        if let Some(runtime) = self.local_seat.as_mut() {
-            runtime.mirror_line(CONSOLE_PROMPT);
-        }
         self.service_local_seat_keyboard_during_output();
         if self.last_input_source == ConsoleInputSource::LocalSeat {
             self.serial.flush_tx();
@@ -2120,6 +2126,10 @@ where
             self.emit_serial_bytes_cooperative(CONSOLE_PROMPT.as_bytes());
         } else {
             self.serial.write_bytes_blocking(CONSOLE_PROMPT.as_bytes());
+        }
+        self.service_local_seat_keyboard_during_output();
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.mirror_line(CONSOLE_PROMPT);
         }
         self.service_local_seat_keyboard_during_output();
     }
@@ -9371,6 +9381,55 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.as_str() == "console: cleared local-seat input before serial"));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_and_usb_keyboards_share_parser_after_usb_polling_enabled() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        local_seat.enqueue_keyboard_bytes(b"ping\n");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.serial_mut().driver_mut().push_rx(b"help\n");
+
+        pump.poll();
+        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+        let usb_turn = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(usb_turn.contains("PONG"), "{usb_turn}");
+
+        pump.poll();
+        assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
+        let serial_turn = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(serial_turn.contains("Commands:"), "{serial_turn}");
     }
 
     #[cfg(feature = "kernel")]
