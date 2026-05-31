@@ -232,6 +232,42 @@ root now maps bounded multi-page `PT_LOAD` runtime images and semantic
 MMIO/DMA/shared resource ranges before submitting the pointer-free init
 descriptor.
 
+### Historical Pi 4 Baseline Mapping
+
+The May 18-20 Pi 4 captures are evidence baselines for behavior the new
+architecture must preserve, not authority to restore root-resident drivers. They
+prove useful expectations such as a clean serial shell, cold USB/VL805 progress,
+USB keyboard input, selected Wi-Fi DHCP progress, and visible local-seat
+feedback; reopened 26a/26b closure still requires fresh driver-task owner-state
+proof from the linked-runtime model.
+
+- HAL owns resource admission, MMIO mapping, DMA publication, IRQ binding and
+  acknowledgement, SDIO/card transport authority, mailbox reset/power calls, and
+  BCM2711 PCIe/VL805 prep. Old U-Boot, Linux, or root-resident observations may
+  define expected order and diagnostic breadcrumbs, but they do not become
+  runtime authority.
+- Child driver runtimes own bounded steady work only after HAL has admitted the
+  resources and root has delivered the pointer-free descriptor. Serial RX/TX,
+  HDMI frame submission, USB xHCI/HID polling, GENET RX/TX, CYW43 SDPCM/control,
+  SDIO CMD52/CMD53/POLL_IRQ, and PCIe read/write/flush turns must return through
+  the runtime ring or fail closed.
+- The first root prompt and serial input are the safety boundary. No USB, HDMI,
+  PCIe, SDIO, GENET, CYW43, DHCP, or log-stream proof may hold them hostage;
+  unproved work must leave deferred/no-reply breadcrumbs and retry only through
+  bounded prompt-side service paths.
+- HDMI needs visible mirror proof separate from early owner-state. Descriptor
+  load or engine-init evidence does not prove display acceptance until a bounded
+  text/framebuffer render is visible or fails red with an explicit diagnostic
+  mirror marker.
+- USB must replay PCIe/VL805 descriptor state before xHCI engine init, and that
+  engine-init call must return or fail closed. Missing EXT_CFG, BAR/COMMAND,
+  DMA-window, or poll-only ownership proof is a PCIe/VL805 blocker, not a
+  reason to spin or trust old handoff state.
+- Wi-Fi replay is independent of USB. CYW43/SDIO descriptor replay and selected
+  network progress must not wait for HID readiness, and USB polling must not
+  mask Wi-Fi blockers; both lanes remain subordinate to serial/HDMI
+  responsiveness and fail closed with separate frontier breadcrumbs.
+
 ### Driver-Task Scheduling Contracts
 
 Reopened Milestones 26a and 26b require every hardware-facing driver path to
@@ -367,18 +403,19 @@ installs the root-mapped driver-local IPC buffer at `0x70001000`, and dispatches
 only fixed-layout command/completion records; callback-pointer dispatch is
 compiled out for that profile. During first receive/bootstrap, root temporarily
 raises the child MCP/priority high enough for a nonblocking send/yield descriptor
-handoff to schedule the linked runtime. Mandatory serial mini-UART cutover then
-uses a pre-root reply rendezvous while the serial child is still in that
-bootstrap-priority window; that reply turn deliberately does not sample latency
-timers. Root restores contract MCP/priority immediately after the bounded
-runtime-init or proof turn. A deferred proof emits
+handoff to schedule the linked runtime. Physical Pi 4 serial still publishes the
+first root shell through the HAL-owned mini-UART fallback before any linked
+runtime proof can block operator input; root then replays the serial runtime
+descriptor and mini-UART init as bounded prompt-side turns. Root restores
+contract MCP/priority immediately after each bounded runtime-init or proof turn.
+A deferred proof emits
 `DRIVER_TASK_BOOTSTRAP_DEFERRED`; it is fail-closed acceptance evidence, not a
-root-task fallback. GENET, CYW43, SDIO, and PCIe runtime-init descriptors defer
-before the root shell because their prompt-side replay must not hold serial,
-USB, or HDMI hostage while bus/network ownership is still proving. Their TCBs
-still start and leave `DRIVER_TASK_BOOTSTRAP_DEFERRED` breadcrumbs, while
-network and bus owner-state acceptance remains red until a later bounded service
-proof returns. USB/local-seat and HDMI text may attempt their pre-root descriptor
+root-task fallback. Serial, GENET, CYW43, SDIO, and PCIe runtime-init
+descriptors defer before the root shell because their prompt-side replay must
+not hold the first serial prompt, USB, or HDMI hostage while driver ownership is
+still proving. Their TCBs still start and leave `DRIVER_TASK_BOOTSTRAP_DEFERRED`
+breadcrumbs, while owner-state acceptance remains red until a later bounded
+service proof returns. USB/local-seat and HDMI text may attempt their pre-root descriptor
 handoff only as bounded send/yield proof. Those send-only pre-root turns carry
 `DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY`, so the linked runtime publishes the shared
 completion record and returns to `Recv` without issuing `Reply`; a missing
@@ -392,10 +429,10 @@ actual text/framebuffer updates use the HDMI `SubmitFrame` opcode. Both the
 pre-root HDMI engine-init retry and early text render are bounded nonblocking
 proof attempts, so either frontier can fail red without hiding the UART prompt.
 After the prompt is printed, root retries the concise HDMI console-ready mirror
-before SDIO, PCIe, GENET, or CYW43 replay. Prompt-side replay uses the linked
-driver-task reply path, not send-only polling, because the runtime TCBs run below
-root priority and must be scheduled by the IPC rendezvous to publish completion
-once the serial prompt is already available.
+before SDIO, PCIe, GENET, or CYW43 replay. Prompt-side descriptor replay remains
+bounded send/yield service so a missing bus or network completion cannot steal
+the visible serial shell; any no-reply frontier is logged and retried only by
+the next explicit service path.
 The shell-first deferral is the serial-safety boundary: no bus, network, USB, or
 display proof may hold the first prompt hostage, and repeated no-reply display
 mirroring must be circuit-broken instead of retried per console line. If the
@@ -471,8 +508,10 @@ pointers, but it does not credit owner-state progress until a later device
 service turn makes real hardware progress from driver-local state.
 
 The default Pi/hardware path is cut over to linked isolated images. Normal
-serial init goes through the linked `pi4-driver-serial` image and the event pump
-uses a `driver-task-serial-client` once that init command succeeds. GENET/CYW43
+serial init replays through the linked `pi4-driver-serial` image after the first
+prompt, and the event pump uses a `driver-task-serial-client` once that init
+command succeeds. Until then, the HAL-owned mini-UART fallback remains a
+diagnostic shell only and does not credit serial owner-state acceptance. GENET/CYW43
 and USB/local-seat root callers are ring clients on the physical Pi branch; the
 old root-resident `BcmGenetDevice`, `Cyw43NetDevice`, and `Pi4LocalSeat`
 constructors remain only in compatibility paths and cannot count as owner-state

@@ -5006,6 +5006,8 @@ def summarize_driver_task_frontiers(
 
         if contract == "pcie-root" and stage == "usb-prereq-pcie-replay":
             usb_frontier = f"usb-prereq-pcie-replay-{status}"
+        if contract == "pcie-root" and stage == "usb-prereq-pcie-engine-init":
+            usb_frontier = f"usb-prereq-pcie-engine-init-{status}"
         if hot_path == "usb-keyboard" and stage:
             if status not in non_blocking_statuses:
                 usb_frontier = f"{stage}-{status}"
@@ -5082,11 +5084,10 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
         if "driver_task_resource_init" in raw:
             latest_usb_stage = fields.get("stage", "").lower()
             latest_usb_status = fields.get("status", "").lower()
-            if (
-                contract == "pcie-root"
-                and latest_usb_stage == "usb-prereq-pcie-replay"
-                and latest_usb_status not in {"ready", "deferred", "begin", "progress"}
-            ):
+            if contract == "pcie-root" and latest_usb_stage in {
+                "usb-prereq-pcie-replay",
+                "usb-prereq-pcie-engine-init",
+            } and latest_usb_status not in {"ready", "deferred", "begin", "progress"}:
                 return f"{latest_usb_stage}-{latest_usb_status}"
             continue
         request = parse_hex_int(fields.get("request"))
@@ -5106,7 +5107,12 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
                 return "usb-engine-init-no-reply"
 
     if latest_usb_stage in {"usb-engine-init", "usb-xhci-init"}:
-        if latest_usb_status in {"no-reply", "blocked", "blocked-pcie-runtime"}:
+        if latest_usb_status in {
+            "no-reply",
+            "blocked",
+            "blocked-pcie-runtime",
+            "blocked-pcie-hal-prep",
+        }:
             return f"{latest_usb_stage}-{latest_usb_status}"
         if latest_usb_status == "begin" and latest_usb_blocking_call:
             return "usb-engine-init-blocking-call-stalled"

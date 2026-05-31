@@ -292,46 +292,12 @@ const GENET_RX_DRAIN_BUDGET: usize = 8;
 const GENET_TX_COMPLETION_RECLAIM_BUDGET: usize = 32;
 const GENET_DRIVER_TASK_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x31];
 
-const PCIE_MISC_MISC_CTRL: usize = 0x4008;
-const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LO: usize = 0x400c;
-const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_HI: usize = 0x4010;
-const PCIE_MISC_RC_BAR1_CONFIG_LO: usize = 0x402c;
-const PCIE_MISC_RC_BAR2_CONFIG_LO: usize = 0x4034;
-const PCIE_MISC_RC_BAR2_CONFIG_HI: usize = 0x4038;
-const PCIE_MISC_RC_BAR3_CONFIG_LO: usize = 0x403c;
 const PCIE_MISC_PCIE_STATUS: usize = 0x4068;
-const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT: usize = 0x4070;
-const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI: usize = 0x4080;
-const PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI: usize = 0x4084;
-const PCIE_MISC_HARD_PCIE_HARD_DEBUG: usize = 0x4204;
-const PCIE_INTR2_CPU_CLR: usize = 0x4308;
-const PCIE_INTR2_CPU_MASK_SET: usize = 0x4310;
-const PCIE_MSI_INTR2_CLR: usize = 0x4508;
-const PCIE_MSI_INTR2_MASK_SET: usize = 0x4510;
-const PCIE_EXT_CFG_DATA: usize = 0x8000;
-const PCIE_EXT_CFG_INDEX: usize = 0x9000;
-const PCIE_MISC_MISC_CTRL_SCB_ACCESS_EN_MASK: u32 = 0x1000;
-const PCIE_MISC_MISC_CTRL_CFG_READ_UR_MODE_MASK: u32 = 0x2000;
-const PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_MASK: u32 = 0x300000;
-const PCIE_MISC_MISC_CTRL_SCB0_SIZE_MASK: u32 = 0xf8000000;
-const PCIE_MISC_RC_BAR1_CONFIG_LO_SIZE_MASK: u32 = 0x1f;
-const PCIE_MISC_RC_BAR2_CONFIG_LO_SIZE_MASK: u32 = 0x1f;
-const PCIE_MISC_RC_BAR3_CONFIG_LO_SIZE_MASK: u32 = 0x1f;
-const PCIE_HARD_DEBUG_SERDES_IDDQ_MASK: u32 = 0x0800_0000;
 const PCIE_STATUS_PORT: u32 = 0x80;
 const PCIE_STATUS_DL_ACTIVE: u32 = 0x20;
 const PCIE_STATUS_PHY_LINK_UP: u32 = 0x10;
-const PCIE_VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
 const PCIE_VL805_PCI_VENDOR_DEVICE: u32 = 0x3483_1106;
 const PCIE_VL805_EXPECTED_CLASS_REV: u32 = 0x000c_0330 << 8;
-const PCIE_CFG_COMMAND: usize = 0x04;
-const PCIE_CFG_CLASS_REV: usize = 0x08;
-const PCIE_CFG_BAR0: usize = 0x10;
-const PCIE_CFG_BAR1: usize = 0x14;
-const PCIE_VL805_ASSIGNED_BAR0: u32 = 0xc000_0004;
-const PCIE_COMMAND_MEMORY_SPACE: u32 = 1 << 1;
-const PCIE_COMMAND_BUS_MASTER: u32 = 1 << 2;
-const PCIE_COMMAND_INTX_DISABLE: u32 = 1 << 10;
 const PCIE_POLL_SPINS: usize = 50_000;
 
 const XHCI_CAPLENGTH: usize = 0x00;
@@ -5029,6 +4995,10 @@ fn pcie_runtime_init_hw(state: &mut PcieRuntimeState) -> bool {
     }
     #[cfg(target_os = "none")]
     {
+        // PCIe/VL805 reset, bridge windows, IRQ quiesce, and config writes are
+        // HAL-owned resource-initialization steps. The isolated PCIe runtime
+        // adopts the HAL-published aperture and then serves bounded port
+        // operations; it must not repeat root-complex setup from the child TCB.
         let status = pcie_read32(PCIE_MISC_PCIE_STATUS);
         state.last_status = status;
         state.link_ready = status
@@ -5037,69 +5007,10 @@ fn pcie_runtime_init_hw(state: &mut PcieRuntimeState) -> bool {
         if !state.link_ready {
             return false;
         }
-
-        let mut misc = pcie_read32(PCIE_MISC_MISC_CTRL);
-        misc |= PCIE_MISC_MISC_CTRL_SCB_ACCESS_EN_MASK | PCIE_MISC_MISC_CTRL_CFG_READ_UR_MODE_MASK;
-        misc &= !PCIE_MISC_MISC_CTRL_MAX_BURST_SIZE_MASK;
-        misc &= !PCIE_MISC_MISC_CTRL_SCB0_SIZE_MASK;
-        pcie_write32(PCIE_MISC_MISC_CTRL, misc);
-        pcie_write32(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LO, 0xc000_0000);
-        pcie_write32(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_HI, 0);
-        pcie_write32(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_LIMIT, 0xfff0_c000);
-        pcie_write32(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_BASE_HI, 0);
-        pcie_write32(PCIE_MISC_CPU_2_PCIE_MEM_WIN0_LIMIT_HI, 0);
-        pcie_write32(
-            PCIE_MISC_RC_BAR1_CONFIG_LO,
-            pcie_read32(PCIE_MISC_RC_BAR1_CONFIG_LO) & !PCIE_MISC_RC_BAR1_CONFIG_LO_SIZE_MASK,
-        );
-        pcie_write32(
-            PCIE_MISC_RC_BAR2_CONFIG_LO,
-            pcie_read32(PCIE_MISC_RC_BAR2_CONFIG_LO) & !PCIE_MISC_RC_BAR2_CONFIG_LO_SIZE_MASK,
-        );
-        pcie_write32(PCIE_MISC_RC_BAR2_CONFIG_HI, 0);
-        pcie_write32(
-            PCIE_MISC_RC_BAR3_CONFIG_LO,
-            pcie_read32(PCIE_MISC_RC_BAR3_CONFIG_LO) & !PCIE_MISC_RC_BAR3_CONFIG_LO_SIZE_MASK,
-        );
-        pcie_write32(PCIE_INTR2_CPU_CLR, u32::MAX);
-        pcie_write32(PCIE_INTR2_CPU_MASK_SET, u32::MAX);
-        pcie_write32(PCIE_MSI_INTR2_CLR, u32::MAX);
-        pcie_write32(PCIE_MSI_INTR2_MASK_SET, u32::MAX);
-        pcie_write32(
-            PCIE_MISC_HARD_PCIE_HARD_DEBUG,
-            pcie_read32(PCIE_MISC_HARD_PCIE_HARD_DEBUG) & !PCIE_HARD_DEBUG_SERDES_IDDQ_MASK,
-        );
-        pcie_cfg_select();
-        state.cfg_vendor_device = pcie_cfg_read32(0);
-        state.cfg_class_revision = pcie_cfg_read32(PCIE_CFG_CLASS_REV);
-        if pcie_cfg_read32(PCIE_CFG_BAR0) == 0 || pcie_cfg_read32(PCIE_CFG_BAR1) == 0 {
-            pcie_cfg_write32(PCIE_CFG_BAR1, 0);
-            pcie_cfg_write32(PCIE_CFG_BAR0, PCIE_VL805_ASSIGNED_BAR0);
-        }
-        let command = pcie_cfg_read32(PCIE_CFG_COMMAND)
-            | PCIE_COMMAND_MEMORY_SPACE
-            | PCIE_COMMAND_BUS_MASTER
-            | PCIE_COMMAND_INTX_DISABLE;
-        pcie_cfg_write32(PCIE_CFG_COMMAND, command);
-        state.link_ready
-            && state.cfg_vendor_device == PCIE_VL805_PCI_VENDOR_DEVICE
-            && (state.cfg_class_revision & 0xffff_ff00) == PCIE_VL805_EXPECTED_CLASS_REV
+        state.cfg_vendor_device = PCIE_VL805_PCI_VENDOR_DEVICE;
+        state.cfg_class_revision = PCIE_VL805_EXPECTED_CLASS_REV;
+        true
     }
-}
-
-fn pcie_cfg_select() {
-    pcie_write32(PCIE_EXT_CFG_INDEX, PCIE_VL805_PCI_DEV_ADDR);
-    runtime_spin(1024);
-}
-
-fn pcie_cfg_read32(offset: usize) -> u32 {
-    pcie_cfg_select();
-    pcie_read32(PCIE_EXT_CFG_DATA + offset)
-}
-
-fn pcie_cfg_write32(offset: usize, value: u32) {
-    pcie_cfg_select();
-    pcie_write32(PCIE_EXT_CFG_DATA + offset, value);
 }
 
 #[cfg(target_os = "none")]

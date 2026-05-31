@@ -818,7 +818,7 @@ impl LocalSeatRuntime {
                             return;
                         }
                         if self.root_console_ready
-                            && try_attach_root_display_diagnostic_runtime()
+                            && try_attach_root_display_diagnostic_runtime("linked-runtime-pending")
                             && local_seat_driver_runtime_write_line(line)
                         {
                             return;
@@ -912,8 +912,9 @@ impl LocalSeatRuntime {
                     }
                     if self.root_console_ready
                         && (local_seat_driver_runtime_write_line(line)
-                            || (try_attach_root_display_diagnostic_runtime()
-                                && local_seat_driver_runtime_write_line(line)))
+                            || (try_attach_root_display_diagnostic_runtime(
+                                "linked-runtime-no-reply",
+                            ) && local_seat_driver_runtime_write_line(line)))
                     {
                         self.refresh_usb_owner_record();
                         self.refresh_hdmi_owner_record();
@@ -1021,6 +1022,12 @@ impl LocalSeatRuntime {
         self.backend_keyboard_polling_enabled
     }
 
+    /// Returns whether the serial root-console prompt has been published.
+    #[must_use]
+    pub const fn root_console_ready(&self) -> bool {
+        self.root_console_ready
+    }
+
     /// Return keyboard ingress counters for `usb status` diagnostics.
     #[must_use]
     pub fn keyboard_trace(&self) -> LocalSeatKeyboardTrace {
@@ -1047,6 +1054,38 @@ impl LocalSeatRuntime {
     pub fn mark_root_console_ready(&mut self) {
         self.root_console_ready = true;
         self.backend_keyboard_poll_deferred_logged = false;
+    }
+
+    /// Attach the root-owned HDMI diagnostic mirror after the serial prompt.
+    ///
+    /// This is not linked-runtime acceptance; it preserves visible console
+    /// output while the HDMI child-runtime first-draw proof remains open.
+    #[must_use]
+    pub fn ensure_prompt_display_diagnostic_mirror(&mut self) -> bool {
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            if !self.root_console_ready {
+                return false;
+            }
+            let ready =
+                try_attach_root_display_diagnostic_runtime("linked-runtime-visibility-unproved");
+            self.refresh_hdmi_owner_record();
+            return ready;
+        }
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
+        {
+            false
+        }
     }
 
     /// Predict the first prompt-safe USB probe route before xHCI MMIO starts.
@@ -1196,6 +1235,17 @@ impl LocalSeatRuntime {
         {
             #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
             if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+                if local_seat_root_driver_runtime_attached() {
+                    local_seat_driver_runtime_arm_prompt_safe_probe();
+                    let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
+                    let read = local_seat_driver_runtime_poll_keyboard(&mut chunk).unwrap_or(0);
+                    if read != 0 {
+                        let _ = self.enqueue_keyboard_bytes(&chunk[..read]);
+                    }
+                    self.refresh_usb_owner_record();
+                    self.refresh_hdmi_owner_record();
+                    return;
+                }
                 if !LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
                     && !try_attach_linked_local_seat_runtime(self.root_console_ready)
                 {
@@ -1471,6 +1521,16 @@ fn local_seat_driver_runtime_attached() -> bool {
     LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
         || LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire)
         || LOCAL_SEAT_DRIVER_RUNTIME.lock().is_some()
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn local_seat_root_driver_runtime_attached() -> bool {
+    LOCAL_SEAT_DRIVER_RUNTIME.lock().is_some()
 }
 
 #[cfg(all(
@@ -1832,6 +1892,25 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
             );
         }
         let pcie_contract = crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT;
+        if !linked_local_seat_pcie_hal_prep_ready() {
+            if !LINKED_LOCAL_SEAT_PCIE_ENGINE_DEFERRED_LOGGED.swap(true, Ordering::AcqRel) {
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    pcie_contract,
+                    crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                    "usb-prereq-pcie-engine-init",
+                    "blocked-hal-prep-required",
+                    None,
+                );
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    usb_contract,
+                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                    "usb-xhci-init",
+                    "blocked-pcie-hal-prep",
+                    None,
+                );
+            }
+            return false;
+        }
         let pcie_command = crate::hal::driver_task::runtime_engine_init_command(
             crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
             crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(pcie_contract),
@@ -2087,7 +2166,7 @@ fn local_seat_driver_runtime_write_line(line: &str) -> bool {
     target_arch = "aarch64",
     target_os = "none"
 ))]
-fn try_attach_root_display_diagnostic_runtime() -> bool {
+fn try_attach_root_display_diagnostic_runtime(reason: &'static str) -> bool {
     if LOCAL_SEAT_DRIVER_RUNTIME
         .lock()
         .as_ref()
@@ -2110,9 +2189,14 @@ fn try_attach_root_display_diagnostic_runtime() -> bool {
             *LOCAL_SEAT_DRIVER_RUNTIME.lock() = Some(backend);
             if display_attached {
                 if !ROOT_LOCAL_SEAT_DISPLAY_DIAG_LOGGED.swap(true, Ordering::AcqRel) {
-                    boot_log::force_uart_line(
-                        "[local-seat] root HDMI diagnostic mirror active reason=linked-runtime-no-reply acceptance=red",
+                    let mut line = heapless::String::<160>::new();
+                    let _ = core::fmt::Write::write_fmt(
+                        &mut line,
+                        format_args!(
+                            "[local-seat] root HDMI diagnostic mirror active reason={reason} acceptance=red"
+                        ),
                     );
+                    boot_log::force_uart_line(line.as_str());
                 }
                 true
             } else {
@@ -2134,6 +2218,17 @@ fn try_attach_root_display_diagnostic_runtime() -> bool {
             false
         }
     }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn linked_local_seat_pcie_hal_prep_ready() -> bool {
+    crate::hal::pi4_pcie::pi4_pcie_link_and_rc_ready_proven()
+        && crate::hal::pi4_pcie::pi4_pcie_irq_sources_masked_proven()
 }
 
 #[cfg(feature = "kernel")]
@@ -3291,9 +3386,9 @@ mod tests {
             buffer_lines: 4,
         });
 
-        assert!(!runtime.root_console_ready);
+        assert!(!runtime.root_console_ready());
         runtime.mark_root_console_ready();
-        assert!(runtime.root_console_ready);
+        assert!(runtime.root_console_ready());
     }
 
     #[test]

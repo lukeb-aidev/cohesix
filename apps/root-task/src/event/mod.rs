@@ -1951,14 +1951,31 @@ where
             );
         }
         debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
+        #[cfg(feature = "kernel")]
+        boot_log::force_uart_line_raw("[mark] root-console.prompt.write.begin");
         self.emit_prompt();
         #[cfg(feature = "kernel")]
         boot_log::set_serial_prompt_refresh_after_logs(
             crate::generated::hardware_config().local_seat.enabled,
         );
+        #[cfg(feature = "kernel")]
+        boot_log::force_uart_line_raw("[mark] root-console.prompt.write.ok");
         self.serial.poll_io();
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();
+        }
+        #[cfg(feature = "kernel")]
+        {
+            let _ = crate::serial::resume_serial_driver_task_runtime_after_prompt();
+        }
+        if let Some(runtime) = self.local_seat.as_mut() {
+            #[cfg(not(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            )))]
+            let _ = runtime;
             #[cfg(all(
                 feature = "kernel",
                 feature = "usb",
@@ -1974,6 +1991,7 @@ where
             ))]
             runtime.mirror_line(CONSOLE_PROMPT);
         }
+        self.arm_post_prompt_local_seat_once();
         if !self.banner_emitted {
             log::info!(target: "event", "[event] root console banner emitted");
             self.banner_emitted = true;
@@ -2080,6 +2098,9 @@ where
 
     fn service_local_seat_keyboard_during_output(&mut self) {
         if let Some(runtime) = self.local_seat.as_mut() {
+            if !runtime.root_console_ready() {
+                return;
+            }
             for _ in 0..LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES {
                 runtime.poll_backend_keyboard();
                 self.metrics.local_seat_output_keyboard_polls = self
@@ -2090,15 +2111,47 @@ where
         }
     }
 
+    fn mirror_local_seat_line_if_ready(&mut self, line: &str) {
+        if let Some(runtime) = self.local_seat.as_mut() {
+            if runtime.root_console_ready() {
+                runtime.mirror_line(line);
+            }
+        }
+    }
+
+    fn arm_post_prompt_local_seat_once(&mut self) {
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            if let Some(runtime) = self.local_seat.as_mut() {
+                boot_log::force_uart_line_raw(
+                    "[local-seat] post-prompt attach begin action=arm-cooperative",
+                );
+                let display_diag_ready = runtime.ensure_prompt_display_diagnostic_mirror();
+                runtime.enable_backend_keyboard_polling();
+                let mut line = HeaplessString::<160>::new();
+                let _ =
+                    write!(
+                    line,
+                    "[local-seat] post-prompt attach end result=armed-cooperative display_diag={}",
+                    if display_diag_ready { "ready" } else { "deferred" }
+                );
+                boot_log::force_uart_line_raw(line.as_str());
+            }
+        }
+    }
+
     fn try_emit_console_line(&mut self, line: &str) -> bool {
         if self.last_input_source.is_physical_console() {
             self.emit_serial_line(line);
             return true;
         }
         self.service_local_seat_keyboard_during_output();
-        if let Some(runtime) = self.local_seat.as_mut() {
-            runtime.mirror_line(line);
-        }
+        self.mirror_local_seat_line_if_ready(line);
         self.service_local_seat_keyboard_during_output();
         #[cfg(feature = "net-console")]
         if self.last_input_source == ConsoleInputSource::Net {
@@ -2123,9 +2176,7 @@ where
             self.serial.write_line_blocking(line);
         }
         self.service_local_seat_keyboard_during_output();
-        if let Some(runtime) = self.local_seat.as_mut() {
-            runtime.mirror_line(line);
-        }
+        self.mirror_local_seat_line_if_ready(line);
         self.service_local_seat_keyboard_during_output();
     }
 
@@ -2142,9 +2193,7 @@ where
             self.serial.write_bytes_blocking(CONSOLE_PROMPT.as_bytes());
         }
         self.service_local_seat_keyboard_during_output();
-        if let Some(runtime) = self.local_seat.as_mut() {
-            runtime.mirror_line(CONSOLE_PROMPT);
-        }
+        self.mirror_local_seat_line_if_ready(CONSOLE_PROMPT);
         self.service_local_seat_keyboard_during_output();
     }
 
@@ -7836,6 +7885,39 @@ mod tests {
         assert!(transcript.ends_with(CONSOLE_PROMPT));
     }
 
+    #[test]
+    fn start_cli_keeps_initial_prompt_serial_first_with_local_seat() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.start_cli();
+        let emitted = pump.serial_mut().driver_mut().drain_tx();
+        let transcript = core::str::from_utf8(emitted.as_slice()).unwrap();
+
+        assert!(transcript.contains(CONSOLE_BANNER));
+        assert!(transcript.ends_with(CONSOLE_PROMPT));
+        assert_eq!(pump.metrics().local_seat_output_keyboard_polls, 0);
+        drop(pump);
+        assert!(local_seat.root_console_ready());
+        assert!(local_seat.mirrored_lines_snapshot().is_empty());
+    }
+
     struct NullIpc;
 
     impl IpcDispatcher for NullIpc {
@@ -9761,6 +9843,7 @@ mod tests {
             line_bytes: 64,
             buffer_lines: 8,
         });
+        local_seat.mark_root_console_ready();
         local_seat.enqueue_keyboard_bytes(b"ping\n");
 
         let mut pump =
@@ -9789,6 +9872,7 @@ mod tests {
             line_bytes: 64,
             buffer_lines: 8,
         });
+        local_seat.mark_root_console_ready();
         local_seat.enqueue_keyboard_bytes(b"hel");
 
         let mut pump =
@@ -9842,6 +9926,7 @@ mod tests {
             line_bytes: 64,
             buffer_lines: 8,
         });
+        local_seat.mark_root_console_ready();
         local_seat.enqueue_keyboard_bytes(b"helx\x08p\n");
 
         let mut pump =

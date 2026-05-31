@@ -416,12 +416,53 @@ pub fn init_serial_driver_task_runtime() -> bool {
     ok
 }
 
+/// Replay deferred serial runtime topology and attach the linked mini-UART image.
+///
+/// This is intentionally prompt-side on physical Pi 4 owner-state boots: the
+/// direct HAL-owned mini-UART fallback must publish a usable shell before any
+/// linked-runtime no-reply can affect operator input.
+#[cfg(feature = "kernel")]
+pub fn resume_serial_driver_task_runtime_after_prompt() -> bool {
+    if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        return true;
+    }
+    if serial_driver_task_runtime_attached() {
+        return true;
+    }
+    let contract = driver_task_contract();
+    let descriptor_ready = crate::hal::driver_task::ensure_deferred_runtime_init_descriptor(
+        contract,
+        crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+    );
+    if !descriptor_ready {
+        emit_serial_runtime_state("driver", "post-prompt-descriptor-pending", "red");
+        return false;
+    }
+    init_serial_driver_task_runtime()
+}
+
 /// Returns whether the physical serial runtime is attached to its driver task.
 #[cfg(feature = "kernel")]
 #[must_use]
 pub fn serial_driver_task_runtime_attached() -> bool {
     SERIAL_LINKED_RUNTIME_ATTACHED.load(AtomicOrdering::Acquire) != 0
         || SERIAL_DRIVER_RUNTIME.lock().is_some()
+}
+
+#[cfg(feature = "kernel")]
+const fn serial_driver_task_transport_required(
+    owner_state_active: bool,
+    runtime_attached: bool,
+) -> bool {
+    owner_state_active && runtime_attached
+}
+
+#[cfg(feature = "kernel")]
+fn serial_driver_task_transport_active() -> bool {
+    serial_driver_task_transport_required(
+        crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+        serial_driver_task_runtime_attached(),
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -645,7 +686,7 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            if serial_driver_task_transport_active() {
                 crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
                     contract,
                     crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
@@ -782,7 +823,7 @@ where
         let contract = <D as SerialDriver>::driver_task_contract();
         #[cfg(feature = "kernel")]
         {
-            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            if serial_driver_task_transport_active() {
                 crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
                     contract,
                     crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
@@ -1474,6 +1515,15 @@ mod tests {
         assert_eq!(contract.name, "serial");
         assert!(contract.preempts_network_data());
         assert_eq!(contract.validate(), Ok(()));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn physical_pi_serial_uses_driver_task_only_after_runtime_attaches() {
+        assert!(serial_driver_task_transport_required(true, true));
+        assert!(!serial_driver_task_transport_required(true, false));
+        assert!(!serial_driver_task_transport_required(false, true));
+        assert!(!serial_driver_task_transport_required(false, false));
     }
 
     #[test]

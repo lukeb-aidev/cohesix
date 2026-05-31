@@ -1018,6 +1018,27 @@ def test_gate_summary_labels_usb_engine_init_no_reply() -> None:
     assert record["USB_BLOCKER"] == "usb-engine-init-no-reply"
 
 
+def test_gate_summary_labels_pcie_hal_prep_gate() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=pcie-root hot_path=pcie-root "
+            "stage=usb-prereq-pcie-replay status=ready acceptance=no "
+            "code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=pcie-root hot_path=pcie-root "
+            "stage=usb-prereq-pcie-engine-init status=blocked-hal-prep-required "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-xhci-init "
+            "status=blocked-pcie-hal-prep acceptance=no code=none "
+            "detail=none result=none frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["USB_DRIVER_TASK_FRONTIER"] == "usb-xhci-init-blocked-pcie-hal-prep"
+    assert record["USB_BLOCKER"] == "usb-prereq-pcie-engine-init-blocked-hal-prep-required"
+
+
 def test_gate_summary_tracks_net_and_sdio_replay_blockers() -> None:
     events = normalizer.parse_events(
         [

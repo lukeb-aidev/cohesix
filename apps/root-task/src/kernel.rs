@@ -4527,7 +4527,26 @@ fn bootstrap<P: Platform>(
                 continue;
             }
             boot_log::force_uart_line("[uart] driver-task runtime init begin owner=serial");
-            if !crate::serial::init_serial_driver_task_runtime() {
+            let serial_runtime_deferred =
+                crate::hal::driver_task::pre_root_runtime_init_deferred_for_shell(
+                    crate::hal::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+                );
+            if serial_runtime_deferred {
+                boot_log::force_uart_line(
+                    "[uart] driver-task runtime init deferred owner=serial action=root-mini-uart-fallback",
+                );
+                boot_log::force_uart_line(
+                    "SERIAL_RUNTIME_STATE owner=driver stage=serial-runtime-init status=deferred acceptance=red",
+                );
+                boot_log::force_uart_line(
+                    "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=fallback acceptance=red reason=driver-task-deferred-until-prompt",
+                );
+                try_hal_map_after_coverage_miss =
+                    physical_pi_serial_fallback_should_try_hal_map(true, candidate, false);
+                if !try_hal_map_after_coverage_miss {
+                    continue;
+                }
+            } else if !crate::serial::init_serial_driver_task_runtime() {
                 let linked_runtime_attached = crate::serial::serial_driver_task_runtime_attached();
                 boot_log::force_uart_line(
                     "[uart] driver-task runtime init failed owner=serial action=root-mini-uart-fallback acceptance=no",

@@ -471,7 +471,8 @@ pub const fn pre_root_runtime_init_deferred_for_profile(
     }
     matches!(
         contract.kind,
-        DriverTaskKind::WiredNic
+        DriverTaskKind::Serial
+            | DriverTaskKind::WiredNic
             | DriverTaskKind::WifiNic
             | DriverTaskKind::SdioHost
             | DriverTaskKind::PcieRoot
@@ -5193,7 +5194,12 @@ mod tests {
     }
 
     #[test]
-    fn pi4_pre_root_runtime_init_defers_network_sdio_and_pcie_before_shell() {
+    fn pi4_pre_root_runtime_init_defers_serial_network_sdio_and_pcie_before_shell() {
+        assert!(pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware,
+            Pi4PreRootNetBootstrapSelection::Wifi,
+            SERIAL_DRIVER_TASK_CONTRACT
+        ));
         assert!(pre_root_runtime_init_deferred_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware,
             Pi4PreRootNetBootstrapSelection::Wifi,

@@ -70,7 +70,7 @@ Non-goals:
 ## 5. Boot and Bring-Up Flow
 1. seL4 elfloader enters the root-task entry point.
 2. Root task reconstructs canonical CSpace addressing using `seL4_CapInitThreadCNode` and `bootinfo.initThreadCNodeSizeBits`, validates the `bootinfo.empty` window, and logs copy/mint/retype tuples before consuming slots.
-3. UART boot diagnostics are emitted through the emergency path, then physical Pi 4 skips installing a steady-state root UART mapping and initializes the linked mini-UART serial driver-task runtime instead. When the init command succeeds, the steady-state event pump receives only a ring-backed serial client. If the linked serial runtime does not reply, root may map the HAL-owned mini-UART frame as a diagnostic shell fallback; that path remains acceptance-red and does not credit serial owner-state proof.
+3. UART boot diagnostics are emitted through the emergency path, then physical Pi 4 skips installing a steady-state root UART mapping and defers linked mini-UART serial driver-task runtime proof until after the first prompt. Root may map the HAL-owned mini-UART frame as a diagnostic shell fallback and keep serial RX/TX on that direct MMIO path until the linked runtime attaches; that path remains acceptance-red and does not credit serial owner-state proof. When prompt-side linked-runtime init succeeds, the steady-state event pump receives only a ring-backed serial client.
 4. HAL setup, timer initialization, and IPC endpoints are established.
 5. Manifest-generated tables (tickets, Secure9P limits, policy/audit flags) are loaded from `apps/root-task/src/generated`.
 6. Milestone 26 hardware gates execute before ticket publication:
