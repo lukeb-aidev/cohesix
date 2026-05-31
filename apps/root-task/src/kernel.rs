@@ -831,6 +831,10 @@ fn physical_pi_linked_serial_runtime_candidate(candidate: KernelUartCandidate) -
     candidate.kind() == KernelUartKind::Bcm2711MiniUart
 }
 
+fn physical_pi_serial_root_fallback_allowed(candidate: KernelUartCandidate) -> bool {
+    physical_pi_linked_serial_runtime_candidate(candidate)
+}
+
 fn live_driver_task_bootstrap_skip_reason(qemu_virtio_compat: bool) -> Option<&'static str> {
     if should_bootstrap_live_driver_tasks(qemu_virtio_compat) {
         None
@@ -4465,6 +4469,11 @@ fn bootstrap<P: Platform>(
     if consumed_slots > 0 {
         hal.consume_bootstrap_slots(consumed_slots);
     }
+    // Keep low Pi4 MMIO pages ahead of driver-child VSpace mappings so later
+    // root diagnostics and child runtimes share one HAL-owned frame cap.
+    crate::hal::pi4_wifi::preseed_mailbox_mmio(hal);
+    crate::hal::pi4_wifi::preseed_gpio_mmio(hal);
+
     let driver_task_report = if let Some(reason) =
         live_driver_task_bootstrap_skip_reason(cfg!(feature = "net-backend-virtio"))
     {
@@ -4490,12 +4499,6 @@ fn bootstrap<P: Platform>(
     );
     boot_log::force_uart_line(driver_task_line.as_str());
 
-    // Reserve the low mailbox/GPIO pages before mid/high Pi4 MMIO mappings
-    // advance the device-untyped cursor. Defer SDHCI until after UART so the
-    // FE300000 page cannot consume past the FE215000 UART window first.
-    crate::hal::pi4_wifi::preseed_mailbox_mmio(hal);
-    crate::hal::pi4_wifi::preseed_gpio_mmio(hal);
-
     let mut uart_slot: Option<sel4_sys::seL4_CPtr> = None;
     let mut uart_mmio: Option<KernelUartMmio> = None;
     let mut uart_map_error: Option<sel4_sys::seL4_Error> = None;
@@ -4514,13 +4517,19 @@ fn bootstrap<P: Platform>(
             }
             boot_log::force_uart_line("[uart] driver-task runtime init begin owner=serial");
             if !crate::serial::init_serial_driver_task_runtime() {
-                boot_log::force_uart_line("[uart] driver-task runtime init failed owner=serial");
-                return Err(BootError::Fatal(
-                    "serial driver-task runtime init failed".to_owned(),
-                ));
+                boot_log::force_uart_line(
+                    "[uart] driver-task runtime init failed owner=serial action=root-mini-uart-fallback acceptance=no",
+                );
+                boot_log::force_uart_line(
+                    "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=fallback acceptance=red reason=driver-task-no-reply",
+                );
+                if !physical_pi_serial_root_fallback_allowed(candidate) {
+                    continue;
+                }
+            } else {
+                boot_log::force_uart_line("[uart] driver-task runtime init ok owner=serial");
+                break;
             }
-            boot_log::force_uart_line("[uart] driver-task runtime init ok owner=serial");
-            break;
         }
 
         let coverage = hal.device_coverage(paddr, DEVICE_FRAME_BITS);
@@ -7358,10 +7367,19 @@ mod tests {
         assert!(super::physical_pi_linked_serial_runtime_candidate(
             KernelUartCandidate::Pi4MiniUart,
         ));
+        assert!(super::physical_pi_serial_root_fallback_allowed(
+            KernelUartCandidate::Pi4MiniUart,
+        ));
         assert!(!super::physical_pi_linked_serial_runtime_candidate(
             KernelUartCandidate::QemuPl011,
         ));
+        assert!(!super::physical_pi_serial_root_fallback_allowed(
+            KernelUartCandidate::QemuPl011,
+        ));
         assert!(!super::physical_pi_linked_serial_runtime_candidate(
+            KernelUartCandidate::Pi4Pl011,
+        ));
+        assert!(!super::physical_pi_serial_root_fallback_allowed(
             KernelUartCandidate::Pi4Pl011,
         ));
     }

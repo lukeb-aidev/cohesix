@@ -1406,6 +1406,27 @@ fn runtime_image_acceptance_eligible(
 }
 
 #[cfg(feature = "kernel")]
+fn runtime_image_stack_pages(spec: Option<driver_task::DriverTaskRuntimeImageSpec>) -> usize {
+    spec.map(|spec| {
+        usize::from(spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Stack)).max(1)
+    })
+    .unwrap_or(1)
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_image_stack_top(
+    spec: Option<driver_task::DriverTaskRuntimeImageSpec>,
+) -> Result<usize, HalError> {
+    let pages = runtime_image_stack_pages(spec);
+    let stack_bytes = pages
+        .checked_mul(1usize << sel4::PAGE_BITS)
+        .ok_or(HalError::Unsupported("driver-runtime-stack-size"))?;
+    driver_task::DRIVER_TASK_STACK_BOTTOM_VADDR
+        .checked_add(stack_bytes)
+        .ok_or(HalError::Unsupported("driver-runtime-stack-vaddr"))
+}
+
+#[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_SERIAL_MMIO_BASES: &[usize] = &[uart::PI4_MINI_UART_PADDR];
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_USB_XHCI_MMIO_BASES: &[usize] =
@@ -1707,11 +1728,26 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         spec.hot_path,
         driver_task::DriverTaskBudgetGrant::from_contract(contract),
     );
+    let completion = driver_task::run_driver_task_ring_command_nonblocking(contract, command);
     let engine_ready = matches!(
-        driver_task::run_driver_task_ring_command_nonblocking(contract, command),
+        completion,
         Some(done)
             if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
                 && done.result == 1
+    );
+    let status = if engine_ready {
+        "ready"
+    } else if completion.is_some() {
+        "unexpected-completion"
+    } else {
+        "no-reply"
+    };
+    driver_task::emit_driver_task_resource_init_status(
+        contract,
+        driver_task::DriverTaskHotPath::HdmiText,
+        "hdmi-engine-init",
+        status,
+        completion,
     );
     if !engine_ready {
         crate::bootstrap::log::force_uart_line(
@@ -2173,6 +2209,7 @@ fn restore_driver_tcb_steady_priority(
     steady_priority: u8,
 ) -> Result<(), HalError> {
     if bootstrap_priority == steady_priority {
+        driver_task::publish_driver_task_steady_priority_active(contract);
         return Ok(());
     }
     sel4::set_tcb_sched_params(
@@ -2194,6 +2231,7 @@ fn restore_driver_tcb_steady_priority(
         ),
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
+    driver_task::publish_driver_task_steady_priority_active(contract);
     Ok(())
 }
 
@@ -2654,6 +2692,7 @@ impl<'a> KernelHal<'a> {
 
         let (bootstrap_priority, steady_priority) =
             configure_driver_tcb_priority_for_boot(contract, tcb)?;
+        driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
 
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
@@ -2850,6 +2889,7 @@ impl<'a> KernelHal<'a> {
             return Err(HalError::Unsupported("driver-runtime-hdmi-fb-pages"));
         }
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
+        let mut root_vaddr_base: Option<usize> = None;
         for page in 0..page_count {
             let paddr = page_base
                 .checked_add(page.saturating_mul(page_bytes))
@@ -2857,9 +2897,23 @@ impl<'a> KernelHal<'a> {
             let vaddr = (DRIVER_RUNTIME_FRAMEBUFFER_VADDR as usize)
                 .checked_add(page.saturating_mul(page_bytes))
                 .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-vaddr"))?;
+            let frame = self.env.map_device(paddr).map_err(HalError::Sel4)?;
+            let root_vaddr = frame.ptr().as_ptr() as usize;
+            if let Some(first) = root_vaddr_base {
+                let expected = first
+                    .checked_add(page.saturating_mul(page_bytes))
+                    .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-root-vaddr"))?;
+                if root_vaddr != expected {
+                    return Err(HalError::Unsupported(
+                        "driver-runtime-hdmi-fb-root-noncontiguous",
+                    ));
+                }
+            } else {
+                root_vaddr_base = Some(root_vaddr);
+            }
             self.env
-                .map_device_page_into_vspace(
-                    paddr,
+                .map_page_copy_into_vspace(
+                    frame.cap(),
                     vspace,
                     vaddr,
                     rights,
@@ -2871,6 +2925,10 @@ impl<'a> KernelHal<'a> {
         framebuffer.vaddr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR
             .checked_add(page_offset as u64)
             .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-vaddr"))?;
+        let root_framebuffer_vaddr = root_vaddr_base
+            .and_then(|vaddr| vaddr.checked_add(page_offset))
+            .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-root-vaddr"))?;
+        driver_task::publish_hdmi_runtime_root_framebuffer_mapping(root_framebuffer_vaddr, map_len);
         if let Some(builder) = init_descriptor.as_deref_mut() {
             builder.set_framebuffer_region(framebuffer, page_base, map_len, page_count)?;
         }
@@ -3183,14 +3241,25 @@ impl<'a> KernelHal<'a> {
             .env
             .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
             .map_err(HalError::Sel4)?;
-        let mut stack_frame = self
-            .env
-            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
-            .map_err(HalError::Sel4)?;
+        let stack_pages = runtime_image_stack_pages(runtime_image_spec);
+        let stack_top = runtime_image_stack_top(runtime_image_spec)?;
+        let mut stack_frames: AllocVec<RamFrame> = AllocVec::new();
+        stack_frames
+            .try_reserve_exact(stack_pages)
+            .map_err(|_| HalError::Unsupported("driver-runtime-stack-plan-oom"))?;
+        for _ in 0..stack_pages {
+            stack_frames.push(
+                self.env
+                    .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+                    .map_err(HalError::Sel4)?,
+            );
+        }
 
         ring_frame.as_mut_slice().fill(0);
         ipc_frame.as_mut_slice().fill(0);
-        stack_frame.as_mut_slice().fill(0);
+        for stack_frame in &mut stack_frames {
+            stack_frame.as_mut_slice().fill(0);
+        }
 
         let badge = 0xD000 | (role_bit as seL4_Word);
         let fault_err = sel4::cnode_mint_depth(
@@ -3294,16 +3363,21 @@ impl<'a> KernelHal<'a> {
                 &mut tracker,
             )
             .map_err(HalError::Sel4)?;
-        self.env
-            .map_page_copy_into_vspace(
-                stack_frame.cap(),
-                vspace,
-                driver_task::DRIVER_TASK_STACK_BOTTOM_VADDR,
-                data_rights,
-                sel4_sys::seL4_ARM_Page_Default,
-                &mut tracker,
-            )
-            .map_err(HalError::Sel4)?;
+        for (page, stack_frame) in stack_frames.iter().enumerate() {
+            let vaddr = driver_task::DRIVER_TASK_STACK_BOTTOM_VADDR
+                .checked_add(page.saturating_mul(1usize << sel4::PAGE_BITS))
+                .ok_or(HalError::Unsupported("driver-runtime-stack-vaddr"))?;
+            self.env
+                .map_page_copy_into_vspace(
+                    stack_frame.cap(),
+                    vspace,
+                    vaddr,
+                    data_rights,
+                    sel4_sys::seL4_ARM_Page_Default,
+                    &mut tracker,
+                )
+                .map_err(HalError::Sel4)?;
+        }
         self.install_cyw43_sdio_bus_link(contract, child_cnode, child_depth, vspace, &mut tracker)?;
 
         let mut runtime_init_descriptor =
@@ -3339,6 +3413,7 @@ impl<'a> KernelHal<'a> {
 
         let (bootstrap_priority, steady_priority) =
             configure_driver_tcb_priority_for_boot(contract, tcb)?;
+        driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
 
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
 
@@ -3347,7 +3422,7 @@ impl<'a> KernelHal<'a> {
         sel4::write_tcb_registers(
             tcb,
             runtime_load.entry,
-            driver_task::DRIVER_TASK_STACK_TOP_VADDR,
+            stack_top,
             task_key as seL4_Word,
             true,
         )
@@ -3478,9 +3553,15 @@ impl<'a> KernelHal<'a> {
         self.env
             .unmap_page_cap(ipc_frame.cap())
             .map_err(HalError::Sel4)?;
-        self.env
-            .unmap_page_cap(stack_frame.cap())
-            .map_err(HalError::Sel4)?;
+        for stack_frame in &stack_frames {
+            self.env
+                .unmap_page_cap(stack_frame.cap())
+                .map_err(HalError::Sel4)?;
+        }
+        let stack_frame_cap = stack_frames
+            .first()
+            .map(RamFrame::cap)
+            .ok_or(HalError::Unsupported("driver-runtime-stack-empty"))?;
 
         Ok(KernelDriverTaskHandle {
             contract,
@@ -3491,7 +3572,7 @@ impl<'a> KernelHal<'a> {
             notification,
             fault_slot: driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
             ipc_frame: ipc_frame.cap(),
-            stack_frame: stack_frame.cap(),
+            stack_frame: stack_frame_cap,
             ring_frame: Some(ring_frame.cap()),
             vspace: Some(vspace),
             code_frame: mapped_code_frame,
@@ -3509,7 +3590,7 @@ impl<'a> KernelHal<'a> {
             code_vaddr: runtime_load.code_vaddr,
             ipc_vaddr: driver_task::DRIVER_TASK_IPC_VADDR,
             ring_vaddr: driver_task::DRIVER_TASK_RING_VADDR,
-            stack_top: driver_task::DRIVER_TASK_STACK_TOP_VADDR,
+            stack_top,
             affinity_core,
             vspace_isolated: true,
             pointer_free_ipc,
@@ -4074,6 +4155,7 @@ mod tests {
             1,
             1,
             1,
+            1,
             true,
             false,
         );
@@ -4112,6 +4194,7 @@ mod tests {
             1,
             1,
             1,
+            1,
             true,
             false,
         );
@@ -4145,6 +4228,7 @@ mod tests {
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
             super::driver_task::DriverTaskHotPath::UsbKeyboard,
             64,
+            16,
             512,
             16,
             2,
@@ -4240,6 +4324,7 @@ mod tests {
         let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
             super::driver_task::DriverTaskHotPath::GenetNic,
             64,
+            16,
             6,
             512,
             32,

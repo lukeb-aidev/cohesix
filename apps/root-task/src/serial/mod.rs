@@ -330,6 +330,18 @@ pub const fn serial_owner_state_acceptance_ready() -> bool {
     true
 }
 
+#[cfg(feature = "kernel")]
+fn emit_serial_runtime_state(owner: &str, status: &str, acceptance: &str) {
+    let mut line = HeaplessString::<160>::new();
+    let _ = fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "SERIAL_RUNTIME_STATE owner={owner} stage=serial-runtime-init status={status} acceptance={acceptance}",
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
 /// Construct the physical UART runtime behind the serial driver-task ring.
 #[cfg(feature = "kernel")]
 pub fn init_serial_driver_task_runtime() -> bool {
@@ -353,8 +365,9 @@ pub fn init_serial_driver_task_runtime() -> bool {
         },
     );
     command.aux0 = SERIAL_RUNTIME_AUX_INIT;
+    emit_serial_runtime_state("driver", "begin", "red");
     let completion =
-        crate::hal::driver_task::run_driver_task_ring_service_bootstrap_call(contract, command);
+        crate::hal::driver_task::run_driver_task_ring_service_bootstrap(contract, command);
     let ok = completion.is_some_and(|completion| {
         completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
             && completion.result == 1
@@ -388,13 +401,18 @@ pub fn init_serial_driver_task_runtime() -> bool {
                 None,
             );
             SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
+            emit_serial_runtime_state("driver", "owner-state-rejected", "red");
             return false;
         }
         SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
+        emit_serial_runtime_state("driver", "ready", "green");
     } else {
         SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
+        emit_serial_runtime_state("driver", status, "red");
     }
-    let _ = SERIAL_RUNTIME_INIT_LEASE.lock().take();
+    if ok || completion.is_some() {
+        let _ = SERIAL_RUNTIME_INIT_LEASE.lock().take();
+    }
     ok
 }
 

@@ -202,6 +202,8 @@ static POST_COMMIT_IPC_UNLOCKED: AtomicBool = AtomicBool::new(false);
 static PRECOMMIT_IPC_FORBIDDEN: AtomicU32 = AtomicU32::new(0);
 static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
 static UART_LOG_SUPPRESSION_DEPTH: AtomicU32 = AtomicU32::new(0);
+static SERIAL_PROMPT_REFRESH_AFTER_LOGS: AtomicBool = AtomicBool::new(false);
+const SERIAL_PROMPT: &[u8] = b"cohesix> ";
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -330,7 +332,33 @@ fn record_drop() {
 }
 
 fn emit_uart(payload: &[u8]) {
-    with_raw_uart_lock(|| sel4::debug_put_bytes_unlocked(payload));
+    with_raw_uart_lock(|| {
+        sel4::debug_put_bytes_unlocked(payload);
+        emit_serial_prompt_refresh_unlocked(payload);
+    });
+}
+
+fn emit_serial_prompt_refresh_unlocked(payload: &[u8]) {
+    if !serial_prompt_refresh_should_emit(
+        SERIAL_PROMPT_REFRESH_AFTER_LOGS.load(Ordering::Acquire),
+        payload,
+    ) {
+        return;
+    }
+    sel4::debug_put_bytes_unlocked(SERIAL_PROMPT);
+}
+
+const fn serial_prompt_refresh_should_emit(enabled: bool, payload: &[u8]) -> bool {
+    enabled && payload.len() != 0
+}
+
+/// Reprint the root prompt after raw UART diagnostics once the prompt exists.
+pub fn set_serial_prompt_refresh_after_logs(enabled: bool) {
+    SERIAL_PROMPT_REFRESH_AFTER_LOGS.store(enabled, Ordering::Release);
+}
+
+pub(crate) fn emit_serial_prompt_refresh_for_raw_uart(payload: &[u8]) {
+    emit_serial_prompt_refresh_unlocked(payload);
 }
 
 /// Emit a UART line regardless of the current logger transport.
@@ -355,20 +383,25 @@ pub fn force_uart_line(line: &str) {
         return;
     }
 
-    with_raw_uart_lock(|| sel4::debug_put_line_unlocked(line.as_bytes()));
+    with_raw_uart_lock(|| {
+        sel4::debug_put_line_unlocked(line.as_bytes());
+        emit_serial_prompt_refresh_unlocked(line.as_bytes());
+    });
 }
 
 /// Emit a compact critical UART line even when normal diagnostics are buffered.
 ///
-/// Use this only for operator-visible readiness/failure summaries; verbose
-/// driver traces must continue through [`force_uart_line`] so the log buffer can
-/// protect serial responsiveness after the root console starts.
+/// Use this for operator-visible readiness/failure summaries that must stay on
+/// the serial console even if another logger transport is active.
 pub fn force_uart_line_raw(line: &str) {
     if line.trim().is_empty() {
         return;
     }
 
-    with_raw_uart_lock(|| sel4::debug_put_line_unlocked(line.as_bytes()));
+    with_raw_uart_lock(|| {
+        sel4::debug_put_line_unlocked(line.as_bytes());
+        emit_serial_prompt_refresh_unlocked(line.as_bytes());
+    });
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
@@ -623,6 +656,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn serial_prompt_refresh_requires_prompt_and_payload() {
+        assert!(serial_prompt_refresh_should_emit(true, b"log\r\n"));
+        assert!(!serial_prompt_refresh_should_emit(true, b""));
+        assert!(!serial_prompt_refresh_should_emit(false, b"log\r\n"));
+    }
+
+    #[test]
+    fn log_buffer_switch_policy_honors_prompt_refresh() {
+        assert!(log_buffer_switch_allowed_after_prompt_refresh(false));
+        assert!(!log_buffer_switch_allowed_after_prompt_refresh(true));
+    }
+
     #[cfg(feature = "kernel")]
     #[test]
     fn runtime_transport_drops_when_endpoint_missing() {
@@ -793,16 +839,26 @@ fn init_logger_bootstrap_only_inner() {
     EP_ONLY_PERMITTED.store(false, Ordering::Release);
     EP_ATTACH_WAIT_LOGGED.store(false, Ordering::Release);
     POST_COMMIT_IPC_UNLOCKED.store(false, Ordering::Release);
+    SERIAL_PROMPT_REFRESH_AFTER_LOGS.store(false, Ordering::Release);
     ::log::set_max_level(LevelFilter::Info);
 }
 
 /// Switch the logger to the in-VM log buffer backing `/log/queen.log`.
 pub fn switch_logger_to_log_buffer() -> bool {
+    if !log_buffer_switch_allowed_after_prompt_refresh(
+        SERIAL_PROMPT_REFRESH_AFTER_LOGS.load(Ordering::Acquire),
+    ) {
+        return false;
+    }
     if !log_buffer::enable_log_channel() {
         return false;
     }
     log_buffer::append_log_line("[INFO audit] log.channel=LOGFILE path=/log/queen.log");
     true
+}
+
+const fn log_buffer_switch_allowed_after_prompt_refresh(prompt_refresh_enabled: bool) -> bool {
+    !prompt_refresh_enabled
 }
 
 /// Switches the logger sink to the userland channel once IPC is online.

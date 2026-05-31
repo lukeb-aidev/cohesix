@@ -58,6 +58,7 @@ static CYW43_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
 static GENET_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static CYW43_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
+static SDIO_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static GENET_RUNTIME: Mutex<Option<BcmGenetDevice>> = Mutex::new(None);
 static CYW43_RUNTIME: Mutex<Option<Cyw43NetDevice>> = Mutex::new(None);
 static NET_RUNTIME_INIT_LEASE: Mutex<Option<NetRuntimeInitLease>> = Mutex::new(None);
@@ -67,7 +68,11 @@ fn run_driver_task_net_service(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
-    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
+    } else {
+        crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+    }
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -122,7 +127,7 @@ fn emit_net_driver_task_replay_status(
         stage,
         status,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -135,7 +140,7 @@ fn emit_sdio_driver_task_replay_status(stage: &'static str, status: &'static str
         "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host selected=wifi-owner-link attempted=yes stage={} blocker={}",
         stage, status,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 type NetRuntimeInitFn = unsafe fn(
@@ -254,6 +259,34 @@ where
             return Err(DriverTaskNetError::RuntimePending(hot_path.as_str()));
         }
         emit_net_driver_task_replay_status(config, hot_path, "descriptor-replay", "ready");
+        if hot_path == DriverTaskHotPath::Cyw43Wifi {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::SdioHost,
+                "cyw43-sdio-prereq",
+                "begin",
+                None,
+            );
+            if let Err(err) = init_sdio_host_linked_runtime() {
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    SDIO_HOST_DRIVER_TASK_CONTRACT,
+                    DriverTaskHotPath::SdioHost,
+                    "cyw43-sdio-prereq",
+                    "failed",
+                    None,
+                );
+                emit_net_driver_task_replay_status(config, hot_path, "cyw43-sdio-prereq", "failed");
+                return Err(err);
+            }
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::SdioHost,
+                "cyw43-sdio-prereq",
+                "ready",
+                None,
+            );
+            emit_net_driver_task_replay_status(config, hot_path, "cyw43-sdio-prereq", "ready");
+        }
         let mut command = DriverTaskCommandRecord::pi4_hot_path(
             0,
             hot_path,
@@ -473,6 +506,9 @@ where
 
 #[cfg(feature = "kernel")]
 fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
+    if SDIO_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0 {
+        return Ok(());
+    }
     let contract = SDIO_HOST_DRIVER_TASK_CONTRACT;
     let _ = crate::hal::driver_task::register_pi4_bus_ring_service(contract);
     emit_sdio_driver_task_replay_status("descriptor-replay", "begin");
@@ -515,6 +551,7 @@ fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
             DriverTaskHotPath::SdioHost,
         )
     {
+        SDIO_LINKED_RUNTIME_READY.store(1, Ordering::Release);
         emit_sdio_driver_task_replay_status("owner-state", "ready");
         Ok(())
     } else {

@@ -32,9 +32,7 @@ pub fn debug_uart_line(line: &str) {
     {
         crate::bootstrap::log::with_raw_uart_lock(|| {
             crate::sel4::debug_put_line_unlocked(line.as_bytes());
-            if line.starts_with("audit ") {
-                crate::sel4::debug_put_bytes_unlocked(b"cohesix> ");
-            }
+            crate::bootstrap::log::emit_serial_prompt_refresh_for_raw_uart(line.as_bytes());
         });
     }
 

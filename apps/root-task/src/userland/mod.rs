@@ -246,14 +246,10 @@ pub fn main(ctx: BootContext) -> ! {
                     );
                     let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
                     if local_seat_enabled {
-                        boot_log::force_uart_line(
-                            "[trace] log channel switching to /log/queen.log before deferred Wi-Fi",
+                        boot_log::force_uart_line_raw(
+                            "[trace] deferred Wi-Fi logs remain on serial",
                         );
-                        let _ = boot_log::switch_logger_to_log_buffer();
                     }
-                    let _wifi_breadcrumb_uart_guard =
-                        crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart();
-                    let _wifi_log_uart_guard = crate::bootstrap::log::suppress_uart_log_output();
                     log::info!(
                         target: "net-console",
                         "[net-console] deferred resume before serial root console; starting Wi-Fi stack"
@@ -360,14 +356,8 @@ pub fn main(ctx: BootContext) -> ! {
                 );
                 let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
                 if local_seat_enabled {
-                    boot_log::force_uart_line_raw(
-                        "[trace] log channel switching to /log/queen.log before deferred Wi-Fi",
-                    );
-                    let _ = boot_log::switch_logger_to_log_buffer();
+                    boot_log::force_uart_line_raw("[trace] deferred Wi-Fi logs remain on serial");
                 }
-                let _wifi_breadcrumb_uart_guard =
-                    crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart();
-                let _wifi_log_uart_guard = crate::bootstrap::log::suppress_uart_log_output();
                 log::info!(
                     target: "net-console",
                     "[net-console] deferred resume after serial root prompt; starting Wi-Fi stack"

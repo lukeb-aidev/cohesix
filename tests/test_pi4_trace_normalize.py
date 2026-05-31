@@ -344,6 +344,15 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_BOOTSTRAP_DEFERRED": 0,
         "DRIVER_TASK_RESOURCE_INIT": 0,
         "DRIVER_TASK_RESOURCE_BLOCKER": "none",
+        "SERIAL_DRIVER_ACCEPTED": "no",
+        "SERIAL_FALLBACK_ACTIVE": "no",
+        "SERIAL_RUNTIME_FRONTIER": "none",
+        "HDMI_DESCRIPTOR_READY": "no",
+        "HDMI_ENGINE_READY": "no",
+        "HDMI_OWNER_STATE_READY": "no",
+        "HDMI_RUNTIME_FRONTIER": "none",
+        "USB_DRIVER_TASK_FRONTIER": "none",
+        "WIFI_REPLAY_FRONTIER": "none",
         "NET_DRIVER_TASK_REPLAY_EVENTS": 0,
         "NET_DRIVER_TASK_REPLAY_BLOCKER": "none",
         "SDIO_DRIVER_TASK_REPLAY_EVENTS": 0,
@@ -855,6 +864,103 @@ def test_gate_summary_ignores_expected_deferred_resource_init() -> None:
     )
 
 
+def test_gate_summary_distinguishes_serial_fallback_from_driver_acceptance() -> None:
+    fallback_events = normalizer.parse_events(
+        [
+            "SERIAL_RUNTIME_STATE owner=driver stage=serial-runtime-init "
+            "status=no-reply acceptance=red",
+            "[uart] driver-task runtime init failed owner=serial "
+            "action=root-mini-uart-fallback acceptance=no",
+            "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init "
+            "status=fallback acceptance=red reason=driver-task-no-reply",
+        ]
+    )
+
+    fallback_record = normalizer.summarize_gates(fallback_events).to_record()
+    assert fallback_record["SERIAL_FALLBACK_ACTIVE"] == "yes"
+    assert fallback_record["SERIAL_DRIVER_ACCEPTED"] == "no"
+    assert fallback_record["SERIAL_RUNTIME_FRONTIER"] == "serial-root-fallback"
+
+    accepted_events = normalizer.parse_events(
+        [
+            "SERIAL_RUNTIME_STATE owner=driver stage=serial-runtime-init "
+            "status=ready acceptance=green",
+            "DRIVER_TASK_BOOT contract=serial role=serial started=yes "
+            "pointer_free_ipc=yes owner_state=driver-owned",
+        ]
+    )
+
+    accepted_record = normalizer.summarize_gates(accepted_events).to_record()
+    assert accepted_record["SERIAL_FALLBACK_ACTIVE"] == "no"
+    assert accepted_record["SERIAL_DRIVER_ACCEPTED"] == "yes"
+    assert (
+        accepted_record["SERIAL_RUNTIME_FRONTIER"]
+        == "serial-driver-owner-state-ready"
+    )
+
+
+def test_gate_summary_tracks_current_serial_runtime_init_outstanding() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=serial hot_path=serial-console "
+            "stage=runtime-descriptor-bootstrap status=no-reply "
+            "acceptance=no code=none detail=none result=none frame_len=1344",
+            "DRIVER_TASK_RING_CALL_BEGIN contract=serial endpoint=0x0649 "
+            "request=10 opcode=1 flags=0x0000 arg0=0 arg1=3 "
+            "aux0=0x53455249 aux1=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["SERIAL_DRIVER_ACCEPTED"] == "no"
+    assert record["SERIAL_RUNTIME_FRONTIER"] == "serial-runtime-init-outstanding"
+
+
+def test_gate_summary_tracks_hdmi_usb_and_wifi_frontiers() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=hdmi-text hot_path=hdmi-text "
+            "stage=runtime-descriptor-bootstrap status=ready acceptance=no "
+            "code=1 detail=0 result=1 frame_len=1344",
+            "DRIVER_TASK_RESOURCE_INIT contract=hdmi-text hot_path=hdmi-text "
+            "stage=hdmi-engine-init status=no-reply acceptance=no "
+            "code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=runtime-descriptor-bootstrap "
+            "status=ready acceptance=no code=1 detail=0 result=1 frame_len=1344",
+            "DRIVER_TASK_RESOURCE_INIT contract=pcie-root hot_path=pcie-root "
+            "stage=usb-prereq-pcie-replay status=no-reply acceptance=no "
+            "code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=sdio-host tcb=0x05b8 "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["HDMI_DESCRIPTOR_READY"] == "yes"
+    assert record["HDMI_ENGINE_READY"] == "no"
+    assert record["HDMI_OWNER_STATE_READY"] == "no"
+    assert record["HDMI_RUNTIME_FRONTIER"] == "hdmi-engine-init-no-reply"
+    assert record["USB_DRIVER_TASK_FRONTIER"] == "usb-prereq-pcie-replay-no-reply"
+    assert record["USB_BLOCKER"] == "usb-prereq-pcie-replay-no-reply"
+    assert record["WIFI_REPLAY_FRONTIER"] == "pre-prompt-deferred"
+
+
+def test_gate_summary_tracks_hdmi_boot_failure_before_fallback_noise() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_BOOT contract=hdmi-text role=display status=failed "
+            "err=seL4_NotEnoughMemory",
+            "[local-seat] root HDMI diagnostic mirror unavailable "
+            "detail=framebuffer-map action=serial-shell",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["HDMI_DESCRIPTOR_READY"] == "no"
+    assert record["HDMI_RUNTIME_FRONTIER"] == "hdmi-engine-init-boot-failed"
+
+
 def test_gate_summary_labels_prompt_gated_usb_runtime_deferral() -> None:
     events = normalizer.parse_events(
         [
@@ -871,6 +977,45 @@ def test_gate_summary_labels_prompt_gated_usb_runtime_deferral() -> None:
     assert record["ROOT_CONSOLE_READY"] == "yes"
     assert record["USB_GATE"] == 1
     assert record["USB_BLOCKER"] == "driver-task-runtime-deferred"
+
+
+def test_gate_summary_labels_usb_engine_init_blocking_stall() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci-mmio-hint=none source=absent",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-engine-init status=begin "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_RING_CALL_BEGIN contract=usb-local-seat "
+            "endpoint=0x07a4 request=2 opcode=1 flags=0x0000 "
+            "arg0=2 arg1=2 aux0=0x4c53494e aux1=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["USB_GATE"] == 1
+    assert record["USB_BLOCKER"] == "usb-engine-init-blocking-call-stalled"
+
+
+def test_gate_summary_labels_usb_engine_init_no_reply() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci-mmio-hint=none source=absent",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-engine-init status=begin "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_RING_CALL_BEGIN contract=usb-local-seat "
+            "endpoint=0x07a4 request=2 opcode=1 flags=0x2000 "
+            "arg0=2 arg1=2 aux0=0x4c53494e aux1=0 frame_len=0",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=usb-local-seat "
+            "endpoint=0x07a4 request=2 mode=nonblocking attempts=4096 "
+            "opcode=1 arg0=2 aux0=0x4c53494e frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["USB_GATE"] == 1
+    assert record["USB_BLOCKER"] == "usb-engine-init-no-reply"
 
 
 def test_gate_summary_tracks_net_and_sdio_replay_blockers() -> None:
@@ -900,6 +1045,49 @@ def test_gate_summary_tracks_net_and_sdio_replay_blockers() -> None:
         record["SDIO_DRIVER_TASK_REPLAY_BLOCKER"]
         == "sdio-host:sdio-first-command:fault"
     )
+    assert record["WIFI_BLOCKER"] == "sdio-driver-task-replay"
+    assert record["WIFI_REPLAY_FRONTIER"] == "sdio-driver-task-replay"
+
+
+def test_gate_summary_labels_deferred_wifi_start_without_replay() -> None:
+    events = normalizer.parse_events(
+        [
+            "[Cohesix] Root console ready (type 'help' for commands)",
+            "cohesix> [local-seat] xhci boot contract raw_hint=0x0000000000000000/0",
+            "[net-console] deferred resume reason=root-shell-ready action=start-wifi",
+            "[trace] deferred Wi-Fi logs remain on serial",
+            "cohesix> ",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["ROOT_PROMPT_SEEN"] == "yes"
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "wifi-started-no-replay"
+    assert record["WIFI_EXACT"] == "wifi-started-no-replay"
+    assert record["WIFI_BLOCKER_LINE"] == 3
+    assert record["NET_DRIVER_TASK_REPLAY_EVENTS"] == 0
+    assert record["SDIO_DRIVER_TASK_REPLAY_EVENTS"] == 0
+
+
+def test_gate_summary_keeps_deferred_wifi_replay_blocker_after_start() -> None:
+    events = normalizer.parse_events(
+        [
+            "[net-console] deferred resume reason=root-shell-ready action=start-wifi",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=descriptor-replay "
+            "blocker=ready",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=engine-init blocker=no-reply",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_BLOCKER"] == "cyw43-driver-task-replay"
+    assert record["WIFI_REPLAY_FRONTIER"] == "cyw43-driver-task-replay"
+    assert record["NET_DRIVER_TASK_REPLAY_EVENTS"] == 1
+    assert record["NET_DRIVER_TASK_REPLAY_BLOCKER"] == "cyw43-wifi:engine-init:no-reply"
+    assert record["SDIO_DRIVER_TASK_REPLAY_EVENTS"] == 1
 
 
 def test_gate_summary_tracks_root_console_readiness() -> None:

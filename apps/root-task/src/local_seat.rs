@@ -191,6 +191,30 @@ static LINKED_LOCAL_SEAT_PCIE_REPLAY_READY_LOGGED: AtomicBool = AtomicBool::new(
     target_arch = "aarch64",
     target_os = "none"
 ))]
+static LINKED_LOCAL_SEAT_PCIE_ENGINE_BEGIN_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_PCIE_ENGINE_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_PCIE_ENGINE_DEFERRED_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LINKED_LOCAL_SEAT_USB_INIT_DEFERRED_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(
@@ -828,9 +852,7 @@ impl LocalSeatRuntime {
                                 ),
                                 frame,
                             );
-                        let completion = crate::hal::driver_task::run_driver_task_ring_service(
-                            contract, command,
-                        );
+                        let completion = run_local_seat_driver_task_ring_service(contract, command);
                         draw_no_reply = completion.is_none();
                         if let Some(completion) = completion {
                             if completion.code
@@ -918,9 +940,7 @@ impl LocalSeatRuntime {
                     crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
                     frame,
                 );
-                if crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                    .is_some()
-                {
+                if run_local_seat_driver_task_ring_service(contract, command).is_some() {
                     return;
                 }
             }
@@ -1212,8 +1232,7 @@ impl LocalSeatRuntime {
                         flags: 0,
                     },
                 );
-                if let Some(completion) =
-                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                if let Some(completion) = run_local_seat_driver_task_ring_service(contract, command)
                 {
                     if completion.code
                         == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
@@ -1315,7 +1334,7 @@ impl LocalSeatRuntime {
                         crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
                 },
             );
-            if crate::hal::driver_task::run_driver_task_ring_service(contract, command).is_some() {
+            if run_local_seat_driver_task_ring_service(contract, command).is_some() {
                 return;
             }
             // SAFETY: The HAL admits this compatibility callback only for
@@ -1670,7 +1689,7 @@ fn try_attach_linked_display_runtime(root_console_ready: bool) -> bool {
             crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
         ),
     );
-    let hdmi_completion = crate::hal::driver_task::run_driver_task_ring_service(
+    let hdmi_completion = run_local_seat_driver_task_ring_service(
         crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
         hdmi_command,
     );
@@ -1812,6 +1831,65 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 None,
             );
         }
+        let pcie_contract = crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT;
+        let pcie_command = crate::hal::driver_task::runtime_engine_init_command(
+            crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(pcie_contract),
+        );
+        if !LINKED_LOCAL_SEAT_PCIE_ENGINE_BEGIN_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                pcie_contract,
+                crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                "usb-prereq-pcie-engine-init",
+                "begin",
+                None,
+            );
+        }
+        let pcie_completion = run_local_seat_driver_task_ring_service(pcie_contract, pcie_command);
+        let pcie_ready = pcie_completion.is_some_and(|completion| {
+            completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+        });
+        let pcie_status = local_seat_completion_status(pcie_completion, pcie_ready);
+        if pcie_ready || !LINKED_LOCAL_SEAT_PCIE_ENGINE_DEFERRED_LOGGED.swap(true, Ordering::AcqRel)
+        {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                pcie_contract,
+                crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                "usb-prereq-pcie-engine-init",
+                pcie_status,
+                pcie_completion,
+            );
+        }
+        if !pcie_ready {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                usb_contract,
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                "usb-xhci-init",
+                "blocked-pcie-engine-init",
+                pcie_completion,
+            );
+            return false;
+        }
+        if !crate::hal::driver_task::register_driver_task_runtime_owner_state(
+            crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+        ) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                pcie_contract,
+                crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                "pcie-owner-state",
+                "descriptor-rejected",
+                pcie_completion,
+            );
+        } else if !LINKED_LOCAL_SEAT_PCIE_ENGINE_READY_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                pcie_contract,
+                crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                "pcie-owner-state",
+                "ready",
+                pcie_completion,
+            );
+        }
         let mut usb_command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
             0,
             crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
@@ -1832,8 +1910,7 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 None,
             );
         }
-        let usb_completion =
-            crate::hal::driver_task::run_driver_task_ring_service(usb_contract, usb_command);
+        let usb_completion = run_local_seat_driver_task_ring_service(usb_contract, usb_command);
         let usb_controller_ready = local_seat_usb_engine_init_ready(usb_completion);
         let usb_keyboard_ready = local_seat_usb_keyboard_init_ready(usb_completion);
         crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -2018,6 +2095,9 @@ fn try_attach_root_display_diagnostic_runtime() -> bool {
     {
         return true;
     }
+    if ROOT_LOCAL_SEAT_DISPLAY_DIAG_FAILED_LOGGED.load(Ordering::Acquire) {
+        return false;
+    }
     let Some(lease) = LOCAL_SEAT_RUNTIME_INIT_LEASE.lock().as_ref().copied() else {
         return false;
     };
@@ -2053,6 +2133,18 @@ fn try_attach_root_display_diagnostic_runtime() -> bool {
             }
             false
         }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn run_local_seat_driver_task_ring_service(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> Option<crate::hal::driver_task::DriverTaskCompletionRecord> {
+    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
+    } else {
+        crate::hal::driver_task::run_driver_task_ring_service(contract, command)
     }
 }
 
@@ -2116,11 +2208,12 @@ fn init_local_seat_driver_runtime_on_service(
         },
     );
     command.aux0 = DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
-    let ok = crate::hal::driver_task::run_driver_task_ring_service(driver_task_contract(), command)
-        .is_some_and(|completion| {
+    let ok = run_local_seat_driver_task_ring_service(driver_task_contract(), command).is_some_and(
+        |completion| {
             completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                 && completion.result == 1
-        });
+        },
+    );
     if ok {
         Ok(())
     } else {

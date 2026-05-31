@@ -1886,9 +1886,12 @@ where
     pub fn announce_console_ready(&mut self) {
         if self.ninedoor.is_some() {
             if crate::generated::hardware_config().local_seat.enabled {
-                boot_log::force_uart_line("[trace] log channel buffered after local-seat handoff");
+                boot_log::force_uart_line_raw(
+                    "[trace] log channel remains on serial after local-seat handoff",
+                );
+            } else {
+                boot_log::switch_logger_to_log_buffer();
             }
-            boot_log::switch_logger_to_log_buffer();
         }
         self.audit.info("console: attach uart");
         if let Some(bridge) = self.ninedoor.as_mut() {
@@ -1949,6 +1952,10 @@ where
         }
         debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
         self.emit_prompt();
+        #[cfg(feature = "kernel")]
+        boot_log::set_serial_prompt_refresh_after_logs(
+            crate::generated::hardware_config().local_seat.enabled,
+        );
         self.serial.poll_io();
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();

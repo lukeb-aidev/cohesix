@@ -222,6 +222,21 @@ class TraceEvent:
 
 
 @dataclass(frozen=True)
+class DriverTaskFrontiers:
+    """Fail-closed driver-task frontier details for Pi 4 bring-up logs."""
+
+    serial_driver_accepted: bool = False
+    serial_fallback_active: bool = False
+    serial_runtime_frontier: str = "none"
+    hdmi_descriptor_ready: bool = False
+    hdmi_engine_ready: bool = False
+    hdmi_owner_state_ready: bool = False
+    hdmi_runtime_frontier: str = "none"
+    usb_driver_task_frontier: str = "none"
+    wifi_replay_frontier: str = "none"
+
+
+@dataclass(frozen=True)
 class GateSummary:
     """Current USB/WiFi hardware bring-up gate state."""
 
@@ -287,6 +302,15 @@ class GateSummary:
     driver_task_bootstrap_deferred: int = 0
     driver_task_resource_init: int = 0
     driver_task_resource_blocker: str = "none"
+    serial_driver_accepted: bool = False
+    serial_fallback_active: bool = False
+    serial_runtime_frontier: str = "none"
+    hdmi_descriptor_ready: bool = False
+    hdmi_engine_ready: bool = False
+    hdmi_owner_state_ready: bool = False
+    hdmi_runtime_frontier: str = "none"
+    usb_driver_task_frontier: str = "none"
+    wifi_replay_frontier: str = "none"
     net_driver_task_replay_events: int = 0
     net_driver_task_replay_blocker: str = "none"
     sdio_driver_task_replay_events: int = 0
@@ -404,6 +428,21 @@ class GateSummary:
             "DRIVER_TASK_BOOTSTRAP_DEFERRED": self.driver_task_bootstrap_deferred,
             "DRIVER_TASK_RESOURCE_INIT": self.driver_task_resource_init,
             "DRIVER_TASK_RESOURCE_BLOCKER": self.driver_task_resource_blocker,
+            "SERIAL_DRIVER_ACCEPTED": (
+                "yes" if self.serial_driver_accepted else "no"
+            ),
+            "SERIAL_FALLBACK_ACTIVE": (
+                "yes" if self.serial_fallback_active else "no"
+            ),
+            "SERIAL_RUNTIME_FRONTIER": self.serial_runtime_frontier,
+            "HDMI_DESCRIPTOR_READY": "yes" if self.hdmi_descriptor_ready else "no",
+            "HDMI_ENGINE_READY": "yes" if self.hdmi_engine_ready else "no",
+            "HDMI_OWNER_STATE_READY": (
+                "yes" if self.hdmi_owner_state_ready else "no"
+            ),
+            "HDMI_RUNTIME_FRONTIER": self.hdmi_runtime_frontier,
+            "USB_DRIVER_TASK_FRONTIER": self.usb_driver_task_frontier,
+            "WIFI_REPLAY_FRONTIER": self.wifi_replay_frontier,
             "NET_DRIVER_TASK_REPLAY_EVENTS": self.net_driver_task_replay_events,
             "NET_DRIVER_TASK_REPLAY_BLOCKER": self.net_driver_task_replay_blocker,
             "SDIO_DRIVER_TASK_REPLAY_EVENTS": self.sdio_driver_task_replay_events,
@@ -4523,6 +4562,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     wifi_exact, wifi_phase, wifi_blocker_line = summarize_wifi_failure_detail(
         event_list, wifi_blocker
     )
+    wifi_deferred_resume_start = next(
+        (
+            event
+            for event in event_list
+            if "[net-console]" in event.raw.lower()
+            and "deferred resume reason=root-shell-ready" in event.raw.lower()
+            and "action=start-wifi" in event.raw.lower()
+        ),
+        None,
+    )
     panic_events = [
         event
         for event in event_list
@@ -4658,12 +4707,38 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     driver_task_resource_init, driver_task_resource_blocker = (
         summarize_driver_task_resource_init(event_list)
     )
+    usb_driver_task_blocker = summarize_usb_driver_task_stall(event_list)
+    if usb_driver_task_blocker is not None:
+        usb_gate = max(usb_gate, 1)
+        usb_blocker = usb_driver_task_blocker
     net_driver_task_replay_events, net_driver_task_replay_blocker = (
         summarize_driver_task_replay_status(event_list, "net_driver_task_replay_status")
     )
     sdio_driver_task_replay_events, sdio_driver_task_replay_blocker = (
         summarize_driver_task_replay_status(event_list, "sdio_driver_task_replay_status")
     )
+    driver_task_frontiers = summarize_driver_task_frontiers(
+        event_list,
+        net_driver_task_replay_blocker,
+        sdio_driver_task_replay_blocker,
+    )
+    if sdio_driver_task_replay_blocker != "none":
+        wifi_gate = max(wifi_gate, 1)
+        wifi_blocker = "sdio-driver-task-replay"
+        wifi_exact = sdio_driver_task_replay_blocker
+    elif net_driver_task_replay_blocker != "none":
+        wifi_gate = max(wifi_gate, 1)
+        wifi_blocker = "cyw43-driver-task-replay"
+        wifi_exact = net_driver_task_replay_blocker
+    if (
+        wifi_deferred_resume_start is not None
+        and net_driver_task_replay_events == 0
+        and sdio_driver_task_replay_events == 0
+    ):
+        wifi_gate = max(wifi_gate, 1)
+        wifi_blocker = "wifi-started-no-replay"
+        wifi_exact = "wifi-started-no-replay"
+        wifi_blocker_line = wifi_deferred_resume_start.line
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -4727,6 +4802,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_bootstrap_deferred=driver_task_bootstrap_deferred,
         driver_task_resource_init=driver_task_resource_init,
         driver_task_resource_blocker=driver_task_resource_blocker,
+        serial_driver_accepted=driver_task_frontiers.serial_driver_accepted,
+        serial_fallback_active=driver_task_frontiers.serial_fallback_active,
+        serial_runtime_frontier=driver_task_frontiers.serial_runtime_frontier,
+        hdmi_descriptor_ready=driver_task_frontiers.hdmi_descriptor_ready,
+        hdmi_engine_ready=driver_task_frontiers.hdmi_engine_ready,
+        hdmi_owner_state_ready=driver_task_frontiers.hdmi_owner_state_ready,
+        hdmi_runtime_frontier=driver_task_frontiers.hdmi_runtime_frontier,
+        usb_driver_task_frontier=driver_task_frontiers.usb_driver_task_frontier,
+        wifi_replay_frontier=driver_task_frontiers.wifi_replay_frontier,
         net_driver_task_replay_events=net_driver_task_replay_events,
         net_driver_task_replay_blocker=net_driver_task_replay_blocker,
         sdio_driver_task_replay_events=sdio_driver_task_replay_events,
@@ -4757,6 +4841,250 @@ def summarize_driver_task_resource_init(events: Iterable[TraceEvent]) -> tuple[i
             stage = event.fields.get("stage", "unknown")
             return len(resource_events), f"{hot_path}:{stage}:{status}"
     return len(resource_events), "none"
+
+
+def summarize_driver_task_frontiers(
+    events: Iterable[TraceEvent],
+    net_replay_blocker: str = "none",
+    sdio_replay_blocker: str = "none",
+) -> DriverTaskFrontiers:
+    """Return fail-closed frontiers for driver-task acceptance triage."""
+
+    serial_driver_accepted = False
+    serial_fallback_active = False
+    serial_status: str | None = None
+    serial_descriptor_blocker: str | None = None
+    serial_runtime_requests: set[int] = set()
+    hdmi_descriptor_ready = False
+    hdmi_engine_ready = False
+    hdmi_owner_state_ready = False
+    hdmi_engine_blocker: str | None = None
+    hdmi_boot_blocker: str | None = None
+    usb_frontier = "none"
+    wifi_pre_prompt_deferred = False
+    non_blocking_statuses = {"ready", "deferred", "begin", "progress"}
+
+    for event in events:
+        raw = event.raw.lower()
+        fields = event.fields
+        contract = fields.get("contract", "").lower()
+        hot_path = fields.get("hot_path", "").lower()
+        stage = fields.get("stage", "").lower()
+        status = fields.get("status", "").lower()
+
+        if "serial_runtime_state" in raw:
+            owner = fields.get("owner", "").lower()
+            serial_status = status or fields.get("state", "").lower()
+            if owner == "root" and serial_status == "fallback":
+                serial_fallback_active = True
+            if (
+                owner == "driver"
+                and serial_status == "ready"
+                and fields.get("acceptance", "").lower() == "green"
+            ):
+                serial_driver_accepted = True
+
+        if "root-mini-uart-fallback" in raw:
+            serial_fallback_active = True
+
+        if "driver_task_owner_state" in raw:
+            owner_state = fields.get("owner_state", "").lower()
+            descriptor = fields.get("descriptor", "").lower()
+            root_pointer = fields.get("root_pointer", "").lower()
+            if (
+                hot_path == "serial-console"
+                and owner_state == "driver-owned"
+                and descriptor == "present"
+                and root_pointer == "no"
+            ):
+                serial_driver_accepted = True
+            if (
+                hot_path == "hdmi-text"
+                and owner_state == "driver-owned"
+                and descriptor == "present"
+                and root_pointer == "no"
+            ):
+                hdmi_owner_state_ready = True
+
+        if "driver_task_boot" in raw:
+            owner_state = fields.get("owner_state", "").lower()
+            pointer_free_ipc = fields.get("pointer_free_ipc", "").lower()
+            status = fields.get("status", "").lower()
+            if (
+                contract == "serial"
+                and owner_state == "driver-owned"
+                and pointer_free_ipc == "yes"
+            ):
+                serial_driver_accepted = True
+            if contract == "hdmi-text" and status == "failed":
+                hdmi_boot_blocker = "boot-failed"
+
+        if "root hdmi diagnostic mirror unavailable" in raw:
+            detail = fields.get("detail", "").lower()
+            if detail:
+                hdmi_engine_blocker = detail
+
+        if "driver_task_ring_call_begin" in raw and contract == "serial":
+            aux0 = fields.get("aux0", "").lower()
+            request = parse_hex_int(fields.get("request"))
+            if aux0 == "0x53455249" and request is not None:
+                serial_runtime_requests.add(request)
+        if (
+            (
+                "driver_task_ring_call_return" in raw
+                or "driver_task_ring_call_timeout" in raw
+            )
+            and contract == "serial"
+        ):
+            request = parse_hex_int(fields.get("request"))
+            if request is not None:
+                serial_runtime_requests.discard(request)
+            if "driver_task_ring_call_timeout" in raw:
+                serial_status = "no-reply"
+
+        if "driver_task_bootstrap_deferred" in raw and contract in {
+            "sdio-host",
+            "cyw43455",
+            "bcmgenet-v5",
+        }:
+            wifi_pre_prompt_deferred = True
+
+        if "driver_task_hdmi_early_ready" in raw:
+            if fields.get("engine_init", "").lower() == "yes":
+                hdmi_engine_ready = True
+            elif fields.get("engine_init", "").lower() == "no":
+                hdmi_engine_blocker = "no-reply"
+            if fields.get("owner_state", "").lower() == "yes":
+                hdmi_owner_state_ready = True
+
+        if "driver_task_resource_init" not in raw:
+            continue
+
+        if hot_path == "serial-console" and stage == "serial-runtime-init":
+            serial_status = status
+        if hot_path == "serial-console" and status not in non_blocking_statuses:
+            serial_descriptor_blocker = f"{stage}-{status}"
+
+        if hot_path == "hdmi-text":
+            if stage == "runtime-descriptor-bootstrap" and status == "ready":
+                hdmi_descriptor_ready = True
+            if stage == "hdmi-engine-init":
+                if status == "ready":
+                    hdmi_engine_ready = True
+                elif status not in non_blocking_statuses:
+                    hdmi_engine_blocker = status
+            if stage == "hdmi-owner-state" and status == "ready":
+                hdmi_owner_state_ready = True
+
+        if contract == "pcie-root" and stage == "usb-prereq-pcie-replay":
+            usb_frontier = f"usb-prereq-pcie-replay-{status}"
+        if hot_path == "usb-keyboard" and stage:
+            if status not in non_blocking_statuses:
+                usb_frontier = f"{stage}-{status}"
+            elif usb_frontier == "none" and stage == "runtime-descriptor-bootstrap":
+                usb_frontier = "usb-runtime-descriptor-bootstrap-ready"
+            elif usb_frontier == "none" and stage.startswith("usb-"):
+                usb_frontier = f"{stage}-{status}"
+
+    if serial_driver_accepted:
+        serial_frontier = "serial-driver-owner-state-ready"
+    elif serial_fallback_active:
+        serial_frontier = "serial-root-fallback"
+    elif serial_runtime_requests:
+        serial_frontier = "serial-runtime-init-outstanding"
+    elif serial_status == "no-reply":
+        serial_frontier = "serial-runtime-init-no-reply"
+    elif serial_status:
+        serial_frontier = f"serial-runtime-init-{serial_status}"
+    elif serial_descriptor_blocker:
+        serial_frontier = f"serial-{serial_descriptor_blocker}"
+    else:
+        serial_frontier = "none"
+
+    if hdmi_owner_state_ready:
+        hdmi_frontier = "hdmi-owner-state-ready"
+    elif hdmi_engine_ready:
+        hdmi_frontier = "hdmi-engine-ready-owner-pending"
+    elif hdmi_boot_blocker:
+        hdmi_frontier = f"hdmi-engine-init-{hdmi_boot_blocker}"
+    elif hdmi_engine_blocker:
+        hdmi_frontier = f"hdmi-engine-init-{hdmi_engine_blocker}"
+    elif hdmi_descriptor_ready:
+        hdmi_frontier = "hdmi-runtime-descriptor-bootstrap-ready"
+    else:
+        hdmi_frontier = "none"
+
+    if sdio_replay_blocker != "none":
+        wifi_frontier = "sdio-driver-task-replay"
+    elif net_replay_blocker != "none":
+        wifi_frontier = "cyw43-driver-task-replay"
+    elif wifi_pre_prompt_deferred:
+        wifi_frontier = "pre-prompt-deferred"
+    else:
+        wifi_frontier = "none"
+
+    return DriverTaskFrontiers(
+        serial_driver_accepted=serial_driver_accepted,
+        serial_fallback_active=serial_fallback_active,
+        serial_runtime_frontier=serial_frontier,
+        hdmi_descriptor_ready=hdmi_descriptor_ready,
+        hdmi_engine_ready=hdmi_engine_ready,
+        hdmi_owner_state_ready=hdmi_owner_state_ready,
+        hdmi_runtime_frontier=hdmi_frontier,
+        usb_driver_task_frontier=usb_frontier,
+        wifi_replay_frontier=wifi_frontier,
+    )
+
+
+def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
+    """Return a USB-local-seat driver-task blocker that can hide serial RX."""
+
+    outstanding: dict[int, str] = {}
+    latest_usb_stage: str | None = None
+    latest_usb_status: str | None = None
+    latest_usb_blocking_call = False
+    for event in events:
+        if event.domain != "driver":
+            continue
+        fields = event.fields
+        contract = fields.get("contract", "").lower()
+        if contract not in {"usb-local-seat", "pcie-root"}:
+            continue
+        raw = event.raw.lower()
+        if "driver_task_resource_init" in raw:
+            latest_usb_stage = fields.get("stage", "").lower()
+            latest_usb_status = fields.get("status", "").lower()
+            if (
+                contract == "pcie-root"
+                and latest_usb_stage == "usb-prereq-pcie-replay"
+                and latest_usb_status not in {"ready", "deferred", "begin", "progress"}
+            ):
+                return f"{latest_usb_stage}-{latest_usb_status}"
+            continue
+        request = parse_hex_int(fields.get("request"))
+        if request is None:
+            continue
+        if "driver_task_ring_call_begin" in raw:
+            flags = parse_hex_int(fields.get("flags")) or 0
+            outstanding[request] = "blocking" if flags == 0 else "bounded"
+            latest_usb_blocking_call = flags == 0
+        elif (
+            "driver_task_ring_call_return" in raw
+            or "driver_task_ring_call_timeout" in raw
+        ):
+            outstanding.pop(request, None)
+            latest_usb_blocking_call = False
+            if "driver_task_ring_call_timeout" in raw:
+                return "usb-engine-init-no-reply"
+
+    if latest_usb_stage in {"usb-engine-init", "usb-xhci-init"}:
+        if latest_usb_status in {"no-reply", "blocked", "blocked-pcie-runtime"}:
+            return f"{latest_usb_stage}-{latest_usb_status}"
+        if latest_usb_status == "begin" and latest_usb_blocking_call:
+            return "usb-engine-init-blocking-call-stalled"
+    if any(mode == "blocking" for mode in outstanding.values()):
+        return "usb-driver-task-blocking-call-stalled"
+    return None
 
 
 def summarize_driver_task_replay_status(

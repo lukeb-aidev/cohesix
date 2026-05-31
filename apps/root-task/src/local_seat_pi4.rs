@@ -7082,6 +7082,11 @@ impl HdmiTextSink {
         framebuffer_hint: Option<Pi4FramebufferHint>,
     ) -> Result<Self, Pi4SeatError> {
         if let Some(hint) = framebuffer_hint {
+            if let Ok(sink) =
+                Self::from_published_root_framebuffer(hint, HdmiBackend::DtbSimpleFramebuffer)
+            {
+                return Ok(sink);
+            }
             match Self::from_fixed_framebuffer(hal, hint, HdmiBackend::DtbSimpleFramebuffer) {
                 Ok(sink) => return Ok(sink),
                 Err(err) => {
@@ -7201,6 +7206,69 @@ impl HdmiTextSink {
             pitch_bytes,
             HdmiBackend::MailboxProperty,
         )
+    }
+
+    fn from_published_root_framebuffer(
+        hint: Pi4FramebufferHint,
+        backend: HdmiBackend,
+    ) -> Result<Self, Pi4SeatError> {
+        let Some(mapping) = crate::hal::driver_task::hdmi_runtime_root_framebuffer_mapping() else {
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        };
+        if mapping.paddr != hint.paddr
+            || mapping.width != hint.width
+            || mapping.height != hint.height
+            || mapping.pitch != hint.pitch
+        {
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        }
+        let fb_size = hint
+            .pitch
+            .checked_mul(hint.height)
+            .ok_or(Pi4SeatError::FramebufferUnavailable)?;
+        let framebuffer_len =
+            validate_framebuffer_geometry(mapping.width, mapping.height, mapping.pitch, fb_size)
+                .ok_or(Pi4SeatError::FramebufferUnavailable)?;
+        let page_offset = mapping.paddr & PAGE_MASK;
+        let required_map_len = page_offset
+            .checked_add(framebuffer_len)
+            .ok_or(Pi4SeatError::FramebufferUnavailable)?;
+        if mapping.map_len < required_map_len {
+            return Err(Pi4SeatError::FramebufferUnavailable);
+        }
+        let rows = text_row_count(mapping.height);
+        let text_height = text_viewport_height(mapping.height, rows);
+        let framebuffer = mapping.vaddr as *mut u8;
+        let mut line = heapless::String::<176>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] display root framebuffer reuse source=driver-task-map paddr=0x{paddr:016x} vaddr=0x{vaddr:016x}",
+                paddr = mapping.paddr,
+                vaddr = mapping.vaddr,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+        let mut sink = Self {
+            width: mapping.width,
+            height: mapping.height,
+            text_height,
+            pitch: mapping.pitch,
+            framebuffer_len,
+            cols: cmp::max(1, mapping.width / CHAR_WIDTH),
+            rows,
+            row: 0,
+            col: 0,
+            framebuffer,
+            backend,
+            scrollback_lines: VecDeque::with_capacity(HDMI_SCROLLBACK_MAX_LINES),
+            current_line: String::new(),
+            scrollback_row_offset: 0,
+            mappings: Vec::new(),
+            _prefix_maps: Vec::new(),
+        };
+        sink.clear_screen();
+        Ok(sink)
     }
 
     fn from_fixed_framebuffer(

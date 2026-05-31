@@ -94,6 +94,7 @@ static mut TEST_BOOTINFO_PTR: *const seL4_BootInfo = ptr::null();
 const DMA_MAP_DIAG: bool = cfg!(feature = "dev-virt") || cfg!(feature = "cache-trace");
 const DMA_MAP_LOG_CAPACITY: usize = 128;
 const MAX_DEVICE_SKIP_OBJECTS: usize = 512;
+const MAX_DEVICE_FRAME_CACHE: usize = 256;
 const SEL4_UNTYPED_OBJECT_WORD: seL4_Word = sel4_sys::seL4_UntypedObject as seL4_Word;
 const SEL4_TCB_OBJECT_WORD: seL4_Word = sel4_sys::seL4_TCBObject as seL4_Word;
 const SEL4_ENDPOINT_OBJECT_WORD: seL4_Word = sel4_sys::seL4_EndpointObject as seL4_Word;
@@ -3957,6 +3958,28 @@ impl DeviceFrame {
     }
 }
 
+#[derive(Copy, Clone)]
+struct DeviceFrameCacheEntry {
+    paddr: usize,
+    source_cap: seL4_CPtr,
+    root_cap: Option<seL4_CPtr>,
+    root_vaddr: Option<usize>,
+}
+
+const ROOT_DEVICE_CACHE_BCM2711_BUS_START: usize = 0x7e00_0000;
+const ROOT_DEVICE_CACHE_BCM2711_BUS_END: usize = 0x8000_0000;
+const ROOT_DEVICE_CACHE_BCM2711_PERIPH_START: usize = 0xfd00_0000;
+const ROOT_DEVICE_CACHE_BCM2711_PERIPH_END: usize = 0xff00_0000;
+const ROOT_DEVICE_CACHE_VL805_BAR_START: usize = 0x0000_0006_0000_0000;
+const ROOT_DEVICE_CACHE_VL805_BAR_END: usize = 0x0000_0006_0010_0000;
+
+fn root_device_frame_cache_eligible(paddr: usize) -> bool {
+    (ROOT_DEVICE_CACHE_BCM2711_BUS_START..ROOT_DEVICE_CACHE_BCM2711_BUS_END).contains(&paddr)
+        || (ROOT_DEVICE_CACHE_BCM2711_PERIPH_START..ROOT_DEVICE_CACHE_BCM2711_PERIPH_END)
+            .contains(&paddr)
+        || (ROOT_DEVICE_CACHE_VL805_BAR_START..ROOT_DEVICE_CACHE_VL805_BAR_END).contains(&paddr)
+}
+
 /// Virtual mapping of DMA-capable RAM used for driver buffers.
 #[derive(Clone)]
 pub struct RamFrame {
@@ -4039,6 +4062,7 @@ pub struct KernelEnv<'a> {
     ipcbuf_trace: bool,
     ipcbuf_view: Option<IpcBufView>,
     device_skip_objects: Vec<seL4_CPtr, MAX_DEVICE_SKIP_OBJECTS>,
+    device_frame_cache: Vec<DeviceFrameCacheEntry, MAX_DEVICE_FRAME_CACHE>,
     device_pt_pool: Option<DevicePtPool>,
     reserved: ReservedVaddrRanges,
 }
@@ -4365,6 +4389,7 @@ impl<'a> KernelEnv<'a> {
             ipcbuf_trace: false,
             ipcbuf_view: None,
             device_skip_objects: Vec::new(),
+            device_frame_cache: Vec::new(),
             device_pt_pool,
             reserved,
         }
@@ -4694,7 +4719,7 @@ impl<'a> KernelEnv<'a> {
         }
     }
 
-    /// Retypes a physical device page and maps it only into a non-root VSpace.
+    /// Maps a physical device page into a non-root VSpace through the HAL cache.
     pub fn map_device_page_into_vspace(
         &mut self,
         paddr: usize,
@@ -4704,8 +4729,19 @@ impl<'a> KernelEnv<'a> {
         attr: sel4_sys::seL4_ARM_VMAttributes,
         tracker: &mut VSpaceTableTracker,
     ) -> Result<seL4_CPtr, seL4_Error> {
+        if let Some(cached) = self.cached_device_frame_for_paddr(paddr) {
+            return self.map_page_copy_into_vspace(
+                cached.source_cap,
+                vspace,
+                vaddr,
+                rights,
+                attr,
+                tracker,
+            );
+        }
         let frame_slot = self.retype_device_page_for_paddr(paddr, "driver-vspace-device")?;
         self.map_page_cap_into_vspace(frame_slot, vspace, vaddr, rights, attr, tracker)?;
+        self.remember_device_frame_cap(paddr, frame_slot)?;
         Ok(frame_slot)
     }
 
@@ -4863,16 +4899,102 @@ impl<'a> KernelEnv<'a> {
             caller.line(),
             device_cursor = self.device_cursor,
         );
+        if let Some(frame) = self.map_cached_device_frame(paddr)? {
+            return Ok(frame);
+        }
         let frame_slot = self.retype_device_page_for_paddr(paddr, "root-device")?;
         let range = self.next_mapping_range(self.device_cursor, PAGE_SIZE, "device-frame");
         self.device_cursor = range.end;
         self.map_frame(frame_slot, range.start, DEVICE_VM_ATTRIBUTES, false)?;
+        if root_device_frame_cache_eligible(paddr) {
+            self.record_cached_device_root_mapping(paddr, frame_slot, frame_slot, range.start)?;
+        }
         Ok(DeviceFrame {
             cap: frame_slot,
             paddr,
             ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
                 .expect("device mapping address must be non-null"),
         })
+    }
+
+    fn cached_device_frame_for_paddr(&self, paddr: usize) -> Option<DeviceFrameCacheEntry> {
+        self.device_frame_cache
+            .iter()
+            .copied()
+            .find(|entry| entry.paddr == paddr)
+    }
+
+    fn remember_device_frame_cap(
+        &mut self,
+        paddr: usize,
+        source_cap: seL4_CPtr,
+    ) -> Result<(), seL4_Error> {
+        if self
+            .device_frame_cache
+            .iter()
+            .any(|entry| entry.paddr == paddr)
+        {
+            return Ok(());
+        }
+        self.device_frame_cache
+            .push(DeviceFrameCacheEntry {
+                paddr,
+                source_cap,
+                root_cap: None,
+                root_vaddr: None,
+            })
+            .map_err(|_| seL4_NotEnoughMemory)
+    }
+
+    fn record_cached_device_root_mapping(
+        &mut self,
+        paddr: usize,
+        source_cap: seL4_CPtr,
+        root_cap: seL4_CPtr,
+        root_vaddr: usize,
+    ) -> Result<(), seL4_Error> {
+        if let Some(entry) = self
+            .device_frame_cache
+            .iter_mut()
+            .find(|entry| entry.paddr == paddr)
+        {
+            entry.root_cap = Some(root_cap);
+            entry.root_vaddr = Some(root_vaddr);
+            return Ok(());
+        }
+        self.device_frame_cache
+            .push(DeviceFrameCacheEntry {
+                paddr,
+                source_cap,
+                root_cap: Some(root_cap),
+                root_vaddr: Some(root_vaddr),
+            })
+            .map_err(|_| seL4_NotEnoughMemory)
+    }
+
+    fn map_cached_device_frame(&mut self, paddr: usize) -> Result<Option<DeviceFrame>, seL4_Error> {
+        let Some(cached) = self.cached_device_frame_for_paddr(paddr) else {
+            return Ok(None);
+        };
+        if let (Some(root_cap), Some(root_vaddr)) = (cached.root_cap, cached.root_vaddr) {
+            return Ok(Some(DeviceFrame {
+                cap: root_cap,
+                paddr,
+                ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(root_vaddr))
+                    .expect("device mapping address must be non-null"),
+            }));
+        }
+        let root_cap = self.copy_cap_to_new_slot(cached.source_cap, seL4_CapRights_ReadWrite)?;
+        let range = self.next_mapping_range(self.device_cursor, PAGE_SIZE, "device-frame-cache");
+        self.device_cursor = range.end;
+        self.map_frame(root_cap, range.start, DEVICE_VM_ATTRIBUTES, false)?;
+        self.record_cached_device_root_mapping(paddr, cached.source_cap, root_cap, range.start)?;
+        Ok(Some(DeviceFrame {
+            cap: root_cap,
+            paddr,
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
+                .expect("device mapping address must be non-null"),
+        }))
     }
 
     fn retype_device_page_for_paddr(
@@ -6466,6 +6588,16 @@ mod tests {
 
         assert_eq!(frame.cap(), 0x42);
         assert_eq!(frame.paddr(), 0x8000_0000);
+    }
+
+    #[test]
+    fn root_device_cache_excludes_large_framebuffer_ram() {
+        assert!(!root_device_frame_cache_eligible(0x3e51_3000));
+        assert!(root_device_frame_cache_eligible(0xfe00_b000));
+        assert!(root_device_frame_cache_eligible(0xfe20_0000));
+        assert!(root_device_frame_cache_eligible(0xfe30_0000));
+        assert!(root_device_frame_cache_eligible(0xfd50_0000));
+        assert!(root_device_frame_cache_eligible(0x0000_0006_0000_0000));
     }
 
     #[test]

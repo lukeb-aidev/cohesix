@@ -938,7 +938,7 @@ pub const DRIVER_TASK_IPC_VADDR: usize = 0x7000_1000;
 pub const DRIVER_TASK_STACK_BOTTOM_VADDR: usize = 0x7000_2000;
 
 /// Fixed driver-local virtual address for the top of the trampoline stack.
-pub const DRIVER_TASK_STACK_TOP_VADDR: usize = 0x7000_3000;
+pub const DRIVER_TASK_STACK_TOP_VADDR: usize = 0x7001_2000;
 
 /// First fixed driver-local virtual address reserved for explicit MMIO pages.
 pub const DRIVER_TASK_DEVICE_MMIO_VADDR: usize = 0x7020_0000;
@@ -1100,6 +1100,7 @@ impl DriverTaskRuntimeImageSpec {
     pub const fn new(
         hot_path: DriverTaskHotPath,
         code_pages: u16,
+        stack_pages: u16,
         mmio_pages: u16,
         dma_pages: u16,
         shared_buffer_pages: u16,
@@ -1116,7 +1117,7 @@ impl DriverTaskRuntimeImageSpec {
         regions[1] = DriverTaskRuntimeRegion::new(
             DriverTaskRuntimeRegionKind::Stack,
             DRIVER_TASK_STACK_BOTTOM_VADDR,
-            1,
+            stack_pages,
             0,
         );
         regions[2] = DriverTaskRuntimeRegion::new(
@@ -1279,6 +1280,29 @@ static HDMI_RUNTIME_FRAMEBUFFER_WIDTH: AtomicUsize = AtomicUsize::new(0);
 static HDMI_RUNTIME_FRAMEBUFFER_HEIGHT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static HDMI_RUNTIME_FRAMEBUFFER_PITCH: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static HDMI_RUNTIME_ROOT_FRAMEBUFFER_VADDR: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static HDMI_RUNTIME_ROOT_FRAMEBUFFER_MAP_LEN: AtomicUsize = AtomicUsize::new(0);
+
+/// Root diagnostic framebuffer mapping published while HDMI ownership is still
+/// being proved by the isolated runtime.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HdmiRuntimeRootFramebufferMapping {
+    /// Physical framebuffer base reported by firmware/DT.
+    pub paddr: usize,
+    /// Root-task virtual address of the visible framebuffer start.
+    pub vaddr: usize,
+    /// Visible width in pixels.
+    pub width: usize,
+    /// Visible height in pixels.
+    pub height: usize,
+    /// Pitch in bytes.
+    pub pitch: usize,
+    /// Total mapped byte span including the first-page offset.
+    pub map_len: usize,
+}
 
 /// Publish the boot payload that may contain linked Pi 4 driver runtime images.
 #[cfg(feature = "kernel")]
@@ -1301,6 +1325,14 @@ pub fn publish_hdmi_runtime_framebuffer_hint(
     HDMI_RUNTIME_FRAMEBUFFER_PITCH.store(pitch, Ordering::Release);
 }
 
+/// Publish a root diagnostic mapping for the framebuffer pages also copied into
+/// the HDMI driver runtime VSpace.
+#[cfg(feature = "kernel")]
+pub fn publish_hdmi_runtime_root_framebuffer_mapping(vaddr: usize, map_len: usize) {
+    HDMI_RUNTIME_ROOT_FRAMEBUFFER_VADDR.store(vaddr, Ordering::Release);
+    HDMI_RUNTIME_ROOT_FRAMEBUFFER_MAP_LEN.store(map_len, Ordering::Release);
+}
+
 /// Return the bootloader framebuffer metadata staged for the linked HDMI runtime.
 #[cfg(feature = "kernel")]
 pub fn hdmi_runtime_framebuffer_hint() -> Option<DriverRuntimeFramebufferDescriptor> {
@@ -1320,6 +1352,29 @@ pub fn hdmi_runtime_framebuffer_hint() -> Option<DriverRuntimeFramebufferDescrip
         format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
     };
     descriptor.valid().then_some(descriptor)
+}
+
+/// Return the root diagnostic framebuffer mapping, if HAL published one.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn hdmi_runtime_root_framebuffer_mapping() -> Option<HdmiRuntimeRootFramebufferMapping> {
+    let paddr = HDMI_RUNTIME_FRAMEBUFFER_PADDR.load(Ordering::Acquire);
+    let vaddr = HDMI_RUNTIME_ROOT_FRAMEBUFFER_VADDR.load(Ordering::Acquire);
+    let width = HDMI_RUNTIME_FRAMEBUFFER_WIDTH.load(Ordering::Acquire);
+    let height = HDMI_RUNTIME_FRAMEBUFFER_HEIGHT.load(Ordering::Acquire);
+    let pitch = HDMI_RUNTIME_FRAMEBUFFER_PITCH.load(Ordering::Acquire);
+    let map_len = HDMI_RUNTIME_ROOT_FRAMEBUFFER_MAP_LEN.load(Ordering::Acquire);
+    if paddr == 0 || vaddr == 0 || width == 0 || height == 0 || pitch == 0 || map_len == 0 {
+        return None;
+    }
+    Some(HdmiRuntimeRootFramebufferMapping {
+        paddr,
+        vaddr,
+        width,
+        height,
+        pitch,
+        map_len,
+    })
 }
 
 #[cfg(feature = "kernel")]
@@ -1474,7 +1529,7 @@ fn generated_runtime_image_spec_for_hot_path(
 }
 
 fn fallback_runtime_image_spec(hot_path: DriverTaskHotPath) -> DriverTaskRuntimeImageSpec {
-    DriverTaskRuntimeImageSpec::new(hot_path, 1, 0, 0, 0, true, false)
+    DriverTaskRuntimeImageSpec::new(hot_path, 1, 1, 0, 0, 0, true, false)
 }
 
 fn runtime_image_spec_from_generated(
@@ -1484,6 +1539,7 @@ fn runtime_image_spec_from_generated(
     DriverTaskRuntimeImageSpec::new(
         hot_path,
         generated.code_pages,
+        generated.stack_pages,
         generated.mmio_pages,
         generated.dma_pages,
         generated.shared_buffer_pages,
@@ -1641,6 +1697,9 @@ pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 
 #[cfg(feature = "kernel")]
 struct DriverTaskCommandSlot {
+    tcb: AtomicUsize,
+    steady_priority: AtomicUsize,
+    steady_priority_active: AtomicUsize,
     endpoint: AtomicUsize,
     ring_root_ptr: AtomicUsize,
     ring_frame_cap: AtomicUsize,
@@ -1679,6 +1738,9 @@ struct DriverTaskCommandSlot {
 impl DriverTaskCommandSlot {
     const fn new() -> Self {
         Self {
+            tcb: AtomicUsize::new(0),
+            steady_priority: AtomicUsize::new(0),
+            steady_priority_active: AtomicUsize::new(0),
             endpoint: AtomicUsize::new(0),
             ring_root_ptr: AtomicUsize::new(0),
             ring_frame_cap: AtomicUsize::new(0),
@@ -1924,6 +1986,37 @@ fn read_cntfrq() -> u64 {
     value
 }
 
+/// Publish the TCB cap and steady priority backing one driver task.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_scheduler(
+    contract: DriverTaskContract,
+    tcb: usize,
+    steady_priority: u8,
+) {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.tcb.store(tcb, Ordering::Release);
+    slot.steady_priority
+        .store(usize::from(steady_priority), Ordering::Release);
+    slot.steady_priority_active.store(0, Ordering::Release);
+}
+
+/// Mark that one driver task has left bootstrap priority and is in steady state.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_steady_priority_active(contract: DriverTaskContract) {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.steady_priority_active.store(1, Ordering::Release);
+}
+
 /// Publish the root-side command endpoint for a created driver TCB.
 #[cfg(feature = "kernel")]
 pub fn publish_driver_task_command_endpoint(contract: DriverTaskContract, endpoint: usize) {
@@ -1991,8 +2084,87 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     slot.endpoint.store(0, Ordering::Release);
     slot.ring_root_ptr.store(0, Ordering::Release);
     slot.ring_frame_cap.store(0, Ordering::Release);
+    slot.tcb.store(0, Ordering::Release);
+    slot.steady_priority.store(0, Ordering::Release);
+    slot.steady_priority_active.store(0, Ordering::Release);
     slot.active.store(0, Ordering::Release);
     slot.request_seq.store(0, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+struct DriverTaskPriorityRestore {
+    contract: DriverTaskContract,
+    tcb: usize,
+    steady_priority: u8,
+}
+
+#[cfg(feature = "kernel")]
+impl Drop for DriverTaskPriorityRestore {
+    fn drop(&mut self) {
+        let tcb = self.tcb as sel4_sys::seL4_CPtr;
+        let priority = self.steady_priority;
+        let sched = crate::sel4::set_tcb_sched_params(
+            tcb,
+            sel4_sys::seL4_CapInitThreadTCB,
+            priority,
+            priority,
+        );
+        let prio = crate::sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, priority);
+        if sched.is_err() || prio.is_err() {
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::write(
+                &mut line,
+                format_args!(
+                    "DRIVER_TASK_PRIORITY_RESTORE contract={} tcb=0x{:04x} priority={} status=failed",
+                    self.contract.name, self.tcb, priority,
+                ),
+            );
+            crate::bootstrap::log::force_uart_line_raw(line.as_str());
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn boost_driver_task_priority_for_bounded_turn(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskPriorityRestore> {
+    if !physical_pi_driver_task_only_owner_state_active() {
+        return None;
+    }
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let tcb = slot.tcb.load(Ordering::Acquire);
+    let steady_priority = slot.steady_priority.load(Ordering::Acquire);
+    if tcb == 0 || steady_priority == 0 || slot.steady_priority_active.load(Ordering::Acquire) == 0
+    {
+        return None;
+    }
+    let steady_priority = steady_priority as u8;
+    let boost = PI4_BOUNDED_BOOTSTRAP_PRIORITY;
+    if steady_priority >= boost {
+        return None;
+    }
+    let tcb_cap = tcb as sel4_sys::seL4_CPtr;
+    if crate::sel4::set_tcb_sched_params(tcb_cap, sel4_sys::seL4_CapInitThreadTCB, boost, boost)
+        .is_err()
+        || crate::sel4::set_tcb_priority(tcb_cap, sel4_sys::seL4_CapInitThreadTCB, boost).is_err()
+    {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_PRIORITY_BOOST contract={} tcb=0x{:04x} priority={} status=failed",
+                contract.name, tcb, boost,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+        return None;
+    }
+    Some(DriverTaskPriorityRestore {
+        contract,
+        tcb,
+        steady_priority,
+    })
 }
 
 #[cfg(feature = "kernel")]
@@ -2416,7 +2588,11 @@ pub fn ensure_deferred_runtime_init_descriptor(
         DriverTaskBudgetGrant::from_contract(contract),
         frame,
     );
-    let completion = run_driver_task_ring_command(contract, command);
+    let completion = if deferred_runtime_init_replay_must_be_bounded(hot_path) {
+        run_driver_task_ring_command_nonblocking(contract, command)
+    } else {
+        run_driver_task_ring_command(contract, command)
+    };
     let complete = completion.is_some_and(|completion| {
         completion.code == DriverTaskCompletionCode::Progress.as_u16()
             && completion.result == hot_path.as_u32()
@@ -2448,13 +2624,14 @@ pub fn ensure_deferred_runtime_init_descriptor(
 
 /// Returns whether descriptor replay still uses nonblocking sends after prompt.
 ///
-/// Shell-first deferral is the prompt-safety boundary on physical Pi 4. Once
-/// the serial prompt is live, replay uses the reply path so the lower-priority
-/// runtime TCB is actually scheduled and can publish the owner-state proof.
+/// Shell-first deferral is the prompt-safety boundary on physical Pi 4. The
+/// first prompt must stay responsive even when a deferred SDIO, PCIe, or NIC
+/// runtime never replies, so replay uses bounded sends while temporarily
+/// boosting the target runtime TCB.
 #[must_use]
 pub const fn deferred_runtime_init_replay_must_be_bounded(hot_path: DriverTaskHotPath) -> bool {
     let _ = hot_path;
-    false
+    true
 }
 
 #[cfg(feature = "kernel")]
@@ -2480,7 +2657,7 @@ fn emit_deferred_runtime_init_status(
         status,
         action,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 /// Borrow a staged shared-ring payload for the current synchronous service turn.
@@ -2536,7 +2713,7 @@ fn emit_driver_task_ring_call_begin(
         command.aux1,
         command.frame.len,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -2561,7 +2738,7 @@ fn emit_driver_task_ring_call_return(
         completion.detail,
         completion.result,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -2589,7 +2766,7 @@ fn emit_driver_task_ring_call_timeout(
         command.aux0,
         command.frame.len,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -2803,6 +2980,11 @@ fn run_driver_task_ring_command_with_mode(
     let mut completion = completion_reset;
     let mut start_ticks = None;
     let trace_call = driver_task_ring_call_trace_enabled(contract, command, mode);
+    let _priority_restore = if driver_task_ring_mode_uses_bounded_send(mode) {
+        boost_driver_task_priority_for_bounded_turn(contract)
+    } else {
+        None
+    };
 
     if driver_task_ring_mode_uses_bounded_send(mode) {
         if trace_call {
@@ -2970,7 +3152,7 @@ pub fn emit_driver_task_resource_init_status(
             status,
         );
     }
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 /// Host-test/no-kernel variant for call sites that share control flow.
@@ -5054,12 +5236,27 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn deferred_runtime_init_replay_stays_bounded_after_prompt() {
+        assert!(deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::SdioHost
+        ));
+        assert!(deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::Cyw43Wifi
+        ));
+        assert!(deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::PcieRoot
+        ));
+    }
+
     #[cfg(feature = "kernel")]
     #[test]
     fn clear_driver_task_transport_removes_partial_bootstrap_endpoint() {
         let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
         publish_driver_task_command_endpoint(contract, 0x1234);
         publish_driver_task_ring(contract, 0x7000_0000);
+        publish_driver_task_scheduler(contract, 0x4321, 240);
+        publish_driver_task_steady_priority_active(contract);
 
         clear_driver_task_transport(contract);
 
@@ -5067,6 +5264,9 @@ mod tests {
         let slot = slot_for_task_key(task_key).expect("slot");
         assert_eq!(slot.endpoint.load(Ordering::Acquire), 0);
         assert_eq!(slot.ring_root_ptr.load(Ordering::Acquire), 0);
+        assert_eq!(slot.tcb.load(Ordering::Acquire), 0);
+        assert_eq!(slot.steady_priority.load(Ordering::Acquire), 0);
+        assert_eq!(slot.steady_priority_active.load(Ordering::Acquire), 0);
         assert_eq!(slot.active.load(Ordering::Acquire), 0);
         assert_eq!(slot.request_seq.load(Ordering::Acquire), 0);
     }
@@ -5339,7 +5539,7 @@ mod tests {
         assert_eq!(DRIVER_TASK_STACK_BOTTOM_VADDR & 0xfff, 0);
         assert_eq!(
             DRIVER_TASK_STACK_TOP_VADDR - DRIVER_TASK_STACK_BOTTOM_VADDR,
-            4096
+            16 * 4096
         );
 
         let budget = DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT);
@@ -5565,26 +5765,26 @@ mod tests {
     }
 
     #[test]
-    fn deferred_runtime_init_replay_uses_reply_path_after_prompt() {
-        assert!(!deferred_runtime_init_replay_must_be_bounded(
+    fn deferred_runtime_init_replay_uses_bounded_path_after_prompt() {
+        assert!(deferred_runtime_init_replay_must_be_bounded(
             DriverTaskHotPath::SdioHost
         ));
-        assert!(!deferred_runtime_init_replay_must_be_bounded(
+        assert!(deferred_runtime_init_replay_must_be_bounded(
             DriverTaskHotPath::PcieRoot
         ));
-        assert!(!deferred_runtime_init_replay_must_be_bounded(
+        assert!(deferred_runtime_init_replay_must_be_bounded(
             DriverTaskHotPath::GenetNic
         ));
-        assert!(!deferred_runtime_init_replay_must_be_bounded(
+        assert!(deferred_runtime_init_replay_must_be_bounded(
             DriverTaskHotPath::Cyw43Wifi
         ));
-        assert!(!deferred_runtime_init_replay_must_be_bounded(
+        assert!(deferred_runtime_init_replay_must_be_bounded(
             DriverTaskHotPath::SerialConsole
         ));
-        assert!(!deferred_runtime_init_replay_must_be_bounded(
+        assert!(deferred_runtime_init_replay_must_be_bounded(
             DriverTaskHotPath::HdmiText
         ));
-        assert!(!deferred_runtime_init_replay_must_be_bounded(
+        assert!(deferred_runtime_init_replay_must_be_bounded(
             DriverTaskHotPath::UsbKeyboard
         ));
     }

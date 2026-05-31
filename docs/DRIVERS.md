@@ -407,8 +407,10 @@ USB keyboard polling, HDMI mirroring, and network/bus replay remain separate
 service turns after the serial shell is visible unless their pre-root owner-state
 proof has already returned.
 Root-console startup publishes its raw UART start/end markers and the serial
-prompt before the `/log/queen.log`/NineDoor log-stream handoff, so log-buffer
-attachment is also shell-first. After the prompt and successful USB arming,
+prompt before any NineDoor log-stream attachment. On Pi 4 local-seat boots,
+post-prompt driver diagnostics remain on the serial UART and the logger reprints
+`cohesix>` after each log line, so inaccessible 9P paths cannot hide the active
+debug stream. After the prompt and successful USB arming,
 serial UART and USB keyboard input remain concurrent sources for the shared
 root-console parser.
 Steady physical Pi service turns use blocking `seL4_Call`,
@@ -435,6 +437,14 @@ USB/local-seat must report `usb-prereq-pcie-replay`, `usb-xhci-init`,
 log can distinguish PCIe replay, xHCI bring-up, keyboard enumeration, and first
 interrupt-report progress. These lines are debug telemetry only and do not
 satisfy driver-task acceptance until the matching owner-state proof is present.
+The Pi 4 gate summary must keep these diagnostic frontiers explicit with
+`SERIAL_RUNTIME_FRONTIER`, `HDMI_RUNTIME_FRONTIER`,
+`USB_DRIVER_TASK_FRONTIER`, and `WIFI_REPLAY_FRONTIER`; those fields identify
+the next blocked layer without changing acceptance. A root mini-UART fallback
+after serial linked-runtime no-reply must log
+`SERIAL_RUNTIME_STATE owner=root ... status=fallback acceptance=red` and
+`SERIAL_FALLBACK_ACTIVE=yes`; it preserves the diagnostic shell but never
+credits `SERIAL_DRIVER_ACCEPTED` or owner-state acceptance.
 QEMU smoke can additionally allocate isolated VSpaces and map the minimal trampoline transport
 set, but that remains transport proof rather than the functional Pi hardware
 path.
@@ -443,7 +453,12 @@ Before any linked runtime can accept hardware service, root now stages a
 pointer-free `DriverRuntimeInitDescriptor` from the shared `pi4-driver-abi`
 crate into the command ring and submits a runtime-init command. That descriptor
 contains the hot-path id, role bit, fixed MMIO/DMA/shared-buffer virtual bases,
-the physical page list for mapped MMIO, runtime-owned DMA pages and shared
+and manifest-sized runtime stack mapping. Pi 4 runtime images currently declare
+sixteen stack pages per driver; root must map every declared page and set SP to
+the top of that manifest range before resuming the child TCB, because one-page
+runtime stacks can fault below the ring/IPC window during USB, SDIO, PCIe, or
+Wi-Fi engine initialization. The descriptor also carries the physical page list
+for mapped MMIO, runtime-owned DMA pages and shared
 pages, semantic resource ranges for large apertures, bus-address alias policy,
 framebuffer metadata, IRQ descriptors, and bus-link descriptors for split owners
 such as USB/PCIe and CYW43/SDIO. Runtime init is deliberately non-acceptance: it
@@ -1239,7 +1254,13 @@ power/reset state.
   Cohesix emits `action=root-console-wait-for-wifi`, preserves the Wi-Fi
   configuration for operator diagnostics, skips pre-prompt CYW43455 resume with
   `action=root-shell-first`, and publishes the serial shell before DHCP/data
-  work. `wifi-host-eapol-pending` is not a data-path success; it exists to keep
+  work. Post-prompt SDIO and CYW43455 descriptor replay uses bounded
+  nonblocking IPC with temporary runtime-TCB priority boosts, and emits raw UART
+  `SDIO_DRIVER_TASK_REPLAY_STATUS` / `NET_DRIVER_TASK_REPLAY_STATUS`
+  breadcrumbs on serial, with a fresh `cohesix>` prompt after each log line, so
+  inaccessible `/log/queen.log` paths cannot hide a replay stall.
+  `wifi-host-eapol-pending` is not a
+  data-path success; it exists to keep
   DHCP/data blocked while prompt-side `wifi diag` / `nettest` can report the
   exact WPA/EAPOL boundary after the shell is reachable. While that state is live,
   root-task performs bounded pre-root host-EAPOL burst polls, then post-root
@@ -1256,10 +1277,9 @@ power/reset state.
   reports in one pass and keeps 32 keyboard interrupt-IN reads armed on the
   poll-only Pi 4 path, so press/release/next-key sequences can complete while
   console output, HDMI echo, or bounded Wi-Fi diagnostics are in progress. When
-  deferred Pi 4 Wi-Fi starts before the root prompt, verbose driver diagnostics
-  are written to `/log/queen.log` and the serial UART keeps compact
-  readiness/error summaries so HDMI and serial do not diverge behind a boot-log
-  backlog.
+  deferred Pi 4 Wi-Fi starts, verbose driver diagnostics stay on the serial
+  UART with prompt refresh after each log line so HDMI, serial, and unavailable
+  9P log access cannot diverge behind a hidden boot-log backlog.
   `usb status` exposes low-volume keyboard capture counters for HID
   reports/filtering, local-seat queue accept/drain/echo, event-loop
   keyboard-priority turns, and output-side keyboard service polls so missed
