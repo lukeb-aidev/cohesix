@@ -1049,6 +1049,33 @@ def test_gate_summary_tracks_net_and_sdio_replay_blockers() -> None:
     assert record["WIFI_REPLAY_FRONTIER"] == "sdio-driver-task-replay"
 
 
+def test_gate_summary_tracks_split_sdio_command_probe_blockers() -> None:
+    events = normalizer.parse_events(
+        [
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=sdio-cmd0-go-idle "
+            "blocker=ready",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=sdio-cmd5-ocr "
+            "blocker=fault",
+            "DRIVER_TASK_RESOURCE_INIT contract=sdio-host "
+            "hot_path=sdio-host stage=sdio-cmd5-ocr status=fault "
+            "acceptance=no code=5 detail=20737 result=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["SDIO_DRIVER_TASK_REPLAY_EVENTS"] == 2
+    assert (
+        record["SDIO_DRIVER_TASK_REPLAY_BLOCKER"]
+        == "sdio-host:sdio-cmd5-ocr:fault"
+    )
+    assert (
+        record["DRIVER_TASK_RESOURCE_BLOCKER"]
+        == "sdio-host:sdio-cmd5-ocr:fault"
+    )
+
+
 def test_gate_summary_labels_deferred_wifi_start_without_replay() -> None:
     events = normalizer.parse_events(
         [
@@ -1154,6 +1181,24 @@ def test_gate_summary_marks_bootinfo_panic_as_unclean_halt() -> None:
     assert gates.to_record()["PANIC_SEEN"] == "yes"
     assert gates.to_record()["PANIC_REASON"] == "bootinfo-snapshot-corrupted"
     assert gates.to_record()["BOOT_HALT_REASON"] == "bootinfo-snapshot-corrupted"
+
+
+def test_gate_summary_promotes_bootstrap_fatal_panic_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "[PANIC] panicked at apps/root-task/src/kernel.rs:3213:38:",
+            "[bootstrap:fatal] serial driver-task runtime missing after owner-state cutover",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.boot_halted is True
+    assert gates.to_record()["PANIC_SEEN"] == "yes"
+    assert (
+        gates.to_record()["PANIC_REASON"]
+        == "serial-driver-task-runtime-missing-after-owner-state-cutover"
+    )
 
 
 def test_usb_proof_summary_advances_command_gate() -> None:

@@ -31,6 +31,7 @@ UNSUPPORTED_OPERATION_FIELD_RE = re.compile(
 )
 CYW43_CONTROL_PLANE_EXACT_RE = re.compile(r"cyw43-control-plane-[a-z0-9-]+")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+PANIC_REASON_TOKEN_RE = re.compile(r"[^A-Za-z0-9]+")
 WIFI_SECRET_REDACTIONS = (
     re.compile(r"(?i)(coh_wifi_psk=)([^ \t\r\n;]+)"),
     re.compile(r"(?i)(cohesix,wifi-psk=)([^ \t\r\n;]+)"),
@@ -480,6 +481,13 @@ def redact_sensitive_line(line: str) -> str:
     return redacted
 
 
+def normalize_panic_reason(reason: str) -> str:
+    """Return a stable, compact panic reason token."""
+
+    normalized = PANIC_REASON_TOKEN_RE.sub("-", reason.strip().lower()).strip("-")
+    return normalized or "root-task-panic"
+
+
 def split_trace_segments(line: str) -> list[str]:
     """Split physical UART lines that contain multiple trace producers."""
 
@@ -632,6 +640,7 @@ def classify_domain(line: str) -> str | None:
     if (
         line.startswith("BOOTINFO_SNAPSHOT_CORRUPTED")
         or "[panic]" in lower
+        or lower.startswith("[bootstrap:fatal]")
         or lower.startswith("[cohesix:root-task] panic")
     ):
         return "kernel"
@@ -839,6 +848,16 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
         }
         stage = "bootinfo-snapshot-corrupted"
         message = "panic reason=bootinfo-snapshot-corrupted"
+    elif line.startswith("[bootstrap:fatal]"):
+        reason = normalize_panic_reason(line.split("]", 1)[-1])
+        fields = {
+            **fields,
+            "halt": "yes",
+            "panic": "yes",
+            "reason": reason,
+        }
+        stage = "panic"
+        message = f"panic reason={reason}"
     elif "[PANIC]" in line or "panic: panicked at" in line:
         fields = {
             **fields,
@@ -4582,7 +4601,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         )
     ]
     panic_seen = bool(panic_events)
-    panic_reason = panic_events[0].fields.get("reason", "root-task-panic") if panic_seen else "none"
+    panic_reason = "none"
+    if panic_seen:
+        panic_reason = next(
+            (
+                event.fields.get("reason", "root-task-panic")
+                for event in panic_events
+                if event.fields.get("reason") not in (None, "root-task-panic")
+            ),
+            panic_events[0].fields.get("reason", "root-task-panic"),
+        )
     boot_halted = panic_seen or any(
         event.domain == "kernel" and event.fields.get("halt") == "yes"
         for event in event_list

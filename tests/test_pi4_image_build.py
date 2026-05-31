@@ -31,3 +31,25 @@ def test_pi4_image_build_defaults_to_pi4_release_features() -> None:
 
     assert 'ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"' in source
     assert "(default: release-pi4,bootstrap-trace)" in source
+
+
+def test_pi4_image_build_prefers_repo_local_sel4_build_tree() -> None:
+    """Default staging must not silently use a stale home-directory Pi image."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/seL4/build_UBOOT"' in source
+    assert 'SEL4_BUILD_DIR="${DEFAULT_REPO_SEL4_BUILD_DIR}"' in source
+    assert "default: repo seL4/build_UBOOT" in source
+
+
+def test_pi4_image_build_skip_build_rejects_stale_selected_image() -> None:
+    """Flash-only retries must fail closed when source is newer than the image."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "verify_skip_build_image_fresh" in source
+    assert "--skip-build selected stale seL4 image" in source
+    assert 'apps/root-task/src' in source
+    assert 'apps/root-task/src/generated' in source
+    assert 'apps/pi4-driver-runtime/src' in source

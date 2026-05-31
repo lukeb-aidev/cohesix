@@ -435,8 +435,12 @@ SDIO, CYW43, and GENET failures can be separated from transport no-reply. HDMI m
 USB/local-seat must report `usb-prereq-pcie-replay`, `usb-xhci-init`,
 `usb-keyboard-enumeration`, and `usb-keyboard-first-report` separately so a Pi
 log can distinguish PCIe replay, xHCI bring-up, keyboard enumeration, and first
-interrupt-report progress. These lines are debug telemetry only and do not
-satisfy driver-task acceptance until the matching owner-state proof is present.
+interrupt-report progress. SDIO/Wi-Fi replay must split the first command proof
+into `sdio-cmd0-go-idle` and `sdio-cmd5-ocr`; a CMD0 failure means the SDIO
+command path itself is broken, while a CMD5/OCR failure points at card response,
+power/reset, or CYW43-side readiness. These lines are debug telemetry only and
+do not satisfy driver-task acceptance until the matching owner-state proof is
+present.
 The Pi 4 gate summary must keep these diagnostic frontiers explicit with
 `SERIAL_RUNTIME_FRONTIER`, `HDMI_RUNTIME_FRONTIER`,
 `USB_DRIVER_TASK_FRONTIER`, and `WIFI_REPLAY_FRONTIER`; those fields identify
@@ -480,10 +484,15 @@ substrate. If a linked ring-backed hardware owner is unavailable, the service
 turn fails closed with `DeviceUnavailable` instead of falling back to
 root-driving the hardware. On the strict Pi owner-ring path, SDIO command and
 single-frame data calls consume the linked-runtime completion and return before
-the root SDHCI body, and PCIe physical port read/write/flush helpers return
-from linked-runtime completions before root MMIO. Full CYW43 firmware and
-SDPCM ownership, GENET DMA, USB/xHCI event-ring ownership, and broader VL805
-handoff still need fresh Pi proof and remaining hardware-state completion.
+the root SDHCI body. PCIe runtime engine init is adopt-only: it may validate the
+live root-complex/VL805 tuple, refresh bounded windows and masks, and assign the
+VL805 BAR/COMMAND if the already-live link proves ready, but it must not assert
+BCM2711 `SW_INIT_1` or PERST from the prompt-side linked-runtime service turn.
+Full PCIe reset/power sequencing stays in the HAL-owned platform proof path, and
+PCIe physical port read/write/flush helpers return from linked-runtime
+completions before root MMIO. Full CYW43 firmware and SDPCM ownership, GENET
+DMA, USB/xHCI event-ring ownership, and broader VL805 handoff still need fresh
+Pi proof and remaining hardware-state completion.
 
 Boot logs must expose the distinction with these breadcrumbs:
 

@@ -835,6 +835,16 @@ fn physical_pi_serial_root_fallback_allowed(candidate: KernelUartCandidate) -> b
     physical_pi_linked_serial_runtime_candidate(candidate)
 }
 
+fn physical_pi_serial_fallback_should_try_hal_map(
+    owner_state_active: bool,
+    candidate: KernelUartCandidate,
+    linked_runtime_attached: bool,
+) -> bool {
+    owner_state_active
+        && !linked_runtime_attached
+        && physical_pi_serial_root_fallback_allowed(candidate)
+}
+
 fn live_driver_task_bootstrap_skip_reason(qemu_virtio_compat: bool) -> Option<&'static str> {
     if should_bootstrap_live_driver_tasks(qemu_virtio_compat) {
         None
@@ -4504,6 +4514,7 @@ fn bootstrap<P: Platform>(
     let mut uart_map_error: Option<sel4_sys::seL4_Error> = None;
     for candidate in UART_CANDIDATES {
         let paddr = candidate.paddr();
+        let mut try_hal_map_after_coverage_miss = false;
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
             if !physical_pi_linked_serial_runtime_candidate(candidate) {
                 let mut skip_line = heapless::String::<160>::new();
@@ -4517,13 +4528,19 @@ fn bootstrap<P: Platform>(
             }
             boot_log::force_uart_line("[uart] driver-task runtime init begin owner=serial");
             if !crate::serial::init_serial_driver_task_runtime() {
+                let linked_runtime_attached = crate::serial::serial_driver_task_runtime_attached();
                 boot_log::force_uart_line(
                     "[uart] driver-task runtime init failed owner=serial action=root-mini-uart-fallback acceptance=no",
                 );
                 boot_log::force_uart_line(
                     "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=fallback acceptance=red reason=driver-task-no-reply",
                 );
-                if !physical_pi_serial_root_fallback_allowed(candidate) {
+                try_hal_map_after_coverage_miss = physical_pi_serial_fallback_should_try_hal_map(
+                    true,
+                    candidate,
+                    linked_runtime_attached,
+                );
+                if !try_hal_map_after_coverage_miss {
                     continue;
                 }
             } else {
@@ -4533,29 +4550,37 @@ fn bootstrap<P: Platform>(
         }
 
         let coverage = hal.device_coverage(paddr, DEVICE_FRAME_BITS);
-        let Some(coverage) = coverage else {
+        if let Some(coverage) = coverage {
+            let mut line = heapless::String::<224>::new();
+            let _ = write!(
+                    line,
+                    "[uart] coverage backend={} paddr=0x{paddr:08x} region=[0x{base:08x}..0x{limit:08x}) idx={} used={}",
+                    candidate.label(),
+                    coverage.index,
+                    if coverage.used { "yes" } else { "no" },
+                    paddr = paddr,
+                    base = coverage.base,
+                    limit = coverage.limit,
+            );
+            console.writeln_prefixed(line.as_str());
+        } else {
             let mut line = heapless::String::<192>::new();
             let _ = write!(
                 line,
-                "[uart] coverage missing backend={} paddr=0x{paddr:08x}",
+                "[uart] coverage missing backend={} paddr=0x{paddr:08x} action={}",
                 candidate.label(),
+                if try_hal_map_after_coverage_miss {
+                    "try-hal-map-cache"
+                } else {
+                    "skip"
+                },
                 paddr = paddr,
             );
             console.writeln_prefixed(line.as_str());
-            continue;
-        };
-        let mut line = heapless::String::<224>::new();
-        let _ = write!(
-                line,
-                "[uart] coverage backend={} paddr=0x{paddr:08x} region=[0x{base:08x}..0x{limit:08x}) idx={} used={}",
-                candidate.label(),
-                coverage.index,
-                if coverage.used { "yes" } else { "no" },
-                paddr = paddr,
-                base = coverage.base,
-                limit = coverage.limit,
-        );
-        console.writeln_prefixed(line.as_str());
+            if !try_hal_map_after_coverage_miss {
+                continue;
+            }
+        }
 
         match hal.map_device(paddr) {
             Ok(region) => {
@@ -7381,6 +7406,32 @@ mod tests {
         ));
         assert!(!super::physical_pi_serial_root_fallback_allowed(
             KernelUartCandidate::Pi4Pl011,
+        ));
+    }
+
+    #[test]
+    fn physical_pi_serial_fallback_maps_only_mini_uart_after_no_reply() {
+        use crate::serial::kernel_uart::KernelUartCandidate;
+
+        assert!(super::physical_pi_serial_fallback_should_try_hal_map(
+            true,
+            KernelUartCandidate::Pi4MiniUart,
+            false,
+        ));
+        assert!(!super::physical_pi_serial_fallback_should_try_hal_map(
+            true,
+            KernelUartCandidate::Pi4MiniUart,
+            true,
+        ));
+        assert!(!super::physical_pi_serial_fallback_should_try_hal_map(
+            false,
+            KernelUartCandidate::Pi4MiniUart,
+            false,
+        ));
+        assert!(!super::physical_pi_serial_fallback_should_try_hal_map(
+            true,
+            KernelUartCandidate::Pi4Pl011,
+            false,
         ));
     }
 

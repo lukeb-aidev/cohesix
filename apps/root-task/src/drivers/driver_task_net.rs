@@ -39,7 +39,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK, DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
     DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL, DRIVER_RUNTIME_CYW43_OP_RELEASE,
     DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT, DRIVER_RUNTIME_NET_INIT_AUX,
-    DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE, DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
 };
 
 const GENET_DRIVER_TASK_MAC: EthernetAddress =
@@ -49,7 +49,8 @@ const CYW43_DRIVER_TASK_MAC: EthernetAddress =
 const DRIVER_TASK_NET_STATUS: &str = "driver-task-ring-client";
 const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
 const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
-const SDIO_FIRST_COMMAND_INDEX: u32 = 5;
+const SDIO_GO_IDLE_COMMAND_INDEX: u32 = 0;
+const SDIO_CMD5_OCR_COMMAND_INDEX: u32 = 5;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -571,6 +572,29 @@ fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
 
 #[cfg(feature = "kernel")]
 fn submit_sdio_first_command_probe(contract: DriverTaskContract) -> bool {
+    submit_sdio_command_probe(
+        contract,
+        "sdio-cmd0-go-idle",
+        SDIO_GO_IDLE_COMMAND_INDEX,
+        DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
+        true,
+    ) && submit_sdio_command_probe(
+        contract,
+        "sdio-cmd5-ocr",
+        SDIO_CMD5_OCR_COMMAND_INDEX,
+        DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
+        false,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn submit_sdio_command_probe(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    command_index: u32,
+    response_flags: u16,
+    allow_zero_result: bool,
+) -> bool {
     let mut command = DriverTaskCommandRecord::pi4_hot_path(
         0,
         DriverTaskHotPath::SdioHost,
@@ -581,17 +605,20 @@ fn submit_sdio_first_command_probe(contract: DriverTaskContract) -> bool {
             flags: 0,
         },
     );
-    command.aux0 = (SDIO_FIRST_COMMAND_INDEX << 16) | u32::from(DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR);
+    command.aux0 = (command_index << 16) | u32::from(response_flags);
     command.aux1 = 0;
+    emit_sdio_driver_task_replay_status(stage, "begin");
     let completion = run_driver_task_net_service(contract, command);
     let ready = completion.is_some_and(|completion| {
-        completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result != 0
+        completion.code == DriverTaskCompletionCode::Progress.as_u16()
+            && (allow_zero_result || completion.result != 0)
     });
     let status = driver_task_resource_completion_status(completion, ready);
+    emit_sdio_driver_task_replay_status(stage, status);
     crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
         DriverTaskHotPath::SdioHost,
-        "sdio-first-command",
+        stage,
         status,
         completion,
     );

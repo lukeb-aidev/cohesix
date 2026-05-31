@@ -10,7 +10,13 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
 CANONICAL_MANIFEST_PATH="${ROOT_DIR}/configs/root_task.toml"
-SEL4_BUILD_DIR="${HOME}/seL4/build_UBOOT"
+DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/seL4/build_UBOOT"
+DEFAULT_HOME_SEL4_BUILD_DIR="${HOME}/seL4/build_UBOOT"
+if [[ -d "${DEFAULT_REPO_SEL4_BUILD_DIR}" ]]; then
+    SEL4_BUILD_DIR="${DEFAULT_REPO_SEL4_BUILD_DIR}"
+else
+    SEL4_BUILD_DIR="${DEFAULT_HOME_SEL4_BUILD_DIR}"
+fi
 SEL4_VENV_DIR="${ROOT_DIR}/.venv"
 U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
 OBJCOPY_WRAPPER="${ROOT_DIR}/scripts/aarch64-objcopy-stdout.sh"
@@ -57,7 +63,8 @@ Options:
   --manifest <path>         Manifest input for root-task build:
                             TOML (coh-rtc source) or resolved JSON
                             (default: configs/root_task_pi4_uboot_aarch64.toml)
-  --sel4-build-dir <dir>    seL4 Pi4 build directory (default: ~/seL4/build_UBOOT)
+  --sel4-build-dir <dir>    seL4 Pi4 build directory (default: repo seL4/build_UBOOT
+                            when present, otherwise ~/seL4/build_UBOOT)
   --venv <dir>              Python venv containing build tooling (default: <repo>/.venv)
   --u-boot-bin <path>       U-Boot binary (default: third_party/u-boot/u-boot.bin)
   --firmware-dir <dir>      Pi firmware directory (default: out/uefi/pi4-followup/firmware/v1.50)
@@ -196,6 +203,39 @@ verify_u_boot_pi4_target() {
     fi
     grep -q '^CONFIG_SYS_CONSOLE_IS_IN_ENV=y$' "${config_file}" || \
       fail "u-boot.bin is missing CONFIG_SYS_CONSOLE_IS_IN_ENV; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+}
+
+verify_skip_build_image_fresh() {
+    local image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
+    local input=""
+    local stale=""
+    local -a freshness_inputs=(
+        "${MANIFEST_PATH}"
+        "${ROOT_DIR}/apps/root-task/Cargo.toml"
+        "${ROOT_DIR}/apps/root-task/build.rs"
+        "${ROOT_DIR}/apps/root-task/src"
+        "${ROOT_DIR}/apps/pi4-driver-runtime/Cargo.toml"
+        "${ROOT_DIR}/apps/pi4-driver-runtime/src"
+        "${ROOT_DIR}/crates/pi4-driver-abi/Cargo.toml"
+        "${ROOT_DIR}/crates/pi4-driver-abi/src"
+    )
+
+    require_file "$image"
+    for input in "${freshness_inputs[@]}"; do
+        [[ -e "$input" ]] || continue
+        if [[ -f "$input" && "$input" -nt "$image" ]]; then
+            fail "--skip-build selected stale seL4 image ${image}; ${input} is newer. Re-run without --skip-build or pass --sel4-build-dir to the matching build tree."
+        fi
+        if [[ -d "$input" ]]; then
+            stale="$(find "$input" \
+                \( -path "${ROOT_DIR}/apps/root-task/src/generated" -o \
+                   -path "${ROOT_DIR}/apps/root-task/src/generated/*" \) -prune -o \
+                -type f \( -name '*.rs' -o -name '*.toml' \) -newer "$image" -print -quit)"
+            if [[ -n "$stale" ]]; then
+                fail "--skip-build selected stale seL4 image ${image}; ${stale} is newer. Re-run without --skip-build or pass --sel4-build-dir to the matching build tree."
+            fi
+        fi
+    done
 }
 
 verify_boot_cmd_usb_cold_boot() {
@@ -1301,6 +1341,7 @@ main() {
         local sel4_source_dir
         sel4_source_dir="$(resolve_sel4_source_dir)"
         verify_pi4_sel4_xhci_device_untyped "$sel4_source_dir"
+        verify_skip_build_image_fresh
         log "Skipping build (--skip-build)"
     fi
 
