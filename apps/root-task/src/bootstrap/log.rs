@@ -345,6 +345,9 @@ fn emit_serial_prompt_refresh_unlocked(payload: &[u8]) {
     ) {
         return;
     }
+    #[cfg(feature = "kernel")]
+    crate::serial::emit_prompt_refresh_with_input_shadow_unlocked(SERIAL_PROMPT);
+    #[cfg(not(feature = "kernel"))]
     sel4::debug_put_bytes_unlocked(SERIAL_PROMPT);
 }
 

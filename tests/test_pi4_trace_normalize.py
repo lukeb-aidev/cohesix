@@ -898,6 +898,29 @@ def test_gate_summary_distinguishes_serial_fallback_from_driver_acceptance() -> 
         == "serial-driver-owner-state-ready"
     )
 
+    cutover_events = normalizer.parse_events(
+        [
+            "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init "
+            "status=fallback acceptance=red reason=driver-task-deferred-until-prompt",
+            "SERIAL_RUNTIME_STATE owner=driver stage=serial-runtime-init "
+            "status=ready acceptance=green",
+            "[uart] serial console cutover "
+            "backend=driver-task-serial-client owner=serial",
+            "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init "
+            "status=cutover acceptance=green reason=driver-task-attached",
+            "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+        ]
+    )
+
+    cutover_record = normalizer.summarize_gates(cutover_events).to_record()
+    assert cutover_record["SERIAL_FALLBACK_ACTIVE"] == "no"
+    assert cutover_record["SERIAL_DRIVER_ACCEPTED"] == "yes"
+    assert (
+        cutover_record["SERIAL_RUNTIME_FRONTIER"]
+        == "serial-driver-owner-state-ready"
+    )
+
 
 def test_gate_summary_tracks_current_serial_runtime_init_outstanding() -> None:
     events = normalizer.parse_events(
@@ -2859,6 +2882,32 @@ def test_gate_summary_reports_reset_hcrst_timeout_before_command_gate() -> None:
 
     assert gates.usb_gate == 2
     assert gates.usb_blocker == "reset-hcrst-timeout"
+
+
+def test_gate_summary_reports_pcie_owner_ring_before_keyboard_not_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb ownership_proof proof_gate=3 target_gate=10 "
+            "cfg_live=yes cmd_live=yes mailbox=mailbox-acked",
+            "DRIVER_TASK_RESOURCE_INIT contract=pcie-root hot_path=pcie-root "
+            "stage=pcie-owner-turn status=fault acceptance=no code=5 detail=3 "
+            "result=0 frame_len=0",
+            "[local-seat] vl805 posted-write flush rejected "
+            "reason=pcie-owner-ring-unavailable action=fail-closed",
+            "[local-seat] xhci.diag stage=0x0331 tag=drop-skip-uninitialized",
+            "usb: golden_path outcome=controller-init-failed command_probe=n/a "
+            "progress=no-controller proof_gate=1 diag_stage=0x0331 "
+            "diag_tag=drop-skip-uninitialized",
+            "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+            "proof_gate=0 target_gate=10 next=keyboard-ready "
+            "blocker=keyboard-not-ready",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "pcie-owner-ring-unavailable"
 
 
 def test_gate_summary_reports_pre_hcrst_halt_timeout_before_command_gate() -> None:

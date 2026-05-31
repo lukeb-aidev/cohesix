@@ -16,8 +16,9 @@ The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 
 - smoltcp is compiled without default features; only the IPv4/TCP stack is enabled. Random seeds and MAC addresses are
   deterministic to ensure reproducible boots inside QEMU and when mirrored on hardware.
 - Console buffers (`heapless::String`) cap line length at 256 bytes and reject control characters beyond backspace/delete to
-  prevent uncontrolled allocations. The serial façade uses `heapless::spsc::Queue` staging buffers sized at 256 bytes for RX and
-  TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic allocation.
+  prevent uncontrolled allocations. The serial facade uses `heapless::spsc::Queue` staging buffers sized at 512 bytes for RX and
+  1024 bytes for TX, and exposes atomic back-pressure counters so `/proc/boot` can surface saturation data without dynamic
+  allocation.
 - The virtio-console driver mirrors device descriptor rings with bounded `heapless::spsc::Queue` structures (mirroring the RX/TX
   staging buffers) so host tests can exercise the driver without MMIO. Pending TCP console lines are staged in a
   `heapless::Deque` (depth 8) before the event pump forwards them into the parser, providing a deterministic envelope for

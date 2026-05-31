@@ -446,13 +446,18 @@ proof has already returned.
 Root-console startup publishes its raw UART start/end markers and the serial
 prompt before any NineDoor log-stream attachment. On Pi 4 local-seat boots,
 post-prompt driver diagnostics remain on the serial UART and the logger reprints
-`cohesix>` after each log line, so inaccessible 9P paths cannot hide the active
-debug stream. After the prompt and successful USB arming,
+`cohesix>` plus the current partial serial input after each log line, so
+inaccessible 9P paths cannot hide the active debug stream and raw diagnostics do
+not make typed-but-unsubmitted characters look lost. After the prompt and successful USB arming,
 serial UART and USB keyboard input remain concurrent sources for the shared
 root-console parser.
 Steady physical Pi service turns use blocking `seL4_Call`,
 and the linked runtime replies only after publishing the primitive completion
-record. Pre-root bootstrap turns do not sample timer registers, and dummy-timer
+record. Shell-deferred linked runtimes may report `pointer_free_ipc=yes` once
+their isolated shared-ring transport pages are mapped; that proves the IPC shape
+only, not device ownership. Owner-state and acceptance remain red until the
+deferred runtime descriptor is replayed and the linked runtime returns hardware
+progress. Pre-root bootstrap turns do not sample timer registers, and dummy-timer
 Pi profiles suppress service-latency proof instead of reading CNT registers;
 later steady ring latency telemetry uses the EL0 virtual counter only when the
 profile enables the architected-counter timer. The ring transport emits
@@ -486,6 +491,11 @@ after serial linked-runtime no-reply must log
 `SERIAL_RUNTIME_STATE owner=root ... status=fallback acceptance=red` and
 `SERIAL_FALLBACK_ACTIVE=yes`; it preserves the diagnostic shell but never
 credits `SERIAL_DRIVER_ACCEPTED` or owner-state acceptance.
+When the deferred post-prompt serial runtime init later returns green, root must
+cut the live console over to `driver-task-serial-client`, emit
+`SERIAL_RUNTIME_STATE owner=root ... status=cutover acceptance=green`, and clear
+`SERIAL_FALLBACK_ACTIVE`; the boot-safety fallback must not remain the active
+interactive transport after driver-owned serial service is proven.
 QEMU smoke can additionally allocate isolated VSpaces and map the minimal trampoline transport
 set, but that remains transport proof rather than the functional Pi hardware
 path.

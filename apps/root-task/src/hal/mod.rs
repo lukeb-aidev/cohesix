@@ -1363,6 +1363,10 @@ fn add_driver_task_handle_to_report(
     if let Some(spec) = handle.runtime_image_spec {
         report.runtime_image_declared_count = report.runtime_image_declared_count.saturating_add(1);
         report.runtime_image_declared_hot_path_mask |= spec.hot_path.owner_state_bit();
+        if driver_task::driver_task_runtime_owner_state_registered(spec.hot_path) {
+            report.owner_state_role_mask |= handle.role_bit;
+            report.owner_state_hot_path_mask |= spec.hot_path.owner_state_bit();
+        }
         if handle.runtime_image_mapped_region_mask
             & driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK
             == driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK
@@ -1403,6 +1407,16 @@ fn runtime_image_acceptance_eligible(
 ) -> bool {
     spec.map(driver_task::DriverTaskRuntimeImageSpec::acceptance_eligible)
         .unwrap_or(false)
+}
+
+#[cfg(feature = "kernel")]
+fn runtime_image_transport_pointer_free_ipc_ready(
+    mapped_region_mask: u16,
+    ipc_abi: driver_task::DriverTaskIpcAbi,
+) -> bool {
+    ipc_abi.is_pointer_free()
+        && mapped_region_mask & driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK
+            == driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK
 }
 
 #[cfg(feature = "kernel")]
@@ -3501,7 +3515,10 @@ impl<'a> KernelHal<'a> {
                     runtime_init_descriptor.is_some(),
                 );
             }
-            runtime_init_ok
+            runtime_image_transport_pointer_free_ipc_ready(
+                runtime_image_mapped_region_mask,
+                driver_task::CURRENT_DRIVER_TASK_IPC_ABI,
+            )
         } else {
             let completion = if runtime_init_ok {
                 let command = driver_task::DriverTaskCommandRecord::service(
@@ -4610,6 +4627,39 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn bootstrap_report_preserves_early_runtime_owner_state() {
+        super::driver_task::publish_driver_task_bootstrap_report(
+            super::DriverTaskBootstrapReport::default(),
+        );
+        assert!(
+            super::driver_task::register_driver_task_runtime_owner_state(
+                super::driver_task::DriverTaskHotPath::HdmiText,
+            )
+        );
+
+        let mut report = super::DriverTaskBootstrapReport::default();
+        let handle = fake_isolated_driver_task_handle(
+            super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            true,
+            Some(2),
+        );
+        super::add_driver_task_handle_to_report(&mut report, &handle);
+
+        assert!(
+            report.owner_state_hot_path_mask
+                & super::driver_task::DriverTaskHotPath::HdmiText.owner_state_bit()
+                != 0
+        );
+        assert!(
+            report.owner_state_role_mask & super::driver_task::DRIVER_TASK_ROLE_DISPLAY_BIT != 0
+        );
+        super::driver_task::publish_driver_task_bootstrap_report(
+            super::DriverTaskBootstrapReport::default(),
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn isolated_runtime_image_handles_do_not_credit_owner_state_by_declaration() {
         let pi_contracts = [
             super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
@@ -4647,6 +4697,23 @@ mod tests {
                 contract.name
             );
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn isolated_runtime_transport_mapping_proves_pointer_free_ipc_shape() {
+        assert!(super::runtime_image_transport_pointer_free_ipc_ready(
+            super::driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK,
+            super::driver_task::DriverTaskIpcAbi::SharedRingCommand,
+        ));
+        assert!(!super::runtime_image_transport_pointer_free_ipc_ready(
+            super::driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK & !0x1,
+            super::driver_task::DriverTaskIpcAbi::SharedRingCommand,
+        ));
+        assert!(!super::runtime_image_transport_pointer_free_ipc_ready(
+            super::driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK,
+            super::driver_task::DriverTaskIpcAbi::CallbackPointer,
+        ));
     }
 
     #[cfg(feature = "kernel")]

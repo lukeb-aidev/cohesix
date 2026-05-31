@@ -1966,7 +1966,17 @@ where
         }
         #[cfg(feature = "kernel")]
         {
-            let _ = crate::serial::resume_serial_driver_task_runtime_after_prompt();
+            if crate::serial::resume_serial_driver_task_runtime_after_prompt()
+                && self.serial.use_driver_task_client_after_attach()
+            {
+                boot_log::force_uart_line_raw(
+                    "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
+                );
+                boot_log::force_uart_line_raw(
+                    "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover acceptance=green reason=driver-task-attached",
+                );
+                self.serial.poll_io();
+            }
         }
         if let Some(runtime) = self.local_seat.as_mut() {
             #[cfg(not(all(
@@ -2201,6 +2211,7 @@ where
         for chunk in bytes.chunks(LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES) {
             self.serial.enqueue_tx(chunk);
             self.serial.flush_tx();
+            let _ = self.serial.poll_io();
             self.service_local_seat_keyboard_during_output();
         }
     }

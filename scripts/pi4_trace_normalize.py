@@ -136,6 +136,7 @@ USB_OUTCOME_BLOCKERS = {
     "no-connected-ports",
     "no-keyboard-found",
     "pcie-xhci-device-coverage-missing",
+    "pcie-owner-ring-unavailable",
     "pcie-vl805-config-contract-missing",
     "root-port-read-begin",
     "root-port-read-timer-preempted",
@@ -992,6 +993,8 @@ def normalize_usb_blocker(value: str) -> str:
         return "pcie-xhci-device-coverage-missing"
     if "pcie-vl805-config-contract-missing" in lower:
         return "pcie-vl805-config-contract-missing"
+    if "pcie-owner-ring-unavailable" in lower:
+        return "pcie-owner-ring-unavailable"
     if (
         "deferred-until-root-console" in lower
         or "driver-task-runtime-unproved" in lower
@@ -1883,6 +1886,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     command_timeout_expected_ptr: int | None = None
     command_timeout_crcr_plan: int | None = None
     reset_init_blocker: str | None = None
+    pcie_owner_blocker: str | None = None
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
     precise_command_timeout_details = {
@@ -2029,6 +2033,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if "vl805 posted-write flush" in raw:
             run_posted_flush_pending = False
+            if fields.get("reason", "").lower() == "pcie-owner-ring-unavailable":
+                gate = max(gate, 3)
+                pcie_owner_blocker = "pcie-owner-ring-unavailable"
+                blocker = pcie_owner_blocker
+                continue
             if (
                 parse_hex_int(fields.get("stage")) == 0x031F
                 and fields.get("role", "").lower() == "command-doorbell"
@@ -2589,6 +2598,18 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         blocker = reset_init_blocker
     if reset_init_blocker:
         gate = min(gate, 2)
+    if pcie_owner_blocker and blocker in {
+        "unknown",
+        "none",
+        "controller-init",
+        "controller-init-edge",
+        "controller-init-failed",
+        "keyboard-not-ready",
+        "no-controller",
+        "unavailable",
+    }:
+        blocker = pcie_owner_blocker
+        gate = max(gate, 3)
     if (
         gate == 1
         and blocker == "unknown"
@@ -4936,11 +4957,18 @@ def summarize_driver_task_frontiers(
             if owner == "root" and serial_status == "fallback":
                 serial_fallback_active = True
             if (
+                owner == "root"
+                and serial_status == "cutover"
+                and fields.get("acceptance", "").lower() == "green"
+            ):
+                serial_fallback_active = False
+            if (
                 owner == "driver"
                 and serial_status == "ready"
                 and fields.get("acceptance", "").lower() == "green"
             ):
                 serial_driver_accepted = True
+                serial_fallback_active = False
 
         if "root-mini-uart-fallback" in raw:
             serial_fallback_active = True
@@ -4956,6 +4984,7 @@ def summarize_driver_task_frontiers(
                 and root_pointer == "no"
             ):
                 serial_driver_accepted = True
+                serial_fallback_active = False
             if (
                 hot_path == "hdmi-text"
                 and owner_state == "driver-owned"
@@ -4974,6 +5003,7 @@ def summarize_driver_task_frontiers(
                 and pointer_free_ipc == "yes"
             ):
                 serial_driver_accepted = True
+                serial_fallback_active = False
             if contract == "hdmi-text" and status == "failed":
                 hdmi_boot_blocker = "boot-failed"
 

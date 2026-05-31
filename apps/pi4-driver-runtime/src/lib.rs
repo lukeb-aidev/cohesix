@@ -293,9 +293,15 @@ const GENET_TX_COMPLETION_RECLAIM_BUDGET: usize = 32;
 const GENET_DRIVER_TASK_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x31];
 
 const PCIE_MISC_PCIE_STATUS: usize = 0x4068;
+const PCIE_EXT_CFG_DATA: usize = 0x8000;
+const PCIE_EXT_CFG_INDEX: usize = 0x9000;
+const PCIE_CFG_COMMAND_STATUS: usize = 0x04;
+const PCIE_CFG_BAR0: usize = 0x10;
+const PCIE_CFG_BAR1: usize = 0x14;
 const PCIE_STATUS_PORT: u32 = 0x80;
 const PCIE_STATUS_DL_ACTIVE: u32 = 0x20;
 const PCIE_STATUS_PHY_LINK_UP: u32 = 0x10;
+const PCIE_VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
 const PCIE_VL805_PCI_VENDOR_DEVICE: u32 = 0x3483_1106;
 const PCIE_VL805_EXPECTED_CLASS_REV: u32 = 0x000c_0330 << 8;
 const PCIE_POLL_SPINS: usize = 50_000;
@@ -783,7 +789,7 @@ const MINI_UART_LSR_RX_READY: u32 = 1;
 #[cfg(target_os = "none")]
 const MINI_UART_LSR_TX_EMPTY: u32 = 1 << 5;
 #[cfg(target_os = "none")]
-const MINI_UART_TX_SPIN_LIMIT: usize = 1024;
+const MINI_UART_TX_SPIN_LIMIT: usize = 65_536;
 const MINI_UART_RX_DRAIN_LIMIT: usize = 128;
 
 /// Shared-buffer descriptor passed over the pointer-free driver-task ring.
@@ -2439,7 +2445,12 @@ fn service_pcie_root(command: DriverTaskCommandRecord) -> DriverTaskCompletionRe
             if command.frame.len != 0 {
                 return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
             }
-            let _ = pcie_read32(offset);
+            if !pcie_runtime_flush_vl805_posted_write() {
+                return DriverTaskCompletionRecord::fault(
+                    command.sequence,
+                    FAULT_DEVICE_UNAVAILABLE,
+                );
+            }
             PCIE_OP_COUNT.fetch_add(1, Ordering::AcqRel);
             PCIE_RUNTIME_STATE.with_mut(|state| {
                 state.op_count = state.op_count.saturating_add(1);
@@ -5025,6 +5036,29 @@ fn pcie_runtime_init_hw(state: &mut PcieRuntimeState) -> bool {
 }
 
 #[cfg(target_os = "none")]
+fn pcie_runtime_flush_vl805_posted_write() -> bool {
+    pcie_write32(PCIE_EXT_CFG_INDEX, PCIE_VL805_PCI_DEV_ADDR);
+    let selected = pcie_read32(PCIE_EXT_CFG_INDEX);
+    if selected != PCIE_VL805_PCI_DEV_ADDR {
+        return false;
+    }
+    let command_status = pcie_read32(PCIE_EXT_CFG_DATA + PCIE_CFG_COMMAND_STATUS);
+    if command_status == 0 || command_status == u32::MAX || command_status == selected {
+        return false;
+    }
+    let _ = pcie_read32(PCIE_EXT_CFG_DATA + PCIE_CFG_BAR0);
+    let _ = pcie_read32(PCIE_EXT_CFG_DATA + PCIE_CFG_BAR1);
+    let status = pcie_read32(PCIE_MISC_PCIE_STATUS);
+    status & (PCIE_STATUS_PORT | PCIE_STATUS_DL_ACTIVE | PCIE_STATUS_PHY_LINK_UP)
+        == (PCIE_STATUS_PORT | PCIE_STATUS_DL_ACTIVE | PCIE_STATUS_PHY_LINK_UP)
+}
+
+#[cfg(not(target_os = "none"))]
+fn pcie_runtime_flush_vl805_posted_write() -> bool {
+    true
+}
+
+#[cfg(target_os = "none")]
 fn sdio_read32(offset: usize) -> u32 {
     // SAFETY: The SDIO runtime maps the declared SDHCI MMIO page at
     // `DRIVER_TASK_DEVICE_MMIO_VADDR`; all offsets used by callers are bounded
@@ -5206,7 +5240,37 @@ fn sdio_clear_post_clock_inhibit() -> bool {
     sdio_wait_inhibit_clear(true)
 }
 
+fn sdio_prepped_registers_ready(power: u8, clock: u16, reset: u8, present: u32) -> bool {
+    (power & (SDHCI_POWER_330 | SDHCI_POWER_ON)) == (SDHCI_POWER_330 | SDHCI_POWER_ON)
+        && (clock & (SDHCI_CLOCK_INT_EN | SDHCI_CLOCK_INT_STABLE | SDHCI_CLOCK_CARD_EN))
+            == (SDHCI_CLOCK_INT_EN | SDHCI_CLOCK_INT_STABLE | SDHCI_CLOCK_CARD_EN)
+        && (reset & (SDHCI_RESET_ALL | SDHCI_RESET_CMD | SDHCI_RESET_DATA)) == 0
+        && (present & (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE))
+            == (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE)
+        && (present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) == 0
+}
+
+fn sdio_adopt_hal_prepped_host() -> bool {
+    let power = sdio_read8(SDHCI_POWER_CONTROL);
+    let clock = sdio_read16(SDHCI_CLOCK_CONTROL);
+    let reset = sdio_read8(SDHCI_SOFTWARE_RESET);
+    let present = sdio_read32(SDHCI_PRESENT_STATE);
+    if !sdio_prepped_registers_ready(power, clock, reset, present) {
+        return false;
+    }
+
+    sdio_write8(SDHCI_TIMEOUT_CONTROL, 0x0e);
+    sdio_write32(SDHCI_INT_ENABLE, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+    sdio_write32(SDHCI_SIGNAL_ENABLE, 0);
+    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+    sdio_write8(SDHCI_HOST_CONTROL, sdio_read8(SDHCI_HOST_CONTROL) & !0x06);
+    true
+}
+
 fn sdio_runtime_init_hw() -> bool {
+    if sdio_adopt_hal_prepped_host() {
+        return true;
+    }
     sdio_write16(SDHCI_CLOCK_CONTROL, 0);
     sdio_write8(SDHCI_POWER_CONTROL, 0);
     for _ in 0..SDHCI_POWER_READY_SPINS {
@@ -6417,6 +6481,28 @@ mod tests {
             service_command(0, engine_init),
             DriverTaskCompletionRecord::fault(71, FAULT_DEVICE_UNAVAILABLE)
         );
+    }
+
+    #[test]
+    fn sdio_engine_init_accepts_old_hal_prepped_host_register_state() {
+        assert!(sdio_prepped_registers_ready(
+            SDHCI_POWER_330 | SDHCI_POWER_ON,
+            SDHCI_CLOCK_INT_EN | SDHCI_CLOCK_INT_STABLE | SDHCI_CLOCK_CARD_EN,
+            0,
+            SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE
+        ));
+        assert!(!sdio_prepped_registers_ready(
+            SDHCI_POWER_330 | SDHCI_POWER_ON,
+            SDHCI_CLOCK_INT_EN | SDHCI_CLOCK_INT_STABLE | SDHCI_CLOCK_CARD_EN,
+            0,
+            SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE | SDHCI_CMD_INHIBIT
+        ));
+        assert!(!sdio_prepped_registers_ready(
+            SDHCI_POWER_330 | SDHCI_POWER_ON,
+            SDHCI_CLOCK_INT_EN | SDHCI_CLOCK_INT_STABLE,
+            0,
+            SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE
+        ));
     }
 
     #[test]

@@ -280,6 +280,15 @@ impl ErrorType for KernelSerialDriver {
 }
 
 impl SerialDriver for KernelSerialDriver {
+    #[cfg(feature = "kernel")]
+    fn try_use_driver_task_client_after_attach(&mut self) -> bool {
+        if !crate::serial::serial_driver_task_runtime_attached() {
+            return false;
+        }
+        *self = Self::DriverTaskClient;
+        true
+    }
+
     fn read_byte(&mut self) -> nb::Result<u8, Self::Error> {
         match self {
             Self::Pl011(driver) => driver.read_byte(),

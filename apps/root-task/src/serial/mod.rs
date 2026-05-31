@@ -97,7 +97,7 @@ pub(crate) fn with_uart_tx_lock<R>(f: impl FnOnce() -> R) -> R {
 pub const DEFAULT_RX_CAPACITY: usize = 512;
 
 /// Capacity of the TX staging queue used by [`SerialPort`].
-pub const DEFAULT_TX_CAPACITY: usize = 256;
+pub const DEFAULT_TX_CAPACITY: usize = 1024;
 
 /// Maximum number of UTF-8 codepoints retained in a console line.
 pub const DEFAULT_LINE_CAPACITY: usize = 256;
@@ -131,6 +131,34 @@ static SERIAL_RUNTIME_INIT_LEASE: SpinMutex<Option<kernel_uart::KernelUartMmio>>
 static SERIAL_CLIENT_RX: SpinMutex<Queue<u8, DEFAULT_RX_CAPACITY>> = SpinMutex::new(Queue::new());
 #[cfg(feature = "kernel")]
 static SERIAL_LINKED_RUNTIME_ATTACHED: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static SERIAL_PROMPT_INPUT_SHADOW: SpinMutex<HeaplessString<DEFAULT_LINE_CAPACITY>> =
+    SpinMutex::new(HeaplessString::new());
+
+#[cfg(feature = "kernel")]
+fn prompt_shadow_push(byte: u8) {
+    let mut shadow = SERIAL_PROMPT_INPUT_SHADOW.lock();
+    let _ = shadow.push(byte as char);
+}
+
+#[cfg(feature = "kernel")]
+fn prompt_shadow_pop() {
+    let _ = SERIAL_PROMPT_INPUT_SHADOW.lock().pop();
+}
+
+#[cfg(feature = "kernel")]
+fn prompt_shadow_clear() {
+    SERIAL_PROMPT_INPUT_SHADOW.lock().clear();
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn emit_prompt_refresh_with_input_shadow_unlocked(prompt: &[u8]) {
+    crate::sel4::debug_put_bytes_unlocked(prompt);
+    let shadow = SERIAL_PROMPT_INPUT_SHADOW.lock();
+    if !shadow.is_empty() {
+        crate::sel4::debug_put_bytes_unlocked(shadow.as_bytes());
+    }
+}
 
 /// Error type surfaced by the serial subsystem.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -179,6 +207,12 @@ pub trait SerialDriver: ErrorType {
 
     /// Attempt to write a single byte to the device.
     fn write_byte(&mut self, byte: u8) -> nb::Result<(), Self::Error>;
+
+    /// Switch the live console endpoint to the linked serial driver task.
+    #[cfg(feature = "kernel")]
+    fn try_use_driver_task_client_after_attach(&mut self) -> bool {
+        false
+    }
 }
 
 impl<T> ScheduledHardwareDriver for T
@@ -659,6 +693,12 @@ where
 
     /// Emit bytes directly to the device while holding the shared UART TX lock.
     pub fn write_bytes_blocking(&mut self, data: &[u8]) {
+        #[cfg(feature = "kernel")]
+        if serial_driver_task_transport_active() {
+            self.enqueue_tx(data);
+            self.flush_tx_locked();
+            return;
+        }
         with_uart_tx_lock(|| {
             self.flush_tx_blocking_unlocked();
             for &byte in data {
@@ -669,6 +709,13 @@ where
 
     /// Emit a complete console line without allowing other UART producers to interleave.
     pub fn write_line_blocking(&mut self, line: &str) {
+        #[cfg(feature = "kernel")]
+        if serial_driver_task_transport_active() {
+            self.enqueue_tx(line.as_bytes());
+            self.enqueue_tx(b"\r\n");
+            self.flush_tx_locked();
+            return;
+        }
         with_uart_tx_lock(|| {
             self.flush_tx_blocking_unlocked();
             for &byte in line.as_bytes() {
@@ -687,50 +734,7 @@ where
         #[cfg(feature = "kernel")]
         {
             if serial_driver_task_transport_active() {
-                crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
-                    contract,
-                    crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
-                    serial_runtime_ring_service_driver_task,
-                );
-                let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-                    0,
-                    crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-                    crate::hal::driver_task::DriverFrameDescriptor {
-                        offset: 0,
-                        len: 0,
-                        flags: 0,
-                    },
-                );
-                if let Some(completion) =
-                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                {
-                    if completion.code
-                        == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
-                    {
-                        if let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
-                            contract,
-                            completion.frame,
-                        ) {
-                            let mut accepted = 0usize;
-                            for &byte in bytes {
-                                if self.rx.enqueue(byte).is_err() {
-                                    self.telemetry.rx_overflow();
-                                    break;
-                                }
-                                accepted = accepted.saturating_add(1);
-                            }
-                            return accepted != 0;
-                        }
-                        self.telemetry.driver_task_budget_overrun();
-                        return false;
-                    }
-                    return completion.code
-                        == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                        && completion.result != 0;
-                }
-                self.telemetry.driver_task_budget_overrun();
-                return false;
+                return self.poll_driver_task_rx_into_queue(contract);
             }
             crate::hal::driver_task::register_driver_task_root_context_ring_service(
                 contract,
@@ -830,6 +834,7 @@ where
                     serial_runtime_ring_service_driver_task,
                 );
                 if self.flush_tx_driver_task_ring(contract) {
+                    let _ = self.poll_driver_task_rx_into_queue(contract);
                     return;
                 }
                 self.telemetry.driver_task_budget_overrun();
@@ -871,6 +876,64 @@ where
             }
         }
         self.flush_tx_current_tcb(contract);
+    }
+
+    #[cfg(feature = "kernel")]
+    fn poll_driver_task_rx_into_queue(&mut self, contract: DriverTaskContract) -> bool {
+        crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+            contract,
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
+            serial_runtime_ring_service_driver_task,
+        );
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        if let Some(completion) =
+            crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+        {
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
+            {
+                if let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
+                    contract,
+                    completion.frame,
+                ) {
+                    let mut accepted = 0usize;
+                    for &byte in bytes {
+                        if self.rx.enqueue(byte).is_err() {
+                            self.telemetry.rx_overflow();
+                            break;
+                        }
+                        accepted = accepted.saturating_add(1);
+                    }
+                    return accepted != 0;
+                }
+                self.telemetry.driver_task_budget_overrun();
+                return false;
+            }
+            return completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result != 0;
+        }
+        self.telemetry.driver_task_budget_overrun();
+        false
+    }
+
+    /// Switch prompt-side service from the root mini-UART fallback to the driver task.
+    #[cfg(feature = "kernel")]
+    pub fn use_driver_task_client_after_attach(&mut self) -> bool {
+        if !serial_driver_task_transport_active() {
+            return false;
+        }
+        self.flush_tx_locked();
+        self.driver.try_use_driver_task_client_after_attach()
     }
 
     #[cfg(feature = "kernel")]
@@ -1075,12 +1138,16 @@ where
             match byte {
                 b'\r' => {
                     self.driver_local.set_suppress_lf(true);
+                    #[cfg(feature = "kernel")]
+                    prompt_shadow_clear();
                     self.emit_newline();
                     let mut completed = HeaplessString::new();
                     core::mem::swap(&mut completed, &mut self.line);
                     return Some(completed);
                 }
                 b'\n' => {
+                    #[cfg(feature = "kernel")]
+                    prompt_shadow_clear();
                     self.emit_newline();
                     let mut completed = HeaplessString::new();
                     core::mem::swap(&mut completed, &mut self.line);
@@ -1088,6 +1155,8 @@ where
                 }
                 0x08 | 0x7f => {
                     if self.line.pop().is_some() && self.driver_local.echo_enabled() {
+                        #[cfg(feature = "kernel")]
+                        prompt_shadow_pop();
                         self.enqueue_tx(b"\x08 \x08");
                     }
                 }
@@ -1099,6 +1168,8 @@ where
                         self.telemetry.utf8_drop();
                         continue;
                     }
+                    #[cfg(feature = "kernel")]
+                    prompt_shadow_push(byte);
                     if self.driver_local.echo_enabled() {
                         self.enqueue_tx(&[byte]);
                     }
@@ -1114,6 +1185,8 @@ where
     pub fn clear_partial_line(&mut self) -> bool {
         let had_partial = !self.line.is_empty();
         self.line.clear();
+        #[cfg(feature = "kernel")]
+        prompt_shadow_clear();
         had_partial
     }
 
@@ -1571,6 +1644,28 @@ mod tests {
         let record = port.owner_runtime_record();
         assert_eq!(record.rx_depth, 0);
         assert_eq!(record.line_len, 2);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn prompt_refresh_shadow_tracks_partial_serial_input() {
+        prompt_shadow_clear();
+        let driver = LoopbackSerial::<64>::new();
+        let mut port: SerialPort<_, 16, 32, 16> = SerialPort::new(driver);
+
+        port.driver_mut().push_rx(b"wifi");
+        assert!(port.poll_io());
+        assert!(port.next_line().is_none());
+        assert_eq!(SERIAL_PROMPT_INPUT_SHADOW.lock().as_str(), "wifi");
+
+        port.driver_mut().push_rx(&[0x08, b'x', b'\n']);
+        assert!(port.poll_io());
+        let line = port
+            .next_line()
+            .expect("newline completes the edited input");
+
+        assert_eq!(line.as_str(), "wifx");
+        assert!(SERIAL_PROMPT_INPUT_SHADOW.lock().is_empty());
     }
 
     #[test]

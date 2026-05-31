@@ -202,6 +202,8 @@ static PCIE_OWNER_QUEUE_LAST_VALUE: AtomicUsize = AtomicUsize::new(0);
 static PCIE_OWNER_QUEUE_LAST_RESULT: AtomicUsize = AtomicUsize::new(0);
 static PCIE_OWNER_QUEUE_NON_ACCEPTANCE_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static PCIE_OWNER_QUEUE_REPLAY_PENDING_LOGGED: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_ENGINE_READY: AtomicUsize = AtomicUsize::new(0);
+static PCIE_OWNER_QUEUE_ENGINE_INIT_FAIL_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static PCIE_OWNER_QUEUE_FIRST_TURN_LOGGED: AtomicUsize = AtomicUsize::new(0);
 static PCIE_OWNER_QUEUE_NO_REPLY_LOGGED: AtomicUsize = AtomicUsize::new(0);
 
@@ -290,6 +292,9 @@ fn pcie_owner_queue_ring_service_completion(
         }
         return None;
     }
+    if !pcie_owner_queue_ensure_engine_ready(contract) {
+        return None;
+    }
     let frame = if op == PCIE_OWNER_OP_PORT_WRITE {
         match super::driver_task::stage_driver_task_ring_frame(contract, &value.to_le_bytes(), 0) {
             Some(frame) => frame,
@@ -348,9 +353,64 @@ fn pcie_owner_queue_ring_service_completion(
 }
 
 #[cfg(feature = "kernel")]
+fn pcie_owner_queue_ensure_engine_ready(contract: super::driver_task::DriverTaskContract) -> bool {
+    if PCIE_OWNER_QUEUE_ENGINE_READY.load(Ordering::Acquire) != 0 {
+        return true;
+    }
+
+    let command = super::driver_task::runtime_engine_init_command(
+        super::driver_task::DriverTaskHotPath::PcieRoot,
+        super::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+    );
+    let completion = super::driver_task::run_driver_task_ring_service(contract, command);
+    let ready = completion.is_some_and(|completion| {
+        completion.code == super::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+            && completion.result == 1
+    });
+    let status = match completion {
+        Some(done)
+            if done.code == super::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && done.result == 1 =>
+        {
+            "ready"
+        }
+        Some(_) => "fault",
+        None => "no-reply",
+    };
+    if ready {
+        PCIE_OWNER_QUEUE_ENGINE_READY.store(1, Ordering::Release);
+        super::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            super::driver_task::DriverTaskHotPath::PcieRoot,
+            "pcie-engine-init",
+            status,
+            completion,
+        );
+        true
+    } else {
+        if PCIE_OWNER_QUEUE_ENGINE_INIT_FAIL_LOGGED.swap(1, Ordering::AcqRel) == 0 {
+            super::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                super::driver_task::DriverTaskHotPath::PcieRoot,
+                "pcie-engine-init",
+                status,
+                completion,
+            );
+        }
+        false
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn pcie_owner_queue_ring_service_turn(op: u16, stage: u16, offset: usize, value: u32) -> bool {
     pcie_owner_queue_ring_service_completion(op, stage, offset, value).is_some_and(|completion| {
-        completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16()
+        let ok = completion.code != super::driver_task::DriverTaskCompletionCode::Fault.as_u16();
+        if ok {
+            let _ = super::driver_task::register_driver_task_runtime_owner_state(
+                super::driver_task::DriverTaskHotPath::PcieRoot,
+            );
+        }
+        ok
     })
 }
 
