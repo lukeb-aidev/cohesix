@@ -5400,6 +5400,24 @@ where
     }
 }
 
+pub fn prepare_driver_task_sdio_resources<H>(hal: &mut H) -> Result<(), HalError>
+where
+    H: DeviceHal<Error = HalError>,
+{
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] driver-task sdio resource prep begin"
+    ));
+    preseed_mmio(hal);
+    let mut state = Pi4WifiState::new(hal)?;
+    state.set_power(WifiPowerState::On)?;
+    state.set_reset(WifiResetState::Deasserted)?;
+    state.reset_host()?;
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] driver-task sdio resource prep ready"
+    ));
+    Ok(())
+}
+
 const SDHCI_BLOCK_SIZE: usize = 0x04;
 const SDHCI_BLOCK_COUNT: usize = 0x06;
 const SDHCI_ARGUMENT: usize = 0x08;
@@ -25045,7 +25063,20 @@ fn map_device_exact<H>(
 where
     H: DeviceHal<Error = HalError>,
 {
-    let Some(coverage) = hal.device_coverage(paddr, PAGE_BITS) else {
+    let coverage = hal.device_coverage(paddr, PAGE_BITS);
+    if coverage.is_none() {
+        if let Ok(frame) = hal.map_device(paddr) {
+            let actual_paddr = page_get_address(frame.cap()).map_err(HalError::from)?;
+            if actual_paddr == paddr {
+                emit_breadcrumb(format_args!(
+                    "[pi4-wifi] map exact reuse paddr=0x{paddr:08x} reason=device-frame-cache"
+                ));
+                return Ok(frame);
+            }
+        }
+        return Err(HalError::Unsupported("device-coverage"));
+    }
+    let Some(coverage) = coverage else {
         return Err(HalError::Unsupported("device-coverage"));
     };
     let span_bytes = coverage.limit.saturating_sub(coverage.base);

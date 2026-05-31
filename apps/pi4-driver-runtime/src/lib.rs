@@ -398,15 +398,27 @@ const SDHCI_TIMEOUT_CONTROL: usize = 0x2e;
 const SDHCI_SOFTWARE_RESET: usize = 0x2f;
 const SDHCI_INT_ENABLE: usize = 0x34;
 const SDHCI_SIGNAL_ENABLE: usize = 0x38;
+const SDHCI_HOST_VERSION: usize = 0xfe;
 const SDHCI_POWER_ON: u8 = 0x01;
 const SDHCI_POWER_330: u8 = 0x0e;
 const SDHCI_CLOCK_INT_EN: u16 = 1 << 0;
 const SDHCI_CLOCK_INT_STABLE: u16 = 1 << 1;
 const SDHCI_CLOCK_CARD_EN: u16 = 1 << 2;
+const SDHCI_DIVIDER_SHIFT: u16 = 8;
+const SDHCI_DIVIDER_HI_SHIFT: u16 = 6;
+const SDHCI_DIV_MASK: u16 = 0x00ff;
+const SDHCI_DIV_HI_MASK: u16 = 0x0300;
+const SDHCI_SPEC_VER_MASK: u16 = 0x00ff;
+const SDHCI_SPEC_300: u16 = 2;
 const SDHCI_RESET_ALL: u8 = 0x01;
 const SDHCI_RESET_CMD: u8 = 0x02;
 const SDHCI_RESET_DATA: u8 = 0x04;
+const SDHCI_CARD_PRESENT: u32 = 1 << 16;
+const SDHCI_CARD_STATE_STABLE: u32 = 1 << 17;
 const SDHCI_INIT_SPINS: usize = 100_000;
+const SDHCI_POWER_READY_SPINS: usize = 500_000;
+const SDHCI_STARTUP_CLOCK_HZ: u32 = 400_000;
+const BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ: u32 = 250_000_000;
 
 const CYW43_SDPCM_HEADER_BYTES: usize = 12;
 const CYW43_BDC_HEADER_BYTES: usize = 4;
@@ -2302,7 +2314,6 @@ fn sdio_make_command(cmd: u16, flags: u16, data: bool) -> u16 {
     (cmd << 8) | command
 }
 
-#[cfg(target_os = "none")]
 fn sdio_wait_inhibit_clear(wait_data: bool) -> bool {
     let mask = if wait_data {
         SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT
@@ -5094,39 +5105,137 @@ fn sdio_write8(offset: usize, value: u8) {
 #[cfg(not(target_os = "none"))]
 fn sdio_write8(_offset: usize, _value: u8) {}
 
+fn sdio_software_reset(mask: u8) -> bool {
+    sdio_write8(SDHCI_SOFTWARE_RESET, mask);
+    for _ in 0..SDHCI_INIT_SPINS {
+        if sdio_read8(SDHCI_SOFTWARE_RESET) & mask == 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
+fn sdio_wait_for_int_clock_stable() -> bool {
+    for _ in 0..SDHCI_INIT_SPINS {
+        if sdio_read16(SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE != 0 {
+            return true;
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
+fn sdhci_spec300_divider_for_base_clock(base_clock_hz: u32, target_hz: u32) -> u16 {
+    if base_clock_hz <= target_hz {
+        1
+    } else {
+        let mut div = 2u16;
+        while div < 2046 && (base_clock_hz / u32::from(div)) > target_hz {
+            div = div.saturating_add(2);
+        }
+        div
+    }
+}
+
+fn sdio_clock_divider(target_hz: u32) -> u16 {
+    let version = sdio_read16(SDHCI_HOST_VERSION) & SDHCI_SPEC_VER_MASK;
+    if version >= SDHCI_SPEC_300 {
+        sdhci_spec300_divider_for_base_clock(BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ, target_hz)
+    } else {
+        let mut div = 1u16;
+        while div < 256 && (BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ / u32::from(div)) > target_hz {
+            div = div.saturating_mul(2);
+        }
+        div
+    }
+}
+
+fn sdio_set_clock_hz(target_hz: u32) -> bool {
+    if target_hz == 0 {
+        sdio_write16(SDHCI_CLOCK_CONTROL, 0);
+        return true;
+    }
+    let divider = sdio_clock_divider(target_hz.max(1));
+    let encoded_divider = divider >> 1;
+    let mut clock = SDHCI_CLOCK_INT_EN;
+    clock |= (encoded_divider & SDHCI_DIV_MASK) << SDHCI_DIVIDER_SHIFT;
+    clock |= ((encoded_divider & SDHCI_DIV_HI_MASK) >> 8) << SDHCI_DIVIDER_HI_SHIFT;
+    sdio_write16(SDHCI_CLOCK_CONTROL, 0);
+    sdio_write16(SDHCI_CLOCK_CONTROL, clock);
+    if !sdio_wait_for_int_clock_stable() {
+        return false;
+    }
+    sdio_write16(SDHCI_CLOCK_CONTROL, clock | SDHCI_CLOCK_CARD_EN);
+    true
+}
+
+fn sdio_power_ready(power: u8, present: u32) -> bool {
+    (power & (SDHCI_POWER_330 | SDHCI_POWER_ON)) == (SDHCI_POWER_330 | SDHCI_POWER_ON)
+        && (present & (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE))
+            == (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE)
+        && (present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) == 0
+}
+
+fn sdio_power_card_ready(power: u8, present: u32) -> bool {
+    (power & (SDHCI_POWER_330 | SDHCI_POWER_ON)) == (SDHCI_POWER_330 | SDHCI_POWER_ON)
+        && (present & (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE))
+            == (SDHCI_CARD_PRESENT | SDHCI_CARD_STATE_STABLE)
+}
+
+fn sdio_settle_power_on_ready() {
+    for _ in 0..SDHCI_POWER_READY_SPINS {
+        let power = sdio_read8(SDHCI_POWER_CONTROL);
+        let present = sdio_read32(SDHCI_PRESENT_STATE);
+        if sdio_power_ready(power, present) || sdio_power_card_ready(power, present) {
+            return;
+        }
+        core::hint::spin_loop();
+    }
+}
+
+fn sdio_clear_post_clock_inhibit() -> bool {
+    let present = sdio_read32(SDHCI_PRESENT_STATE);
+    if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) == 0 {
+        return true;
+    }
+    if !sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
+        return false;
+    }
+    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+    sdio_wait_inhibit_clear(true)
+}
+
 fn sdio_runtime_init_hw() -> bool {
     sdio_write16(SDHCI_CLOCK_CONTROL, 0);
     sdio_write8(SDHCI_POWER_CONTROL, 0);
-    sdio_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_ALL);
-    for _ in 0..SDHCI_INIT_SPINS {
-        if sdio_read8(SDHCI_SOFTWARE_RESET) & SDHCI_RESET_ALL == 0 {
-            break;
-        }
+    for _ in 0..SDHCI_POWER_READY_SPINS {
         core::hint::spin_loop();
     }
+    if !sdio_software_reset(SDHCI_RESET_ALL) {
+        return false;
+    }
     sdio_write8(SDHCI_POWER_CONTROL, SDHCI_POWER_330 | SDHCI_POWER_ON);
+    sdio_settle_power_on_ready();
     sdio_write8(SDHCI_TIMEOUT_CONTROL, 0x0e);
     sdio_write32(SDHCI_INT_ENABLE, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     sdio_write32(SDHCI_SIGNAL_ENABLE, 0);
-    sdio_write8(SDHCI_SOFTWARE_RESET, SDHCI_RESET_CMD | SDHCI_RESET_DATA);
-    for _ in 0..SDHCI_INIT_SPINS {
-        if sdio_read8(SDHCI_SOFTWARE_RESET) & (SDHCI_RESET_CMD | SDHCI_RESET_DATA) == 0 {
-            break;
-        }
-        core::hint::spin_loop();
+    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+    if !sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
+        return false;
     }
-    sdio_write16(SDHCI_CLOCK_CONTROL, SDHCI_CLOCK_INT_EN);
-    for _ in 0..SDHCI_INIT_SPINS {
-        if sdio_read16(SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE != 0 {
-            break;
+    if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
+        sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+        sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+        if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
+            return false;
         }
-        core::hint::spin_loop();
     }
-    sdio_write16(
-        SDHCI_CLOCK_CONTROL,
-        SDHCI_CLOCK_INT_EN | SDHCI_CLOCK_CARD_EN,
-    );
-    sdio_write8(SDHCI_HOST_CONTROL, sdio_read8(SDHCI_HOST_CONTROL) | 0x2);
+    if !sdio_clear_post_clock_inhibit() {
+        return false;
+    }
+    sdio_write8(SDHCI_HOST_CONTROL, sdio_read8(SDHCI_HOST_CONTROL) & !0x06);
+    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     true
 }
 
@@ -6229,6 +6338,22 @@ mod tests {
         assert_eq!(
             service_command(0, command),
             DriverTaskCompletionRecord::frame_ready(54, 8)
+        );
+    }
+
+    #[test]
+    fn sdio_runtime_startup_clock_matches_old_hal_divider() {
+        assert_eq!(
+            sdhci_spec300_divider_for_base_clock(
+                BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ,
+                SDHCI_STARTUP_CLOCK_HZ
+            ),
+            626
+        );
+        assert_eq!(
+            BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ
+                / u32::from(sdio_clock_divider(SDHCI_STARTUP_CLOCK_HZ)),
+            399_361
         );
     }
 

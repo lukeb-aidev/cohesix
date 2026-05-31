@@ -1801,7 +1801,22 @@ fn map_device_exact(
     label: &'static str,
     prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
 ) -> Result<crate::sel4::DeviceFrame, HalError> {
-    let Some(coverage) = hal.device_coverage(paddr, PAGE_BITS) else {
+    let coverage = hal.device_coverage(paddr, PAGE_BITS);
+    if coverage.is_none() {
+        if let Ok(frame) = hal.map_device(paddr) {
+            let actual_paddr = page_get_address(frame.cap()).map_err(HalError::from)?;
+            if actual_paddr == paddr {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] {label} map exact reuse paddr=0x{paddr:016x} reason=device-frame-cache"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return Ok(frame);
+            }
+        }
         let mut line = heapless::String::<192>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -1810,6 +1825,9 @@ fn map_device_exact(
             ),
         );
         boot_log::force_uart_line(line.as_str());
+        return Err(HalError::Unsupported("device-coverage"));
+    }
+    let Some(coverage) = coverage else {
         return Err(HalError::Unsupported("device-coverage"));
     };
     let span_bytes = coverage.limit.saturating_sub(coverage.base);

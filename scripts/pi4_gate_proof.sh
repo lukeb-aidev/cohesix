@@ -373,6 +373,7 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=keyboard-first-byte")
         args+=("--expect-not" "USB_BLOCKER=no-keyboard-found")
         args+=("--expect-not" "USB_BLOCKER=keyboard-not-ready")
+        args+=("--expect-not" "USB_BLOCKER=pcie-xhci-device-coverage-missing")
         args+=("--expect-not" "USB_BLOCKER=pcie-vl805-config-contract-missing")
         args+=("--expect-not" "USB_BLOCKER=unavailable")
         args+=("--expect-not" "USB_BLOCKER=safe-port-event-required")

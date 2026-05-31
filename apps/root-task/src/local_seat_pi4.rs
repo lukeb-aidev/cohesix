@@ -1128,6 +1128,11 @@ const fn keyboard_attach_retry_allowed(
 }
 
 #[inline]
+const fn keyboard_prompt_safe_retry_rearms(err: Pi4SeatError) -> bool {
+    !matches!(err, Pi4SeatError::XhciInit)
+}
+
+#[inline]
 fn usb_probe_pathway_record(
     summary: &mut UsbProbePathwaySummary,
     progress: UsbProbePathProgress,
@@ -2313,10 +2318,16 @@ impl Pi4LocalSeat {
                 );
             } else if let Some(err) = keyboard_error {
                 if prompt_safe_probe {
-                    self.keyboard_init_attempted = false;
-                    boot_log::force_uart_line(
-                        "[local-seat] pi4 keyboard prompt-safe probe reset state=retry-allowed",
-                    );
+                    if keyboard_prompt_safe_retry_rearms(err) {
+                        self.keyboard_init_attempted = false;
+                        boot_log::force_uart_line(
+                            "[local-seat] pi4 keyboard prompt-safe probe reset state=retry-allowed",
+                        );
+                    } else {
+                        boot_log::force_uart_line(
+                            "[local-seat] pi4 keyboard prompt-safe probe terminal state=retry-held reason=xhci-init",
+                        );
+                    }
                 }
                 if matches!(err, Pi4SeatError::XhciInit) {
                     log_latest_xhci_diag_summary("keyboard-init");
@@ -2388,7 +2399,22 @@ fn map_device_exact(
     error: Pi4SeatError,
     prefix_maps: &mut Vec<crate::sel4::DeviceFrame>,
 ) -> Result<crate::sel4::DeviceFrame, Pi4SeatError> {
-    let Some(coverage) = hal.device_coverage(paddr, crate::sel4::PAGE_BITS) else {
+    let coverage = hal.device_coverage(paddr, crate::sel4::PAGE_BITS);
+    if coverage.is_none() {
+        if let Ok(frame) = hal.map_device(paddr) {
+            let actual_paddr = crate::sel4::page_get_address(frame.cap()).map_err(|_| error)?;
+            if actual_paddr == paddr {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] {label} map exact reuse paddr=0x{paddr:016x} reason=device-frame-cache"
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+                return Ok(frame);
+            }
+        }
         let mut line = heapless::String::<192>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -2397,6 +2423,9 @@ fn map_device_exact(
             ),
         );
         boot_log::force_uart_line(line.as_str());
+        return Err(error);
+    }
+    let Some(coverage) = coverage else {
         return Err(error);
     };
     let span_bytes = coverage.limit.saturating_sub(coverage.base);
@@ -16188,6 +16217,17 @@ mod driver_coverage_tests {
         assert!(xhci_diag_stage_force_log(0x0416));
         assert!(!xhci_diag_stage_hot_loop_suppressed(0x0416));
     }
+
+    #[test]
+    fn driver_coverage_prompt_safe_keyboard_retry_holds_terminal_xhci_failure() {
+        assert!(!keyboard_prompt_safe_retry_rearms(Pi4SeatError::XhciInit));
+        assert!(keyboard_prompt_safe_retry_rearms(
+            Pi4SeatError::UsbKeyboardInit
+        ));
+        assert!(keyboard_prompt_safe_retry_rearms(
+            Pi4SeatError::UsbKeyboardMissing
+        ));
+    }
 }
 
 #[cfg(all(test, target_os = "none"))]
@@ -16317,6 +16357,10 @@ mod tests {
             Pi4SeatError::UsbKeyboardInit,
             2,
             2
+        ));
+        assert!(!keyboard_prompt_safe_retry_rearms(Pi4SeatError::XhciInit));
+        assert!(keyboard_prompt_safe_retry_rearms(
+            Pi4SeatError::UsbKeyboardInit
         ));
     }
 

@@ -135,6 +135,7 @@ USB_OUTCOME_BLOCKERS = {
     "keyboard-first-byte",
     "no-connected-ports",
     "no-keyboard-found",
+    "pcie-xhci-device-coverage-missing",
     "pcie-vl805-config-contract-missing",
     "root-port-read-begin",
     "root-port-read-timer-preempted",
@@ -982,6 +983,13 @@ def normalize_usb_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
+    if "no-device-coverage" in lower and (
+        "xhci" in lower
+        or "vl805" in lower
+        or "pcie-root-cfg" in lower
+        or "pi4-pcie-root-cfg" in lower
+    ):
+        return "pcie-xhci-device-coverage-missing"
     if "pcie-vl805-config-contract-missing" in lower:
         return "pcie-vl805-config-contract-missing"
     if (
@@ -2007,6 +2015,18 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if event.domain != "usb":
             continue
+        if "map exact miss" in raw and fields.get("reason") == "no-device-coverage":
+            gate = max(gate, 3)
+            if (
+                "xhci" in raw
+                or "vl805" in raw
+                or "pcie-root-cfg" in raw
+                or "pi4-pcie-root-cfg" in raw
+            ):
+                blocker = "pcie-xhci-device-coverage-missing"
+            elif blocker in {"unknown", "none", "unavailable"}:
+                blocker = "device-coverage-missing"
+            continue
         if "vl805 posted-write flush" in raw:
             run_posted_flush_pending = False
             if (
@@ -2238,7 +2258,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if proof_gate is not None and proof_gate > 0:
                 gate = max(gate, proof_gate)
             proof_result = normalize_usb_blocker(fields.get("result", "none"))
-            blocker = "none" if proof_result == "none" else proof_result
+            if proof_result == "none":
+                blocker = "none"
+            elif proof_result == "unavailable" and blocker not in {"unknown", "none"}:
+                pass
+            else:
+                blocker = proof_result
         if (
             "cfg_window=mapped" in raw
             or "cfg_window=hal-ext-cfg-proven" in raw
@@ -2499,6 +2524,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         and command_timeout_detail in precise_command_timeout_details
                     ):
                         blocker = command_timeout_detail
+                    elif normalized_value == "unavailable" and blocker not in {
+                        "unknown",
+                        "none",
+                    }:
+                        continue
                     elif (
                         key == "result"
                         and normalized_value == "cmd-poll-only-timeout"

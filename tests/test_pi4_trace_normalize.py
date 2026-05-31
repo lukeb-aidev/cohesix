@@ -3631,6 +3631,12 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
         ),
         "pcie-window-enable-slot-timeout": "pcie-window-enable-slot-timeout",
         "pcie-window-no-op-timeout": "pcie-window-no-op-timeout",
+        "xhci-preseed map exact miss reason=no-device-coverage": (
+            "pcie-xhci-device-coverage-missing"
+        ),
+        "pi4-pcie-root-cfg map exact miss reason=no-device-coverage": (
+            "pcie-xhci-device-coverage-missing"
+        ),
         "pcie-irq-quiesce-failed": "pcie-irq-quiesce-failed",
         "pcie-irq-quiesce-missing": "pcie-irq-quiesce-missing",
         "raw-phys-cmd-poll-only-timeout": "raw-phys-cmd-poll-only-timeout",
@@ -3666,6 +3672,26 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
 
     for raw, expected in cases.items():
         assert normalizer.normalize_usb_blocker(raw) == expected
+
+
+def test_gate_summary_keeps_xhci_device_coverage_miss_over_unavailable() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] xhci-preseed map exact miss "
+            "paddr=0x0000000600000000 reason=no-device-coverage",
+            "[local-seat] pi4-pcie-root-cfg map exact miss "
+            "paddr=0x00000000fd500000 reason=no-device-coverage",
+            "[local-seat] vl805 live cfg unavailable; "
+            "xhci probe forced no-live-bus-master cmd=0x0000",
+            "[local-seat] pi4 keyboard unavailable detail=xhci-init",
+            "[local-seat] pi4 keyboard runtime init result=unavailable",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "pcie-xhci-device-coverage-missing"
 
 
 def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
