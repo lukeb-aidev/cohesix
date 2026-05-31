@@ -33,6 +33,50 @@ def _driver_task_owner_state_lines() -> list[str]:
     ]
 
 
+def _strong_driver_task_proof_lines() -> list[str]:
+    return [
+        "U-Boot 2026.01-dirty",
+        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "[Cohesix] Root console ready (type 'help' for commands)",
+        "cohesix> driver proof",
+        "usb: runtime_gate proof_gate=10 blocker=none",
+        "OK NETTEST success",
+        "netstats: active=wifi addr_src=dhcp-lease dhcp=bound wifi_assoc=1 "
+        "wifi_link=1 eapol_secure=1 eapol_rx=1 rx_pkts=1 tx_pkts=1",
+        "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+        "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
+        "task_count=9 failed_count=0 live_tcb_count=9 "
+        "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
+        "broad_caps_leaked=0 sched=yes affinity=per-driver "
+        "affinity_configured=9 affinity_applied=9 vspace=isolated "
+        "ipc_abi=shared-ring-command pointer_free_ipc=yes "
+        "owner_state=driver-owned live_hot_paths=yes",
+        *_driver_task_owner_state_lines(),
+        "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=18",
+        "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=22",
+        "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=44",
+        "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated active_net=cyw43 observed_service_us=91",
+        "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=73",
+        "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=31",
+        "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=36",
+        "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
+        "substrate=active capset=pass fault=pass revoke=pass sched=pass "
+        "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
+        "pointer_free_ipc=yes owner_state=driver-owned required=7 "
+        "dedicated=7 compatibility=0",
+        "SERIAL_ECHO p95_us=800 max_gap_us=1200",
+        "USB_BURST bytes=256 drops=0 max_latency_us=900",
+        "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
+    ]
+
+
 def test_gate_proof_does_not_emit_leading_carriage_return() -> None:
     """Serial proof commands should not manufacture empty console commands."""
 
@@ -52,12 +96,57 @@ def test_gate_proof_waits_for_prompt_at_line_start() -> None:
     assert "grep -q 'cohesix>'" not in source
 
 
+def test_gate_proof_runs_smp_activity_for_post_prompt_driver_proof() -> None:
+    """Default captures should refresh driver-task proof after prompt-side replay."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert '"smp activity"' in source
+    assert source.index('"smp activity"') < source.index('"wifi diag"')
+
+
+def test_gate_proof_refuses_existing_capture_log(tmp_path: pathlib.Path) -> None:
+    """Active capture must not truncate an existing serial log."""
+
+    venv_dir = tmp_path / "venv"
+    python_path = venv_dir / "bin" / "python"
+    python_path.parent.mkdir(parents=True)
+    python_path.write_text("", encoding="utf-8")
+
+    log_path = tmp_path / "pi4-serial.log"
+    original = "keep this boot evidence\n"
+    log_path.write_text(original, encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--skip-build",
+            "--venv",
+            str(venv_dir),
+            "--serial-device",
+            str(tmp_path / "tty"),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "refusing to capture to existing log without truncating" in result.stderr
+    assert log_path.read_text(encoding="utf-8") == original
+
+
 def test_gate_proof_rejects_generic_usb_unavailable_summary() -> None:
     """A generic keyboard-unavailable summary must not mask the real USB gate."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert '"USB_BLOCKER=cmd-event-ring-timeout"' in source
+    assert '"USB_BLOCKER=pcie-vl805-config-contract-missing"' in source
+    assert '"USB_BLOCKER=keyboard-not-ready"' in source
     assert '"USB_BLOCKER=unavailable"' in source
 
 
@@ -111,6 +200,65 @@ def test_gate_proof_rejects_current_usb_and_wifi_blockers(tmp_path: pathlib.Path
         in result.stderr
     )
     assert "WIFI_BLOCKER rejected ht-clock-timeout" in result.stderr
+
+
+def test_gate_proof_rejects_unproved_driver_task_runtime_blockers(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Default proof policy must fail the current no-reply runtime frontier."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "U-Boot 2026.01-dirty",
+                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[Cohesix] Root console ready (type 'help' for commands)",
+                "cohesix> usb status",
+                "usb: ownership_blocker current=pcie-vl805-config-contract-missing "
+                "expected=vl805-config-window+command+bar0+mailbox "
+                "observed=missing-or-disabled blocker=pcie-vl805-config-contract-missing",
+                "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+                "proof_gate=0 target_gate=10 next=keyboard-ready blocker=keyboard-not-ready",
+                "[net-console] deferred failed detail=cyw43-wifi driver-task runtime "
+                "is pending hardware service",
+                "ERR NETTEST reason=policy detail=net-disabled "
+                "cause=cyw43-wifi driver-task runtime is pending hardware service",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "USB_BLOCKER=pcie-vl805-config-contract-missing" in result.stdout
+    assert "WIFI_BLOCKER=wifi-driver-task-runtime-unproved" in result.stdout
+    assert (
+        "USB_BLOCKER rejected pcie-vl805-config-contract-missing"
+        in result.stderr
+    )
+    assert (
+        "WIFI_BLOCKER rejected wifi-driver-task-runtime-unproved"
+        in result.stderr
+    )
 
 
 def test_gate_proof_rejects_unknown_default_gate_evidence(
@@ -479,47 +627,7 @@ def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
         pytest.skip("current Python is not inside a venv-like directory")
 
     log_path = tmp_path / "pi4-serial.log"
-    lines = [
-        "U-Boot 2026.01-dirty",
-        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
-        "[Cohesix] Root console ready (type 'help' for commands)",
-        "cohesix> driver proof",
-        "usb: runtime_gate proof_gate=10 blocker=none",
-        "OK NETTEST success",
-        "netstats: active=wifi addr_src=dhcp-lease dhcp=bound wifi_assoc=1 "
-        "wifi_link=1 eapol_secure=1 eapol_rx=1 rx_pkts=1 tx_pkts=1",
-        "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
-        "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
-        "task_count=9 failed_count=0 live_tcb_count=9 "
-        "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
-        "broad_caps_leaked=0 sched=yes affinity=per-driver "
-        "affinity_configured=9 affinity_applied=9 vspace=isolated "
-        "ipc_abi=shared-ring-command pointer_free_ipc=yes "
-        "owner_state=driver-owned live_hot_paths=yes",
-        *_driver_task_owner_state_lines(),
-        "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
-        "live_tcb=yes hot_path=dedicated observed_service_us=18",
-        "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
-        "live_tcb=yes hot_path=dedicated observed_service_us=22",
-        "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task "
-        "live_tcb=yes hot_path=dedicated observed_service_us=44",
-        "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
-        "live_tcb=yes hot_path=dedicated active_net=cyw43 observed_service_us=91",
-        "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task "
-        "live_tcb=yes hot_path=dedicated observed_service_us=73",
-        "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task "
-        "live_tcb=yes hot_path=dedicated observed_service_us=31",
-        "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
-        "live_tcb=yes hot_path=dedicated observed_service_us=36",
-        "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
-        "substrate=active capset=pass fault=pass revoke=pass sched=pass "
-        "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
-        "pointer_free_ipc=yes owner_state=driver-owned required=7 "
-        "dedicated=7 compatibility=0",
-        "SERIAL_ECHO p95_us=800 max_gap_us=1200",
-        "USB_BURST bytes=256 drops=0 max_latency_us=900",
-        "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
-    ]
+    lines = _strong_driver_task_proof_lines()
     log_path.write_text("\n".join(lines), encoding="utf-8")
 
     result = subprocess.run(
@@ -542,6 +650,45 @@ def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
     assert "DRIVER_TASK_OWNER_STATE_PROOF=yes" in result.stdout
     assert "DRIVER_TASK_DEDICATED_READY=yes" in result.stdout
     assert "DRIVER_TASK_SDIO_DEDICATED=yes" in result.stdout
+
+
+def test_gate_proof_rejects_outstanding_driver_task_ring_call(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Strong proof must reject a driver call that never returned."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    lines = _strong_driver_task_proof_lines()
+    lines.append(
+        "DRIVER_TASK_RING_CALL_BEGIN contract=hdmi-text endpoint=0x0649 "
+        "request=9 opcode=2 flags=0x0000 arg0=3 arg1=4 aux0=0x00000000 "
+        "aux1=0 frame_len=21"
+    )
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-driver-task-proof",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "DRIVER_TASK_RING_CALL_OUTSTANDING=1" in result.stdout
+    assert "DRIVER_TASK_RING_CALL_OUTSTANDING expected 0 got 1" in result.stderr
 
 
 def test_gate_proof_rejects_root_task_panic(tmp_path: pathlib.Path) -> None:

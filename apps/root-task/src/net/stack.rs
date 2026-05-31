@@ -5808,9 +5808,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                             flags: 0,
                         },
                     );
-                    if let Some(completion) =
-                        crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                    {
+                    if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
                         let ring_progress = completion.code
                             == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                             && completion.result != 0;
@@ -5837,9 +5835,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 );
                 command.aux0 = now_ms as u32;
                 command.aux1 = (now_ms >> 32) as u32;
-                if let Some(completion) =
-                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                {
+                if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
                     return completion.code
                         == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                         && completion.result != 0;
@@ -5895,9 +5891,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                             flags: NET_RING_FLAG_BUDGETED,
                         },
                     );
-                    if let Some(completion) =
-                        crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                    {
+                    if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
                         let ring_progress = completion.code
                             == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                             && completion.result != 0;
@@ -5924,9 +5918,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 );
                 command.aux0 = now_ms as u32;
                 command.aux1 = (now_ms >> 32) as u32;
-                if let Some(completion) =
-                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                {
+                if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
                     if completion.code
                         == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                     {
@@ -6371,6 +6363,18 @@ fn net_driver_task_hot_path(
         Some(crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi)
     } else {
         None
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn run_net_driver_task_ring_service(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+) -> Option<crate::hal::driver_task::DriverTaskCompletionRecord> {
+    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
+    } else {
+        crate::hal::driver_task::run_driver_task_ring_service(contract, command)
     }
 }
 

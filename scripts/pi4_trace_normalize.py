@@ -125,6 +125,7 @@ USB_OUTCOME_BLOCKERS = {
     "config-descriptor",
     "config-parse",
     "device-descriptor",
+    "driver-task-runtime-deferred",
     "hid-first-report",
     "hid-init-failed",
     "hid-interrupt-in",
@@ -133,6 +134,7 @@ USB_OUTCOME_BLOCKERS = {
     "keyboard-first-byte",
     "no-connected-ports",
     "no-keyboard-found",
+    "pcie-vl805-config-contract-missing",
     "root-port-read-begin",
     "root-port-read-timer-preempted",
     "root-port-sample-deferred",
@@ -283,6 +285,12 @@ class GateSummary:
     driver_task_ring_call_outstanding: int = 0
     driver_task_ring_call_timeout: int = 0
     driver_task_bootstrap_deferred: int = 0
+    driver_task_resource_init: int = 0
+    driver_task_resource_blocker: str = "none"
+    net_driver_task_replay_events: int = 0
+    net_driver_task_replay_blocker: str = "none"
+    sdio_driver_task_replay_events: int = 0
+    sdio_driver_task_replay_blocker: str = "none"
     serial_responsive_proof: bool = False
     usb_burst_proof: bool = False
     usb_burst_drops: int = -1
@@ -394,6 +402,12 @@ class GateSummary:
             "DRIVER_TASK_RING_CALL_OUTSTANDING": self.driver_task_ring_call_outstanding,
             "DRIVER_TASK_RING_CALL_TIMEOUT": self.driver_task_ring_call_timeout,
             "DRIVER_TASK_BOOTSTRAP_DEFERRED": self.driver_task_bootstrap_deferred,
+            "DRIVER_TASK_RESOURCE_INIT": self.driver_task_resource_init,
+            "DRIVER_TASK_RESOURCE_BLOCKER": self.driver_task_resource_blocker,
+            "NET_DRIVER_TASK_REPLAY_EVENTS": self.net_driver_task_replay_events,
+            "NET_DRIVER_TASK_REPLAY_BLOCKER": self.net_driver_task_replay_blocker,
+            "SDIO_DRIVER_TASK_REPLAY_EVENTS": self.sdio_driver_task_replay_events,
+            "SDIO_DRIVER_TASK_REPLAY_BLOCKER": self.sdio_driver_task_replay_blocker,
             "SERIAL_RESPONSIVE_PROOF": (
                 "yes" if self.serial_responsive_proof else "no"
             ),
@@ -598,6 +612,45 @@ def classify_domain(line: str) -> str | None:
         return "kernel"
     if line.startswith("Kernel entry via Interrupt"):
         return "kernel"
+    if (
+        line.startswith("wifi:")
+        or line.startswith("WiFi:")
+        or line.startswith("WIFI:")
+        or line.startswith("OK NETTEST")
+        or line.startswith("ERR NETTEST")
+        or (
+            "[pi4-wifi]" in lower
+            and "vl805-usb-hcd-power" not in lower
+            and "xhci-reset-notify" not in lower
+            and "owner=vl805-usb-hcd-power" not in lower
+            and "owner=xhci-reset-notify" not in lower
+            and not (
+                "mailbox power-on" in lower
+                and "module=0x00000003" in lower
+            )
+        )
+        or "[cyw43]" in lower
+        or (
+            "[net-console]" in lower
+            and (
+                "deferred reason=local-seat-usb-first" in lower
+                or "action=serial-local-seat-first" in lower
+                or "action=serial-root-console-first" in lower
+                or "action=root-console-wait-for-wifi" in lower
+                or "action=wait-for-wifi" in lower
+                or "action=start-wifi" in lower
+                or "bringup_status=wifi-" in lower
+                or ("device initialized" in lower and "interface=wifi" in lower)
+                or "root console wait" in lower
+                or "wifi-net-console-deferred-until-root-console" in lower
+                or "wifi-net-console-pending-before-root-console" in lower
+                or "wifi-not-ready" in lower
+                or "deferred failed detail=" in lower
+                or "deferred ready backend=cyw43" in lower
+            )
+        )
+    ):
+        return "wifi"
     if (
         "DRIVER_TASK" in line
         or "SCHED_CONTRACT" in line
@@ -871,6 +924,15 @@ def normalize_usb_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
+    if "pcie-vl805-config-contract-missing" in lower:
+        return "pcie-vl805-config-contract-missing"
+    if (
+        "deferred-until-root-console" in lower
+        or "driver-task-runtime-unproved" in lower
+        or "root-shell-first" in lower
+        or "serial-shell-first" in lower
+    ):
+        return "driver-task-runtime-deferred"
     if "cmd-controller-not-running" in lower:
         return "cmd-controller-not-running"
     if "cmd-controller-not-ready" in lower:
@@ -1159,6 +1221,17 @@ def normalize_wifi_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
+    if (
+        stripped == "cyw43-wifi"
+        or "pi4-wifi-driver-task-runtime-required" in lower
+        or "driver-task-net-runtime-unproved" in lower
+        or "driver-task runtime is pending hardware service" in lower
+        or "driver_task_bootstrap_deferred contract=cyw43455" in lower
+        or "driver_task_bootstrap_deferred contract=sdio-host" in lower
+        or "driver_task_resource_init contract=cyw43455" in lower
+        or "driver_task_resource_init contract=sdio-host" in lower
+    ):
+        return "wifi-driver-task-runtime-unproved"
     if (
         "d11-prereset-fgc-cmd53-r5-rejected" in lower
         or (
@@ -1667,6 +1740,7 @@ def normalize_wifi_exact(value: str) -> str:
         "wifi-host-eapol-pending",
         "host-eapol-required",
         "cyw43-function2-interrupt-unbound",
+        "wifi-driver-task-runtime-unproved",
     ):
         if reason in lower:
             return reason
@@ -2492,7 +2566,15 @@ def join_security_blocker_for_iovar(
 def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     """Summarize the WiFi CYW43455 proof gate from HT through nettest."""
 
-    wifi_events = [event for event in events if event.domain == "wifi"]
+    wifi_events = [
+        event
+        for event in events
+        if event.domain == "wifi"
+        or (
+            event.domain == "driver"
+            and normalize_wifi_blocker(event.raw) == "wifi-driver-task-runtime-unproved"
+        )
+    ]
     if not wifi_events:
         return 0, "missing"
 
@@ -2649,6 +2731,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "boot-deferred-local-seat-usb",
             "boot-deferred-root-console",
             "boot-waiting-for-wifi",
+            "wifi-driver-task-runtime-unproved",
         }:
             explicit_blocker = raw_contract_blocker
         if raw_contract_blocker in precise_control_plane_blockers:
@@ -3493,6 +3576,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "boot-deferred-local-seat-usb",
             "boot-deferred-root-console",
             "boot-waiting-for-wifi",
+            "wifi-driver-task-runtime-unproved",
         }:
             gate = max(gate, 1)
             if blocker not in {
@@ -4571,6 +4655,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         for event in event_list
         if "driver_task_bootstrap_deferred" in event.raw.lower()
     )
+    driver_task_resource_init, driver_task_resource_blocker = (
+        summarize_driver_task_resource_init(event_list)
+    )
+    net_driver_task_replay_events, net_driver_task_replay_blocker = (
+        summarize_driver_task_replay_status(event_list, "net_driver_task_replay_status")
+    )
+    sdio_driver_task_replay_events, sdio_driver_task_replay_blocker = (
+        summarize_driver_task_replay_status(event_list, "sdio_driver_task_replay_status")
+    )
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -4632,11 +4725,56 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_ring_call_outstanding=driver_task_ring_call_outstanding,
         driver_task_ring_call_timeout=driver_task_ring_call_timeout,
         driver_task_bootstrap_deferred=driver_task_bootstrap_deferred,
+        driver_task_resource_init=driver_task_resource_init,
+        driver_task_resource_blocker=driver_task_resource_blocker,
+        net_driver_task_replay_events=net_driver_task_replay_events,
+        net_driver_task_replay_blocker=net_driver_task_replay_blocker,
+        sdio_driver_task_replay_events=sdio_driver_task_replay_events,
+        sdio_driver_task_replay_blocker=sdio_driver_task_replay_blocker,
         serial_responsive_proof=serial_responsive_proof,
         usb_burst_proof=usb_burst_proof,
         usb_burst_drops=usb_burst_drops,
         hdmi_responsive_proof=hdmi_responsive_proof,
     )
+
+
+def summarize_driver_task_resource_init(events: Iterable[TraceEvent]) -> tuple[int, str]:
+    """Return resource-init breadcrumb count and the first hard blocker."""
+
+    resource_events = [
+        event
+        for event in events
+        if "driver_task_resource_init" in event.raw.lower()
+    ]
+    non_blocking_statuses = {"ready", "deferred", "begin", "progress"}
+    for event in resource_events:
+        status = event.fields.get("status", "unknown").lower()
+        if status not in non_blocking_statuses:
+            hot_path = event.fields.get(
+                "hot_path",
+                event.fields.get("contract", "unknown"),
+            )
+            stage = event.fields.get("stage", "unknown")
+            return len(resource_events), f"{hot_path}:{stage}:{status}"
+    return len(resource_events), "none"
+
+
+def summarize_driver_task_replay_status(
+    events: Iterable[TraceEvent], marker: str
+) -> tuple[int, str]:
+    """Return replay breadcrumb count and the first non-ready replay status."""
+
+    replay_events = [
+        event for event in events if marker in event.raw.lower()
+    ]
+    non_blocking_statuses = {"ready", "deferred", "begin", "progress"}
+    for event in replay_events:
+        status = event.fields.get("blocker", "unknown").lower()
+        if status not in non_blocking_statuses:
+            role = event.fields.get("role", "unknown")
+            stage = event.fields.get("stage", "unknown")
+            return len(replay_events), f"{role}:{stage}:{status}"
+    return len(replay_events), "none"
 
 
 def parse_expectations(expectations: Iterable[str]) -> dict[str, str]:

@@ -136,6 +136,8 @@ pub fn main(ctx: BootContext) -> ! {
     let mut net_unavailable_detail = take_net_unavailable_detail(&ctx);
     #[cfg(feature = "net-console")]
     let mut net_deferred_config = take_net_deferred_config(&ctx);
+    #[cfg(all(feature = "net-console", feature = "kernel"))]
+    let mut post_prompt_net_stack: Option<NetStackHandle> = None;
     log::info!(
         target: "userland",
         "[userland] event-pump: building console runtime (serial + timer + ipc)"
@@ -304,19 +306,41 @@ pub fn main(ctx: BootContext) -> ! {
                 }
             }
         }
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        let resume_deferred_net_after_root = net_stack.is_none() && net_deferred_config.is_some();
         #[cfg(feature = "net-console")]
         {
-            pump = attach_network(pump, net_stack.as_mut(), net_unavailable_detail.take());
-            if pump.net_console_enabled() {
-                log::info!(
-                    target: "net-console",
-                    "[net-console] listening on 0.0.0.0:{}",
-                    crate::net::CONSOLE_TCP_PORT
+            #[cfg(all(feature = "net-console", feature = "kernel"))]
+            if resume_deferred_net_after_root {
+                boot_log::force_uart_line(
+                    "[net-console] deferred resume pending reason=root-shell-first action=start-after-prompt",
                 );
+            } else {
+                pump = attach_network(pump, net_stack.as_mut(), net_unavailable_detail.take());
+                if pump.net_console_enabled() {
+                    log::info!(
+                        target: "net-console",
+                        "[net-console] listening on 0.0.0.0:{}",
+                        crate::net::CONSOLE_TCP_PORT
+                    );
+                }
+            }
+            #[cfg(not(all(feature = "net-console", feature = "kernel")))]
+            {
+                pump = attach_network(pump, net_stack.as_mut(), net_unavailable_detail.take());
+                if pump.net_console_enabled() {
+                    log::info!(
+                        target: "net-console",
+                        "[net-console] listening on 0.0.0.0:{}",
+                        crate::net::CONSOLE_TCP_PORT
+                    );
+                }
             }
         }
         #[cfg(all(feature = "net-console", feature = "kernel"))]
-        wait_for_net_console_before_root_console(&mut pump);
+        if !resume_deferred_net_after_root {
+            wait_for_net_console_before_root_console(&mut pump);
+        }
         log::info!(
             target: "root_task::kernel",
             "[boot] TimersAndIPC: root-console.start.begin"
@@ -328,6 +352,85 @@ pub fn main(ctx: BootContext) -> ! {
         pump.start_cli();
         boot_log::force_uart_line_raw("[mark] root-console.start.ok");
         pump.announce_console_ready();
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
+        if resume_deferred_net_after_root {
+            if let Some(config) = net_deferred_config.take() {
+                boot_log::force_uart_line_raw(
+                    "[net-console] deferred resume reason=root-shell-ready action=start-wifi",
+                );
+                let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
+                if local_seat_enabled {
+                    boot_log::force_uart_line_raw(
+                        "[trace] log channel switching to /log/queen.log before deferred Wi-Fi",
+                    );
+                    let _ = boot_log::switch_logger_to_log_buffer();
+                }
+                let _wifi_breadcrumb_uart_guard =
+                    crate::hal::pi4_wifi::suppress_wifi_breadcrumb_uart();
+                let _wifi_log_uart_guard = crate::bootstrap::log::suppress_uart_log_output();
+                log::info!(
+                    target: "net-console",
+                    "[net-console] deferred resume after serial root prompt; starting Wi-Fi stack"
+                );
+                match init_deferred_net_console(config, ctx.wifi_debug_hal_ptr) {
+                    Ok(stack) => {
+                        let status = stack.status_report();
+                        let mut line = HeaplessString::<192>::new();
+                        let state = match status.address_source {
+                            "wifi-host-eapol-pending" => "deferred pending",
+                            "wifi-host-eapol-required" => "deferred blocked",
+                            _ => "deferred ready",
+                        };
+                        let _ = write!(
+                            line,
+                            "[net-console] {state} backend={} active={} address_source={} dhcp={} port={}",
+                            status.backend,
+                            status.active_interface,
+                            status.address_source,
+                            status.dhcp_phase,
+                            crate::net::CONSOLE_TCP_PORT,
+                        );
+                        if local_seat_enabled {
+                            boot_log::force_uart_line_raw(line.as_str());
+                        } else {
+                            boot_log::force_uart_line(line.as_str());
+                        }
+                        log::info!(target: "net-console", "{}", line.as_str());
+                        post_prompt_net_stack = Some(stack);
+                        net_unavailable_detail = None;
+                    }
+                    Err(err) => {
+                        let mut detail = HeaplessString::<192>::new();
+                        let _ = write!(detail, "{err}");
+                        let mut line = HeaplessString::<224>::new();
+                        let _ = write!(
+                            line,
+                            "[net-console] deferred failed detail={}",
+                            detail.as_str(),
+                        );
+                        if local_seat_enabled {
+                            boot_log::force_uart_line_raw(line.as_str());
+                        } else {
+                            boot_log::force_uart_line(line.as_str());
+                        }
+                        log::warn!(target: "net-console", "{}", line.as_str());
+                        net_unavailable_detail = Some(detail);
+                    }
+                }
+                pump = attach_network(
+                    pump,
+                    post_prompt_net_stack.as_mut(),
+                    net_unavailable_detail.take(),
+                );
+                if pump.net_console_enabled() {
+                    log::info!(
+                        target: "net-console",
+                        "[net-console] listening on 0.0.0.0:{}",
+                        crate::net::CONSOLE_TCP_PORT
+                    );
+                }
+            }
+        }
         #[cfg(feature = "kernel")]
         {
             let now_ms = crate::hal::timebase().now_ms();

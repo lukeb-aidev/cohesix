@@ -31,14 +31,15 @@ use crate::hal::driver_task::{
 };
 use crate::hal::{HalError, Hardware};
 use crate::net::{
-    ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetStage, MAX_FRAME_LEN,
+    ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetInterfacePolicy, NetStage,
+    MAX_FRAME_LEN,
 };
 use pi4_driver_abi::{
     DriverRuntimeCyw43CommandDescriptor, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK, DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
     DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL, DRIVER_RUNTIME_CYW43_OP_RELEASE,
-    DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT, DRIVER_RUNTIME_ENGINE_INIT_AUX,
-    DRIVER_RUNTIME_NET_INIT_AUX,
+    DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT, DRIVER_RUNTIME_NET_INIT_AUX,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
 };
 
 const GENET_DRIVER_TASK_MAC: EthernetAddress =
@@ -48,6 +49,7 @@ const CYW43_DRIVER_TASK_MAC: EthernetAddress =
 const DRIVER_TASK_NET_STATUS: &str = "driver-task-ring-client";
 const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
 const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
+const SDIO_FIRST_COMMAND_INDEX: u32 = 5;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -59,6 +61,82 @@ static CYW43_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static GENET_RUNTIME: Mutex<Option<BcmGenetDevice>> = Mutex::new(None);
 static CYW43_RUNTIME: Mutex<Option<Cyw43NetDevice>> = Mutex::new(None);
 static NET_RUNTIME_INIT_LEASE: Mutex<Option<NetRuntimeInitLease>> = Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_net_service(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+}
+
+#[cfg(not(feature = "kernel"))]
+fn run_driver_task_net_service(
+    _contract: DriverTaskContract,
+    _command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    None
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_resource_completion_status(
+    completion: Option<DriverTaskCompletionRecord>,
+    ready: bool,
+) -> &'static str {
+    if ready {
+        "ready"
+    } else {
+        match completion {
+            Some(completion) if completion.code == DriverTaskCompletionCode::Fault.as_u16() => {
+                "fault"
+            }
+            Some(_) => "unexpected-completion",
+            None => "no-reply",
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_net_driver_task_replay_status(
+    config: ConsoleNetConfig,
+    hot_path: DriverTaskHotPath,
+    stage: &'static str,
+    status: &'static str,
+) {
+    use core::fmt::Write;
+
+    let selected = match (config.policy.interface, hot_path) {
+        (NetInterfacePolicy::Wired, DriverTaskHotPath::GenetNic)
+        | (NetInterfacePolicy::Wifi, DriverTaskHotPath::Cyw43Wifi)
+        | (NetInterfacePolicy::Auto, DriverTaskHotPath::GenetNic)
+        | (NetInterfacePolicy::Auto, DriverTaskHotPath::Cyw43Wifi) => "yes",
+        _ => "no",
+    };
+    let mut line = heapless::String::<192>::new();
+    let _ = write!(
+        line,
+        "NET_DRIVER_TASK_REPLAY_STATUS role={} selected={} policy={} attempted=yes stage={} blocker={}",
+        hot_path.as_str(),
+        selected,
+        config.policy.interface.as_str(),
+        stage,
+        status,
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_sdio_driver_task_replay_status(stage: &'static str, status: &'static str) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<160>::new();
+    let _ = write!(
+        line,
+        "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host selected=wifi-owner-link attempted=yes stage={} blocker={}",
+        stage, status,
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
 
 type NetRuntimeInitFn = unsafe fn(
     usize,
@@ -163,6 +241,19 @@ where
             hot_path.as_u32() as usize,
             runtime_ring_service,
         );
+        emit_net_driver_task_replay_status(config, hot_path, "descriptor-replay", "begin");
+        if !crate::hal::driver_task::ensure_deferred_runtime_init_descriptor(contract, hot_path) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                hot_path,
+                "runtime-descriptor-replay",
+                "pending",
+                None,
+            );
+            emit_net_driver_task_replay_status(config, hot_path, "descriptor-replay", "pending");
+            return Err(DriverTaskNetError::RuntimePending(hot_path.as_str()));
+        }
+        emit_net_driver_task_replay_status(config, hot_path, "descriptor-replay", "ready");
         let mut command = DriverTaskCommandRecord::pi4_hot_path(
             0,
             hot_path,
@@ -174,27 +265,95 @@ where
             },
         );
         command.aux0 = DRIVER_RUNTIME_NET_INIT_AUX;
-        let initialized = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-            .is_some_and(|completion| {
-                completion.code == DriverTaskCompletionCode::Progress.as_u16()
-                    && completion.result == 1
-            });
+        emit_net_driver_task_replay_status(config, hot_path, "engine-init", "begin");
+        let completion = run_driver_task_net_service(contract, command);
+        let initialized = completion.is_some_and(|completion| {
+            completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
+        });
+        let status = driver_task_resource_completion_status(completion, initialized);
+        emit_net_driver_task_replay_status(config, hot_path, "engine-init", status);
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            hot_path,
+            "net-engine-init",
+            status,
+            completion,
+        );
         if initialized {
             match hot_path {
                 DriverTaskHotPath::GenetNic => {
                     if !crate::hal::driver_task::register_driver_task_runtime_owner_state(hot_path)
                     {
+                        crate::hal::driver_task::emit_driver_task_resource_init_status(
+                            contract,
+                            hot_path,
+                            "genet-owner-state",
+                            "descriptor-rejected",
+                            None,
+                        );
+                        emit_net_driver_task_replay_status(
+                            config,
+                            hot_path,
+                            "owner-state",
+                            "descriptor-rejected",
+                        );
                         return Err(DriverTaskNetError::RuntimeInit("genet-owner-state"));
                     }
                     GENET_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+                    emit_net_driver_task_replay_status(config, hot_path, "owner-state", "ready");
                 }
                 DriverTaskHotPath::Cyw43Wifi => {
-                    complete_cyw43_linked_runtime_firmware(hal, contract)?;
+                    crate::hal::driver_task::emit_driver_task_resource_init_status(
+                        contract,
+                        hot_path,
+                        "cyw43-firmware",
+                        "begin",
+                        None,
+                    );
+                    emit_net_driver_task_replay_status(config, hot_path, "cyw43-firmware", "begin");
+                    if let Err(err) = complete_cyw43_linked_runtime_firmware(hal, contract) {
+                        crate::hal::driver_task::emit_driver_task_resource_init_status(
+                            contract,
+                            hot_path,
+                            "cyw43-firmware",
+                            "failed",
+                            None,
+                        );
+                        emit_net_driver_task_replay_status(
+                            config,
+                            hot_path,
+                            "cyw43-firmware",
+                            "failed",
+                        );
+                        return Err(err);
+                    }
+                    crate::hal::driver_task::emit_driver_task_resource_init_status(
+                        contract,
+                        hot_path,
+                        "cyw43-firmware",
+                        "ready",
+                        None,
+                    );
+                    emit_net_driver_task_replay_status(config, hot_path, "cyw43-firmware", "ready");
                     if !crate::hal::driver_task::register_driver_task_runtime_owner_state(hot_path)
                     {
+                        crate::hal::driver_task::emit_driver_task_resource_init_status(
+                            contract,
+                            hot_path,
+                            "cyw43-owner-state",
+                            "descriptor-rejected",
+                            None,
+                        );
+                        emit_net_driver_task_replay_status(
+                            config,
+                            hot_path,
+                            "owner-state",
+                            "descriptor-rejected",
+                        );
                         return Err(DriverTaskNetError::RuntimeInit("cyw43-owner-state"));
                     }
                     CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+                    emit_net_driver_task_replay_status(config, hot_path, "owner-state", "ready");
                 }
                 _ => {}
             }
@@ -225,10 +384,9 @@ where
         },
     );
     command.aux0 = DRIVER_RUNTIME_NET_INIT_AUX;
-    let result = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-        .is_some_and(|completion| {
-            completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
-        });
+    let result = run_driver_task_net_service(contract, command).is_some_and(|completion| {
+        completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
+    });
     if result {
         Ok(())
     } else {
@@ -316,6 +474,66 @@ where
 #[cfg(feature = "kernel")]
 fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
     let contract = SDIO_HOST_DRIVER_TASK_CONTRACT;
+    let _ = crate::hal::driver_task::register_pi4_bus_ring_service(contract);
+    emit_sdio_driver_task_replay_status("descriptor-replay", "begin");
+    if !crate::hal::driver_task::ensure_deferred_runtime_init_descriptor(
+        contract,
+        DriverTaskHotPath::SdioHost,
+    ) {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::SdioHost,
+            "runtime-descriptor-replay",
+            "pending",
+            None,
+        );
+        emit_sdio_driver_task_replay_status("descriptor-replay", "pending");
+        return Err(DriverTaskNetError::RuntimePending("sdio-host"));
+    }
+    emit_sdio_driver_task_replay_status("descriptor-replay", "ready");
+    let command = crate::hal::driver_task::runtime_engine_init_command(
+        DriverTaskHotPath::SdioHost,
+        DriverTaskBudgetGrant::from_contract(contract),
+    );
+    emit_sdio_driver_task_replay_status("engine-init", "begin");
+    let completion = run_driver_task_net_service(contract, command);
+    let initialized = completion.is_some_and(|completion| {
+        completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
+    });
+    let status = driver_task_resource_completion_status(completion, initialized);
+    emit_sdio_driver_task_replay_status("engine-init", status);
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        DriverTaskHotPath::SdioHost,
+        "sdio-engine-init",
+        status,
+        completion,
+    );
+    let first_command_ok = initialized && submit_sdio_first_command_probe(contract);
+    if first_command_ok
+        && crate::hal::driver_task::register_driver_task_runtime_owner_state(
+            DriverTaskHotPath::SdioHost,
+        )
+    {
+        emit_sdio_driver_task_replay_status("owner-state", "ready");
+        Ok(())
+    } else {
+        if first_command_ok {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::SdioHost,
+                "sdio-owner-state",
+                "descriptor-rejected",
+                None,
+            );
+            emit_sdio_driver_task_replay_status("owner-state", "descriptor-rejected");
+        }
+        Err(DriverTaskNetError::RuntimeInit("sdio-host-linked-runtime"))
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn submit_sdio_first_command_probe(contract: DriverTaskContract) -> bool {
     let mut command = DriverTaskCommandRecord::pi4_hot_path(
         0,
         DriverTaskHotPath::SdioHost,
@@ -326,20 +544,21 @@ fn init_sdio_host_linked_runtime() -> Result<(), DriverTaskNetError> {
             flags: 0,
         },
     );
-    command.aux0 = DRIVER_RUNTIME_ENGINE_INIT_AUX;
-    let initialized = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-        .is_some_and(|completion| {
-            completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
-        });
-    if initialized
-        && crate::hal::driver_task::register_driver_task_runtime_owner_state(
-            DriverTaskHotPath::SdioHost,
-        )
-    {
-        Ok(())
-    } else {
-        Err(DriverTaskNetError::RuntimeInit("sdio-host-linked-runtime"))
-    }
+    command.aux0 = (SDIO_FIRST_COMMAND_INDEX << 16) | u32::from(DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR);
+    command.aux1 = 0;
+    let completion = run_driver_task_net_service(contract, command);
+    let ready = completion.is_some_and(|completion| {
+        completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result != 0
+    });
+    let status = driver_task_resource_completion_status(completion, ready);
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        DriverTaskHotPath::SdioHost,
+        "sdio-first-command",
+        status,
+        completion,
+    );
+    ready
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -391,13 +610,41 @@ fn stream_cyw43_runtime_payload(
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_runtime_command_stage(op: u16) -> &'static str {
+    match op {
+        DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT => "cyw43-transport-init",
+        DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK => "cyw43-firmware-chunk",
+        DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK => "cyw43-nvram-chunk",
+        DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL => "cyw43-nvram-tail",
+        DRIVER_RUNTIME_CYW43_OP_RELEASE => "cyw43-firmware-release",
+        _ => "cyw43-command",
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_command_stage_always_logs_success(op: u16) -> bool {
+    !matches!(
+        op,
+        DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK | DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+    )
+}
+
+#[cfg(feature = "kernel")]
 fn submit_cyw43_runtime_command(
     contract: DriverTaskContract,
     mut descriptor: DriverRuntimeCyw43CommandDescriptor,
     payload: &[u8],
 ) -> Result<(), DriverTaskNetError> {
+    let stage = cyw43_runtime_command_stage(descriptor.op);
     let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
     if desc_size + payload.len() > MAX_DRIVER_TASK_FRAME_BYTES {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "budget-exceeded",
+            None,
+        );
         return Err(DriverTaskNetError::RuntimeInit("cyw43-command-budget"));
     }
     let payload_offset = crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET
@@ -411,12 +658,20 @@ fn submit_cyw43_runtime_command(
     let mut scratch = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
     encode_cyw43_descriptor(&mut scratch[..desc_size], descriptor);
     scratch[desc_size..desc_size + payload.len()].copy_from_slice(payload);
-    let staged = crate::hal::driver_task::stage_driver_task_ring_frame(
+    let Some(staged) = crate::hal::driver_task::stage_driver_task_ring_frame(
         contract,
         &scratch[..desc_size + payload.len()],
         0,
-    )
-    .ok_or(DriverTaskNetError::RuntimeInit("cyw43-stage-command"))?;
+    ) else {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "stage-failed",
+            None,
+        );
+        return Err(DriverTaskNetError::RuntimeInit("cyw43-stage-command"));
+    };
     let mut command = DriverTaskCommandRecord::pi4_hot_path(
         0,
         DriverTaskHotPath::Cyw43Wifi,
@@ -428,11 +683,40 @@ fn submit_cyw43_runtime_command(
         },
     );
     command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
-    let completion = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-command-completion"))?;
+    let Some(completion) = run_driver_task_net_service(contract, command) else {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "no-reply",
+            None,
+        );
+        return Err(DriverTaskNetError::RuntimeInit("cyw43-command-completion"));
+    };
     if completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result != 0 {
+        if cyw43_command_stage_always_logs_success(descriptor.op) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "ready",
+                Some(completion),
+            );
+        }
         Ok(())
     } else {
+        let status = if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
+            "fault"
+        } else {
+            "unexpected-completion"
+        };
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            status,
+            Some(completion),
+        );
         Err(DriverTaskNetError::RuntimeInit("cyw43-command"))
     }
 }
@@ -764,8 +1048,7 @@ fn submit_driver_task_frame(
         DriverTaskBudgetGrant::from_contract(contract),
         descriptor,
     );
-    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-        .is_some_and(driver_task_tx_completion_submitted)
+    run_driver_task_net_service(contract, command).is_some_and(driver_task_tx_completion_submitted)
 }
 
 #[cfg(feature = "kernel")]
@@ -799,7 +1082,7 @@ fn receive_driver_task_frame(
             flags: 0,
         },
     );
-    let completion = crate::hal::driver_task::run_driver_task_ring_service(contract, command)?;
+    let completion = run_driver_task_net_service(contract, command)?;
     if completion.code != DriverTaskCompletionCode::FrameReady.as_u16() {
         return None;
     }

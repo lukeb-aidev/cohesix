@@ -344,8 +344,8 @@ RTL8139 and virtio-net remain QEMU compatibility contracts, not physical Pi
 trampoline work. For each successfully created physical Pi driver TCB, the HAL allocates the TCB
 object, child CNode, command endpoint, notification, IPC frame, stack frame,
 ring frame, and fault endpoint slot; installs a restricted child CSpace; binds
-the remote IPC buffer; applies the contract MCP plus shell-safe bootstrap
-priority; applies
+the remote IPC buffer; applies a temporary bounded-bootstrap MCP/priority;
+applies
 manifest-selected per-driver affinity through `seL4_TCB_SetAffinity` on enabled
 profiles or emits the physical-Pi deferral marker; binds the notification; maps
 every bounded `PT_LOAD` page from the linked runtime ELF plus
@@ -365,22 +365,47 @@ counts when the fixed descriptor page arrays are intentionally capped. The
 physical Pi linked-runtime `_start` entry preserves the root-supplied task key,
 installs the root-mapped driver-local IPC buffer at `0x70001000`, and dispatches
 only fixed-layout command/completion records; callback-pointer dispatch is
-compiled out for that profile. During first receive/bootstrap, root gives the
-driver its contract MCP but resumes it with `TCB.WriteRegisters(resume=1)` at the
-shell-safe Pi bootstrap priority, then raises it to contract priority only after
-ring receive/reply proof. A deferred proof emits
+compiled out for that profile. During first receive/bootstrap, root temporarily
+raises the child MCP/priority high enough for a nonblocking send/yield descriptor
+handoff to schedule the linked runtime. Mandatory serial mini-UART cutover then
+uses a pre-root reply rendezvous while the serial child is still in that
+bootstrap-priority window; that reply turn deliberately does not sample latency
+timers. Root restores contract MCP/priority immediately after the bounded
+runtime-init or proof turn. A deferred proof emits
 `DRIVER_TASK_BOOTSTRAP_DEFERRED`; it is fail-closed acceptance evidence, not a
-root-task fallback. GENET and CYW43 are both deferred before the root shell
-because their network runtime-init service currently uses blocking `seL4_Call`;
-their TCBs still start and leave `DRIVER_TASK_BOOTSTRAP_DEFERRED` breadcrumbs,
-while network owner-state acceptance remains red until a later service proof
-returns. USB/local-seat applies the same shell-first boundary to local-seat
-service turns: HDMI text runtime init, HDMI mirroring, USB keyboard runtime init,
-and background keyboard polling defer with explicit local-seat breadcrumbs until
-the serial prompt is live and a prompt-side diagnostic or later proof-safe path
-submits the steady `seL4_Call` service turn. That keeps HDMI/USB from entering
-the pre-prompt dependency chain while still giving lower-priority driver TCBs CPU
-after the serial shell is visible.
+root-task fallback. GENET, CYW43, SDIO, and PCIe runtime-init descriptors defer
+before the root shell because their prompt-side replay must not hold serial,
+USB, or HDMI hostage while bus/network ownership is still proving. Their TCBs
+still start and leave `DRIVER_TASK_BOOTSTRAP_DEFERRED` breadcrumbs, while
+network and bus owner-state acceptance remains red until a later bounded service
+proof returns. USB/local-seat and HDMI text may attempt their pre-root descriptor
+handoff only as bounded send/yield proof. Those send-only pre-root turns carry
+`DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY`, so the linked runtime publishes the shared
+completion record and returns to `Recv` without issuing `Reply`; a missing
+completion must turn red and leave the root task runnable instead of trapping
+boot inside `seL4_Call`.
+This bounded bootstrap proof is resource-initialization evidence only: it must
+not be treated as final owner-state or driver acceptance.
+HDMI engine init is a
+zero-frame `Service` command carrying `DRIVER_RUNTIME_ENGINE_INIT_AUX`; only
+actual text/framebuffer updates use the HDMI `SubmitFrame` opcode. Both the
+pre-root HDMI engine-init retry and early text render are bounded nonblocking
+proof attempts, so either frontier can fail red without hiding the UART prompt.
+After the prompt is printed, root retries the concise HDMI console-ready mirror
+before SDIO, PCIe, GENET, or CYW43 replay. Prompt-side replay uses the linked
+driver-task reply path, not send-only polling, because the runtime TCBs run below
+root priority and must be scheduled by the IPC rendezvous to publish completion
+once the serial prompt is already available.
+The shell-first deferral is the serial-safety boundary: no bus, network, USB, or
+display proof may hold the first prompt hostage, and repeated no-reply display
+mirroring must be circuit-broken instead of retried per console line. If the
+linked HDMI runtime still does not reply, root may use
+the HAL-mapped firmware framebuffer as a diagnostic-only mirror and must log
+`[local-seat] root HDMI diagnostic mirror active ... acceptance=red`; that is
+visible debug output, not driver-task owner-state acceptance. Prompt-side
+USB keyboard polling, HDMI mirroring, and network/bus replay remain separate
+service turns after the serial shell is visible unless their pre-root owner-state
+proof has already returned.
 Root-console startup publishes its raw UART start/end markers and the serial
 prompt before the `/log/queen.log`/NineDoor log-stream handoff, so log-buffer
 attachment is also shell-first. After the prompt and successful USB arming,
@@ -394,8 +419,23 @@ later steady ring latency telemetry uses the EL0 virtual counter only when the
 profile enables the architected-counter timer. The ring transport emits
 `DRIVER_TASK_RING_CALL_BEGIN` before the submit, `DRIVER_TASK_RING_CALL_RETURN`
 after completion, and `DRIVER_TASK_RING_CALL_TIMEOUT` if a bounded diagnostic
-bootstrap handshake cannot prove receive/reply progress. QEMU smoke can
-additionally allocate isolated VSpaces and map the minimal trampoline transport
+bootstrap handshake cannot prove receive/completion progress; timeout breadcrumbs
+include the command mode, opcode, hot-path argument, aux word, and frame length
+so a stalled boot log identifies the exact resource-init or service turn that
+failed to complete. Non-acceptance resource initialization breadcrumbs use
+`DRIVER_TASK_RESOURCE_INIT ... stage=... status=... acceptance=no` for descriptor
+record, descriptor bootstrap, deferred descriptor replay, engine-init,
+owner-state rejection, and first command probes. Ring submit failures use the
+same non-acceptance line with `status=no-endpoint`, `status=ring-missing`, or
+`status=busy`; runtime command faults keep the primitive completion detail so
+SDIO, CYW43, and GENET failures can be separated from transport no-reply. HDMI must report
+`hdmi-framebuffer-map`, `hdmi-engine-init`, and `hdmi-first-draw` separately.
+USB/local-seat must report `usb-prereq-pcie-replay`, `usb-xhci-init`,
+`usb-keyboard-enumeration`, and `usb-keyboard-first-report` separately so a Pi
+log can distinguish PCIe replay, xHCI bring-up, keyboard enumeration, and first
+interrupt-report progress. These lines are debug telemetry only and do not
+satisfy driver-task acceptance until the matching owner-state proof is present.
+QEMU smoke can additionally allocate isolated VSpaces and map the minimal trampoline transport
 set, but that remains transport proof rather than the functional Pi hardware
 path.
 
@@ -434,6 +474,9 @@ Boot logs must expose the distinction with these breadcrumbs:
 
 - `DRIVER_TASK_DEFAULT requested=dedicated required=yes substrate_active=<yes|no> live_hot_paths=<yes|no>`
 - `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=<isolated|shared-root> vspace_cap=<cap> code_vaddr=<addr> ring_vaddr=<addr> ipc_abi=<abi> pointer_free_ipc=<yes|no> runtime_image=<transport-mapped|declared-only|none> runtime_declared=<mask> runtime_mapped=<mask> runtime_acceptance=<yes|no> owner_state=<driver-owned|root-owned|not-proven> owner_state_reason=<reason>`
+  where `runtime_acceptance=yes` means the image/descriptor is structurally
+  eligible, while `owner_state=driver-owned` is emitted only after a
+  driver-specific owner-state registration has occurred
 - `DRIVER_TASK_AFFINITY_DEFERRED contract=<name> target=<target> selected_core=<n> reason=pi4-child-tcb-affinity-boot-stall-guard`
   on physical Pi owner-state boots while early child-TCB affinity remains
   guarded; this line intentionally leaves affinity proof red
@@ -507,6 +550,10 @@ still carry a root runtime pointer or root-stack context are registered as
 `root-context-diagnostic` and the HAL forces the common
 `DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE` bit, so a shared-ring
 transport turn cannot later be promoted into owner-state proof by accident.
+Send-only bootstrap and background commands instead carry
+`DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY`; that flag is a transport contract, not a
+root-context marker, and tells the linked runtime to skip `Reply` after writing
+the shared completion record.
 Runtime-image specs declare the intended per-hot-path mapping contract for code,
 stack, IPC, ring, MMIO, DMA, and shared buffers. Physical Pi 4 bootstrap now
 selects the isolated VSpace constructor; for generated Pi 4 hot paths it looks
@@ -1228,10 +1275,12 @@ power/reset state.
   `wifi dump-state`. Operators can still run the explicit `wifi probe-ht`
   command when they want the stateful HT probe.
 - Wi-Fi association completion is event-pump driven for both explicit `wifi`
-  and `auto` interface policies. The driver issues the join command before the
-  serial prompt on Pi 4 local-seat Wi-Fi boots, and the pre-root event-pump wait
-  keeps polling until association and DHCP/static addressing reach a usable
-  state, terminally fail, or hit the bounded pre-root timeout.
+  and `auto` interface policies. While linked-runtime pointer-free proof is
+  incomplete, Pi 4 local-seat Wi-Fi boots preserve the selected Wi-Fi policy but
+  do not issue the join command before the serial prompt; prompt-side
+  diagnostics and the event pump then drive association and DHCP/static
+  addressing without hiding serial, USB, or HDMI responsiveness behind the
+  Wi-Fi wait.
 - In the physical Pi driver-task cutover profile, `auto` selects CYW43 when
   bounded Wi-Fi credentials are present and otherwise selects wired GENET before
   Wi-Fi ownership begins. Once CYW43 is selected, protocol, HAL transport,
@@ -1436,9 +1485,12 @@ active path is Cohesix-owned cold start:
   Wi-Fi credentials, proceed only after that pre-net USB probe has completed;
   if `hw.local_seat.required=true`, `coh-rtc` requires matching
   `hw.devices[]` entries for the configured keyboard/display IDs with
-  `required=true`, and a missing local-seat backend is fatal before ticket
-  publication. A present backend with no keyboard ready on the first
-  bounded probe keeps polling instead of falling back to serial-only. When
+  `required=true`. A missing manifest device remains fatal before ticket
+  publication, but a driver-task backend that is intentionally unavailable
+  before the serial prompt is not fatal: the serial shell must come up first
+  and the local-seat runtime keeps polling once prompt-safe service turns are
+  allowed. A present backend with no keyboard ready on the first bounded probe
+  keeps polling instead of falling back to serial-only. When
   `required=false`, backend failures degrade to serial-only diagnostics with
   explicit `[local-seat]` boot lines and no repeated xHCI probing.
   The root console then waits in the event pump until Wi-Fi association and

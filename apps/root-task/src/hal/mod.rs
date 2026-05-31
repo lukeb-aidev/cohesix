@@ -69,22 +69,21 @@ use pi4_driver_abi::{
     DriverRuntimeBusLinkDescriptor, DriverRuntimeInitDescriptor, DriverRuntimePageDescriptor,
     DriverRuntimeResourceRangeDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
     DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_ENGINE_INIT_AUX,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING,
-    DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS, DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS,
-    DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER, DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED,
-    DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE, DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY,
-    DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN, DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS,
-    DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE, DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS,
-    DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED, DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS,
-    DRIVER_RUNTIME_RESOURCE_KIND_DMA, DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER,
-    DRIVER_RUNTIME_RESOURCE_KIND_MMIO, DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
-    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES, DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL,
-    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
-    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS,
-    DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
-    DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
-    DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+    DRIVER_RUNTIME_INIT_FLAG_BUS_ADDRESSING, DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS,
+    DRIVER_RUNTIME_INIT_FLAG_DMA_PADDRS, DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER,
+    DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED, DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_FLAG_ROOT_CONTEXT_FORBIDDEN,
+    DRIVER_RUNTIME_INIT_FLAG_SHARED_PADDRS, DRIVER_RUNTIME_RESOURCE_FLAG_DEVICE_VISIBLE,
+    DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_FLAG_ROOT_SHARED,
+    DRIVER_RUNTIME_RESOURCE_FLAG_VADDR_CONTIGUOUS, DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+    DRIVER_RUNTIME_RESOURCE_KIND_FRAMEBUFFER, DRIVER_RUNTIME_RESOURCE_KIND_MMIO,
+    DRIVER_RUNTIME_RESOURCE_KIND_SHARED, DRIVER_RUNTIME_RESOURCE_PAGE_BYTES,
+    DRIVER_RUNTIME_RESOURCE_TAG_CYW43_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS, DRIVER_RUNTIME_RESOURCE_TAG_HDMI_FRAMEBUFFER,
+    DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
+    DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
+    DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1704,19 +1703,12 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         return Ok(false);
     }
 
-    let mut command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
-        0,
+    let command = driver_task::runtime_engine_init_command(
         spec.hot_path,
         driver_task::DriverTaskBudgetGrant::from_contract(contract),
-        driver_task::DriverFrameDescriptor {
-            offset: 0,
-            len: 0,
-            flags: 0,
-        },
     );
-    command.aux0 = DRIVER_RUNTIME_ENGINE_INIT_AUX;
     let engine_ready = matches!(
-        driver_task::run_driver_task_ring_command_bootstrap(contract, command),
+        driver_task::run_driver_task_ring_command_nonblocking(contract, command),
         Some(done)
             if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
                 && done.result == 1
@@ -1743,7 +1735,7 @@ fn bootstrap_linked_runtime_engine_for_early_console(
             frame,
         );
         matches!(
-            driver_task::run_driver_task_ring_command_bootstrap(contract, command),
+            driver_task::run_driver_task_ring_command_nonblocking(contract, command),
             Some(done)
                 if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
                     && done.result != 0
@@ -2150,10 +2142,11 @@ fn configure_driver_tcb_priority_for_boot(
 ) -> Result<(u8, u8), HalError> {
     let steady_priority = contract.sel4_priority();
     let bootstrap_priority = driver_task::driver_task_bootstrap_priority(contract);
+    let bootstrap_mcp = core::cmp::max(steady_priority, bootstrap_priority);
     sel4::set_tcb_sched_params(
         tcb,
         sel4_sys::seL4_CapInitThreadTCB,
-        steady_priority,
+        bootstrap_mcp,
         bootstrap_priority,
     )
     .map_err(HalError::Sel4)?;
@@ -2339,6 +2332,10 @@ impl<'a> KernelHal<'a> {
                         continue;
                     }
                     add_driver_task_handle_to_report(&mut report, &handle);
+                    let runtime_owner_state_registered =
+                        handle.runtime_image_spec.is_some_and(|spec| {
+                            driver_task::driver_task_runtime_owner_state_registered(spec.hot_path)
+                        });
                     let mut line = heapless::String::<1024>::new();
                     let _ = fmt::write(
                         &mut line,
@@ -2377,7 +2374,7 @@ impl<'a> KernelHal<'a> {
                             } else {
                                 "no"
                             },
-                            if handle.pointer_free_ipc && handle.runtime_image_acceptance_eligible {
+                            if runtime_owner_state_registered {
                                 "driver-owned"
                             } else if handle.vspace_isolated {
                                 "not-proven"
@@ -2825,6 +2822,13 @@ impl<'a> KernelHal<'a> {
         mut init_descriptor: Option<&mut RuntimeInitDescriptorBuilder>,
     ) -> Result<bool, HalError> {
         let Some(mut framebuffer) = driver_task::hdmi_runtime_framebuffer_hint() else {
+            driver_task::emit_driver_task_resource_init_status(
+                HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                driver_task::DriverTaskHotPath::HdmiText,
+                "hdmi-framebuffer-map",
+                "no-hint",
+                None,
+            );
             return Ok(false);
         };
         let paddr = usize::try_from(framebuffer.paddr)
@@ -2870,6 +2874,21 @@ impl<'a> KernelHal<'a> {
         if let Some(builder) = init_descriptor.as_deref_mut() {
             builder.set_framebuffer_region(framebuffer, page_base, map_len, page_count)?;
         }
+        let mut line = heapless::String::<320>::new();
+        let _ = fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_RESOURCE_INIT contract=hdmi-text hot_path=hdmi-text stage=hdmi-framebuffer-map status=ready paddr=0x{paddr:016x} vaddr=0x{vaddr:016x} width={width} height={height} pitch={pitch} pages={page_count} map_len={map_len}",
+                paddr = paddr,
+                vaddr = framebuffer.vaddr,
+                width = framebuffer.width,
+                height = framebuffer.height,
+                pitch = framebuffer.pitch,
+                page_count = page_count,
+                map_len = map_len,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
         Ok(true)
     }
 
@@ -3338,29 +3357,62 @@ impl<'a> KernelHal<'a> {
         let runtime_init_deferred = runtime_init_descriptor.is_some()
             && driver_task::pre_root_runtime_init_deferred_for_shell(contract);
         let runtime_init_ok = if runtime_init_deferred {
-            emit_driver_task_bootstrap_deferred(contract, tcb, true);
+            let runtime_descriptor_recorded =
+                runtime_init_descriptor.as_ref().is_some_and(|descriptor| {
+                    driver_task::record_deferred_runtime_init_descriptor(contract, *descriptor)
+                });
+            emit_driver_task_bootstrap_deferred(contract, tcb, runtime_descriptor_recorded);
             false
         } else if let Some(descriptor) = runtime_init_descriptor.as_ref() {
             let spec =
                 runtime_image_spec.ok_or(HalError::Unsupported("driver-runtime-init-spec"))?;
-            let frame = driver_task::stage_driver_runtime_init_descriptor(contract, descriptor)
-                .ok_or(HalError::Unsupported("driver-runtime-init-stage"))?;
+            let Some(frame) =
+                driver_task::stage_driver_runtime_init_descriptor(contract, descriptor)
+            else {
+                driver_task::emit_driver_task_resource_init_status(
+                    contract,
+                    spec.hot_path,
+                    "runtime-descriptor-bootstrap",
+                    "stage-failed",
+                    None,
+                );
+                return Err(HalError::Unsupported("driver-runtime-init-stage"));
+            };
             let command = driver_task::runtime_init_command(
                 spec.hot_path,
                 driver_task::DriverTaskBudgetGrant::from_contract(contract),
                 frame,
             );
-            matches!(
-                driver_task::run_driver_task_ring_command_bootstrap(contract, command),
+            let completion = driver_task::run_driver_task_ring_command_bootstrap(contract, command);
+            let runtime_init_ok = matches!(
+                completion,
                 Some(done)
-                    if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                        && done.result == spec.hot_path.as_u32()
-            )
+                if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                    && done.result == spec.hot_path.as_u32()
+            );
+            let status = if runtime_init_ok {
+                "ready"
+            } else if completion.is_some() {
+                "unexpected-completion"
+            } else {
+                "no-reply"
+            };
+            driver_task::emit_driver_task_resource_init_status(
+                contract,
+                spec.hot_path,
+                "runtime-descriptor-bootstrap",
+                status,
+                completion,
+            );
+            runtime_init_ok
         } else {
             !driver_task::physical_pi_driver_task_only_owner_state_active()
         };
         if runtime_init_ok {
             if let Some(spec) = runtime_image_spec {
+                if spec.hot_path == driver_task::DriverTaskHotPath::SerialConsole {
+                    let _ = crate::serial::init_serial_driver_task_runtime();
+                }
                 let _ = bootstrap_linked_runtime_engine_for_early_console(contract, spec)?;
             }
         }

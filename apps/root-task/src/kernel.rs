@@ -4413,9 +4413,31 @@ fn bootstrap<P: Platform>(
         let boot_policy = resolve_pi4_boot_net_policy(extra_bytes, extra_range.clone(), hardware);
         let config = crate::net::console_net_config_with_runtime_policy(boot_policy.policy);
         let rejected_policy_reason = dtb_rejected_net_policy_reason(boot_policy.source);
-        crate::hal::driver_task::publish_pi4_pre_root_net_bootstrap_selection(
-            pi4_pre_root_net_bootstrap_selection(hardware, &config, rejected_policy_reason),
-        );
+        let selection =
+            pi4_pre_root_net_bootstrap_selection(hardware, &config, rejected_policy_reason);
+        crate::hal::driver_task::publish_pi4_pre_root_net_bootstrap_selection(selection);
+        if hardware.network.enabled && !config.backend.uses_dev_virt_defaults() {
+            let mut line = heapless::String::<192>::new();
+            let source = match boot_policy.source {
+                Pi4BootNetPolicySource::Manifest => "manifest",
+                Pi4BootNetPolicySource::DtbApplied => "dtb",
+                Pi4BootNetPolicySource::DtbRejected(_) => "dtb-rejected",
+            };
+            let _ = write!(
+                line,
+                "[net-policy] source={} mode={} interface={} wifi_creds={} pre_root_selection={:?}",
+                source,
+                config.policy.mode.as_str(),
+                config.policy.interface.as_str(),
+                if boot_policy.wifi_credentials_present {
+                    "yes"
+                } else {
+                    "no"
+                },
+                selection,
+            );
+            boot_log::force_uart_line(line.as_str());
+        }
         boot_policy
     };
 
@@ -4643,7 +4665,7 @@ fn bootstrap<P: Platform>(
             let mut line = heapless::String::<192>::new();
             let _ = write!(
                 line,
-                "[local-seat] required keyboard not ready yet detail={} action=continue-polling",
+                "[local-seat] required keyboard not ready yet detail={} action=serial-shell-then-continue-polling",
                 probe_result.as_str()
             );
             console.writeln_prefixed(line.as_str());
@@ -7532,11 +7554,15 @@ mod tests {
     }
 
     #[test]
-    fn required_local_seat_probe_aborts_only_when_backend_absent() {
+    fn required_local_seat_probe_aborts_only_for_real_backend_absence() {
         use crate::local_seat::LocalSeatKeyboardProbeResult::{
-            Attached, BackendUnavailable, KeyboardUnavailable,
+            Attached, BackendUnavailable, DeferredUntilRootConsole, KeyboardUnavailable,
         };
 
+        assert!(!super::required_local_seat_probe_should_abort(
+            true,
+            DeferredUntilRootConsole
+        ));
         assert!(super::required_local_seat_probe_should_abort(
             true,
             BackendUnavailable
@@ -7557,12 +7583,16 @@ mod tests {
     #[test]
     fn required_local_seat_probe_continues_polling_when_keyboard_not_ready() {
         use crate::local_seat::LocalSeatKeyboardProbeResult::{
-            Attached, BackendUnavailable, KeyboardUnavailable,
+            Attached, BackendUnavailable, DeferredUntilRootConsole, KeyboardUnavailable,
         };
 
         assert!(super::required_local_seat_probe_should_continue_polling(
             true,
             KeyboardUnavailable
+        ));
+        assert!(super::required_local_seat_probe_should_continue_polling(
+            true,
+            DeferredUntilRootConsole
         ));
         assert!(!super::required_local_seat_probe_should_continue_polling(
             true,

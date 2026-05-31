@@ -9,6 +9,8 @@
 //! dedicated seL4 driver-task model. Drivers must declare the contract they
 //! consume before runtime code may service them.
 
+#[cfg(feature = "kernel")]
+use core::cell::UnsafeCell;
 #[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
 use core::sync::atomic::AtomicU64;
 #[cfg(feature = "kernel")]
@@ -18,9 +20,12 @@ use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_ENGINE_INIT_AUX,
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
     DRIVER_RUNTIME_INIT_AUX,
+};
+use pi4_driver_abi::{
+    DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR, DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
 };
 
 /// Hardware driver instance covered by a scheduling contract.
@@ -449,10 +454,12 @@ pub const fn root_fallback_allowed_for_profile(profile: DriverTaskRuntimeProfile
 
 /// Returns whether a pre-root physical-Pi bootstrap must defer runtime-init service.
 ///
-/// The physical Pi 4 path uses a blocking seL4 call for linked-runtime service
-/// turns. Network runtimes are allowed to make progress only after the root
-/// shell is available, so a selected or fallback NIC cannot starve serial,
-/// local-seat, and display console availability.
+/// The physical Pi 4 path keeps bootstrap runtime-init turns bounded and
+/// reserves blocking reply-path service for post-prompt steady state. Network
+/// runtimes, SDIO bus-owner proof, and PCIe root proof are allowed to make
+/// progress only after the root shell is available, so a selected or fallback
+/// NIC, wedged SDIO bus-owner runtime, or unresponsive PCIe root runtime cannot
+/// starve serial, local-seat, and display console availability.
 #[must_use]
 pub const fn pre_root_runtime_init_deferred_for_profile(
     profile: DriverTaskRuntimeProfile,
@@ -464,7 +471,10 @@ pub const fn pre_root_runtime_init_deferred_for_profile(
     }
     matches!(
         contract.kind,
-        DriverTaskKind::WiredNic | DriverTaskKind::WifiNic
+        DriverTaskKind::WiredNic
+            | DriverTaskKind::WifiNic
+            | DriverTaskKind::SdioHost
+            | DriverTaskKind::PcieRoot
     )
 }
 
@@ -625,12 +635,13 @@ pub const CURRENT_DRIVER_TASK_IPC_ABI: DriverTaskIpcAbi = if STEADY_STATE_COMPAT
     DriverTaskIpcAbi::SharedRingCommand
 };
 
-/// Temporary priority for Pi 4 linked runtimes before root has reached shell.
+/// Temporary priority for Pi 4 linked runtimes during bounded bootstrap turns.
 ///
-/// The child TCB keeps its full contract MCP, but its runnable priority stays
-/// below root until the first endpoint-backed ring turn proves that it blocks
-/// and replies correctly.
-pub const PI4_SHELL_SAFE_BOOTSTRAP_PRIORITY: u8 = 1;
+/// Pre-root runtime init uses nonblocking sends plus explicit yields instead
+/// of `seL4_Call`, so the child must be schedulable while root is polling the
+/// fixed completion record. The HAL restores the contract priority immediately
+/// after the bounded init/proof turn.
+pub const PI4_BOUNDED_BOOTSTRAP_PRIORITY: u8 = 255;
 
 /// Entry point for bootstrap-created driver TCBs.
 #[cfg(feature = "kernel")]
@@ -863,6 +874,11 @@ pub const DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE: u16 = 1 << 15;
 /// owner-state progress by itself because the driver has not serviced a device
 /// turn yet.
 pub const DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE: u16 = 1 << 14;
+/// Command flag used for send-only bootstrap/nonblocking turns.
+///
+/// The linked runtime must not issue `Reply` for these commands because `NbSend`
+/// does not install a reply cap. Completion still travels through the shared ring.
+pub const DRIVER_TASK_RING_FLAG_ONE_WAY: u16 = DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
 /// Any ring flag that prevents owner-state credit.
 pub const DRIVER_TASK_RING_NON_ACCEPTANCE_FLAGS: u16 =
     DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE
@@ -2286,6 +2302,187 @@ pub const fn runtime_init_command(
     }
 }
 
+/// Build a runtime engine-init service command for a Pi 4 hot path.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub const fn runtime_engine_init_command(
+    hot_path: DriverTaskHotPath,
+    budget: DriverTaskBudgetGrant,
+) -> DriverTaskCommandRecord {
+    DriverTaskCommandRecord {
+        sequence: 0,
+        opcode: DriverTaskOpcode::Service.as_u16(),
+        flags: 0,
+        arg0: hot_path.as_u32(),
+        arg1: hot_path.role_bit() as u32,
+        aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+        aux1: 0,
+        budget,
+        frame: DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    }
+}
+
+/// Record a runtime-init descriptor that must be replayed after the shell.
+#[cfg(feature = "kernel")]
+pub fn record_deferred_runtime_init_descriptor(
+    contract: DriverTaskContract,
+    descriptor: DriverRuntimeInitDescriptor,
+) -> bool {
+    let Some(hot_path) = DriverTaskHotPath::from_u32(descriptor.hot_path) else {
+        return false;
+    };
+    if hot_path.contract() != contract
+        || descriptor.role_bit != hot_path.role_bit() as u32
+        || !descriptor.valid()
+    {
+        emit_driver_task_resource_init_status(
+            contract,
+            hot_path,
+            "runtime-descriptor-record",
+            "invalid-descriptor",
+            None,
+        );
+        return false;
+    }
+    deferred_runtime_init_slot(hot_path).store(descriptor);
+    emit_driver_task_resource_init_status(
+        contract,
+        hot_path,
+        "runtime-descriptor-record",
+        "deferred",
+        None,
+    );
+    true
+}
+
+/// Replay a shell-deferred runtime-init descriptor before steady service.
+#[cfg(feature = "kernel")]
+pub fn ensure_deferred_runtime_init_descriptor(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+) -> bool {
+    if !physical_pi_driver_task_only_owner_state_active() {
+        return true;
+    }
+    if hot_path.contract() != contract {
+        emit_driver_task_resource_init_status(
+            contract,
+            hot_path,
+            "runtime-descriptor-replay",
+            "wrong-contract",
+            None,
+        );
+        return false;
+    }
+    let slot = deferred_runtime_init_slot(hot_path);
+    if slot.initialized.load(Ordering::Acquire) != 0 {
+        return true;
+    }
+    if slot.pending.load(Ordering::Acquire) == 0 {
+        return true;
+    }
+    let descriptor = slot.load();
+    if descriptor.hot_path != hot_path.as_u32()
+        || descriptor.role_bit != hot_path.role_bit() as u32
+        || !descriptor.valid()
+    {
+        emit_driver_task_resource_init_status(
+            contract,
+            hot_path,
+            "runtime-descriptor-replay",
+            "invalid-descriptor",
+            None,
+        );
+        emit_deferred_runtime_init_status(contract, hot_path, "invalid-descriptor");
+        return false;
+    }
+    let Some(frame) = stage_driver_runtime_init_descriptor(contract, &descriptor) else {
+        emit_driver_task_resource_init_status(
+            contract,
+            hot_path,
+            "runtime-descriptor-replay",
+            "stage-failed",
+            None,
+        );
+        emit_deferred_runtime_init_status(contract, hot_path, "stage-failed");
+        return false;
+    };
+    let command = runtime_init_command(
+        hot_path,
+        DriverTaskBudgetGrant::from_contract(contract),
+        frame,
+    );
+    let completion = run_driver_task_ring_command(contract, command);
+    let complete = completion.is_some_and(|completion| {
+        completion.code == DriverTaskCompletionCode::Progress.as_u16()
+            && completion.result == hot_path.as_u32()
+    });
+    let status = if complete {
+        "ready"
+    } else if completion.is_some() {
+        "unexpected-completion"
+    } else {
+        "no-reply"
+    };
+    emit_driver_task_resource_init_status(
+        contract,
+        hot_path,
+        "runtime-descriptor-replay",
+        status,
+        completion,
+    );
+    if complete {
+        slot.initialized.store(1, Ordering::Release);
+        slot.pending.store(0, Ordering::Release);
+        emit_deferred_runtime_init_status(contract, hot_path, "resumed");
+        true
+    } else {
+        emit_deferred_runtime_init_status(contract, hot_path, "pending");
+        false
+    }
+}
+
+/// Returns whether descriptor replay still uses nonblocking sends after prompt.
+///
+/// Shell-first deferral is the prompt-safety boundary on physical Pi 4. Once
+/// the serial prompt is live, replay uses the reply path so the lower-priority
+/// runtime TCB is actually scheduled and can publish the owner-state proof.
+#[must_use]
+pub const fn deferred_runtime_init_replay_must_be_bounded(hot_path: DriverTaskHotPath) -> bool {
+    let _ = hot_path;
+    false
+}
+
+#[cfg(feature = "kernel")]
+fn emit_deferred_runtime_init_status(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    status: &'static str,
+) {
+    use core::fmt::Write;
+    use heapless::String;
+
+    let mut line = String::<224>::new();
+    let action = if status == "resumed" {
+        "steady-service-enabled"
+    } else {
+        "serial-shell"
+    };
+    let _ = write!(
+        line,
+        "DRIVER_TASK_RUNTIME_INIT_DEFERRED contract={} hot_path={} status={} action={}",
+        contract.name,
+        hot_path.as_str(),
+        status,
+        action,
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
 /// Borrow a staged shared-ring payload for the current synchronous service turn.
 #[cfg(feature = "kernel")]
 pub fn driver_task_ring_frame_bytes(
@@ -2324,11 +2521,20 @@ fn emit_driver_task_ring_call_begin(
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<256>::new();
+    let mut line = String::<320>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_RING_CALL_BEGIN contract={} endpoint=0x{:04x} request={} opcode={} flags=0x{:04x} arg0={} arg1={}",
-        contract.name, endpoint, request, command.opcode, command.flags, command.arg0, command.arg1,
+        "DRIVER_TASK_RING_CALL_BEGIN contract={} endpoint=0x{:04x} request={} opcode={} flags=0x{:04x} arg0={} arg1={} aux0=0x{:08x} aux1={} frame_len={}",
+        contract.name,
+        endpoint,
+        request,
+        command.opcode,
+        command.flags,
+        command.arg0,
+        command.arg1,
+        command.aux0,
+        command.aux1,
+        command.frame.len,
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
 }
@@ -2363,15 +2569,25 @@ fn emit_driver_task_ring_call_timeout(
     contract: DriverTaskContract,
     endpoint: usize,
     request: usize,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
 ) {
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<192>::new();
+    let mut line = String::<320>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_RING_CALL_TIMEOUT contract={} endpoint=0x{:04x} request={} attempts={}",
-        contract.name, endpoint, request, DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS,
+        "DRIVER_TASK_RING_CALL_TIMEOUT contract={} endpoint=0x{:04x} request={} mode={} attempts={} opcode={} arg0={} aux0=0x{:08x} frame_len={}",
+        contract.name,
+        endpoint,
+        request,
+        mode.as_str(),
+        DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS,
+        command.opcode,
+        command.arg0,
+        command.aux0,
+        command.frame.len,
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
 }
@@ -2381,7 +2597,80 @@ fn emit_driver_task_ring_call_timeout(
 enum DriverTaskRingCommandMode {
     Steady,
     Bootstrap,
+    BootstrapCall,
     NonBlocking,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskRingCommandMode {
+    const fn as_str(self) -> &'static str {
+        match self {
+            DriverTaskRingCommandMode::Steady => "steady",
+            DriverTaskRingCommandMode::Bootstrap => "bootstrap",
+            DriverTaskRingCommandMode::BootstrapCall => "bootstrap-call",
+            DriverTaskRingCommandMode::NonBlocking => "nonblocking",
+        }
+    }
+
+    const fn records_latency(self) -> bool {
+        matches!(
+            self,
+            DriverTaskRingCommandMode::Steady | DriverTaskRingCommandMode::NonBlocking
+        )
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_call_trace_enabled(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    _mode: DriverTaskRingCommandMode,
+) -> bool {
+    if command.aux0 != 0
+        || command.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE != 0
+        || command.frame.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE != 0
+    {
+        return true;
+    }
+    if matches!(
+        contract.kind,
+        DriverTaskKind::Serial | DriverTaskKind::LocalSeatUsb | DriverTaskKind::HdmiText
+    ) {
+        return false;
+    }
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_ring_resource_submit_status(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    stage: &'static str,
+    status: &'static str,
+) {
+    if !driver_task_ring_call_trace_enabled(contract, command, DriverTaskRingCommandMode::Steady) {
+        return;
+    }
+    if let Some(hot_path) = DriverTaskHotPath::from_u32(command.arg0) {
+        emit_driver_task_resource_init_status(contract, hot_path, stage, status, None);
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_mode_uses_bounded_send(mode: DriverTaskRingCommandMode) -> bool {
+    matches!(
+        mode,
+        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::Bootstrap
+    )
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_flags_for_mode(mode: DriverTaskRingCommandMode, flags: u16) -> u16 {
+    if driver_task_ring_mode_uses_bounded_send(mode) {
+        flags | DRIVER_TASK_RING_FLAG_ONE_WAY
+    } else {
+        flags
+    }
 }
 
 /// Execute a fixed-layout command over the pointer-free shared-ring ABI.
@@ -2407,6 +2696,19 @@ pub fn run_driver_task_ring_command_bootstrap(
     run_driver_task_ring_command_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
 }
 
+/// Execute a bootstrap command through a reply rendezvous without latency proof.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_command_bootstrap_call(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode(
+        contract,
+        command,
+        DriverTaskRingCommandMode::BootstrapCall,
+    )
+}
+
 /// Execute a linked-runtime command with bounded nonblocking sends.
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_command_nonblocking(
@@ -2426,22 +2728,62 @@ fn run_driver_task_ring_command_with_mode(
     mut command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
 ) -> Option<DriverTaskCompletionRecord> {
-    let task_key = driver_task_contract_key(contract)?;
-    let slot = slot_for_task_key(task_key)?;
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "invalid-contract",
+        );
+        return None;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "slot-missing",
+        );
+        return None;
+    };
     let endpoint = slot.endpoint.load(Ordering::Acquire);
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
-    if endpoint == 0 || ring_root_ptr == 0 {
+    if endpoint == 0 {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "no-endpoint",
+        );
+        return None;
+    }
+    if ring_root_ptr == 0 {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "ring-missing",
+        );
         return None;
     }
     if slot.active.swap(1, Ordering::AcqRel) != 0 {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "busy",
+        );
         return None;
     }
+
+    command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
 
     let request = slot
         .request_seq
         .load(Ordering::Relaxed)
         .wrapping_add(1)
         .max(1);
+    slot.request_seq.store(request, Ordering::Release);
     command.sequence = request as u32;
     let completion_reset =
         DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand);
@@ -2460,10 +2802,15 @@ fn run_driver_task_ring_command_with_mode(
 
     let mut completion = completion_reset;
     let mut start_ticks = None;
+    let trace_call = driver_task_ring_call_trace_enabled(contract, command, mode);
 
-    if mode == DriverTaskRingCommandMode::NonBlocking {
-        emit_driver_task_ring_call_begin(contract, endpoint, request, command);
-        start_ticks = driver_task_counter_ticks();
+    if driver_task_ring_mode_uses_bounded_send(mode) {
+        if trace_call {
+            emit_driver_task_ring_call_begin(contract, endpoint, request, command);
+        }
+        if mode == DriverTaskRingCommandMode::NonBlocking {
+            start_ticks = driver_task_counter_ticks();
+        }
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
         for _ in 0..DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS {
             crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
@@ -2473,37 +2820,14 @@ fn run_driver_task_ring_command_with_mode(
             // nonblocking send and published the primitive completion record.
             completion = unsafe { core::ptr::read_volatile(completion_ptr) };
             if completion.sequence == request as u32 {
-                emit_driver_task_ring_call_return(contract, endpoint, request, completion);
+                if trace_call {
+                    emit_driver_task_ring_call_return(contract, endpoint, request, completion);
+                }
                 break;
             }
         }
         if completion.sequence != request as u32 {
-            emit_driver_task_ring_call_timeout(contract, endpoint, request);
-        }
-    } else if mode == DriverTaskRingCommandMode::Bootstrap
-        && physical_pi_driver_task_only_owner_state_active()
-        && cfg!(not(sel4_config_kernel_mcs))
-    {
-        emit_driver_task_ring_call_begin(contract, endpoint, request, command);
-        // SAFETY: The fixed ABI uses MR0 as the request sequence. The physical
-        // Pi bootstrap path uses a blocking call so the lower-priority runtime
-        // TCB can run and reply before root continues toward userland.
-        unsafe {
-            sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
-        }
-        let _ = crate::sel4::call_unchecked(
-            endpoint as sel4_sys::seL4_CPtr,
-            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
-        );
-        // SAFETY: The completion pointer addresses the same validated ring page;
-        // a matching sequence means the linked runtime observed the command and
-        // published a primitive completion record before replying.
-        completion = unsafe { core::ptr::read_volatile(completion_ptr) };
-        if completion.sequence == request as u32 {
-            emit_driver_task_ring_call_return(contract, endpoint, request, completion);
-        }
-        if completion.sequence != request as u32 {
-            emit_driver_task_ring_call_timeout(contract, endpoint, request);
+            emit_driver_task_ring_call_timeout(contract, endpoint, request, command, mode);
         }
     } else if physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs))
     {
@@ -2511,8 +2835,12 @@ fn run_driver_task_ring_command_with_mode(
         // driver TCBs receive CPU without relying on cross-priority yield
         // behavior; the linked runtime replies after publishing the primitive
         // completion record.
-        emit_driver_task_ring_call_begin(contract, endpoint, request, command);
-        start_ticks = driver_task_counter_ticks();
+        if trace_call {
+            emit_driver_task_ring_call_begin(contract, endpoint, request, command);
+        }
+        if mode.records_latency() {
+            start_ticks = driver_task_counter_ticks();
+        }
         // SAFETY: The fixed ABI uses MR0 as the request sequence. Re-writing it
         // immediately before the blocking call keeps diagnostic UART emission
         // out of the message-register contract.
@@ -2527,7 +2855,9 @@ fn run_driver_task_ring_command_with_mode(
         // page; the reply boundary guarantees the isolated runtime had a chance
         // to publish the shared-frame result.
         completion = unsafe { core::ptr::read_volatile(completion_ptr) };
-        emit_driver_task_ring_call_return(contract, endpoint, request, completion);
+        if trace_call {
+            emit_driver_task_ring_call_return(contract, endpoint, request, completion);
+        }
     } else {
         start_ticks = driver_task_counter_ticks();
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
@@ -2578,6 +2908,19 @@ pub fn run_driver_task_ring_service_bootstrap(
     run_driver_task_ring_service_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
 }
 
+/// Execute a bootstrap service turn through a reply rendezvous without latency proof.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_bootstrap_call(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode(
+        contract,
+        command,
+        DriverTaskRingCommandMode::BootstrapCall,
+    )
+}
+
 /// Execute one registered driver service turn through bounded nonblocking IPC.
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_service_nonblocking(
@@ -2589,6 +2932,56 @@ pub fn run_driver_task_ring_service_nonblocking(
         command,
         DriverTaskRingCommandMode::NonBlocking,
     )
+}
+
+/// Emit a non-acceptance resource-initialization breadcrumb for one hot path.
+#[cfg(feature = "kernel")]
+pub fn emit_driver_task_resource_init_status(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    stage: &'static str,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) {
+    use core::fmt::Write;
+    use heapless::String;
+
+    let mut line = String::<320>::new();
+    if let Some(completion) = completion {
+        let _ = write!(
+            line,
+            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code={} detail={} result={} frame_len={}",
+            contract.name,
+            hot_path.as_str(),
+            stage,
+            status,
+            completion.code,
+            completion.detail,
+            completion.result,
+            completion.frame.len,
+        );
+    } else {
+        let _ = write!(
+            line,
+            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code=none detail=none result=none frame_len=0",
+            contract.name,
+            hot_path.as_str(),
+            stage,
+            status,
+        );
+    }
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
+/// Host-test/no-kernel variant for call sites that share control flow.
+#[cfg(not(feature = "kernel"))]
+pub fn emit_driver_task_resource_init_status(
+    _contract: DriverTaskContract,
+    _hot_path: DriverTaskHotPath,
+    _stage: &'static str,
+    _status: &'static str,
+    _completion: Option<DriverTaskCompletionRecord>,
+) {
 }
 
 #[cfg(feature = "kernel")]
@@ -3052,7 +3445,7 @@ impl DriverTaskContract {
     #[must_use]
     pub const fn bootstrap_priority(self, profile: DriverTaskRuntimeProfile) -> u8 {
         match profile {
-            DriverTaskRuntimeProfile::Pi4Hardware => PI4_SHELL_SAFE_BOOTSTRAP_PRIORITY,
+            DriverTaskRuntimeProfile::Pi4Hardware => PI4_BOUNDED_BOOTSTRAP_PRIORITY,
             DriverTaskRuntimeProfile::QemuCompatibility | DriverTaskRuntimeProfile::HostTest => {
                 self.sel4_priority()
             }
@@ -3522,6 +3915,74 @@ pub const PI4_DRIVER_TASK_HOT_PATHS: [DriverTaskHotPath; 7] = [
     DriverTaskHotPath::SdioHost,
     DriverTaskHotPath::PcieRoot,
 ];
+
+#[cfg(feature = "kernel")]
+struct DeferredRuntimeInitSlot {
+    descriptor: UnsafeCell<DriverRuntimeInitDescriptor>,
+    pending: AtomicU32,
+    initialized: AtomicU32,
+}
+
+#[cfg(feature = "kernel")]
+// SAFETY: Root is the only writer for deferred runtime-init descriptors, and it
+// serializes commands per contract through the ring `active` gate. Driver tasks
+// only see a copied descriptor after root stages it into the command ring.
+unsafe impl Sync for DeferredRuntimeInitSlot {}
+
+#[cfg(feature = "kernel")]
+impl DeferredRuntimeInitSlot {
+    const fn new() -> Self {
+        Self {
+            descriptor: UnsafeCell::new(DriverRuntimeInitDescriptor::empty()),
+            pending: AtomicU32::new(0),
+            initialized: AtomicU32::new(0),
+        }
+    }
+
+    fn store(&self, descriptor: DriverRuntimeInitDescriptor) {
+        // SAFETY: See the `Sync` invariant; the descriptor is primitive-only
+        // and copied before the pending bit is published.
+        unsafe {
+            core::ptr::write_volatile(self.descriptor.get(), descriptor);
+        }
+        self.initialized.store(0, Ordering::Release);
+        self.pending.store(1, Ordering::Release);
+    }
+
+    fn load(&self) -> DriverRuntimeInitDescriptor {
+        // SAFETY: The pending bit is acquired before callers load the
+        // descriptor, and root is the sole writer.
+        unsafe { core::ptr::read_volatile(self.descriptor.get()) }
+    }
+}
+
+#[cfg(feature = "kernel")]
+static DEFERRED_RUNTIME_INIT_SERIAL: DeferredRuntimeInitSlot = DeferredRuntimeInitSlot::new();
+#[cfg(feature = "kernel")]
+static DEFERRED_RUNTIME_INIT_USB: DeferredRuntimeInitSlot = DeferredRuntimeInitSlot::new();
+#[cfg(feature = "kernel")]
+static DEFERRED_RUNTIME_INIT_HDMI: DeferredRuntimeInitSlot = DeferredRuntimeInitSlot::new();
+#[cfg(feature = "kernel")]
+static DEFERRED_RUNTIME_INIT_GENET: DeferredRuntimeInitSlot = DeferredRuntimeInitSlot::new();
+#[cfg(feature = "kernel")]
+static DEFERRED_RUNTIME_INIT_CYW43: DeferredRuntimeInitSlot = DeferredRuntimeInitSlot::new();
+#[cfg(feature = "kernel")]
+static DEFERRED_RUNTIME_INIT_SDIO: DeferredRuntimeInitSlot = DeferredRuntimeInitSlot::new();
+#[cfg(feature = "kernel")]
+static DEFERRED_RUNTIME_INIT_PCIE: DeferredRuntimeInitSlot = DeferredRuntimeInitSlot::new();
+
+#[cfg(feature = "kernel")]
+fn deferred_runtime_init_slot(hot_path: DriverTaskHotPath) -> &'static DeferredRuntimeInitSlot {
+    match hot_path {
+        DriverTaskHotPath::SerialConsole => &DEFERRED_RUNTIME_INIT_SERIAL,
+        DriverTaskHotPath::UsbKeyboard => &DEFERRED_RUNTIME_INIT_USB,
+        DriverTaskHotPath::HdmiText => &DEFERRED_RUNTIME_INIT_HDMI,
+        DriverTaskHotPath::GenetNic => &DEFERRED_RUNTIME_INIT_GENET,
+        DriverTaskHotPath::Cyw43Wifi => &DEFERRED_RUNTIME_INIT_CYW43,
+        DriverTaskHotPath::SdioHost => &DEFERRED_RUNTIME_INIT_SDIO,
+        DriverTaskHotPath::PcieRoot => &DEFERRED_RUNTIME_INIT_PCIE,
+    }
+}
 
 /// Concrete owner-state hot-path mask required for strongest Pi 4 isolation.
 pub const REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK: usize = DriverTaskHotPath::SerialConsole
@@ -4482,6 +4943,8 @@ pub fn emit_boot_contract_proof() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "kernel")]
+    use core::sync::atomic::Ordering;
 
     #[test]
     fn builtin_driver_task_contracts_are_valid_and_dedicated() {
@@ -4527,14 +4990,14 @@ mod tests {
     }
 
     #[test]
-    fn pi4_bootstrap_priority_never_preempts_root_before_shell() {
+    fn pi4_bootstrap_priority_is_schedulable_for_bounded_bootstrap() {
         assert_eq!(
             SERIAL_DRIVER_TASK_CONTRACT.bootstrap_priority(DriverTaskRuntimeProfile::Pi4Hardware),
-            PI4_SHELL_SAFE_BOOTSTRAP_PRIORITY
+            PI4_BOUNDED_BOOTSTRAP_PRIORITY
         );
         assert!(
             SERIAL_DRIVER_TASK_CONTRACT.bootstrap_priority(DriverTaskRuntimeProfile::Pi4Hardware)
-                < DriverTaskClass::Background.sel4_priority()
+                > SERIAL_DRIVER_TASK_CONTRACT.sel4_priority()
         );
         assert_eq!(
             SERIAL_DRIVER_TASK_CONTRACT
@@ -4548,7 +5011,7 @@ mod tests {
     }
 
     #[test]
-    fn pi4_pre_root_runtime_init_defers_network_before_shell() {
+    fn pi4_pre_root_runtime_init_defers_network_sdio_and_pcie_before_shell() {
         assert!(pre_root_runtime_init_deferred_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware,
             Pi4PreRootNetBootstrapSelection::Wifi,
@@ -4569,10 +5032,15 @@ mod tests {
             Pi4PreRootNetBootstrapSelection::Wired,
             GENET_DRIVER_TASK_CONTRACT
         ));
-        assert!(!pre_root_runtime_init_deferred_for_profile(
+        assert!(pre_root_runtime_init_deferred_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware,
             Pi4PreRootNetBootstrapSelection::Wifi,
             SDIO_HOST_DRIVER_TASK_CONTRACT
+        ));
+        assert!(pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware,
+            Pi4PreRootNetBootstrapSelection::Wifi,
+            PCIE_ROOT_DRIVER_TASK_CONTRACT
         ));
         assert!(!pre_root_runtime_init_deferred_for_profile(
             DriverTaskRuntimeProfile::QemuCompatibility,
@@ -4586,6 +5054,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "kernel")]
     #[test]
     fn clear_driver_task_transport_removes_partial_bootstrap_endpoint() {
         let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
@@ -4968,6 +5437,191 @@ mod tests {
         assert_eq!(command.aux0, DRIVER_RUNTIME_INIT_AUX);
         assert_eq!(command.frame, frame);
         assert!(!command.owner_state_credit_eligible());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_engine_init_command_is_service_not_frame_submit() {
+        let command = runtime_engine_init_command(
+            DriverTaskHotPath::HdmiText,
+            DriverTaskBudgetGrant::from_contract(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+        );
+        assert_eq!(command.opcode, DriverTaskOpcode::Service.as_u16());
+        assert_eq!(command.flags, 0);
+        assert_eq!(command.arg0, DriverTaskHotPath::HdmiText.as_u32());
+        assert_eq!(command.arg1, DriverTaskHotPath::HdmiText.role_bit() as u32);
+        assert_eq!(command.aux0, DRIVER_RUNTIME_ENGINE_INIT_AUX);
+        assert_eq!(command.aux1, 0);
+        assert_eq!(command.frame.len, 0);
+        assert!(command.owner_state_credit_eligible());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn steady_ring_trace_suppresses_low_latency_console_turns() {
+        let frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        };
+        let serial = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::SerialConsole,
+            DriverTaskBudgetGrant::from_contract(SERIAL_DRIVER_TASK_CONTRACT),
+            frame,
+        );
+        let usb = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT),
+            frame,
+        );
+        let hdmi = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::HdmiText,
+            DriverTaskBudgetGrant::from_contract(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+            frame,
+        );
+        assert!(!driver_task_ring_call_trace_enabled(
+            SERIAL_DRIVER_TASK_CONTRACT,
+            serial,
+            DriverTaskRingCommandMode::Steady
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            usb,
+            DriverTaskRingCommandMode::Steady
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            hdmi,
+            DriverTaskRingCommandMode::Steady
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            hdmi,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn steady_ring_trace_keeps_init_and_bus_turns() {
+        let frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        };
+        let hdmi_init = runtime_engine_init_command(
+            DriverTaskHotPath::HdmiText,
+            DriverTaskBudgetGrant::from_contract(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+        );
+        let pcie = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::PcieRoot,
+            DriverTaskBudgetGrant::from_contract(PCIE_ROOT_DRIVER_TASK_CONTRACT),
+            frame,
+        );
+        assert!(driver_task_ring_call_trace_enabled(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            hdmi_init,
+            DriverTaskRingCommandMode::Steady
+        ));
+        assert!(driver_task_ring_call_trace_enabled(
+            PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            pcie,
+            DriverTaskRingCommandMode::Steady
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn deferred_runtime_init_descriptor_records_for_prompt_replay() {
+        let hot_path = DriverTaskHotPath::PcieRoot;
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = hot_path.as_u32();
+        descriptor.role_bit = hot_path.role_bit() as u32;
+        descriptor.flags = pi4_driver_abi::DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            | pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = pi4_driver_abi::DriverRuntimePageDescriptor::new(0x4000_0000);
+        assert!(descriptor.valid());
+
+        assert!(record_deferred_runtime_init_descriptor(
+            hot_path.contract(),
+            descriptor
+        ));
+        let slot = deferred_runtime_init_slot(hot_path);
+        assert_eq!(slot.pending.load(Ordering::Acquire), 1);
+        assert_eq!(slot.initialized.load(Ordering::Acquire), 0);
+        assert_eq!(slot.load().hot_path, hot_path.as_u32());
+
+        assert!(!record_deferred_runtime_init_descriptor(
+            GENET_DRIVER_TASK_CONTRACT,
+            descriptor
+        ));
+        slot.pending.store(0, Ordering::Release);
+        slot.initialized.store(0, Ordering::Release);
+    }
+
+    #[test]
+    fn deferred_runtime_init_replay_uses_reply_path_after_prompt() {
+        assert!(!deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::SdioHost
+        ));
+        assert!(!deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::PcieRoot
+        ));
+        assert!(!deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::GenetNic
+        ));
+        assert!(!deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::Cyw43Wifi
+        ));
+        assert!(!deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::SerialConsole
+        ));
+        assert!(!deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::HdmiText
+        ));
+        assert!(!deferred_runtime_init_replay_must_be_bounded(
+            DriverTaskHotPath::UsbKeyboard
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn bootstrap_ring_mode_remains_bounded() {
+        assert!(driver_task_ring_mode_uses_bounded_send(
+            DriverTaskRingCommandMode::Bootstrap
+        ));
+        assert!(driver_task_ring_mode_uses_bounded_send(
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+        assert!(!driver_task_ring_mode_uses_bounded_send(
+            DriverTaskRingCommandMode::Steady
+        ));
+        assert!(!driver_task_ring_mode_uses_bounded_send(
+            DriverTaskRingCommandMode::BootstrapCall
+        ));
+        assert_eq!(
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::Bootstrap, 0),
+            DRIVER_TASK_RING_FLAG_ONE_WAY
+        );
+        assert_eq!(
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::NonBlocking, 0),
+            DRIVER_TASK_RING_FLAG_ONE_WAY
+        );
+        assert_eq!(
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::Steady, 0),
+            0
+        );
+        assert_eq!(
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::BootstrapCall, 0),
+            0
+        );
+        assert!(!DriverTaskRingCommandMode::Bootstrap.records_latency());
+        assert!(!DriverTaskRingCommandMode::BootstrapCall.records_latency());
     }
 
     #[test]

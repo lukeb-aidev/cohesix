@@ -1958,6 +1958,13 @@ where
                 target_arch = "aarch64",
                 target_os = "none"
             ))]
+            runtime.mirror_line("Cohesix console ready");
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
             runtime.mirror_line(CONSOLE_PROMPT);
         }
         if !self.banner_emitted {
@@ -2662,6 +2669,8 @@ where
             PCIE_ROOT_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
         ));
         self.emit_console_line(bus_contracts.as_str());
+        #[cfg(feature = "kernel")]
+        crate::hal::driver_task::emit_boot_contract_proof();
     }
 
     #[cfg(feature = "kernel")]

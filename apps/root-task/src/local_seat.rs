@@ -39,14 +39,18 @@ use alloc::vec::Vec;
     target_arch = "aarch64",
     target_os = "none"
 ))]
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
     target_arch = "aarch64",
     target_os = "none"
 ))]
-use pi4_driver_abi::DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+use pi4_driver_abi::{
+    DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+    DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
+};
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
@@ -99,7 +103,151 @@ static LINKED_LOCAL_SEAT_DISPLAY_ATTACHED: AtomicBool = AtomicBool::new(false);
     target_arch = "aarch64",
     target_os = "none"
 ))]
+static LINKED_LOCAL_SEAT_DISPLAY_FAILED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LINKED_LOCAL_SEAT_DISPLAY_DEFERRED_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_DISPLAY_INIT_ATTEMPTED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_DISPLAY_INIT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_DISPLAY_FIRST_DRAW_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_DISPLAY_FIRST_DRAW_FAILED_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_DISPLAY_INIT_DEFERRED_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_PCIE_REPLAY_DEFERRED_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_PCIE_REPLAY_BEGIN_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_PCIE_REPLAY_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_USB_INIT_DEFERRED_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_USB_ENGINE_BEGIN_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_USB_KEYBOARD_READY: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_USB_ENUM_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_PENDING_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static ROOT_LOCAL_SEAT_DISPLAY_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static ROOT_LOCAL_SEAT_DISPLAY_DIAG_FAILED_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(
     feature = "kernel",
@@ -161,8 +309,9 @@ pub(crate) const fn local_seat_pre_root_runtime_init_allowed(
 pub(crate) const fn local_seat_linked_display_service_allowed(
     physical_pi_owner_state: bool,
     display_attached: bool,
+    display_failed: bool,
 ) -> bool {
-    !physical_pi_owner_state || display_attached
+    !physical_pi_owner_state || (display_attached && !display_failed)
 }
 
 /// Return whether linked local-seat service may use the steady driver-task path.
@@ -174,10 +323,31 @@ pub(crate) const fn local_seat_prompt_steady_service_allowed(
     !physical_pi_owner_state || root_console_ready
 }
 
+/// Return whether prompt-side HDMI attach should retry after a transient miss.
+#[must_use]
+pub(crate) const fn local_seat_display_attach_retry_allowed(
+    root_console_ready: bool,
+    display_attached: bool,
+    attempts: usize,
+) -> bool {
+    const DISPLAY_ATTACH_RETRY_LIMIT: usize = 4;
+
+    root_console_ready && !display_attached && attempts < DISPLAY_ATTACH_RETRY_LIMIT
+}
+
 /// Return whether a post-prompt USB poll/attach miss should suspend background
 /// keyboard polling instead of holding the serial shell behind another turn.
 #[must_use]
 pub(crate) const fn local_seat_keyboard_poll_suspends_on_missing_reply(
+    physical_pi_owner_state: bool,
+    root_console_ready: bool,
+) -> bool {
+    physical_pi_owner_state && root_console_ready
+}
+
+/// Return whether a display mirror miss should preserve the serial shell.
+#[must_use]
+pub(crate) const fn local_seat_display_mirror_suspends_on_missing_reply(
     physical_pi_owner_state: bool,
     root_console_ready: bool,
 ) -> bool {
@@ -215,6 +385,8 @@ pub enum LocalSeatKeyboardProbeResult {
     Attached,
     /// A platform backend exists, but no keyboard became usable.
     KeyboardUnavailable,
+    /// Driver-task local-seat service is intentionally deferred until prompt.
+    DeferredUntilRootConsole,
     /// No platform backend is attached.
     BackendUnavailable,
 }
@@ -232,6 +404,7 @@ impl LocalSeatKeyboardProbeResult {
         match self {
             Self::Attached => "attached",
             Self::KeyboardUnavailable => "keyboard-unavailable",
+            Self::DeferredUntilRootConsole => "deferred-until-root-console",
             Self::BackendUnavailable => "backend-unavailable",
         }
     }
@@ -607,13 +780,25 @@ impl LocalSeatRuntime {
             #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
             {
                 if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-                    if !LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire) {
-                        let _ = try_attach_linked_display_runtime();
+                    if !LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire)
+                        && !LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire)
+                    {
+                        let _ = try_attach_linked_display_runtime(self.root_console_ready);
                     }
                     if !local_seat_linked_display_service_allowed(
                         true,
                         LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire),
+                        LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire),
                     ) {
+                        if self.root_console_ready && local_seat_driver_runtime_write_line(line) {
+                            return;
+                        }
+                        if self.root_console_ready
+                            && try_attach_root_display_diagnostic_runtime()
+                            && local_seat_driver_runtime_write_line(line)
+                        {
+                            return;
+                        }
                         if !LINKED_LOCAL_SEAT_DISPLAY_DEFERRED_LOGGED.swap(true, Ordering::AcqRel) {
                             boot_log::force_uart_line(
                                 "[local-seat] runtime display mirror deferred action=serial-shell-first",
@@ -628,6 +813,7 @@ impl LocalSeatRuntime {
                         crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
                         display_runtime_ring_service_driver_task,
                     );
+                    let mut draw_no_reply = false;
                     if let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(
                         contract,
                         line.as_bytes(),
@@ -642,20 +828,75 @@ impl LocalSeatRuntime {
                                 ),
                                 frame,
                             );
-                        if let Some(completion) =
-                            crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                        {
+                        let completion = crate::hal::driver_task::run_driver_task_ring_service(
+                            contract, command,
+                        );
+                        draw_no_reply = completion.is_none();
+                        if let Some(completion) = completion {
                             if completion.code
                                 == crate::hal::driver_task::DriverTaskCompletionCode::Progress
                                     .as_u16()
                                 && completion.result != 0
                             {
+                                if !LINKED_LOCAL_SEAT_DISPLAY_FIRST_DRAW_READY_LOGGED
+                                    .swap(true, Ordering::AcqRel)
+                                {
+                                    crate::hal::driver_task::emit_driver_task_resource_init_status(
+                                        contract,
+                                        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+                                        "hdmi-first-draw",
+                                        "ready",
+                                        Some(completion),
+                                    );
+                                    emit_hdmi_text_final_state(
+                                        true,
+                                        "first-draw",
+                                        "framebuffer-write",
+                                        self.root_console_ready,
+                                        LINKED_LOCAL_SEAT_DISPLAY_INIT_ATTEMPTS
+                                            .load(Ordering::Acquire),
+                                        Some(completion),
+                                    );
+                                }
                                 return;
                             }
+                        }
+                        if !LINKED_LOCAL_SEAT_DISPLAY_FIRST_DRAW_FAILED_LOGGED
+                            .swap(true, Ordering::AcqRel)
+                        {
+                            let status = local_seat_completion_status(completion, false);
+                            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                                contract,
+                                crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+                                "hdmi-first-draw",
+                                status,
+                                completion,
+                            );
                         }
                     }
                     self.driver_task_budget_overruns =
                         self.driver_task_budget_overruns.saturating_add(1);
+                    if draw_no_reply {
+                        LINKED_LOCAL_SEAT_DISPLAY_FAILED.store(true, Ordering::Release);
+                    }
+                    if local_seat_display_mirror_suspends_on_missing_reply(
+                        true,
+                        self.root_console_ready,
+                    ) && !LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOGGED.swap(true, Ordering::AcqRel)
+                    {
+                        boot_log::force_uart_line(
+                            "[local-seat] runtime display mirror suspended reason=driver-task-no-reply action=serial-shell",
+                        );
+                    }
+                    if self.root_console_ready
+                        && (local_seat_driver_runtime_write_line(line)
+                            || (try_attach_root_display_diagnostic_runtime()
+                                && local_seat_driver_runtime_write_line(line)))
+                    {
+                        self.refresh_usb_owner_record();
+                        self.refresh_hdmi_owner_record();
+                        return;
+                    }
                     self.refresh_usb_owner_record();
                     self.refresh_hdmi_owner_record();
                     return;
@@ -816,6 +1057,22 @@ impl LocalSeatRuntime {
             target_os = "none"
         ))]
         {
+            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                && !self.root_console_ready
+                && !local_seat_pre_root_runtime_init_allowed(
+                    true,
+                    crate::hal::driver_task::driver_task_runtime_proof().pointer_free_ipc_proof,
+                )
+            {
+                boot_log::force_uart_line(
+                    "[local-seat] cold-boot keyboard probe deferred reason=driver-task-runtime-unproved action=root-shell-first",
+                );
+                self.backend_keyboard_polling_enabled = false;
+                self.backend_keyboard_poll_deferred_logged = false;
+                self.refresh_usb_owner_record();
+                self.refresh_hdmi_owner_record();
+                return LocalSeatKeyboardProbeResult::DeferredUntilRootConsole;
+            }
             let mut result = if local_seat_driver_runtime_attached() {
                 LocalSeatKeyboardProbeResult::KeyboardUnavailable
             } else {
@@ -956,13 +1213,22 @@ impl LocalSeatRuntime {
                     },
                 );
                 if let Some(completion) =
-                    crate::hal::driver_task::run_driver_task_ring_service_nonblocking(
-                        contract, command,
-                    )
+                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
                 {
                     if completion.code
                         == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
                     {
+                        if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED
+                            .swap(true, Ordering::AcqRel)
+                        {
+                            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                                contract,
+                                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                                "usb-keyboard-first-report",
+                                "ready",
+                                Some(completion),
+                            );
+                        }
                         if let Some(bytes) = crate::hal::driver_task::driver_task_ring_frame_bytes(
                             contract,
                             completion.frame,
@@ -975,11 +1241,46 @@ impl LocalSeatRuntime {
                         == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                         && completion.result != 0
                     {
+                        if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_PENDING_LOGGED
+                            .swap(true, Ordering::AcqRel)
+                        {
+                            let status = if completion.detail
+                                == DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+                            {
+                                "pending"
+                            } else {
+                                "progress"
+                            };
+                            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                                contract,
+                                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                                "usb-keyboard-first-report",
+                                status,
+                                Some(completion),
+                            );
+                        }
                         return;
                     }
                     if completion.code
                         == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
                     {
+                        if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_PENDING_LOGGED
+                            .swap(true, Ordering::AcqRel)
+                        {
+                            let status =
+                                if LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire) {
+                                    "pending"
+                                } else {
+                                    "blocked-keyboard-enumeration"
+                                };
+                            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                                contract,
+                                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                                "usb-keyboard-first-report",
+                                status,
+                                Some(completion),
+                            );
+                        }
                         return;
                     }
                 }
@@ -1159,19 +1460,18 @@ fn local_seat_driver_runtime_attached() -> bool {
     target_arch = "aarch64",
     target_os = "none"
 ))]
-fn local_seat_driver_runtime_display_attached() -> bool {
-    if LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire) {
-        return true;
-    }
-    if crate::hal::driver_task::driver_task_runtime_owner_state_registered(
-        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
-    ) {
-        return true;
-    }
-    LOCAL_SEAT_DRIVER_RUNTIME
-        .lock()
-        .as_ref()
-        .is_some_and(Pi4LocalSeat::display_attached)
+fn local_seat_usb_engine_init_ready(
+    completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
+) -> bool {
+    completion.is_some_and(|completion| {
+        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+            && completion.result == 1
+            && matches!(
+                completion.detail,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+                    | DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
+            )
+    })
 }
 
 #[cfg(all(
@@ -1180,24 +1480,265 @@ fn local_seat_driver_runtime_display_attached() -> bool {
     target_arch = "aarch64",
     target_os = "none"
 ))]
-fn try_attach_linked_display_runtime() -> bool {
+fn local_seat_usb_keyboard_init_ready(
+    completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
+) -> bool {
+    completion.is_some_and(|completion| {
+        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+            && completion.result == 1
+            && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
+    })
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn local_seat_usb_engine_init_status(
+    completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
+) -> &'static str {
+    let ready = completion.is_some_and(|completion| {
+        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+            && completion.result == 1
+    });
+    local_seat_completion_status(completion, ready)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn local_seat_usb_keyboard_enum_status(
+    completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
+) -> &'static str {
+    match completion {
+        Some(completion)
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY =>
+        {
+            "ready"
+        }
+        Some(completion)
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY =>
+        {
+            "not-enumerated"
+        }
+        Some(completion)
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16() =>
+        {
+            "fault"
+        }
+        Some(_) => "unexpected-completion",
+        None => "blocked-xhci-init",
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn emit_hdmi_text_final_state(
+    ready: bool,
+    stage: &'static str,
+    reason: &'static str,
+    root_console_ready: bool,
+    attempt: usize,
+    completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<224>::new();
+    let event = if ready {
+        "HDMI_TEXT_READY"
+    } else {
+        "HDMI_TEXT_BLOCKED"
+    };
+    if let Some(completion) = completion {
+        let _ = write!(
+            line,
+            "{event} stage={stage} reason={reason} root_console_ready={} attempt={} code={} detail={} result={} frame_len={}",
+            if root_console_ready { "yes" } else { "no" },
+            attempt,
+            completion.code,
+            completion.detail,
+            completion.result,
+            completion.frame.len,
+        );
+    } else {
+        let _ = write!(
+            line,
+            "{event} stage={stage} reason={reason} root_console_ready={} attempt={} code=none detail=none result=none frame_len=0",
+            if root_console_ready { "yes" } else { "no" },
+            attempt,
+        );
+    }
+    boot_log::force_uart_line(line.as_str());
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn local_seat_completion_status(
+    completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
+    ready: bool,
+) -> &'static str {
+    if ready {
+        "ready"
+    } else {
+        match completion {
+            Some(completion)
+                if completion.code
+                    == crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16() =>
+            {
+                "fault"
+            }
+            Some(_) => "unexpected-completion",
+            None => "no-reply",
+        }
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn try_attach_linked_display_runtime(root_console_ready: bool) -> bool {
     if LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire) {
         return true;
+    }
+    if LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire) {
+        return false;
     }
     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
         crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
         crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
         display_runtime_ring_service_driver_task,
     );
-    if crate::hal::driver_task::driver_task_runtime_owner_state_registered(
-        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+    if !local_seat_prompt_steady_service_allowed(
+        crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+        root_console_ready,
     ) {
+        return false;
+    }
+    if LINKED_LOCAL_SEAT_DISPLAY_INIT_ATTEMPTED.swap(true, Ordering::AcqRel) {
+        let attempts = LINKED_LOCAL_SEAT_DISPLAY_INIT_ATTEMPTS.load(Ordering::Acquire);
+        if !local_seat_display_attach_retry_allowed(root_console_ready, false, attempts) {
+            return false;
+        }
+    }
+    let attempt = LINKED_LOCAL_SEAT_DISPLAY_INIT_ATTEMPTS
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    if !local_seat_display_attach_retry_allowed(
+        root_console_ready,
+        LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire),
+        attempt.saturating_sub(1),
+    ) {
+        return false;
+    }
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+        "hdmi-engine-attach-begin",
+        if root_console_ready {
+            "root-console-ready"
+        } else {
+            "serial-shell-first"
+        },
+        None,
+    );
+    let hdmi_command = crate::hal::driver_task::runtime_engine_init_command(
+        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        ),
+    );
+    let hdmi_completion = crate::hal::driver_task::run_driver_task_ring_service(
+        crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        hdmi_command,
+    );
+    let hdmi_ok = hdmi_completion.is_some_and(|completion| {
+        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+            && completion.result == 1
+    });
+    let hdmi_status = local_seat_completion_status(hdmi_completion, hdmi_ok);
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+        "hdmi-engine-init",
+        hdmi_status,
+        hdmi_completion,
+    );
+    let hdmi_owner = hdmi_ok
+        && crate::hal::driver_task::register_driver_task_runtime_owner_state(
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+        );
+    if hdmi_ok && !hdmi_owner {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+            "hdmi-owner-state",
+            "descriptor-rejected",
+            None,
+        );
+        emit_hdmi_text_final_state(
+            false,
+            "engine-init",
+            "owner-state-descriptor-rejected",
+            root_console_ready,
+            attempt,
+            hdmi_completion,
+        );
+    }
+    if hdmi_owner {
         LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.store(true, Ordering::Release);
+        LINKED_LOCAL_SEAT_DISPLAY_FAILED.store(false, Ordering::Release);
+        emit_hdmi_text_final_state(
+            true,
+            "engine-init",
+            "driver-task-owner-state",
+            root_console_ready,
+            attempt,
+            hdmi_completion,
+        );
         boot_log::force_uart_line(
-            "[local-seat] linked HDMI runtime active action=early-boot-mirror",
+            "[local-seat] linked HDMI runtime active action=serial-safe-mirror",
         );
         return true;
     }
+    if !hdmi_ok {
+        emit_hdmi_text_final_state(
+            false,
+            "engine-init",
+            hdmi_status,
+            root_console_ready,
+            attempt,
+            hdmi_completion,
+        );
+    }
+    if !LINKED_LOCAL_SEAT_DISPLAY_INIT_DEFERRED_LOGGED.swap(true, Ordering::AcqRel) {
+        boot_log::force_uart_line(
+            "[local-seat] linked HDMI runtime pending reason=driver-task-init-no-reply action=serial-shell",
+        );
+    }
+    LINKED_LOCAL_SEAT_DISPLAY_INIT_ATTEMPTED.store(false, Ordering::Release);
     false
 }
 
@@ -1214,7 +1755,7 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
     ) {
         return false;
     }
-    let _ = try_attach_linked_display_runtime();
+    let _ = try_attach_linked_display_runtime(root_console_ready);
     let usb_contract = driver_task_contract();
     let hdmi_contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
@@ -1228,6 +1769,49 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
         display_runtime_ring_service_driver_task,
     );
     if !LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire) {
+        let _ = crate::hal::driver_task::register_pi4_bus_ring_service(
+            crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+        );
+        if !LINKED_LOCAL_SEAT_PCIE_REPLAY_BEGIN_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+                crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                "usb-prereq-pcie-replay",
+                "begin",
+                None,
+            );
+        }
+        if !crate::hal::driver_task::ensure_deferred_runtime_init_descriptor(
+            crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+        ) {
+            if !LINKED_LOCAL_SEAT_PCIE_REPLAY_DEFERRED_LOGGED.swap(true, Ordering::AcqRel) {
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+                    crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                    "usb-prereq-pcie-replay",
+                    "blocked",
+                    None,
+                );
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    usb_contract,
+                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                    "usb-xhci-init",
+                    "blocked-pcie-runtime",
+                    None,
+                );
+            }
+            return false;
+        }
+        if !LINKED_LOCAL_SEAT_PCIE_REPLAY_READY_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+                crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                "usb-prereq-pcie-replay",
+                "ready",
+                None,
+            );
+        }
         let mut usb_command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
             0,
             crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
@@ -1239,38 +1823,81 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
             },
         );
         usb_command.aux0 = DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
-        let usb_ok = crate::hal::driver_task::run_driver_task_ring_service_nonblocking(
+        if !LINKED_LOCAL_SEAT_USB_ENGINE_BEGIN_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                usb_contract,
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                "usb-engine-init",
+                "begin",
+                None,
+            );
+        }
+        let usb_completion =
+            crate::hal::driver_task::run_driver_task_ring_service(usb_contract, usb_command);
+        let usb_controller_ready = local_seat_usb_engine_init_ready(usb_completion);
+        let usb_keyboard_ready = local_seat_usb_keyboard_init_ready(usb_completion);
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
             usb_contract,
-            usb_command,
-        )
-        .is_some_and(|completion| {
-            completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
-        });
-        let usb_owner = usb_ok
+            crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            local_seat_usb_engine_init_status(usb_completion),
+            usb_completion,
+        );
+        if usb_controller_ready
+            || !LINKED_LOCAL_SEAT_USB_INIT_DEFERRED_LOGGED.swap(true, Ordering::AcqRel)
+        {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                usb_contract,
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                "usb-xhci-init",
+                local_seat_usb_engine_init_status(usb_completion),
+                usb_completion,
+            );
+        }
+        if usb_controller_ready || !LINKED_LOCAL_SEAT_USB_ENUM_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                usb_contract,
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                "usb-keyboard-enumeration",
+                local_seat_usb_keyboard_enum_status(usb_completion),
+                usb_completion,
+            );
+        }
+        if usb_controller_ready {
+            LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.store(true, Ordering::Release);
+        }
+        if usb_keyboard_ready {
+            LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
+        }
+        let usb_owner = usb_keyboard_ready
             && crate::hal::driver_task::register_driver_task_runtime_owner_state(
                 crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
             );
-        if usb_owner {
-            LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.store(true, Ordering::Release);
-            boot_log::force_uart_line(
-                "[local-seat] linked USB runtime active action=serial-safe-keyboard",
+        if usb_controller_ready && !usb_owner {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                usb_contract,
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                "usb-owner-state",
+                if usb_keyboard_ready {
+                    "descriptor-rejected"
+                } else {
+                    "blocked-keyboard-enumeration"
+                },
+                usb_completion,
             );
+        }
+        if usb_controller_ready {
+            if usb_keyboard_ready {
+                boot_log::force_uart_line(
+                    "[local-seat] linked USB runtime active keyboard=ready action=serial-safe-keyboard",
+                );
+            } else {
+                boot_log::force_uart_line(
+                    "[local-seat] linked USB runtime active keyboard=not-enumerated action=keep-diagnostics-open",
+                );
+            }
         } else {
             return false;
-        }
-    }
-    if !LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire)
-        && local_seat_driver_runtime_display_attached()
-    {
-        let hdmi_owner = crate::hal::driver_task::register_driver_task_runtime_owner_state(
-            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
-        );
-        if hdmi_owner {
-            LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.store(true, Ordering::Release);
-            boot_log::force_uart_line(
-                "[local-seat] linked HDMI runtime active action=serial-safe-mirror",
-            );
         }
     }
     LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
@@ -1314,7 +1941,7 @@ fn init_linked_local_seat_runtime_from_lease(
     target_os = "none"
 ))]
 fn local_seat_driver_runtime_keyboard_attached() -> bool {
-    if LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire) {
+    if LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire) {
         return true;
     }
     LOCAL_SEAT_DRIVER_RUNTIME
@@ -1370,8 +1997,63 @@ fn local_seat_driver_runtime_write_line(line: &str) -> bool {
     let Some(runtime) = guard.as_mut() else {
         return false;
     };
+    if !runtime.display_attached() {
+        return false;
+    }
     runtime.write_line(line);
     true
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn try_attach_root_display_diagnostic_runtime() -> bool {
+    if LOCAL_SEAT_DRIVER_RUNTIME
+        .lock()
+        .as_ref()
+        .is_some_and(Pi4LocalSeat::display_attached)
+    {
+        return true;
+    }
+    let Some(lease) = LOCAL_SEAT_RUNTIME_INIT_LEASE.lock().as_ref().copied() else {
+        return false;
+    };
+    // SAFETY: `attach_platform_backend` stores this HAL pointer during boot and
+    // the root task remains alive while prompt-side display diagnostics run.
+    let hal = unsafe { &mut *(lease.hal_ptr as *mut crate::hal::KernelHal<'static>) };
+    match Pi4LocalSeat::new(hal, local_seat_backend_hints(lease.hints)) {
+        Ok(backend) => {
+            let display_attached = backend.display_attached();
+            *LOCAL_SEAT_DRIVER_RUNTIME.lock() = Some(backend);
+            if display_attached {
+                if !ROOT_LOCAL_SEAT_DISPLAY_DIAG_LOGGED.swap(true, Ordering::AcqRel) {
+                    boot_log::force_uart_line(
+                        "[local-seat] root HDMI diagnostic mirror active reason=linked-runtime-no-reply acceptance=red",
+                    );
+                }
+                true
+            } else {
+                false
+            }
+        }
+        Err(err) => {
+            if !ROOT_LOCAL_SEAT_DISPLAY_DIAG_FAILED_LOGGED.swap(true, Ordering::AcqRel) {
+                let mut line = heapless::String::<160>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] root HDMI diagnostic mirror unavailable detail={} action=serial-shell",
+                        err.as_str()
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+            false
+        }
+    }
 }
 
 #[cfg(all(
@@ -2052,10 +2734,15 @@ mod tests {
     fn keyboard_probe_result_labels_required_policy_boundary() {
         assert!(LocalSeatKeyboardProbeResult::Attached.attached());
         assert!(!LocalSeatKeyboardProbeResult::KeyboardUnavailable.attached());
+        assert!(!LocalSeatKeyboardProbeResult::DeferredUntilRootConsole.attached());
         assert!(!LocalSeatKeyboardProbeResult::BackendUnavailable.attached());
         assert_eq!(
             LocalSeatKeyboardProbeResult::KeyboardUnavailable.as_str(),
             "keyboard-unavailable"
+        );
+        assert_eq!(
+            LocalSeatKeyboardProbeResult::DeferredUntilRootConsole.as_str(),
+            "deferred-until-root-console"
         );
     }
 
@@ -2405,9 +3092,23 @@ mod tests {
 
     #[test]
     fn local_seat_linked_display_service_waits_for_display_attach() {
-        assert!(!local_seat_linked_display_service_allowed(true, false));
-        assert!(local_seat_linked_display_service_allowed(true, true));
-        assert!(local_seat_linked_display_service_allowed(false, false));
+        assert!(!local_seat_linked_display_service_allowed(
+            true, false, false
+        ));
+        assert!(local_seat_linked_display_service_allowed(true, true, false));
+        assert!(!local_seat_linked_display_service_allowed(true, true, true));
+        assert!(local_seat_linked_display_service_allowed(
+            false, false, true
+        ));
+    }
+
+    #[test]
+    fn prompt_side_display_attach_retries_transient_misses() {
+        assert!(!local_seat_display_attach_retry_allowed(false, false, 0));
+        assert!(!local_seat_display_attach_retry_allowed(true, true, 0));
+        assert!(local_seat_display_attach_retry_allowed(true, false, 0));
+        assert!(local_seat_display_attach_retry_allowed(true, false, 3));
+        assert!(!local_seat_display_attach_retry_allowed(true, false, 4));
     }
 
     #[test]
@@ -2518,6 +3219,19 @@ mod tests {
             true, true
         ));
         assert!(!local_seat_keyboard_poll_suspends_on_missing_reply(
+            false, true
+        ));
+    }
+
+    #[test]
+    fn physical_pi_display_mirror_miss_preserves_live_serial_prompt() {
+        assert!(!local_seat_display_mirror_suspends_on_missing_reply(
+            true, false
+        ));
+        assert!(local_seat_display_mirror_suspends_on_missing_reply(
+            true, true
+        ));
+        assert!(!local_seat_display_mirror_suspends_on_missing_reply(
             false, true
         ));
     }

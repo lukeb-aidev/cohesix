@@ -16,7 +16,8 @@ PYTHON="${VENV_DIR}/bin/python"
 FLASH_DISK=""
 DISK_LABEL="COHESIX"
 SERIAL_DEVICE="${COHESIX_PI4_SERIAL_DEVICE:-/dev/cu.usbserial-0001}"
-LOG_PATH="${COHESIX_PI4_SERIAL_LOG:-/Users/lukasbower/pi4-serial.log}"
+DEFAULT_LOG_PATH="/Users/lukasbower/pi4-serial-$(date +%Y%m%d-%H%M%S).log"
+LOG_PATH="${COHESIX_PI4_SERIAL_LOG:-${DEFAULT_LOG_PATH}}"
 BOOT_WAIT_SECONDS=12
 CONSOLE_READY_TIMEOUT_SECONDS=60
 CAPTURE_SECONDS=10
@@ -32,6 +33,7 @@ REQUIRE_DRIVER_TASK_PROOF=0
 REQUIRE_INPUT_RESPONSIVE=0
 
 DEFAULT_COMMANDS=(
+    "smp activity"
     "wifi diag"
     "nettest"
     "netstats"
@@ -67,7 +69,9 @@ Options:
   --serial-device <path>     Serial device for Cohesix console
                              (default: /dev/cu.usbserial-0001)
   --log <path>               Serial log output/input path
-                             (default: /Users/lukasbower/pi4-serial.log)
+                             (default: /Users/lukasbower/pi4-serial-<timestamp>.log)
+                             Active capture refuses existing paths; use
+                             --normalize-only or --no-capture for existing logs.
   --boot-wait <seconds>      Delay before issuing console commands
                              (default: 12)
   --console-ready-timeout <seconds>
@@ -109,6 +113,7 @@ Options:
   -h, --help                 Show this help
 
 Default proof commands:
+  smp activity
   wifi diag
   nettest
   netstats
@@ -144,6 +149,16 @@ require_nonnegative_integer() {
     local name="$1"
     local value="$2"
     [[ "${value}" =~ ^[0-9]+$ ]] || fail "${name} must be a non-negative integer: ${value}"
+}
+
+ensure_capture_log_is_fresh() {
+    local parent
+
+    parent="$(dirname "${LOG_PATH}")"
+    mkdir -p "${parent}"
+    if [[ -e "${LOG_PATH}" ]]; then
+        fail "refusing to capture to existing log without truncating: ${LOG_PATH}; pass a fresh --log path, or use --normalize-only/--no-capture for existing logs"
+    fi
 }
 
 detect_flash_disk() {
@@ -268,7 +283,8 @@ run_capture() {
     done
 
     [[ -e "${SERIAL_DEVICE}" ]] || fail "serial device missing: ${SERIAL_DEVICE}"
-    : > "${LOG_PATH}"
+    ensure_capture_log_is_fresh
+    : >> "${LOG_PATH}"
     stty -f "${SERIAL_DEVICE}" 115200 cs8 -cstopb -parenb -ixon -ixoff -crtscts raw
 
     log "capturing ${SERIAL_DEVICE} to ${LOG_PATH}"
@@ -356,6 +372,8 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=hid-first-report")
         args+=("--expect-not" "USB_BLOCKER=keyboard-first-byte")
         args+=("--expect-not" "USB_BLOCKER=no-keyboard-found")
+        args+=("--expect-not" "USB_BLOCKER=keyboard-not-ready")
+        args+=("--expect-not" "USB_BLOCKER=pcie-vl805-config-contract-missing")
         args+=("--expect-not" "USB_BLOCKER=unavailable")
         args+=("--expect-not" "USB_BLOCKER=safe-port-event-required")
         args+=("--expect-not" "USB_BLOCKER=safe-port-state")
@@ -417,6 +435,7 @@ run_normalizer() {
         args+=("--expect-not" "WIFI_BLOCKER=nettest-selftest-disabled")
         args+=("--expect-not" "WIFI_BLOCKER=nettest-unsupported")
         args+=("--expect-not" "WIFI_BLOCKER=nettest-failed")
+        args+=("--expect-not" "WIFI_BLOCKER=wifi-driver-task-runtime-unproved")
     fi
     if [[ "${REQUIRE_USB_READY}" -eq 1 ]]; then
         args+=("--expect-min" "USB_GATE=10" "--expect" "USB_BLOCKER=none")
@@ -454,6 +473,9 @@ run_normalizer() {
         args+=("--expect" "DRIVER_TASK_OWNER_STATE_PROOF=yes")
         args+=("--expect" "DRIVER_TASK_BUDGET_OVERRUNS=0")
         args+=("--expect-min" "DRIVER_TASK_LATENCY_PROOFS=7")
+        args+=("--expect" "DRIVER_TASK_RING_CALL_OUTSTANDING=0")
+        args+=("--expect" "DRIVER_TASK_RING_CALL_TIMEOUT=0")
+        args+=("--expect" "DRIVER_TASK_BOOTSTRAP_DEFERRED=0")
     fi
     if [[ "${REQUIRE_INPUT_RESPONSIVE}" -eq 1 ]]; then
         args+=("--expect" "SERIAL_RESPONSIVE_PROOF=yes")
@@ -623,6 +645,9 @@ if [[ "${ALLOW_SUMMARY_ONLY}" -eq 1 ]] \
 fi
 
 if [[ "${NORMALIZE_ONLY}" -eq 0 ]]; then
+    if [[ "${NO_CAPTURE}" -eq 0 ]]; then
+        ensure_capture_log_is_fresh
+    fi
     run_image_build
     if [[ "${NO_CAPTURE}" -eq 0 ]]; then
         run_capture

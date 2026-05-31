@@ -342,6 +342,12 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_RING_CALL_OUTSTANDING": 0,
         "DRIVER_TASK_RING_CALL_TIMEOUT": 0,
         "DRIVER_TASK_BOOTSTRAP_DEFERRED": 0,
+        "DRIVER_TASK_RESOURCE_INIT": 0,
+        "DRIVER_TASK_RESOURCE_BLOCKER": "none",
+        "NET_DRIVER_TASK_REPLAY_EVENTS": 0,
+        "NET_DRIVER_TASK_REPLAY_BLOCKER": "none",
+        "SDIO_DRIVER_TASK_REPLAY_EVENTS": 0,
+        "SDIO_DRIVER_TASK_REPLAY_BLOCKER": "none",
         "SERIAL_RESPONSIVE_PROOF": "no",
         "USB_BURST_PROOF": "no",
         "USB_BURST_DROPS": -1,
@@ -738,6 +744,63 @@ def test_gate_summary_tracks_driver_task_ring_call_timeout() -> None:
     assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
 
 
+def test_gate_summary_preserves_pcie_vl805_usb_blocker_over_keyboard_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: ownership_blocker current=pcie-vl805-config-contract-missing "
+            "expected=vl805-config-window+command+bar0+mailbox "
+            "observed=missing-or-disabled blocker=pcie-vl805-config-contract-missing",
+            "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+            "proof_gate=0 target_gate=10 next=keyboard-ready blocker=keyboard-not-ready",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_blocker == "pcie-vl805-config-contract-missing"
+
+
+def test_gate_summary_labels_driver_task_wifi_runtime_unproved() -> None:
+    events = normalizer.parse_events(
+        [
+            "[net-console] deferred failed detail=cyw43-wifi driver-task runtime "
+            "is pending hardware service",
+            "wifi: debug subcommand=diag result=error "
+            "error=unsupported operation: pi4-wifi-driver-task-runtime-required",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-wifi driver-task runtime is pending hardware service",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_blocker == "wifi-driver-task-runtime-unproved"
+    assert gates.wifi_exact == "wifi-driver-task-runtime-unproved"
+
+
+def test_gate_summary_labels_pre_prompt_wifi_sdio_driver_task_deferral() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=sdio-host hot_path=sdio-host "
+            "stage=runtime-descriptor-record status=deferred acceptance=no "
+            "code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=sdio-host tcb=0x064c "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+            "DRIVER_TASK_BUS_LINK contract=cyw43455 owner=sdio-host "
+            "channel=cyw43-sdio endpoint_slot=0x0008 ring_vaddr=0x70e00000",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=runtime-descriptor-record status=deferred acceptance=no "
+            "code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=cyw43455 tcb=0x101f "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "wifi-driver-task-runtime-unproved"
+
+
 def test_gate_summary_tracks_driver_task_bootstrap_deferred() -> None:
     events = normalizer.parse_events(
         [
@@ -748,6 +811,95 @@ def test_gate_summary_tracks_driver_task_bootstrap_deferred() -> None:
 
     record = normalizer.summarize_gates(events).to_record()
     assert record["DRIVER_TASK_BOOTSTRAP_DEFERRED"] == 1
+
+
+def test_gate_summary_tracks_driver_task_resource_init_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=hdmi-text hot_path=hdmi-text "
+            "stage=hdmi-engine-init status=ready acceptance=no code=1 "
+            "detail=0 result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-xhci-init status=no-reply "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_RESOURCE_INIT"] == 2
+    assert (
+        record["DRIVER_TASK_RESOURCE_BLOCKER"]
+        == "usb-keyboard:usb-xhci-init:no-reply"
+    )
+
+
+def test_gate_summary_ignores_expected_deferred_resource_init() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=sdio-host "
+            "hot_path=sdio-host stage=runtime-descriptor-record "
+            "status=deferred acceptance=no code=none detail=none result=none "
+            "frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=serial "
+            "hot_path=serial-console stage=serial-runtime-init "
+            "status=no-reply acceptance=no code=none detail=none result=none "
+            "frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_RESOURCE_INIT"] == 2
+    assert (
+        record["DRIVER_TASK_RESOURCE_BLOCKER"]
+        == "serial-console:serial-runtime-init:no-reply"
+    )
+
+
+def test_gate_summary_labels_prompt_gated_usb_runtime_deferral() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] cold-boot keyboard probe deferred "
+            "reason=driver-task-runtime-unproved action=root-shell-first",
+            "[local-seat] cold-boot keyboard probe end stage=pre-net "
+            "result=deferred-until-root-console polling_enabled=0",
+            "[Cohesix] Root console ready (type 'help' for commands)",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["BOOT_HALTED"] == "no"
+    assert record["ROOT_CONSOLE_READY"] == "yes"
+    assert record["USB_GATE"] == 1
+    assert record["USB_BLOCKER"] == "driver-task-runtime-deferred"
+
+
+def test_gate_summary_tracks_net_and_sdio_replay_blockers() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=descriptor-replay blocker=ready",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=engine-init blocker=no-reply",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=descriptor-replay "
+            "blocker=ready",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=sdio-first-command "
+            "blocker=fault",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["NET_DRIVER_TASK_REPLAY_EVENTS"] == 2
+    assert (
+        record["NET_DRIVER_TASK_REPLAY_BLOCKER"]
+        == "cyw43-wifi:engine-init:no-reply"
+    )
+    assert record["SDIO_DRIVER_TASK_REPLAY_EVENTS"] == 2
+    assert (
+        record["SDIO_DRIVER_TASK_REPLAY_BLOCKER"]
+        == "sdio-host:sdio-first-command:fault"
+    )
 
 
 def test_gate_summary_tracks_root_console_readiness() -> None:

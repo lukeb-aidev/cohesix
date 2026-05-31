@@ -333,6 +333,9 @@ pub const fn serial_owner_state_acceptance_ready() -> bool {
 /// Construct the physical UART runtime behind the serial driver-task ring.
 #[cfg(feature = "kernel")]
 pub fn init_serial_driver_task_runtime() -> bool {
+    if SERIAL_LINKED_RUNTIME_ATTACHED.load(AtomicOrdering::Acquire) != 0 {
+        return true;
+    }
     let contract = driver_task_contract();
     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
         contract,
@@ -350,11 +353,26 @@ pub fn init_serial_driver_task_runtime() -> bool {
         },
     );
     command.aux0 = SERIAL_RUNTIME_AUX_INIT;
-    let ok = crate::hal::driver_task::run_driver_task_ring_service_bootstrap(contract, command)
-        .is_some_and(|completion| {
-            completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
-        });
+    let completion =
+        crate::hal::driver_task::run_driver_task_ring_service_bootstrap_call(contract, command);
+    let ok = completion.is_some_and(|completion| {
+        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+            && completion.result == 1
+    });
+    let status = if ok {
+        "ready"
+    } else if completion.is_some() {
+        "unexpected-completion"
+    } else {
+        "no-reply"
+    };
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+        "serial-runtime-init",
+        status,
+        completion,
+    );
     if ok {
         let owner_state_registered = serial_owner_state_descriptor().is_some_and(|descriptor| {
             crate::hal::driver_task::register_driver_task_owner_state_descriptor(
@@ -362,6 +380,13 @@ pub fn init_serial_driver_task_runtime() -> bool {
             )
         });
         if !owner_state_registered {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+                "serial-owner-state",
+                "descriptor-rejected",
+                None,
+            );
             SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
             return false;
         }
@@ -791,12 +816,16 @@ where
 
     #[cfg(feature = "kernel")]
     fn flush_tx_driver_task_ring(&mut self, contract: DriverTaskContract) -> bool {
+        let turn_limit = usize::from(contract.budget.max_ops_per_turn)
+            .min(contract.budget.max_bytes_per_turn as usize)
+            .min(usize::from(contract.budget.max_frames_per_turn))
+            .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES);
         let mut staged =
             heapless::Vec::<u8, { crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES }>::new();
         if let Some(byte) = self.driver_local.take_pending_tx() {
             let _ = staged.push(byte);
         }
-        while staged.len() < staged.capacity() {
+        while staged.len() < turn_limit {
             let Some(byte) = self.tx.dequeue() else {
                 break;
             };

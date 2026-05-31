@@ -15,6 +15,12 @@ pub const DRIVER_RUNTIME_INIT_AUX: u32 = 0x4452_494e;
 pub const DRIVER_RUNTIME_ENGINE_INIT_AUX: u32 = 0x454e_474e;
 /// Local-seat USB/HDMI init command used by the root ring client.
 pub const DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX: u32 = 0x4c53_494e;
+/// USB runtime init detail: xHCI controller reached run state, no keyboard endpoint yet.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY: u16 = 0x0201;
+/// USB runtime init detail: xHCI controller and boot keyboard endpoint are ready.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY: u16 = 0x0202;
+/// USB service detail: keyboard endpoint is armed, but no interrupt report has arrived.
+pub const DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING: u16 = 0x0203;
 /// GENET/CYW43 network init command used by the root ring client.
 pub const DRIVER_RUNTIME_NET_INIT_AUX: u32 = 0x494e_4954;
 /// CYW43 command descriptor submission marker used in `aux0`.
@@ -107,6 +113,8 @@ pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT: u32 = 8;
 /// CYW43-local virtual address where root maps the SDIO owner command ring.
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR: u64 = 0x70e0_0000;
+/// Command flag: root delivered this turn with send-only IPC and expects no reply cap.
+pub const DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY: u16 = 1 << 13;
 
 /// Resource range kind: memory-mapped device registers.
 pub const DRIVER_RUNTIME_RESOURCE_KIND_MMIO: u16 = 1;

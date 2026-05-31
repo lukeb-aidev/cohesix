@@ -9477,6 +9477,8 @@ fn sdio_owner_queue_ring_service_completion(
     let runtime_flags = flags | sdio_runtime_response_flag(response);
     command.aux0 = ((cmd as u32) << 16) | u32::from(runtime_flags);
     command.aux1 = arg;
+    // SDIO owner turns run after shell-first descriptor replay; use the reply
+    // path so the lower-priority owner runtime is actually scheduled.
     let completion = super::driver_task::run_driver_task_ring_service(contract, command)?;
     if sdio_owner_completion_has_hardware_progress(completion) {
         let _ = register_sdio_owner_state_descriptor();
