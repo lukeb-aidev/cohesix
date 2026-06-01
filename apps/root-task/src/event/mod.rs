@@ -218,6 +218,10 @@ const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 32;
 const CONSOLE_OUTPUT_LINES_PER_IDLE_TURN: usize = 2;
 const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
+#[cfg(feature = "kernel")]
+const SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS: u64 = 10_000;
+#[cfg(feature = "kernel")]
+const SERIAL_INPUT_IDLE_TRACE_LIMIT: u8 = 0;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS: u64 = 750;
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -1452,12 +1456,18 @@ where
     local_seat_chunk_input_pending: bool,
     console_output_flush_active: bool,
     pending_console_output: HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
+    #[cfg(feature = "kernel")]
+    serial_input_idle_trace_next_ms: u64,
+    #[cfg(feature = "kernel")]
+    serial_input_idle_trace_count: u8,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_pending: bool,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_not_before_ms: u64,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_idle_turns: u8,
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    post_prompt_local_seat_attach_blocked_traces: u8,
     last_smp_activity_snapshot: Option<SmpActivitySnapshot>,
 }
 
@@ -1545,12 +1555,18 @@ where
             local_seat_chunk_input_pending: false,
             console_output_flush_active: false,
             pending_console_output: HeaplessVec::new(),
+            #[cfg(feature = "kernel")]
+            serial_input_idle_trace_next_ms: 0,
+            #[cfg(feature = "kernel")]
+            serial_input_idle_trace_count: 0,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_pending: false,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_not_before_ms: 0,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_idle_turns: 0,
+            #[cfg(all(feature = "kernel", feature = "usb"))]
+            post_prompt_local_seat_attach_blocked_traces: 0,
             last_smp_activity_snapshot: None,
         }
     }
@@ -1686,6 +1702,13 @@ where
                     || serial_output_pending
                     || output_pending,
             );
+            self.maybe_emit_serial_input_idle_trace(
+                serial_rx_activity
+                    || serial_input
+                    || followup_serial_input
+                    || local_input
+                    || post_runtime_local_input,
+            );
             return;
         }
         self.serial.flush_tx();
@@ -1698,6 +1721,9 @@ where
                 || post_runtime_local_input
                 || serial_output_pending
                 || output_pending,
+        );
+        self.maybe_emit_serial_input_idle_trace(
+            serial_rx_activity || serial_input || local_input || post_runtime_local_input,
         );
     }
 
@@ -2084,31 +2110,6 @@ where
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();
         }
-        #[cfg(feature = "kernel")]
-        {
-            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
-                && crate::serial::resume_serial_driver_task_runtime_after_prompt()
-            {
-                if crate::serial::serial_driver_task_interactive_cutover_allowed()
-                    && self.serial.use_driver_task_client_after_attach()
-                {
-                    boot_log::force_uart_line_raw(
-                        "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
-                    );
-                    boot_log::force_uart_line_raw(
-                        "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover acceptance=green reason=driver-task-attached",
-                    );
-                    self.serial.poll_io();
-                } else {
-                    boot_log::force_uart_line_raw(
-                        "[uart] serial console cutover deferred backend=bcm2711-mini-uart reason=driver-task-rx-proof-missing action=root-uart-console",
-                    );
-                    crate::serial::emit_serial_runtime_cutover_deferred(
-                        "driver-task-rx-proof-missing",
-                    );
-                }
-            }
-        }
         if let Some(runtime) = self.local_seat.as_mut() {
             #[cfg(not(all(
                 feature = "kernel",
@@ -2133,6 +2134,41 @@ where
             runtime.mirror_line(CONSOLE_PROMPT);
         }
         self.schedule_post_prompt_local_seat_attach();
+        self.run_post_prompt_local_seat_attach_before_serial_cutover();
+        #[cfg(feature = "kernel")]
+        {
+            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                && crate::serial::resume_serial_driver_task_runtime_after_prompt()
+            {
+                if crate::serial::probe_driver_task_rx_after_attach()
+                    && crate::serial::serial_driver_task_interactive_cutover_allowed()
+                    && self.serial.use_driver_task_client_after_attach()
+                {
+                    boot_log::force_uart_line_raw(
+                        "[uart] serial console cutover backend=driver-task-serial-client owner=serial",
+                    );
+                    boot_log::force_uart_line_raw(
+                        "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover acceptance=green reason=driver-task-attached",
+                    );
+                    crate::serial::emit_serial_input_route_trace(
+                        "root-console-start",
+                        "driver-task-rx-proven",
+                    );
+                    self.serial.poll_io();
+                } else {
+                    boot_log::force_uart_line_raw(
+                        "[uart] serial console cutover deferred backend=bcm2711-mini-uart reason=driver-task-rx-proof-missing action=root-uart-console",
+                    );
+                    crate::serial::emit_serial_runtime_cutover_deferred(
+                        "driver-task-rx-proof-missing",
+                    );
+                    crate::serial::emit_serial_input_route_trace(
+                        "root-console-start",
+                        "driver-task-rx-proof-missing",
+                    );
+                }
+            }
+        }
         if !self.banner_emitted {
             log::info!(target: "event", "[event] root console banner emitted");
             self.banner_emitted = true;
@@ -2328,6 +2364,43 @@ where
         self.console_output_flush_active = false;
     }
 
+    #[cfg(feature = "kernel")]
+    fn maybe_emit_serial_input_idle_trace(&mut self, physical_input_active: bool) {
+        if !self.banner_emitted {
+            return;
+        }
+        if physical_input_active || self.serial.interactive_input_active() {
+            self.serial_input_idle_trace_next_ms = self
+                .now_ms
+                .saturating_add(SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS);
+            return;
+        }
+        if self.serial.tx_pending()
+            || self.console_output_flush_active
+            || !self.pending_console_output.is_empty()
+            || self.physical_console_input_pending_for_output()
+        {
+            self.serial_input_idle_trace_next_ms = self
+                .now_ms
+                .saturating_add(SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS);
+            return;
+        }
+        if self.serial_input_idle_trace_count >= SERIAL_INPUT_IDLE_TRACE_LIMIT {
+            return;
+        }
+        if self.now_ms < self.serial_input_idle_trace_next_ms {
+            return;
+        }
+        crate::serial::emit_serial_input_idle_trace(self.now_ms, self.serial.tx_pending());
+        self.serial_input_idle_trace_count = self.serial_input_idle_trace_count.saturating_add(1);
+        self.serial_input_idle_trace_next_ms = self
+            .now_ms
+            .saturating_add(SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS);
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    fn maybe_emit_serial_input_idle_trace(&mut self, _physical_input_active: bool) {}
+
     fn mirror_local_seat_line_if_ready(&mut self, line: &str) {
         if self.serial.interactive_input_active() {
             return;
@@ -2347,6 +2420,7 @@ where
             }
             self.post_prompt_local_seat_attach_pending = true;
             self.post_prompt_local_seat_attach_idle_turns = 0;
+            self.post_prompt_local_seat_attach_blocked_traces = 0;
             self.post_prompt_local_seat_attach_not_before_ms = self
                 .now_ms
                 .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS);
@@ -2357,17 +2431,46 @@ where
         }
     }
 
+    fn run_post_prompt_local_seat_attach_before_serial_cutover(&mut self) {
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            if !self.post_prompt_local_seat_attach_pending || self.local_seat.is_none() {
+                return;
+            }
+            boot_log::force_uart_line_raw(
+                "[local-seat] post-prompt attach begin reason=before-serial-cutover",
+            );
+            self.post_prompt_local_seat_attach_pending = false;
+            self.post_prompt_local_seat_attach_idle_turns = 0;
+            self.post_prompt_local_seat_attach_blocked_traces = 0;
+            self.arm_post_prompt_local_seat_once();
+        }
+    }
+
     fn maybe_run_post_prompt_local_seat_attach(&mut self, physical_input_active: bool) {
         #[cfg(all(feature = "kernel", feature = "usb"))]
         {
             if !self.post_prompt_local_seat_attach_pending {
                 return;
             }
-            if physical_input_active
-                || self.serial.interactive_input_active()
-                || self.serial.tx_pending()
-                || self.now_ms < self.post_prompt_local_seat_attach_not_before_ms
-            {
+            let blocked_reason = if physical_input_active {
+                Some("physical-input-active")
+            } else if self.serial.interactive_input_active() {
+                Some("serial-input-active")
+            } else if self.serial.tx_pending() {
+                Some("serial-tx-pending")
+            } else if self.now_ms < self.post_prompt_local_seat_attach_not_before_ms {
+                Some("idle-grace")
+            } else {
+                None
+            };
+            if let Some(reason) = blocked_reason {
+                self.emit_post_prompt_local_seat_attach_blocked(reason);
                 self.post_prompt_local_seat_attach_idle_turns = 0;
                 return;
             }
@@ -2385,6 +2488,27 @@ where
         }
         #[cfg(not(all(feature = "kernel", feature = "usb")))]
         let _ = physical_input_active;
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn emit_post_prompt_local_seat_attach_blocked(&mut self, _reason: &'static str) {
+        if self.post_prompt_local_seat_attach_blocked_traces >= 8 {
+            return;
+        }
+        self.post_prompt_local_seat_attach_blocked_traces = self
+            .post_prompt_local_seat_attach_blocked_traces
+            .saturating_add(1);
+        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        {
+            let reason = _reason;
+            let mut line = HeaplessString::<160>::new();
+            let _ = write!(
+                line,
+                "[local-seat] post-prompt attach deferred reason={} idle_turns={} now_ms={}",
+                reason, self.post_prompt_local_seat_attach_idle_turns, self.now_ms
+            );
+            boot_log::force_uart_line_raw(line.as_str());
+        }
     }
 
     fn arm_post_prompt_local_seat_once(&mut self) {
@@ -5765,6 +5889,8 @@ where
             consumed = true;
             lines = lines.saturating_add(1);
             self.last_input_source = ConsoleInputSource::Serial;
+            #[cfg(feature = "kernel")]
+            crate::serial::emit_serial_input_consume_trace(line.len());
             if !self.local_line.is_empty() {
                 self.local_line.clear();
                 self.audit
@@ -10112,6 +10238,40 @@ mod tests {
         .expect("serial output must be utf8");
         assert!(idle_turn.contains("[log] background burst"), "{idle_turn}");
         assert_eq!(pump.metrics().physical_console_output_flushed, 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_input_idle_trace_waits_for_quiet_console_output() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.banner_emitted = true;
+        pump.now_ms = SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS;
+        pump.serial.enqueue_tx(b"busy");
+
+        pump.maybe_emit_serial_input_idle_trace(false);
+
+        assert_eq!(pump.serial_input_idle_trace_count, 0);
+        assert_eq!(
+            pump.serial_input_idle_trace_next_ms,
+            SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS * 2
+        );
+
+        pump.serial.flush_tx();
+        pump.serial.driver_mut().drain_tx();
+        pump.now_ms = pump.serial_input_idle_trace_next_ms;
+        pump.maybe_emit_serial_input_idle_trace(false);
+
+        assert_eq!(pump.serial_input_idle_trace_count, 0);
     }
 
     #[test]

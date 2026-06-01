@@ -20,12 +20,13 @@ use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_ENGINE_INIT_AUX,
-    DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
-    DRIVER_RUNTIME_INIT_AUX,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
+    DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX,
 };
 use pi4_driver_abi::{
-    DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR, DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
+    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
 };
 
 /// Hardware driver instance covered by a scheduling contract.
@@ -928,6 +929,10 @@ pub const DRIVER_TASK_CHILD_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr = 3;
 #[cfg(feature = "kernel")]
 pub const DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
     DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT as sel4_sys::seL4_CPtr;
+/// Child CSpace slot used by USB to call the PCIe/VL805 bus-owner runtime.
+#[cfg(feature = "kernel")]
+pub const DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
+    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT as sel4_sys::seL4_CPtr;
 
 /// Fixed driver-local virtual address for the root/driver command page.
 pub const DRIVER_TASK_RING_VADDR: usize = 0x7000_0000;
@@ -953,6 +958,8 @@ pub const DRIVER_TASK_SHARED_BUFFER_VADDR: usize = 0x70c0_0000;
 
 /// Fixed CYW43-local virtual address for the SDIO owner command ring page.
 pub const DRIVER_TASK_SDIO_BUS_RING_VADDR: usize = DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR as usize;
+/// Fixed USB-local virtual address for the PCIe owner command ring page.
+pub const DRIVER_TASK_PCIE_BUS_RING_VADDR: usize = DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR as usize;
 
 /// Offset of the first fixed-layout completion record within the ring page.
 pub const DRIVER_TASK_RING_COMPLETION_OFFSET: usize = 64;
@@ -1695,6 +1702,7 @@ pub const DRIVER_TASK_KEY_PCIE_ROOT: usize = 8;
 pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 /// Bounded send/yield attempts for the first linked-runtime ring handshake.
 pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
+const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 
 #[cfg(feature = "kernel")]
@@ -2178,6 +2186,10 @@ fn driver_task_bounded_turn_bus_owner(
         && command.arg0 == DriverTaskHotPath::Cyw43Wifi.as_u32()
     {
         Some(SDIO_HOST_DRIVER_TASK_CONTRACT)
+    } else if matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.arg0 == DriverTaskHotPath::UsbKeyboard.as_u32()
+    {
+        Some(PCIE_ROOT_DRIVER_TASK_CONTRACT)
     } else {
         None
     }
@@ -2884,6 +2896,15 @@ fn driver_task_ring_attempt_limit(
 ) -> usize {
     if !driver_task_ring_mode_uses_bounded_send(mode) {
         return DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::NonBlocking
+        && command.aux0 == 0
+        && matches!(
+            contract.kind,
+            DriverTaskKind::Serial | DriverTaskKind::LocalSeatUsb | DriverTaskKind::HdmiText
+        )
+    {
+        return DRIVER_TASK_PROMPT_RING_ATTEMPTS;
     }
     if matches!(contract.kind, DriverTaskKind::WifiNic) && command.aux0 != 0 {
         DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
@@ -5854,7 +5875,31 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn wifi_bounded_turn_boosts_sdio_bus_owner() {
+    fn prompt_side_local_seat_commands_use_short_nonblocking_window() {
+        let command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::HdmiText,
+            DriverTaskBudgetGrant::from_contract(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 80,
+                flags: 0,
+            },
+        );
+
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn bounded_turn_boosts_linked_bus_owners() {
         let cyw43 = DriverTaskCommandRecord::pi4_hot_path(
             0,
             DriverTaskHotPath::Cyw43Wifi,
@@ -5868,6 +5913,21 @@ mod tests {
         assert_eq!(
             driver_task_bounded_turn_bus_owner(CYW43_WIFI_DRIVER_TASK_CONTRACT, cyw43),
             Some(SDIO_HOST_DRIVER_TASK_CONTRACT)
+        );
+
+        let usb = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        assert_eq!(
+            driver_task_bounded_turn_bus_owner(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT, usb),
+            Some(PCIE_ROOT_DRIVER_TASK_CONTRACT)
         );
 
         let genet = DriverTaskCommandRecord::pi4_hot_path(

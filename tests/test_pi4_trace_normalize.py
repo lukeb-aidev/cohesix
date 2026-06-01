@@ -414,6 +414,25 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
 
 
+def test_gate_summary_treats_serial_input_trace_as_responsive_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "SERIAL_INPUT_TRACE stage=route route=bcm2711-mini-uart "
+            "driver_runtime_attached=1 client_active=0 rx_proven=0 "
+            "root_context_service=skipped reason=driver-task-rx-proof-missing",
+            "SERIAL_INPUT_TRACE stage=uart-rx route=bcm2711-mini-uart "
+            "bytes=5 rx_depth=5 line_len=0 first=0x68 last=0x0a",
+            "SERIAL_INPUT_TRACE stage=line-ready route=bcm2711-mini-uart "
+            "line_len=4 rx_depth=0 partial_len=0",
+            "SERIAL_INPUT_TRACE stage=consume-line route=bcm2711-mini-uart "
+            "line_len=4 rx_depth=0 partial_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["SERIAL_RESPONSIVE_PROOF"] == "yes"
+
+
 def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
     """Dedicated closure must prove substrate, capset, fault, revoke, and scheduling."""
 
@@ -1117,12 +1136,44 @@ def test_gate_summary_labels_usb_first_report_enumeration_blocker() -> None:
     record = normalizer.summarize_gates(events).to_record()
     assert (
         record["USB_BLOCKER"]
-        == "usb-keyboard-first-report-blocked-keyboard-enumeration"
+        == "usb-xhci-ready-keyboard-not-enumerated"
     )
     assert (
         record["USB_DRIVER_TASK_FRONTIER"]
         == "usb-keyboard-first-report-blocked-keyboard-enumeration"
     )
+
+
+def test_gate_summary_preserves_usb_runtime_enumeration_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-enumeration-retry "
+            "status=root-port-connected acceptance=no code=1 "
+            "detail=517 result=1 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert (
+        record["USB_DRIVER_TASK_FRONTIER"]
+        == "usb-keyboard-enumeration-retry-root-port-connected"
+    )
+
+
+def test_gate_summary_labels_cyw43_transport_substage_faults() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-transport-init "
+            "status=fault acceptance=no code=5 detail=21283 "
+            "result=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_EXACT"] == "cyw43-backplane-chipcommon-read"
+    assert record["WIFI_PHASE"] == "cyw43-transport-init"
 
 
 def test_gate_summary_labels_pcie_hal_prep_gate() -> None:
@@ -1244,6 +1295,20 @@ def test_gate_summary_labels_cyw43_sdio_descriptor_fault_detail() -> None:
     record = normalizer.summarize_gates(events).to_record()
     assert record["WIFI_EXACT"] == "cyw43-sdio-descriptor-unavailable"
     assert record["WIFI_PHASE"] == "cyw43-transport-init"
+
+
+def test_gate_summary_labels_cyw43_firmware_prep_fault_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-firmware-prep status=fault "
+            "acceptance=no code=5 detail=21256 result=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_EXACT"] == "cyw43-firmware-prep"
+    assert record["WIFI_PHASE"] == "cyw43-firmware-prep"
 
 
 def test_gate_summary_preserves_cyw43_transport_detail_for_replay_blocker() -> None:

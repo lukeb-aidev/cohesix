@@ -48,9 +48,14 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     target_os = "none"
 ))]
 use pi4_driver_abi::{
-    DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN,
+    DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN,
     DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN,
-    DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY, DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED, DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
 };
 #[cfg(all(
@@ -1650,6 +1655,11 @@ fn local_seat_usb_engine_init_ready(
             && matches!(
                 completion.detail,
                 DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+                    | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+                    | DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+                    | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
+                    | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
+                    | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
                     | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
                     | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
                     | DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
@@ -1733,6 +1743,46 @@ fn local_seat_usb_keyboard_enum_status(
         }
         Some(completion)
             if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY =>
+        {
+            "command-ring-ready"
+        }
+        Some(completion)
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED =>
+        {
+            "root-port-connected"
+        }
+        Some(completion)
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED =>
+        {
+            "device-addressed"
+        }
+        Some(completion)
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR =>
+        {
+            "device-descriptor"
+        }
+        Some(completion)
+            if completion.code
+                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result == 1
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR =>
+        {
+            "config-descriptor"
+        }
+        Some(completion)
+            if completion.code
                 == crate::hal::driver_task::DriverTaskCompletionCode::Fault.as_u16() =>
         {
             "fault"
@@ -1756,6 +1806,11 @@ fn local_seat_usb_keyboard_enumeration_progress(
         && matches!(
             completion.detail,
             DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY

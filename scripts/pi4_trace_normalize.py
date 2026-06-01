@@ -137,6 +137,7 @@ USB_OUTCOME_BLOCKERS = {
     "keyboard-first-byte",
     "no-connected-ports",
     "no-keyboard-found",
+    "usb-xhci-ready-keyboard-not-enumerated",
     "pcie-xhci-device-coverage-missing",
     "pcie-owner-ring-unavailable",
     "pcie-vl805-config-contract-missing",
@@ -714,6 +715,7 @@ def classify_domain(line: str) -> str | None:
         return "driver"
     if (
         line.startswith("SERIAL_ECHO")
+        or line.startswith("SERIAL_INPUT_TRACE")
         or line.startswith("USB_BURST")
         or line.startswith("HDMI_RESPONSIVE")
         or "serial echo" in lower
@@ -1818,6 +1820,16 @@ def normalize_wifi_exact(value: str) -> str:
         "0x531e": "cyw43-backplane-device-control",
         "21279": "cyw43-backplane-armcr4-reset",
         "0x531f": "cyw43-backplane-armcr4-reset",
+        "21280": "cyw43-firmware-range",
+        "0x5320": "cyw43-firmware-range",
+        "21256": "cyw43-firmware-prep",
+        "0x5308": "cyw43-firmware-prep",
+        "21281": "cyw43-backplane-window",
+        "0x5321": "cyw43-backplane-window",
+        "21282": "cyw43-post-release-cardcap",
+        "0x5322": "cyw43-post-release-cardcap",
+        "21283": "cyw43-backplane-chipcommon-read",
+        "0x5323": "cyw43-backplane-chipcommon-read",
         "20738": "cyw43-sdio-descriptor-unavailable",
         "0x5102": "cyw43-sdio-descriptor-unavailable",
     }
@@ -4668,6 +4680,10 @@ def line_has_serial_responsiveness(raw: str, fields: dict[str, str]) -> bool:
     return (
         raw.startswith("serial_echo")
         or "serial echo" in raw
+        or (
+            "serial_input_trace" in raw
+            and fields.get("stage") in {"consume-line", "line-ready"}
+        )
         or fields.get("serial_responsive") in {"1", "true", "yes"}
     )
 
@@ -5223,6 +5239,7 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
     outstanding: dict[int, str] = {}
     latest_usb_stage: str | None = None
     latest_usb_status: str | None = None
+    latest_usb_engine_detail: int | None = None
     latest_usb_blocking_call = False
     for event in events:
         if event.domain != "driver":
@@ -5235,6 +5252,19 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
         if "driver_task_resource_init" in raw:
             latest_usb_stage = fields.get("stage", "").lower()
             latest_usb_status = fields.get("status", "").lower()
+            detail = parse_hex_int(fields.get("detail"))
+            if contract == "usb-local-seat" and detail in {
+                0x0201,
+                0x0204,
+                0x0205,
+                0x0206,
+                0x0207,
+                0x0208,
+                0x0210,
+                0x0211,
+                0x0202,
+            }:
+                latest_usb_engine_detail = detail
             if contract == "pcie-root" and latest_usb_stage in {
                 "usb-prereq-pcie-replay",
                 "usb-prereq-pcie-engine-init",
@@ -5259,10 +5289,21 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
 
     if latest_usb_stage in {
         "usb-keyboard-enumeration",
+        "usb-keyboard-enumeration-retry",
         "usb-keyboard-first-report",
         "usb-owner-state",
     }:
+        if (
+            latest_usb_status == "blocked-keyboard-enumeration"
+            and latest_usb_engine_detail == 0x0201
+        ):
+            return "usb-xhci-ready-keyboard-not-enumerated"
         if latest_usb_status in {
+            "command-ring-ready",
+            "root-port-connected",
+            "device-addressed",
+            "device-descriptor",
+            "config-descriptor",
             "hub-topology-no-keyboard",
             "hid-endpoint-not-ready",
             "blocked-keyboard-enumeration",

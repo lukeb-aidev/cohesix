@@ -138,6 +138,12 @@ static SERIAL_DRIVER_TASK_CLIENT_ACTIVE: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
+static SERIAL_INPUT_ROUTE_LOGGED: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static SERIAL_INPUT_RX_TRACE_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static SERIAL_INPUT_LINE_TRACE_COUNT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
 static SERIAL_PROMPT_INPUT_SHADOW: SpinMutex<HeaplessString<DEFAULT_LINE_CAPACITY>> =
     SpinMutex::new(HeaplessString::new());
 
@@ -565,6 +571,150 @@ fn serial_driver_task_transport_active() -> bool {
 }
 
 #[cfg(feature = "kernel")]
+const fn serial_driver_task_rx_completion_proves_input(
+    completion_code: u16,
+    accepted: usize,
+) -> bool {
+    completion_code == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
+        && accepted != 0
+}
+
+#[cfg(feature = "kernel")]
+const fn serial_root_context_service_allowed_policy(owner_state_active: bool) -> bool {
+    !owner_state_active
+}
+
+#[cfg(feature = "kernel")]
+fn serial_root_context_service_allowed() -> bool {
+    serial_root_context_service_allowed_policy(
+        crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn serial_input_route_label() -> &'static str {
+    if SERIAL_DRIVER_TASK_CLIENT_ACTIVE.load(AtomicOrdering::Acquire) != 0 {
+        "driver-task-serial-client"
+    } else if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        "bcm2711-mini-uart"
+    } else {
+        "profile-serial-driver"
+    }
+}
+
+#[cfg(feature = "kernel")]
+const SERIAL_INPUT_RX_TRACE_LIMIT: u32 = 8;
+#[cfg(feature = "kernel")]
+const SERIAL_INPUT_LINE_TRACE_LIMIT: u32 = 6;
+
+#[cfg(feature = "kernel")]
+fn serial_input_trace_budget_take(counter: &AtomicU32, limit: u32) -> bool {
+    counter.fetch_add(1, AtomicOrdering::AcqRel) < limit
+}
+
+#[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
+fn emit_serial_input_trace(line: &str) {
+    crate::bootstrap::log::force_uart_line_raw(line);
+}
+
+#[cfg(all(
+    feature = "kernel",
+    not(all(target_arch = "aarch64", target_os = "none"))
+))]
+fn emit_serial_input_trace(_line: &str) {}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn emit_serial_input_route_trace(stage: &str, reason: &str) {
+    let mut line = HeaplessString::<224>::new();
+    let _ = fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "SERIAL_INPUT_TRACE stage={stage} route={} driver_runtime_attached={} client_active={} rx_proven={} root_context_service={} reason={reason}",
+            serial_input_route_label(),
+            serial_driver_task_runtime_attached() as u8,
+            (SERIAL_DRIVER_TASK_CLIENT_ACTIVE.load(AtomicOrdering::Acquire) != 0) as u8,
+            (SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.load(AtomicOrdering::Acquire) != 0) as u8,
+            if serial_root_context_service_allowed() { "allowed" } else { "skipped" },
+        ),
+    );
+    emit_serial_input_trace(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_serial_input_route_trace_once(stage: &str, reason: &str) {
+    if SERIAL_INPUT_ROUTE_LOGGED
+        .compare_exchange(0, 1, AtomicOrdering::AcqRel, AtomicOrdering::Acquire)
+        .is_ok()
+    {
+        emit_serial_input_route_trace(stage, reason);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_serial_input_poll_trace(
+    stage: &str,
+    count: usize,
+    rx_depth: usize,
+    line_len: usize,
+    first: u8,
+    last: u8,
+) {
+    if !serial_input_trace_budget_take(&SERIAL_INPUT_RX_TRACE_COUNT, SERIAL_INPUT_RX_TRACE_LIMIT) {
+        return;
+    }
+    let mut line = HeaplessString::<192>::new();
+    let _ = fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "SERIAL_INPUT_TRACE stage={stage} route={} bytes={count} rx_depth={rx_depth} line_len={line_len} first=0x{first:02x} last=0x{last:02x}",
+            serial_input_route_label(),
+        ),
+    );
+    emit_serial_input_trace(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_serial_input_line_trace(stage: &str, len: usize, rx_depth: usize, line_len: usize) {
+    if !serial_input_trace_budget_take(
+        &SERIAL_INPUT_LINE_TRACE_COUNT,
+        SERIAL_INPUT_LINE_TRACE_LIMIT,
+    ) {
+        return;
+    }
+    let mut line = HeaplessString::<160>::new();
+    let _ = fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "SERIAL_INPUT_TRACE stage={stage} route={} line_len={len} rx_depth={rx_depth} partial_len={line_len}",
+            serial_input_route_label(),
+        ),
+    );
+    emit_serial_input_trace(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn emit_serial_input_consume_trace(len: usize) {
+    emit_serial_input_line_trace("consume-line", len, 0, 0);
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn emit_serial_input_idle_trace(now_ms: u64, tx_pending: bool) {
+    let mut line = HeaplessString::<192>::new();
+    let _ = fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "SERIAL_INPUT_TRACE stage=idle route={} now_ms={now_ms} driver_runtime_attached={} client_active={} rx_proven={} tx_pending={}",
+            serial_input_route_label(),
+            serial_driver_task_runtime_attached() as u8,
+            (SERIAL_DRIVER_TASK_CLIENT_ACTIVE.load(AtomicOrdering::Acquire) != 0) as u8,
+            (SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.load(AtomicOrdering::Acquire) != 0) as u8,
+            tx_pending as u8,
+        ),
+    );
+    emit_serial_input_trace(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
 pub(crate) fn driver_task_client_read_byte() -> nb::Result<u8, SerialError> {
     if let Some(byte) = SERIAL_CLIENT_RX.lock().dequeue() {
         return Ok(byte);
@@ -580,7 +730,8 @@ pub(crate) fn preserve_driver_task_rx_after_raw_uart() {
     if !serial_driver_task_transport_active() {
         return;
     }
-    let _ = driver_task_client_poll_rx_into_client_queue();
+    // Raw UART logging can run from diagnostic paths that must never block on a
+    // driver-task reply. Prompt polling performs the real bounded RX service.
 }
 
 #[cfg(feature = "kernel")]
@@ -608,10 +759,14 @@ fn driver_task_client_poll_rx_into_client_queue() -> usize {
             flags: 0,
         },
     );
-    let Some(completion) = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+    let Some(completion) =
+        crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
     else {
         return 0;
     };
+    if completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16() {
+        return 0;
+    }
     if completion.code != crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16() {
         return 0;
     }
@@ -628,10 +783,19 @@ fn driver_task_client_poll_rx_into_client_queue() -> usize {
         }
         accepted = accepted.saturating_add(1);
     }
-    if accepted != 0 {
+    if serial_driver_task_rx_completion_proves_input(completion.code, accepted) {
         SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.store(1, AtomicOrdering::Release);
     }
     accepted
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn probe_driver_task_rx_after_attach() -> bool {
+    if !serial_driver_task_runtime_attached() {
+        return false;
+    }
+    let _ = driver_task_client_poll_rx_into_client_queue();
+    SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.load(AtomicOrdering::Acquire) != 0
 }
 
 #[cfg(feature = "kernel")]
@@ -652,7 +816,7 @@ pub(crate) fn driver_task_client_write_byte(byte: u8) -> nb::Result<(), SerialEr
         crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
         frame,
     );
-    match crate::hal::driver_task::run_driver_task_ring_service(contract, command) {
+    match crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command) {
         Some(completion)
             if completion.code
                 == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
@@ -872,44 +1036,51 @@ where
             if serial_driver_task_transport_active() {
                 return self.poll_driver_task_rx_into_queue(contract);
             }
-            crate::hal::driver_task::register_driver_task_root_context_ring_service(
-                contract,
-                self as *mut Self as usize,
-                serial_ring_service_driver_task::<D, RX, TX, LINE>,
-            );
-            let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-                0,
-                crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-                crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-                crate::hal::driver_task::DriverFrameDescriptor {
-                    offset: 0,
-                    len: 0,
-                    flags:
-                        crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
-                },
-            );
-            if let Some(completion) =
-                crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-            {
-                return completion.code
-                    == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                    && completion.result != 0;
-            }
-            // SAFETY: The HAL admits this compatibility callback only for
-            // QEMU/host profiles. Physical Pi 4 builds return None without
-            // compiling callback slot state.
-            if let Some(result) = unsafe {
-                crate::hal::driver_task::try_driver_task_compat_service(
+            if serial_root_context_service_allowed() {
+                crate::hal::driver_task::register_driver_task_root_context_ring_service(
                     contract,
                     self as *mut Self as usize,
-                    serial_poll_io_driver_task::<D, RX, TX, LINE>,
-                )
-            } {
-                return result != 0;
-            }
-            if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
-                self.telemetry.driver_task_budget_overrun();
-                return false;
+                    serial_ring_service_driver_task::<D, RX, TX, LINE>,
+                );
+                let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+                    0,
+                    crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                    crate::hal::driver_task::DriverFrameDescriptor {
+                        offset: 0,
+                        len: 0,
+                        flags:
+                            crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
+                    },
+                );
+                if let Some(completion) =
+                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                {
+                    return completion.code
+                        == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                        && completion.result != 0;
+                }
+                // SAFETY: The HAL admits this compatibility callback only for
+                // QEMU/host profiles. Physical Pi 4 builds return None without
+                // compiling callback slot state.
+                if let Some(result) = unsafe {
+                    crate::hal::driver_task::try_driver_task_compat_service(
+                        contract,
+                        self as *mut Self as usize,
+                        serial_poll_io_driver_task::<D, RX, TX, LINE>,
+                    )
+                } {
+                    return result != 0;
+                }
+                if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
+                    self.telemetry.driver_task_budget_overrun();
+                    return false;
+                }
+            } else {
+                emit_serial_input_route_trace_once(
+                    "poll-route",
+                    "physical-root-mini-uart-fallback",
+                );
             }
         }
         self.poll_io_current_tcb(contract)
@@ -925,6 +1096,9 @@ where
         };
         let mut budget_exhausted = false;
         let mut rx_activity = false;
+        let mut accepted = 0usize;
+        let mut first = 0u8;
+        let mut last = 0u8;
         // Drain RX side first so newly available bytes can be processed in the
         // same cycle.
         loop {
@@ -938,6 +1112,11 @@ where
                         self.telemetry.driver_task_budget_overrun();
                         break;
                     }
+                    if accepted == 0 {
+                        first = byte;
+                    }
+                    last = byte;
+                    accepted = accepted.saturating_add(1);
                     rx_activity = true;
                     if self.rx.enqueue(byte).is_err() {
                         self.telemetry.rx_overflow();
@@ -955,6 +1134,17 @@ where
             self.telemetry.driver_task_budget_overrun();
         } else {
             with_uart_tx_lock(|| self.flush_tx_unlocked(&mut budget));
+        }
+        #[cfg(feature = "kernel")]
+        if accepted != 0 {
+            emit_serial_input_poll_trace(
+                "uart-rx",
+                accepted,
+                self.rx.len(),
+                self.line.len(),
+                first,
+                last,
+            );
         }
         rx_activity
     }
@@ -976,39 +1166,48 @@ where
                 self.telemetry.driver_task_budget_overrun();
                 return;
             }
-            crate::hal::driver_task::register_driver_task_root_context_ring_service(
-                contract,
-                self as *mut Self as usize,
-                serial_ring_service_driver_task::<D, RX, TX, LINE>,
-            );
-            let mut command = crate::hal::driver_task::DriverTaskCommandRecord::flush(
-                0,
-                crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-            );
-            command.flags =
-                crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
-            command.frame.flags =
-                crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
-            if crate::hal::driver_task::run_driver_task_ring_service(contract, command).is_some() {
-                return;
-            }
-            // SAFETY: The HAL admits this compatibility callback only for
-            // QEMU/host profiles. Physical Pi 4 builds return None without
-            // compiling callback slot state.
-            if unsafe {
-                crate::hal::driver_task::try_driver_task_compat_service(
+            if serial_root_context_service_allowed() {
+                crate::hal::driver_task::register_driver_task_root_context_ring_service(
                     contract,
                     self as *mut Self as usize,
-                    serial_flush_tx_driver_task::<D, RX, TX, LINE>,
-                )
-            }
-            .is_some()
-            {
-                return;
-            }
-            if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
-                self.telemetry.driver_task_budget_overrun();
-                return;
+                    serial_ring_service_driver_task::<D, RX, TX, LINE>,
+                );
+                let mut command = crate::hal::driver_task::DriverTaskCommandRecord::flush(
+                    0,
+                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+                );
+                command.flags =
+                    crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
+                command.frame.flags =
+                    crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE;
+                if crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+                    .is_some()
+                {
+                    return;
+                }
+                // SAFETY: The HAL admits this compatibility callback only for
+                // QEMU/host profiles. Physical Pi 4 builds return None without
+                // compiling callback slot state.
+                if unsafe {
+                    crate::hal::driver_task::try_driver_task_compat_service(
+                        contract,
+                        self as *mut Self as usize,
+                        serial_flush_tx_driver_task::<D, RX, TX, LINE>,
+                    )
+                }
+                .is_some()
+                {
+                    return;
+                }
+                if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
+                    self.telemetry.driver_task_budget_overrun();
+                    return;
+                }
+            } else {
+                emit_serial_input_route_trace_once(
+                    "flush-route",
+                    "physical-root-mini-uart-fallback",
+                );
             }
         }
         self.flush_tx_current_tcb(contract);
@@ -1039,7 +1238,7 @@ where
             },
         );
         if let Some(completion) =
-            crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+            crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
         {
             if completion.code
                 == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
@@ -1144,7 +1343,8 @@ where
             crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
             frame,
         );
-        let completion = crate::hal::driver_task::run_driver_task_ring_service(contract, command);
+        let completion =
+            crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command);
         let written = match completion {
             Some(completion)
                 if completion.code
@@ -1308,6 +1508,8 @@ where
                     self.emit_newline();
                     let mut completed = HeaplessString::new();
                     core::mem::swap(&mut completed, &mut self.line);
+                    #[cfg(feature = "kernel")]
+                    emit_serial_input_line_trace("line-ready", completed.len(), self.rx.len(), 0);
                     return Some(completed);
                 }
                 b'\n' => {
@@ -1316,6 +1518,8 @@ where
                     self.emit_newline();
                     let mut completed = HeaplessString::new();
                     core::mem::swap(&mut completed, &mut self.line);
+                    #[cfg(feature = "kernel")]
+                    emit_serial_input_line_trace("line-ready", completed.len(), self.rx.len(), 0);
                     return Some(completed);
                 }
                 0x08 | 0x7f => {
@@ -1832,6 +2036,30 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn physical_pi_serial_idle_completion_is_not_rx_proof() {
+        assert!(!serial_driver_task_rx_completion_proves_input(
+            crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16(),
+            0
+        ));
+        assert!(!serial_driver_task_rx_completion_proves_input(
+            crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16(),
+            0
+        ));
+        assert!(serial_driver_task_rx_completion_proves_input(
+            crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16(),
+            1
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn physical_pi_serial_fallback_bypasses_root_context_service() {
+        assert!(!serial_root_context_service_allowed_policy(true));
+        assert!(serial_root_context_service_allowed_policy(false));
+    }
+
     #[test]
     fn serial_owner_runtime_record_is_fixed_layout_and_acceptance_ready() {
         assert!(
@@ -1899,6 +2127,24 @@ mod tests {
 
         assert_eq!(line.as_str(), "wifx");
         assert!(SERIAL_PROMPT_INPUT_SHADOW.lock().is_empty());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_input_trace_budget_caps_diagnostic_bursts() {
+        let counter = AtomicU32::new(0);
+
+        for _ in 0..SERIAL_INPUT_RX_TRACE_LIMIT {
+            assert!(serial_input_trace_budget_take(
+                &counter,
+                SERIAL_INPUT_RX_TRACE_LIMIT
+            ));
+        }
+
+        assert!(!serial_input_trace_budget_take(
+            &counter,
+            SERIAL_INPUT_RX_TRACE_LIMIT
+        ));
     }
 
     #[test]

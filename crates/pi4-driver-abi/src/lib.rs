@@ -21,6 +21,16 @@ pub const DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY: u16 = 0x0201;
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY: u16 = 0x0202;
 /// USB service detail: keyboard endpoint is armed, but no interrupt report has arrived.
 pub const DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING: u16 = 0x0203;
+/// USB runtime init detail: xHCI command and event rings produced a completion.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY: u16 = 0x0204;
+/// USB runtime init detail: at least one root port reported a connected device.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED: u16 = 0x0205;
+/// USB runtime init detail: xHCI addressed a root or hub child device.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED: u16 = 0x0206;
+/// USB runtime init detail: a device descriptor transfer completed.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR: u16 = 0x0207;
+/// USB runtime init detail: configuration descriptor transfer completed.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR: u16 = 0x0208;
 /// USB runtime init detail: hub topology was traversed, but no boot keyboard endpoint was ready.
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN: u16 = 0x0210;
 /// USB runtime init detail: a HID keyboard endpoint was found, but final attach did not complete.
@@ -45,6 +55,8 @@ pub const DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME: u16 = 6;
 pub const DRIVER_RUNTIME_CYW43_OP_ETH_TX: u16 = 7;
 /// CYW43 operation: poll the Function 2 RX path.
 pub const DRIVER_RUNTIME_CYW43_OP_RX_POLL: u16 = 8;
+/// CYW43 operation: prepare the firmware upload transport before streaming chunks.
+pub const DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP: u16 = 9;
 /// PCIe runtime command operation: read one 32-bit xHCI/VL805 register.
 pub const DRIVER_RUNTIME_PCIE_OP_PORT_READ: u16 = 1;
 /// PCIe runtime command operation: write one 32-bit xHCI/VL805 register.
@@ -115,8 +127,12 @@ pub const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
 pub const DRIVER_RUNTIME_RING_PAGE_BYTES: u16 = 4096;
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
+/// Child CSpace slot where USB receives the PCIe/VL805 bus-owner endpoint cap.
+pub const DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT: u32 = 9;
 /// Child CSpace slot where CYW43 receives the SDIO bus-owner endpoint cap.
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT: u32 = 8;
+/// USB-local virtual address where root maps the PCIe owner command ring.
+pub const DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR: u64 = 0x70e0_1000;
 /// CYW43-local virtual address where root maps the SDIO owner command ring.
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR: u64 = 0x70e0_0000;
 /// Command flag: root delivered this turn with send-only IPC and expects no reply cap.
@@ -415,6 +431,7 @@ impl DriverRuntimeCyw43CommandDescriptor {
     #[must_use]
     pub const fn valid(self) -> bool {
         let known_op = self.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+            || self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP
             || self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
             || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
             || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL
@@ -427,6 +444,7 @@ impl DriverRuntimeCyw43CommandDescriptor {
             || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
             || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX;
         let zero_payload = self.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+            || self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP
             || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL
             || self.op == DRIVER_RUNTIME_CYW43_OP_RELEASE
             || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL;

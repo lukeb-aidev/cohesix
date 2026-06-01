@@ -36,10 +36,11 @@ use crate::net::{
 };
 use pi4_driver_abi::{
     DriverRuntimeCyw43CommandDescriptor, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-    DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK, DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
-    DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL, DRIVER_RUNTIME_CYW43_OP_RELEASE,
-    DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT, DRIVER_RUNTIME_NET_INIT_AUX,
-    DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE, DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
+    DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK, DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+    DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK, DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL,
+    DRIVER_RUNTIME_CYW43_OP_RELEASE, DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
 };
 
 const GENET_DRIVER_TASK_MAC: EthernetAddress =
@@ -455,6 +456,14 @@ where
         },
         &[],
     )?;
+    submit_cyw43_runtime_command(
+        contract,
+        DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        },
+        &[],
+    )?;
     stream_cyw43_runtime_payload(
         contract,
         DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
@@ -707,6 +716,7 @@ fn stream_cyw43_runtime_payload(
 const fn cyw43_runtime_command_stage(op: u16) -> &'static str {
     match op {
         DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT => "cyw43-transport-init",
+        DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP => "cyw43-firmware-prep",
         DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK => "cyw43-firmware-chunk",
         DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK => "cyw43-nvram-chunk",
         DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL => "cyw43-nvram-tail",

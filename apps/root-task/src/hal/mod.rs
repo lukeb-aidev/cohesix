@@ -3185,6 +3185,53 @@ impl<'a> KernelHal<'a> {
         Ok(())
     }
 
+    fn install_usb_pcie_bus_link(
+        &mut self,
+        contract: DriverTaskContract,
+        child_cnode: seL4_CPtr,
+        child_depth: u8,
+        vspace: seL4_CPtr,
+        tracker: &mut VSpaceTableTracker,
+    ) -> Result<(), HalError> {
+        if contract != USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT {
+            return Ok(());
+        }
+        let (pcie_endpoint, pcie_ring_frame) =
+            driver_task::driver_task_bus_owner_transport_caps(PCIE_ROOT_DRIVER_TASK_CONTRACT)
+                .ok_or(HalError::Unsupported(
+                    "driver-runtime-pcie-bus-link-missing",
+                ))?;
+        let root_cnode = self.env.init_cnode_cap();
+        let root_depth = sel4::word_bits() as u8;
+        let endpoint_err = sel4::cnode_mint_depth(
+            child_cnode,
+            driver_task::DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT,
+            child_depth,
+            root_cnode,
+            pcie_endpoint,
+            root_depth,
+            sel4_sys::seL4_CapRights_All,
+            0,
+        );
+        if endpoint_err != seL4_NoError {
+            return Err(HalError::Sel4(endpoint_err));
+        }
+        self.env
+            .map_page_copy_into_vspace(
+                pcie_ring_frame,
+                vspace,
+                driver_task::DRIVER_TASK_PCIE_BUS_RING_VADDR,
+                sel4_sys::seL4_CapRights_ReadWrite,
+                sel4_sys::seL4_ARM_Page_Default,
+                tracker,
+            )
+            .map_err(HalError::Sel4)?;
+        crate::bootstrap::log::force_uart_line(
+            "DRIVER_TASK_BUS_LINK contract=usb-keyboard owner=pcie-root channel=usb-pcie endpoint_slot=0x0009 ring_vaddr=0x70e01000",
+        );
+        Ok(())
+    }
+
     fn create_isolated_driver_task(
         &mut self,
         contract: DriverTaskContract,
@@ -3392,6 +3439,7 @@ impl<'a> KernelHal<'a> {
                 )
                 .map_err(HalError::Sel4)?;
         }
+        self.install_usb_pcie_bus_link(contract, child_cnode, child_depth, vspace, &mut tracker)?;
         self.install_cyw43_sdio_bus_link(contract, child_cnode, child_depth, vspace, &mut tracker)?;
 
         let mut runtime_init_descriptor =
