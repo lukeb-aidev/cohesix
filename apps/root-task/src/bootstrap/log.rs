@@ -204,7 +204,7 @@ static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
 static UART_LOG_SUPPRESSION_DEPTH: AtomicU32 = AtomicU32::new(0);
 static SERIAL_PROMPT_REFRESH_AFTER_LOGS: AtomicBool = AtomicBool::new(false);
 const SERIAL_PROMPT: &[u8] = b"cohesix> ";
-const SERIAL_RX_PRESERVE_CHUNK_BYTES: usize = 32;
+const SERIAL_RX_PRESERVE_CHUNK_BYTES: usize = 8;
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -688,6 +688,14 @@ mod tests {
         assert!(serial_prompt_refresh_should_emit(true, b"log\r\n"));
         assert!(!serial_prompt_refresh_should_emit(true, b""));
         assert!(!serial_prompt_refresh_should_emit(false, b"log\r\n"));
+    }
+
+    #[test]
+    fn serial_raw_log_chunks_preserve_rx_before_fifo_pressure() {
+        assert!(
+            SERIAL_RX_PRESERVE_CHUNK_BYTES <= 8,
+            "raw UART diagnostics must service serial RX before a mini-UART FIFO can overflow"
+        );
     }
 
     #[test]

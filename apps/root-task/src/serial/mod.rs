@@ -134,6 +134,10 @@ static SERIAL_CLIENT_RX: SpinMutex<Queue<u8, DEFAULT_RX_CAPACITY>> = SpinMutex::
 #[cfg(feature = "kernel")]
 static SERIAL_LINKED_RUNTIME_ATTACHED: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
+static SERIAL_DRIVER_TASK_CLIENT_ACTIVE: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
 static SERIAL_PROMPT_INPUT_SHADOW: SpinMutex<HeaplessString<DEFAULT_LINE_CAPACITY>> =
     SpinMutex::new(HeaplessString::new());
 
@@ -398,6 +402,18 @@ fn emit_serial_runtime_state(owner: &str, status: &str, acceptance: &str) {
     crate::bootstrap::log::force_uart_line(line.as_str());
 }
 
+#[cfg(feature = "kernel")]
+pub(crate) fn emit_serial_runtime_cutover_deferred(reason: &str) {
+    let mut line = HeaplessString::<192>::new();
+    let _ = fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init status=cutover-deferred acceptance=red reason={reason}",
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
 /// Construct the physical UART runtime behind the serial driver-task ring.
 #[cfg(feature = "kernel")]
 pub fn init_serial_driver_task_runtime() -> bool {
@@ -516,8 +532,27 @@ pub fn serial_driver_task_runtime_attached() -> bool {
 const fn serial_driver_task_transport_required(
     owner_state_active: bool,
     runtime_attached: bool,
+    client_active: bool,
 ) -> bool {
-    owner_state_active && runtime_attached
+    owner_state_active && runtime_attached && client_active
+}
+
+#[cfg(feature = "kernel")]
+const fn serial_driver_task_interactive_cutover_policy(
+    owner_state_active: bool,
+    runtime_attached: bool,
+    rx_proven: bool,
+) -> bool {
+    runtime_attached && (!owner_state_active || rx_proven)
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn serial_driver_task_interactive_cutover_allowed() -> bool {
+    serial_driver_task_interactive_cutover_policy(
+        crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+        serial_driver_task_runtime_attached(),
+        SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.load(AtomicOrdering::Acquire) != 0,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -525,6 +560,7 @@ fn serial_driver_task_transport_active() -> bool {
     serial_driver_task_transport_required(
         crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
         serial_driver_task_runtime_attached(),
+        SERIAL_DRIVER_TASK_CLIENT_ACTIVE.load(AtomicOrdering::Acquire) != 0,
     )
 }
 
@@ -591,6 +627,9 @@ fn driver_task_client_poll_rx_into_client_queue() -> usize {
             break;
         }
         accepted = accepted.saturating_add(1);
+    }
+    if accepted != 0 {
+        SERIAL_DRIVER_TASK_CLIENT_RX_PROVEN.store(1, AtomicOrdering::Release);
     }
     accepted
 }
@@ -1051,10 +1090,16 @@ where
     #[cfg(feature = "kernel")]
     pub fn use_driver_task_client_after_attach(&mut self) -> bool {
         if !serial_driver_task_transport_active() {
-            return false;
+            if !serial_driver_task_interactive_cutover_allowed() {
+                return false;
+            }
         }
         self.flush_tx_locked();
-        self.driver.try_use_driver_task_client_after_attach()
+        let attached = self.driver.try_use_driver_task_client_after_attach();
+        if attached {
+            SERIAL_DRIVER_TASK_CLIENT_ACTIVE.store(1, AtomicOrdering::Release);
+        }
+        attached
     }
 
     #[cfg(feature = "kernel")]
@@ -1763,10 +1808,28 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn physical_pi_serial_uses_driver_task_only_after_runtime_attaches() {
-        assert!(serial_driver_task_transport_required(true, true));
-        assert!(!serial_driver_task_transport_required(true, false));
-        assert!(!serial_driver_task_transport_required(false, true));
-        assert!(!serial_driver_task_transport_required(false, false));
+        assert!(serial_driver_task_transport_required(true, true, true));
+        assert!(!serial_driver_task_transport_required(true, true, false));
+        assert!(!serial_driver_task_transport_required(true, false, true));
+        assert!(!serial_driver_task_transport_required(false, true, true));
+        assert!(!serial_driver_task_transport_required(false, false, false));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn physical_pi_serial_interactive_cutover_requires_rx_proof() {
+        assert!(serial_driver_task_interactive_cutover_policy(
+            true, true, true
+        ));
+        assert!(!serial_driver_task_interactive_cutover_policy(
+            true, true, false
+        ));
+        assert!(!serial_driver_task_interactive_cutover_policy(
+            true, false, true
+        ));
+        assert!(serial_driver_task_interactive_cutover_policy(
+            false, true, false
+        ));
     }
 
     #[test]

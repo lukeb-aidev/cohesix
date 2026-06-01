@@ -497,11 +497,16 @@ after serial linked-runtime no-reply must log
 `SERIAL_RUNTIME_STATE owner=root ... status=fallback acceptance=red` and
 `SERIAL_FALLBACK_ACTIVE=yes`; it preserves the diagnostic shell but never
 credits `SERIAL_DRIVER_ACCEPTED` or owner-state acceptance.
-When the deferred post-prompt serial runtime init later returns green, root must
-cut the live console over to `driver-task-serial-client`, emit
-`SERIAL_RUNTIME_STATE owner=root ... status=cutover acceptance=green`, and clear
-`SERIAL_FALLBACK_ACTIVE`; the boot-safety fallback must not remain the active
-interactive transport after driver-owned serial service is proven.
+When the deferred post-prompt serial runtime init later returns green, root may
+cut the live console over to `driver-task-serial-client` only after the
+driver-task client has also proven receive-side progress. A runtime that proves
+TX/init but not interactive RX must keep the known-good root mini-UART console
+active, emit
+`SERIAL_RUNTIME_STATE owner=root ... status=cutover-deferred acceptance=red`
+with a concrete reason such as `driver-task-rx-proof-missing`, and leave
+`SERIAL_FALLBACK_ACTIVE=yes`. The boot-safety fallback must not be removed just
+because descriptor replay or TX service succeeded; operator input has priority
+over serial owner-state credit.
 QEMU smoke can additionally allocate isolated VSpaces and map the minimal trampoline transport
 set, but that remains transport proof rather than the functional Pi hardware
 path.

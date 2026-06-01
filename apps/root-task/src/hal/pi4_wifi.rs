@@ -5409,9 +5409,31 @@ where
     ));
     preseed_mmio(hal);
     let mut state = Pi4WifiState::new(hal)?;
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] driver-task sdio handoff stage=power-on"
+    ));
     state.set_power(WifiPowerState::On)?;
-    state.set_reset(WifiResetState::Deasserted)?;
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] driver-task sdio handoff stage=reset-asserted"
+    ));
+    state.set_reset(WifiResetState::Asserted)?;
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] driver-task sdio handoff stage=host-reset"
+    ));
     state.reset_host()?;
+    let effective_clock_hz = state.set_clock_hz(CYW43_STARTUP_CLOCK_HZ)?;
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] driver-task sdio handoff stage=startup-clock clock={}Hz",
+        effective_clock_hz
+    ));
+    state.set_bus_width(SdioBusWidth::OneBit)?;
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] driver-task sdio handoff stage=bus-width width=1"
+    ));
+    state.set_reset(WifiResetState::Deasserted)?;
+    emit_breadcrumb(format_args!(
+        "[pi4-wifi] driver-task sdio handoff stage=reset-deasserted"
+    ));
     emit_breadcrumb(format_args!(
         "[pi4-wifi] driver-task sdio resource prep ready"
     ));

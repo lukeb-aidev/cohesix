@@ -1818,6 +1818,8 @@ def normalize_wifi_exact(value: str) -> str:
         "0x531e": "cyw43-backplane-device-control",
         "21279": "cyw43-backplane-armcr4-reset",
         "0x531f": "cyw43-backplane-armcr4-reset",
+        "20738": "cyw43-sdio-descriptor-unavailable",
+        "0x5102": "cyw43-sdio-descriptor-unavailable",
     }
     if lower in cyw43_transport_details:
         return cyw43_transport_details[lower]
@@ -5041,8 +5043,9 @@ def summarize_driver_task_frontiers(
         if "serial_runtime_state" in raw:
             owner = fields.get("owner", "").lower()
             serial_status = status or fields.get("state", "").lower()
-            if owner == "root" and serial_status == "fallback":
+            if owner == "root" and serial_status in {"fallback", "cutover-deferred"}:
                 serial_fallback_active = True
+                serial_driver_accepted = False
             if (
                 owner == "root"
                 and serial_status == "cutover"

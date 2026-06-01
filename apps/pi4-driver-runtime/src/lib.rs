@@ -440,8 +440,8 @@ const USB_ENDPOINT_ATTR_INTERRUPT: u8 = 3;
 const USB_ENDPOINT_DIR_IN: u8 = 0x80;
 const USB_XHCI_SPINS: usize = 100_000;
 const USB_ROOT_PORT_POWER_SETTLE_SPINS: usize = USB_XHCI_SPINS / 16;
-const USB_ROOT_PORT_SCAN_PASSES: usize = 3;
-const USB_ENUMERATION_RETRY_COOLDOWN_TURNS: u8 = 8;
+const USB_ROOT_PORT_SCAN_PASSES: usize = 16;
+const USB_ENUMERATION_RETRY_COOLDOWN_TURNS: u8 = 1;
 const USB_HUB_STATUS_CONNECTION: u16 = 1 << 0;
 const USB_HUB_STATUS_ENABLE: u16 = 1 << 1;
 const USB_HUB_STATUS_RESET: u16 = 1 << 4;
@@ -8018,6 +8018,12 @@ mod tests {
         assert_eq!(usb_hub_speed_from_status(0), XHCI_SPEED_FULL);
         assert_eq!(xhci_default_control_packet(XHCI_SPEED_LOW), 8);
         assert_eq!(usb_hub_port_index_candidates(7, 4), [0x0004, 0x0704]);
+    }
+
+    #[test]
+    fn usb_runtime_retries_keyboard_enumeration_without_long_cooldown() {
+        assert_eq!(USB_ENUMERATION_RETRY_COOLDOWN_TURNS, 1);
+        assert!(USB_ROOT_PORT_SCAN_PASSES >= 16);
     }
 
     #[test]

@@ -936,6 +936,29 @@ def test_gate_summary_distinguishes_serial_fallback_from_driver_acceptance() -> 
     assert cutover_only_record["SERIAL_FALLBACK_ACTIVE"] == "no"
     assert cutover_only_record["SERIAL_DRIVER_ACCEPTED"] == "yes"
 
+    cutover_deferred_events = normalizer.parse_events(
+        [
+            "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init "
+            "status=fallback acceptance=red reason=driver-task-deferred-until-prompt",
+            "SERIAL_RUNTIME_STATE owner=driver stage=serial-runtime-init "
+            "status=ready acceptance=green",
+            "[uart] serial console cutover deferred backend=bcm2711-mini-uart "
+            "reason=driver-task-rx-proof-missing action=root-uart-console",
+            "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init "
+            "status=cutover-deferred acceptance=red reason=driver-task-rx-proof-missing",
+        ]
+    )
+
+    cutover_deferred_record = normalizer.summarize_gates(
+        cutover_deferred_events
+    ).to_record()
+    assert cutover_deferred_record["SERIAL_FALLBACK_ACTIVE"] == "yes"
+    assert cutover_deferred_record["SERIAL_DRIVER_ACCEPTED"] == "no"
+    assert (
+        cutover_deferred_record["SERIAL_RUNTIME_FRONTIER"]
+        == "serial-root-fallback"
+    )
+
 
 def test_gate_summary_tracks_current_serial_runtime_init_outstanding() -> None:
     events = normalizer.parse_events(
@@ -1206,6 +1229,20 @@ def test_gate_summary_labels_cyw43_backplane_substage_fault_detail() -> None:
 
     record = normalizer.summarize_gates(events).to_record()
     assert record["WIFI_EXACT"] == "cyw43-backplane-armcr4-reset"
+    assert record["WIFI_PHASE"] == "cyw43-transport-init"
+
+
+def test_gate_summary_labels_cyw43_sdio_descriptor_fault_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-transport-init status=fault "
+            "acceptance=no code=5 detail=20738 result=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_EXACT"] == "cyw43-sdio-descriptor-unavailable"
     assert record["WIFI_PHASE"] == "cyw43-transport-init"
 
 
