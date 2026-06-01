@@ -1129,7 +1129,7 @@ const fn keyboard_attach_retry_allowed(
 
 #[inline]
 const fn keyboard_prompt_safe_retry_rearms(err: Pi4SeatError) -> bool {
-    !matches!(err, Pi4SeatError::XhciInit)
+    matches!(err, Pi4SeatError::UsbKeyboardInit)
 }
 
 #[inline]
@@ -4838,6 +4838,11 @@ fn xhci_connected_mask_from_portsc(port_statuses: &[u32]) -> u32 {
 }
 
 #[inline]
+const fn xhci_root_port_sample_should_log(connected_mask: u32, sample_index: usize) -> bool {
+    connected_mask != 0 || sample_index <= XHCI_PORT_DETECT_PASSES
+}
+
+#[inline]
 const fn empty_usb_root_port_status_entry() -> UsbRootPortStatusEntry {
     UsbRootPortStatusEntry {
         port: 0,
@@ -4908,6 +4913,7 @@ fn xhci_sample_root_ports(
     ctrl: &XhciCtrl<SeatDma>,
     max_ports: usize,
     port_statuses: &mut [u32; XHCI_MAX_PROBE_PORTS],
+    sample_index: usize,
 ) -> u32 {
     for status in port_statuses.iter_mut() {
         *status = 0;
@@ -4918,15 +4924,17 @@ fn xhci_sample_root_ports(
     }
     remember_xhci_root_port_statuses(&port_statuses[..sample_ports]);
     let connected_mask = xhci_connected_mask_from_portsc(&port_statuses[..sample_ports]);
-    let mut line = heapless::String::<160>::new();
-    let _ = core::fmt::Write::write_fmt(
-        &mut line,
-        format_args!(
-            "[local-seat] xhci root-port sample-done ports={} connected_mask=0x{connected_mask:04x}",
-            sample_ports,
-        ),
-    );
-    boot_log::force_uart_line(line.as_str());
+    if xhci_root_port_sample_should_log(connected_mask, sample_index) {
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] xhci root-port sample-done ports={} connected_mask=0x{connected_mask:04x} sample={sample_index}",
+                sample_ports,
+            ),
+        );
+        boot_log::force_uart_line(line.as_str());
+    }
     connected_mask
 }
 
@@ -8184,6 +8192,77 @@ fn prepare_vl805_pci(hal: &mut KernelHal<'_>) -> Option<usize> {
     None
 }
 
+pub(crate) fn prepare_driver_task_vl805_pcie_runtime(hal: &mut KernelHal<'_>) -> bool {
+    let mut mmio = prepare_vl805_pci(hal);
+    let mut ready = driver_task_vl805_pcie_runtime_ready();
+    if !ready {
+        boot_log::force_uart_line(
+            "[local-seat] vl805 driver-task pcie-hal-prep action=mailbox-reset-before-driver-task reason=live-proof-missing",
+        );
+        match ensure_runtime_vl805_mailbox_reset(hal) {
+            Ok(()) => {
+                let retry_mmio = RPI4_XHCI_MMIO_HIGH_CANDIDATE;
+                let fresh_ready = xhci_fresh_runtime_ownership_ready(vl805_cfg_bus_master_ready());
+                if retry_vl805_pci_bcm2711_after_mailbox_reset(hal, retry_mmio, fresh_ready) {
+                    mmio = Some(retry_mmio);
+                }
+                ready = driver_task_vl805_pcie_runtime_ready();
+            }
+            Err(err) => {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::Write::write_fmt(
+                    &mut line,
+                    format_args!(
+                        "[local-seat] vl805 driver-task pcie-hal-prep mailbox-reset=failed reason={}",
+                        err.as_str()
+                    ),
+                );
+                boot_log::force_uart_line(line.as_str());
+            }
+        }
+    }
+    let mut line = heapless::String::<224>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] vl805 driver-task pcie-hal-prep mmio={} link_rc={} irq_masked={} ready={}",
+            match mmio {
+                Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE) => "high-bar",
+                Some(_) => "unexpected",
+                None => "none",
+            },
+            pi4_pcie::pi4_pcie_link_and_rc_ready_proven() as u8,
+            pi4_pcie::pi4_pcie_irq_sources_masked_proven() as u8,
+            ready as u8,
+        ),
+    );
+    boot_log::force_uart_line(line.as_str());
+    ready
+}
+
+#[inline]
+const fn driver_task_vl805_pcie_runtime_ready_from_sources(
+    mmio: Option<usize>,
+    link_rc_ready: bool,
+    irq_masked: bool,
+    fresh_runtime_ownership: bool,
+) -> bool {
+    matches!(mmio, Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE))
+        && link_rc_ready
+        && irq_masked
+        && fresh_runtime_ownership
+}
+
+#[inline]
+pub(crate) fn driver_task_vl805_pcie_runtime_ready() -> bool {
+    driver_task_vl805_pcie_runtime_ready_from_sources(
+        current_vl805_xhci_mmio_hint(),
+        pi4_pcie::pi4_pcie_link_and_rc_ready_proven(),
+        pi4_pcie::pi4_pcie_irq_sources_masked_proven(),
+        xhci_fresh_runtime_ownership_ready(vl805_cfg_bus_master_ready()),
+    )
+}
+
 #[inline]
 const fn vl805_post_mailbox_pcie_retry_needed(
     mmio: usize,
@@ -10582,6 +10661,7 @@ impl UsbKeyboard {
                                     ctrl.as_ref(),
                                     max_ports,
                                     &mut port_statuses,
+                                    detect_passes_used,
                                 );
                                 if connected_mask != 0 || pass + 1 >= detect_passes {
                                     break;
@@ -10610,6 +10690,7 @@ impl UsbKeyboard {
                                     ctrl.as_ref(),
                                     max_ports,
                                     &mut port_statuses,
+                                    detect_passes_used,
                                 );
                                 if connected_mask != 0 || elapsed_ms >= final_wait_ms {
                                     break;
@@ -16224,7 +16305,7 @@ mod driver_coverage_tests {
         assert!(keyboard_prompt_safe_retry_rearms(
             Pi4SeatError::UsbKeyboardInit
         ));
-        assert!(keyboard_prompt_safe_retry_rearms(
+        assert!(!keyboard_prompt_safe_retry_rearms(
             Pi4SeatError::UsbKeyboardMissing
         ));
     }
@@ -18112,6 +18193,27 @@ mod tests {
         let strategy =
             XhciRuntimeInitStrategy::new(XhciFirmwareHandoff::PlatformResetComplete, false);
 
+        assert!(super::driver_task_vl805_pcie_runtime_ready_from_sources(
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            true,
+            true,
+            true,
+        ));
+        assert!(!super::driver_task_vl805_pcie_runtime_ready_from_sources(
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            true,
+            true,
+            false,
+        ));
+        assert!(!super::driver_task_vl805_pcie_runtime_ready_from_sources(
+            None, true, true, true,
+        ));
+        assert!(!super::driver_task_vl805_pcie_runtime_ready_from_sources(
+            Some(RPI4_XHCI_MMIO_HIGH_CANDIDATE),
+            true,
+            false,
+            true,
+        ));
         assert!(!super::xhci_fresh_runtime_ownership_ready_from_sources(
             true, false, false,
         ));

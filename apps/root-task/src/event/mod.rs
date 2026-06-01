@@ -212,9 +212,9 @@ const NET_DIAG_STUCK_MS: u64 = 3_000;
 const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 #[cfg(feature = "net-console")]
 const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 0;
-const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 16;
-const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 4;
-const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 2;
+const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
+const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
+const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
 const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 32;
 
@@ -1406,6 +1406,7 @@ where
     #[cfg(test)]
     test_pi4_debug_commands: bool,
     banner_emitted: bool,
+    serial_console_turn_active: bool,
     last_smp_activity_snapshot: Option<SmpActivitySnapshot>,
 }
 
@@ -1487,6 +1488,7 @@ where
             #[cfg(test)]
             test_pi4_debug_commands: false,
             banner_emitted: false,
+            serial_console_turn_active: false,
             last_smp_activity_snapshot: None,
         }
     }
@@ -1559,6 +1561,36 @@ where
     /// Execute a single cooperative polling cycle.
     pub fn poll(&mut self) {
         let serial_rx_activity = self.serial.poll_io();
+        let local_seat_input_waiting = self
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0);
+        if serial_rx_activity
+            || (self.serial.interactive_input_active() && !local_seat_input_waiting)
+        {
+            self.serial_console_turn_active = true;
+            let serial_input = self.consume_serial();
+            self.serial.flush_tx();
+            let serial_output_pending = self.serial.tx_pending();
+            self.poll_runtime(false, true);
+            self.serial.poll_io();
+            let serial_followup_input = if self.local_seat.is_some() {
+                false
+            } else {
+                self.consume_serial()
+            };
+            self.serial.flush_tx();
+            let serial_turn_should_return = serial_rx_activity
+                || serial_input
+                || serial_followup_input
+                || serial_output_pending
+                || self.serial.interactive_input_active()
+                || self.serial.tx_pending();
+            self.serial_console_turn_active = false;
+            if serial_turn_should_return {
+                return;
+            }
+        }
         let local_input = self.consume_local_seat(LocalSeatConsumePhase::PreRuntime, true);
         if local_input {
             self.serial.flush_tx();
@@ -1885,12 +1917,14 @@ where
     /// Emit console audit messages once the UART bridge is connected.
     pub fn announce_console_ready(&mut self) {
         if self.ninedoor.is_some() {
-            if crate::generated::hardware_config().local_seat.enabled {
+            if boot_log::switch_logger_to_log_buffer() {
                 boot_log::force_uart_line_raw(
-                    "[trace] log channel remains on serial after local-seat handoff",
+                    "[trace] log channel switched to /log/queen.log; raw driver blockers remain on serial",
                 );
             } else {
-                boot_log::switch_logger_to_log_buffer();
+                boot_log::force_uart_line_raw(
+                    "[trace] log channel remains on serial; raw driver blockers preserved",
+                );
             }
         }
         self.audit.info("console: attach uart");
@@ -2107,6 +2141,9 @@ where
     }
 
     fn service_local_seat_keyboard_during_output(&mut self) {
+        if self.serial_console_turn_active || self.serial.interactive_input_active() {
+            return;
+        }
         if let Some(runtime) = self.local_seat.as_mut() {
             if !runtime.root_console_ready() {
                 return;
@@ -2122,6 +2159,9 @@ where
     }
 
     fn mirror_local_seat_line_if_ready(&mut self, line: &str) {
+        if self.serial.interactive_input_active() {
+            return;
+        }
         if let Some(runtime) = self.local_seat.as_mut() {
             if runtime.root_console_ready() {
                 runtime.mirror_line(line);
@@ -2137,12 +2177,28 @@ where
             target_os = "none"
         ))]
         {
+            #[cfg(feature = "net-console")]
+            let wifi_detail = self.net_disabled_refusal_detail();
             if let Some(runtime) = self.local_seat.as_mut() {
                 boot_log::force_uart_line_raw(
                     "[local-seat] post-prompt attach begin action=arm-cooperative",
                 );
                 let display_diag_ready = runtime.ensure_prompt_display_diagnostic_mirror();
                 runtime.enable_backend_keyboard_polling();
+                let keyboard_probe = runtime.probe_backend_keyboard_once();
+                let usb_frontier =
+                    "[drivers] USB frontier: post-prompt linked-runtime probe armed; xHCI/keyboard state will mirror here";
+                boot_log::force_uart_line_raw(usb_frontier);
+                runtime.mirror_line(usb_frontier);
+                #[cfg(feature = "net-console")]
+                {
+                    let wifi_frontier = format_message(format_args!(
+                        "[drivers] WiFi frontier: driver-task replay state preserved {}",
+                        wifi_detail
+                    ));
+                    boot_log::force_uart_line_raw(wifi_frontier.as_str());
+                    runtime.mirror_line(wifi_frontier.as_str());
+                }
                 let mut line = HeaplessString::<160>::new();
                 let _ =
                     write!(
@@ -2151,6 +2207,13 @@ where
                     if display_diag_ready { "ready" } else { "deferred" }
                 );
                 boot_log::force_uart_line_raw(line.as_str());
+                let mut probe_line = HeaplessString::<128>::new();
+                let _ = write!(
+                    probe_line,
+                    "[local-seat] post-prompt usb probe result={}",
+                    keyboard_probe.as_str()
+                );
+                boot_log::force_uart_line_raw(probe_line.as_str());
             }
         }
     }
@@ -5515,6 +5578,9 @@ where
     }
 
     fn consume_local_seat(&mut self, phase: LocalSeatConsumePhase, skip_runtime: bool) -> bool {
+        if self.serial.tx_pending() {
+            return false;
+        }
         let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
         let mut empty_polls = 0usize;
         let mut consumed = false;
@@ -6436,20 +6502,19 @@ where
                                             self.metrics.ui_reads =
                                                 self.metrics.ui_reads.saturating_add(1);
                                             self.stream_end_pending = true;
-                                            if log_path {
-                                                self.pending_stream = None;
-                                            } else if let Some(pending) =
-                                                self.pending_stream.as_mut()
-                                            {
+                                            if let Some(pending) = self.pending_stream.as_mut() {
                                                 pending.next_line = 0;
                                                 pending.bandwidth_bytes = stream_bytes;
-                                                pending.cursor =
+                                                pending.cursor = if log_path {
+                                                    None
+                                                } else {
                                                     cursor_check.map(|check| PendingCursor {
                                                         path_key: path_str.to_owned(),
                                                         offset: 0,
                                                         len: data_bytes as usize,
                                                         check,
-                                                    });
+                                                    })
+                                                };
                                             }
                                         }
                                     }
@@ -7929,6 +7994,78 @@ mod tests {
         assert!(local_seat.mirrored_lines_snapshot().is_empty());
     }
 
+    #[test]
+    fn serial_partial_input_suppresses_output_side_keyboard_polling() {
+        let driver = LoopbackSerial::<8192>::new();
+        driver.push_rx(b"w");
+        let mut serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        assert!(serial.poll_io());
+        assert!(serial.interactive_input_active());
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.emit_serial_line("serial output");
+
+        assert_eq!(pump.metrics().local_seat_output_keyboard_polls, 0);
+        drop(pump);
+        assert!(local_seat.mirrored_lines_snapshot().is_empty());
+    }
+
+    #[test]
+    fn serial_input_skips_pre_runtime_local_seat_polling() {
+        let driver = LoopbackSerial::<8192>::new();
+        driver.push_rx(b"help\n");
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.poll();
+
+        assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
+        let rendered = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(rendered.contains("Commands:"), "{rendered}");
+        drop(pump);
+        assert_eq!(local_seat.keyboard_trace().backend_poll_calls, 0);
+    }
+
     struct NullIpc;
 
     impl IpcDispatcher for NullIpc {
@@ -8573,6 +8710,7 @@ mod tests {
             line_bytes: 256,
             buffer_lines: 32,
         });
+        local_seat.mark_root_console_ready();
         let mut pump =
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
         pump.serial_mut().driver_mut().push_rx(b"smp activity\n");
@@ -9445,7 +9583,7 @@ mod tests {
     }
 
     #[test]
-    fn local_seat_keyboard_input_preempts_concurrent_serial_line() {
+    fn serial_input_preempts_concurrent_local_seat_line() {
         let driver = LoopbackSerial::<1024>::new();
         let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::repeated(2, 1);
@@ -9467,29 +9605,24 @@ mod tests {
 
         pump.poll();
 
-        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
-        assert_eq!(pump.local_line.as_str(), "pi");
+        assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
+        assert!(pump.local_line.is_empty());
         let metrics = pump.metrics();
-        assert_eq!(metrics.local_seat_keyboard_priority_turns, 1);
-        assert_eq!(metrics.local_seat_runtime_skipped_turns, 1);
-        assert_eq!(metrics.local_seat_serial_dispatch_yielded_turns, 1);
+        assert_eq!(metrics.local_seat_keyboard_priority_turns, 0);
+        assert_eq!(metrics.local_seat_runtime_skipped_turns, 0);
+        assert_eq!(metrics.local_seat_serial_dispatch_yielded_turns, 0);
         let first_turn_tx = pump.serial_mut().driver_mut().drain_tx();
         let first_turn_rendered = String::from_utf8(first_turn_tx.into_iter().collect())
             .expect("serial output must be utf8");
         assert!(
-            !first_turn_rendered.contains("Commands:"),
+            first_turn_rendered.contains("Commands:"),
             "{first_turn_rendered}"
         );
 
         pump.poll();
 
-        assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
-        assert!(pump.local_line.is_empty());
-        drop(pump);
-        assert!(audit
-            .entries
-            .iter()
-            .any(|entry| entry.as_str() == "console: cleared local-seat input before serial"));
+        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+        assert_eq!(pump.local_line.as_str(), "pi");
     }
 
     #[cfg(feature = "kernel")]
@@ -9517,18 +9650,6 @@ mod tests {
         pump.serial_mut().driver_mut().push_rx(b"help\n");
 
         pump.poll();
-        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
-        let usb_turn = String::from_utf8(
-            pump.serial_mut()
-                .driver_mut()
-                .drain_tx()
-                .into_iter()
-                .collect(),
-        )
-        .expect("serial output must be utf8");
-        assert!(usb_turn.contains("PONG"), "{usb_turn}");
-
-        pump.poll();
         assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
         let serial_turn = String::from_utf8(
             pump.serial_mut()
@@ -9539,6 +9660,18 @@ mod tests {
         )
         .expect("serial output must be utf8");
         assert!(serial_turn.contains("Commands:"), "{serial_turn}");
+
+        pump.poll();
+        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+        let usb_turn = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(usb_turn.contains("PONG"), "{usb_turn}");
     }
 
     #[cfg(feature = "kernel")]
@@ -9763,6 +9896,46 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cat_queen_log_streams_full_payload_after_ack() {
+        let _root_guard = ReachableRootGuard::new(1);
+        let marker = "[test] cat-queen-log-streams-full-payload marker=serial-must-not-only-see-the-ack-summary";
+        log_buffer::append_log_line(marker);
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
+        pump.session = Some(SessionRole::Worker);
+        {
+            let driver = pump.serial_mut().driver_mut();
+            driver.push_rx(b"cat /log/queen.log\n");
+        }
+        pump.poll();
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("OK CAT path=/log/queen.log"),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.trim_end_matches('\r') == marker),
+            "{rendered}"
+        );
+        assert!(rendered.contains("END\r\n"), "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn log_command_emits_end_sentinel_and_quit_clears_session() {
         let driver = LoopbackSerial::<2048>::new();
         let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -9958,13 +10131,11 @@ mod tests {
     }
 
     #[test]
-    fn local_seat_input_drain_contract_tolerates_idle_hid_reports() {
+    fn local_seat_input_drain_contract_keeps_serial_latency_bounded() {
         let (poll_passes, empty_polls, output_polls, serial_lines, serial_chunk_bytes) =
             local_seat_input_drain_contract_for_test();
-        assert!(poll_passes >= 8);
-        assert!(poll_passes <= 32);
-        assert!(empty_polls >= 2);
-        assert!(empty_polls <= poll_passes);
+        assert_eq!(poll_passes, 1);
+        assert_eq!(empty_polls, 1);
         assert!(output_polls >= 1);
         assert!(output_polls <= empty_polls);
         assert_eq!(serial_lines, 1);

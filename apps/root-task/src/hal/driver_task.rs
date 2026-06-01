@@ -1695,6 +1695,7 @@ pub const DRIVER_TASK_KEY_PCIE_ROOT: usize = 8;
 pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 /// Bounded send/yield attempts for the first linked-runtime ring handshake.
 pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
+const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 
 #[cfg(feature = "kernel")]
 struct DriverTaskCommandSlot {
@@ -2166,6 +2167,34 @@ fn boost_driver_task_priority_for_bounded_turn(
         tcb,
         steady_priority,
     })
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_bounded_turn_bus_owner(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskContract> {
+    if matches!(contract.kind, DriverTaskKind::WifiNic)
+        && command.arg0 == DriverTaskHotPath::Cyw43Wifi.as_u32()
+    {
+        Some(SDIO_HOST_DRIVER_TASK_CONTRACT)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn boost_driver_task_priorities_for_bounded_turn(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> (
+    Option<DriverTaskPriorityRestore>,
+    Option<DriverTaskPriorityRestore>,
+) {
+    let primary = boost_driver_task_priority_for_bounded_turn(contract);
+    let bus_owner = driver_task_bounded_turn_bus_owner(contract, command)
+        .and_then(boost_driver_task_priority_for_bounded_turn);
+    (primary, bus_owner)
 }
 
 #[cfg(feature = "kernel")]
@@ -2658,7 +2687,7 @@ fn emit_deferred_runtime_init_status(
         status,
         action,
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    crate::bootstrap::log::force_uart_line(line.as_str());
 }
 
 /// Borrow a staged shared-ring payload for the current synchronous service turn.
@@ -2714,7 +2743,7 @@ fn emit_driver_task_ring_call_begin(
         command.aux1,
         command.frame.len,
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    crate::bootstrap::log::force_uart_line(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -2739,7 +2768,11 @@ fn emit_driver_task_ring_call_return(
         completion.detail,
         completion.result,
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
+        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    } else {
+        crate::bootstrap::log::force_uart_line(line.as_str());
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -2749,6 +2782,7 @@ fn emit_driver_task_ring_call_timeout(
     request: usize,
     command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
+    attempts: usize,
 ) {
     use core::fmt::Write;
     use heapless::String;
@@ -2761,7 +2795,7 @@ fn emit_driver_task_ring_call_timeout(
         endpoint,
         request,
         mode.as_str(),
-        DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS,
+        attempts,
         command.opcode,
         command.arg0,
         command.aux0,
@@ -2840,6 +2874,22 @@ const fn driver_task_ring_mode_uses_bounded_send(mode: DriverTaskRingCommandMode
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::Bootstrap
     )
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_attempt_limit(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+) -> usize {
+    if !driver_task_ring_mode_uses_bounded_send(mode) {
+        return DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS;
+    }
+    if matches!(contract.kind, DriverTaskKind::WifiNic) && command.aux0 != 0 {
+        DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
+    } else {
+        DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -2982,9 +3032,9 @@ fn run_driver_task_ring_command_with_mode(
     let mut start_ticks = None;
     let trace_call = driver_task_ring_call_trace_enabled(contract, command, mode);
     let _priority_restore = if driver_task_ring_mode_uses_bounded_send(mode) {
-        boost_driver_task_priority_for_bounded_turn(contract)
+        boost_driver_task_priorities_for_bounded_turn(contract, command)
     } else {
-        None
+        (None, None)
     };
 
     if driver_task_ring_mode_uses_bounded_send(mode) {
@@ -2995,7 +3045,8 @@ fn run_driver_task_ring_command_with_mode(
             start_ticks = driver_task_counter_ticks();
         }
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
-        for _ in 0..DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS {
+        let attempts = driver_task_ring_attempt_limit(contract, command, mode);
+        for _ in 0..attempts {
             crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
             crate::sel4::yield_now();
             // SAFETY: The completion pointer addresses the same validated ring
@@ -3010,7 +3061,9 @@ fn run_driver_task_ring_command_with_mode(
             }
         }
         if completion.sequence != request as u32 {
-            emit_driver_task_ring_call_timeout(contract, endpoint, request, command, mode);
+            emit_driver_task_ring_call_timeout(
+                contract, endpoint, request, command, mode, attempts,
+            );
         }
     } else if physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs))
     {
@@ -3153,7 +3206,23 @@ pub fn emit_driver_task_resource_init_status(
             status,
         );
     }
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    if driver_task_resource_status_requires_uart(status) {
+        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    } else {
+        crate::bootstrap::log::force_uart_line(line.as_str());
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_resource_status_requires_uart(status: &str) -> bool {
+    status == "failed"
+        || status == "no-reply"
+        || status == "invalid-contract"
+        || status == "slot-missing"
+        || status == "no-endpoint"
+        || status == "ring-missing"
+        || status == "busy"
+        || status.starts_with("blocked")
 }
 
 /// Host-test/no-kernel variant for call sites that share control flow.
@@ -4677,7 +4746,7 @@ pub const SERIAL_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContract {
     class: DriverTaskClass::RealtimeInput,
     authority: DriverTaskAuthority::ConsoleTransport,
     isolation: DriverTaskIsolation::DedicatedSeL4Task,
-    budget: DriverTaskBudget::preemptible(64, 512, 64),
+    budget: DriverTaskBudget::preemptible(1024, 1024, 1024),
     queue_depth: 64,
 };
 
@@ -5435,7 +5504,10 @@ mod tests {
     #[test]
     fn service_budget_fails_closed_on_exhaustion() {
         let mut budget = DriverServiceBudget::new(SERIAL_DRIVER_TASK_CONTRACT).unwrap();
-        assert_eq!(budget.charge_ops(64), Ok(()));
+        assert_eq!(
+            budget.charge_ops(SERIAL_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn),
+            Ok(())
+        );
         assert_eq!(budget.ops_left(), 0);
         assert_eq!(
             budget.charge_ops(1),
@@ -5738,6 +5810,92 @@ mod tests {
             pcie,
             DriverTaskRingCommandMode::Steady
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_descriptor_commands_get_long_bounded_init_window() {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 28,
+                flags: 0,
+            },
+        );
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS
+        );
+        command.aux0 = 0x4359_5734;
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
+        );
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                SERIAL_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_bounded_turn_boosts_sdio_bus_owner() {
+        let cyw43 = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        assert_eq!(
+            driver_task_bounded_turn_bus_owner(CYW43_WIFI_DRIVER_TASK_CONTRACT, cyw43),
+            Some(SDIO_HOST_DRIVER_TASK_CONTRACT)
+        );
+
+        let genet = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::GenetNic,
+            DriverTaskBudgetGrant::from_contract(GENET_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        assert_eq!(
+            driver_task_bounded_turn_bus_owner(GENET_DRIVER_TASK_CONTRACT, genet),
+            None
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn routine_resource_statuses_can_leave_interactive_uart() {
+        assert!(!driver_task_resource_status_requires_uart("begin"));
+        assert!(!driver_task_resource_status_requires_uart("ready"));
+        assert!(driver_task_resource_status_requires_uart(
+            "blocked-live-proof-missing"
+        ));
+        assert!(driver_task_resource_status_requires_uart("no-reply"));
+        assert!(driver_task_resource_status_requires_uart("failed"));
     }
 
     #[cfg(feature = "kernel")]

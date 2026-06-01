@@ -921,6 +921,21 @@ def test_gate_summary_distinguishes_serial_fallback_from_driver_acceptance() -> 
         == "serial-driver-owner-state-ready"
     )
 
+    cutover_only_events = normalizer.parse_events(
+        [
+            "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init "
+            "status=fallback acceptance=red reason=driver-task-deferred-until-prompt",
+            "[uart] serial console cutover "
+            "backend=driver-task-serial-client owner=serial",
+            "SERIAL_RUNTIME_STATE owner=root stage=serial-runtime-init "
+            "status=cutover acceptance=green reason=driver-task-attached",
+        ]
+    )
+
+    cutover_only_record = normalizer.summarize_gates(cutover_only_events).to_record()
+    assert cutover_only_record["SERIAL_FALLBACK_ACTIVE"] == "no"
+    assert cutover_only_record["SERIAL_DRIVER_ACCEPTED"] == "yes"
+
 
 def test_gate_summary_tracks_current_serial_runtime_init_outstanding() -> None:
     events = normalizer.parse_events(
@@ -1041,6 +1056,52 @@ def test_gate_summary_labels_usb_engine_init_no_reply() -> None:
     assert record["USB_BLOCKER"] == "usb-engine-init-no-reply"
 
 
+def test_gate_summary_labels_linked_usb_hub_topology_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-engine-init status=ready "
+            "acceptance=no code=1 detail=528 result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-enumeration "
+            "status=hub-topology-no-keyboard acceptance=no code=1 "
+            "detail=528 result=1 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["USB_BLOCKER"] == "hub-topology-no-keyboard"
+    assert (
+        record["USB_DRIVER_TASK_FRONTIER"]
+        == "usb-keyboard-enumeration-hub-topology-no-keyboard"
+    )
+
+
+def test_gate_summary_labels_usb_first_report_enumeration_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-owner-state "
+            "status=blocked-keyboard-enumeration acceptance=no code=1 "
+            "detail=513 result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-first-report "
+            "status=blocked-keyboard-enumeration acceptance=no code=3 "
+            "detail=0 result=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert (
+        record["USB_BLOCKER"]
+        == "usb-keyboard-first-report-blocked-keyboard-enumeration"
+    )
+    assert (
+        record["USB_DRIVER_TASK_FRONTIER"]
+        == "usb-keyboard-first-report-blocked-keyboard-enumeration"
+    )
+
+
 def test_gate_summary_labels_pcie_hal_prep_gate() -> None:
     events = normalizer.parse_events(
         [
@@ -1118,6 +1179,56 @@ def test_gate_summary_tracks_split_sdio_command_probe_blockers() -> None:
         record["DRIVER_TASK_RESOURCE_BLOCKER"]
         == "sdio-host:sdio-cmd5-ocr:fault"
     )
+
+
+def test_gate_summary_labels_cyw43_transport_substage_fault_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-transport-init status=fault "
+            "acceptance=no code=5 detail=21271 result=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_EXACT"] == "cyw43-transport-host-bus-width"
+    assert record["WIFI_PHASE"] == "cyw43-transport-init"
+
+
+def test_gate_summary_labels_cyw43_backplane_substage_fault_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-transport-init status=fault "
+            "acceptance=no code=5 detail=21279 result=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_EXACT"] == "cyw43-backplane-armcr4-reset"
+    assert record["WIFI_PHASE"] == "cyw43-transport-init"
+
+
+def test_gate_summary_preserves_cyw43_transport_detail_for_replay_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-firmware blocker=begin",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-transport-init status=fault "
+            "acceptance=no code=5 detail=21279 result=0 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-firmware status=failed "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-firmware blocker=failed",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_BLOCKER"] == "cyw43-driver-task-replay"
+    assert record["WIFI_EXACT"] == "cyw43-backplane-armcr4-reset"
+    assert record["WIFI_PHASE"] == "cyw43-transport-init"
 
 
 def test_gate_summary_labels_deferred_wifi_start_without_replay() -> None:

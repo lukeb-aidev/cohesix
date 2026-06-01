@@ -1774,7 +1774,7 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         driver_task::DriverTaskHotPath::HdmiText,
     );
     let banner = if owner_state {
-        let frame = driver_task::stage_driver_task_ring_frame(contract, b"Starting HDMI", 0)
+        let frame = driver_task::stage_driver_task_ring_frame(contract, b"Starting HDMI\n", 0)
             .ok_or(HalError::Unsupported(
                 "driver-runtime-hdmi-early-banner-stage",
             ))?;

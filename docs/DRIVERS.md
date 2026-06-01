@@ -263,6 +263,11 @@ proof from the linked-runtime model.
   engine-init call must return or fail closed. Missing EXT_CFG, BAR/COMMAND,
   DMA-window, or poll-only ownership proof is a PCIe/VL805 blocker, not a
   reason to spin or trust old handoff state.
+- If xHCI engine-init reaches controller-ready before HID readiness, the linked
+  USB runtime must keep enumeration alive through bounded prompt-side service:
+  preserve current-boot Port Status Change events, power/sample root ports,
+  retry hub/HID enumeration, and publish owner-state only after keyboard-ready
+  or first-report proof.
 - Wi-Fi replay is independent of USB. CYW43/SDIO descriptor replay and selected
   network progress must not wait for HID readiness, and USB polling must not
   mask Wi-Fi blockers; both lanes remain subordinate to serial/HDMI
@@ -475,11 +480,12 @@ same non-acceptance line with `status=no-endpoint`, `status=ring-missing`, or
 SDIO, CYW43, and GENET failures can be separated from transport no-reply. HDMI must report
 `hdmi-framebuffer-map`, `hdmi-engine-init`, and `hdmi-first-draw` separately.
 USB/local-seat must report `usb-prereq-pcie-replay`, `usb-xhci-init`,
-`usb-keyboard-enumeration`, and `usb-keyboard-first-report` separately so a Pi
-log can distinguish PCIe replay, xHCI bring-up, keyboard enumeration, and first
-interrupt-report progress. SDIO/Wi-Fi replay must split the first command proof
-into `sdio-cmd0-go-idle` and `sdio-cmd5-ocr`; a CMD0 failure means the SDIO
-command path itself is broken, while a CMD5/OCR failure points at card response,
+`usb-keyboard-enumeration`, prompt-side `usb-keyboard-enumeration-retry`, and
+`usb-keyboard-first-report` separately so a Pi log can distinguish PCIe replay,
+xHCI bring-up, keyboard enumeration, retry progress, and first interrupt-report
+progress. SDIO/Wi-Fi replay must split the first command proof into
+`sdio-cmd0-go-idle` and `sdio-cmd5-ocr`; a CMD0 failure means the SDIO command
+path itself is broken, while a CMD5/OCR failure points at card response,
 power/reset, or CYW43-side readiness. These lines are debug telemetry only and
 do not satisfy driver-task acceptance until the matching owner-state proof is
 present.
@@ -520,8 +526,12 @@ service turn makes real hardware progress from driver-local state.
 The default Pi/hardware path is cut over to linked isolated images. Normal
 serial init replays through the linked `pi4-driver-serial` image after the first
 prompt, and the event pump uses a `driver-task-serial-client` once that init
-command succeeds. Until then, the HAL-owned mini-UART fallback remains a
-diagnostic shell only and does not credit serial owner-state acceptance. GENET/CYW43
+command succeeds. The linked client preserves the old-good root-side console
+service shape: RX drains first in bounded 128-byte bursts, TX staging keeps a
+4096-byte queue, echo/edit records are best-effort and never flush synchronously
+while parsing input, and one driver-task TX frame may carry up to the 1024-byte
+serial byte/operation budget. Until then, the HAL-owned mini-UART fallback
+remains a diagnostic shell only and does not credit serial owner-state acceptance. GENET/CYW43
 and USB/local-seat root callers are ring clients on the physical Pi branch; the
 old root-resident `BcmGenetDevice`, `Cyw43NetDevice`, and `Pi4LocalSeat`
 constructors remain only in compatibility paths and cannot count as owner-state
@@ -866,14 +876,23 @@ leave the line stuck.
 ### SDIO/CYW43455
 
 CYW43455 is an SDIO device, but Cohesix does not expose a generic SDIO host API
-to drivers. The `Cyw43Hal` contract owns SDHCI reset, power, clock, bus width,
-CMD52 direct I/O, CMD53 extended transfers, firmware bundle access, and Wi-Fi
-power/reset state.
+to arbitrary drivers. Under the split driver model, `sdio-host` owns SDHCI reset,
+power, clock, host bus width, CMD52 direct I/O, CMD53 extended transfers, and
+`POLL_IRQ`; the CYW43 runtime owns card-side CCCR/backplane sequencing,
+firmware bundle streaming, and Wi-Fi power/reset state. CYW43 may request a
+bounded SDIO-owner host-config turn for the proven card/host 4-bit and high-speed
+transition, but it must not write SDHCI host-control registers directly.
 
 - Function 0 is CCCR/FBR control.
 - Function 1 is the Broadcom backplane/control path.
 - Function 2 is the data/control-plane FIFO path after firmware.
 - Function 2 remains disabled before firmware/NVRAM upload.
+- CYW43 transport init must mirror the old-good Pi 4 order: use the startup
+  SDIO clock and one-bit host mode to enable Function 1, request/prove ALP,
+  establish KSO/backplane control, and hold ARMCR4 reset before widening the
+  card to 4-bit mode or asking `sdio-host` for high-speed host timing. A
+  backplane fault in this stage is a transport blocker, not a firmware/DHCP
+  blocker.
 - Production Function 2 traffic requires firmware upload/release evidence, real
   `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness (`IOR2`/ready proof). The
   latest Pi 4 hardware trace proved the `CHIPCLKCSR=0x50`
@@ -935,7 +954,10 @@ power/reset state.
   blocks, so each 32 KiB F1/64-byte firmware window becomes a 511-block
   32704-byte command plus a final 1-block 64-byte command. Do not encode a
   block-mode count of zero for a 512-block command; zero count is only valid for
-  512-byte byte-mode CMD53 transfers.
+  512-byte byte-mode CMD53 transfers. The split-runtime `sdio-host` owner must
+  program `SDHCI_TRNS_MULTI` for any CMD53 block-mode turn with more than one
+  block, including CYW43 firmware upload chunks delivered through the
+  CYW43-to-SDIO bus link.
 - Non-captured early iovars must not be hard blockers before this attach proof
   point. Cohesix may attempt station-path compatibility knobs such as
   `bus:txglom` and AMPDU limits only after the Linux first-iovar/MAC sequence,

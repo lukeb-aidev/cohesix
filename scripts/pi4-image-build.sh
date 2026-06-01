@@ -652,6 +652,15 @@ realpath_py() {
     python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"
 }
 
+canonicalize_input_paths() {
+    MANIFEST_PATH="$(realpath_py "${MANIFEST_PATH}")"
+    SEL4_BUILD_DIR="$(realpath_py "${SEL4_BUILD_DIR}")"
+    SEL4_VENV_DIR="$(realpath_py "${SEL4_VENV_DIR}")"
+    U_BOOT_BIN="$(realpath_py "${U_BOOT_BIN}")"
+    FIRMWARE_DIR="$(realpath_py "${FIRMWARE_DIR}")"
+    STAGE_DIR="$(realpath_py "${STAGE_DIR}")"
+}
+
 root_task_target_dir() {
     local target_dir="${CARGO_TARGET_DIR:-${ROOT_DIR}/target}"
 
@@ -1300,6 +1309,7 @@ unmount_flashed_disk() {
 
 main() {
     parse_args "$@"
+    canonicalize_input_paths
 
     cd "$ROOT_DIR"
     trap cleanup EXIT

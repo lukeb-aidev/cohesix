@@ -128,6 +128,8 @@ USB_OUTCOME_BLOCKERS = {
     "device-descriptor",
     "driver-task-runtime-deferred",
     "hid-first-report",
+    "hid-endpoint-not-ready",
+    "hub-topology-no-keyboard",
     "hid-init-failed",
     "hid-interrupt-in",
     "hid-queue-read-failed",
@@ -1138,6 +1140,10 @@ def normalize_usb_blocker(value: str) -> str:
         return "invalid-config-value"
     if "hid-init-failed" in lower:
         return "hid-init-failed"
+    if "hid-endpoint-not-ready" in lower:
+        return "hid-endpoint-not-ready"
+    if "hub-topology-no-keyboard" in lower:
+        return "hub-topology-no-keyboard"
     if "queue-read" in lower and any(
         token in lower for token in ("fail", "error", "timeout")
     ):
@@ -1779,6 +1785,42 @@ def normalize_wifi_exact(value: str) -> str:
     """Preserve exact CYW43 terminal reasons while keeping stable blockers."""
 
     lower = value.lower()
+    cyw43_transport_details = {
+        "21264": "cyw43-transport-bus-link-missing",
+        "0x5310": "cyw43-transport-bus-link-missing",
+        "21265": "cyw43-transport-direct-sdio-init",
+        "0x5311": "cyw43-transport-direct-sdio-init",
+        "21266": "cyw43-transport-card-init",
+        "0x5312": "cyw43-transport-card-init",
+        "21267": "cyw43-transport-f1-block-size",
+        "0x5313": "cyw43-transport-f1-block-size",
+        "21268": "cyw43-transport-f2-block-size",
+        "0x5314": "cyw43-transport-f2-block-size",
+        "21269": "cyw43-transport-f1-enable",
+        "0x5315": "cyw43-transport-f1-enable",
+        "21270": "cyw43-transport-card-bus-width",
+        "0x5316": "cyw43-transport-card-bus-width",
+        "21271": "cyw43-transport-host-bus-width",
+        "0x5317": "cyw43-transport-host-bus-width",
+        "21272": "cyw43-transport-backplane",
+        "0x5318": "cyw43-transport-backplane",
+        "21273": "cyw43-transport-high-speed",
+        "0x5319": "cyw43-transport-high-speed",
+        "21274": "cyw43-backplane-alp",
+        "0x531a": "cyw43-backplane-alp",
+        "21275": "cyw43-backplane-wake",
+        "0x531b": "cyw43-backplane-wake",
+        "21276": "cyw43-backplane-kso",
+        "0x531c": "cyw43-backplane-kso",
+        "21277": "cyw43-backplane-watermark",
+        "0x531d": "cyw43-backplane-watermark",
+        "21278": "cyw43-backplane-device-control",
+        "0x531e": "cyw43-backplane-device-control",
+        "21279": "cyw43-backplane-armcr4-reset",
+        "0x531f": "cyw43-backplane-armcr4-reset",
+    }
+    if lower in cyw43_transport_details:
+        return cyw43_transport_details[lower]
     control_plane_exact = CYW43_CONTROL_PLANE_EXACT_RE.search(lower)
     if control_plane_exact is not None:
         return control_plane_exact.group(0)
@@ -3981,6 +4023,14 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
         return 1
     if "[cyw43] control-plane" in raw and "action=fail" in raw:
         return 1
+    if (
+        event.domain == "driver"
+        and event.fields.get("contract", "").lower() == "cyw43455"
+        and event.fields.get("stage", "").lower() == "cyw43-transport-init"
+    ):
+        return 1
+    if event.domain == "driver" and event.fields.get("contract", "").lower() == "cyw43455":
+        return 2
     if "[cyw43] iovar" in raw and "failed" in raw:
         return 2
     if "[cyw43] init failure" in raw or "boot_failure source=live" in raw:
@@ -4012,7 +4062,19 @@ def summarize_wifi_failure_detail(
     join_begin_seen = False
     join_security_pending_iovar: str | None = None
     join_security_wpa_auth_ready_count = 0
-    for event in (event for event in events if event.domain == "wifi"):
+    for event in (
+        event
+        for event in events
+        if event.domain == "wifi"
+        or (
+            event.domain == "driver"
+            and event.fields.get("contract", "").lower() == "cyw43455"
+        )
+        or (
+            event.domain == "driver"
+            and normalize_wifi_blocker(event.raw) == "wifi-driver-task-runtime-unproved"
+        )
+    ):
         raw = event.raw.lower()
         fields = event.fields
         if "[cyw43] control-plane step=join action=begin" in raw:
@@ -4048,6 +4110,15 @@ def summarize_wifi_failure_detail(
                 socram_core_ctrl_stage = event_stage
 
         candidate = normalize_wifi_blocker(raw)
+        if (
+            wifi_blocker == "cyw43-driver-task-replay"
+            and event.domain == "driver"
+            and fields.get("contract", "").lower() == "cyw43455"
+            and "driver_task_resource_init" in raw
+            and fields.get("status", "").lower()
+            not in {"ready", "deferred", "begin", "progress"}
+        ):
+            candidate = "cyw43-driver-task-replay"
         if (
             wifi_blocker == "control-plane-reply-idle-loop"
             and "sdio xfer chunk" in raw
@@ -4804,11 +4875,27 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     if sdio_driver_task_replay_blocker != "none":
         wifi_gate = max(wifi_gate, 1)
         wifi_blocker = "sdio-driver-task-replay"
-        wifi_exact = sdio_driver_task_replay_blocker
+        replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
+            event_list, wifi_blocker
+        )
+        if replay_exact != "none":
+            wifi_exact = replay_exact
+            wifi_phase = replay_phase
+            wifi_blocker_line = replay_line
+        else:
+            wifi_exact = sdio_driver_task_replay_blocker
     elif net_driver_task_replay_blocker != "none":
         wifi_gate = max(wifi_gate, 1)
         wifi_blocker = "cyw43-driver-task-replay"
-        wifi_exact = net_driver_task_replay_blocker
+        replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
+            event_list, wifi_blocker
+        )
+        if replay_exact != "none":
+            wifi_exact = replay_exact
+            wifi_phase = replay_phase
+            wifi_blocker_line = replay_line
+        else:
+            wifi_exact = net_driver_task_replay_blocker
     if (
         wifi_deferred_resume_start is not None
         and net_driver_task_replay_events == 0
@@ -4961,6 +5048,7 @@ def summarize_driver_task_frontiers(
                 and serial_status == "cutover"
                 and fields.get("acceptance", "").lower() == "green"
             ):
+                serial_driver_accepted = True
                 serial_fallback_active = False
             if (
                 owner == "driver"
@@ -5166,6 +5254,19 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
             if "driver_task_ring_call_timeout" in raw:
                 return "usb-engine-init-no-reply"
 
+    if latest_usb_stage in {
+        "usb-keyboard-enumeration",
+        "usb-keyboard-first-report",
+        "usb-owner-state",
+    }:
+        if latest_usb_status in {
+            "hub-topology-no-keyboard",
+            "hid-endpoint-not-ready",
+            "blocked-keyboard-enumeration",
+        }:
+            if latest_usb_stage == "usb-keyboard-first-report":
+                return f"{latest_usb_stage}-{latest_usb_status}"
+            return latest_usb_status
     if latest_usb_stage in {"usb-engine-init", "usb-xhci-init"}:
         if latest_usb_status in {
             "no-reply",

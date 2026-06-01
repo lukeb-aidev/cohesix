@@ -97,7 +97,7 @@ pub(crate) fn with_uart_tx_lock<R>(f: impl FnOnce() -> R) -> R {
 pub const DEFAULT_RX_CAPACITY: usize = 512;
 
 /// Capacity of the TX staging queue used by [`SerialPort`].
-pub const DEFAULT_TX_CAPACITY: usize = 1024;
+pub const DEFAULT_TX_CAPACITY: usize = 4096;
 
 /// Maximum number of UTF-8 codepoints retained in a console line.
 pub const DEFAULT_LINE_CAPACITY: usize = 256;
@@ -108,6 +108,8 @@ const SERIAL_DRIVER_LOCAL_RECORD_VERSION: u16 = 1;
 const SERIAL_DRIVER_LOCAL_FLAG_ECHO_ENABLED: u16 = 1 << 0;
 const SERIAL_DRIVER_LOCAL_FLAG_SUPPRESS_LF: u16 = 1 << 1;
 const SERIAL_PENDING_TX_NONE: u16 = u16::MAX;
+#[cfg(feature = "kernel")]
+const SERIAL_RUNTIME_RX_DRAIN_DURING_TX_INTERVAL: usize = 8;
 const SERIAL_OWNER_DESCRIPTOR_FLAGS: u16 =
     crate::hal::driver_task::DRIVER_TASK_OWNER_STATE_REQUIRED_FLAGS;
 #[cfg(feature = "kernel")]
@@ -354,6 +356,26 @@ const fn saturating_u16(value: usize) -> u16 {
     }
 }
 
+fn serial_driver_task_rx_budget(
+    contract: DriverTaskContract,
+    available_capacity: usize,
+) -> Option<crate::hal::driver_task::DriverTaskBudgetGrant> {
+    let grant = crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract);
+    let max_bytes = (grant.max_bytes as usize)
+        .min(usize::from(grant.max_ops))
+        .min(usize::from(grant.max_frames))
+        .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES)
+        .min(available_capacity);
+    if max_bytes == 0 {
+        return None;
+    }
+    Some(crate::hal::driver_task::DriverTaskBudgetGrant {
+        max_ops: grant.max_ops.min(saturating_u16(max_bytes)),
+        max_frames: grant.max_frames.min(saturating_u16(max_bytes)),
+        max_bytes: grant.max_bytes.min(max_bytes as u32),
+    })
+}
+
 /// Whether serial can be credited as driver-owned owner-state proof.
 ///
 /// This is true only for the physical Pi linked-runtime path: root keeps the
@@ -438,6 +460,13 @@ pub fn init_serial_driver_task_runtime() -> bool {
             emit_serial_runtime_state("driver", "owner-state-rejected", "red");
             return false;
         }
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+            "serial-owner-state",
+            "ready",
+            completion,
+        );
         SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
         emit_serial_runtime_state("driver", "ready", "green");
     } else {
@@ -504,7 +533,30 @@ pub(crate) fn driver_task_client_read_byte() -> nb::Result<u8, SerialError> {
     if let Some(byte) = SERIAL_CLIENT_RX.lock().dequeue() {
         return Ok(byte);
     }
+    if driver_task_client_poll_rx_into_client_queue() == 0 {
+        return Err(NbError::WouldBlock);
+    }
+    SERIAL_CLIENT_RX.lock().dequeue().ok_or(NbError::WouldBlock)
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn preserve_driver_task_rx_after_raw_uart() {
+    if !serial_driver_task_transport_active() {
+        return;
+    }
+    let _ = driver_task_client_poll_rx_into_client_queue();
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_client_poll_rx_into_client_queue() -> usize {
     let contract = driver_task_contract();
+    let available_capacity = {
+        let rx = SERIAL_CLIENT_RX.lock();
+        DEFAULT_RX_CAPACITY.saturating_sub(rx.len())
+    };
+    let Some(budget) = serial_driver_task_rx_budget(contract, available_capacity) else {
+        return 0;
+    };
     crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
         contract,
         crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
@@ -513,7 +565,7 @@ pub(crate) fn driver_task_client_read_byte() -> nb::Result<u8, SerialError> {
     let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
         0,
         crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        budget,
         crate::hal::driver_task::DriverFrameDescriptor {
             offset: 0,
             len: 0,
@@ -522,21 +574,25 @@ pub(crate) fn driver_task_client_read_byte() -> nb::Result<u8, SerialError> {
     );
     let Some(completion) = crate::hal::driver_task::run_driver_task_ring_service(contract, command)
     else {
-        return Err(NbError::WouldBlock);
+        return 0;
     };
     if completion.code != crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16() {
-        return Err(NbError::WouldBlock);
+        return 0;
     }
     let Some(bytes) =
         crate::hal::driver_task::driver_task_ring_frame_bytes(contract, completion.frame)
     else {
-        return Err(NbError::Other(SerialError::DeviceFault));
+        return 0;
     };
     let mut rx = SERIAL_CLIENT_RX.lock();
+    let mut accepted = 0usize;
     for &byte in bytes {
-        let _ = rx.enqueue(byte);
+        if rx.enqueue(byte).is_err() {
+            break;
+        }
+        accepted = accepted.saturating_add(1);
     }
-    rx.dequeue().ok_or(NbError::WouldBlock)
+    accepted
 }
 
 #[cfg(feature = "kernel")]
@@ -648,6 +704,12 @@ where
         self.driver_local.pending_tx_byte().is_some() || !self.tx.is_empty()
     }
 
+    /// Whether serial input is already waiting in the command path.
+    #[must_use]
+    pub fn interactive_input_active(&self) -> bool {
+        !self.rx.is_empty() || !self.line.is_empty()
+    }
+
     /// HAL scheduling contract consumed by this port.
     #[must_use]
     pub fn driver_task_contract(&self) -> DriverTaskContract {
@@ -684,6 +746,41 @@ where
             accepted = accepted.saturating_add(1);
         }
         accepted
+    }
+
+    /// Stage one ordered serial record without blocking or partially enqueueing it.
+    ///
+    /// Echoes and edit-control records must never synchronously flush the UART
+    /// while input is being parsed. Under output pressure the input line still
+    /// wins and the echo record is dropped whole.
+    pub fn try_enqueue_tx_record(&mut self, parts: &[&[u8]]) -> bool {
+        let mut total = 0usize;
+        for part in parts {
+            total = total.saturating_add(part.len());
+        }
+        let pending = self
+            .tx
+            .len()
+            .saturating_add(usize::from(self.driver_local.pending_tx_byte().is_some()));
+        let capacity = TX.saturating_sub(1);
+        if total > capacity.saturating_sub(pending) {
+            self.telemetry.tx_overflow();
+            return false;
+        }
+        for part in parts {
+            for &byte in *part {
+                if self.tx.enqueue(byte).is_err() {
+                    self.telemetry.tx_overflow();
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// Stage a complete line record with CRLF serial line ending.
+    pub fn try_enqueue_line_record(&mut self, line: &str) -> bool {
+        self.try_enqueue_tx_record(&[line.as_bytes(), b"\r\n"])
     }
 
     /// Flush currently staged TX bytes without polling RX.
@@ -880,6 +977,13 @@ where
 
     #[cfg(feature = "kernel")]
     fn poll_driver_task_rx_into_queue(&mut self, contract: DriverTaskContract) -> bool {
+        if self.drain_driver_task_client_rx_queue() != 0 {
+            return true;
+        }
+        let Some(budget) = serial_driver_task_rx_budget(contract, RX.saturating_sub(self.rx.len()))
+        else {
+            return false;
+        };
         crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
             contract,
             crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
@@ -888,7 +992,7 @@ where
         let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
             0,
             crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+            budget,
             crate::hal::driver_task::DriverFrameDescriptor {
                 offset: 0,
                 len: 0,
@@ -926,6 +1030,23 @@ where
         false
     }
 
+    #[cfg(feature = "kernel")]
+    fn drain_driver_task_client_rx_queue(&mut self) -> usize {
+        let mut rx = SERIAL_CLIENT_RX.lock();
+        let mut accepted = 0usize;
+        while self.rx.len() < RX {
+            let Some(byte) = rx.dequeue() else {
+                break;
+            };
+            if self.rx.enqueue(byte).is_err() {
+                self.telemetry.rx_overflow();
+                break;
+            }
+            accepted = accepted.saturating_add(1);
+        }
+        accepted
+    }
+
     /// Switch prompt-side service from the root mini-UART fallback to the driver task.
     #[cfg(feature = "kernel")]
     pub fn use_driver_task_client_after_attach(&mut self) -> bool {
@@ -940,7 +1061,6 @@ where
     fn flush_tx_driver_task_ring(&mut self, contract: DriverTaskContract) -> bool {
         let turn_limit = usize::from(contract.budget.max_ops_per_turn)
             .min(contract.budget.max_bytes_per_turn as usize)
-            .min(usize::from(contract.budget.max_frames_per_turn))
             .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES);
         let mut staged =
             heapless::Vec::<u8, { crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES }>::new();
@@ -1157,7 +1277,7 @@ where
                     if self.line.pop().is_some() && self.driver_local.echo_enabled() {
                         #[cfg(feature = "kernel")]
                         prompt_shadow_pop();
-                        self.enqueue_tx(b"\x08 \x08");
+                        let _ = self.try_enqueue_tx_record(&[b"\x08 \x08"]);
                     }
                 }
                 byte if byte.is_ascii_control() => {
@@ -1171,7 +1291,7 @@ where
                     #[cfg(feature = "kernel")]
                     prompt_shadow_push(byte);
                     if self.driver_local.echo_enabled() {
-                        self.enqueue_tx(&[byte]);
+                        let _ = self.try_enqueue_tx_record(&[core::slice::from_ref(&byte)]);
                     }
                 }
             }
@@ -1192,7 +1312,7 @@ where
 
     fn emit_newline(&mut self) {
         if self.driver_local.echo_enabled() {
-            self.enqueue_tx(b"\r\n");
+            let _ = self.try_enqueue_tx_record(&[b"\r\n"]);
         }
     }
 
@@ -1323,6 +1443,37 @@ where
 }
 
 #[cfg(feature = "kernel")]
+fn serial_runtime_drain_rx_budgeted<D, const RX: usize, const TX: usize, const LINE: usize>(
+    port: &mut SerialPort<D, RX, TX, LINE>,
+    budget: &mut DriverServiceBudget,
+) where
+    D: SerialDriver,
+{
+    loop {
+        if port.serial_byte_budget_available(budget).is_err() {
+            break;
+        }
+        match port.driver.read_byte() {
+            Ok(byte) => {
+                if port.charge_serial_byte(budget).is_err() {
+                    port.telemetry.driver_task_budget_overrun();
+                    break;
+                }
+                if port.rx.enqueue(byte).is_err() {
+                    port.telemetry.rx_overflow();
+                    break;
+                }
+            }
+            Err(NbError::WouldBlock) => break,
+            Err(NbError::Other(_)) => {
+                port.telemetry.rx_overflow();
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn serial_runtime_write_bytes<D, const RX: usize, const TX: usize, const LINE: usize>(
     port: &mut SerialPort<D, RX, TX, LINE>,
     bytes: &[u8],
@@ -1339,8 +1490,12 @@ where
         }
     };
     let mut written = 0usize;
+    serial_runtime_drain_rx_budgeted(port, &mut budget);
     with_uart_tx_lock(|| {
         for &byte in bytes {
+            if written != 0 && written % SERIAL_RUNTIME_RX_DRAIN_DURING_TX_INTERVAL == 0 {
+                serial_runtime_drain_rx_budgeted(port, &mut budget);
+            }
             if port.serial_byte_budget_available(&budget).is_err() {
                 port.telemetry.driver_task_budget_overrun();
                 break;
@@ -1361,6 +1516,7 @@ where
             }
         }
     });
+    serial_runtime_drain_rx_budgeted(port, &mut budget);
     written
 }
 
@@ -1582,6 +1738,20 @@ mod tests {
     }
 
     #[test]
+    fn driver_task_rx_budget_clamps_to_shell_queue_capacity() {
+        let budget = serial_driver_task_rx_budget(driver_task_contract(), 17).unwrap();
+
+        assert_eq!(budget.max_ops, 17);
+        assert_eq!(budget.max_frames, 17);
+        assert_eq!(budget.max_bytes, 17);
+    }
+
+    #[test]
+    fn driver_task_rx_budget_refuses_full_shell_queue() {
+        assert!(serial_driver_task_rx_budget(driver_task_contract(), 0).is_none());
+    }
+
+    #[test]
     fn serial_declares_valid_realtime_driver_task_contract() {
         let contract = driver_task_contract();
 
@@ -1670,29 +1840,35 @@ mod tests {
 
     #[test]
     fn poll_io_obeys_driver_task_budget() {
-        let driver = LoopbackSerial::<1024>::new();
-        let mut port: SerialPort<_, 1024, 1024, 16> = SerialPort::new(driver);
-        let input = [b'a'; 128];
+        let driver = LoopbackSerial::<2048>::new();
+        let mut port: SerialPort<_, 2048, 2048, 16> = SerialPort::new(driver);
+        let input = [b'a'; 1100];
         port.driver_mut().push_rx(&input);
 
         assert!(port.poll_io());
 
-        assert_eq!(port.rx.len(), 64);
-        assert_eq!(port.driver_mut().rx.borrow().len(), 64);
+        assert_eq!(
+            port.rx.len(),
+            usize::from(driver_task_contract().budget.max_ops_per_turn)
+        );
+        assert_eq!(port.driver_mut().rx.borrow().len(), 76);
         assert!(port.telemetry().driver_task_budget_overruns > 0);
     }
 
     #[test]
     fn flush_tx_obeys_driver_task_budget() {
-        let driver = LoopbackSerial::<1024>::new();
-        let mut port: SerialPort<_, 1024, 1024, 16> = SerialPort::new(driver);
-        let output = [b'x'; 128];
+        let driver = LoopbackSerial::<2048>::new();
+        let mut port: SerialPort<_, 2048, 2048, 16> = SerialPort::new(driver);
+        let output = [b'x'; 1100];
         port.enqueue_tx(&output);
 
         port.flush_tx();
 
         let emitted = port.driver_mut().drain_tx();
-        assert_eq!(emitted.len(), 64);
+        assert_eq!(
+            emitted.len(),
+            usize::from(driver_task_contract().budget.max_ops_per_turn)
+        );
         assert!(port.telemetry().driver_task_budget_overruns > 0);
     }
 
@@ -1708,6 +1884,22 @@ mod tests {
         let emitted = port.driver_mut().drain_tx();
         assert!(emitted.len() < output.len());
         assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+    }
+
+    #[test]
+    fn echo_records_do_not_flush_or_block_when_tx_queue_is_full() {
+        let driver = LoopbackSerial::<16>::new();
+        let mut port: SerialPort<_, 16, 2, 16> = SerialPort::new(driver);
+        assert!(port.tx.enqueue(b'x').is_ok());
+
+        assert!(port.rx.enqueue(b'a').is_ok());
+        assert!(port.rx.enqueue(b'\n').is_ok());
+        let line = port.next_line().expect("newline completes input");
+
+        assert_eq!(line.as_str(), "a");
+        assert_eq!(port.tx.len(), 1);
+        assert_eq!(port.driver_mut().drain_tx().len(), 0);
+        assert!(port.telemetry().tx_backpressure > 0);
     }
 
     #[cfg(feature = "kernel")]
@@ -1801,6 +1993,26 @@ mod tests {
 
         assert_eq!(written, 3);
         assert_eq!(port.driver_mut().drain_tx().as_slice(), b"abc");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_serial_write_preserves_rx_during_output() {
+        let driver = LoopbackSerial::<128>::new();
+        let mut port: SerialPort<_, 128, 128, 16> = SerialPort::new(driver);
+        port.driver_mut().push_rx(b"wifi diag\n");
+
+        let written = serial_runtime_write_bytes(
+            &mut port,
+            b"long serial output while operator is typing",
+            driver_task_contract(),
+        );
+
+        assert!(written > 0);
+        assert_eq!(port.driver_mut().rx.borrow().len(), 0);
+        let mut out = [0u8; 16];
+        let read = serial_runtime_poll_bytes(&mut port, &mut out, driver_task_contract());
+        assert_eq!(&out[..read], b"wifi diag\n");
     }
 
     #[cfg(feature = "kernel")]

@@ -21,6 +21,10 @@ pub const DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY: u16 = 0x0201;
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY: u16 = 0x0202;
 /// USB service detail: keyboard endpoint is armed, but no interrupt report has arrived.
 pub const DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING: u16 = 0x0203;
+/// USB runtime init detail: hub topology was traversed, but no boot keyboard endpoint was ready.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN: u16 = 0x0210;
+/// USB runtime init detail: a HID keyboard endpoint was found, but final attach did not complete.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN: u16 = 0x0211;
 /// GENET/CYW43 network init command used by the root ring client.
 pub const DRIVER_RUNTIME_NET_INIT_AUX: u32 = 0x494e_4954;
 /// CYW43 command descriptor submission marker used in `aux0`.
@@ -73,6 +77,8 @@ pub const DRIVER_RUNTIME_SDIO_OP_CMD53_READ: u16 = 3;
 pub const DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE: u16 = 4;
 /// SDIO bus-owner operation: poll interrupt status.
 pub const DRIVER_RUNTIME_SDIO_OP_POLL_IRQ: u16 = 5;
+/// SDIO bus-owner operation: apply host-controller clock and bus-width state.
+pub const DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG: u16 = 6;
 /// SDIO response kind: no response.
 pub const DRIVER_RUNTIME_SDIO_RESP_NONE: u8 = 0;
 /// SDIO response kind: OCR/R4 response.
@@ -283,6 +289,10 @@ pub struct DriverRuntimeSdioCommandDescriptor {
 impl DriverRuntimeSdioCommandDescriptor {
     /// CMD53 address increments after each byte/block.
     pub const FLAG_INCREMENT: u16 = 1 << 0;
+    /// Host-config command requests 4-bit SDIO bus width.
+    pub const FLAG_HOST_BUS_WIDTH_4BIT: u16 = 1 << 1;
+    /// Host-config command requests SDHCI high-speed mode.
+    pub const FLAG_HOST_HIGH_SPEED: u16 = 1 << 2;
 
     /// Empty descriptor.
     #[must_use]
@@ -309,7 +319,9 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_READ
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
-            || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
+            || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ
+            || self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG;
+        let host_config = self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG;
         let known_response = self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_OCR
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_SHORT
@@ -323,6 +335,8 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
         let effective_len = if read_result {
             1
+        } else if host_config {
+            0
         } else if self.block_count != 0 {
             (self.block_count as u32).saturating_mul(self.block_size as u32)
         } else {
@@ -332,7 +346,16 @@ impl DriverRuntimeSdioCommandDescriptor {
         known_op
             && known_response
             && self.function <= 7
-            && self.addr < (1 << 17)
+            && (host_config || self.addr < (1 << 17))
+            && (!host_config
+                || (self.function == 0
+                    && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
+                    && self.data_offset == 0
+                    && self.len == 0
+                    && self.block_size == 0
+                    && self.block_count == 0
+                    && self.reserved == 0
+                    && self.addr <= 100_000_000))
             && (!cmd52 || (self.len == 1 && self.block_count == 0 && self.block_size == 0))
             && (!cmd53
                 || ((self.len != 0 || self.block_count != 0)
@@ -340,9 +363,10 @@ impl DriverRuntimeSdioCommandDescriptor {
                         || (self.block_size != 0
                             && self.block_size <= 512
                             && self.block_count <= 511))))
-            && effective_len != 0
-            && self.data_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
-            && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32
+            && (host_config
+                || (effective_len != 0
+                    && self.data_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
+                    && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32))
     }
 }
 
@@ -1260,6 +1284,34 @@ mod tests {
         assert!(!descriptor.valid());
         descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
         descriptor.len = DRIVER_RUNTIME_RING_PAGE_BYTES;
+        assert!(!descriptor.valid());
+    }
+
+    #[test]
+    fn sdio_command_descriptor_validates_host_config_bounds() {
+        let mut descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: 50_000_000,
+            data_offset: 0,
+            len: 0,
+            block_size: 0,
+            block_count: 0,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT
+                | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED,
+            reserved: 0,
+            timeout_us: 1000,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.addr = 100_000_001;
+        assert!(!descriptor.valid());
+        descriptor.addr = 50_000_000;
+        descriptor.len = 1;
+        assert!(!descriptor.valid());
+        descriptor.len = 0;
+        descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
         assert!(!descriptor.valid());
     }
 

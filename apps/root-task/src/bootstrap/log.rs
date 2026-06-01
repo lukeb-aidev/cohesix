@@ -204,6 +204,7 @@ static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
 static UART_LOG_SUPPRESSION_DEPTH: AtomicU32 = AtomicU32::new(0);
 static SERIAL_PROMPT_REFRESH_AFTER_LOGS: AtomicBool = AtomicBool::new(false);
 const SERIAL_PROMPT: &[u8] = b"cohesix> ";
+const SERIAL_RX_PRESERVE_CHUNK_BYTES: usize = 32;
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -332,10 +333,12 @@ fn record_drop() {
 }
 
 fn emit_uart(payload: &[u8]) {
-    with_raw_uart_lock(|| {
-        sel4::debug_put_bytes_unlocked(payload);
-        emit_serial_prompt_refresh_unlocked(payload);
-    });
+    emit_uart_payload(payload, false);
+}
+
+fn preserve_serial_rx_after_raw_uart() {
+    #[cfg(feature = "kernel")]
+    crate::serial::preserve_driver_task_rx_after_raw_uart();
 }
 
 fn emit_serial_prompt_refresh_unlocked(payload: &[u8]) {
@@ -349,6 +352,33 @@ fn emit_serial_prompt_refresh_unlocked(payload: &[u8]) {
     crate::serial::emit_prompt_refresh_with_input_shadow_unlocked(SERIAL_PROMPT);
     #[cfg(not(feature = "kernel"))]
     sel4::debug_put_bytes_unlocked(SERIAL_PROMPT);
+}
+
+fn emit_uart_payload(payload: &[u8], append_crlf: bool) {
+    if !SERIAL_PROMPT_REFRESH_AFTER_LOGS.load(Ordering::Acquire) {
+        with_raw_uart_lock(|| {
+            sel4::debug_put_bytes_unlocked(payload);
+            if append_crlf {
+                sel4::debug_put_bytes_unlocked(b"\r\n");
+            }
+        });
+        preserve_serial_rx_after_raw_uart();
+        return;
+    }
+
+    for chunk in payload.chunks(SERIAL_RX_PRESERVE_CHUNK_BYTES) {
+        if chunk.is_empty() {
+            continue;
+        }
+        with_raw_uart_lock(|| sel4::debug_put_bytes_unlocked(chunk));
+        preserve_serial_rx_after_raw_uart();
+    }
+    if append_crlf {
+        with_raw_uart_lock(|| sel4::debug_put_bytes_unlocked(b"\r\n"));
+        preserve_serial_rx_after_raw_uart();
+    }
+    with_raw_uart_lock(|| emit_serial_prompt_refresh_unlocked(payload));
+    preserve_serial_rx_after_raw_uart();
 }
 
 const fn serial_prompt_refresh_should_emit(enabled: bool, payload: &[u8]) -> bool {
@@ -386,10 +416,7 @@ pub fn force_uart_line(line: &str) {
         return;
     }
 
-    with_raw_uart_lock(|| {
-        sel4::debug_put_line_unlocked(line.as_bytes());
-        emit_serial_prompt_refresh_unlocked(line.as_bytes());
-    });
+    emit_uart_payload(line.as_bytes(), true);
 }
 
 /// Emit a compact critical UART line even when normal diagnostics are buffered.
@@ -401,10 +428,7 @@ pub fn force_uart_line_raw(line: &str) {
         return;
     }
 
-    with_raw_uart_lock(|| {
-        sel4::debug_put_line_unlocked(line.as_bytes());
-        emit_serial_prompt_refresh_unlocked(line.as_bytes());
-    });
+    emit_uart_payload(line.as_bytes(), true);
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
@@ -668,8 +692,7 @@ mod tests {
 
     #[test]
     fn log_buffer_switch_policy_honors_prompt_refresh() {
-        assert!(log_buffer_switch_allowed_after_prompt_refresh(false));
-        assert!(!log_buffer_switch_allowed_after_prompt_refresh(true));
+        assert!(log_buffer_switch_allowed_after_prompt_refresh());
     }
 
     #[cfg(feature = "kernel")]
@@ -848,9 +871,7 @@ fn init_logger_bootstrap_only_inner() {
 
 /// Switch the logger to the in-VM log buffer backing `/log/queen.log`.
 pub fn switch_logger_to_log_buffer() -> bool {
-    if !log_buffer_switch_allowed_after_prompt_refresh(
-        SERIAL_PROMPT_REFRESH_AFTER_LOGS.load(Ordering::Acquire),
-    ) {
+    if !log_buffer_switch_allowed_after_prompt_refresh() {
         return false;
     }
     if !log_buffer::enable_log_channel() {
@@ -860,8 +881,8 @@ pub fn switch_logger_to_log_buffer() -> bool {
     true
 }
 
-const fn log_buffer_switch_allowed_after_prompt_refresh(prompt_refresh_enabled: bool) -> bool {
-    !prompt_refresh_enabled
+const fn log_buffer_switch_allowed_after_prompt_refresh() -> bool {
+    true
 }
 
 /// Switches the logger sink to the userland channel once IPC is online.
