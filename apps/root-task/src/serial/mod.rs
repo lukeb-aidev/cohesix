@@ -1097,7 +1097,9 @@ where
         let mut budget_exhausted = false;
         let mut rx_activity = false;
         let mut accepted = 0usize;
+        #[cfg(feature = "kernel")]
         let mut first = 0u8;
+        #[cfg(feature = "kernel")]
         let mut last = 0u8;
         // Drain RX side first so newly available bytes can be processed in the
         // same cycle.
@@ -1112,10 +1114,13 @@ where
                         self.telemetry.driver_task_budget_overrun();
                         break;
                     }
-                    if accepted == 0 {
-                        first = byte;
+                    #[cfg(feature = "kernel")]
+                    {
+                        if accepted == 0 {
+                            first = byte;
+                        }
+                        last = byte;
                     }
-                    last = byte;
                     accepted = accepted.saturating_add(1);
                     rx_activity = true;
                     if self.rx.enqueue(byte).is_err() {

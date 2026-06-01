@@ -2442,13 +2442,7 @@ where
             if !self.post_prompt_local_seat_attach_pending || self.local_seat.is_none() {
                 return;
             }
-            boot_log::force_uart_line_raw(
-                "[local-seat] post-prompt attach begin reason=before-serial-cutover",
-            );
-            self.post_prompt_local_seat_attach_pending = false;
-            self.post_prompt_local_seat_attach_idle_turns = 0;
-            self.post_prompt_local_seat_attach_blocked_traces = 0;
-            self.arm_post_prompt_local_seat_once();
+            self.emit_post_prompt_local_seat_attach_blocked("serial-cutover-priority");
         }
     }
 
@@ -4137,22 +4131,64 @@ where
         #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         {
             let runtime = crate::local_seat_pi4::latest_usb_runtime_proof_status();
+            let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
+            let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
+            let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
+            let linked_gate = Self::usb_runtime_gate_for_linked_detail(linked_detail);
+            let linked_first_byte = self.local_seat.as_ref().is_some_and(|local_seat| {
+                let trace = local_seat.keyboard_trace();
+                trace.backend_read_bytes != 0
+                    || trace.accepted_bytes != 0
+                    || trace.echoed_bytes != 0
+            });
+            let keyboard_ready = runtime.keyboard_ready || linked_keyboard_ready;
+            let first_report = runtime.first_report || linked_first_report || linked_first_byte;
+            let first_byte = runtime.first_byte || linked_first_byte;
+            let proof_gate = if first_byte {
+                runtime.proof_gate.max(9)
+            } else if first_report {
+                runtime.proof_gate.max(8)
+            } else if keyboard_ready {
+                runtime.proof_gate.max(7)
+            } else if linked_gate != 0 {
+                runtime.proof_gate.max(linked_gate)
+            } else {
+                runtime.proof_gate
+            };
+            let next_step = if first_byte {
+                "keyboard-first-byte"
+            } else if first_report {
+                "keyboard-first-byte"
+            } else if keyboard_ready {
+                "keyboard-first-report"
+            } else if linked_detail != 0 {
+                Self::usb_runtime_next_for_linked_detail(linked_detail)
+            } else {
+                runtime.next_step
+            };
+            let blocker = if keyboard_ready {
+                "none"
+            } else if linked_detail != 0 {
+                Self::usb_runtime_blocker_for_linked_detail(linked_detail)
+            } else {
+                runtime.blocker
+            };
             let runtime_line = format_message(format_args!(
                 "usb: runtime_gate keyboard={} first_report={} first_byte={} proof_gate={} target_gate=10 next={} blocker={}",
-                Self::yes_no(runtime.keyboard_ready),
-                Self::yes_no(runtime.first_report),
-                Self::yes_no(runtime.first_byte),
-                runtime.proof_gate,
-                runtime.next_step,
-                runtime.blocker,
+                Self::yes_no(keyboard_ready),
+                Self::yes_no(first_report),
+                Self::yes_no(first_byte),
+                proof_gate,
+                next_step,
+                blocker,
             ));
             self.emit_console_line(runtime_line.as_str());
             let runtime_contract = format_message(format_args!(
                 "usb: runtime_contract current={} expected={} blocker={} proof_gate={} target_gate=10",
-                Self::usb_runtime_step_label(runtime.proof_gate),
-                runtime.next_step,
-                runtime.blocker,
-                runtime.proof_gate,
+                Self::usb_runtime_step_label(proof_gate),
+                next_step,
+                blocker,
+                proof_gate,
             ));
             self.emit_console_line(runtime_contract.as_str());
             let keyboard = crate::local_seat_pi4::latest_usb_keyboard_poll_status();
@@ -4519,6 +4555,98 @@ where
             8 => "keyboard-ready",
             9 => "hid-first-report",
             _ => "keyboard-online",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_gate_for_linked_detail(detail: u16) -> u8 {
+        match detail {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => 3,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => 4,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => 5,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED => 6,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED => 7,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => 8,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 9,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 10,
+            _ => 0,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_next_for_linked_detail(detail: u16) -> &'static str {
+        match detail {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => "command-ring-ready",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => {
+                "root-port-connected"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => {
+                "device-addressed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED => {
+                "device-descriptor"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED => {
+                "config-descriptor"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => "hid-keyboard",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => "keyboard-ready",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => {
+                "keyboard-first-report"
+            }
+            _ => "keyboard-ready",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_blocker_for_linked_detail(detail: u16) -> &'static str {
+        match detail {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => "xhci-ready",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => {
+                "command-ring-ready"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED => {
+                "root-port-connected"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => {
+                "enable-slot-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED => "device-addressed",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED => {
+                "address-device-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR => "device-descriptor",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED => {
+                "device-descriptor-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR => "config-descriptor",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED => {
+                "config-descriptor-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN => {
+                "hub-topology-no-keyboard"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => "hub-attach-failed",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN => {
+                "hid-endpoint-not-ready"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => "hid-attach-failed",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => "none",
+            _ => "keyboard-not-ready",
         }
     }
 

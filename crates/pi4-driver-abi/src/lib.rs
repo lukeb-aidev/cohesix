@@ -35,6 +35,18 @@ pub const DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR: u16 = 0x0208;
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN: u16 = 0x0210;
 /// USB runtime init detail: a HID keyboard endpoint was found, but final attach did not complete.
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN: u16 = 0x0211;
+/// USB runtime init detail: xHCI Enable Slot did not complete for a connected root port.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED: u16 = 0x0212;
+/// USB runtime init detail: xHCI Address Device did not complete after Enable Slot.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED: u16 = 0x0213;
+/// USB runtime init detail: device descriptor transfer failed after address.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED: u16 = 0x0214;
+/// USB runtime init detail: configuration descriptor transfer failed after device descriptor.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED: u16 = 0x0215;
+/// USB runtime init detail: HID keyboard endpoint attach/control setup failed.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED: u16 = 0x0216;
+/// USB runtime init detail: hub descriptor or hub context setup failed.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED: u16 = 0x0217;
 /// GENET/CYW43 network init command used by the root ring client.
 pub const DRIVER_RUNTIME_NET_INIT_AUX: u32 = 0x494e_4954;
 /// CYW43 command descriptor submission marker used in `aux0`.

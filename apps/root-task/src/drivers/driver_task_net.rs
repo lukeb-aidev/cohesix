@@ -814,6 +814,7 @@ fn submit_cyw43_runtime_command(
         } else {
             "unexpected-completion"
         };
+        emit_cyw43_runtime_command_fault(contract, stage, descriptor, completion);
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             contract,
             DriverTaskHotPath::Cyw43Wifi,
@@ -823,6 +824,34 @@ fn submit_cyw43_runtime_command(
         );
         Err(DriverTaskNetError::RuntimeInit("cyw43-command"))
     }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_runtime_command_fault(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    completion: DriverTaskCompletionRecord,
+) {
+    use core::fmt::Write;
+
+    if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
+        return;
+    }
+    let mut line = heapless::String::<240>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_COMMAND_FAULT contract={} stage={} op={} target=0x{:08x} payload_len={} total_len={} detail={} result={}",
+        contract.name,
+        stage,
+        descriptor.op,
+        descriptor.target_addr,
+        descriptor.payload_len,
+        descriptor.total_len,
+        completion.detail,
+        completion.result,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]

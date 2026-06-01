@@ -122,13 +122,19 @@ JOIN_SECURITY_EXACT_BY_BLOCKER = {
     "join-security-bsscfg-sup-wpa-loop": "cyw43-join-security-bsscfg-sup-wpa-loop",
 }
 USB_OUTCOME_BLOCKERS = {
+    "address-device-failed",
     "address-failed",
     "config-descriptor",
+    "config-descriptor-failed",
     "config-parse",
     "device-descriptor",
+    "device-descriptor-failed",
     "driver-task-runtime-deferred",
+    "enable-slot-failed",
+    "hid-attach-failed",
     "hid-first-report",
     "hid-endpoint-not-ready",
+    "hub-attach-failed",
     "hub-topology-no-keyboard",
     "hid-init-failed",
     "hid-interrupt-in",
@@ -1130,6 +1136,10 @@ def normalize_usb_blocker(value: str) -> str:
         return "root-port-device-not-found"
     if "address-device-timeout" in lower or "addressdevicetimeout" in lower:
         return "address-device-timeout"
+    if "address-device-failed" in lower:
+        return "address-device-failed"
+    if "enable-slot-failed" in lower:
+        return "enable-slot-failed"
     if "root-port-deferred-capture" in lower or "captured-root-port-enum" in lower:
         return "captured-root-port-enum"
     if "address-device-pending" in lower:
@@ -1144,6 +1154,10 @@ def normalize_usb_blocker(value: str) -> str:
         return "hid-init-failed"
     if "hid-endpoint-not-ready" in lower:
         return "hid-endpoint-not-ready"
+    if "hid-attach-failed" in lower:
+        return "hid-attach-failed"
+    if "hub-attach-failed" in lower:
+        return "hub-attach-failed"
     if "hub-topology-no-keyboard" in lower:
         return "hub-topology-no-keyboard"
     if "queue-read" in lower and any(
@@ -1167,11 +1181,11 @@ def normalize_usb_blocker(value: str) -> str:
     if ("device-descriptor" in lower or "device-desc" in lower) and any(
         token in lower for token in ("fail", "timeout", "missing", "error")
     ):
-        return "device-descriptor"
+        return "device-descriptor-failed"
     if ("config-descriptor" in lower or "config-desc" in lower) and any(
         token in lower for token in ("fail", "timeout", "missing", "error")
     ):
-        return "config-descriptor"
+        return "config-descriptor-failed"
     if "config-parse" in lower and any(
         token in lower for token in ("fail", "timeout", "missing", "error")
     ):
@@ -4217,6 +4231,13 @@ def summarize_wifi_failure_detail(
             line = event.line
         if candidate == wifi_blocker:
             candidate_priority = wifi_failure_detail_priority(event, wifi_blocker, candidate)
+            if (
+                blocker_matched
+                and event_exact == "none"
+                and exact != "none"
+                and candidate_priority >= blocker_priority
+            ):
+                continue
             if blocker_matched and candidate_priority > blocker_priority:
                 continue
             if blocker_matched and candidate_priority == blocker_priority and wifi_blocker in {
@@ -5285,6 +5306,28 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
             outstanding.pop(request, None)
             latest_usb_blocking_call = False
             if "driver_task_ring_call_timeout" in raw:
+                if contract == "usb-local-seat" and latest_usb_stage in {
+                    "usb-keyboard-enumeration",
+                    "usb-keyboard-enumeration-retry",
+                    "usb-keyboard-first-report",
+                    "usb-owner-state",
+                }:
+                    return "usb-keyboard-enumeration-no-reply"
+                if contract == "usb-local-seat" and latest_usb_engine_detail in {
+                    0x0205,
+                    0x0206,
+                    0x0207,
+                    0x0208,
+                    0x0210,
+                    0x0211,
+                    0x0212,
+                    0x0213,
+                    0x0214,
+                    0x0215,
+                    0x0216,
+                    0x0217,
+                }:
+                    return "usb-keyboard-enumeration-no-reply"
                 return "usb-engine-init-no-reply"
 
     if latest_usb_stage in {
@@ -5304,6 +5347,12 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
             "device-addressed",
             "device-descriptor",
             "config-descriptor",
+            "enable-slot-failed",
+            "address-device-failed",
+            "device-descriptor-failed",
+            "config-descriptor-failed",
+            "hid-attach-failed",
+            "hub-attach-failed",
             "hub-topology-no-keyboard",
             "hid-endpoint-not-ready",
             "blocked-keyboard-enumeration",

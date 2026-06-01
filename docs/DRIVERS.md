@@ -266,8 +266,9 @@ proof from the linked-runtime model.
 - If xHCI engine-init reaches controller-ready before HID readiness, the linked
   USB runtime must keep enumeration alive through bounded prompt-side service:
   preserve current-boot Port Status Change events, power/sample root ports,
-  retry hub/HID enumeration, and publish owner-state only after keyboard-ready
-  or first-report proof.
+  retry hub/HID enumeration during bounded init/resume turns, report the last
+  enumeration frontier during prompt polls, and publish owner-state only after
+  keyboard-ready or first-report proof.
 - Wi-Fi replay is independent of USB. CYW43/SDIO descriptor replay and selected
   network progress must not wait for HID readiness, and USB polling must not
   mask Wi-Fi blockers; both lanes remain subordinate to serial/HDMI
@@ -415,13 +416,13 @@ descriptor and mini-UART init as bounded prompt-side turns. Root restores
 contract MCP/priority immediately after each bounded runtime-init or proof turn.
 A deferred proof emits
 `DRIVER_TASK_BOOTSTRAP_DEFERRED`; it is fail-closed acceptance evidence, not a
-root-task fallback. Serial, GENET, CYW43, SDIO, and PCIe runtime-init
+root-task fallback. Serial, USB/local-seat, GENET, CYW43, SDIO, and PCIe runtime-init
 descriptors defer before the root shell because their prompt-side replay must
-not hold the first serial prompt, USB, or HDMI hostage while driver ownership is
+not hold the first serial prompt or HDMI hostage while driver ownership is
 still proving. Their TCBs still start and leave `DRIVER_TASK_BOOTSTRAP_DEFERRED`
 breadcrumbs, while owner-state acceptance remains red until a later bounded
-service proof returns. USB/local-seat and HDMI text may attempt their pre-root descriptor
-handoff only as bounded send/yield proof. Those send-only pre-root turns carry
+service proof returns. HDMI text may attempt its pre-root descriptor handoff only
+as bounded send/yield proof. Those send-only pre-root turns carry
 `DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY`, so the linked runtime publishes the shared
 completion record and returns to `Recv` without issuing `Reply`; a missing
 completion must turn red and leave the root task runnable instead of trapping
@@ -989,7 +990,10 @@ transition, but it must not write SDHCI host-control registers directly.
   512-byte byte-mode CMD53 transfers. The split-runtime `sdio-host` owner must
   program `SDHCI_TRNS_MULTI` for any CMD53 block-mode turn with more than one
   block, including CYW43 firmware upload chunks delivered through the
-  CYW43-to-SDIO bus link.
+  CYW43-to-SDIO bus link. If the SDIO owner reports a transfer fault, it must
+  reset the CMD/DATA path, clear interrupt state, preserve the host clock/bus
+  configuration, and let CYW43 invalidate and reprogram the backplane window
+  before retrying byte-mode upload.
 - Non-captured early iovars must not be hard blockers before this attach proof
   point. Cohesix may attempt station-path compatibility knobs such as
   `bus:txglom` and AMPDU limits only after the Linux first-iovar/MAC sequence,
@@ -1402,8 +1406,12 @@ transition, but it must not write SDHCI host-control registers directly.
   `usb status` exposes low-volume keyboard capture counters for HID
   reports/filtering, local-seat queue accept/drain/echo, event-loop
   keyboard-priority turns, and output-side keyboard service polls so missed
-  keystrokes can be attributed without adding UART spam. HDMI progress banners
-  are rate-limited to a 5-10 s visible cadence.
+  keystrokes can be attributed without adding UART spam. HDMI progress mirrors
+  the same driver-resource milestones as concise `[drivers] ...` lines once a
+  display sink is available; the UART retains the full
+  `DRIVER_TASK_RESOURCE_INIT` record. Successful CYW43 firmware chunks are not
+  mirrored individually, but Wi-Fi progress banners keep a 5-10 s visible
+  cadence while long startup work is active.
 - Pi 4 local-seat USB is not a reason to disable Wi-Fi diagnostics. The serial
   console retains the HAL-backed Wi-Fi debug path after root-console handoff so
   `wifi diag`, `wifi load-fw`, and `wifi retry` can exercise CYW43455 without

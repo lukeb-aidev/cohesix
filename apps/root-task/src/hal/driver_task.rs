@@ -22,7 +22,7 @@ use pi4_driver_abi::{
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
     DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -457,10 +457,11 @@ pub const fn root_fallback_allowed_for_profile(profile: DriverTaskRuntimeProfile
 ///
 /// The physical Pi 4 path keeps bootstrap runtime-init turns bounded and
 /// reserves blocking reply-path service for post-prompt steady state. Network
-/// runtimes, SDIO bus-owner proof, and PCIe root proof are allowed to make
-/// progress only after the root shell is available, so a selected or fallback
-/// NIC, wedged SDIO bus-owner runtime, or unresponsive PCIe root runtime cannot
-/// starve serial, local-seat, and display console availability.
+/// runtimes, USB local-seat proof, SDIO bus-owner proof, and PCIe root proof
+/// are allowed to make progress only after the root shell is available, so a
+/// selected or fallback NIC, wedged local-seat runtime, SDIO bus-owner runtime,
+/// or unresponsive PCIe root runtime cannot starve serial and display console
+/// availability.
 #[must_use]
 pub const fn pre_root_runtime_init_deferred_for_profile(
     profile: DriverTaskRuntimeProfile,
@@ -473,6 +474,7 @@ pub const fn pre_root_runtime_init_deferred_for_profile(
     matches!(
         contract.kind,
         DriverTaskKind::Serial
+            | DriverTaskKind::LocalSeatUsb
             | DriverTaskKind::WiredNic
             | DriverTaskKind::WifiNic
             | DriverTaskKind::SdioHost
@@ -2823,6 +2825,7 @@ enum DriverTaskRingCommandMode {
     Bootstrap,
     BootstrapCall,
     NonBlocking,
+    PromptSlice,
 }
 
 #[cfg(feature = "kernel")]
@@ -2833,13 +2836,16 @@ impl DriverTaskRingCommandMode {
             DriverTaskRingCommandMode::Bootstrap => "bootstrap",
             DriverTaskRingCommandMode::BootstrapCall => "bootstrap-call",
             DriverTaskRingCommandMode::NonBlocking => "nonblocking",
+            DriverTaskRingCommandMode::PromptSlice => "prompt-slice",
         }
     }
 
     const fn records_latency(self) -> bool {
         matches!(
             self,
-            DriverTaskRingCommandMode::Steady | DriverTaskRingCommandMode::NonBlocking
+            DriverTaskRingCommandMode::Steady
+                | DriverTaskRingCommandMode::NonBlocking
+                | DriverTaskRingCommandMode::PromptSlice
         )
     }
 }
@@ -2884,7 +2890,9 @@ fn emit_driver_task_ring_resource_submit_status(
 const fn driver_task_ring_mode_uses_bounded_send(mode: DriverTaskRingCommandMode) -> bool {
     matches!(
         mode,
-        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::Bootstrap
+        DriverTaskRingCommandMode::NonBlocking
+            | DriverTaskRingCommandMode::Bootstrap
+            | DriverTaskRingCommandMode::PromptSlice
     )
 }
 
@@ -2897,6 +2905,9 @@ fn driver_task_ring_attempt_limit(
     if !driver_task_ring_mode_uses_bounded_send(mode) {
         return DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS;
     }
+    if mode == DriverTaskRingCommandMode::PromptSlice {
+        return DRIVER_TASK_PROMPT_RING_ATTEMPTS;
+    }
     if mode == DriverTaskRingCommandMode::NonBlocking
         && command.aux0 == 0
         && matches!(
@@ -2905,6 +2916,12 @@ fn driver_task_ring_attempt_limit(
         )
     {
         return DRIVER_TASK_PROMPT_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::NonBlocking
+        && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
+    {
+        return DRIVER_TASK_LONG_INIT_RING_ATTEMPTS;
     }
     if matches!(contract.kind, DriverTaskKind::WifiNic) && command.aux0 != 0 {
         DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
@@ -2971,6 +2988,24 @@ pub fn run_driver_task_ring_command_nonblocking(
     )
 }
 
+/// Execute one prompt-side slice of a linked-runtime command.
+///
+/// Unlike [`run_driver_task_ring_command_nonblocking`], this keeps the ring
+/// active when the driver has accepted a long hardware turn but has not yet
+/// published a completion. Later prompt slices poll the same request instead
+/// of overwriting the command frame.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_command_prompt_slice(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode(
+        contract,
+        command,
+        DriverTaskRingCommandMode::PromptSlice,
+    )
+}
+
 #[cfg(feature = "kernel")]
 fn run_driver_task_ring_command_with_mode(
     contract: DriverTaskContract,
@@ -3015,7 +3050,15 @@ fn run_driver_task_ring_command_with_mode(
         );
         return None;
     }
-    if slot.active.swap(1, Ordering::AcqRel) != 0 {
+
+    command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
+    let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+    let completion_ptr =
+        (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+
+    let prompt_slice_resume =
+        mode == DriverTaskRingCommandMode::PromptSlice && slot.active.load(Ordering::Acquire) != 0;
+    if slot.active.swap(1, Ordering::AcqRel) != 0 && !prompt_slice_resume {
         emit_driver_task_ring_resource_submit_status(
             contract,
             command,
@@ -3025,31 +3068,41 @@ fn run_driver_task_ring_command_with_mode(
         return None;
     }
 
-    command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
+    let request = if prompt_slice_resume {
+        slot.request_seq.load(Ordering::Acquire)
+    } else {
+        let request = slot
+            .request_seq
+            .load(Ordering::Relaxed)
+            .wrapping_add(1)
+            .max(1);
+        slot.request_seq.store(request, Ordering::Release);
+        command.sequence = request as u32;
+        let completion_reset =
+            DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand);
+        // SAFETY: `ring_root_ptr` is the root mapping of one HAL-owned frame that
+        // was also mapped into the driver VSpace at `DRIVER_TASK_RING_VADDR`. The
+        // fixed records are page-local, primitive-only, and naturally aligned.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr, completion_reset);
+            core::ptr::write_volatile(command_ptr, command);
+        }
+        request
+    };
+    if request == 0 {
+        slot.active.store(0, Ordering::Release);
+        return None;
+    }
 
-    let request = slot
-        .request_seq
-        .load(Ordering::Relaxed)
-        .wrapping_add(1)
-        .max(1);
-    slot.request_seq.store(request, Ordering::Release);
-    command.sequence = request as u32;
-    let completion_reset =
-        DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand);
-    let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
-    let completion_ptr =
-        (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
-
-    // SAFETY: `ring_root_ptr` is the root mapping of one HAL-owned frame that
-    // was also mapped into the driver VSpace at `DRIVER_TASK_RING_VADDR`. The
-    // fixed records are page-local, primitive-only, and naturally aligned.
+    // SAFETY: MR0 carries only the current ring request sequence. Rewriting it
+    // before each send is harmless and keeps resumed prompt slices aligned with
+    // the already staged command.
     unsafe {
-        core::ptr::write_volatile(completion_ptr, completion_reset);
-        core::ptr::write_volatile(command_ptr, command);
         sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
     }
 
-    let mut completion = completion_reset;
+    // SAFETY: The completion pointer addresses the validated shared ring page.
+    let mut completion = unsafe { core::ptr::read_volatile(completion_ptr) };
     let mut start_ticks = None;
     let trace_call = driver_task_ring_call_trace_enabled(contract, command, mode);
     let _priority_restore = if driver_task_ring_mode_uses_bounded_send(mode) {
@@ -3059,27 +3112,31 @@ fn run_driver_task_ring_command_with_mode(
     };
 
     if driver_task_ring_mode_uses_bounded_send(mode) {
-        if trace_call {
+        if trace_call && !prompt_slice_resume {
             emit_driver_task_ring_call_begin(contract, endpoint, request, command);
         }
-        if mode == DriverTaskRingCommandMode::NonBlocking {
+        if mode.records_latency() && !prompt_slice_resume {
             start_ticks = driver_task_counter_ticks();
         }
-        let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
         let attempts = driver_task_ring_attempt_limit(contract, command, mode);
-        for _ in 0..attempts {
-            crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
-            crate::sel4::yield_now();
-            // SAFETY: The completion pointer addresses the same validated ring
-            // page. A matching sequence means the isolated runtime observed the
-            // nonblocking send and published the primitive completion record.
-            completion = unsafe { core::ptr::read_volatile(completion_ptr) };
-            if completion.sequence == request as u32 {
-                if trace_call {
-                    emit_driver_task_ring_call_return(contract, endpoint, request, completion);
+        if completion.sequence != request as u32 {
+            let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
+            for _ in 0..attempts {
+                crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
+                crate::sel4::yield_now();
+                // SAFETY: The completion pointer addresses the same validated ring
+                // page. A matching sequence means the isolated runtime observed the
+                // nonblocking send and published the primitive completion record.
+                completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+                if completion.sequence == request as u32 {
+                    if trace_call {
+                        emit_driver_task_ring_call_return(contract, endpoint, request, completion);
+                    }
+                    break;
                 }
-                break;
             }
+        } else if trace_call {
+            emit_driver_task_ring_call_return(contract, endpoint, request, completion);
         }
         if completion.sequence != request as u32 {
             emit_driver_task_ring_call_timeout(
@@ -3131,7 +3188,9 @@ fn run_driver_task_ring_command_with_mode(
         }
     }
 
-    slot.active.store(0, Ordering::Release);
+    if completion.sequence == request as u32 || mode != DriverTaskRingCommandMode::PromptSlice {
+        slot.active.store(0, Ordering::Release);
+    }
     if completion.sequence == request as u32 {
         if let (Some(start_ticks), Some(end_ticks), Some(counter_frequency)) = (
             start_ticks,
@@ -3191,6 +3250,19 @@ pub fn run_driver_task_ring_service_nonblocking(
     )
 }
 
+/// Execute one prompt-side service slice without monopolising the root shell.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_prompt_slice(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode(
+        contract,
+        command,
+        DriverTaskRingCommandMode::PromptSlice,
+    )
+}
+
 /// Emit a non-acceptance resource-initialization breadcrumb for one hot path.
 #[cfg(feature = "kernel")]
 pub fn emit_driver_task_resource_init_status(
@@ -3232,6 +3304,7 @@ pub fn emit_driver_task_resource_init_status(
     } else {
         crate::bootstrap::log::force_uart_line(line.as_str());
     }
+    emit_driver_task_resource_init_hdmi_progress(contract, hot_path, stage, status, completion);
 }
 
 #[cfg(feature = "kernel")]
@@ -3244,6 +3317,88 @@ fn driver_task_resource_status_requires_uart(status: &str) -> bool {
         || status == "ring-missing"
         || status == "busy"
         || status.starts_with("blocked")
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_resource_init_hdmi_progress(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    stage: &'static str,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) {
+    if let Some(line) =
+        driver_task_resource_hdmi_progress_line(contract, hot_path, stage, status, completion)
+    {
+        crate::local_seat::mirror_driver_start_progress_line(line.as_str());
+    }
+}
+
+fn driver_task_resource_hdmi_progress_line(
+    _contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    stage: &'static str,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) -> Option<heapless::String<192>> {
+    use core::fmt::Write;
+
+    if !driver_task_resource_status_mirrors_to_hdmi(hot_path, stage, status) {
+        return None;
+    }
+    let mut line = heapless::String::<192>::new();
+    let _ = write!(
+        line,
+        "[drivers] {} {} {}",
+        driver_task_hdmi_progress_label(hot_path),
+        stage,
+        status,
+    );
+    if let Some(completion) = completion {
+        let _ = write!(
+            line,
+            " detail=0x{:04x} result={}",
+            completion.detail, completion.result
+        );
+    }
+    Some(line)
+}
+
+fn driver_task_resource_status_mirrors_to_hdmi(
+    hot_path: DriverTaskHotPath,
+    stage: &str,
+    status: &str,
+) -> bool {
+    if hot_path == DriverTaskHotPath::HdmiText {
+        return false;
+    }
+    if stage == "cyw43-firmware-chunk" && status == "ready" {
+        return false;
+    }
+    status == "begin"
+        || status == "ready"
+        || status == "deferred"
+        || status == "pending"
+        || status == "resumed"
+        || status == "fault"
+        || status == "failed"
+        || status == "no-reply"
+        || status == "unexpected-completion"
+        || status == "descriptor-rejected"
+        || status.ends_with("failed")
+        || status.starts_with("blocked")
+}
+
+const fn driver_task_hdmi_progress_label(hot_path: DriverTaskHotPath) -> &'static str {
+    match hot_path {
+        DriverTaskHotPath::SerialConsole => "Serial",
+        DriverTaskHotPath::UsbKeyboard => "USB",
+        DriverTaskHotPath::HdmiText => "HDMI",
+        DriverTaskHotPath::GenetNic => "GENET",
+        DriverTaskHotPath::Cyw43Wifi => "WiFi",
+        DriverTaskHotPath::SdioHost => "SDIO",
+        DriverTaskHotPath::PcieRoot => "PCIe",
+    }
 }
 
 /// Host-test/no-kernel variant for call sites that share control flow.
@@ -5284,11 +5439,16 @@ mod tests {
     }
 
     #[test]
-    fn pi4_pre_root_runtime_init_defers_serial_network_sdio_and_pcie_before_shell() {
+    fn pi4_pre_root_runtime_init_defers_serial_usb_network_sdio_and_pcie_before_shell() {
         assert!(pre_root_runtime_init_deferred_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware,
             Pi4PreRootNetBootstrapSelection::Wifi,
             SERIAL_DRIVER_TASK_CONTRACT
+        ));
+        assert!(pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware,
+            Pi4PreRootNetBootstrapSelection::Wifi,
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT
         ));
         assert!(pre_root_runtime_init_deferred_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware,
@@ -5899,6 +6059,93 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn usb_local_seat_engine_init_uses_prompt_slice_at_shell() {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
+        );
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice
+            ),
+            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+        );
+    }
+
+    #[test]
+    fn hdmi_progress_lines_cover_driver_start_without_recursive_display_spam() {
+        let progress = driver_task_resource_hdmi_progress_line(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "begin",
+            None,
+        )
+        .unwrap();
+        assert_eq!(progress.as_str(), "[drivers] USB usb-engine-init begin");
+
+        assert!(driver_task_resource_hdmi_progress_line(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::HdmiText,
+            "hdmi-first-draw",
+            "ready",
+            Some(DriverTaskCompletionRecord::progress(7, 1)),
+        )
+        .is_none());
+
+        assert!(driver_task_resource_hdmi_progress_line(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-firmware-chunk",
+            "ready",
+            Some(DriverTaskCompletionRecord::progress(8, 4096)),
+        )
+        .is_none());
+
+        let fault = driver_task_resource_hdmi_progress_line(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-transport-init",
+            "fault",
+            Some(DriverTaskCompletionRecord {
+                sequence: 9,
+                code: DriverTaskCompletionCode::Fault.as_u16(),
+                detail: 0x5323,
+                result: 0,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            fault.as_str(),
+            "[drivers] WiFi cyw43-transport-init fault detail=0x5323 result=0"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn bounded_turn_boosts_linked_bus_owners() {
         let cyw43 = DriverTaskCommandRecord::pi4_hot_path(
             0,
@@ -6022,6 +6269,9 @@ mod tests {
         assert!(driver_task_ring_mode_uses_bounded_send(
             DriverTaskRingCommandMode::NonBlocking
         ));
+        assert!(driver_task_ring_mode_uses_bounded_send(
+            DriverTaskRingCommandMode::PromptSlice
+        ));
         assert!(!driver_task_ring_mode_uses_bounded_send(
             DriverTaskRingCommandMode::Steady
         ));
@@ -6037,6 +6287,10 @@ mod tests {
             DRIVER_TASK_RING_FLAG_ONE_WAY
         );
         assert_eq!(
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::PromptSlice, 0),
+            DRIVER_TASK_RING_FLAG_ONE_WAY
+        );
+        assert_eq!(
             driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::Steady, 0),
             0
         );
@@ -6046,6 +6300,7 @@ mod tests {
         );
         assert!(!DriverTaskRingCommandMode::Bootstrap.records_latency());
         assert!(!DriverTaskRingCommandMode::BootstrapCall.records_latency());
+        assert!(DriverTaskRingCommandMode::PromptSlice.records_latency());
     }
 
     #[test]

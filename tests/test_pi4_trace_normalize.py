@@ -1098,6 +1098,26 @@ def test_gate_summary_labels_usb_engine_init_no_reply() -> None:
     assert record["USB_BLOCKER"] == "usb-engine-init-no-reply"
 
 
+def test_gate_summary_preserves_usb_keyboard_frontier_after_root_port() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-engine-init status=ready "
+            "acceptance=no code=1 detail=517 result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-owner-state "
+            "status=blocked-keyboard-enumeration acceptance=no code=1 "
+            "detail=517 result=1 frame_len=0",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=usb-local-seat "
+            "endpoint=0x07a4 request=3 mode=nonblocking attempts=128 "
+            "opcode=1 arg0=2 aux0=0x00000000 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["USB_BLOCKER"] == "usb-keyboard-enumeration-no-reply"
+
+
 def test_gate_summary_labels_linked_usb_hub_topology_blocker() -> None:
     events = normalizer.parse_events(
         [
@@ -1158,6 +1178,24 @@ def test_gate_summary_preserves_usb_runtime_enumeration_detail() -> None:
     assert (
         record["USB_DRIVER_TASK_FRONTIER"]
         == "usb-keyboard-enumeration-retry-root-port-connected"
+    )
+
+
+def test_gate_summary_preserves_linked_usb_address_failure_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-enumeration-retry "
+            "status=address-device-failed acceptance=no code=1 "
+            "detail=531 result=1 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["USB_BLOCKER"] == "address-device-failed"
+    assert (
+        record["USB_DRIVER_TASK_FRONTIER"]
+        == "usb-keyboard-enumeration-retry-address-device-failed"
     )
 
 
@@ -1295,6 +1333,23 @@ def test_gate_summary_labels_cyw43_sdio_descriptor_fault_detail() -> None:
     record = normalizer.summarize_gates(events).to_record()
     assert record["WIFI_EXACT"] == "cyw43-sdio-descriptor-unavailable"
     assert record["WIFI_PHASE"] == "cyw43-transport-init"
+
+
+def test_gate_summary_preserves_cyw43_chunk_detail_across_aggregate_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-firmware-chunk status=fault "
+            "acceptance=no code=5 detail=20738 result=0 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-firmware status=failed "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_EXACT"] == "cyw43-sdio-descriptor-unavailable"
+    assert record["WIFI_PHASE"] == "cyw43-firmware-chunk"
 
 
 def test_gate_summary_labels_cyw43_firmware_prep_fault_detail() -> None:
@@ -3922,8 +3977,8 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
         "no-connected-ports": "no-connected-ports",
         "address-failed": "address-failed",
         "invalid-config-value": "invalid-config-value",
-        "device-desc failed": "device-descriptor",
-        "config-desc failed": "config-descriptor",
+        "device-desc failed": "device-descriptor-failed",
+        "config-desc failed": "config-descriptor-failed",
         "set-config timeout": "set-config",
         "hid-init-failed": "hid-init-failed",
         "keyboard-missing": "no-keyboard-found",
