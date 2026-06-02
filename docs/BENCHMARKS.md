@@ -209,19 +209,19 @@ Each artifact above records:
 
 ### Repro Commands (mandatory matrix)
 ```bash
-python3 scripts/rest_perf_harness.py simulate \
+python3 scripts/rest_perf_harness.py --mode simulate \
   --rest-url http://127.0.0.1:8080 \
   --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01
 
-python3 scripts/rest_perf_harness.py simulate \
+python3 scripts/rest_perf_harness.py --mode simulate \
   --rest-url http://127.0.0.1:8080 \
   --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01
 
-python3 scripts/rest_perf_harness.py simulate \
+python3 scripts/rest_perf_harness.py --mode simulate \
   --rest-url http://127.0.0.1:8080 \
   --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01
 
-python3 scripts/rest_perf_harness.py simulate \
+python3 scripts/rest_perf_harness.py --mode simulate \
   --rest-url http://127.0.0.1:8080 \
   --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01
 ```

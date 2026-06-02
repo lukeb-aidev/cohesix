@@ -266,9 +266,10 @@ proof from the linked-runtime model.
 - If xHCI engine-init reaches controller-ready before HID readiness, the linked
   USB runtime must keep enumeration alive through bounded prompt-side service:
   preserve current-boot Port Status Change events, power/sample root ports,
-  retry hub/HID enumeration during bounded init/resume turns, report the last
-  enumeration frontier during prompt polls, and publish owner-state only after
-  keyboard-ready or first-report proof.
+  keep controller init separate from the explicit keyboard-enumeration aux
+  command, retry hub/HID enumeration during bounded resume turns, report the
+  last enumeration frontier during ordinary prompt polls, and publish owner-state
+  only after keyboard-ready or first-report proof.
 - Wi-Fi replay is independent of USB. CYW43/SDIO descriptor replay and selected
   network progress must not wait for HID readiness, and USB polling must not
   mask Wi-Fi blockers; both lanes remain subordinate to serial/HDMI

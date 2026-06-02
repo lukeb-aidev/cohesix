@@ -44,7 +44,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG, DRIVER_RUNTIME_SDIO_OP_POLL_IRQ,
     DRIVER_RUNTIME_SDIO_RESP_LONG, DRIVER_RUNTIME_SDIO_RESP_NONE, DRIVER_RUNTIME_SDIO_RESP_OCR,
     DRIVER_RUNTIME_SDIO_RESP_SHORT, DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY,
-    DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED,
+    DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED,
     DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR,
     DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED,
@@ -949,6 +949,22 @@ impl Cyw43RuntimeState {
     fn reset(&mut self) {
         *self = Self::new();
     }
+
+    fn reset_firmware_upload_state(&mut self) {
+        self.firmware_uploaded = false;
+        self.nvram_uploaded = false;
+        self.firmware_released = false;
+        self.firmware_upload_prepared = false;
+        self.firmware_byte_mode_fallback = false;
+        self.sdpcm_seq = 0;
+        self.sdpcm_seq_max = 1;
+        self.tx_frames = 0;
+        self.rx_frames = 0;
+        self.firmware_bytes = 0;
+        self.nvram_bytes = 0;
+        self.backplane_window = 0;
+        self.backplane_window_valid = false;
+    }
 }
 
 static RUNTIME_DESCRIPTOR: RuntimeDescriptorSlot = RuntimeDescriptorSlot::new();
@@ -1708,8 +1724,7 @@ fn usb_runtime_init(descriptor: DriverRuntimeInitDescriptor) -> Option<u16> {
                 state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
                 return Some(DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY);
             }
-            state.enumeration_retry_cooldown = 0;
-            return usb_runtime_retry_keyboard_enumeration(state).or(Some(state.init_detail));
+            return usb_runtime_enumeration_detail(state).or(Some(state.init_detail));
         }
         state.reset();
         let detail = usb_runtime_init_hw(descriptor, state)?;
@@ -1838,6 +1853,18 @@ fn service_usb_keyboard(command: DriverTaskCommandRecord) -> DriverTaskCompletio
     if !engine_initialized(&USB_RUNTIME_FLAGS) {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
+    if command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX {
+        let detail = USB_RUNTIME_STATE.with_mut(|state| {
+            state.enumeration_retry_cooldown = 0;
+            usb_runtime_retry_keyboard_enumeration(state).or(Some(state.init_detail))
+        });
+        return match detail {
+            Some(detail) => {
+                DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, 1)
+            }
+            None => DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE),
+        };
+    }
     if command.frame.len == 0 {
         let produced = USB_RUNTIME_STATE.with_mut(usb_runtime_poll_keyboard);
         return if produced == 0 {
@@ -1847,9 +1874,7 @@ fn service_usb_keyboard(command: DriverTaskCommandRecord) -> DriverTaskCompletio
                     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
                     1,
                 )
-            } else if let Some(detail) = USB_RUNTIME_STATE
-                .with_mut(usb_runtime_retry_keyboard_enumeration)
-                .or_else(|| USB_RUNTIME_STATE.with_mut(usb_runtime_enumeration_detail))
+            } else if let Some(detail) = USB_RUNTIME_STATE.with_mut(usb_runtime_enumeration_detail)
             {
                 DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, 1)
             } else {
@@ -2999,6 +3024,7 @@ fn cyw43_transport_init(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
     if !state.bus_link_ready {
         return Err(FAULT_CYW43_TRANSPORT_BUS_LINK);
     }
+    state.reset_firmware_upload_state();
     if !cyw43_uses_sdio_bus_link() && !sdio_runtime_init_hw() {
         return Err(FAULT_CYW43_TRANSPORT_DIRECT_SDIO);
     }
@@ -3533,6 +3559,25 @@ fn cyw43_backplane_write_u32(state: &mut Cyw43RuntimeState, addr: u32, value: u3
 }
 
 fn cyw43_backplane_read_u32(state: &mut Cyw43RuntimeState, addr: u32) -> Option<u32> {
+    cyw43_backplane_read_u32_cmd53(state, addr, cyw43_backplane_function_addr(addr), true)
+        .or_else(|| {
+            state.backplane_window_valid = false;
+            cyw43_clear_last_fault();
+            cyw43_backplane_read_u32_cmd52_current_window(state, addr)
+        })
+        .or_else(|| {
+            state.backplane_window_valid = false;
+            cyw43_clear_last_fault();
+            cyw43_backplane_read_u32_cmd53(state, addr, cyw43_backplane_function_addr(addr), false)
+        })
+}
+
+fn cyw43_backplane_read_u32_cmd53(
+    state: &mut Cyw43RuntimeState,
+    addr: u32,
+    function_addr: u32,
+    increment: bool,
+) -> Option<u32> {
     if !cyw43_backplane_set_window(state, addr) {
         return None;
     }
@@ -3543,13 +3588,32 @@ fn cyw43_backplane_read_u32(state: &mut Cyw43RuntimeState, addr: u32) -> Option<
     };
     sdio_execute_transfer(
         SDIO_CMD53,
-        sdio_cmd53_arg(false, 1, cyw43_backplane_function_addr(addr), true, 0, 4),
+        sdio_cmd53_arg(false, 1, function_addr, increment, 0, 4),
         DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
         frame,
         4,
-        1,
+        0,
     )?;
     Some(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET))
+}
+
+fn cyw43_backplane_read_u32_cmd52_current_window(
+    state: &mut Cyw43RuntimeState,
+    addr: u32,
+) -> Option<u32> {
+    if !cyw43_backplane_set_window(state, addr) {
+        return None;
+    }
+    let base = addr & BACKPLANE_ADDRESS_MASK;
+    let mut bytes = [0u8; 4];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        let Some(byte_addr) = base.checked_add(index as u32) else {
+            cyw43_record_last_fault(FAULT_CYW43_BACKPLANE_WINDOW);
+            return None;
+        };
+        *byte = cyw43_sdio_cmd52_read(1, byte_addr)?;
+    }
+    Some(u32::from_le_bytes(bytes))
 }
 
 fn cyw43_stage_sdpcm_tx(state: &mut Cyw43RuntimeState, frame: DriverFrameDescriptor) -> usize {
@@ -4238,7 +4302,8 @@ fn usb_runtime_enumeration_detail(state: &mut UsbRuntimeState) -> Option<u16> {
         return None;
     }
     match state.init_detail {
-        DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+        DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
         | DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
         | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
         | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
@@ -5527,17 +5592,45 @@ fn xhci_enable_slot(
     state: &mut UsbRuntimeState,
     descriptor: DriverRuntimeInitDescriptor,
 ) -> Option<u8> {
-    let event = xhci_enqueue_command(
-        state,
-        descriptor,
-        XhciTrb {
-            parameter: 0,
-            status: 0,
-            control: XHCI_TRB_TYPE_ENABLE_SLOT << 10,
-        },
-    )?;
+    let command = XhciTrb {
+        parameter: 0,
+        status: 0,
+        control: XHCI_TRB_TYPE_ENABLE_SLOT << 10,
+    };
+    let event = xhci_enqueue_command(state, descriptor, command).or_else(|| {
+        xhci_recover_command_ring(state, descriptor)?;
+        xhci_enqueue_command(state, descriptor, command)
+    })?;
     let slot = xhci_slot_id(event.control);
     (slot != 0).then_some(slot)
+}
+
+fn xhci_recover_command_ring(
+    state: &mut UsbRuntimeState,
+    descriptor: DriverRuntimeInitDescriptor,
+) -> Option<()> {
+    let dma_range = runtime_resource_range(
+        descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    )?;
+    let cmd_ring = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET)?;
+    zero_dma_range(
+        dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET,
+        XHCI_COMMAND_RING_TRBS.saturating_mul(XHCI_TRB_BYTES),
+    );
+    state.cmd_enqueue = 0;
+    state.cmd_cycle = true;
+    let op_base = state.cap_length as usize;
+    usb_write64(op_base + XHCI_CRCR, cmd_ring | 1);
+    xhci_flush_posted_write(
+        state,
+        XHCI_FLUSH_STAGE_INIT,
+        op_base + XHCI_CRCR + 4,
+        (cmd_ring >> 32) as u32,
+    );
+    xhci_drain_events_preserving_port_changes(state, descriptor);
+    Some(())
 }
 
 fn xhci_address_device(
@@ -8185,6 +8278,44 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_transport_recovery_clears_stale_firmware_state() {
+        let mut state = Cyw43RuntimeState::new();
+        state.transport_ready = true;
+        state.firmware_uploaded = true;
+        state.nvram_uploaded = true;
+        state.firmware_released = true;
+        state.firmware_upload_prepared = true;
+        state.firmware_byte_mode_fallback = true;
+        state.sdpcm_seq = 9;
+        state.sdpcm_seq_max = 9;
+        state.tx_frames = 3;
+        state.rx_frames = 2;
+        state.firmware_bytes = 4096;
+        state.nvram_bytes = 256;
+        state.backplane_window = 0x1800_0000;
+        state.backplane_window_valid = true;
+        state.bus_link_ready = true;
+
+        state.reset_firmware_upload_state();
+
+        assert!(state.transport_ready);
+        assert!(state.bus_link_ready);
+        assert!(!state.firmware_uploaded);
+        assert!(!state.nvram_uploaded);
+        assert!(!state.firmware_released);
+        assert!(!state.firmware_upload_prepared);
+        assert!(!state.firmware_byte_mode_fallback);
+        assert_eq!(state.sdpcm_seq, 0);
+        assert_eq!(state.sdpcm_seq_max, 1);
+        assert_eq!(state.tx_frames, 0);
+        assert_eq!(state.rx_frames, 0);
+        assert_eq!(state.firmware_bytes, 0);
+        assert_eq!(state.nvram_bytes, 0);
+        assert_eq!(state.backplane_window, 0);
+        assert!(!state.backplane_window_valid);
+    }
+
+    #[test]
     fn cyw43_runtime_faults_preserve_command_stage_detail() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -8818,6 +8949,110 @@ mod tests {
             DriverTaskCompletionRecord::progress_with_detail(
                 83,
                 DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED,
+                1
+            )
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            assert_eq!(
+                state.init_detail,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+            );
+            assert_eq!(state.enumeration_retry_cooldown, 0);
+        });
+    }
+
+    #[test]
+    fn usb_local_seat_init_does_not_resume_enumeration_after_xhci_ready() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let mut init = DriverTaskCommandRecord {
+            sequence: 90,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_command(0, init),
+            DriverTaskCompletionRecord::progress_with_detail(
+                90,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+                1
+            )
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED;
+            state.enumeration_retry_cooldown = 7;
+        });
+        init.sequence = 91;
+        assert_eq!(
+            service_command(0, init),
+            DriverTaskCompletionRecord::progress_with_detail(
+                91,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED,
+                1
+            )
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            assert_eq!(
+                state.init_detail,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+            );
+            assert_eq!(state.enumeration_retry_cooldown, 7);
+        });
+    }
+
+    #[test]
+    fn usb_enumeration_aux_reports_keyboard_ready_without_poll_retry() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let init = DriverTaskCommandRecord {
+            sequence: 92,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_command(0, init),
+            DriverTaskCompletionRecord::progress_with_detail(
+                92,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+                1
+            )
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.keyboard_slot = 1;
+            state.keyboard_endpoint_id = 3;
+        });
+        let enumerate = DriverTaskCommandRecord {
+            sequence: 93,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_command(0, enumerate),
+            DriverTaskCompletionRecord::progress_with_detail(
+                93,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
                 1
             )
         );

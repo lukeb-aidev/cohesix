@@ -23,6 +23,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
     DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+    DRIVER_RUNTIME_USB_ENUMERATE_AUX,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -1705,6 +1706,7 @@ pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 /// Bounded send/yield attempts for the first linked-runtime ring handshake.
 pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
+const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = 8;
 const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = 512;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 
@@ -2908,7 +2910,10 @@ fn driver_task_ring_attempt_limit(
     }
     if mode == DriverTaskRingCommandMode::PromptSlice
         && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
-        && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
+        && matches!(
+            command.aux0,
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
+        )
     {
         return DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS;
     }
@@ -2917,16 +2922,25 @@ fn driver_task_ring_attempt_limit(
     }
     if mode == DriverTaskRingCommandMode::NonBlocking
         && command.aux0 == 0
+        && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+    {
+        return DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::NonBlocking
+        && command.aux0 == 0
         && matches!(
             contract.kind,
-            DriverTaskKind::Serial | DriverTaskKind::LocalSeatUsb | DriverTaskKind::HdmiText
+            DriverTaskKind::Serial | DriverTaskKind::HdmiText
         )
     {
         return DRIVER_TASK_PROMPT_RING_ATTEMPTS;
     }
     if mode == DriverTaskRingCommandMode::NonBlocking
         && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
-        && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
+        && matches!(
+            command.aux0,
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
+        )
     {
         return DRIVER_TASK_LONG_INIT_RING_ATTEMPTS;
     }
@@ -3145,7 +3159,7 @@ fn run_driver_task_ring_command_with_mode(
         } else if trace_call {
             emit_driver_task_ring_call_return(contract, endpoint, request, completion);
         }
-        if completion.sequence != request as u32 {
+        if completion.sequence != request as u32 && trace_call {
             emit_driver_task_ring_call_timeout(
                 contract, endpoint, request, command, mode, attempts,
             );
@@ -6066,6 +6080,35 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn usb_keyboard_poll_uses_tiny_prompt_window_without_timeout_spam() {
+        let command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS
+        );
+        assert!(!driver_task_ring_call_trace_enabled(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn usb_local_seat_engine_init_uses_prompt_slice_at_shell() {
         let mut command = DriverTaskCommandRecord::pi4_hot_path(
             0,
@@ -6087,6 +6130,16 @@ mod tests {
             ),
             DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
         );
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice
+            ),
+            DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS
+        );
+
+        command.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
         assert_eq!(
             driver_task_ring_attempt_limit(
                 USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,

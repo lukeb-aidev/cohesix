@@ -5478,10 +5478,10 @@ Deliver a Cohesix-aligned reliability and scale step that:
 - `cargo test -p nine-door`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `.venv/bin/python -m pytest -q tests/test_rest_perf_harness.py`
-- `python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01`
-- `python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01`
-- `python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01`
-- `python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01`
+- `python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01`
+- `python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01`
+- `python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01`
+- `python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01`
 
 ## Checks (Definition of Done)
 - Gateway REST handlers use a bounded broker queue/dispatcher instead of per-request lock contention on shared transport state; control-path latency remains protected under telemetry pressure.
@@ -5534,10 +5534,10 @@ Changes:
   - docs/TEST_PLAN.md - add canonical commands and required outputs for all four scenarios.
 Commands:
   - .venv/bin/python -m pytest -q tests/test_rest_perf_harness.py
-  - python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01
-  - python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01
-  - python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01
-  - python scripts/rest_perf_harness.py simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01
+  - python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01
+  - python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01
+  - python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-100mb --error-budget-rate 0.01
+  - python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01
 Checks:
   - Each scenario emits deterministic summary artifacts and fails hard (exit code non-zero) when error rate exceeds budget.
 Deliverables:
@@ -5851,7 +5851,7 @@ Changes:
   - docs/BENCHMARKS.md - publish 3-hive baseline and optional 10-hive stretch results with first-failure mode analysis.
   - docs/USE_CASES.md + docs/TEST_PLAN.md - map federated scale to concrete use-case flows and mandatory gate commands.
 Commands:
-  - python scripts/rest_perf_harness.py simulate --multi-hive --hives 3 --workers-per-hive 1000 --no-retries --error-budget-rate 0.01
+  - python scripts/rest_perf_harness.py --mode simulate --multi-hive --hives 3 --workers-per-hive 1000 --no-retries --error-budget-rate 0.01
 Checks:
   - Multi-hive scenarios hit target worker totals via federation without breaching per-hive invariants.
 Deliverables:

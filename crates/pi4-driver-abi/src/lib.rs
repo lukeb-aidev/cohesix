@@ -15,6 +15,8 @@ pub const DRIVER_RUNTIME_INIT_AUX: u32 = 0x4452_494e;
 pub const DRIVER_RUNTIME_ENGINE_INIT_AUX: u32 = 0x454e_474e;
 /// Local-seat USB/HDMI init command used by the root ring client.
 pub const DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX: u32 = 0x4c53_494e;
+/// USB keyboard enumeration step command used after local-seat engine init.
+pub const DRIVER_RUNTIME_USB_ENUMERATE_AUX: u32 = 0x5553_4245;
 /// USB runtime init detail: xHCI controller reached run state, no keyboard endpoint yet.
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY: u16 = 0x0201;
 /// USB runtime init detail: xHCI controller and boot keyboard endpoint are ready.

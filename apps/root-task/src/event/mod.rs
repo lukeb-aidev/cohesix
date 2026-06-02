@@ -228,6 +228,10 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS: u64 = 750;
 const POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_TURNS: u8 = 2;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS: u64 = 10_000;
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS: u16 = 1024;
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS: u16 = 1;
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
 const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 8;
 
@@ -1470,6 +1474,10 @@ where
     post_prompt_local_seat_attach_idle_turns: u8,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_blocked_traces: u8,
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    post_prompt_local_seat_attach_retry_turns: u16,
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    post_prompt_local_seat_attach_attempts: u16,
     last_smp_activity_snapshot: Option<SmpActivitySnapshot>,
 }
 
@@ -1569,6 +1577,10 @@ where
             post_prompt_local_seat_attach_idle_turns: 0,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_blocked_traces: 0,
+            #[cfg(all(feature = "kernel", feature = "usb"))]
+            post_prompt_local_seat_attach_retry_turns: 0,
+            #[cfg(all(feature = "kernel", feature = "usb"))]
+            post_prompt_local_seat_attach_attempts: 0,
             last_smp_activity_snapshot: None,
         }
     }
@@ -2423,6 +2435,8 @@ where
             self.post_prompt_local_seat_attach_pending = true;
             self.post_prompt_local_seat_attach_idle_turns = 0;
             self.post_prompt_local_seat_attach_blocked_traces = 0;
+            self.post_prompt_local_seat_attach_retry_turns = 0;
+            self.post_prompt_local_seat_attach_attempts = 0;
             self.post_prompt_local_seat_attach_not_before_ms = self
                 .now_ms
                 .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS);
@@ -2467,6 +2481,14 @@ where
             };
             if let Some(reason) = blocked_reason {
                 self.emit_post_prompt_local_seat_attach_blocked(reason);
+                self.post_prompt_local_seat_attach_idle_turns = 0;
+                return;
+            }
+            if self.post_prompt_local_seat_attach_retry_turns != 0 {
+                self.post_prompt_local_seat_attach_retry_turns = self
+                    .post_prompt_local_seat_attach_retry_turns
+                    .saturating_sub(1);
+                self.emit_post_prompt_local_seat_attach_blocked("retry-turn-cooldown");
                 self.post_prompt_local_seat_attach_idle_turns = 0;
                 return;
             }
@@ -2518,53 +2540,70 @@ where
             #[cfg(feature = "net-console")]
             let wifi_detail = self.net_disabled_refusal_detail();
             if let Some(runtime) = self.local_seat.as_mut() {
-                boot_log::force_uart_line_raw(
-                    "[local-seat] post-prompt attach begin action=arm-cooperative",
-                );
+                let attempt = self.post_prompt_local_seat_attach_attempts;
+                self.post_prompt_local_seat_attach_attempts = self
+                    .post_prompt_local_seat_attach_attempts
+                    .saturating_add(1);
+                let verbose_attempt = attempt < POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS;
+                if verbose_attempt {
+                    boot_log::force_uart_line_raw(
+                        "[local-seat] post-prompt attach begin action=arm-cooperative",
+                    );
+                }
                 let display_diag_ready = runtime.ensure_prompt_display_diagnostic_mirror();
                 runtime.enable_backend_keyboard_polling();
                 let keyboard_probe = runtime.probe_backend_keyboard_once();
-                let usb_frontier =
-                    "[drivers] USB frontier: post-prompt linked-runtime probe armed; xHCI/keyboard state will mirror here";
-                boot_log::force_uart_line_raw(usb_frontier);
-                runtime.mirror_line(usb_frontier);
+                if verbose_attempt || keyboard_probe.attached() {
+                    let usb_frontier =
+                        "[drivers] USB frontier: post-prompt linked-runtime probe armed; xHCI/keyboard state will mirror here";
+                    boot_log::force_uart_line_raw(usb_frontier);
+                    runtime.mirror_line(usb_frontier);
+                }
                 #[cfg(feature = "net-console")]
                 {
-                    let wifi_frontier = format_message(format_args!(
-                        "[drivers] WiFi frontier: driver-task replay state preserved {}",
-                        wifi_detail
-                    ));
-                    boot_log::force_uart_line_raw(wifi_frontier.as_str());
-                    runtime.mirror_line(wifi_frontier.as_str());
+                    if verbose_attempt {
+                        let wifi_frontier = format_message(format_args!(
+                            "[drivers] WiFi frontier: driver-task replay state preserved {}",
+                            wifi_detail
+                        ));
+                        boot_log::force_uart_line_raw(wifi_frontier.as_str());
+                        runtime.mirror_line(wifi_frontier.as_str());
+                    }
                 }
-                let mut line = HeaplessString::<160>::new();
-                let _ =
-                    write!(
-                    line,
-                    "[local-seat] post-prompt attach end result=armed-cooperative display_diag={}",
-                    if display_diag_ready { "ready" } else { "deferred" }
-                );
-                boot_log::force_uart_line_raw(line.as_str());
-                let mut probe_line = HeaplessString::<128>::new();
-                let _ = write!(
-                    probe_line,
-                    "[local-seat] post-prompt usb probe result={}",
-                    keyboard_probe.as_str()
-                );
-                boot_log::force_uart_line_raw(probe_line.as_str());
+                if verbose_attempt || keyboard_probe.attached() {
+                    let mut line = HeaplessString::<160>::new();
+                    let _ =
+                        write!(
+                        line,
+                        "[local-seat] post-prompt attach end result=armed-cooperative display_diag={}",
+                        if display_diag_ready { "ready" } else { "deferred" }
+                    );
+                    boot_log::force_uart_line_raw(line.as_str());
+                    let mut probe_line = HeaplessString::<128>::new();
+                    let _ = write!(
+                        probe_line,
+                        "[local-seat] post-prompt usb probe result={}",
+                        keyboard_probe.as_str()
+                    );
+                    boot_log::force_uart_line_raw(probe_line.as_str());
+                }
                 if !keyboard_probe.attached() {
                     self.post_prompt_local_seat_attach_pending = true;
                     self.post_prompt_local_seat_attach_idle_turns = 0;
+                    self.post_prompt_local_seat_attach_retry_turns =
+                        POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS;
                     self.post_prompt_local_seat_attach_not_before_ms = self
                         .now_ms
                         .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS);
-                    let mut retry_line = HeaplessString::<128>::new();
-                    let _ = write!(
-                        retry_line,
-                        "[local-seat] post-prompt attach retry scheduled action=serial-safe-usb-progress retry_ms={}",
-                        POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS
-                    );
-                    boot_log::force_uart_line_raw(retry_line.as_str());
+                    if verbose_attempt {
+                        let mut retry_line = HeaplessString::<128>::new();
+                        let _ = write!(
+                            retry_line,
+                            "[local-seat] post-prompt attach retry scheduled action=serial-safe-usb-progress retry_ms={}",
+                            POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS
+                        );
+                        boot_log::force_uart_line_raw(retry_line.as_str());
+                    }
                 }
             }
         }
@@ -3545,6 +3584,33 @@ where
         let _wifi_log_uart_guard = crate::bootstrap::log::suppress_uart_log_output();
 
         self.emit_wifi_debug_status(subcommand, "begin", profile, None);
+        #[cfg(feature = "net-console")]
+        if self.wifi_debug.is_none() {
+            if let Some(cause) = self.net_unavailable_detail.as_ref() {
+                if matches!(
+                    command,
+                    WifiDebugCommand::DumpState | WifiDebugCommand::Diag
+                ) {
+                    let detail = format_message(format_args!(
+                        "wifi: driver-task replay failure detail=net-disabled cause={cause}"
+                    ));
+                    self.emit_console_line(detail.as_str());
+                    self.emit_wifi_debug_status(
+                        subcommand,
+                        "complete",
+                        profile,
+                        Some("result=ok source=driver-task-replay-failure"),
+                    );
+                    self.metrics.accepted_commands =
+                        self.metrics.accepted_commands.saturating_add(1);
+                    let detail = format_message(format_args!(
+                        "detail=subcommand={subcommand} scope=serial-local source=driver-task-replay-failure"
+                    ));
+                    self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
+                    return;
+                }
+            }
+        }
         let result = match command {
             WifiDebugCommand::Help => Ok(None),
             WifiDebugCommand::DumpState => match self.wifi_debug.as_mut() {
@@ -3920,6 +3986,23 @@ where
                 "deferred"
             },
         ));
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        {
+            let _ = write!(
+                line,
+                " controller={} keyboard={}",
+                if crate::local_seat::linked_local_seat_usb_controller_ready() {
+                    "ready"
+                } else {
+                    "not-ready"
+                },
+                if crate::local_seat::linked_local_seat_usb_keyboard_ready() {
+                    "yes"
+                } else {
+                    "no"
+                }
+            );
+        }
         if let Some(action_detail) = action_detail {
             let _ = write!(line, " {action_detail}");
         }
@@ -8516,6 +8599,42 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
+    fn post_prompt_local_seat_retry_turn_cooldown_blocks_immediate_reentry() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1_000);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.post_prompt_local_seat_attach_pending = true;
+        pump.post_prompt_local_seat_attach_not_before_ms = 0;
+        pump.post_prompt_local_seat_attach_retry_turns = 2;
+
+        pump.maybe_run_post_prompt_local_seat_attach(false);
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+        assert_eq!(pump.post_prompt_local_seat_attach_retry_turns, 1);
+
+        pump.maybe_run_post_prompt_local_seat_attach(false);
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+        assert_eq!(pump.post_prompt_local_seat_attach_retry_turns, 0);
+
+        pump.maybe_run_post_prompt_local_seat_attach(false);
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+        pump.maybe_run_post_prompt_local_seat_attach(false);
+        assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
     fn start_cli_defers_local_seat_attach_until_serial_idle_grace() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -11288,6 +11407,48 @@ mod tests {
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_diag_reports_cached_driver_task_failure_without_hal_debug_handle() {
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut cause = HeaplessString::<192>::new();
+        let _ = cause.push_str("cyw43-command driver-task runtime init failed");
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network_unavailable_detail(Some(cause))
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        for _ in 0..8 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=cyw43-command driver-task runtime init failed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=driver-task-replay-failure"),
+            "{rendered}"
+        );
     }
 
     #[cfg(feature = "kernel")]

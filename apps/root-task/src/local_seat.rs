@@ -42,7 +42,7 @@ use alloc::vec::Vec;
 ))]
 use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(all(feature = "kernel", feature = "usb"))]
-use pi4_driver_abi::DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+use pi4_driver_abi::{DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_USB_ENUMERATE_AUX};
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
@@ -325,6 +325,14 @@ static LINKED_LOCAL_SEAT_USB_KEYBOARD_READY: AtomicBool = AtomicBool::new(false)
     target_arch = "aarch64",
     target_os = "none"
 ))]
+static LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LINKED_LOCAL_SEAT_USB_LAST_DETAIL: AtomicUsize = AtomicUsize::new(0);
 
 #[cfg(all(
@@ -375,13 +383,8 @@ static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_PENDING_LOGGED: AtomicBool = AtomicBoo
 ))]
 static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED: AtomicBool = AtomicBool::new(false);
 
-#[cfg(all(
-    feature = "kernel",
-    feature = "usb",
-    target_arch = "aarch64",
-    target_os = "none"
-))]
-const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 2;
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 1;
 
 #[cfg(all(
     feature = "kernel",
@@ -508,6 +511,15 @@ pub(crate) const fn local_seat_display_mirror_suspends_on_missing_reply(
 const fn local_seat_keyboard_poll_aux(keyboard_ready: bool) -> u32 {
     let _ = keyboard_ready;
     0
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn linked_local_seat_usb_attach_probe_required(
+    controller_attached: bool,
+    keyboard_ready: bool,
+    enumeration_pending: bool,
+) -> bool {
+    !controller_attached || (enumeration_pending && !keyboard_ready)
 }
 
 /// Deterministic local-seat initialisation outcome.
@@ -1286,7 +1298,7 @@ impl LocalSeatRuntime {
                 self.refresh_hdmi_owner_record();
                 return LocalSeatKeyboardProbeResult::Attached;
             }
-            let mut result = if local_seat_usb_driver_runtime_attached() {
+            let mut result = if local_seat_usb_controller_runtime_attached() {
                 LocalSeatKeyboardProbeResult::KeyboardUnavailable
             } else {
                 LocalSeatKeyboardProbeResult::BackendUnavailable
@@ -1302,6 +1314,8 @@ impl LocalSeatRuntime {
             }
             if local_seat_driver_runtime_keyboard_attached() {
                 result = LocalSeatKeyboardProbeResult::Attached;
+            } else if local_seat_usb_controller_runtime_attached() {
+                result = LocalSeatKeyboardProbeResult::KeyboardUnavailable;
             }
             return result;
         }
@@ -1462,8 +1476,16 @@ impl LocalSeatRuntime {
         {
             #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
             if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-                if !LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
-                    && !try_attach_linked_local_seat_runtime(self.root_console_ready)
+                let controller_attached =
+                    LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire);
+                let keyboard_ready = LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire);
+                let enumeration_pending =
+                    LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire);
+                if linked_local_seat_usb_attach_probe_required(
+                    controller_attached,
+                    keyboard_ready,
+                    enumeration_pending,
+                ) && !try_attach_linked_local_seat_runtime(self.root_console_ready)
                 {
                     self.driver_task_budget_overruns =
                         self.driver_task_budget_overruns.saturating_add(1);
@@ -1760,8 +1782,17 @@ fn local_seat_driver_runtime_attached() -> bool {
     target_os = "none"
 ))]
 fn local_seat_usb_driver_runtime_attached() -> bool {
+    local_seat_driver_runtime_keyboard_attached()
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn local_seat_usb_controller_runtime_attached() -> bool {
     LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
-        || LOCAL_SEAT_DRIVER_RUNTIME.lock().is_some()
 }
 
 #[cfg(all(
@@ -2542,6 +2573,7 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
             usb_completion,
         );
         if usb_controller_ready && !usb_keyboard_ready {
+            usb_command.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
             for _ in 0..LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS {
                 crate::hal::driver_task::emit_driver_task_resource_init_status(
                     usb_contract,
@@ -2595,6 +2627,9 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
         }
         if usb_keyboard_ready {
             LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
+            LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(false, Ordering::Release);
+        } else if usb_controller_ready {
+            LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(true, Ordering::Release);
         }
         let usb_owner = usb_keyboard_ready
             && crate::hal::driver_task::register_driver_task_runtime_owner_state(
@@ -2627,7 +2662,7 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
             return false;
         }
     }
-    LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
+    LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
 }
 
 #[cfg(all(
@@ -2685,6 +2720,16 @@ fn local_seat_driver_runtime_keyboard_attached() -> bool {
 ))]
 pub(crate) fn linked_local_seat_usb_keyboard_ready() -> bool {
     LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+pub(crate) fn linked_local_seat_usb_controller_ready() -> bool {
+    LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
 }
 
 #[cfg(all(
@@ -2949,7 +2994,15 @@ fn run_local_seat_driver_task_ring_service(
     command: crate::hal::driver_task::DriverTaskCommandRecord,
 ) -> Option<crate::hal::driver_task::DriverTaskCompletionRecord> {
     if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-        if command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX {
+        #[cfg(feature = "usb")]
+        let prompt_slice_aux = matches!(
+            command.aux0,
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
+        );
+        #[cfg(not(feature = "usb"))]
+        let prompt_slice_aux = command.aux0 == pi4_driver_abi::DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+
+        if prompt_slice_aux {
             crate::hal::driver_task::run_driver_task_ring_service_prompt_slice(contract, command)
         } else {
             crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
@@ -4145,6 +4198,29 @@ mod tests {
     fn linked_usb_keyboard_poll_stays_nonblocking_until_keyboard_ready() {
         assert_eq!(local_seat_keyboard_poll_aux(false), 0);
         assert_eq!(local_seat_keyboard_poll_aux(true), 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn linked_usb_attach_probe_continues_while_enumeration_is_pending() {
+        assert!(linked_local_seat_usb_attach_probe_required(
+            false, false, false
+        ));
+        assert!(linked_local_seat_usb_attach_probe_required(
+            true, false, true
+        ));
+        assert!(!linked_local_seat_usb_attach_probe_required(
+            true, false, false
+        ));
+        assert!(!linked_local_seat_usb_attach_probe_required(
+            true, true, true
+        ));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn linked_usb_enumeration_resume_is_single_turn_per_retry() {
+        assert_eq!(LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS, 1);
     }
 
     #[test]
