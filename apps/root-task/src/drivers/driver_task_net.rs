@@ -40,7 +40,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK, DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL,
     DRIVER_RUNTIME_CYW43_OP_RELEASE, DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
     DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
-    DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR, DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+    DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
 };
 
 const GENET_DRIVER_TASK_MAC: EthernetAddress =
@@ -52,6 +53,11 @@ const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
 const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
 const SDIO_GO_IDLE_COMMAND_INDEX: u32 = 0;
 const SDIO_CMD5_OCR_COMMAND_INDEX: u32 = 5;
+const SDIO_CMD3_RCA_COMMAND_INDEX: u32 = 3;
+const SDIO_CMD7_SELECT_COMMAND_INDEX: u32 = 7;
+const SDIO_R4_READY: u32 = 1 << 31;
+const SDIO_OCR_3V2_3V4: u32 = 0x00ff_8000;
+const SDIO_CMD5_READY_ATTEMPTS: usize = 16;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -585,8 +591,8 @@ where
         status,
         completion,
     );
-    let first_command_ok = initialized && submit_sdio_first_command_probe(contract);
-    if first_command_ok
+    let card_init_ok = initialized && submit_sdio_card_init_probe(contract);
+    if card_init_ok
         && crate::hal::driver_task::register_driver_task_runtime_owner_state(
             DriverTaskHotPath::SdioHost,
         )
@@ -595,7 +601,7 @@ where
         emit_sdio_driver_task_replay_status("owner-state", "ready");
         Ok(())
     } else {
-        if first_command_ok {
+        if card_init_ok {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 contract,
                 DriverTaskHotPath::SdioHost,
@@ -610,20 +616,74 @@ where
 }
 
 #[cfg(feature = "kernel")]
-fn submit_sdio_first_command_probe(contract: DriverTaskContract) -> bool {
-    submit_sdio_command_probe(
+fn submit_sdio_card_init_probe(contract: DriverTaskContract) -> bool {
+    if submit_sdio_command_probe(
         contract,
         "sdio-cmd0-go-idle",
         SDIO_GO_IDLE_COMMAND_INDEX,
+        0,
         DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
         true,
-    ) && submit_sdio_command_probe(
+    )
+    .is_none()
+    {
+        return false;
+    }
+    let Some(ocr) = submit_sdio_command_probe(
         contract,
         "sdio-cmd5-ocr",
         SDIO_CMD5_OCR_COMMAND_INDEX,
+        0,
         DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
         false,
-    )
+    ) else {
+        return false;
+    };
+    if ocr & SDIO_OCR_3V2_3V4 == 0 {
+        return false;
+    }
+    let desired_ocr = ocr & SDIO_OCR_3V2_3V4;
+    let mut ready_ocr = 0;
+    for _ in 0..SDIO_CMD5_READY_ATTEMPTS {
+        let Some(response) = submit_sdio_command_probe(
+            contract,
+            "sdio-cmd5-ready",
+            SDIO_CMD5_OCR_COMMAND_INDEX,
+            desired_ocr,
+            DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
+            false,
+        ) else {
+            return false;
+        };
+        ready_ocr = response;
+        if ready_ocr & SDIO_R4_READY != 0 {
+            break;
+        }
+    }
+    if ready_ocr & SDIO_R4_READY == 0 {
+        return false;
+    }
+    let Some(rca_response) = submit_sdio_command_probe(
+        contract,
+        "sdio-cmd3-rca",
+        SDIO_CMD3_RCA_COMMAND_INDEX,
+        0,
+        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+        false,
+    ) else {
+        return false;
+    };
+    let rca = rca_response & 0xffff_0000;
+    rca != 0
+        && submit_sdio_command_probe(
+            contract,
+            "sdio-cmd7-select",
+            SDIO_CMD7_SELECT_COMMAND_INDEX,
+            rca,
+            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
+            true,
+        )
+        .is_some()
 }
 
 #[cfg(feature = "kernel")]
@@ -631,9 +691,10 @@ fn submit_sdio_command_probe(
     contract: DriverTaskContract,
     stage: &'static str,
     command_index: u32,
+    argument: u32,
     response_flags: u16,
     allow_zero_result: bool,
-) -> bool {
+) -> Option<u32> {
     let mut command = DriverTaskCommandRecord::pi4_hot_path(
         0,
         DriverTaskHotPath::SdioHost,
@@ -645,7 +706,7 @@ fn submit_sdio_command_probe(
         },
     );
     command.aux0 = (command_index << 16) | u32::from(response_flags);
-    command.aux1 = 0;
+    command.aux1 = argument;
     emit_sdio_driver_task_replay_status(stage, "begin");
     let completion = run_driver_task_net_service(contract, command);
     let ready = completion.is_some_and(|completion| {
@@ -661,7 +722,9 @@ fn submit_sdio_command_probe(
         status,
         completion,
     );
-    ready
+    completion
+        .filter(|_| ready)
+        .map(|completion| completion.result)
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -838,10 +901,10 @@ fn emit_cyw43_runtime_command_fault(
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
         return;
     }
-    let mut line = heapless::String::<240>::new();
+    let mut line = heapless::String::<320>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_COMMAND_FAULT contract={} stage={} op={} target=0x{:08x} payload_len={} total_len={} detail={} result={}",
+        "CYW43_DRIVER_TASK_COMMAND_FAULT contract={} stage={} op={} target=0x{:08x} payload_len={} total_len={} detail={} reason={} result={}",
         contract.name,
         stage,
         descriptor.op,
@@ -849,9 +912,52 @@ fn emit_cyw43_runtime_command_fault(
         descriptor.payload_len,
         descriptor.total_len,
         completion.detail,
+        cyw43_runtime_fault_reason(completion.detail),
         completion.result,
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
+    match detail {
+        0x5101 => "sdio-command-unavailable",
+        0x5102 => "sdio-descriptor-unavailable",
+        0x5301 => "cyw43-transport-init",
+        0x5302 => "cyw43-firmware-chunk",
+        0x5303 => "cyw43-nvram-chunk",
+        0x5304 => "cyw43-nvram-tail",
+        0x5305 => "cyw43-release",
+        0x5306 => "cyw43-control-frame",
+        0x5307 => "cyw43-eth-tx",
+        0x5308 => "cyw43-firmware-prep",
+        0x5310 => "cyw43-transport-bus-link-missing",
+        0x5311 => "cyw43-transport-direct-sdio-init",
+        0x5312 => "cyw43-transport-card-init",
+        0x5313 => "cyw43-transport-f1-block-size",
+        0x5314 => "cyw43-transport-f2-block-size",
+        0x5315 => "cyw43-transport-f1-enable",
+        0x5316 => "cyw43-transport-card-bus-width",
+        0x5317 => "cyw43-transport-host-bus-width",
+        0x5319 => "cyw43-transport-high-speed",
+        0x531a => "cyw43-backplane-alp",
+        0x531b => "cyw43-backplane-wake",
+        0x531c => "cyw43-backplane-kso",
+        0x531d => "cyw43-backplane-watermark",
+        0x531e => "cyw43-backplane-device-control",
+        0x531f => "cyw43-backplane-armcr4-reset",
+        0x5320 => "cyw43-firmware-range",
+        0x5321 => "cyw43-backplane-window",
+        0x5322 => "cyw43-post-release-cardcap",
+        0x5323 => "cyw43-backplane-chipcommon-read",
+        0x5324 => "cyw43-transport-card-cmd0",
+        0x5325 => "cyw43-transport-card-cmd5-ocr",
+        0x5326 => "cyw43-transport-card-cmd5-ready",
+        0x5327 => "cyw43-transport-card-cmd3-rca",
+        0x5328 => "cyw43-transport-card-cmd7-select",
+        0x53ff => "cyw43-command",
+        _ => "unknown",
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -1427,6 +1533,31 @@ mod tests {
         let mut dev = Cyw43DriverTaskDevice::default();
         assert!(dev.receive(Instant::from_millis(0)).is_none());
         assert_eq!(dev.bringup_status_label(), Some("driver-task-ring-client"));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_fault_reason_labels_split_transport_details() {
+        assert_eq!(
+            cyw43_runtime_fault_reason(0x5323),
+            "cyw43-backplane-chipcommon-read"
+        );
+        assert_eq!(
+            cyw43_runtime_fault_reason(0x5102),
+            "sdio-descriptor-unavailable"
+        );
+        assert_eq!(
+            cyw43_runtime_fault_reason(0x5312),
+            "cyw43-transport-card-init"
+        );
+        assert_eq!(
+            cyw43_runtime_fault_reason(0x5325),
+            "cyw43-transport-card-cmd5-ocr"
+        );
+        assert_eq!(
+            cyw43_runtime_fault_reason(0x5328),
+            "cyw43-transport-card-cmd7-select"
+        );
     }
 
     #[cfg(feature = "kernel")]

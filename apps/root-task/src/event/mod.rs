@@ -226,6 +226,8 @@ const SERIAL_INPUT_IDLE_TRACE_LIMIT: u8 = 0;
 const POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS: u64 = 750;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_TURNS: u8 = 2;
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS: u64 = 10_000;
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
 const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 8;
 
@@ -2550,6 +2552,20 @@ where
                     keyboard_probe.as_str()
                 );
                 boot_log::force_uart_line_raw(probe_line.as_str());
+                if !keyboard_probe.attached() {
+                    self.post_prompt_local_seat_attach_pending = true;
+                    self.post_prompt_local_seat_attach_idle_turns = 0;
+                    self.post_prompt_local_seat_attach_not_before_ms = self
+                        .now_ms
+                        .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS);
+                    let mut retry_line = HeaplessString::<128>::new();
+                    let _ = write!(
+                        retry_line,
+                        "[local-seat] post-prompt attach retry scheduled action=serial-safe-usb-progress retry_ms={}",
+                        POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS
+                    );
+                    boot_log::force_uart_line_raw(retry_line.as_str());
+                }
             }
         }
     }
@@ -4145,11 +4161,11 @@ where
             let first_report = runtime.first_report || linked_first_report || linked_first_byte;
             let first_byte = runtime.first_byte || linked_first_byte;
             let proof_gate = if first_byte {
-                runtime.proof_gate.max(9)
+                runtime.proof_gate.max(10)
             } else if first_report {
-                runtime.proof_gate.max(8)
+                runtime.proof_gate.max(9)
             } else if keyboard_ready {
-                runtime.proof_gate.max(7)
+                runtime.proof_gate.max(8)
             } else if linked_gate != 0 {
                 runtime.proof_gate.max(linked_gate)
             } else {
@@ -4563,19 +4579,19 @@ where
         match detail {
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => 3,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => 4,
-            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => 5,
-            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED => 6,
-            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED => 7,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED => 5,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => 5,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED => 6,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED => 5,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR => 7,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED => 6,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => 8,
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => 7,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 9,
-            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 10,
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 7,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 8,
             _ => 0,
         }
     }
@@ -10851,6 +10867,53 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_step_label(10),
             "keyboard-online"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn linked_usb_runtime_detail_gates_match_ten_gate_ladder() {
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+            ),
+            3
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+            ),
+            4
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+            ),
+            5
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
+            ),
+            6
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
+            ),
+            7
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
+            ),
+            7
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
+            ),
+            8
         );
     }
 

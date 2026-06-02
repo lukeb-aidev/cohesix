@@ -282,7 +282,7 @@ impl ErrorType for KernelSerialDriver {
 impl SerialDriver for KernelSerialDriver {
     #[cfg(feature = "kernel")]
     fn try_use_driver_task_client_after_attach(&mut self) -> bool {
-        if !crate::serial::serial_driver_task_runtime_attached() {
+        if !crate::serial::serial_driver_task_interactive_cutover_allowed() {
             return false;
         }
         *self = Self::DriverTaskClient;

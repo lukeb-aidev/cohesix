@@ -119,7 +119,6 @@ const FAULT_CYW43_FIRMWARE_PREP: u16 = 0x5308;
 const FAULT_CYW43_COMMAND: u16 = 0x53ff;
 const FAULT_CYW43_TRANSPORT_BUS_LINK: u16 = 0x5310;
 const FAULT_CYW43_TRANSPORT_DIRECT_SDIO: u16 = 0x5311;
-const FAULT_CYW43_TRANSPORT_CARD_INIT: u16 = 0x5312;
 const FAULT_CYW43_TRANSPORT_F1_BLOCK_SIZE: u16 = 0x5313;
 const FAULT_CYW43_TRANSPORT_F2_BLOCK_SIZE: u16 = 0x5314;
 const FAULT_CYW43_TRANSPORT_F1_ENABLE: u16 = 0x5315;
@@ -136,6 +135,11 @@ const FAULT_CYW43_FIRMWARE_RANGE: u16 = 0x5320;
 const FAULT_CYW43_BACKPLANE_WINDOW: u16 = 0x5321;
 const FAULT_CYW43_POST_RELEASE_CARDCAP: u16 = 0x5322;
 const FAULT_CYW43_BACKPLANE_CHIPCOMMON_READ: u16 = 0x5323;
+const FAULT_CYW43_TRANSPORT_CARD_CMD0: u16 = 0x5324;
+const FAULT_CYW43_TRANSPORT_CARD_CMD5_OCR: u16 = 0x5325;
+const FAULT_CYW43_TRANSPORT_CARD_CMD5_READY: u16 = 0x5326;
+const FAULT_CYW43_TRANSPORT_CARD_CMD3_RCA: u16 = 0x5327;
+const FAULT_CYW43_TRANSPORT_CARD_CMD7_SELECT: u16 = 0x5328;
 
 const SERIAL_RUNTIME_AUX_INIT: u32 = 0x5345_5249;
 
@@ -477,7 +481,6 @@ const USB_PROTOCOL_KEYBOARD: u8 = 1;
 const USB_ENDPOINT_ATTR_INTERRUPT: u8 = 3;
 const USB_ENDPOINT_DIR_IN: u8 = 0x80;
 const USB_XHCI_SPINS: usize = 1_000_000;
-const USB_XHCI_REDOORBELL_SPINS: usize = 16_384;
 const USB_ROOT_PORT_POWER_SETTLE_SPINS: usize = USB_XHCI_SPINS / 16;
 const USB_ROOT_PORT_SCAN_PASSES: usize = 16;
 const USB_ENUMERATION_RETRY_COOLDOWN_TURNS: u8 = 1;
@@ -1844,7 +1847,9 @@ fn service_usb_keyboard(command: DriverTaskCommandRecord) -> DriverTaskCompletio
                     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
                     1,
                 )
-            } else if let Some(detail) = USB_RUNTIME_STATE.with_mut(usb_runtime_enumeration_detail)
+            } else if let Some(detail) = USB_RUNTIME_STATE
+                .with_mut(usb_runtime_retry_keyboard_enumeration)
+                .or_else(|| USB_RUNTIME_STATE.with_mut(usb_runtime_enumeration_detail))
             {
                 DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, 1)
             } else {
@@ -2998,9 +3003,7 @@ fn cyw43_transport_init(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
         return Err(FAULT_CYW43_TRANSPORT_DIRECT_SDIO);
     }
     state.backplane_window_valid = false;
-    if !cyw43_sdio_card_init() {
-        return Err(FAULT_CYW43_TRANSPORT_CARD_INIT);
-    }
+    cyw43_sdio_card_init()?;
     if !cyw43_set_function_block_size(1, SDIO_FUNCTION1_BLOCK_SIZE) {
         return Err(FAULT_CYW43_TRANSPORT_F1_BLOCK_SIZE);
     }
@@ -3018,23 +3021,26 @@ fn cyw43_transport_init(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
     Ok(())
 }
 
-fn cyw43_sdio_card_init() -> bool {
+fn cyw43_sdio_card_init() -> Result<(), u16> {
     #[cfg(not(target_os = "none"))]
     {
-        return true;
+        return Ok(());
     }
     #[cfg(target_os = "none")]
     {
+        if cyw43_uses_sdio_bus_link() {
+            return Ok(());
+        }
         let empty = DriverFrameDescriptor::empty();
         if sdio_execute_transfer(0, 0, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE, empty, 1, 0).is_none() {
-            return false;
+            return Err(FAULT_CYW43_TRANSPORT_CARD_CMD0);
         }
         let mut ocr = 0u32;
         for _ in 0..SDHCI_INIT_SPINS {
             let Some(response) =
                 sdio_execute_transfer(SDIO_CMD5, 0, DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR, empty, 1, 0)
             else {
-                return false;
+                return Err(FAULT_CYW43_TRANSPORT_CARD_CMD5_OCR);
             };
             ocr = response;
             if ocr & SDIO_OCR_3V2_3V4 != 0 {
@@ -3043,7 +3049,7 @@ fn cyw43_sdio_card_init() -> bool {
             core::hint::spin_loop();
         }
         if ocr & SDIO_OCR_3V2_3V4 == 0 {
-            return false;
+            return Err(FAULT_CYW43_TRANSPORT_CARD_CMD5_OCR);
         }
         let desired_ocr = ocr & SDIO_OCR_3V2_3V4;
         for _ in 0..SDHCI_INIT_SPINS {
@@ -3055,7 +3061,7 @@ fn cyw43_sdio_card_init() -> bool {
                 1,
                 0,
             ) else {
-                return false;
+                return Err(FAULT_CYW43_TRANSPORT_CARD_CMD5_READY);
             };
             if response & SDIO_R4_READY != 0 {
                 ocr = response;
@@ -3064,7 +3070,7 @@ fn cyw43_sdio_card_init() -> bool {
             core::hint::spin_loop();
         }
         if ocr & SDIO_R4_READY == 0 {
-            return false;
+            return Err(FAULT_CYW43_TRANSPORT_CARD_CMD5_READY);
         }
         let Some(rca_response) = sdio_execute_transfer(
             SDIO_CMD3,
@@ -3074,19 +3080,22 @@ fn cyw43_sdio_card_init() -> bool {
             1,
             0,
         ) else {
-            return false;
+            return Err(FAULT_CYW43_TRANSPORT_CARD_CMD3_RCA);
         };
         let rca = rca_response & 0xffff_0000;
-        rca != 0
-            && sdio_execute_transfer(
-                SDIO_CMD7,
-                rca,
-                DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
-                empty,
-                1,
-                0,
-            )
-            .is_some()
+        if rca == 0 {
+            return Err(FAULT_CYW43_TRANSPORT_CARD_CMD3_RCA);
+        }
+        sdio_execute_transfer(
+            SDIO_CMD7,
+            rca,
+            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
+            empty,
+            1,
+            0,
+        )
+        .map(|_| ())
+        .ok_or(FAULT_CYW43_TRANSPORT_CARD_CMD7_SELECT)
     }
 }
 
@@ -3139,6 +3148,27 @@ fn cyw43_enable_sdio_high_speed_timing() -> Result<bool, u16> {
 }
 
 fn cyw43_backplane_transport_init(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
+    cyw43_backplane_transport_init_once()?;
+    if cyw43_backplane_read_u32(state, CYW43_CHIPCOMMON_BASE).is_some() {
+        return Ok(());
+    }
+    let first_fault = cyw43_take_last_fault_detail();
+    state.backplane_window_valid = false;
+    cyw43_clear_last_fault();
+    cyw43_recover_backplane_startup_transport(state)?;
+    cyw43_backplane_transport_init_once()?;
+    if cyw43_backplane_read_u32(state, CYW43_CHIPCOMMON_BASE).is_some() {
+        return Ok(());
+    }
+    let fault = cyw43_take_last_fault_detail().or(first_fault);
+    if fault == Some(FAULT_SDIO_DESCRIPTOR_UNAVAILABLE) {
+        cyw43_record_last_fault(FAULT_CYW43_BACKPLANE_CHIPCOMMON_READ);
+        return Err(FAULT_CYW43_BACKPLANE_CHIPCOMMON_READ);
+    }
+    Err(fault.unwrap_or(FAULT_CYW43_BACKPLANE_WINDOW))
+}
+
+fn cyw43_backplane_transport_init_once() -> Result<(), u16> {
     if !cyw43_sdio_cmd52_write(
         1,
         SBSDIO_FUNC1_CHIPCLKCSR,
@@ -3163,21 +3193,25 @@ fn cyw43_backplane_transport_init(state: &mut Cyw43RuntimeState) -> Result<(), u
         SBSDIO_FORCE_HW_CLKREQ_OFF | SBSDIO_FORCE_ALP,
     );
     cyw43_spin_wait(CYW43_BACKPLANE_FORCE_ALP_SETTLE_SPINS);
-    if cyw43_backplane_read_u32(state, CYW43_CHIPCOMMON_BASE).is_some() {
-        return Ok(());
-    }
+    Ok(())
+}
+
+fn cyw43_recover_backplane_startup_transport(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
     state.backplane_window_valid = false;
-    cyw43_clear_last_fault();
-    cyw43_spin_wait(CYW43_BACKPLANE_FORCE_ALP_SETTLE_SPINS);
-    if cyw43_backplane_read_u32(state, CYW43_CHIPCOMMON_BASE).is_some() {
-        return Ok(());
+    if !cyw43_configure_sdio_host(SDHCI_STARTUP_CLOCK_HZ, 0) {
+        return Err(FAULT_CYW43_TRANSPORT_HOST_BUS_WIDTH);
     }
-    let fault = cyw43_take_last_fault_detail();
-    if fault == Some(FAULT_SDIO_DESCRIPTOR_UNAVAILABLE) {
-        cyw43_record_last_fault(FAULT_CYW43_BACKPLANE_CHIPCOMMON_READ);
-        return Err(FAULT_CYW43_BACKPLANE_CHIPCOMMON_READ);
+    cyw43_sdio_card_init()?;
+    if !cyw43_set_function_block_size(1, SDIO_FUNCTION1_BLOCK_SIZE) {
+        return Err(FAULT_CYW43_TRANSPORT_F1_BLOCK_SIZE);
     }
-    Err(fault.unwrap_or(FAULT_CYW43_BACKPLANE_WINDOW))
+    if !cyw43_set_function_block_size(2, SDIO_FUNCTION2_BLOCK_SIZE) {
+        return Err(FAULT_CYW43_TRANSPORT_F2_BLOCK_SIZE);
+    }
+    if !cyw43_enable_sdio_function(SDIO_FUNC_ENABLE_1, SDIO_FUNC_READY_1) {
+        return Err(FAULT_CYW43_TRANSPORT_F1_ENABLE);
+    }
+    Ok(())
 }
 
 fn cyw43_prepare_firmware_upload_transport(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
@@ -4232,7 +4266,7 @@ fn usb_runtime_retry_keyboard_enumeration(state: &mut UsbRuntimeState) -> Option
     }
     if state.enumeration_retry_cooldown != 0 {
         state.enumeration_retry_cooldown = state.enumeration_retry_cooldown.saturating_sub(1);
-        return None;
+        return usb_runtime_enumeration_detail(state).or(Some(state.init_detail));
     }
     state.enumeration_retry_cooldown = USB_ENUMERATION_RETRY_COOLDOWN_TURNS;
     let descriptor = RUNTIME_DESCRIPTOR.load();
@@ -4249,7 +4283,7 @@ fn usb_runtime_retry_keyboard_enumeration(state: &mut UsbRuntimeState) -> Option
     } else if state.init_detail != before || state.port_event_candidate_mask != 0 {
         Some(state.init_detail)
     } else {
-        None
+        usb_runtime_enumeration_detail(state).or(Some(state.init_detail))
     }
 }
 
@@ -5025,7 +5059,7 @@ fn xhci_wait_command_completion(
     state: &mut UsbRuntimeState,
     descriptor: DriverRuntimeInitDescriptor,
 ) -> Option<XhciTrb> {
-    for waited in 0..USB_XHCI_SPINS {
+    for _ in 0..USB_XHCI_SPINS {
         while let Some(event) = xhci_next_event(state, descriptor) {
             xhci_ack_event_dequeue(state, descriptor);
             if xhci_trb_type(event.control) == XHCI_TRB_TYPE_COMMAND_COMPLETION {
@@ -5038,9 +5072,6 @@ fn xhci_wait_command_completion(
             if xhci_trb_type(event.control) == XHCI_TRB_TYPE_PORT_STATUS_CHANGE_EVENT {
                 xhci_preserve_port_status_change_event(state, event);
             }
-        }
-        if waited != 0 && waited % USB_XHCI_REDOORBELL_SPINS == 0 {
-            xhci_ring_doorbell(state, 0, 0);
         }
         core::hint::spin_loop();
     }
@@ -6662,12 +6693,7 @@ fn usb_runtime_init_hw(
     );
     let _ = usb_wait_status(op_base, XHCI_USBSTS_HCH, 0);
     state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY;
-    if usb_keyboard_enumerate(state, descriptor, dma_range) {
-        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
-        Some(DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY)
-    } else {
-        Some(state.init_detail)
-    }
+    Some(DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY)
 }
 
 #[cfg(target_os = "none")]
@@ -7029,6 +7055,9 @@ fn sdio_runtime_init_hw() -> bool {
 }
 
 fn sdio_apply_host_config(target_hz: u32, flags: u16) -> bool {
+    if !sdio_recover_command_path() {
+        return false;
+    }
     if target_hz != 0 && !sdio_set_clock_hz(target_hz) {
         return false;
     }
@@ -7942,7 +7971,11 @@ mod tests {
         };
         assert_eq!(
             service_command(0, idle),
-            DriverTaskCompletionRecord::idle(22)
+            DriverTaskCompletionRecord::progress_with_detail(
+                22,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+                1
+            )
         );
         USB_RUNTIME_STATE.with_mut(|state| {
             state.initialized = true;

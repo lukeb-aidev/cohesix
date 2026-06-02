@@ -1705,6 +1705,7 @@ pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 /// Bounded send/yield attempts for the first linked-runtime ring handshake.
 pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
+const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = 512;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 
 #[cfg(feature = "kernel")]
@@ -2904,6 +2905,12 @@ fn driver_task_ring_attempt_limit(
 ) -> usize {
     if !driver_task_ring_mode_uses_bounded_send(mode) {
         return DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::PromptSlice
+        && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
+    {
+        return DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS;
     }
     if mode == DriverTaskRingCommandMode::PromptSlice {
         return DRIVER_TASK_PROMPT_RING_ATTEMPTS;
@@ -6086,7 +6093,7 @@ mod tests {
                 command,
                 DriverTaskRingCommandMode::PromptSlice
             ),
-            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+            DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS
         );
     }
 

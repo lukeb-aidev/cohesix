@@ -5895,9 +5895,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         let ring_progress = completion.code
                             == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                             && completion.result != 0;
-                        return Ok(self.poll_with_time(now_ms) || ring_progress);
+                        return self
+                            .poll_budgeted_with_time(now_ms, budget)
+                            .map(|root_progress| root_progress || ring_progress);
                     }
-                    return Ok(self.poll_with_time(now_ms));
+                    return self.poll_budgeted_with_time(now_ms, budget);
                 }
                 let mut root_pointer_context =
                     NetRootPointerRingContext::new(self as *mut Self, hot_path);
