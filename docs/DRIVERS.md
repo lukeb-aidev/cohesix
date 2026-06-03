@@ -330,7 +330,7 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 | `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image requires a semantic xHCI MMIO range, DMA/shared pages, the VL805 PCIe DMA bus alias, and a pointer-free USB-to-PCIe bus link before engine init; root maps the PCIe owner ring at `0x70e01000` and mints the owner endpoint at child slot `9` so USB can flush VL805 posted writes without owning PCIe MMIO; the DMA arena is described by page descriptors and may be physically non-contiguous; the runtime now owns a direct-root-port xHCI keyboard path with command/event/EP0/interrupt-IN rings, root-port reset, slot/address/configure-endpoint commands, HID boot-protocol setup, duplicate-key suppression, and DMA report polling; hub keyboards and VL805 timing still need Pi hardware proof |
 | `hdmi-text` | HDMI text mirror | `hdmi-text` | isolated child VSpace using the linked `pi4-driver-hdmi` image | linked image requires framebuffer metadata plus declared resources and renders bounded text frames directly into the mapped framebuffer |
 | `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | isolated child VSpace using the linked `pi4-driver-genet` image | linked image requires declared GENET MMIO/DMA/shared pages before engine init; the descriptor ring now uses a 32-RX/32-TX page-described DMA arena so non-contiguous physical pages remain safe; it programs UMAC/RGMII, MDIO PHY speed, MAC address, RX/TX descriptor rings, bounded TX submission, RX drain, and TX completion reclaim inside the runtime; useful link/DHCP progress still needs Pi hardware proof |
-| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image requires shared control buffers plus the pointer-free CYW43-to-SDIO bus-link descriptor before engine init; CYW43 no longer receives direct SDHCI MMIO or a DMA arena, so SDIO register authority belongs to `sdio-host`; Wi-Fi association/DHCP and WPA/EAPOL still need Pi hardware proof of the SDIO owner-link service path |
+| `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image requires shared control buffers plus the pointer-free CYW43-to-SDIO bus-link descriptor before engine init; root maps the SDIO owner ring at `0x70e00000` and the owner two-page data window at `0x70e01000` so the descriptor advertises `shared_offset=4096` and `shared_len=8192`; CYW43 no longer receives direct SDHCI MMIO or a DMA arena, so SDIO register authority belongs to `sdio-host`; Wi-Fi association/DHCP and WPA/EAPOL still need Pi hardware proof of the SDIO owner-link service path |
 | `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
 | `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | linked image receives the HAL-declared SDHCI MMIO page plus shared pages, services fixed-layout CMD52/CMD53/POLL_IRQ turns, and must report dedicated-role plus owner-state descriptor proof before 26b SDIO acceptance is credited |
@@ -392,11 +392,12 @@ applies
 manifest-selected per-driver affinity through `seL4_TCB_SetAffinity` on enabled
 profiles or emits the physical-Pi deferral marker; binds the notification; maps
 every bounded `PT_LOAD` page from the linked runtime ELF plus
-declared runtime regions; and resumes the TCB. Generated `code-pages=64`
-currently covers the observed ~35 KiB runtime images and the 64 KiB linker
-alignment gaps between RO, RX, and RW load segments. The generated runtime
+declared runtime regions; and resumes the TCB. Generated `code-pages=80`
+covers the current multi-segment runtime images, including the observed 65-page
+linked ELF spans and the 64 KiB linker alignment gaps between RO, RX, and RW
+load segments. The generated runtime
 buffer budgets are sized to the fixed descriptor ABI and current runtime use:
-serial receives four shared pages; USB receives 64 DMA pages plus 32 shared
+serial receives four shared pages; USB receives 128 DMA pages plus 32 shared
 pages; HDMI receives 16 shared pages plus the framebuffer aperture; GENET
 receives 64 DMA pages plus 32 shared pages for a 32-RX/32-TX descriptor-ring
 shape; CYW43 receives 64 shared pages for SDPCM/control batching; SDIO receives
@@ -715,9 +716,10 @@ input.
 The CYW43 runtime data path now separates conservative control-plane Function 2
 reply reads from runtime data/glom reads. Control replies keep the Linux-derived
 64-byte first-read plus bounded remainder shape. Runtime RX uses a single
-512-byte block-aligned Function 2 request into an 8192-byte bounded frame buffer
-and deaggregates at most 16 glom subframes into a 16-entry bounded queue before
-yielding back to the driver-service budget.
+512-byte block-aligned Function 2 request into the mapped 8192-byte owner-link
+shared data window and then copies only decoded Ethernet payloads into the
+root-facing bounded frame. It deaggregates at most 16 glom subframes into a
+16-entry bounded queue before yielding back to the driver-service budget.
 
 Runtime CYW43 data TX follows the same bounded-service rule. The smoltcp
 `TxToken` is admitted only when link/security policy allows data and the current

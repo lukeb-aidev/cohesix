@@ -2068,12 +2068,45 @@ fn local_seat_usb_keyboard_enumeration_progress(
     target_arch = "aarch64",
     target_os = "none"
 ))]
+const fn linked_local_seat_usb_detail_rank(detail: u16) -> u8 {
+    match detail {
+        DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => 3,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => 4,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => 5,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED => 6,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 7,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 8,
+        _ => 0,
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 fn record_linked_local_seat_usb_detail(
     completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
 ) {
     if let Some(completion) = completion {
         if completion.detail != 0 {
-            LINKED_LOCAL_SEAT_USB_LAST_DETAIL.store(completion.detail as usize, Ordering::Release);
+            let old = LINKED_LOCAL_SEAT_USB_LAST_DETAIL.load(Ordering::Acquire) as u16;
+            if linked_local_seat_usb_detail_rank(completion.detail)
+                >= linked_local_seat_usb_detail_rank(old)
+            {
+                LINKED_LOCAL_SEAT_USB_LAST_DETAIL
+                    .store(completion.detail as usize, Ordering::Release);
+            }
         }
     }
 }
@@ -2133,7 +2166,7 @@ fn publish_local_seat_usb_enumeration_progress(
     contract: crate::hal::driver_task::DriverTaskContract,
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
 ) {
-    LINKED_LOCAL_SEAT_USB_LAST_DETAIL.store(completion.detail as usize, Ordering::Release);
+    record_linked_local_seat_usb_detail(Some(completion));
     if completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY {
         publish_local_seat_usb_keyboard_ready(contract, completion);
         return;
@@ -2660,6 +2693,59 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
             }
         } else {
             return false;
+        }
+    }
+    if LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
+        && !LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
+        && LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire)
+    {
+        let mut usb_command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(usb_contract),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        usb_command.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
+        let verbose_retry = !LINKED_LOCAL_SEAT_USB_ENUM_PROGRESS_LOGGED.load(Ordering::Acquire);
+        if verbose_retry {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                usb_contract,
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                "usb-keyboard-enumeration-retry",
+                "begin",
+                None,
+            );
+        }
+        let resume_completion = run_local_seat_driver_task_ring_service(usb_contract, usb_command);
+        record_linked_local_seat_usb_detail(resume_completion);
+        if let Some(completion) = resume_completion {
+            if local_seat_usb_keyboard_init_ready(Some(completion)) {
+                LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(false, Ordering::Release);
+                publish_local_seat_usb_keyboard_ready(usb_contract, completion);
+            } else if local_seat_usb_engine_init_ready(Some(completion)) {
+                LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(true, Ordering::Release);
+                publish_local_seat_usb_enumeration_progress(usb_contract, completion);
+            } else if verbose_retry {
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    usb_contract,
+                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                    "usb-keyboard-enumeration-retry",
+                    local_seat_usb_keyboard_enum_status(Some(completion)),
+                    Some(completion),
+                );
+            }
+        } else if verbose_retry {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                usb_contract,
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                "usb-keyboard-enumeration-retry",
+                "no-reply",
+                None,
+            );
         }
     }
     LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)

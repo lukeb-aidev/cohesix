@@ -603,9 +603,9 @@ fn serial_input_route_label() -> &'static str {
 }
 
 #[cfg(feature = "kernel")]
-const SERIAL_INPUT_RX_TRACE_LIMIT: u32 = 8;
+const SERIAL_INPUT_RX_TRACE_LIMIT: u32 = 1;
 #[cfg(feature = "kernel")]
-const SERIAL_INPUT_LINE_TRACE_LIMIT: u32 = 6;
+const SERIAL_INPUT_LINE_TRACE_LIMIT: u32 = 1;
 
 #[cfg(feature = "kernel")]
 fn serial_input_trace_budget_take(counter: &AtomicU32, limit: u32) -> bool {

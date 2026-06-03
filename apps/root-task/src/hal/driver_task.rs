@@ -972,6 +972,11 @@ pub const DRIVER_TASK_RING_FRAME_OFFSET: usize = 256;
 
 /// One page is enough for the current smoke command and completion records.
 pub const DRIVER_TASK_RING_PAGE_BYTES: usize = 4096;
+/// Shared owner pages exposed through a linked bus-owner transport.
+pub const DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY: usize = 2;
+/// Bytes in the CYW43-to-SDIO owner shared data window.
+pub const DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES: usize =
+    DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY * DRIVER_TASK_RING_PAGE_BYTES;
 
 /// Offset reserved for owner-state descriptors in the ring page.
 pub const DRIVER_TASK_OWNER_STATE_OFFSET: usize = 128;
@@ -1708,6 +1713,7 @@ pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
 const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = 8;
 const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = 512;
+const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = 16_384;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 
 #[cfg(feature = "kernel")]
@@ -1718,6 +1724,8 @@ struct DriverTaskCommandSlot {
     endpoint: AtomicUsize,
     ring_root_ptr: AtomicUsize,
     ring_frame_cap: AtomicUsize,
+    shared_frame_count: AtomicUsize,
+    shared_frame_caps: [AtomicUsize; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
     request_seq: AtomicUsize,
     active: AtomicUsize,
     ring_handler: AtomicUsize,
@@ -1759,6 +1767,8 @@ impl DriverTaskCommandSlot {
             endpoint: AtomicUsize::new(0),
             ring_root_ptr: AtomicUsize::new(0),
             ring_frame_cap: AtomicUsize::new(0),
+            shared_frame_count: AtomicUsize::new(0),
+            shared_frame_caps: [AtomicUsize::new(0), AtomicUsize::new(0)],
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             ring_handler: AtomicUsize::new(0),
@@ -2068,6 +2078,31 @@ pub fn publish_driver_task_ring_frame_cap(contract: DriverTaskContract, ring_fra
     slot.ring_frame_cap.store(ring_frame_cap, Ordering::Release);
 }
 
+/// Publish one root CSpace cap backing a driver shared-buffer page.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_shared_frame_cap(
+    contract: DriverTaskContract,
+    page_index: usize,
+    shared_frame_cap: usize,
+) {
+    if page_index >= DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
+        return;
+    }
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.shared_frame_caps[page_index].store(shared_frame_cap, Ordering::Release);
+    let required_count = page_index.saturating_add(1);
+    let current = slot.shared_frame_count.load(Ordering::Acquire);
+    if required_count > current {
+        slot.shared_frame_count
+            .store(required_count, Ordering::Release);
+    }
+}
+
 /// Return the endpoint and ring-frame caps for a linked bus-owner runtime.
 #[cfg(feature = "kernel")]
 #[must_use]
@@ -2087,6 +2122,40 @@ pub fn driver_task_bus_owner_transport_caps(
     ))
 }
 
+/// Return the endpoint, ring-frame cap, and bounded shared-buffer caps for a
+/// linked bus-owner runtime.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_bus_owner_transport_caps_with_shared(
+    contract: DriverTaskContract,
+    min_shared_pages: usize,
+) -> Option<(
+    sel4_sys::seL4_CPtr,
+    sel4_sys::seL4_CPtr,
+    [sel4_sys::seL4_CPtr; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
+)> {
+    if min_shared_pages > DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
+        return None;
+    }
+    let (endpoint, ring_frame_cap) = driver_task_bus_owner_transport_caps(contract)?;
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    if slot.shared_frame_count.load(Ordering::Acquire) < min_shared_pages {
+        return None;
+    }
+    let mut shared_frame_caps = [0; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY];
+    let mut index = 0usize;
+    while index < min_shared_pages {
+        let cap = slot.shared_frame_caps[index].load(Ordering::Acquire);
+        if cap == 0 {
+            return None;
+        }
+        shared_frame_caps[index] = cap as sel4_sys::seL4_CPtr;
+        index = index.saturating_add(1);
+    }
+    Some((endpoint, ring_frame_cap, shared_frame_caps))
+}
+
 /// Clear a partially published driver-task transport after bootstrap failure.
 #[cfg(feature = "kernel")]
 pub fn clear_driver_task_transport(contract: DriverTaskContract) {
@@ -2099,6 +2168,10 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     slot.endpoint.store(0, Ordering::Release);
     slot.ring_root_ptr.store(0, Ordering::Release);
     slot.ring_frame_cap.store(0, Ordering::Release);
+    slot.shared_frame_count.store(0, Ordering::Release);
+    for shared_frame_cap in &slot.shared_frame_caps {
+        shared_frame_cap.store(0, Ordering::Release);
+    }
     slot.tcb.store(0, Ordering::Release);
     slot.steady_priority.store(0, Ordering::Release);
     slot.steady_priority_active.store(0, Ordering::Release);
@@ -2910,10 +2983,13 @@ fn driver_task_ring_attempt_limit(
     }
     if mode == DriverTaskRingCommandMode::PromptSlice
         && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
-        && matches!(
-            command.aux0,
-            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
-        )
+        && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX
+    {
+        return DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::PromptSlice
+        && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
     {
         return DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS;
     }
@@ -5548,6 +5624,44 @@ mod tests {
         assert_eq!(slot.request_seq.load(Ordering::Acquire), 0);
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn bus_owner_transport_caps_require_published_shared_window_pages() {
+        let contract = SDIO_HOST_DRIVER_TASK_CONTRACT;
+        clear_driver_task_transport(contract);
+        publish_driver_task_command_endpoint(contract, 0x1234);
+        publish_driver_task_ring_frame_cap(contract, 0x2000);
+        assert!(driver_task_bus_owner_transport_caps_with_shared(
+            contract,
+            DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY
+        )
+        .is_none());
+
+        publish_driver_task_shared_frame_cap(contract, 0, 0x3000);
+        assert!(driver_task_bus_owner_transport_caps_with_shared(
+            contract,
+            DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY
+        )
+        .is_none());
+
+        publish_driver_task_shared_frame_cap(contract, 1, 0x4000);
+        let (endpoint, ring, shared) = driver_task_bus_owner_transport_caps_with_shared(
+            contract,
+            DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY,
+        )
+        .expect("shared bus-owner caps");
+        assert_eq!(endpoint, 0x1234);
+        assert_eq!(ring, 0x2000);
+        assert_eq!(shared, [0x3000, 0x4000]);
+
+        clear_driver_task_transport(contract);
+        assert!(driver_task_bus_owner_transport_caps_with_shared(
+            contract,
+            DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY
+        )
+        .is_none());
+    }
+
     #[test]
     fn builtin_isolation_summary_requires_runtime_proof_for_acceptance() {
         let summary = builtin_isolation_summary();
@@ -6146,7 +6260,7 @@ mod tests {
                 command,
                 DriverTaskRingCommandMode::PromptSlice
             ),
-            DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS
+            DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
         );
     }
 

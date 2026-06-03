@@ -1022,6 +1022,80 @@ EOF
     grep -q 'dynamic_debug/control' "${script_path}" || fail "brcmfmac dynamic debug helper missing debugfs control path"
 }
 
+assert_driver_runtime_elf_budgets() {
+    local runtime_artifact_dir="$1"
+    local manifest_json="${ROOT_DIR}/out/manifests/root_task_resolved.json"
+    require_file "$manifest_json"
+    python3 - "$manifest_json" "$runtime_artifact_dir" <<'PY'
+import json
+import os
+import struct
+import sys
+
+PAGE_BYTES = 4096
+PT_LOAD = 1
+
+
+def load_span_pages(path: str) -> int:
+    with open(path, "rb") as handle:
+        image = handle.read()
+    if len(image) < 64 or image[:4] != b"\x7fELF":
+        raise ValueError(f"{path}: not an ELF image")
+    if image[4] != 2 or image[5] != 1:
+        raise ValueError(f"{path}: expected little-endian ELF64")
+    phoff = struct.unpack_from("<Q", image, 32)[0]
+    phentsize = struct.unpack_from("<H", image, 54)[0]
+    phnum = struct.unpack_from("<H", image, 56)[0]
+    if phentsize < 56 or phnum == 0:
+        raise ValueError(f"{path}: invalid program header table")
+    min_vaddr = None
+    max_vaddr = 0
+    for index in range(phnum):
+        base = phoff + index * phentsize
+        if base + 56 > len(image):
+            raise ValueError(f"{path}: truncated program header table")
+        p_type = struct.unpack_from("<I", image, base)[0]
+        if p_type != PT_LOAD:
+            continue
+        p_vaddr = struct.unpack_from("<Q", image, base + 16)[0]
+        p_memsz = struct.unpack_from("<Q", image, base + 40)[0]
+        if p_memsz == 0:
+            continue
+        page_base = p_vaddr & ~(PAGE_BYTES - 1)
+        page_end = (p_vaddr + p_memsz + PAGE_BYTES - 1) & ~(PAGE_BYTES - 1)
+        min_vaddr = page_base if min_vaddr is None else min(min_vaddr, page_base)
+        max_vaddr = max(max_vaddr, page_end)
+    if min_vaddr is None or max_vaddr <= min_vaddr:
+        raise ValueError(f"{path}: no loadable segment span")
+    return (max_vaddr - min_vaddr) // PAGE_BYTES
+
+
+manifest_path, runtime_dir = sys.argv[1], sys.argv[2]
+with open(manifest_path, "r", encoding="utf-8") as handle:
+    manifest = json.load(handle)
+
+errors = []
+for image in manifest["root_task"]["driver_images"]["images"]:
+    artifact = os.path.basename(image["artifact"])
+    path = os.path.join(runtime_dir, artifact)
+    declared_pages = int(image["code-pages"])
+    if not os.path.isfile(path):
+        errors.append(f"{artifact}: runtime artifact is missing from {runtime_dir}")
+        continue
+    actual_pages = load_span_pages(path)
+    if actual_pages > declared_pages:
+        errors.append(
+            f"{artifact}: ELF span requires {actual_pages} pages but manifest declares "
+            f"{declared_pages} code-pages"
+        )
+
+if errors:
+    for error in errors:
+        print(error, file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 package_driver_runtime_raw_cpio() {
     local raw_cpio="$1"
     local raw_dir
@@ -1031,6 +1105,7 @@ package_driver_runtime_raw_cpio() {
     local runtime_artifact_dir="${ROOT_DIR}/target/aarch64-unknown-none/release"
     local bin
 
+    assert_driver_runtime_elf_budgets "$runtime_artifact_dir"
     mkdir -p "$raw_dir"
     rm -rf "$runtime_root"
     mkdir -p "$runtime_bin"

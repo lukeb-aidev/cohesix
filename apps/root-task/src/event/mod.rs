@@ -232,7 +232,7 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS: u64 = 10_000;
 const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS: u16 = 1024;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS: u16 = 1;
-const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
+const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 4;
 const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2510,7 +2510,7 @@ where
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     fn emit_post_prompt_local_seat_attach_blocked(&mut self, _reason: &'static str) {
-        if self.post_prompt_local_seat_attach_blocked_traces >= 8 {
+        if self.post_prompt_local_seat_attach_blocked_traces >= 1 {
             return;
         }
         self.post_prompt_local_seat_attach_blocked_traces = self
@@ -2825,10 +2825,8 @@ where
     #[allow(unsafe_code)]
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn emit_smp_snapshot(&mut self) -> bool {
-        self.emit_console_line("[smp] debug scheduler dump begin");
-        let policy = affinity::policy();
-        affinity::debug_dump_per_core(&policy, |line| self.emit_console_line(line));
-        self.emit_console_line("[smp] debug scheduler dump end");
+        self.emit_console_line("[smp] snapshot redirected reason=serial-safe use=smp-activity");
+        self.emit_smp_activity();
         true
     }
 
@@ -4273,21 +4271,23 @@ where
                 runtime.blocker
             };
             let runtime_line = format_message(format_args!(
-                "usb: runtime_gate keyboard={} first_report={} first_byte={} proof_gate={} target_gate=10 next={} blocker={}",
+                "usb: runtime_gate keyboard={} first_report={} first_byte={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x}",
                 Self::yes_no(keyboard_ready),
                 Self::yes_no(first_report),
                 Self::yes_no(first_byte),
                 proof_gate,
                 next_step,
                 blocker,
+                linked_detail,
             ));
             self.emit_console_line(runtime_line.as_str());
             let runtime_contract = format_message(format_args!(
-                "usb: runtime_contract current={} expected={} blocker={} proof_gate={} target_gate=10",
+                "usb: runtime_contract current={} expected={} blocker={} proof_gate={} target_gate=10 detail=0x{:04x}",
                 Self::usb_runtime_step_label(proof_gate),
                 next_step,
                 blocker,
                 proof_gate,
+                linked_detail,
             ));
             self.emit_console_line(runtime_contract.as_str());
             let keyboard = crate::local_seat_pi4::latest_usb_keyboard_poll_status();
@@ -10861,6 +10861,35 @@ mod tests {
     }
 
     #[test]
+    fn serial_burst_drain_with_local_seat_dispatches_complete_lines() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.mark_root_console_ready();
+
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"help\nhelp\n");
+
+        pump.poll();
+
+        assert_eq!(pump.metrics.accepted_commands, 2);
+        assert!(pump.local_line.is_empty());
+        assert!(!pump.parser.clear_buffer());
+    }
+
+    #[test]
     fn local_seat_keyboard_ingress_echoes_typed_bytes_before_completion() {
         let driver = LoopbackSerial::<64>::new();
         let serial = SerialPort::<_, 64, 64, 64>::new(driver);
@@ -10957,7 +10986,7 @@ mod tests {
         assert_eq!(empty_polls, 1);
         assert!(output_polls >= 1);
         assert!(output_polls <= empty_polls);
-        assert_eq!(serial_lines, 1);
+        assert!((2..=4).contains(&serial_lines));
         assert!(serial_chunk_bytes >= 8);
         assert!(serial_chunk_bytes <= crate::serial::DEFAULT_TX_CAPACITY / 2);
     }

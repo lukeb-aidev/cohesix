@@ -84,6 +84,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RESOURCE_TAG_HDMI_REGS, DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST,
     DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART,
     DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1551,8 +1552,8 @@ impl RuntimeInitDescriptorBuilder {
                 descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
                     driver_task::DriverTaskHotPath::SdioHost.as_u32(),
                     DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-                    0,
-                    DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as u32,
+                    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
+                    driver_task::DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES as u32,
                     DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
                 );
                 descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
@@ -3115,6 +3116,11 @@ impl<'a> KernelHal<'a> {
                 self.env
                     .map_page_copy_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
                     .map_err(HalError::Sel4)?;
+                driver_task::publish_driver_task_shared_frame_cap(
+                    hot_path.contract(),
+                    page,
+                    frame.cap() as usize,
+                );
                 if let Some(builder) = init_descriptor.as_deref_mut() {
                     builder.add_shared_page(paddr)?;
                 }
@@ -3149,11 +3155,14 @@ impl<'a> KernelHal<'a> {
         if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
             return Ok(());
         }
-        let (sdio_endpoint, sdio_ring_frame) =
-            driver_task::driver_task_bus_owner_transport_caps(SDIO_HOST_DRIVER_TASK_CONTRACT)
-                .ok_or(HalError::Unsupported(
-                    "driver-runtime-sdio-bus-link-missing",
-                ))?;
+        let (sdio_endpoint, sdio_ring_frame, sdio_shared_frames) =
+            driver_task::driver_task_bus_owner_transport_caps_with_shared(
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                driver_task::DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY,
+            )
+            .ok_or(HalError::Unsupported(
+                "driver-runtime-sdio-bus-link-missing",
+            ))?;
         let root_cnode = self.env.init_cnode_cap();
         let root_depth = sel4::word_bits() as u8;
         let endpoint_err = sel4::cnode_mint_depth(
@@ -3179,8 +3188,25 @@ impl<'a> KernelHal<'a> {
                 tracker,
             )
             .map_err(HalError::Sel4)?;
+        let page_bytes = 1usize << sel4::PAGE_BITS;
+        for (page, frame) in sdio_shared_frames.iter().enumerate() {
+            let vaddr = driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR
+                .checked_add(driver_task::DRIVER_TASK_RING_PAGE_BYTES)
+                .and_then(|base| base.checked_add(page.saturating_mul(page_bytes)))
+                .ok_or(HalError::Unsupported("driver-runtime-sdio-bus-link-vaddr"))?;
+            self.env
+                .map_page_copy_into_vspace(
+                    *frame,
+                    vspace,
+                    vaddr,
+                    sel4_sys::seL4_CapRights_ReadWrite,
+                    sel4_sys::seL4_ARM_Page_Default,
+                    tracker,
+                )
+                .map_err(HalError::Sel4)?;
+        }
         crate::bootstrap::log::force_uart_line(
-            "DRIVER_TASK_BUS_LINK contract=cyw43455 owner=sdio-host channel=cyw43-sdio endpoint_slot=0x0008 ring_vaddr=0x70e00000",
+            "DRIVER_TASK_BUS_LINK contract=cyw43455 owner=sdio-host channel=cyw43-sdio endpoint_slot=0x0008 ring_vaddr=0x70e00000 data_vaddr=0x70e01000 shared_len=8192",
         );
         Ok(())
     }
@@ -4380,6 +4406,80 @@ mod tests {
             512,
             16,
             2,
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_init_descriptor_builder_records_cyw43_sdio_shared_rx_window() {
+        let spec = super::driver_task::DriverTaskRuntimeImageSpec::new(
+            super::driver_task::DriverTaskHotPath::Cyw43Wifi,
+            64,
+            16,
+            0,
+            0,
+            64,
+            false,
+            true,
+        );
+        let mut builder = super::RuntimeInitDescriptorBuilder::new(
+            spec,
+            super::driver_task::DRIVER_TASK_ROLE_NET_BIT,
+        );
+        for index in 0..64 {
+            builder
+                .add_shared_page(0x5000_0000usize + index * 0x1000)
+                .unwrap();
+        }
+        builder
+            .add_buffer_resource_range(
+                super::driver_task::DriverTaskHotPath::Cyw43Wifi,
+                pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
+                super::driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR,
+                0x5000_0000,
+                64,
+                0,
+                true,
+            )
+            .unwrap();
+
+        let descriptor = builder.finish().unwrap();
+        assert_eq!(descriptor.bus_link_count, 1);
+        let link = descriptor.bus_links[0];
+        assert_eq!(
+            link.owner_hot_path,
+            super::driver_task::DriverTaskHotPath::SdioHost.as_u32()
+        );
+        assert_eq!(
+            link.channel_id,
+            pi4_driver_abi::DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+        );
+        assert_eq!(
+            link.shared_offset,
+            pi4_driver_abi::DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
+        );
+        assert_eq!(
+            link.shared_len,
+            pi4_driver_abi::DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32
+        );
+        assert!(descriptor.has_pointer_free_bus_link(
+            super::driver_task::DriverTaskHotPath::SdioHost.as_u32(),
+            pi4_driver_abi::DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+        ));
+        assert_eq!(
+            descriptor.shared_page_count,
+            pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES as u16
+        );
+        assert_eq!(
+            descriptor.resource_pages_by_kind(pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED),
+            64
+        );
+        assert!(descriptor.valid_for_resources(
+            super::driver_task::DriverTaskHotPath::Cyw43Wifi.as_u32(),
+            super::driver_task::DRIVER_TASK_ROLE_NET_BIT as u32,
+            0,
+            0,
+            64,
         ));
     }
 

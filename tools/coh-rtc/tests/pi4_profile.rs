@@ -97,7 +97,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     for image in images {
         assert_eq!(
             image["code-pages"].as_u64().expect("code pages"),
-            64,
+            80,
             "runtime image {} must leave room for the multi-segment linked ELF",
             image["id"]
         );
@@ -119,28 +119,28 @@ fn pi4_uboot_profile_emits_network_policy() {
         runtime_pages(images, "usb-keyboard", "shared-buffer-pages"),
         32
     );
-    assert_eq!(runtime_pages(images, "hdmi-text", "dma-pages"), 16);
+    assert_eq!(runtime_pages(images, "hdmi-text", "dma-pages"), 0);
     assert_eq!(
         runtime_pages(images, "hdmi-text", "shared-buffer-pages"),
         16
     );
-    assert_eq!(runtime_pages(images, "genet-nic", "dma-pages"), 512);
+    assert_eq!(runtime_pages(images, "genet-nic", "dma-pages"), 64);
     assert_eq!(
         runtime_pages(images, "genet-nic", "shared-buffer-pages"),
         32
     );
-    assert_eq!(runtime_pages(images, "cyw43-wifi", "dma-pages"), 128);
+    assert_eq!(runtime_pages(images, "cyw43-wifi", "dma-pages"), 0);
     assert_eq!(
         runtime_pages(images, "cyw43-wifi", "shared-buffer-pages"),
         64
     );
-    assert_eq!(runtime_pages(images, "cyw43-wifi", "mmio-pages"), 1);
+    assert_eq!(runtime_pages(images, "cyw43-wifi", "mmio-pages"), 0);
     assert_eq!(
         runtime_bool(images, "cyw43-wifi", "hardware-state-migrated"),
         true
     );
     assert_eq!(runtime_pages(images, "sdio-host", "mmio-pages"), 1);
-    assert_eq!(runtime_pages(images, "sdio-host", "dma-pages"), 64);
+    assert_eq!(runtime_pages(images, "sdio-host", "dma-pages"), 0);
     assert_eq!(
         runtime_pages(images, "sdio-host", "shared-buffer-pages"),
         32

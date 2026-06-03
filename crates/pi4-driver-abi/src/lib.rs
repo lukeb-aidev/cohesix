@@ -139,6 +139,11 @@ pub const DRIVER_RUNTIME_RESOURCE_PAGE_BYTES: u64 = 4096;
 pub const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
 /// Bytes in one command/completion ring page.
 pub const DRIVER_RUNTIME_RING_PAGE_BYTES: u16 = 4096;
+/// Offset namespace base for runtime shared-buffer payloads referenced by an
+/// owner-ring descriptor.
+pub const DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE: u16 = DRIVER_RUNTIME_RING_PAGE_BYTES;
+/// Maximum SDIO descriptor payload carried outside the owner command ring.
+pub const DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES: u16 = 8192;
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
 /// Child CSpace slot where USB receives the PCIe/VL805 bus-owner endpoint cap.
@@ -300,7 +305,8 @@ pub struct DriverRuntimeSdioCommandDescriptor {
     pub response_kind: u8,
     /// SDIO register/window address.
     pub addr: u32,
-    /// Data payload offset inside the fixed command ring page.
+    /// Data payload offset inside the fixed command ring page or the bounded
+    /// runtime shared-buffer payload window.
     pub data_offset: u16,
     /// Data bytes for byte-mode transfers.
     pub len: u16,
@@ -373,6 +379,12 @@ impl DriverRuntimeSdioCommandDescriptor {
             self.len as u32
         };
         let payload_end = self.data_offset as u32 + effective_len;
+        let ring_payload = self.data_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
+            && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32;
+        let shared_payload = self.data_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+            && payload_end
+                <= (DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
+                    + DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32);
         known_op
             && known_response
             && self.function <= 7
@@ -393,10 +405,7 @@ impl DriverRuntimeSdioCommandDescriptor {
                         || (self.block_size != 0
                             && self.block_size <= 512
                             && self.block_count <= 511))))
-            && (host_config
-                || (effective_len != 0
-                    && self.data_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
-                    && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32))
+            && (host_config || (effective_len != 0 && (ring_payload || shared_payload)))
     }
 }
 
@@ -599,9 +608,26 @@ impl DriverRuntimeBusLinkDescriptor {
     /// Returns true when the link contains a bounded pointer-free channel.
     #[must_use]
     pub const fn valid(self) -> bool {
+        let shared_end = self.shared_offset.saturating_add(self.shared_len);
+        let known_channel = self.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE
+            || self.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO;
+        let owner_matches_channel = if self.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
+        {
+            self.owner_hot_path == HOT_PATH_SDIO_HOST
+        } else {
+            self.owner_hot_path == HOT_PATH_PCIE_ROOT
+        };
+        let valid_window = if self.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO {
+            self.shared_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
+                && self.shared_len == DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32
+        } else {
+            self.shared_len != 0 && shared_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32
+        };
         self.owner_hot_path >= HOT_PATH_SERIAL_CONSOLE
             && self.owner_hot_path <= HOT_PATH_PCIE_ROOT
-            && self.channel_id != 0
+            && known_channel
+            && owner_matches_channel
+            && valid_window
             && (self.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE) != 0
     }
 }
@@ -1171,8 +1197,8 @@ mod tests {
         descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
             HOT_PATH_SDIO_HOST,
             DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-            0,
-            DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as u32,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32,
             DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
         );
 
@@ -1192,6 +1218,31 @@ mod tests {
             HOT_PATH_SDIO_HOST,
             DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO
         ));
+
+        descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+            0,
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32,
+            DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+        );
+        assert!(!descriptor.valid());
+        descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+            HOT_PATH_SDIO_HOST,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
+            DRIVER_RUNTIME_RING_PAGE_BYTES as u32,
+            DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+        );
+        assert!(!descriptor.valid());
+        descriptor.bus_links[0] = DriverRuntimeBusLinkDescriptor::new(
+            HOT_PATH_PCIE_ROOT,
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+            DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32,
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32,
+            DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+        );
+        assert!(!descriptor.valid());
     }
 
     #[test]
@@ -1316,6 +1367,17 @@ mod tests {
         assert!(!descriptor.valid());
         descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
         descriptor.len = DRIVER_RUNTIME_RING_PAGE_BYTES;
+        assert!(!descriptor.valid());
+
+        descriptor.data_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
+        descriptor.len = 0;
+        descriptor.block_size = 512;
+        descriptor.block_count = 16;
+        assert!(descriptor.valid());
+        descriptor.data_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE + 1;
+        assert!(!descriptor.valid());
+        descriptor.data_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
+        descriptor.block_count = 17;
         assert!(!descriptor.valid());
     }
 

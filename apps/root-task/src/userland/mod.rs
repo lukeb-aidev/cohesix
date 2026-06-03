@@ -227,18 +227,22 @@ pub fn main(ctx: BootContext) -> ! {
                         crate::hal::driver_task::driver_task_runtime_proof().pointer_free_ipc_proof,
                     );
                 if !resume_deferred_net_before_root && net_deferred_config.is_some() {
-                    boot_log::force_uart_line(
-                        "[net-console] deferred resume skipped reason=driver-task-net-runtime-unproved action=root-shell-first",
+                    let skip_reason = deferred_net_console_before_root_skip_reason(
+                        crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+                        crate::hal::driver_task::driver_task_runtime_proof().pointer_free_ipc_proof,
                     );
+                    let mut line = HeaplessString::<160>::new();
+                    let _ = write!(
+                        line,
+                        "[net-console] deferred resume skipped reason={skip_reason} action=root-shell-first",
+                    );
+                    boot_log::force_uart_line(line.as_str());
                     log::warn!(
                         target: "net-console",
-                        "[net-console] deferred resume skipped before root console: driver-task pointer-free IPC proof is incomplete"
+                        "[net-console] deferred resume skipped before root console: {skip_reason}"
                     );
                     let mut detail = HeaplessString::<192>::new();
-                    let _ = write!(
-                        detail,
-                        "deferred until root shell: driver-task net runtime proof missing",
-                    );
+                    let _ = write!(detail, "deferred until root shell: {skip_reason}",);
                     net_unavailable_detail = Some(detail);
                 } else if let Some(config) = net_deferred_config.take() {
                     boot_log::force_uart_line(
@@ -634,9 +638,23 @@ fn init_deferred_net_console(
 #[cfg(all(feature = "net-console", feature = "kernel"))]
 fn deferred_net_console_resume_before_root_allowed(
     physical_pi_owner_state: bool,
-    pointer_free_ipc_proof: bool,
+    _pointer_free_ipc_proof: bool,
 ) -> bool {
-    !physical_pi_owner_state || pointer_free_ipc_proof
+    !physical_pi_owner_state
+}
+
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+const fn deferred_net_console_before_root_skip_reason(
+    physical_pi_owner_state: bool,
+    pointer_free_ipc_proof: bool,
+) -> &'static str {
+    if physical_pi_owner_state {
+        "physical-pi-serial-shell-first"
+    } else if !pointer_free_ipc_proof {
+        "driver-task-net-runtime-unproved"
+    } else {
+        "none"
+    }
 }
 
 #[cfg(all(feature = "net-console", feature = "kernel"))]
@@ -1001,12 +1019,16 @@ mod tests {
         assert!(!super::deferred_net_console_resume_before_root_allowed(
             true, false
         ));
-        assert!(super::deferred_net_console_resume_before_root_allowed(
+        assert!(!super::deferred_net_console_resume_before_root_allowed(
             true, true
         ));
         assert!(super::deferred_net_console_resume_before_root_allowed(
             false, false
         ));
+        assert_eq!(
+            super::deferred_net_console_before_root_skip_reason(true, true),
+            "physical-pi-serial-shell-first"
+        );
     }
 
     #[cfg(all(feature = "serial-console", feature = "kernel"))]

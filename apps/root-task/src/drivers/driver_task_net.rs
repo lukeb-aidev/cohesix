@@ -51,6 +51,7 @@ const CYW43_DRIVER_TASK_MAC: EthernetAddress =
 const DRIVER_TASK_NET_STATUS: &str = "driver-task-ring-client";
 const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
 const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
+const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize = MAX_DRIVER_TASK_FRAME_BYTES;
 const SDIO_GO_IDLE_COMMAND_INDEX: u32 = 0;
 const SDIO_CMD5_OCR_COMMAND_INDEX: u32 = 5;
 const SDIO_CMD3_RCA_COMMAND_INDEX: u32 = 3;
@@ -870,6 +871,14 @@ where
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_runtime_stream_payload_limit(desc_size: usize) -> Result<usize, Cyw43FirmwareInitError> {
+    let frame_limit = MAX_DRIVER_TASK_FRAME_BYTES.checked_sub(desc_size).ok_or(
+        Cyw43FirmwareInitError::Runtime(DriverTaskNetError::RuntimeInit("cyw43-command-budget")),
+    )?;
+    Ok(frame_limit.min(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES))
+}
+
+#[cfg(feature = "kernel")]
 fn stream_cyw43_runtime_payload(
     contract: DriverTaskContract,
     op: u16,
@@ -878,9 +887,7 @@ fn stream_cyw43_runtime_payload(
     total_len: usize,
 ) -> Result<(), Cyw43FirmwareInitError> {
     let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
-    let max_payload = MAX_DRIVER_TASK_FRAME_BYTES.checked_sub(desc_size).ok_or(
-        Cyw43FirmwareInitError::Runtime(DriverTaskNetError::RuntimeInit("cyw43-command-budget")),
-    )?;
+    let max_payload = cyw43_runtime_stream_payload_limit(desc_size)?;
     let mut offset = 0usize;
     while offset < payload.len() {
         let chunk_len = (payload.len() - offset).min(max_payload);
@@ -1064,7 +1071,19 @@ fn emit_cyw43_runtime_command_fault(
 const fn cyw43_fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool {
     matches!(
         detail,
-        0x5102 | 0x5310 | 0x531a | 0x531b | 0x531c | 0x531d | 0x531e | 0x531f | 0x5321 | 0x5323
+        0x5102
+            | 0x5103
+            | 0x5104
+            | 0x5310
+            | 0x531a
+            | 0x531b
+            | 0x531c
+            | 0x531d
+            | 0x531e
+            | 0x531f
+            | 0x5321
+            | 0x5323
+            | 0x5329
     )
 }
 
@@ -1073,6 +1092,8 @@ const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
     match detail {
         0x5101 => "sdio-command-unavailable",
         0x5102 => "sdio-descriptor-unavailable",
+        0x5103 => "sdio-descriptor-transfer-failed",
+        0x5104 => "sdio-host-config-failed",
         0x5301 => "cyw43-transport-init",
         0x5302 => "cyw43-firmware-chunk",
         0x5303 => "cyw43-nvram-chunk",
@@ -1105,6 +1126,7 @@ const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
         0x5326 => "cyw43-transport-card-cmd5-ready",
         0x5327 => "cyw43-transport-card-cmd3-rca",
         0x5328 => "cyw43-transport-card-cmd7-select",
+        0x5329 => "cyw43-firmware-retry-exhausted",
         0x53ff => "cyw43-command",
         _ => "unknown",
     }
@@ -1697,6 +1719,14 @@ mod tests {
             "sdio-descriptor-unavailable"
         );
         assert_eq!(
+            cyw43_runtime_fault_reason(0x5103),
+            "sdio-descriptor-transfer-failed"
+        );
+        assert_eq!(
+            cyw43_runtime_fault_reason(0x5104),
+            "sdio-host-config-failed"
+        );
+        assert_eq!(
             cyw43_runtime_fault_reason(0x5312),
             "cyw43-transport-card-init"
         );
@@ -1708,6 +1738,10 @@ mod tests {
             cyw43_runtime_fault_reason(0x5328),
             "cyw43-transport-card-cmd7-select"
         );
+        assert_eq!(
+            cyw43_runtime_fault_reason(0x5329),
+            "cyw43-firmware-retry-exhausted"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -1717,6 +1751,9 @@ mod tests {
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5321));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x531a));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5102));
+        assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5103));
+        assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5104));
+        assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5329));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5302));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5306));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x53ff));
@@ -1755,6 +1792,18 @@ mod tests {
                 .recoverable_completion(),
             None
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_firmware_streaming_uses_bounded_boot_chunks() {
+        let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
+        let frame_payload = MAX_DRIVER_TASK_FRAME_BYTES - desc_size;
+        assert_eq!(
+            cyw43_runtime_stream_payload_limit(desc_size).ok(),
+            Some(frame_payload)
+        );
+        assert!(frame_payload < CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES);
     }
 
     #[cfg(feature = "kernel")]
