@@ -51,7 +51,16 @@ const CYW43_DRIVER_TASK_MAC: EthernetAddress =
 const DRIVER_TASK_NET_STATUS: &str = "driver-task-ring-client";
 const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
 const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
-const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize = MAX_DRIVER_TASK_FRAME_BYTES;
+// Keep root-to-runtime firmware chunks aligned to CYW43 Function 1 block
+// boundaries; the runtime coalesces them into the declared 8192-byte SDIO
+// owner shared-payload window before issuing block-mode CMD53 writes.
+const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize = 1024;
+#[cfg(feature = "kernel")]
+const CYW43_RUNTIME_STREAM_CHUNK_RECOVERY_LIMIT: u8 = 4;
+#[cfg(feature = "kernel")]
+// The Pi 4 firmware stream spans hundreds of chunks; keep aggregate recovery
+// high enough for one replay per chunk while the per-chunk cap prevents livelock.
+const CYW43_RUNTIME_STREAM_TOTAL_RECOVERY_LIMIT: u16 = 512;
 const SDIO_GO_IDLE_COMMAND_INDEX: u32 = 0;
 const SDIO_CMD5_OCR_COMMAND_INDEX: u32 = 5;
 const SDIO_CMD3_RCA_COMMAND_INDEX: u32 = 3;
@@ -88,6 +97,18 @@ impl Cyw43CommandSubmitError {
             Self::Completion(_) => DriverTaskNetError::RuntimeInit("cyw43-command"),
         }
     }
+
+    fn recoverable_completion(self) -> Option<DriverTaskCompletionRecord> {
+        match self {
+            Self::Completion(completion)
+                if completion.code == DriverTaskCompletionCode::Fault.as_u16()
+                    && cyw43_fault_detail_allows_sdio_owner_recovery(completion.detail) =>
+            {
+                Some(completion)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -108,12 +129,7 @@ impl Cyw43FirmwareInitError {
 
     fn recoverable_completion(self) -> Option<DriverTaskCompletionRecord> {
         match self {
-            Self::Command(Cyw43CommandSubmitError::Completion(completion))
-                if completion.code == DriverTaskCompletionCode::Fault.as_u16()
-                    && cyw43_fault_detail_allows_sdio_owner_recovery(completion.detail) =>
-            {
-                Some(completion)
-            }
+            Self::Command(err) => err.recoverable_completion(),
             _ => None,
         }
     }
@@ -555,6 +571,7 @@ where
     )
     .map_err(Cyw43FirmwareInitError::Command)?;
     stream_cyw43_runtime_payload(
+        hal,
         contract,
         DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
         CYW43_RAM_BASE_4345,
@@ -571,6 +588,7 @@ where
             DriverTaskNetError::RuntimeInit("cyw43-nvram-range"),
         ))?;
     stream_cyw43_runtime_payload(
+        hal,
         contract,
         DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
         nvram_offset,
@@ -879,16 +897,21 @@ fn cyw43_runtime_stream_payload_limit(desc_size: usize) -> Result<usize, Cyw43Fi
 }
 
 #[cfg(feature = "kernel")]
-fn stream_cyw43_runtime_payload(
+fn stream_cyw43_runtime_payload<H>(
+    hal: &mut H,
     contract: DriverTaskContract,
     op: u16,
     base_addr: u32,
     payload: &[u8],
     total_len: usize,
-) -> Result<(), Cyw43FirmwareInitError> {
+) -> Result<(), Cyw43FirmwareInitError>
+where
+    H: Hardware<Error = HalError>,
+{
     let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
     let max_payload = cyw43_runtime_stream_payload_limit(desc_size)?;
     let mut offset = 0usize;
+    let mut total_recoveries = 0u16;
     while offset < payload.len() {
         let chunk_len = (payload.len() - offset).min(max_payload);
         let target_addr = base_addr
@@ -898,18 +921,51 @@ fn stream_cyw43_runtime_payload(
             .ok_or(Cyw43FirmwareInitError::Runtime(
                 DriverTaskNetError::RuntimeInit("cyw43-target-range"),
             ))?;
-        submit_cyw43_runtime_command_checked(
-            contract,
-            DriverRuntimeCyw43CommandDescriptor {
-                op,
-                target_addr,
-                payload_len: chunk_len as u16,
-                total_len: total_len as u32,
-                ..DriverRuntimeCyw43CommandDescriptor::empty()
-            },
-            &payload[offset..offset + chunk_len],
-        )
-        .map_err(Cyw43FirmwareInitError::Command)?;
+        let mut chunk_recoveries = 0u8;
+        loop {
+            match submit_cyw43_runtime_command_checked(
+                contract,
+                DriverRuntimeCyw43CommandDescriptor {
+                    op,
+                    target_addr,
+                    payload_len: chunk_len as u16,
+                    total_len: total_len as u32,
+                    ..DriverRuntimeCyw43CommandDescriptor::empty()
+                },
+                &payload[offset..offset + chunk_len],
+            ) {
+                Ok(_) => break,
+                Err(err) => {
+                    let Some(completion) = err.recoverable_completion() else {
+                        return Err(Cyw43FirmwareInitError::Command(err));
+                    };
+                    if chunk_recoveries >= CYW43_RUNTIME_STREAM_CHUNK_RECOVERY_LIMIT
+                        || total_recoveries >= CYW43_RUNTIME_STREAM_TOTAL_RECOVERY_LIMIT
+                    {
+                        return Err(Cyw43FirmwareInitError::Command(
+                            Cyw43CommandSubmitError::Completion(completion),
+                        ));
+                    }
+                    if total_recoveries == 0
+                        || total_recoveries % 16 == 0
+                        || chunk_recoveries.saturating_add(1)
+                            == CYW43_RUNTIME_STREAM_CHUNK_RECOVERY_LIMIT
+                    {
+                        crate::hal::driver_task::emit_driver_task_resource_init_status(
+                            contract,
+                            DriverTaskHotPath::Cyw43Wifi,
+                            cyw43_runtime_command_stage(op),
+                            "sdio-owner-retry",
+                            Some(completion),
+                        );
+                    }
+                    force_replay_sdio_host_linked_runtime(hal, "cyw43-stream-recover")
+                        .map_err(Cyw43FirmwareInitError::Runtime)?;
+                    chunk_recoveries = chunk_recoveries.saturating_add(1);
+                    total_recoveries = total_recoveries.saturating_add(1);
+                }
+            }
+        }
         offset += chunk_len;
     }
     Ok(())
@@ -1801,9 +1857,10 @@ mod tests {
         let frame_payload = MAX_DRIVER_TASK_FRAME_BYTES - desc_size;
         assert_eq!(
             cyw43_runtime_stream_payload_limit(desc_size).ok(),
-            Some(frame_payload)
+            Some(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES)
         );
-        assert!(frame_payload < CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES);
+        assert!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES <= frame_payload);
+        assert_eq!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES % 64, 0);
     }
 
     #[cfg(feature = "kernel")]

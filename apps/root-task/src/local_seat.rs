@@ -341,6 +341,14 @@ static LINKED_LOCAL_SEAT_USB_LAST_DETAIL: AtomicUsize = AtomicUsize::new(0);
     target_arch = "aarch64",
     target_os = "none"
 ))]
+static LINKED_LOCAL_SEAT_USB_LAST_RESULT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LINKED_LOCAL_SEAT_USB_ENUM_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(
@@ -384,7 +392,9 @@ static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_PENDING_LOGGED: AtomicBool = AtomicBoo
 static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 1;
+// A controller-ready completion can precede root-port and HID endpoint events by
+// a few linked-runtime turns; keep prompt settling bounded and non-blocking.
+const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 3;
 
 #[cfg(all(
     feature = "kernel",
@@ -1177,7 +1187,7 @@ impl LocalSeatRuntime {
         self.backend_keyboard_polling_enabled
     }
 
-    /// Returns whether the serial root-console prompt has been published.
+    /// Returns whether the serial root console may settle local-seat work.
     #[must_use]
     pub const fn root_console_ready(&self) -> bool {
         self.root_console_ready
@@ -1205,7 +1215,7 @@ impl LocalSeatRuntime {
         self.backend_keyboard_poll_deferred_logged = false;
     }
 
-    /// Mark that the serial root-console prompt has been published.
+    /// Mark that the serial root console may settle local-seat work.
     pub fn mark_root_console_ready(&mut self) {
         self.root_console_ready = true;
         self.backend_keyboard_poll_deferred_logged = false;
@@ -1283,7 +1293,7 @@ impl LocalSeatRuntime {
                 )
             {
                 boot_log::force_uart_line(
-                    "[local-seat] cold-boot keyboard probe deferred reason=driver-task-runtime-unproved action=root-shell-first",
+                    "[local-seat] cold-boot keyboard probe deferred reason=driver-task-runtime-unproved action=root-prompt-delayed",
                 );
                 self.backend_keyboard_polling_enabled = false;
                 self.backend_keyboard_poll_deferred_logged = false;
@@ -1531,7 +1541,7 @@ impl LocalSeatRuntime {
                     if completion.code
                         == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
                     {
-                        publish_local_seat_usb_keyboard_ready(contract, completion);
+                        publish_local_seat_usb_keyboard_owner_ready(contract, completion);
                         if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED
                             .swap(true, Ordering::AcqRel)
                         {
@@ -2106,6 +2116,8 @@ fn record_linked_local_seat_usb_detail(
             {
                 LINKED_LOCAL_SEAT_USB_LAST_DETAIL
                     .store(completion.detail as usize, Ordering::Release);
+                LINKED_LOCAL_SEAT_USB_LAST_RESULT
+                    .store(completion.result as usize, Ordering::Release);
             }
         }
     }
@@ -2123,6 +2135,7 @@ fn publish_local_seat_usb_keyboard_ready(
 ) {
     LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
     LINKED_LOCAL_SEAT_USB_LAST_DETAIL.store(completion.detail as usize, Ordering::Release);
+    LINKED_LOCAL_SEAT_USB_LAST_RESULT.store(completion.result as usize, Ordering::Release);
     if !LINKED_LOCAL_SEAT_USB_ENUM_READY_LOGGED.swap(true, Ordering::AcqRel) {
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             contract,
@@ -2132,6 +2145,20 @@ fn publish_local_seat_usb_keyboard_ready(
             Some(completion),
         );
     }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn publish_local_seat_usb_keyboard_owner_ready(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) {
+    publish_local_seat_usb_keyboard_ready(contract, completion);
+    LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(false, Ordering::Release);
     let usb_owner = crate::hal::driver_task::register_driver_task_runtime_owner_state(
         crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
     );
@@ -2660,11 +2687,12 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
         }
         if usb_keyboard_ready {
             LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
-            LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(false, Ordering::Release);
         } else if usb_controller_ready {
             LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(true, Ordering::Release);
         }
-        let usb_owner = usb_keyboard_ready
+        let first_report_ready =
+            LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire);
+        let usb_owner = first_report_ready
             && crate::hal::driver_task::register_driver_task_runtime_owner_state(
                 crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
             );
@@ -2673,8 +2701,10 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 usb_contract,
                 crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
                 "usb-owner-state",
-                if usb_keyboard_ready {
+                if first_report_ready {
                     "descriptor-rejected"
+                } else if usb_keyboard_ready {
+                    "blocked-first-report"
                 } else {
                     "blocked-keyboard-enumeration"
                 },
@@ -2836,6 +2866,16 @@ pub(crate) fn linked_local_seat_usb_first_report_ready() -> bool {
 ))]
 pub(crate) fn linked_local_seat_usb_runtime_detail() -> u16 {
     LINKED_LOCAL_SEAT_USB_LAST_DETAIL.load(Ordering::Acquire) as u16
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+pub(crate) fn linked_local_seat_usb_runtime_result() -> u32 {
+    LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32
 }
 
 #[cfg(all(
@@ -4305,8 +4345,8 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
-    fn linked_usb_enumeration_resume_is_single_turn_per_retry() {
-        assert_eq!(LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS, 1);
+    fn linked_usb_enumeration_resume_remains_bounded_per_retry() {
+        assert!((1..=3).contains(&LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS));
     }
 
     #[test]

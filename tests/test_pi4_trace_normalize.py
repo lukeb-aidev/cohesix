@@ -1045,7 +1045,7 @@ def test_gate_summary_labels_prompt_gated_usb_runtime_deferral() -> None:
     events = normalizer.parse_events(
         [
             "[local-seat] cold-boot keyboard probe deferred "
-            "reason=driver-task-runtime-unproved action=root-shell-first",
+            "reason=driver-task-runtime-unproved action=root-prompt-delayed",
             "[local-seat] cold-boot keyboard probe end stage=pre-net "
             "result=deferred-until-root-console polling_enabled=0",
             "[Cohesix] Root console ready (type 'help' for commands)",
@@ -1393,7 +1393,7 @@ def test_gate_summary_labels_deferred_wifi_start_without_replay() -> None:
         [
             "[Cohesix] Root console ready (type 'help' for commands)",
             "cohesix> [local-seat] xhci boot contract raw_hint=0x0000000000000000/0",
-            "[net-console] deferred resume reason=root-shell-ready action=start-wifi",
+            "[net-console] deferred resume reason=root-prompt-delayed action=start-wifi",
             "[trace] deferred Wi-Fi logs remain on serial",
             "cohesix> ",
         ]
@@ -1412,7 +1412,7 @@ def test_gate_summary_labels_deferred_wifi_start_without_replay() -> None:
 def test_gate_summary_keeps_deferred_wifi_replay_blocker_after_start() -> None:
     events = normalizer.parse_events(
         [
-            "[net-console] deferred resume reason=root-shell-ready action=start-wifi",
+            "[net-console] deferred resume reason=root-prompt-delayed action=start-wifi",
             "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
             "selected=wifi-owner-link attempted=yes stage=descriptor-replay "
             "blocker=ready",

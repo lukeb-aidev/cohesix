@@ -269,7 +269,8 @@ proof from the linked-runtime model.
   keep controller init separate from the explicit keyboard-enumeration aux
   command, retry hub/HID enumeration during bounded resume turns, report the
   last enumeration frontier during ordinary prompt polls, and publish owner-state
-  only after keyboard-ready or first-report proof.
+  only after first-report proof. Keyboard-ready is an endpoint frontier, not an
+  owner-state proof.
 - Wi-Fi replay is independent of USB. CYW43/SDIO descriptor replay and selected
   network progress must not wait for HID readiness, and USB polling must not
   mask Wi-Fi blockers; both lanes remain subordinate to serial/HDMI
@@ -982,21 +983,23 @@ transition, but it must not write SDHCI host-control registers directly.
   `bus:txglomalign` with the extended header shifts the CDC payload to offset
   20 before the firmware has enabled that framing and leaves the host polling
   for a reply the firmware never generates.
-- CYW43455 firmware upload uses Linux's 32 KiB brcmfmac backplane windows as
-  the primary path (`brcmf_sdiod_ramrw write 32768 bytes`) and keeps Cohesix's
-  byte-mode upload path only as the bounded seL4 recovery path after a real
-  SDHCI transport failure. The HAL must still split the raw Function 1 CMD53
-  commands like Linux's MMC SDIO helper: one command may carry at most 511
-  blocks, so each 32 KiB F1/64-byte firmware window becomes a 511-block
-  32704-byte command plus a final 1-block 64-byte command. Do not encode a
-  block-mode count of zero for a 512-block command; zero count is only valid for
-  512-byte byte-mode CMD53 transfers. The split-runtime `sdio-host` owner must
-  program `SDHCI_TRNS_MULTI` for any CMD53 block-mode turn with more than one
-  block, including CYW43 firmware upload chunks delivered through the
-  CYW43-to-SDIO bus link. If the SDIO owner reports a transfer fault, it must
-  reset the CMD/DATA path, clear interrupt state, preserve the host clock/bus
-  configuration, and let CYW43 invalidate and reprogram the backplane window
-  before retrying byte-mode upload.
+- CYW43455 firmware upload preserves the Linux/brcmfmac block-mode Function 1
+  backplane shape while remaining inside the generated split-runtime payload
+  contract. Root streams 1024-byte, 64-byte-aligned firmware chunks over the
+  owner ring; the CYW43 runtime coalesces them into the declared 8192-byte SDIO
+  shared-payload window and issues 128-block CMD53 writes, with byte-mode only
+  as bounded recovery after a real SDHCI transport failure or for a final short
+  tail. The old monolithic HAL path could issue the full Linux 32704-byte
+  511-block turn from a 32 KiB window; the linked-runtime path must not claim
+  that exact payload size unless the generated SDIO shared-payload contract is
+  widened. Do not encode a block-mode count of zero for a 512-block command;
+  zero count is only valid for 512-byte byte-mode CMD53 transfers. The
+  split-runtime `sdio-host` owner must program `SDHCI_TRNS_MULTI` for any CMD53
+  block-mode turn with more than one block, including CYW43 firmware upload
+  chunks delivered through the CYW43-to-SDIO bus link. If the SDIO owner reports
+  a transfer fault, it must reset the CMD/DATA path, clear interrupt state,
+  preserve the host clock/bus configuration, and let CYW43 invalidate and
+  reprogram the backplane window before retrying byte-mode upload.
 - Non-captured early iovars must not be hard blockers before this attach proof
   point. Cohesix may attempt station-path compatibility knobs such as
   `bus:txglom` and AMPDU limits only after the Linux first-iovar/MAC sequence,
@@ -1367,17 +1370,19 @@ transition, but it must not write SDHCI host-control registers directly.
   buffer. After the USB keyboard transport reaches the runtime `keyboard-ready`
   proof, Wi-Fi still keeps raw HAL breadcrumbs off UART so log volume cannot
   prevent the first user byte from reaching the root shell.
-- Wi-Fi net-console bring-up must not precede the serial root console on Pi 4
-  while linked-runtime pointer-free IPC proof is incomplete, even when
+- Wi-Fi net-console bring-up must not hide the serial root console indefinitely
+  on Pi 4 while linked-runtime pointer-free IPC proof is incomplete, even when
   local-seat is enabled and the selected net-console interface is Wi-Fi.
   Cohesix emits `action=root-console-wait-for-wifi`, preserves the Wi-Fi
-  configuration for operator diagnostics, skips pre-prompt CYW43455 resume with
-  `action=root-shell-first`, and publishes the serial shell before DHCP/data
-  work. Post-prompt SDIO and CYW43455 descriptor replay uses bounded
-  nonblocking IPC with temporary runtime-TCB priority boosts, and emits raw UART
+  configuration for operator diagnostics, skips the earliest CYW43455 resume
+  with `action=root-prompt-delayed` when pre-root proof is insufficient, then
+  runs the bounded deferred SDIO/CYW43455 replay before publishing the normal
+  `cohesix>` prompt. Descriptor replay uses bounded nonblocking IPC with
+  temporary runtime-TCB priority boosts and emits raw UART
   `SDIO_DRIVER_TASK_REPLAY_STATUS` / `NET_DRIVER_TASK_REPLAY_STATUS`
-  breadcrumbs on serial, with a fresh `cohesix>` prompt after each log line, so
-  inaccessible `/log/queen.log` paths cannot hide a replay stall.
+  breadcrumbs on serial, so inaccessible `/log/queen.log` paths cannot hide a
+  replay stall. If replay fails, the prompt is still published with compact
+  fail-closed blockers for prompt-side diagnostics.
   CYW43 receives SDIO only through the pointer-free bus-owner link; after
   `transport-init` has proved the card, Function 1, ALP backplane window, and
   chip identity. The firmware-upload boundary then widens SDIO, enables

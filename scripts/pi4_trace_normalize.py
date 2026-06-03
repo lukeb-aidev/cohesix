@@ -1009,6 +1009,7 @@ def normalize_usb_blocker(value: str) -> str:
         "deferred-until-root-console" in lower
         or "driver-task-runtime-unproved" in lower
         or "root-shell-first" in lower
+        or "root-prompt-delayed" in lower
         or "serial-shell-first" in lower
     ):
         return "driver-task-runtime-deferred"
@@ -4747,7 +4748,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             event
             for event in event_list
             if "[net-console]" in event.raw.lower()
-            and "deferred resume reason=root-shell-ready" in event.raw.lower()
+            and (
+                "deferred resume reason=root-shell-ready" in event.raw.lower()
+                or "deferred resume reason=root-prompt-delayed" in event.raw.lower()
+            )
             and "action=start-wifi" in event.raw.lower()
         ),
         None,

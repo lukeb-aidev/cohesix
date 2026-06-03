@@ -6679,7 +6679,7 @@ mod tests {
                     );
                 }
                 DriverTaskHotPath::UsbKeyboard => {
-                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 64);
+                    assert_eq!(spec.region_pages(DriverTaskRuntimeRegionKind::Dma), 128);
                     assert_eq!(
                         spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer),
                         32

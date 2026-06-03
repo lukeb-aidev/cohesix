@@ -572,6 +572,8 @@ const CYW43_RING_PAGE_PAYLOAD_BYTES: usize =
     DRIVER_TASK_RING_PAGE_BYTES - DRIVER_TASK_RING_FRAME_OFFSET;
 const CYW43_RUNTIME_RX_BUFFER_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
 const CYW43_RUNTIME_RX_BUFFER_OFFSET: usize = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize;
+const CYW43_FIRMWARE_STAGE_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
+const CYW43_FIRMWARE_STAGE_OFFSET: usize = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize;
 const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
 const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
 const CYW43_FIRMWARE_RESET_VECTOR_ADDR: u32 = 0x0000_0000;
@@ -622,7 +624,7 @@ const SDIO_FUNC_READY_1: u8 = 0x02;
 const SDIO_FUNC_READY_2: u8 = 0x04;
 const SDIO_FUNCTION1_BLOCK_SIZE: u16 = 64;
 const SDIO_FUNCTION2_BLOCK_SIZE: u16 = 512;
-const SDIO_CMD53_BYTE_MODE_MAX: usize = 511;
+const SDIO_CMD53_BYTE_MODE_MAX: usize = 512;
 const CYW43_SDIO_FAST_CLOCK_HZ: u32 = 50_000_000;
 const CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ: [u32; 4] = [
     SDHCI_STARTUP_CLOCK_HZ,
@@ -814,6 +816,7 @@ struct UsbRuntimeState {
     keyboard_ep_max_packet: u16,
     keyboard_ep0_ring_offset: usize,
     keyboard_reports_queued: u8,
+    keyboard_doorbell_pending: bool,
     keyboard_report_in_use: [bool; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
     keyboard_report_trb_indices: [u16; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
     keyboard_preserved_event_count: u8,
@@ -861,6 +864,7 @@ impl UsbRuntimeState {
             keyboard_ep_max_packet: 0,
             keyboard_ep0_ring_offset: 0,
             keyboard_reports_queued: 0,
+            keyboard_doorbell_pending: false,
             keyboard_report_in_use: [false; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
             keyboard_report_trb_indices: [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
             keyboard_preserved_event_count: 0,
@@ -996,6 +1000,9 @@ struct Cyw43RuntimeState {
     firmware_total_len: u32,
     nvram_total_len: u32,
     nvram_tail_magic: u32,
+    firmware_stage_addr: u32,
+    firmware_stage_len: u16,
+    firmware_stage: [u8; CYW43_FIRMWARE_STAGE_BYTES],
     backplane_window: u32,
     backplane_window_valid: bool,
     bus_link_ready: bool,
@@ -1029,6 +1036,9 @@ impl Cyw43RuntimeState {
             firmware_total_len: 0,
             nvram_total_len: 0,
             nvram_tail_magic: 0,
+            firmware_stage_addr: 0,
+            firmware_stage_len: 0,
+            firmware_stage: [0; CYW43_FIRMWARE_STAGE_BYTES],
             backplane_window: 0,
             backplane_window_valid: false,
             bus_link_ready: false,
@@ -2015,7 +2025,7 @@ fn service_usb_keyboard(command: DriverTaskCommandRecord) -> DriverTaskCompletio
                 DriverTaskCompletionRecord::progress_with_detail(
                     command.sequence,
                     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
-                    1,
+                    USB_RUNTIME_STATE.with_mut(usb_keyboard_pending_result),
                 )
             } else if let Some(detail) = USB_RUNTIME_STATE.with_mut(usb_runtime_enumeration_detail)
             {
@@ -2343,11 +2353,12 @@ fn service_cyw43_descriptor_command(
                 } else if !state.firmware_upload_prepared {
                     cyw43_record_last_fault(FAULT_CYW43_FIRMWARE_PREP);
                     0
-                } else if cyw43_backplane_write_ring(
+                } else if cyw43_stage_firmware_chunk(
                     state,
                     desc.target_addr,
                     usize::from(desc.payload_offset),
                     usize::from(desc.payload_len),
+                    next_bytes == expected_total,
                 ) {
                     if state.firmware_total_len == 0 {
                         state.firmware_total_len = expected_total;
@@ -2412,7 +2423,9 @@ fn service_cyw43_descriptor_command(
             }
         }
         DRIVER_RUNTIME_CYW43_OP_RELEASE => {
-            if cyw43_release_firmware(state, desc.arg0) {
+            if state.firmware_stage_len != 0 && !cyw43_flush_firmware_stage(state) {
+                0
+            } else if cyw43_release_firmware(state, desc.arg0) {
                 state.firmware_released = true;
                 1
             } else {
@@ -3509,6 +3522,7 @@ fn cyw43_prepare_firmware_upload_transport(state: &mut Cyw43RuntimeState) -> Res
     cyw43_hold_armcr4_for_firmware_upload(state)?;
     cyw43_disable_d11_cores_for_firmware(state);
     cyw43_prepare_socram_for_armcr4_upload(state)?;
+    cyw43_reset_firmware_stage(state);
     state.firmware_upload_prepared = true;
     Ok(())
 }
@@ -3903,10 +3917,100 @@ fn cyw43_reset_firmware_retry_clock(state: &mut Cyw43RuntimeState) {
     state.firmware_retry_clock_index = 0;
 }
 
+fn cyw43_prepare_retryable_firmware_command(state: &mut Cyw43RuntimeState) {
+    if state.firmware_released {
+        return;
+    }
+    state.firmware_retry_clock_index = 0;
+    state.firmware_byte_mode_fallback = true;
+    state.backplane_window_valid = false;
+}
+
 fn cyw43_firmware_upload_retries_exhausted(state: &Cyw43RuntimeState) -> bool {
     !state.firmware_released
         && usize::from(state.firmware_retry_clock_index)
             >= CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len()
+}
+
+fn cyw43_reset_firmware_stage(state: &mut Cyw43RuntimeState) {
+    state.firmware_stage_addr = 0;
+    state.firmware_stage_len = 0;
+}
+
+fn cyw43_flush_firmware_stage(state: &mut Cyw43RuntimeState) -> bool {
+    let len = usize::from(state.firmware_stage_len);
+    if len == 0 {
+        return true;
+    }
+    if len > CYW43_FIRMWARE_STAGE_BYTES {
+        return false;
+    }
+    for index in 0..len {
+        write_runtime_payload_byte(
+            CYW43_FIRMWARE_STAGE_OFFSET + index,
+            state.firmware_stage[index],
+        );
+    }
+    if cyw43_backplane_write_ring(
+        state,
+        state.firmware_stage_addr,
+        CYW43_FIRMWARE_STAGE_OFFSET,
+        len,
+    ) {
+        cyw43_reset_firmware_stage(state);
+        true
+    } else {
+        false
+    }
+}
+
+fn cyw43_stage_firmware_chunk(
+    state: &mut Cyw43RuntimeState,
+    target_addr: u32,
+    payload_offset: usize,
+    payload_len: usize,
+    stream_complete: bool,
+) -> bool {
+    if payload_len == 0 || payload_len > CYW43_FIRMWARE_STAGE_BYTES {
+        cyw43_record_last_fault(FAULT_CYW43_FIRMWARE_RANGE);
+        return false;
+    }
+    let stage_len = usize::from(state.firmware_stage_len);
+    if stage_len == 0 {
+        state.firmware_stage_addr = target_addr;
+    } else if state
+        .firmware_stage_addr
+        .checked_add(u32::from(state.firmware_stage_len))
+        != Some(target_addr)
+    {
+        if !cyw43_flush_firmware_stage(state) {
+            return false;
+        }
+        state.firmware_stage_addr = target_addr;
+    }
+    let stage_len = usize::from(state.firmware_stage_len);
+    let Some(next_stage_len) = stage_len.checked_add(payload_len) else {
+        cyw43_record_last_fault(FAULT_CYW43_FIRMWARE_RANGE);
+        return false;
+    };
+    if next_stage_len > CYW43_FIRMWARE_STAGE_BYTES {
+        cyw43_record_last_fault(FAULT_CYW43_FIRMWARE_RANGE);
+        return false;
+    }
+    for index in 0..payload_len {
+        state.firmware_stage[stage_len + index] = read_runtime_payload_byte(payload_offset + index);
+    }
+    state.firmware_stage_len = next_stage_len as u16;
+    if next_stage_len == CYW43_FIRMWARE_STAGE_BYTES || stream_complete {
+        if cyw43_flush_firmware_stage(state) {
+            true
+        } else {
+            state.firmware_stage_len = stage_len as u16;
+            false
+        }
+    } else {
+        true
+    }
 }
 
 fn cyw43_backplane_write_ring(
@@ -3929,11 +4033,11 @@ fn cyw43_backplane_write_ring(
                     attempts = attempts.saturating_add(1);
                     continue;
                 }
-                if cyw43_firmware_upload_retries_exhausted(state)
-                    && cyw43_take_last_fault_detail().is_none()
-                {
+                let last_fault = cyw43_take_last_fault_detail();
+                if cyw43_firmware_upload_retries_exhausted(state) && last_fault.is_none() {
                     cyw43_record_last_fault(FAULT_CYW43_FIRMWARE_RETRY_EXHAUSTED);
                 }
+                cyw43_prepare_retryable_firmware_command(state);
                 return false;
             }
             let window_offset = (chunk_addr as usize) & BACKPLANE_ADDRESS_MASK as usize;
@@ -3974,14 +4078,14 @@ fn cyw43_backplane_write_ring(
                     attempts = attempts.saturating_add(1);
                     continue;
                 }
-                if cyw43_firmware_upload_retries_exhausted(state)
-                    && cyw43_take_last_fault_detail().is_none()
-                {
+                let last_fault = cyw43_take_last_fault_detail();
+                if cyw43_firmware_upload_retries_exhausted(state) && last_fault.is_none() {
                     cyw43_record_last_fault(FAULT_CYW43_FIRMWARE_RETRY_EXHAUSTED);
                 }
-                if cyw43_take_last_fault_detail().is_none() {
+                if last_fault.is_none() {
                     cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
                 }
+                cyw43_prepare_retryable_firmware_command(state);
                 return false;
             }
             done += chunk_len;
@@ -5102,6 +5206,7 @@ fn pcie_runtime_init(state: &mut PcieRuntimeState) -> bool {
 
 fn usb_reset_keyboard_interrupt_queue(state: &mut UsbRuntimeState) {
     state.keyboard_reports_queued = 0;
+    state.keyboard_doorbell_pending = false;
     state.keyboard_report_in_use = [false; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
     state.keyboard_report_trb_indices = [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
     state.keyboard_preserved_event_count = 0;
@@ -5146,6 +5251,16 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState) -> usize {
 
 fn usb_keyboard_endpoint_ready(state: &mut UsbRuntimeState) -> bool {
     state.initialized && state.keyboard_slot != 0 && state.keyboard_endpoint_id != 0
+}
+
+fn usb_keyboard_pending_result(state: &mut UsbRuntimeState) -> u32 {
+    u32::from(state.keyboard_reports_queued)
+        | if state.keyboard_doorbell_pending {
+            1 << 8
+        } else {
+            0
+        }
+        | (u32::from(state.keyboard_preserved_event_count) << 16)
 }
 
 fn usb_runtime_enumeration_detail(state: &mut UsbRuntimeState) -> Option<u16> {
@@ -7732,6 +7847,7 @@ fn xhci_queue_keyboard_interrupt_in(
     state.keyboard_report_in_use[report_slot] = true;
     state.keyboard_report_trb_indices[report_slot] = trb_index as u16;
     state.keyboard_reports_queued = state.keyboard_reports_queued.saturating_add(1);
+    state.keyboard_doorbell_pending = true;
     true
 }
 
@@ -7764,8 +7880,11 @@ fn xhci_arm_keyboard_interrupt_queue(
         }
         queued_any = true;
     }
-    if queued_any {
-        if !xhci_ring_doorbell(state, state.keyboard_slot, state.keyboard_endpoint_id) {
+    if queued_any || state.keyboard_doorbell_pending {
+        if xhci_ring_doorbell(state, state.keyboard_slot, state.keyboard_endpoint_id) {
+            state.keyboard_doorbell_pending = false;
+        } else {
+            state.keyboard_doorbell_pending = true;
             return false;
         }
     }
@@ -9416,7 +9535,7 @@ mod tests {
             DriverTaskCompletionRecord::progress_with_detail(
                 25,
                 DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
-                1
+                USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u32
             )
         );
 
@@ -10234,6 +10353,86 @@ mod tests {
             )
         );
         assert_eq!(cyw43_backplane_write_chunk_shape(true, false, 4), (4, 4, 1));
+    }
+
+    #[test]
+    fn cyw43_firmware_stage_coalesces_root_chunks_to_shared_window() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_upload_prepared = true;
+
+        for chunk in 0..8usize {
+            for index in 0..1024usize {
+                write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, (chunk + index) as u8);
+            }
+            assert!(cyw43_stage_firmware_chunk(
+                &mut state,
+                CYW43_RAM_BASE_4345 + (chunk * 1024) as u32,
+                DRIVER_TASK_RING_FRAME_OFFSET,
+                1024,
+                false
+            ));
+            if chunk < 7 {
+                assert_eq!(state.firmware_stage_len, ((chunk + 1) * 1024) as u16);
+            }
+        }
+
+        assert_eq!(state.firmware_stage_len, 0);
+        assert_eq!(read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET), 0);
+        assert_eq!(
+            read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + 1024),
+            1
+        );
+        assert_eq!(
+            read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + 8191),
+            (7usize + 1023usize) as u8
+        );
+    }
+
+    #[test]
+    fn cyw43_firmware_stage_flushes_final_short_chunk() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_upload_prepared = true;
+
+        for index in 0..1024usize {
+            write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, 0xa5);
+        }
+        assert!(cyw43_stage_firmware_chunk(
+            &mut state,
+            CYW43_RAM_BASE_4345,
+            DRIVER_TASK_RING_FRAME_OFFSET,
+            1024,
+            false
+        ));
+        assert_eq!(state.firmware_stage_len, 1024);
+
+        for index in 0..512usize {
+            write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, 0x5a);
+        }
+        assert!(cyw43_stage_firmware_chunk(
+            &mut state,
+            CYW43_RAM_BASE_4345 + 1024,
+            DRIVER_TASK_RING_FRAME_OFFSET,
+            512,
+            true
+        ));
+        assert_eq!(state.firmware_stage_len, 0);
+        assert_eq!(read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET), 0xa5);
+        assert_eq!(
+            read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + 1024),
+            0x5a
+        );
+        assert_eq!(
+            read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + 1535),
+            0x5a
+        );
     }
 
     #[test]
