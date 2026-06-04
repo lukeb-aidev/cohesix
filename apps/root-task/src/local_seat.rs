@@ -1293,7 +1293,7 @@ impl LocalSeatRuntime {
                 )
             {
                 boot_log::force_uart_line(
-                    "[local-seat] cold-boot keyboard probe deferred reason=driver-task-runtime-unproved action=root-prompt-delayed",
+                    "[local-seat] cold-boot keyboard probe deferred reason=driver-task-runtime-unproved action=root-prompt-first",
                 );
                 self.backend_keyboard_polling_enabled = false;
                 self.backend_keyboard_poll_deferred_logged = false;
@@ -2095,6 +2095,7 @@ const fn linked_local_seat_usb_detail_rank(detail: u16) -> u8 {
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 7,
         DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 8,
+        DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => 9,
         _ => 0,
     }
 }

@@ -234,7 +234,7 @@ pub fn main(ctx: BootContext) -> ! {
                     let mut line = HeaplessString::<160>::new();
                     let _ = write!(
                         line,
-                        "[net-console] deferred resume skipped reason={skip_reason} action=root-prompt-delayed",
+                        "[net-console] deferred resume skipped reason={skip_reason} action=root-prompt-first",
                     );
                     boot_log::force_uart_line(line.as_str());
                     log::warn!(
@@ -313,7 +313,7 @@ pub fn main(ctx: BootContext) -> ! {
             #[cfg(all(feature = "net-console", feature = "kernel"))]
             if resume_deferred_net_after_root {
                 boot_log::force_uart_line(
-                    "[net-console] deferred resume pending reason=root-prompt-delayed action=settle-before-prompt",
+                    "[net-console] deferred resume pending reason=serial-shell-first action=prompt-before-wifi",
                 );
             } else {
                 pump = attach_network(pump, net_stack.as_mut(), net_unavailable_detail.take());
@@ -348,11 +348,13 @@ pub fn main(ctx: BootContext) -> ! {
         log::info!(target: "boot", "[boot] before starting root shell");
         log::info!(target: "boot", "[boot] root shell starting");
         log::info!(target: "console", "[console] starting root CLI");
+        boot_log::force_uart_line_raw("[mark] root-console.start.begin");
+        pump.start_cli();
         #[cfg(all(feature = "net-console", feature = "kernel"))]
         if resume_deferred_net_after_root {
             if let Some(config) = net_deferred_config.take() {
                 boot_log::force_uart_line_raw(
-                    "[net-console] deferred resume reason=root-prompt-delayed action=start-wifi",
+                    "[net-console] deferred resume reason=root-prompt-printed action=start-wifi",
                 );
                 let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
                 if local_seat_enabled {
@@ -360,7 +362,7 @@ pub fn main(ctx: BootContext) -> ! {
                 }
                 log::info!(
                     target: "net-console",
-                    "[net-console] deferred resume before serial root prompt; starting Wi-Fi stack"
+                    "[net-console] deferred resume after serial root prompt; starting Wi-Fi stack"
                 );
                 match init_deferred_net_console(config, ctx.wifi_debug_hal_ptr) {
                     Ok(stack) => {
@@ -421,8 +423,6 @@ pub fn main(ctx: BootContext) -> ! {
                 }
             }
         }
-        boot_log::force_uart_line_raw("[mark] root-console.start.begin");
-        pump.start_cli();
         boot_log::force_uart_line_raw("[mark] root-console.start.ok");
         pump.announce_console_ready();
         #[cfg(feature = "kernel")]

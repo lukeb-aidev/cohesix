@@ -29,7 +29,6 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
     DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
 };
-
 /// Hardware driver instance covered by a scheduling contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DriverTaskKind {

@@ -55,6 +55,9 @@ TRACE_SEGMENT_RE = re.compile(
     r"))"
 )
 MALFORMED_WIFI_PREFIX_RE = re.compile(r"(?<![A-Za-z0-9_.:-])(?:wif|wi):")
+STARTUP_DIAG_GATE_RE = re.compile(
+    r"^(?P<domain>usb|wifi): gate (?P<gate>[0-9]+)\b", re.IGNORECASE
+)
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
 WIFI_HINTS = ("wifi", "wi-fi", "wlan", "cyw", "brcmf", "sdio", "sdhci", "mmc")
 BOOT_CHAIN_ROOT_MARKERS = (
@@ -539,6 +542,18 @@ def parse_fields(text: str) -> dict[str, str]:
     return fields
 
 
+def startup_diag_gate(raw: str, domain: str) -> int | None:
+    """Return the gate number from a startup black-box diagnostic line."""
+
+    match = STARTUP_DIAG_GATE_RE.match(raw)
+    if match is None or match.group("domain").lower() != domain:
+        return None
+    try:
+        return int(match.group("gate"))
+    except ValueError:
+        return None
+
+
 def usb_bootloader_handoff_evidence(event: TraceEvent) -> bool:
     """Return true when a USB event carries active bootloader handoff state."""
 
@@ -1009,6 +1024,7 @@ def normalize_usb_blocker(value: str) -> str:
         "deferred-until-root-console" in lower
         or "driver-task-runtime-unproved" in lower
         or "root-shell-first" in lower
+        or "root-prompt-first" in lower
         or "root-prompt-delayed" in lower
         or "serial-shell-first" in lower
     ):
@@ -1789,6 +1805,8 @@ def normalize_wifi_blocker(value: str) -> str:
         return "ht-clock-timeout"
     if "firmware-verify-readback" in lower:
         return "firmware-verify-readback"
+    if lower in {"20739", "0x5103"} or "sdio-descriptor-transfer-failed" in lower:
+        return "cyw43-sdio-descriptor-transfer-failed"
     if "function2-disabled" in lower:
         return "function2-disabled"
     if "firmware-verify-mismatch" in lower:
@@ -1847,6 +1865,8 @@ def normalize_wifi_exact(value: str) -> str:
         "0x5323": "cyw43-backplane-chipcommon-read",
         "20738": "cyw43-sdio-descriptor-unavailable",
         "0x5102": "cyw43-sdio-descriptor-unavailable",
+        "20739": "cyw43-sdio-descriptor-transfer-failed",
+        "0x5103": "cyw43-sdio-descriptor-transfer-failed",
     }
     if lower in cyw43_transport_details:
         return cyw43_transport_details[lower]
@@ -2147,6 +2167,20 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         explicit_proof_gate = parse_hex_int(fields.get("proof_gate"))
         if explicit_proof_gate is not None and explicit_proof_gate > 0:
             gate = max(gate, explicit_proof_gate)
+        diag_gate = startup_diag_gate(raw, "usb")
+        if diag_gate is not None:
+            status = fields.get("status", "").lower()
+            name = fields.get("name", "usb-startup-gate")
+            if status == "pass":
+                gate = max(gate, diag_gate)
+                if diag_gate >= 10:
+                    blocker = "none"
+            elif status == "fail":
+                gate = max(gate, max(0, diag_gate - 1))
+                blocker = normalize_usb_blocker(name)
+                if blocker == "none":
+                    blocker = name
+            continue
         if raw.startswith("usb: runtime_gate"):
             proof_gate = parse_hex_int(fields.get("proof_gate"))
             if proof_gate is not None and proof_gate > 0:
@@ -2918,6 +2952,24 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             explicit_blocker = raw_contract_blocker
         if raw_contract_blocker == "runtime-rx-host-latch-spam":
             runtime_rx_host_latch_spam_count += 1
+        diag_gate = startup_diag_gate(raw, "wifi")
+        if diag_gate is not None:
+            status = fields.get("status", "").lower()
+            name = fields.get("name", "wifi-startup-gate")
+            if status == "pass":
+                gate = max(gate, diag_gate)
+                if diag_gate >= 7:
+                    post_f2_progress_seen = True
+                if diag_gate >= 10:
+                    blocker = "none"
+            elif status == "fail":
+                gate = max(gate, max(0, diag_gate - 1))
+                if diag_gate >= 7:
+                    post_f2_progress_seen = True
+                blocker = normalize_wifi_blocker(name)
+                if blocker == "none":
+                    blocker = name
+            continue
         if raw.startswith("netstats:"):
             if (
                 fields.get("active") == "wifi"
@@ -4750,6 +4802,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             if "[net-console]" in event.raw.lower()
             and (
                 "deferred resume reason=root-shell-ready" in event.raw.lower()
+                or "deferred resume reason=root-prompt-printed" in event.raw.lower()
                 or "deferred resume reason=root-prompt-delayed" in event.raw.lower()
             )
             and "action=start-wifi" in event.raw.lower()

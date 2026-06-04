@@ -1103,9 +1103,12 @@ package_driver_runtime_raw_cpio() {
     local runtime_root="${raw_dir}/driver-runtime-root"
     local runtime_bin="${runtime_root}/cohesix/bin"
     local runtime_artifact_dir="${ROOT_DIR}/target/aarch64-unknown-none/release"
+    local strip_tool
     local bin
 
     assert_driver_runtime_elf_budgets "$runtime_artifact_dir"
+    strip_tool="$(find_aarch64_strip || true)"
+    [[ -n "$strip_tool" ]] || fail "aarch64 strip tool not found"
     mkdir -p "$raw_dir"
     rm -rf "$runtime_root"
     mkdir -p "$runtime_bin"
@@ -1120,6 +1123,7 @@ package_driver_runtime_raw_cpio() {
     do
         require_file "${runtime_artifact_dir}/${bin}"
         install -m 0755 "${runtime_artifact_dir}/${bin}" "${runtime_bin}/${bin}"
+        "$strip_tool" --strip-all "${runtime_bin}/${bin}"
         log "Staged isolated driver runtime: ${bin}"
     done
 

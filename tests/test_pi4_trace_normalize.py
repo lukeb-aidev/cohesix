@@ -806,6 +806,25 @@ def test_gate_summary_labels_driver_task_wifi_runtime_unproved() -> None:
     assert gates.wifi_exact == "wifi-driver-task-runtime-unproved"
 
 
+def test_gate_summary_tracks_wifi_startup_blackbox_gates() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 1 name=hal-power-reset status=pass evidence=power=on next=sdio-card-select",
+            "wifi: gate 2 name=sdio-card-select status=pass evidence=card=yes next=cccr-fbr-ready",
+            "wifi: gate 3 name=cccr-fbr-ready status=pass evidence=ioex=0x02 next=ht-clock",
+            "wifi: gate 4 name=ht-clock status=pass evidence=chipclk=0xd0 next=backplane-window",
+            "wifi: gate 5 name=backplane-window status=pass evidence=programmed=0x00198000 next=firmware-upload",
+            "wifi: gate 6 name=firmware-upload status=fail evidence=uploaded=no fault_detail=0x5103 next=function2-ready",
+            "wifi: evidence cyw43 stage=firmware-upload op=1 target=0x00198400 payload_len=8192 total_len=8192 detail=0x5103 reason=sdio-descriptor-transfer-failed result=0x00000000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
+
+
 def test_gate_summary_labels_pre_prompt_wifi_sdio_driver_task_deferral() -> None:
     events = normalizer.parse_events(
         [
@@ -1045,7 +1064,7 @@ def test_gate_summary_labels_prompt_gated_usb_runtime_deferral() -> None:
     events = normalizer.parse_events(
         [
             "[local-seat] cold-boot keyboard probe deferred "
-            "reason=driver-task-runtime-unproved action=root-prompt-delayed",
+            "reason=driver-task-runtime-unproved action=root-prompt-first",
             "[local-seat] cold-boot keyboard probe end stage=pre-net "
             "result=deferred-until-root-console polling_enabled=0",
             "[Cohesix] Root console ready (type 'help' for commands)",
@@ -1393,7 +1412,7 @@ def test_gate_summary_labels_deferred_wifi_start_without_replay() -> None:
         [
             "[Cohesix] Root console ready (type 'help' for commands)",
             "cohesix> [local-seat] xhci boot contract raw_hint=0x0000000000000000/0",
-            "[net-console] deferred resume reason=root-prompt-delayed action=start-wifi",
+            "[net-console] deferred resume reason=root-prompt-printed action=start-wifi",
             "[trace] deferred Wi-Fi logs remain on serial",
             "cohesix> ",
         ]
@@ -1412,7 +1431,7 @@ def test_gate_summary_labels_deferred_wifi_start_without_replay() -> None:
 def test_gate_summary_keeps_deferred_wifi_replay_blocker_after_start() -> None:
     events = normalizer.parse_events(
         [
-            "[net-console] deferred resume reason=root-prompt-delayed action=start-wifi",
+            "[net-console] deferred resume reason=root-prompt-printed action=start-wifi",
             "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
             "selected=wifi-owner-link attempted=yes stage=descriptor-replay "
             "blocker=ready",
@@ -4256,6 +4275,28 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
 
     assert gates.usb_gate == 10
     assert gates.usb_blocker == "none"
+
+
+def test_gate_summary_tracks_usb_startup_blackbox_gates() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: gate 1 name=hal-resources status=pass evidence=ownership_gate=1 next=pcie-vl805",
+            "usb: gate 2 name=pcie-vl805 status=pass evidence=backend_attached=yes next=xhci-operational",
+            "usb: gate 3 name=xhci-operational status=pass evidence=route_progress=controller-ready next=command-event-rings",
+            "usb: gate 4 name=command-event-rings status=pass evidence=queued_reports=4 next=root-port-connected",
+            "usb: gate 5 name=root-port-connected status=pass evidence=connected_mask=0x0002 next=device-addressed",
+            "usb: gate 6 name=device-addressed status=pass evidence=linked_detail=0x0206 next=config-and-hid-descriptors",
+            "usb: gate 7 name=config-and-hid-descriptors status=pass evidence=linked_detail=0x0211 next=keyboard-ready",
+            "usb: gate 8 name=keyboard-ready status=pass evidence=runtime=yes next=first-hid-report",
+            "usb: gate 9 name=first-hid-report status=fail evidence=first_report=no next=first-console-byte",
+            "usb: next_action=inspect-xhci-event-ring-interrupt-delivery blocker=hid-first-report proof_gate=8",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 8
+    assert gates.usb_blocker == "hid-first-report"
 
 
 def test_gate_summary_tracks_usb_hid_queue_and_report_blockers() -> None:

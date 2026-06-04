@@ -52,15 +52,10 @@ const DRIVER_TASK_NET_STATUS: &str = "driver-task-ring-client";
 const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
 const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
 // Keep root-to-runtime firmware chunks aligned to CYW43 Function 1 block
-// boundaries; the runtime coalesces them into the declared 8192-byte SDIO
-// owner shared-payload window before issuing block-mode CMD53 writes.
+// boundaries. The linked runtime preserves and coalesces through the declared
+// 8192-byte SDIO shared window so firmware upload avoids repeated root-side
+// CMD53 setup churn while still bounding each root service turn.
 const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize = 1024;
-#[cfg(feature = "kernel")]
-const CYW43_RUNTIME_STREAM_CHUNK_RECOVERY_LIMIT: u8 = 4;
-#[cfg(feature = "kernel")]
-// The Pi 4 firmware stream spans hundreds of chunks; keep aggregate recovery
-// high enough for one replay per chunk while the per-chunk cap prevents livelock.
-const CYW43_RUNTIME_STREAM_TOTAL_RECOVERY_LIMIT: u16 = 512;
 const SDIO_GO_IDLE_COMMAND_INDEX: u32 = 0;
 const SDIO_CMD5_OCR_COMMAND_INDEX: u32 = 5;
 const SDIO_CMD3_RCA_COMMAND_INDEX: u32 = 3;
@@ -81,6 +76,33 @@ static SDIO_HAL_RESOURCE_READY: AtomicU32 = AtomicU32::new(0);
 static GENET_RUNTIME: Mutex<Option<BcmGenetDevice>> = Mutex::new(None);
 static CYW43_RUNTIME: Mutex<Option<Cyw43NetDevice>> = Mutex::new(None);
 static NET_RUNTIME_INIT_LEASE: Mutex<Option<NetRuntimeInitLease>> = Mutex::new(None);
+#[cfg(feature = "kernel")]
+static CYW43_LAST_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultStatus>> =
+    Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43RuntimeCommandFaultStatus {
+    pub stage: &'static str,
+    pub op: u16,
+    pub target_addr: u32,
+    pub payload_len: u16,
+    pub total_len: u32,
+    pub detail: u16,
+    pub reason: &'static str,
+    pub result: u32,
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn latest_cyw43_runtime_command_fault_status() -> Option<Cyw43RuntimeCommandFaultStatus>
+{
+    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock()
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_runtime_command_fault_status() {
+    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = None;
+}
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy)]
@@ -516,10 +538,14 @@ where
         .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
     let reset_vector = firmware_reset_vector(bundle.firmware)
         .ok_or(DriverTaskNetError::RuntimeInit("cyw43-rstvec"))?;
+    clear_cyw43_runtime_command_fault_status();
     let mut recovered = false;
     loop {
         match complete_cyw43_linked_runtime_firmware_once(hal, contract, bundle, reset_vector) {
-            Ok(()) => return Ok(()),
+            Ok(()) => {
+                clear_cyw43_runtime_command_fault_status();
+                return Ok(());
+            }
             Err(err) => {
                 if !recovered {
                     if let Some(completion) = err.recoverable_completion() {
@@ -898,7 +924,7 @@ fn cyw43_runtime_stream_payload_limit(desc_size: usize) -> Result<usize, Cyw43Fi
 
 #[cfg(feature = "kernel")]
 fn stream_cyw43_runtime_payload<H>(
-    hal: &mut H,
+    _hal: &mut H,
     contract: DriverTaskContract,
     op: u16,
     base_addr: u32,
@@ -911,7 +937,6 @@ where
     let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
     let max_payload = cyw43_runtime_stream_payload_limit(desc_size)?;
     let mut offset = 0usize;
-    let mut total_recoveries = 0u16;
     while offset < payload.len() {
         let chunk_len = (payload.len() - offset).min(max_payload);
         let target_addr = base_addr
@@ -921,50 +946,27 @@ where
             .ok_or(Cyw43FirmwareInitError::Runtime(
                 DriverTaskNetError::RuntimeInit("cyw43-target-range"),
             ))?;
-        let mut chunk_recoveries = 0u8;
-        loop {
-            match submit_cyw43_runtime_command_checked(
-                contract,
-                DriverRuntimeCyw43CommandDescriptor {
-                    op,
-                    target_addr,
-                    payload_len: chunk_len as u16,
-                    total_len: total_len as u32,
-                    ..DriverRuntimeCyw43CommandDescriptor::empty()
-                },
-                &payload[offset..offset + chunk_len],
-            ) {
-                Ok(_) => break,
-                Err(err) => {
-                    let Some(completion) = err.recoverable_completion() else {
-                        return Err(Cyw43FirmwareInitError::Command(err));
-                    };
-                    if chunk_recoveries >= CYW43_RUNTIME_STREAM_CHUNK_RECOVERY_LIMIT
-                        || total_recoveries >= CYW43_RUNTIME_STREAM_TOTAL_RECOVERY_LIMIT
-                    {
-                        return Err(Cyw43FirmwareInitError::Command(
-                            Cyw43CommandSubmitError::Completion(completion),
-                        ));
-                    }
-                    if total_recoveries == 0
-                        || total_recoveries % 16 == 0
-                        || chunk_recoveries.saturating_add(1)
-                            == CYW43_RUNTIME_STREAM_CHUNK_RECOVERY_LIMIT
-                    {
-                        crate::hal::driver_task::emit_driver_task_resource_init_status(
-                            contract,
-                            DriverTaskHotPath::Cyw43Wifi,
-                            cyw43_runtime_command_stage(op),
-                            "sdio-owner-retry",
-                            Some(completion),
-                        );
-                    }
-                    force_replay_sdio_host_linked_runtime(hal, "cyw43-stream-recover")
-                        .map_err(Cyw43FirmwareInitError::Runtime)?;
-                    chunk_recoveries = chunk_recoveries.saturating_add(1);
-                    total_recoveries = total_recoveries.saturating_add(1);
-                }
+        if let Err(err) = submit_cyw43_runtime_command_checked(
+            contract,
+            DriverRuntimeCyw43CommandDescriptor {
+                op,
+                target_addr,
+                payload_len: chunk_len as u16,
+                total_len: total_len as u32,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            &payload[offset..offset + chunk_len],
+        ) {
+            if let Some(completion) = err.recoverable_completion() {
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    contract,
+                    DriverTaskHotPath::Cyw43Wifi,
+                    cyw43_runtime_command_stage(op),
+                    "stream-fault-restart-required",
+                    Some(completion),
+                );
             }
+            return Err(Cyw43FirmwareInitError::Command(err));
         }
         offset += chunk_len;
     }
@@ -1106,6 +1108,16 @@ fn emit_cyw43_runtime_command_fault(
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
         return;
     }
+    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
+        stage,
+        op: descriptor.op,
+        target_addr: descriptor.target_addr,
+        payload_len: descriptor.payload_len,
+        total_len: descriptor.total_len,
+        detail: completion.detail,
+        reason: cyw43_runtime_fault_reason(completion.detail),
+        result: completion.result,
+    });
     let mut line = heapless::String::<320>::new();
     let _ = write!(
         line,
@@ -1128,7 +1140,6 @@ const fn cyw43_fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool {
     matches!(
         detail,
         0x5102
-            | 0x5103
             | 0x5104
             | 0x5310
             | 0x531a
@@ -1144,7 +1155,7 @@ const fn cyw43_fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool {
 }
 
 #[cfg(feature = "kernel")]
-const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
+pub(crate) const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
     match detail {
         0x5101 => "sdio-command-unavailable",
         0x5102 => "sdio-descriptor-unavailable",
@@ -1807,7 +1818,7 @@ mod tests {
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5321));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x531a));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5102));
-        assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5103));
+        assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5103));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5104));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5329));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5302));

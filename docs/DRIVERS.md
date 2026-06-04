@@ -986,20 +986,23 @@ transition, but it must not write SDHCI host-control registers directly.
 - CYW43455 firmware upload preserves the Linux/brcmfmac block-mode Function 1
   backplane shape while remaining inside the generated split-runtime payload
   contract. Root streams 1024-byte, 64-byte-aligned firmware chunks over the
-  owner ring; the CYW43 runtime coalesces them into the declared 8192-byte SDIO
-  shared-payload window and issues 128-block CMD53 writes, with byte-mode only
-  as bounded recovery after a real SDHCI transport failure or for a final short
-  tail. The old monolithic HAL path could issue the full Linux 32704-byte
-  511-block turn from a 32 KiB window; the linked-runtime path must not claim
-  that exact payload size unless the generated SDIO shared-payload contract is
-  widened. Do not encode a block-mode count of zero for a 512-block command;
-  zero count is only valid for 512-byte byte-mode CMD53 transfers. The
-  split-runtime `sdio-host` owner must program `SDHCI_TRNS_MULTI` for any CMD53
-  block-mode turn with more than one block, including CYW43 firmware upload
-  chunks delivered through the CYW43-to-SDIO bus link. If the SDIO owner reports
-  a transfer fault, it must reset the CMD/DATA path, clear interrupt state,
-  preserve the host clock/bus configuration, and let CYW43 invalidate and
-  reprogram the backplane window before retrying byte-mode upload.
+  owner ring; the CYW43 runtime stages those chunks in the declared 8192-byte
+  SDIO shared-payload/RX window and flushes each full window as one owner-link
+  block-mode turn, with the final partial window flushed on end-of-image. The
+  old monolithic HAL path could issue the full Linux 32704-byte 511-block turn
+  from a 32 KiB window; the linked-runtime path must not claim that exact
+  payload size unless the generated SDIO shared-payload contract is widened and
+  hardware proof catches up. Do not encode a block-mode count of zero for a
+  512-block command; zero count is only valid for 512-byte byte-mode CMD53
+  transfers. The split-runtime `sdio-host` owner must program
+  `SDHCI_TRNS_MULTI` for any CMD53 block-mode turn with more than one block,
+  including CYW43 firmware upload chunks delivered through the CYW43-to-SDIO
+  bus link. If the SDIO owner reports a transfer fault such as `0x5103`, root
+  must not destructively replay SDIO ownership or CYW43 power/reset state.
+  Recovery stays inside the linked runtimes: reset the CMD/DATA path, clear
+  interrupt state, preserve the host clock/bus configuration, let CYW43
+  invalidate and reprogram the backplane window, then retry the upload through
+  the bounded slower/byte-mode fallback lane.
 - Non-captured early iovars must not be hard blockers before this attach proof
   point. Cohesix may attempt station-path compatibility knobs such as
   `bus:txglom` and AMPDU limits only after the Linux first-iovar/MAC sequence,
@@ -1375,10 +1378,10 @@ transition, but it must not write SDHCI host-control registers directly.
   local-seat is enabled and the selected net-console interface is Wi-Fi.
   Cohesix emits `action=root-console-wait-for-wifi`, preserves the Wi-Fi
   configuration for operator diagnostics, skips the earliest CYW43455 resume
-  with `action=root-prompt-delayed` when pre-root proof is insufficient, then
-  runs the bounded deferred SDIO/CYW43455 replay before publishing the normal
-  `cohesix>` prompt. Descriptor replay uses bounded nonblocking IPC with
-  temporary runtime-TCB priority boosts and emits raw UART
+  with `action=root-prompt-first` when pre-root proof is insufficient, publishes
+  the normal `cohesix>` prompt, then runs bounded deferred SDIO/CYW43455 replay
+  with UART-visible progress. Descriptor replay uses bounded nonblocking IPC
+  with temporary runtime-TCB priority boosts and emits raw UART
   `SDIO_DRIVER_TASK_REPLAY_STATUS` / `NET_DRIVER_TASK_REPLAY_STATUS`
   breadcrumbs on serial, so inaccessible `/log/queen.log` paths cannot hide a
   replay stall. If replay fails, the prompt is still published with compact
@@ -1414,7 +1417,10 @@ transition, but it must not write SDHCI host-control registers directly.
   `usb status` exposes low-volume keyboard capture counters for HID
   reports/filtering, local-seat queue accept/drain/echo, event-loop
   keyboard-priority turns, and output-side keyboard service polls so missed
-  keystrokes can be attributed without adding UART spam. HDMI progress mirrors
+  keystrokes can be attributed without adding UART spam. `usb diag` also emits
+  the passive `usb: diag recorder=startup-blackbox ...` ten-gate table from
+  cached HAL/runtime evidence, followed by the active failure domain and
+  `usb: next_action=...`; it does not run the live xHCI probe path. HDMI progress mirrors
   the same driver-resource milestones as concise `[drivers] ...` lines once a
   display sink is available; the UART retains the full
   `DRIVER_TASK_RESOURCE_INIT` record. Successful CYW43 firmware chunks are not
@@ -1425,10 +1431,14 @@ transition, but it must not write SDHCI host-control registers directly.
   `wifi diag`, `wifi load-fw`, and `wifi retry` can exercise CYW43455 without
   preventing boot from reaching the shell. Once a terminal boot/control-plane
   failure is preserved, `wifi diag` is passive and compact: it emits the
-  readiness/network summary, reports an unchanged after-state when it skips the
-  long live HT re-probe, and leaves the full transport snapshot to
-  `wifi dump-state`. Operators can still run the explicit `wifi probe-ht`
-  command when they want the stateful HT probe.
+  readiness/network summary, renders the `wifi: diag recorder=startup-blackbox ...`
+  ten-gate table from cached snapshot or linked-runtime CYW43 fault evidence,
+  reports an unchanged after-state when it skips the long live HT re-probe, and
+  leaves the full transport snapshot to `wifi dump-state`. A CYW43 firmware-upload
+  `0x5103` failure is reported as a CMD53 descriptor-transfer blocker with
+  `wifi: next_action=inspect-cyw43-sdio-cmd53-descriptor-transfer`, not as a
+  generic disabled-network state. Operators can still run the explicit
+  `wifi probe-ht` command when they want the stateful HT probe.
 - Wi-Fi association completion is event-pump driven for both explicit `wifi`
   and `auto` interface policies. While linked-runtime pointer-free proof is
   incomplete, Pi 4 local-seat Wi-Fi boots preserve the selected Wi-Fi policy but

@@ -1776,16 +1776,20 @@ where
         }
 
         #[cfg(feature = "net-console")]
+        let local_seat_first_report_pending = self.linked_local_seat_first_report_pending();
+        #[cfg(feature = "net-console")]
         let net_poll = if let Some(net) = self.net.as_mut() {
             let should_yield_before =
                 net_status_should_yield_to_physical_input(&net.status_report());
             let host_eapol_pending_before = net_status_needs_host_eapol_burst(&net.status_report());
+            let local_seat_input_pressure =
+                physical_input_active || local_seat_first_report_pending;
             let net_contract = net.driver_task_contract();
             let network_data_yields_to_input = net_contract
                 .validate()
                 .map(|_| !net_contract.preempts_network_data())
                 .unwrap_or(true);
-            let yield_for_physical_input = physical_input_active
+            let yield_for_physical_input = local_seat_input_pressure
                 && !suppress_console_input
                 && (should_yield_before || network_data_yields_to_input);
             let mut activity = false;
@@ -2089,8 +2093,8 @@ where
         }
     }
 
-    /// Emit the interactive banner and publish the initial prompt after the
-    /// bounded local-seat settle attempt.
+    /// Emit the interactive banner and publish the initial prompt before any
+    /// deferred local-seat settle attempt.
     pub fn start_cli(&mut self) {
         debug_uart_str("[dbg] console: root console task entry\n");
         #[cfg(feature = "kernel")]
@@ -2131,7 +2135,6 @@ where
             runtime.mirror_line("Cohesix console ready");
         }
         self.schedule_post_prompt_local_seat_attach();
-        self.run_prompt_settle_local_seat_attach_before_prompt();
         debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
         #[cfg(feature = "kernel")]
         boot_log::force_uart_line_raw("[mark] root-console.prompt.write.begin");
@@ -2309,6 +2312,27 @@ where
                 .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
     }
 
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn linked_local_seat_first_report_pending(&self) -> bool {
+        crate::local_seat::linked_local_seat_usb_keyboard_ready()
+            && !crate::local_seat::linked_local_seat_usb_first_report_ready()
+    }
+
+    #[cfg(not(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )))]
+    const fn linked_local_seat_first_report_pending(&self) -> bool {
+        false
+    }
+
     fn should_defer_physical_console_output(&mut self) -> bool {
         if self.console_output_flush_active || !self.physical_console_input_pending_for_output() {
             return false;
@@ -2438,23 +2462,6 @@ where
             boot_log::force_uart_line_raw(
                 "[local-seat] prompt-settle attach scheduled action=idle-cooperative",
             );
-        }
-    }
-
-    fn run_prompt_settle_local_seat_attach_before_prompt(&mut self) {
-        #[cfg(all(
-            feature = "kernel",
-            feature = "usb",
-            target_arch = "aarch64",
-            target_os = "none"
-        ))]
-        {
-            if !self.post_prompt_local_seat_attach_pending || self.local_seat.is_none() {
-                return;
-            }
-            self.post_prompt_local_seat_attach_pending = false;
-            self.post_prompt_local_seat_attach_idle_turns = 0;
-            self.arm_post_prompt_local_seat_once();
         }
     }
 
@@ -3578,32 +3585,15 @@ where
         let _wifi_log_uart_guard = crate::bootstrap::log::suppress_uart_log_output();
 
         self.emit_wifi_debug_status(subcommand, "begin", profile, None);
-        #[cfg(feature = "net-console")]
-        if self.wifi_debug.is_none() {
-            if let Some(cause) = self.net_unavailable_detail.as_ref() {
-                if matches!(
-                    command,
-                    WifiDebugCommand::DumpState | WifiDebugCommand::Diag
-                ) {
-                    let detail = format_message(format_args!(
-                        "wifi: driver-task replay failure detail=net-disabled cause={cause}"
-                    ));
-                    self.emit_console_line(detail.as_str());
-                    self.emit_wifi_debug_status(
-                        subcommand,
-                        "complete",
-                        profile,
-                        Some("result=ok source=driver-task-replay-failure"),
-                    );
-                    self.metrics.accepted_commands =
-                        self.metrics.accepted_commands.saturating_add(1);
-                    let detail = format_message(format_args!(
-                        "detail=subcommand={subcommand} scope=serial-local source=driver-task-replay-failure"
-                    ));
-                    self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
-                    return;
-                }
-            }
+        if self.wifi_debug.is_none()
+            && self.emit_wifi_driver_task_runtime_snapshot_if_present(
+                command,
+                subcommand,
+                profile,
+                "debug-handle-unavailable",
+            )
+        {
+            return;
         }
         let result = match command {
             WifiDebugCommand::Help => Ok(None),
@@ -3696,6 +3686,16 @@ where
                 self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
             }
             Err(err) => {
+                if Self::wifi_error_is_driver_task_runtime_required(&err)
+                    && self.emit_wifi_driver_task_runtime_snapshot_if_present(
+                        command,
+                        subcommand,
+                        profile,
+                        "hal-runtime-required",
+                    )
+                {
+                    return;
+                }
                 let error_snapshot_stage = match command {
                     WifiDebugCommand::Help => None,
                     WifiDebugCommand::DumpState => None,
@@ -3830,6 +3830,7 @@ where
                     polling_enabled,
                     Some("action=diag-after-probe"),
                 );
+                self.emit_usb_startup_blackbox(backend_attached, polling_enabled);
             }
             UsbDebugCommand::EnableKeyboard => {
                 let (backend_attached, polling_enabled) = {
@@ -4293,6 +4294,23 @@ where
                 linked_result,
             ));
             self.emit_console_line(runtime_contract.as_str());
+            let (queued_reports, doorbell_pending, preserved_events, transfer_events) =
+                Self::usb_runtime_queue_fields(linked_result);
+            let runtime_queue = format_message(format_args!(
+                "usb: runtime_queue queued_reports={} doorbell_pending={} preserved_events={} transfer_events={}",
+                queued_reports,
+                Self::yes_no(doorbell_pending),
+                preserved_events,
+                transfer_events,
+            ));
+            self.emit_console_line(runtime_queue.as_str());
+            let runtime_next_action = format_message(format_args!(
+                "usb: runtime_next_action action={} reason={} cold_reinit_limit=2 detail=0x{:04x}",
+                Self::usb_runtime_next_action_for_linked_detail(linked_detail),
+                blocker,
+                linked_detail,
+            ));
+            self.emit_console_line(runtime_next_action.as_str());
             let keyboard = crate::local_seat_pi4::latest_usb_keyboard_poll_status();
             let keyboard_line = format_message(format_args!(
                 "usb: keyboard_trace polls={} reports={} no_report={} errors={} nonempty={} emitted={} dup={} zero={} lock={} scroll={} unmapped={}",
@@ -4678,6 +4696,7 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 7,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 8,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => 8,
             _ => 0,
         }
     }
@@ -4708,6 +4727,9 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => "keyboard-ready",
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => {
+                "keyboard-first-report"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => {
                 "keyboard-first-report"
             }
             _ => "keyboard-ready",
@@ -4748,7 +4770,373 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => "hid-attach-failed",
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => "none",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => {
+                "hid-first-report"
+            }
             _ => "keyboard-not-ready",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_next_action_for_linked_detail(detail: u16) -> &'static str {
+        match detail {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => {
+                "cold-reinit-and-reenumerate"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => "wait-first-report",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => {
+                "poll-linked-interrupt-in-and-rering-endpoint-doorbell"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN => {
+                "continue-enumeration"
+            }
+            _ => "wait-driver-task-replay",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_queue_fields(result: u32) -> (u32, bool, u32, u32) {
+        (
+            result & 0xff,
+            ((result >> 8) & 0x1) != 0,
+            (result >> 16) & 0xff,
+            (result >> 24) & 0xff,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_usb_startup_blackbox(&mut self, backend_attached: bool, polling_enabled: bool) {
+        self.emit_console_line("usb: diag recorder=startup-blackbox mode=passive source=cached");
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        {
+            let ownership = self
+                .local_seat
+                .as_ref()
+                .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
+                .map_or_else(
+                    crate::local_seat_pi4::latest_usb_ownership_contract_status,
+                    |preflight| preflight.ownership,
+                );
+            let route = crate::local_seat_pi4::latest_usb_probe_route_status();
+            let runtime = crate::local_seat_pi4::latest_usb_runtime_proof_status();
+            let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
+            let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
+            let linked_gate = Self::usb_runtime_gate_for_linked_detail(linked_detail);
+            let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
+            let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
+            let linked_first_byte = self.local_seat.as_ref().is_some_and(|local_seat| {
+                let trace = local_seat.keyboard_trace();
+                trace.backend_read_bytes != 0
+                    || trace.accepted_bytes != 0
+                    || trace.echoed_bytes != 0
+            });
+            let keyboard_ready = runtime.keyboard_ready || linked_keyboard_ready;
+            let first_report = runtime.first_report || linked_first_report || linked_first_byte;
+            let first_byte = runtime.first_byte || linked_first_byte;
+            let route_gate = route.map_or(0, |status| status.proof_gate);
+            let mut proof_gate = ownership
+                .proof_gate
+                .max(route_gate)
+                .max(runtime.proof_gate)
+                .max(linked_gate);
+            if keyboard_ready {
+                proof_gate = proof_gate.max(8);
+            }
+            if first_report {
+                proof_gate = proof_gate.max(9);
+            }
+            if first_byte {
+                proof_gate = proof_gate.max(10);
+            }
+            let failing_gate = if proof_gate >= 10 {
+                0
+            } else {
+                proof_gate.saturating_add(1).max(1)
+            };
+            let (queued_reports, doorbell_pending, preserved_events, transfer_events) =
+                Self::usb_runtime_queue_fields(linked_result);
+            let active_blocker = if proof_gate >= 10 {
+                "none"
+            } else if keyboard_ready && !first_report {
+                "hid-first-report"
+            } else if first_report && !first_byte {
+                "keyboard-first-byte"
+            } else if linked_detail != 0 {
+                Self::usb_runtime_blocker_for_linked_detail(linked_detail)
+            } else if ownership.blocker != "none" {
+                ownership.blocker
+            } else {
+                "insufficient-cached-proof"
+            };
+            let next_action = if proof_gate >= 10 {
+                "acceptance-complete"
+            } else if keyboard_ready && !first_report {
+                "inspect-xhci-event-ring-interrupt-delivery"
+            } else if first_report && !first_byte {
+                "inspect-hid-report-to-console-byte-path"
+            } else if linked_detail != 0 {
+                Self::usb_runtime_next_action_for_linked_detail(linked_detail)
+            } else if ownership.blocker != "none" {
+                ownership.next_step
+            } else {
+                "capture-linked-runtime-detail"
+            };
+            let route_progress = route.map_or("unavailable", |status| status.progress);
+            let route_outcome = route.map_or("unavailable", |status| status.outcome);
+            let connected_mask = route.map_or(0, |status| status.connected_mask);
+            let event_candidate_mask = route.map_or(0, |status| status.event_candidate_mask);
+            let command_probe = route.map_or("unavailable", |status| status.command_probe);
+            let controller_gate = route.map_or("unavailable", |status| status.controller_gate);
+            let diag_stage = route.and_then(|status| status.diag_stage).unwrap_or(0);
+
+            self.emit_usb_gate_line(
+                1,
+                "hal-resources",
+                Self::usb_startup_gate_status(1, proof_gate, failing_gate),
+                format_args!(
+                    "ownership_gate={} cfg={} cmd={} bar0={} mailbox={}",
+                    ownership.proof_gate,
+                    if ownership.cfg_replay_ready {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                    if ownership.command_ready { "yes" } else { "no" },
+                    Self::format_optional_usize_hex(ownership.bar0),
+                    ownership.mailbox_reset_state,
+                ),
+                if ownership.proof_gate >= 1 {
+                    "pcie-vl805"
+                } else {
+                    ownership.next_step
+                },
+            );
+            self.emit_usb_gate_line(
+                2,
+                "pcie-vl805",
+                Self::usb_startup_gate_status(2, proof_gate, failing_gate),
+                format_args!(
+                    "backend_attached={} command_probe={} controller_gate={}",
+                    Self::yes_no(backend_attached),
+                    command_probe,
+                    controller_gate,
+                ),
+                "xhci-operational",
+            );
+            self.emit_usb_gate_line(
+                3,
+                "xhci-operational",
+                Self::usb_startup_gate_status(3, proof_gate, failing_gate),
+                format_args!(
+                    "route_progress={} route_outcome={} diag_stage=0x{:04x}",
+                    route_progress, route_outcome, diag_stage,
+                ),
+                "command-event-rings",
+            );
+            self.emit_usb_gate_line(
+                4,
+                "command-event-rings",
+                Self::usb_startup_gate_status(4, proof_gate, failing_gate),
+                format_args!(
+                    "queued_reports={} doorbell={} preserved_events={} transfer_events={}",
+                    queued_reports,
+                    Self::yes_no(doorbell_pending),
+                    preserved_events,
+                    transfer_events,
+                ),
+                "root-port-connected",
+            );
+            self.emit_usb_gate_line(
+                5,
+                "root-port-connected",
+                Self::usb_startup_gate_status(5, proof_gate, failing_gate),
+                format_args!(
+                    "connected_mask=0x{:04x} event_candidate_mask=0x{:04x}",
+                    connected_mask, event_candidate_mask,
+                ),
+                "device-addressed",
+            );
+            self.emit_usb_gate_line(
+                6,
+                "device-addressed",
+                Self::usb_startup_gate_status(6, proof_gate, failing_gate),
+                format_args!("linked_detail=0x{:04x}", linked_detail),
+                "config-and-hid-descriptors",
+            );
+            self.emit_usb_gate_line(
+                7,
+                "config-and-hid-descriptors",
+                Self::usb_startup_gate_status(7, proof_gate, failing_gate),
+                format_args!(
+                    "linked_detail=0x{:04x} route_progress={}",
+                    linked_detail, route_progress
+                ),
+                "keyboard-ready",
+            );
+            self.emit_usb_gate_line(
+                8,
+                "keyboard-ready",
+                Self::usb_startup_gate_status(8, proof_gate, failing_gate),
+                format_args!(
+                    "runtime={} linked={} polling={}",
+                    Self::yes_no(runtime.keyboard_ready),
+                    Self::yes_no(linked_keyboard_ready),
+                    if polling_enabled {
+                        "enabled"
+                    } else {
+                        "deferred"
+                    },
+                ),
+                "first-hid-report",
+            );
+            self.emit_usb_gate_line(
+                9,
+                "first-hid-report",
+                Self::usb_startup_gate_status(9, proof_gate, failing_gate),
+                format_args!(
+                    "first_report={} queued_reports={} doorbell={} transfer_events={}",
+                    Self::yes_no(first_report),
+                    queued_reports,
+                    Self::yes_no(doorbell_pending),
+                    transfer_events,
+                ),
+                "first-console-byte",
+            );
+            self.emit_usb_gate_line(
+                10,
+                "first-console-byte",
+                Self::usb_startup_gate_status(10, proof_gate, failing_gate),
+                format_args!(
+                    "first_byte={} backend_bytes={} accepted={} echoed={}",
+                    Self::yes_no(first_byte),
+                    self.local_seat.as_ref().map_or(0, |local_seat| local_seat
+                        .keyboard_trace()
+                        .backend_read_bytes),
+                    self.local_seat
+                        .as_ref()
+                        .map_or(0, |local_seat| local_seat.keyboard_trace().accepted_bytes),
+                    self.local_seat
+                        .as_ref()
+                        .map_or(0, |local_seat| local_seat.keyboard_trace().echoed_bytes),
+                ),
+                "acceptance-complete",
+            );
+            let evidence = format_message(format_args!(
+                "usb: evidence xhci transfer_ring_queued={} doorbell={} preserved_events={} transfer_events={} endpoint=interrupt-in first_report_policy=deep-queue-rering-doorbell cerr=3 max_packet=runtime-private interval=runtime-private source=linked-runtime-result",
+                queued_reports,
+                Self::yes_no(doorbell_pending),
+                preserved_events,
+                transfer_events,
+            ));
+            self.emit_console_line(evidence.as_str());
+            let boundary = format_message(format_args!(
+                "usb: evidence boundary root=event-pump hal=driver-task runtime=usb-local-seat failure_domain={} proof_gate={} target_gate=10",
+                active_blocker, proof_gate,
+            ));
+            self.emit_console_line(boundary.as_str());
+            let next = format_message(format_args!(
+                "usb: next_action={} blocker={} proof_gate={} target_gate=10 detail=0x{:04x} result=0x{:08x}",
+                next_action, active_blocker, proof_gate, linked_detail, linked_result,
+            ));
+            self.emit_console_line(next.as_str());
+        }
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        {
+            let status = if backend_attached { "pass" } else { "unknown" };
+            self.emit_usb_gate_line(
+                1,
+                "hal-resources",
+                status,
+                format_args!(
+                    "backend_attached={} polling={} target=non-pi4-runtime",
+                    Self::yes_no(backend_attached),
+                    if polling_enabled {
+                        "enabled"
+                    } else {
+                        "deferred"
+                    },
+                ),
+                "boot-pi4-linked-runtime",
+            );
+            for gate in 2..=10 {
+                self.emit_usb_gate_line(
+                    gate,
+                    Self::usb_startup_gate_name(gate),
+                    "unknown",
+                    format_args!("evidence=requires-aarch64-none-usb-runtime"),
+                    "boot-pi4-linked-runtime",
+                );
+            }
+            self.emit_console_line(
+                "usb: evidence boundary root=event-pump hal=unavailable runtime=unavailable failure_domain=host-test-profile proof_gate=0 target_gate=10",
+            );
+            self.emit_console_line(
+                "usb: next_action=boot-pi4-linked-runtime blocker=host-test-profile proof_gate=0 target_gate=10 detail=0x0000 result=0x00000000",
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_usb_gate_line(
+        &mut self,
+        gate: u8,
+        name: &'static str,
+        status: &'static str,
+        evidence: fmt::Arguments<'_>,
+        next: &'static str,
+    ) {
+        let mut line = format_message(format_args!(
+            "usb: gate {} name={} status={} evidence=",
+            gate, name, status
+        ));
+        if FmtWrite::write_fmt(&mut line, evidence).is_err() {
+            let _ = write!(line, "truncated");
+        }
+        let _ = write!(line, " next={next}");
+        self.emit_console_line(line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_startup_gate_status(gate: u8, proof_gate: u8, failing_gate: u8) -> &'static str {
+        if failing_gate != 0 {
+            if gate < failing_gate {
+                "pass"
+            } else if gate == failing_gate {
+                "fail"
+            } else {
+                "blocked"
+            }
+        } else if gate <= proof_gate {
+            "pass"
+        } else {
+            "blocked"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_startup_gate_name(gate: u8) -> &'static str {
+        match gate {
+            1 => "hal-resources",
+            2 => "pcie-vl805",
+            3 => "xhci-operational",
+            4 => "command-event-rings",
+            5 => "root-port-connected",
+            6 => "device-addressed",
+            7 => "config-and-hid-descriptors",
+            8 => "keyboard-ready",
+            9 => "first-hid-report",
+            10 => "first-console-byte",
+            _ => "unknown",
         }
     }
 
@@ -4778,6 +5166,93 @@ where
             let _ = write!(line, " {detail}");
         }
         self.emit_console_line(line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_error_is_driver_task_runtime_required(err: &crate::hal::HalError) -> bool {
+        matches!(
+            err,
+            crate::hal::HalError::Unsupported("pi4-wifi-driver-task-runtime-required")
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_command_supports_driver_task_snapshot(command: WifiDebugCommand) -> bool {
+        matches!(
+            command,
+            WifiDebugCommand::DumpState | WifiDebugCommand::Diag | WifiDebugCommand::ProbeHt
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_driver_task_runtime_snapshot_if_present(
+        &mut self,
+        command: WifiDebugCommand,
+        subcommand: &str,
+        profile: &str,
+        source: &str,
+    ) -> bool {
+        if !Self::wifi_command_supports_driver_task_snapshot(command) {
+            return false;
+        }
+        let fault = crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status();
+        if source == "debug-handle-unavailable" && self.net_unavailable_detail.is_none() {
+            return false;
+        }
+        if self.net_unavailable_detail.is_none() && fault.is_none() {
+            return false;
+        }
+
+        if let Some(cause) = self.net_unavailable_detail.as_ref() {
+            let detail = format_message(format_args!(
+                "wifi: driver-task replay failure detail=net-disabled cause={cause}"
+            ));
+            self.emit_console_line(detail.as_str());
+        } else {
+            let detail = format_message(format_args!(
+                "wifi: driver-task replay failure detail=net-state-unavailable source={source}"
+            ));
+            self.emit_console_line(detail.as_str());
+        }
+        self.emit_wifi_driver_task_startup_blackbox(fault, source);
+        if let Some(fault) = fault {
+            let fault_line = format_message(format_args!(
+                "wifi: cyw43 fault stage={} op={} target=0x{:08x} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
+                fault.stage,
+                fault.op,
+                fault.target_addr,
+                fault.payload_len,
+                fault.total_len,
+                fault.detail,
+                fault.reason,
+                fault.result,
+            ));
+            self.emit_console_line(fault_line.as_str());
+            let next = match fault.detail {
+                0x5101 => "verify-sdio-owner-command-availability",
+                0x5102 => "verify-cyw43-to-sdio-descriptor-window",
+                0x5103 => "inspect-linked-sdio-cmd53-after-stage-reset-card-int-preserve",
+                0x5104 => "verify-sdio-host-config-replay",
+                _ => "inspect-cyw43-driver-task-fault-stage",
+            };
+            let next_line = format_message(format_args!(
+                "wifi: driver-task next_action={} source={} recovery_contract=firmware-stage-reset+card-int-preserve",
+                next, source
+            ));
+            self.emit_console_line(next_line.as_str());
+        }
+        self.emit_wifi_debug_status(
+            subcommand,
+            "complete",
+            profile,
+            Some("result=ok source=driver-task-replay-failure"),
+        );
+        self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
+        let detail = format_message(format_args!(
+            "detail=subcommand={subcommand} scope=serial-local source=driver-task-replay-failure"
+        ));
+        self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
+        true
     }
 
     #[cfg(feature = "kernel")]
@@ -4819,6 +5294,7 @@ where
                 (None, None)
             };
         self.emit_wifi_readiness_summary(snapshot, firmware_trace, control_plane_trace);
+        self.emit_wifi_startup_blackbox(snapshot, firmware_trace, control_plane_trace);
         #[cfg(feature = "net-console")]
         self.emit_wifi_network_status();
     }
@@ -5336,6 +5812,522 @@ where
             ));
             self.emit_console_line(boot_failure.as_str());
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_startup_blackbox(
+        &mut self,
+        snapshot: &WifiDebugSnapshot,
+        firmware_trace: Option<WifiFirmwareContractTrace>,
+        control_trace: Option<WifiControlPlaneTrace>,
+    ) {
+        let fault = crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status();
+        self.emit_console_line("wifi: diag recorder=startup-blackbox mode=passive source=cached");
+        self.emit_wifi_startup_gates_from_evidence(
+            Some(snapshot),
+            firmware_trace,
+            control_trace,
+            fault,
+            "snapshot",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_driver_task_startup_blackbox(
+        &mut self,
+        fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+        source: &str,
+    ) {
+        self.emit_console_line(
+            "wifi: diag recorder=startup-blackbox mode=passive source=driver-task",
+        );
+        self.emit_wifi_startup_gates_from_evidence(None, None, None, fault, source);
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_startup_gates_from_evidence(
+        &mut self,
+        snapshot: Option<&WifiDebugSnapshot>,
+        firmware_trace: Option<WifiFirmwareContractTrace>,
+        control_trace: Option<WifiControlPlaneTrace>,
+        fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+        source: &str,
+    ) {
+        let fault_gate = fault.map(|fault| Self::wifi_cyw43_fault_gate(fault.detail));
+        let power_ready = snapshot.is_some_and(|snapshot| {
+            matches!(snapshot.power_state, WifiPowerState::On)
+                && matches!(snapshot.reset_state, WifiResetState::Deasserted)
+        });
+        let card_selected =
+            snapshot.is_some_and(|snapshot| snapshot.card_ready && snapshot.card_rca != 0);
+        let f1_ready = snapshot.is_some_and(|snapshot| {
+            snapshot.io_enable.is_some_and(|value| (value & 0x02) != 0)
+                && snapshot.io_ready.is_some_and(|value| (value & 0x02) != 0)
+        }) || control_trace.is_some_and(|trace| {
+            trace
+                .cccr_io_enable
+                .is_some_and(|value| (value & 0x02) != 0)
+                && trace.cccr_io_ready.is_some_and(|value| (value & 0x02) != 0)
+        });
+        let ht_ready = snapshot.is_some_and(Self::wifi_snapshot_ht_avail)
+            || firmware_trace.is_some_and(|trace| trace.sr_kso_clock_ready);
+        let backplane_ready = snapshot.is_some_and(|snapshot| {
+            snapshot.programmed_backplane_window.is_some()
+                || snapshot.shadow_backplane_window.is_some()
+                || snapshot.shadow_backplane_fn_addr.is_some()
+        }) || control_trace.is_some_and(|trace| {
+            trace.backplane_window_low != 0
+                || trace.backplane_window_mid != 0
+                || trace.backplane_window_high != 0
+        });
+        let firmware_uploaded = firmware_trace
+            .and_then(|trace| trace.proof)
+            .is_some_and(|proof| proof.upload_state == "uploaded" || proof.verified);
+        let firmware_verified = firmware_trace
+            .is_some_and(|trace| trace.firmware_download_verified)
+            || firmware_trace
+                .and_then(|trace| trace.proof)
+                .is_some_and(|proof| proof.verified);
+        let f2_enabled = snapshot
+            .is_some_and(|snapshot| snapshot.io_enable.is_some_and(|value| (value & 0x04) != 0))
+            || control_trace.is_some_and(|trace| {
+                trace
+                    .cccr_io_enable
+                    .is_some_and(|value| (value & 0x04) != 0)
+            });
+        let f2_ready = snapshot
+            .is_some_and(|snapshot| snapshot.io_ready.is_some_and(|value| (value & 0x04) != 0))
+            || control_trace
+                .is_some_and(|trace| trace.cccr_io_ready.is_some_and(|value| (value & 0x04) != 0));
+        let exact_error = snapshot.map_or("", |snapshot| snapshot.control_plane_exact_error);
+        let channel_ready =
+            exact_error.is_empty() || Self::wifi_exact_error_is_join_security_blocker(exact_error);
+
+        let dhcp_pass = self.wifi_diag_dhcp_bound();
+        let network_ready = self.wifi_diag_network_ready();
+        let proof_gate = Self::wifi_startup_proof_gate(
+            power_ready,
+            card_selected,
+            f1_ready,
+            ht_ready,
+            backplane_ready,
+            firmware_uploaded && fault_gate != Some(6),
+            f2_enabled && f2_ready,
+            channel_ready && fault_gate.is_none(),
+            dhcp_pass,
+            network_ready,
+        );
+        let failing_gate = if let Some(gate) = fault_gate {
+            gate
+        } else if proof_gate >= 10 {
+            0
+        } else {
+            proof_gate.saturating_add(1).max(1)
+        };
+        let active_blocker = fault
+            .map(|fault| fault.reason)
+            .unwrap_or_else(|| Self::wifi_startup_blocker_for_gate(failing_gate, exact_error));
+        let next_action = fault
+            .map(|fault| Self::wifi_cyw43_fault_next_action(fault.detail))
+            .unwrap_or_else(|| Self::wifi_startup_next_action_for_gate(failing_gate, exact_error));
+
+        self.emit_wifi_gate_line(
+            1,
+            "hal-power-reset",
+            Self::wifi_startup_gate_status(1, proof_gate, failing_gate),
+            format_args!(
+                "power={} reset={} source={}",
+                snapshot.map_or("unknown", |snapshot| Self::wifi_power_label(
+                    snapshot.power_state
+                )),
+                snapshot.map_or("unknown", |snapshot| Self::wifi_reset_label(
+                    snapshot.reset_state
+                )),
+                source,
+            ),
+            "sdio-card-select",
+        );
+        self.emit_wifi_gate_line(
+            2,
+            "sdio-card-select",
+            Self::wifi_startup_gate_status(2, proof_gate, failing_gate),
+            format_args!(
+                "card={} rca=0x{:04x} ocr=0x{:08x}",
+                snapshot.map_or("unknown", |snapshot| if snapshot.card_ready {
+                    "yes"
+                } else {
+                    "no"
+                }),
+                snapshot.map_or(0, |snapshot| snapshot.card_rca),
+                snapshot.map_or(0, |snapshot| snapshot.card_ocr),
+            ),
+            "cccr-fbr-ready",
+        );
+        self.emit_wifi_gate_line(
+            3,
+            "cccr-fbr-ready",
+            Self::wifi_startup_gate_status(3, proof_gate, failing_gate),
+            format_args!(
+                "ioex={} iordy={} fbr1_blk={} fbr2_blk={}",
+                Self::format_optional_u8(snapshot.and_then(|snapshot| snapshot.io_enable)),
+                Self::format_optional_u8(snapshot.and_then(|snapshot| snapshot.io_ready)),
+                Self::format_optional_u16(
+                    control_trace.and_then(|trace| trace.cached_fbr1_block_size)
+                ),
+                Self::format_optional_u16(
+                    control_trace.and_then(|trace| trace.cached_fbr2_block_size)
+                ),
+            ),
+            "ht-clock",
+        );
+        self.emit_wifi_gate_line(
+            4,
+            "ht-clock",
+            Self::wifi_startup_gate_status(4, proof_gate, failing_gate),
+            format_args!(
+                "chipclk={} clock={}Hz width={}",
+                Self::format_optional_u8(snapshot.and_then(|snapshot| snapshot.chipclkcsr)),
+                snapshot.map_or(0, |snapshot| snapshot.current_clock_hz),
+                snapshot.map_or("unknown", |snapshot| Self::wifi_bus_width_label(
+                    snapshot.bus_width
+                )),
+            ),
+            "backplane-window",
+        );
+        self.emit_wifi_gate_line(
+            5,
+            "backplane-window",
+            Self::wifi_startup_gate_status(5, proof_gate, failing_gate),
+            format_args!(
+                "programmed={} shadow={} fn={}",
+                Self::format_optional_u32(
+                    snapshot.and_then(|snapshot| snapshot.programmed_backplane_window)
+                ),
+                Self::format_optional_u32(
+                    snapshot.and_then(|snapshot| snapshot.shadow_backplane_window)
+                ),
+                Self::format_optional_fn_addr(
+                    snapshot.and_then(|snapshot| snapshot.shadow_backplane_fn_addr)
+                ),
+            ),
+            "firmware-upload",
+        );
+        self.emit_wifi_gate_line(
+            6,
+            "firmware-upload",
+            Self::wifi_startup_gate_status(6, proof_gate, failing_gate),
+            format_args!(
+                "uploaded={} verified={} fault_detail=0x{:04x}",
+                Self::yes_no(firmware_uploaded),
+                Self::yes_no(firmware_verified),
+                fault.map_or(0, |fault| fault.detail),
+            ),
+            "function2-ready",
+        );
+        self.emit_wifi_gate_line(
+            7,
+            "function2-ready",
+            Self::wifi_startup_gate_status(7, proof_gate, failing_gate),
+            format_args!(
+                "f2_enabled={} f2_ready={} f2_state={}",
+                Self::yes_no(f2_enabled),
+                Self::yes_no(f2_ready),
+                snapshot.map_or("unknown", |snapshot| snapshot.control_plane_f2_state),
+            ),
+            "firmware-channel",
+        );
+        self.emit_wifi_gate_line(
+            8,
+            "firmware-channel",
+            Self::wifi_startup_gate_status(8, proof_gate, failing_gate),
+            format_args!(
+                "exact={} sdhci={} reply_mode={}",
+                if exact_error.is_empty() {
+                    "none"
+                } else {
+                    exact_error
+                },
+                snapshot.map_or("unknown", |snapshot| snapshot.control_plane_sdhci_read_diag),
+                snapshot.map_or("unknown", |snapshot| snapshot.control_plane_reply_mode),
+            ),
+            "dhcp-bound",
+        );
+        self.emit_wifi_gate_line(
+            9,
+            "dhcp-bound",
+            Self::wifi_startup_gate_status(9, proof_gate, failing_gate),
+            format_args!("{}", self.wifi_diag_network_evidence()),
+            "nettest-netstats-cohsh",
+        );
+        self.emit_wifi_gate_line(
+            10,
+            "nettest-netstats-cohsh",
+            Self::wifi_startup_gate_status(10, proof_gate, failing_gate),
+            format_args!("{}", self.wifi_diag_acceptance_evidence()),
+            "acceptance-complete",
+        );
+        if let Some(fault) = fault {
+            let fault_line = format_message(format_args!(
+                "wifi: evidence cyw43 stage={} op={} target=0x{:08x} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
+                fault.stage,
+                fault.op,
+                fault.target_addr,
+                fault.payload_len,
+                fault.total_len,
+                fault.detail,
+                fault.reason,
+                fault.result,
+            ));
+            self.emit_console_line(fault_line.as_str());
+            let cmd53 = format_message(format_args!(
+                "wifi: evidence sdio_cmd53 func=runtime-private addr=0x{:08x} len={} block_mode=runtime-private op={} descriptor_status={}",
+                fault.target_addr,
+                fault.payload_len,
+                fault.op,
+                Self::wifi_cyw43_fault_descriptor_status(fault.detail),
+            ));
+            self.emit_console_line(cmd53.as_str());
+        }
+        let boundary = format_message(format_args!(
+            "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain={} proof_gate={} target_gate=10",
+            active_blocker, proof_gate,
+        ));
+        self.emit_console_line(boundary.as_str());
+        let next = format_message(format_args!(
+            "wifi: next_action={} blocker={} proof_gate={} target_gate=10 source={}",
+            next_action, active_blocker, proof_gate, source,
+        ));
+        self.emit_console_line(next.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_gate_line(
+        &mut self,
+        gate: u8,
+        name: &'static str,
+        status: &'static str,
+        evidence: fmt::Arguments<'_>,
+        next: &'static str,
+    ) {
+        let mut line = format_message(format_args!(
+            "wifi: gate {} name={} status={} evidence=",
+            gate, name, status
+        ));
+        if FmtWrite::write_fmt(&mut line, evidence).is_err() {
+            let _ = write!(line, "truncated");
+        }
+        let _ = write!(line, " next={next}");
+        self.emit_console_line(line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_startup_gate_status(gate: u8, proof_gate: u8, failing_gate: u8) -> &'static str {
+        if failing_gate != 0 {
+            if gate < failing_gate {
+                "pass"
+            } else if gate == failing_gate {
+                "fail"
+            } else {
+                "blocked"
+            }
+        } else if gate <= proof_gate {
+            "pass"
+        } else {
+            "blocked"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_cyw43_fault_gate(detail: u16) -> u8 {
+        match detail {
+            0x5101 | 0x5102 | 0x5103 | 0x5104 => 6,
+            0x5310..=0x531f => 5,
+            0x5320..=0x532f => 4,
+            _ => 8,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_cyw43_fault_next_action(detail: u16) -> &'static str {
+        match detail {
+            0x5101 => "verify-sdio-owner-command-availability",
+            0x5102 => "verify-cyw43-to-sdio-descriptor-window",
+            0x5103 => "inspect-cyw43-sdio-cmd53-after-stage-reset-card-int-preserve",
+            0x5104 => "verify-sdio-host-config-replay",
+            0x5310..=0x531f => "inspect-cyw43-backplane-window",
+            0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
+            _ => "inspect-cyw43-runtime-fault-stage",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_cyw43_fault_descriptor_status(detail: u16) -> &'static str {
+        match detail {
+            0x5103 => "descriptor-transfer-failed",
+            0x5102 => "descriptor-unavailable",
+            0x5104 => "host-config-failed",
+            0x5101 => "runtime-command-unavailable",
+            _ => "not-classified",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_startup_blocker_for_gate(gate: u8, exact_error: &str) -> &'static str {
+        match gate {
+            0 => "none",
+            1 => "wifi-power-reset",
+            2 => "sdio-card-select",
+            3 => "cccr-fbr-ready",
+            4 => "ht-clock",
+            5 => "backplane-window",
+            6 => "firmware-upload",
+            7 => "function2-ready",
+            8 => {
+                if exact_error.is_empty() {
+                    "firmware-channel"
+                } else {
+                    "control-plane-exact-error"
+                }
+            }
+            9 => "dhcp-bound",
+            10 => "nettest-netstats-cohsh",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_startup_next_action_for_gate(gate: u8, exact_error: &str) -> &'static str {
+        match gate {
+            0 => "acceptance-complete",
+            1 => "verify-hal-power-reset-resources",
+            2 => "verify-sdio-cmd0-cmd5-cmd3-cmd7",
+            3 => "verify-cccr-fbr-and-block-size",
+            4 => "verify-chipclkcsr-ht-avail",
+            5 => "verify-backplane-window-programming",
+            6 => "inspect-cyw43-firmware-upload",
+            7 => "verify-function2-enable-ready",
+            8 => {
+                if exact_error.is_empty() {
+                    "verify-firmware-channel-first-reply"
+                } else {
+                    "inspect-control-plane-exact-error"
+                }
+            }
+            9 => "run-dhcp-and-report-lease-state",
+            10 => "run-nettest-netstats-and-cohsh",
+            _ => "inspect-wifi-startup-gates",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_startup_proof_gate(
+        power_ready: bool,
+        card_selected: bool,
+        f1_ready: bool,
+        ht_ready: bool,
+        backplane_ready: bool,
+        firmware_uploaded: bool,
+        f2_ready: bool,
+        channel_ready: bool,
+        dhcp_pass: bool,
+        acceptance_pass: bool,
+    ) -> u8 {
+        if !power_ready {
+            0
+        } else if !card_selected {
+            1
+        } else if !f1_ready {
+            2
+        } else if !ht_ready {
+            3
+        } else if !backplane_ready {
+            4
+        } else if !firmware_uploaded {
+            5
+        } else if !f2_ready {
+            6
+        } else if !channel_ready {
+            7
+        } else if !dhcp_pass {
+            8
+        } else if !acceptance_pass {
+            9
+        } else {
+            10
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_dhcp_bound(&self) -> bool {
+        #[cfg(feature = "net-console")]
+        {
+            self.net.as_ref().is_some_and(|net| {
+                let status = net.status_report();
+                status.active_interface == "wifi"
+                    && status.address_source == "dhcp-lease"
+                    && status.dhcp_phase == "bound"
+            })
+        }
+        #[cfg(not(feature = "net-console"))]
+        {
+            false
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_network_ready(&self) -> bool {
+        #[cfg(feature = "net-console")]
+        {
+            self.net.as_ref().is_some_and(|net| {
+                let status = net.status_report();
+                status.active_interface == "wifi"
+                    && status.address_source == "dhcp-lease"
+                    && status.dhcp_phase == "bound"
+            })
+        }
+        #[cfg(not(feature = "net-console"))]
+        {
+            false
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_network_evidence(&self) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        #[cfg(feature = "net-console")]
+        {
+            if let Some(net) = self.net.as_ref() {
+                let status = net.status_report();
+                return format_message(format_args!(
+                    "active={} address_source={} dhcp_phase={} ip={}",
+                    status.active_interface, status.address_source, status.dhcp_phase, status.ip,
+                ));
+            }
+        }
+        format_message(format_args!(
+            "active=none address_source=unavailable dhcp_phase=unavailable ip=unavailable"
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_acceptance_evidence(&self) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        #[cfg(feature = "net-console")]
+        {
+            if let Some(net) = self.net.as_ref() {
+                let status = net.status_report();
+                return format_message(format_args!(
+                    "nettest=requires-command netstats=requires-command cohsh={} backend={}",
+                    if status.address_source == "dhcp-lease" {
+                        "candidate"
+                    } else {
+                        "blocked"
+                    },
+                    status.backend,
+                ));
+            }
+        }
+        format_message(format_args!(
+            "nettest=unavailable netstats=unavailable cohsh=unavailable backend=none"
+        ))
     }
 
     #[cfg(feature = "net-console")]
@@ -8568,7 +9560,7 @@ mod tests {
     }
 
     #[test]
-    fn start_cli_settles_local_seat_before_initial_prompt() {
+    fn start_cli_marks_local_seat_ready_and_schedules_post_prompt_attach() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -8595,6 +9587,8 @@ mod tests {
         assert!(transcript.contains(CONSOLE_BANNER));
         assert!(transcript.ends_with(CONSOLE_PROMPT));
         assert!((1..=8).contains(&pump.metrics().local_seat_output_keyboard_polls));
+        #[cfg(all(feature = "kernel", feature = "usb"))]
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
         drop(pump);
         assert!(local_seat.root_console_ready());
         assert!(local_seat
@@ -8982,6 +9976,7 @@ mod tests {
         calls: heapless::Vec<&'static str, 8>,
         expect_breadcrumb_suppression: bool,
         breadcrumb_suppression_observed: bool,
+        runtime_required: bool,
     }
 
     #[cfg(feature = "kernel")]
@@ -9076,6 +10071,7 @@ mod tests {
                 calls: heapless::Vec::new(),
                 expect_breadcrumb_suppression: false,
                 breadcrumb_suppression_observed: false,
+                runtime_required: false,
             }
         }
 
@@ -9099,6 +10095,11 @@ mod tests {
     impl WifiDebugOps for FakeWifiDebug {
         fn dump_state(&mut self, _stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
             self.push_call("dump-state");
+            if self.runtime_required {
+                return Err(HalError::Unsupported(
+                    "pi4-wifi-driver-task-runtime-required",
+                ));
+            }
             Ok(self.snapshot)
         }
 
@@ -9181,16 +10182,31 @@ mod tests {
 
         fn probe_ht_clock(&mut self) -> Result<bool, HalError> {
             self.push_call("probe-ht");
+            if self.runtime_required {
+                return Err(HalError::Unsupported(
+                    "pi4-wifi-driver-task-runtime-required",
+                ));
+            }
             Ok(self.ht_ready)
         }
 
         fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
             self.push_call("load-fw");
+            if self.runtime_required {
+                return Err(HalError::Unsupported(
+                    "pi4-wifi-driver-task-runtime-required",
+                ));
+            }
             Ok(self.snapshot)
         }
 
         fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
             self.push_call("retry");
+            if self.runtime_required {
+                return Err(HalError::Unsupported(
+                    "pi4-wifi-driver-task-runtime-required",
+                ));
+            }
             Ok(self.snapshot)
         }
     }
@@ -11071,6 +12087,60 @@ mod tests {
             ),
             8
         );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+            ),
+            8
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_usb_runtime_detail_next_actions_are_actionable() {
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+            ),
+            "cold-reinit-and-reenumerate"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
+            ),
+            "cold-reinit-and-reenumerate"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
+            ),
+            "wait-first-report"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+            ),
+            "poll-linked-interrupt-in-and-rering-endpoint-doorbell"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_blocker_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+            ),
+            "hid-first-report"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_usb_runtime_queue_fields_decode_first_report_telemetry() {
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_queue_fields(0x0302_0104),
+            (4, true, 2, 3)
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_queue_fields(0x0000_0020),
+            (32, false, 0, 0)
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -11358,6 +12428,19 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered.contains("wifi: diag recorder=startup-blackbox mode=passive source=cached"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 1 name=hal-power-reset status=pass"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 6 name=firmware-upload"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("wifi: next_action="), "{rendered}");
+        assert!(
             rendered.contains("wifi: diag stage=after-ht-probe"),
             "{rendered}"
         );
@@ -11479,6 +12562,16 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered
+                .contains("wifi: diag recorder=startup-blackbox mode=passive source=driver-task"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 1 name=hal-power-reset status=fail"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("wifi: next_action="), "{rendered}");
+        assert!(
             rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=driver-task-replay-failure"),
             "{rendered}"
         );
@@ -11486,6 +12579,100 @@ mod tests {
             rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=driver-task-replay-failure"),
             "{rendered}"
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_diag_reports_runtime_required_driver_task_snapshot() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut cause = HeaplessString::<192>::new();
+        let _ = cause.push_str("cyw43-command driver-task runtime init failed");
+        let mut wifi = FakeWifiDebug::new();
+        wifi.runtime_required = true;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network_unavailable_detail(Some(cause))
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        for _ in 0..8 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=cyw43-command driver-task runtime init failed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_probe_ht_reports_runtime_required_driver_task_snapshot() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut cause = HeaplessString::<192>::new();
+        let _ = cause.push_str("cyw43-command driver-task runtime init failed");
+        let mut wifi = FakeWifiDebug::new();
+        wifi.runtime_required = true;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network_unavailable_detail(Some(cause))
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi probe-ht\n");
+        for _ in 0..8 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=cyw43-command driver-task runtime init failed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=ok source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=probe-ht scope=serial-local source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+        assert_eq!(wifi.calls.as_slice(), &["probe-ht"]);
     }
 
     #[cfg(feature = "kernel")]
@@ -11671,8 +12858,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_usb_diag_command_skips_live_probe_without_arming_background_polling() {
-        let driver = LoopbackSerial::<1024>::new();
-        let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -11714,6 +12901,22 @@ mod tests {
         assert!(
             rendered
                 .contains("usb: local-seat attached=no polling=deferred action=diag-after-probe"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: diag recorder=startup-blackbox mode=passive source=cached"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: gate 1 name=hal-resources"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: gate 10 name=first-console-byte"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: next_action=boot-pi4-linked-runtime"),
             "{rendered}"
         );
         assert!(
