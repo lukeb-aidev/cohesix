@@ -2522,6 +2522,17 @@ pub fn stage_driver_task_ring_frame(
     payload: &[u8],
     flags: u16,
 ) -> Option<DriverFrameDescriptor> {
+    stage_driver_task_ring_payload_at(contract, DRIVER_TASK_RING_FRAME_OFFSET, payload, flags)
+}
+
+/// Stage a pointer-free payload at a specific offset in the shared ring page.
+#[cfg(feature = "kernel")]
+pub fn stage_driver_task_ring_payload_at(
+    contract: DriverTaskContract,
+    offset: usize,
+    payload: &[u8],
+    flags: u16,
+) -> Option<DriverFrameDescriptor> {
     if payload.len() > MAX_DRIVER_TASK_FRAME_BYTES {
         return None;
     }
@@ -2531,23 +2542,21 @@ pub fn stage_driver_task_ring_frame(
     if ring_root_ptr == 0 {
         return None;
     }
-    let end = DRIVER_TASK_RING_FRAME_OFFSET.checked_add(payload.len())?;
+    let end = offset.checked_add(payload.len())?;
+    if offset < DRIVER_TASK_RING_FRAME_OFFSET {
+        return None;
+    }
     if end > DRIVER_TASK_RING_PAGE_BYTES {
         return None;
     }
-    let dst = (ring_root_ptr + DRIVER_TASK_RING_FRAME_OFFSET) as *mut u8;
+    let dst = (ring_root_ptr + offset) as *mut u8;
     // SAFETY: The destination lies in the HAL-owned ring page after the fixed
     // command/completion records. Bounds above keep the copy page-local, and the
     // root TCB owns writes before it submits the command sequence.
     unsafe {
         core::ptr::copy_nonoverlapping(payload.as_ptr(), dst, payload.len());
     }
-    DriverFrameDescriptor::new(
-        DRIVER_TASK_RING_FRAME_OFFSET as u32,
-        payload.len() as u16,
-        flags,
-    )
-    .ok()
+    DriverFrameDescriptor::new(offset as u32, payload.len() as u16, flags).ok()
 }
 
 /// Stage a pointer-free runtime initialization descriptor into the shared ring.
@@ -3431,6 +3440,7 @@ fn emit_driver_task_resource_init_hdmi_progress(
     if let Some(line) =
         driver_task_resource_hdmi_progress_line(contract, hot_path, stage, status, completion)
     {
+        crate::bootstrap::log::force_uart_line_raw(line.as_str());
         crate::local_seat::mirror_driver_start_progress_line(line.as_str());
     }
 }

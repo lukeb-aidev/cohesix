@@ -422,12 +422,18 @@ pub fn debug_dump_per_core<F>(policy: &generated::AffinityPolicy, mut emit: F)
 where
     F: FnMut(&str),
 {
+    fn dump_kernel_scheduler_uart_locked() {
+        crate::bootstrap::log::with_raw_uart_lock(|| {
+            crate::sel4::debug_dump_scheduler();
+            crate::sel4::debug_dump_cpu_info();
+        });
+    }
+
     let tcb = sel4_sys::seL4_CapInitThreadTCB;
     if !policy.enabled {
         emit("[smp] affinity disabled; dumping scheduler once");
         emit("[smp] note: kernel scheduler/CPU dump text is UART-only");
-        crate::sel4::debug_dump_scheduler();
-        crate::sel4::debug_dump_cpu_info();
+        dump_kernel_scheduler_uart_locked();
         return;
     }
 
@@ -456,8 +462,7 @@ where
         for _ in 0..2 {
             crate::sel4::yield_now();
         }
-        crate::sel4::debug_dump_scheduler();
-        crate::sel4::debug_dump_cpu_info();
+        dump_kernel_scheduler_uart_locked();
     };
 
     for core in 0..policy.max_cores {

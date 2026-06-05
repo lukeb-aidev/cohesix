@@ -65,6 +65,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED, DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
+    DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
 };
 #[cfg(all(
     feature = "kernel",
@@ -394,7 +395,7 @@ static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED: AtomicBool = AtomicBool:
 #[cfg(all(feature = "kernel", feature = "usb"))]
 // A controller-ready completion can precede root-port and HID endpoint events by
 // a few linked-runtime turns; keep prompt settling bounded and non-blocking.
-const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 3;
+const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 1;
 
 #[cfg(all(
     feature = "kernel",
@@ -1595,6 +1596,41 @@ impl LocalSeatRuntime {
                         == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                         && completion.result != 0
                     {
+                        if completion.detail == DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+                        {
+                            record_linked_local_seat_usb_detail(Some(completion));
+                            LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
+                            LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING
+                                .store(false, Ordering::Release);
+                            if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED
+                                .swap(true, Ordering::AcqRel)
+                            {
+                                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                                    contract,
+                                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                                    "usb-keyboard-first-report",
+                                    "ready",
+                                    Some(completion),
+                                );
+                            }
+                            let usb_owner =
+                                crate::hal::driver_task::register_driver_task_runtime_owner_state(
+                                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                                );
+                            if usb_owner
+                                && !LINKED_LOCAL_SEAT_USB_OWNER_READY_LOGGED
+                                    .swap(true, Ordering::AcqRel)
+                            {
+                                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                                    contract,
+                                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                                    "usb-owner-state",
+                                    "ready",
+                                    Some(completion),
+                                );
+                            }
+                            return;
+                        }
                         if local_seat_usb_keyboard_enumeration_progress(completion) {
                             publish_local_seat_usb_enumeration_progress(contract, completion);
                             return;
@@ -2066,7 +2102,7 @@ fn local_seat_usb_keyboard_enum_status(
             "fault"
         }
         Some(_) => "unexpected-completion",
-        None => "blocked-xhci-init",
+        None => "no-reply",
     }
 }
 
@@ -2124,7 +2160,8 @@ const fn linked_local_seat_usb_detail_rank(detail: u16) -> u8 {
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 7,
         DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 8,
-        DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => 9,
+        DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+        | DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => 9,
         _ => 0,
     }
 }
@@ -3266,6 +3303,12 @@ fn init_local_seat_driver_runtime_on_service(
             hal_ptr: hal as *mut crate::hal::KernelHal<'_> as usize,
             hints,
         });
+        if try_attach_root_display_diagnostic_runtime("early-boot-status") {
+            local_seat_driver_runtime_register_boot_progress_display();
+            boot_log::force_uart_line(
+                "[local-seat] early HDMI diagnostic mirror active action=boot-progress-before-console",
+            );
+        }
         boot_log::force_uart_line(
             "[local-seat] linked HDMI runtime init deferred reason=serial-shell-first action=steady-call-after-root",
         );

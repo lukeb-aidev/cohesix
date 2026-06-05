@@ -330,6 +330,10 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_AFFINITY_PROOF": "no",
         "DRIVER_TASK_AFFINITY_CONFIGURED": 0,
         "DRIVER_TASK_AFFINITY_APPLIED": 0,
+        "DRIVER_TASK_AFFINITY_MANIFEST_PROOF": "no",
+        "DRIVER_TASK_AFFINITY_MANIFEST_MATCHES": 0,
+        "DRIVER_TASK_AFFINITY_MANIFEST_MISSING": 7,
+        "DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES": 0,
         "DRIVER_TASK_NOTIFICATION_BIND_DEFERRED": "no",
         "DRIVER_TASK_VSPACE_PROOF": "no",
         "DRIVER_TASK_POINTER_FREE_IPC_PROOF": "no",
@@ -402,6 +406,10 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["DRIVER_TASK_AFFINITY_PROOF"] == "no"
     assert record["DRIVER_TASK_AFFINITY_CONFIGURED"] == 0
     assert record["DRIVER_TASK_AFFINITY_APPLIED"] == 0
+    assert record["DRIVER_TASK_AFFINITY_MANIFEST_PROOF"] == "no"
+    assert record["DRIVER_TASK_AFFINITY_MANIFEST_MATCHES"] == 0
+    assert record["DRIVER_TASK_AFFINITY_MANIFEST_MISSING"] == 7
+    assert record["DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES"] == 0
     assert record["DRIVER_TASK_VSPACE_PROOF"] == "no"
     assert record["DRIVER_TASK_POINTER_FREE_IPC_PROOF"] == "no"
     assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "no"
@@ -514,6 +522,51 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
     assert record["DRIVER_TASK_SDIO_DEDICATED"] == "yes"
     assert record["DRIVER_TASK_PCIE_DEDICATED"] == "yes"
     assert record["DRIVER_TASK_ACTIVE_NET"] == "cyw43"
+
+
+def test_gate_summary_tracks_driver_task_manifest_affinity_from_boot_lines() -> None:
+    """Per-driver boot breadcrumbs must prove the generated Pi 4 core map."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=serial tcb=0x064e runtime_descriptor=yes",
+            "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=usb-local-seat tcb=0x08f2 runtime_descriptor=yes",
+            "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=hdmi-text tcb=0x0a7e runtime_descriptor=yes",
+            "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
+            "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=sdio-host tcb=0x0713 runtime_descriptor=yes",
+            "DRIVER_TASK_BOOT contract=sdio-host role=sdio started=yes affinity_core=3",
+            "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=cyw43455 tcb=0x1915 runtime_descriptor=yes",
+            "DRIVER_TASK_BOOT contract=cyw43455 role=net started=yes affinity_core=3",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_AFFINITY_MANIFEST_PROOF"] == "yes"
+    assert record["DRIVER_TASK_AFFINITY_MANIFEST_MATCHES"] == 7
+    assert record["DRIVER_TASK_AFFINITY_MANIFEST_MISSING"] == 0
+    assert record["DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES"] == 0
+
+    mismatched_events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
+            "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
+            "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
+            "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
+            "DRIVER_TASK_BOOT contract=sdio-host role=sdio started=yes affinity_core=3",
+            "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=0",
+            "DRIVER_TASK_BOOT contract=cyw43455 role=net started=yes affinity_core=3",
+        ]
+    )
+
+    mismatch_record = normalizer.summarize_gates(mismatched_events).to_record()
+    assert mismatch_record["DRIVER_TASK_AFFINITY_MANIFEST_PROOF"] == "no"
+    assert mismatch_record["DRIVER_TASK_AFFINITY_MANIFEST_MATCHES"] == 6
+    assert mismatch_record["DRIVER_TASK_AFFINITY_MANIFEST_MISSING"] == 1
+    assert mismatch_record["DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES"] == 1
 
 
 def test_gate_summary_explicit_pointer_free_ipc_no_overrides_abi_label() -> None:
@@ -1310,6 +1363,10 @@ def test_gate_summary_tracks_split_sdio_command_probe_blockers() -> None:
         record["DRIVER_TASK_RESOURCE_BLOCKER"]
         == "sdio-host:sdio-cmd5-ocr:fault"
     )
+    assert record["WIFI_GATE"] == 2
+    assert record["WIFI_BLOCKER"] == "sdio-card-select"
+    assert record["WIFI_EXACT"] == "sdio-command-unavailable"
+    assert record["WIFI_PHASE"] == "sdio-cmd5-ocr"
 
 
 def test_gate_summary_labels_cyw43_transport_substage_fault_detail() -> None:

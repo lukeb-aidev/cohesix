@@ -22,7 +22,9 @@ pub const DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY: u16 = 0x0201;
 /// USB runtime init detail: xHCI controller and boot keyboard endpoint are ready.
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY: u16 = 0x0202;
 /// USB service detail: keyboard endpoint is armed, but no interrupt report has arrived.
-pub const DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING: u16 = 0x0203;
+pub const DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING: u16 = 0x0500;
+/// USB service detail: a HID interrupt report arrived, but no console byte was emitted.
+pub const DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY: u16 = 0x0501;
 /// USB runtime init detail: xHCI command and event rings produced a completion.
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY: u16 = 0x0204;
 /// USB runtime init detail: at least one root port reported a connected device.
@@ -71,6 +73,24 @@ pub const DRIVER_RUNTIME_CYW43_OP_ETH_TX: u16 = 7;
 pub const DRIVER_RUNTIME_CYW43_OP_RX_POLL: u16 = 8;
 /// CYW43 operation: prepare the firmware upload transport before streaming chunks.
 pub const DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP: u16 = 9;
+/// CYW43 operation: poll only SDPCM control and event frames.
+pub const DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL: u16 = 10;
+/// CYW43 command flag: force Function 1 backplane writes through byte-mode retry.
+pub const DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE: u16 = 1 << 0;
+/// CYW43 command flag: transmit control frames with the Linux SDPCM hw extension.
+pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER: u16 = 1 << 1;
+/// CYW43 frame flag mask carrying the SDPCM channel on frame-ready completions.
+pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK: u16 = 0x000f;
+/// CYW43 frame flag value for SDPCM control-channel payloads.
+pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL: u16 = 0;
+/// CYW43 frame flag value for SDPCM event-channel payloads.
+pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT: u16 = 1;
+/// CYW43 frame flag value for Ethernet data payloads.
+pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA: u16 = 2;
+/// CYW43 frame flag shift carrying the firmware SDPCM credit byte.
+pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT: u16 = 8;
+/// CYW43 frame flag mask carrying the firmware SDPCM credit byte.
+pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK: u16 = 0xff00;
 /// PCIe runtime command operation: read one 32-bit xHCI/VL805 register.
 pub const DRIVER_RUNTIME_PCIE_OP_PORT_READ: u16 = 1;
 /// PCIe runtime command operation: write one 32-bit xHCI/VL805 register.
@@ -461,7 +481,8 @@ impl DriverRuntimeCyw43CommandDescriptor {
             || self.op == DRIVER_RUNTIME_CYW43_OP_RELEASE
             || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
             || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX
-            || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL;
+            || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
+            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL;
         let carries_payload = self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
             || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
             || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
@@ -470,9 +491,20 @@ impl DriverRuntimeCyw43CommandDescriptor {
             || self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP
             || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL
             || self.op == DRIVER_RUNTIME_CYW43_OP_RELEASE
-            || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL;
+            || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
+            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL;
+        let known_flags = match self.op {
+            DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK => {
+                self.flags & !DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE == 0
+            }
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME => {
+                self.flags & !DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER == 0
+            }
+            _ => self.flags == 0,
+        };
         let payload_end = self.payload_offset as u32 + self.payload_len as u32;
         known_op
+            && known_flags
             && ((carries_payload
                 && self.payload_len != 0
                 && self.payload_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
@@ -1411,6 +1443,14 @@ mod tests {
 
     #[test]
     fn cyw43_command_descriptor_validates_ring_payload_bounds() {
+        assert_eq!(DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK & 0xfff0, 0);
+        assert_eq!(DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT, 8);
+        assert_eq!(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK
+                & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
+            0
+        );
+
         let mut descriptor = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
             flags: 0,
@@ -1423,6 +1463,11 @@ mod tests {
             reserved: 0,
         };
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
+        assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE << 1;
+        assert!(!descriptor.valid());
+        descriptor.flags = 0;
 
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET - 1;
         assert!(!descriptor.valid());
@@ -1440,7 +1485,26 @@ mod tests {
         descriptor = DriverRuntimeCyw43CommandDescriptor::empty();
         descriptor.op = DRIVER_RUNTIME_CYW43_OP_RX_POLL;
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
+        assert!(!descriptor.valid());
+        descriptor.flags = 0;
         descriptor.payload_len = 1;
+        assert!(!descriptor.valid());
+
+        descriptor = DriverRuntimeCyw43CommandDescriptor::empty();
+        descriptor.op = DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL;
+        assert!(descriptor.valid());
+
+        descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
+            payload_offset: DRIVER_RUNTIME_RING_FRAME_OFFSET,
+            payload_len: 16,
+            total_len: 16,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
         assert!(!descriptor.valid());
     }
 }

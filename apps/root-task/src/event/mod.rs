@@ -2941,12 +2941,29 @@ where
         let trace = runtime.keyboard_trace();
         let mirrored_drops = runtime.dropped_mirrored_lines();
         let backend_enabled = runtime.backend_keyboard_polling_enabled();
+        let backend_attached = runtime.backend_attached();
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_keyboard_ready = false;
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_first_report = false;
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_first_byte = crate::local_seat_pi4::usb_runtime_first_byte_seen();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_first_byte = false;
         let metrics = self.metrics;
         let line = format_message(format_args!(
-            "[smp] activity local-seat attached=yes keyboard={} display={} backend_poll={} queued={} accepted={} drained={} echoed={} drop={} hdmi_drop={}",
+            "[smp] activity local-seat runtime=present attached={} keyboard_device={} display={} backend_poll={} keyboard_ready={} first_report={} first_byte={} queued={} accepted={} drained={} echoed={} drop={} hdmi_drop={}",
+            Self::yes_no(backend_attached),
             status.keyboard_device,
             status.display_device,
             Self::yes_no(backend_enabled),
+            Self::yes_no(linked_keyboard_ready || backend_attached),
+            Self::yes_no(linked_first_report),
+            Self::yes_no(linked_first_byte || trace.accepted_bytes != 0 || trace.echoed_bytes != 0),
             trace.queued_bytes,
             trace.accepted_bytes,
             trace.drained_bytes,
@@ -3244,23 +3261,27 @@ where
 
     #[cfg(feature = "kernel")]
     fn emit_smp_activity_affinity(&mut self) {
+        let proof = crate::hal::driver_task::driver_task_runtime_proof();
         let policy = affinity::policy();
         let authority = Self::format_optional_core(policy.authority_core);
         let ninedoor = Self::format_core_slice(policy.ninedoor_cores);
         let provider = Self::format_core_slice(policy.provider_cores);
         let worker = Self::format_core_slice(policy.worker_cores);
         let line = format_message(format_args!(
-            "[smp] activity affinity enabled={} max_cores={} authority={} ninedoor={} provider={} worker={}",
+            "[smp] activity affinity enabled={} max_cores={} authority={} ninedoor={} provider={} worker={} configured={} applied={} proof={}",
             Self::yes_no(policy.enabled),
             policy.max_cores,
             authority.as_str(),
             ninedoor.as_str(),
             provider.as_str(),
             worker.as_str(),
+            proof.affinity_configured_count,
+            proof.affinity_applied_count,
+            Self::yes_no(proof.affinity_proof),
         ));
         self.emit_console_line(line.as_str());
         let drivers = format_message(format_args!(
-            "[smp] activity affinity-drivers serial={} usb={} hdmi={} genet={} cyw43={} rtl8139={} virtio={} sdio={} pcie={}",
+            "[smp] activity affinity-drivers policy=manifest serial={} usb={} hdmi={} genet={} cyw43={} rtl8139={} virtio={} sdio={} pcie={} applied_proof={}",
             Self::format_optional_core(policy.drivers.serial).as_str(),
             Self::format_optional_core(policy.drivers.usb_local_seat).as_str(),
             Self::format_optional_core(policy.drivers.hdmi_text).as_str(),
@@ -3270,6 +3291,7 @@ where
             Self::format_optional_core(policy.drivers.virtio_net).as_str(),
             Self::format_optional_core(policy.drivers.sdio_host).as_str(),
             Self::format_optional_core(policy.drivers.pcie_root).as_str(),
+            Self::yes_no(proof.affinity_proof),
         ));
         self.emit_console_line(drivers.as_str());
     }
@@ -4351,6 +4373,8 @@ where
             self.emit_console_line(runtime_contract.as_str());
             if linked_detail
                 == pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+                || linked_detail
+                    == pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
             {
                 let (queued_reports, doorbell_pending, preserved_events, transfer_events) =
                     Self::usb_runtime_queue_fields(linked_result);
@@ -4770,6 +4794,7 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 7,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 8,
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => 8,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => 9,
             _ => 0,
         }
     }
@@ -4804,6 +4829,9 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => {
                 "keyboard-first-report"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => {
+                "keyboard-first-byte"
             }
             _ => "keyboard-ready",
         }
@@ -4846,6 +4874,9 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => {
                 "hid-first-report"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => {
+                "hid-first-byte"
+            }
             _ => "keyboard-not-ready",
         }
     }
@@ -4864,6 +4895,9 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => "wait-first-report",
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => {
                 "poll-linked-interrupt-in-and-rering-endpoint-doorbell"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => {
+                "wait-first-keyboard-byte"
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
@@ -4914,7 +4948,7 @@ where
                     || trace.echoed_bytes != 0
             });
             let keyboard_ready = runtime.keyboard_ready || linked_keyboard_ready;
-            let first_report = runtime.first_report || linked_first_report || linked_first_byte;
+            let first_report = runtime.first_report || linked_first_report;
             let first_byte = runtime.first_byte || linked_first_byte;
             let route_gate = route.map_or(0, |status| status.proof_gate);
             let mut proof_gate = ownership
@@ -5926,11 +5960,11 @@ where
         fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
         source: &str,
     ) {
-        let fault_gate = fault.map(|fault| Self::wifi_cyw43_fault_gate(fault.detail));
+        let fault_gate = fault.map(Self::wifi_runtime_fault_gate);
         let power_ready = snapshot.is_some_and(|snapshot| {
             matches!(snapshot.power_state, WifiPowerState::On)
                 && matches!(snapshot.reset_state, WifiResetState::Deasserted)
-        });
+        }) || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready);
         let card_selected =
             snapshot.is_some_and(|snapshot| snapshot.card_ready && snapshot.card_rca != 0);
         let f1_ready = snapshot.is_some_and(|snapshot| {
@@ -6006,8 +6040,37 @@ where
             .map(|fault| fault.reason)
             .unwrap_or_else(|| Self::wifi_startup_blocker_for_gate(failing_gate, exact_error));
         let next_action = fault
-            .map(|fault| Self::wifi_cyw43_fault_next_action(fault.detail))
+            .map(Self::wifi_runtime_fault_next_action)
             .unwrap_or_else(|| Self::wifi_startup_next_action_for_gate(failing_gate, exact_error));
+        let gate1_power = if let Some(snapshot) = snapshot {
+            Self::wifi_power_label(snapshot.power_state)
+        } else if fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready) {
+            "on"
+        } else {
+            "unknown"
+        };
+        let gate1_reset = if let Some(snapshot) = snapshot {
+            Self::wifi_reset_label(snapshot.reset_state)
+        } else if fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready) {
+            "deasserted"
+        } else {
+            "unknown"
+        };
+        let gate2_evidence = if let Some(snapshot) = snapshot {
+            format_message(format_args!(
+                "card={} rca=0x{:04x} ocr=0x{:08x}",
+                if snapshot.card_ready { "yes" } else { "no" },
+                snapshot.card_rca,
+                snapshot.card_ocr,
+            ))
+        } else if let Some(fault) = fault {
+            format_message(format_args!(
+                "stage={} detail=0x{:04x} result=0x{:08x}",
+                fault.stage, fault.detail, fault.result,
+            ))
+        } else {
+            format_message(format_args!("card=unknown rca=0x0000 ocr=0x00000000"))
+        };
 
         self.emit_wifi_gate_line(
             1,
@@ -6015,13 +6078,7 @@ where
             Self::wifi_startup_gate_status(1, proof_gate, failing_gate),
             format_args!(
                 "power={} reset={} source={}",
-                snapshot.map_or("unknown", |snapshot| Self::wifi_power_label(
-                    snapshot.power_state
-                )),
-                snapshot.map_or("unknown", |snapshot| Self::wifi_reset_label(
-                    snapshot.reset_state
-                )),
-                source,
+                gate1_power, gate1_reset, source,
             ),
             "sdio-card-select",
         );
@@ -6029,16 +6086,7 @@ where
             2,
             "sdio-card-select",
             Self::wifi_startup_gate_status(2, proof_gate, failing_gate),
-            format_args!(
-                "card={} rca=0x{:04x} ocr=0x{:08x}",
-                snapshot.map_or("unknown", |snapshot| if snapshot.card_ready {
-                    "yes"
-                } else {
-                    "no"
-                }),
-                snapshot.map_or(0, |snapshot| snapshot.card_rca),
-                snapshot.map_or(0, |snapshot| snapshot.card_ocr),
-            ),
+            format_args!("{}", gate2_evidence.as_str()),
             "cccr-fbr-ready",
         );
         self.emit_wifi_gate_line(
@@ -6216,6 +6264,16 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_runtime_fault_gate(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> u8 {
+        if Self::wifi_runtime_fault_is_sdio_card_select(fault) {
+            return 2;
+        }
+        Self::wifi_cyw43_fault_gate(fault.detail)
+    }
+
+    #[cfg(feature = "kernel")]
     const fn wifi_cyw43_fault_gate(detail: u16) -> u8 {
         match detail {
             0x5101 | 0x5102 | 0x5103 | 0x5104 => 6,
@@ -6223,6 +6281,16 @@ where
             0x5320..=0x532f => 4,
             _ => 8,
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_runtime_fault_next_action(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> &'static str {
+        if Self::wifi_runtime_fault_is_sdio_card_select(fault) {
+            return "verify-sdio-cmd7-response-contract-and-host-status";
+        }
+        Self::wifi_cyw43_fault_next_action(fault.detail)
     }
 
     #[cfg(feature = "kernel")]
@@ -6236,6 +6304,28 @@ where
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
             _ => "inspect-cyw43-runtime-fault-stage",
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_runtime_fault_is_sdio_card_select(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> bool {
+        matches!(
+            fault.stage,
+            "sdio-cmd0-go-idle"
+                | "sdio-cmd5-ocr"
+                | "sdio-cmd5-ready"
+                | "sdio-cmd3-rca"
+                | "sdio-cmd7-select"
+                | "sdio-cmd7-select-r1-fallback"
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_runtime_fault_implies_hal_power_ready(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> bool {
+        Self::wifi_runtime_fault_is_sdio_card_select(fault)
     }
 
     #[cfg(feature = "kernel")]
@@ -10578,8 +10668,9 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered
-                .contains("[smp] activity local-seat attached=yes keyboard=usb-kbd0 display=hdmi0"),
+            rendered.contains(
+                "[smp] activity local-seat runtime=present attached=no keyboard_device=usb-kbd0 display=hdmi0"
+            ),
             "{rendered}"
         );
         assert!(
@@ -12335,6 +12426,12 @@ mod tests {
             ),
             8
         );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+            ),
+            9
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -12365,10 +12462,22 @@ mod tests {
             "poll-linked-interrupt-in-and-rering-endpoint-doorbell"
         );
         assert_eq!(
+            KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+            ),
+            "wait-first-keyboard-byte"
+        );
+        assert_eq!(
             KernelConsoleTestPump::usb_runtime_blocker_for_linked_detail(
                 pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
             ),
             "hid-first-report"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_blocker_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+            ),
+            "hid-first-byte"
         );
     }
 

@@ -33,6 +33,18 @@ def _driver_task_owner_state_lines() -> list[str]:
     ]
 
 
+def _driver_task_boot_affinity_lines() -> list[str]:
+    return [
+        "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
+        "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
+        "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
+        "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
+        "DRIVER_TASK_BOOT contract=sdio-host role=sdio started=yes affinity_core=3",
+        "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+        "DRIVER_TASK_BOOT contract=cyw43455 role=net started=yes affinity_core=3",
+    ]
+
+
 def _strong_driver_task_proof_lines() -> list[str]:
     return [
         "U-Boot 2026.01-dirty",
@@ -44,6 +56,7 @@ def _strong_driver_task_proof_lines() -> list[str]:
         "netstats: active=wifi addr_src=dhcp-lease dhcp=bound wifi_assoc=1 "
         "wifi_link=1 eapol_secure=1 eapol_rx=1 rx_pkts=1 tx_pkts=1",
         "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+        *_driver_task_boot_affinity_lines(),
         "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
         "task_count=9 failed_count=0 live_tcb_count=9 "
         "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
@@ -412,6 +425,7 @@ def test_gate_proof_rejects_dedicated_contracts_without_substrate_ready(
         "\n".join(
             [
                 "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+                *_driver_task_boot_affinity_lines(),
                 "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=40 observed_service_us=18",
                 "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=40 observed_service_us=22",
                 "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated max_service_us=80 observed_service_us=44",
@@ -470,6 +484,7 @@ def test_gate_proof_rejects_aggregate_dedicated_count_without_required_roles(
         "\n".join(
             [
                 "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+                *_driver_task_boot_affinity_lines(),
                 "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 mcs=0 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=driver-owned live_hot_paths=yes",
                 "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=73",
                 "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=91",
@@ -527,6 +542,7 @@ def test_gate_proof_rejects_isolated_vspace_without_pointer_free_ipc(
         "\n".join(
             [
                 "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+                *_driver_task_boot_affinity_lines(),
                 "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=callback-pointer pointer_free_ipc=no owner_state=driver-owned live_hot_paths=yes",
                 "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=18",
                 "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=22",
@@ -580,6 +596,7 @@ def test_gate_proof_rejects_pointer_free_ring_without_owner_state(
         "\n".join(
             [
                 "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+                *_driver_task_boot_affinity_lines(),
                 "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=root-owned live_hot_paths=yes",
                 "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=18",
                 "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=22",

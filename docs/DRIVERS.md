@@ -370,14 +370,12 @@ fourth core (`core=3`): `root_task.affinity.drivers.bcmgenet-v5=3` and
 `root_task.affinity.drivers.cyw43455=3`. `coh-rtc` emits those fields into the
 generated `DRIVER_AFFINITY_POLICY`; HAL maps the `bcmgenet-v5` and `cyw43455`
 contracts to `DriverAffinityTarget::BcmGenetV5` / `DriverAffinityTarget::Cyw43455`.
-Profiles where child-TCB affinity is enabled call `seL4_TCB_SetAffinity` before
-the driver TCB is resumed. Physical Pi 4 owner-state boots currently defer
-early child-TCB affinity after the May 30 stall evidence and emit
-`DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard`
-instead. A boot may claim the fourth-core placement only when the corresponding
+Physical Pi 4 owner-state boots now call `seL4_TCB_SetAffinity` for each
+bootstrap-created linked-runtime driver TCB before the driver TCB is resumed,
+matching the existing NineDoor/worker affinity path. A boot may claim fourth-core placement only when the corresponding
 `DRIVER_TASK_BOOT` line reports `affinity_core=3` and the aggregate affinity
-proof remains applied; a deferred-affinity line is a placement blocker, not a
-runtime-image or hardware-service success.
+proof remains applied; a `DRIVER_TASK_AFFINITY_DEFERRED` line is a stale
+placement regression, not a runtime-image or hardware-service success.
 The same Pi 4 manifest now defaults the first boot to DHCP/`auto` networking and
 requires the local-seat path, so a no-saved-policy boot exercises GENET DHCP and
 fails visibly if the HDMI/USB runtime cannot initialize.
@@ -596,9 +594,6 @@ Boot logs must expose the distinction with these breadcrumbs:
   where `runtime_acceptance=yes` means the image/descriptor is structurally
   eligible, while `owner_state=driver-owned` is emitted only after a
   driver-specific owner-state registration has occurred
-- `DRIVER_TASK_AFFINITY_DEFERRED contract=<name> target=<target> selected_core=<n> reason=pi4-child-tcb-affinity-boot-stall-guard`
-  on physical Pi owner-state boots while early child-TCB affinity remains
-  guarded; this line intentionally leaves affinity proof red
 - `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED contract=<name> tcb=<cap> notification=<cap> reason=pi4-early-tcb-notification-bind-boot-stall-guard`
   on physical Pi owner-state boots while the optional early TCB-bound
   notification syscall remains guarded; endpoint-backed command-ring startup is
@@ -641,9 +636,9 @@ requires the expected nine-task count, `failed_count=0`, live TCB count,
 required role mask, per-driver affinity count, zero leaked broad caps, all
 proof booleans demanded by `scripts/pi4_gate_proof.sh --require-driver-task-proof`,
 `DRIVER_TASK_POINTER_FREE_IPC_PROOF=yes`, and
-`DRIVER_TASK_OWNER_STATE_PROOF=yes`. A physical Pi
-`DRIVER_TASK_AFFINITY_DEFERRED` line is therefore expected to fail fourth-core
-placement closure until child-TCB affinity is re-enabled and reproved. A
+`DRIVER_TASK_OWNER_STATE_PROOF=yes`. A physical Pi boot with
+`DRIVER_TASK_AFFINITY_DEFERRED` must fail fourth-core placement closure because
+the linked-runtime driver TCB was not pinned to its manifest core. A
 `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED` line similarly blocks notification
 lifecycle closure until the TCB-bound notification setup is re-enabled and
 reproved. Pointer callbacks into root-task
@@ -1230,10 +1225,19 @@ transition, but it must not write SDHCI host-control registers directly.
   and data TX stay blocked until the bounded host EAPOL/key-install path reports
   secure completion. Device construction after this boundary must report a
   precise bring-up status such as `wifi-host-eapol-pending`; it is not proof
-  that the Wi-Fi data path is online. Deferred boot joins may keep the EAPOL-only
-  receive lane running after the proof window, and the event pump must accelerate
-  that state with bounded host-EAPOL burst polls while still returning to serial,
-  USB, and IPC work between bursts. The driver must suppress repetitive low-level
+  that the Wi-Fi data path is online. In the linked driver-runtime profile,
+  `DRIVER_RUNTIME_CYW43_OP_RELEASE` and owner-state registration prove only that
+  firmware is running behind the HAL/SDIO owner; they must still report
+  `wifi-associating` or `wifi-host-eapol-pending` until association and
+  host-EAPOL secure completion are proven. The linked runtime must keep
+  Ethernet RX on `DRIVER_RUNTIME_CYW43_OP_RX_POLL`, expose SDPCM control/event
+  frames only through `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL` with channel-tagged
+  frame completions, and credit-gate control TX exactly like data TX so SDPCM
+  sequence state cannot advance without dongle credit. Deferred boot joins may
+  keep the EAPOL-only receive lane running after the proof window, and the event
+  pump must accelerate that state with bounded host-EAPOL burst polls while
+  still returning to serial, USB, and IPC work between bursts. The driver must
+  suppress repetitive low-level
   SDIO breadcrumbs and continue dropping non-EAPOL data until the secure boundary
   is complete; queued glommed data also remains held until the same secure
   predicate is true. Blocking join attempts and timed-out deferred
@@ -1424,9 +1428,11 @@ transition, but it must not write SDHCI host-control registers directly.
   the passive `usb: diag recorder=startup-blackbox ...` ten-gate table from
   cached HAL/runtime evidence, followed by the active failure domain and
   `usb: next_action=...`; it does not run the live xHCI probe path. HDMI progress mirrors
-  the same driver-resource milestones as concise `[drivers] ...` lines once a
-  display sink is available; the UART retains the full
-  `DRIVER_TASK_RESOURCE_INIT` record. Successful CYW43 firmware chunks are not
+  high-impact driver-resource milestones as concise `[drivers] ...` lines once
+  a display sink is available; those same concise lines are also emitted on the
+  UART so serial captures include every HDMI-visible driver frontier. The UART
+  retains the full `DRIVER_TASK_RESOURCE_INIT` record as the detailed
+  machine-readable source of truth. Successful CYW43 firmware chunks are not
   mirrored individually, but Wi-Fi progress banners keep a 5-10 s visible
   cadence while long startup work is active.
 - Pi 4 local-seat USB is not a reason to disable Wi-Fi diagnostics. The serial

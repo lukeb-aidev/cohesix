@@ -2144,22 +2144,54 @@ fn apply_driver_tcb_affinity_for_boot(
         driver_affinity_target(contract).ok_or(HalError::Unsupported("driver-affinity"))?;
     let affinity_policy = affinity::policy();
     if driver_task::physical_pi_driver_task_only_owner_state_active() {
-        let mut line = heapless::String::<192>::new();
         let selected_core = affinity::select_driver_core(&affinity_policy, affinity_target);
-        let _ = fmt::write(
-            &mut line,
-            format_args!(
-                "DRIVER_TASK_AFFINITY_DEFERRED contract={} target={} selected_core={} reason=pi4-child-tcb-affinity-boot-stall-guard",
-                contract.name,
-                affinity_target.label(),
-                selected_core.map(i32::from).unwrap_or(-1),
-            ),
-        );
-        crate::bootstrap::log::force_uart_line(line.as_str());
+        if let Some(core) = selected_core {
+            let mut line = heapless::String::<192>::new();
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "DRIVER_TASK_AFFINITY_DEFERRED contract={} target={} selected_core={} reason=pi4-child-tcb-affinity-boot-stall-guard",
+                    contract.name,
+                    affinity_target.label(),
+                    core,
+                ),
+            );
+            crate::bootstrap::log::force_uart_line(line.as_str());
+        }
         return Ok(None);
     }
     affinity::apply_driver_tcb_affinity(tcb, affinity_target, &affinity_policy)
         .map_err(HalError::Affinity)
+}
+
+#[cfg(feature = "kernel")]
+fn apply_driver_tcb_affinity_after_bootstrap(
+    contract: DriverTaskContract,
+    tcb: seL4_CPtr,
+    current: Option<u8>,
+) -> Result<Option<u8>, HalError> {
+    if current.is_some() || !driver_task::physical_pi_driver_task_only_owner_state_active() {
+        return Ok(current);
+    }
+    let affinity_target =
+        driver_affinity_target(contract).ok_or(HalError::Unsupported("driver-affinity"))?;
+    let affinity_policy = affinity::policy();
+    let applied = affinity::apply_driver_tcb_affinity(tcb, affinity_target, &affinity_policy)
+        .map_err(HalError::Affinity)?;
+    if let Some(core) = applied {
+        let mut line = heapless::String::<192>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_AFFINITY_APPLIED contract={} target={} selected_core={} reason=pi4-post-bootstrap-proof",
+                contract.name,
+                affinity_target.label(),
+                core,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+    }
+    Ok(applied)
 }
 
 #[cfg(feature = "kernel")]
@@ -2726,6 +2758,8 @@ impl<'a> KernelHal<'a> {
         emit_driver_tcb_resume_return(contract, tcb, "write-registers");
         let started = driver_task::wait_for_driver_task_start(task_key, 256);
         restore_driver_tcb_steady_priority(contract, tcb, bootstrap_priority, steady_priority)?;
+        let affinity_core =
+            apply_driver_tcb_affinity_after_bootstrap(contract, tcb, affinity_core)?;
 
         Ok(KernelDriverTaskHandle {
             contract,
@@ -3641,6 +3675,8 @@ impl<'a> KernelHal<'a> {
                 .unmap_page_cap(code_frame)
                 .map_err(HalError::Sel4)?;
         }
+        let affinity_core =
+            apply_driver_tcb_affinity_after_bootstrap(contract, tcb, affinity_core)?;
         self.env
             .unmap_page_cap(ipc_frame.cap())
             .map_err(HalError::Sel4)?;
@@ -4660,6 +4696,60 @@ mod tests {
     fn irq_trigger_words_match_arm_sel4_contract() {
         assert_eq!(IrqTrigger::Level.arm_trigger_word(), 0);
         assert_eq!(IrqTrigger::Edge.arm_trigger_word(), 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_tcb_affinity_uses_manifest_policy_for_pi_contracts() {
+        assert_eq!(
+            super::apply_driver_tcb_affinity_for_boot(
+                super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+                0x1000,
+            ),
+            Ok(Some(1))
+        );
+        assert_eq!(
+            super::apply_driver_tcb_affinity_for_boot(
+                super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                0x1001,
+            ),
+            Ok(Some(1))
+        );
+        assert_eq!(
+            super::apply_driver_tcb_affinity_for_boot(
+                super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                0x1002,
+            ),
+            Ok(Some(2))
+        );
+        assert_eq!(
+            super::apply_driver_tcb_affinity_for_boot(
+                super::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+                0x1003,
+            ),
+            Ok(Some(2))
+        );
+        assert_eq!(
+            super::apply_driver_tcb_affinity_for_boot(
+                super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+                0x1004,
+            ),
+            Ok(Some(3))
+        );
+        assert_eq!(
+            super::apply_driver_tcb_affinity_for_boot(
+                super::driver_task::GENET_DRIVER_TASK_CONTRACT,
+                0x1005,
+            ),
+            Ok(Some(3))
+        );
+        assert_eq!(
+            super::apply_driver_tcb_affinity_for_boot(
+                super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                0x1006,
+            ),
+            Ok(Some(3))
+        );
     }
 
     #[cfg(feature = "kernel")]

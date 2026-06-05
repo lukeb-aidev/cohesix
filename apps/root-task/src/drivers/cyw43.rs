@@ -14,12 +14,14 @@ use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
 use aes::Aes128;
 use heapless::{Deque, Vec as HeaplessVec};
 use log::{debug, info, trace, warn};
-use smoltcp::phy::{self, Device, DeviceCapabilities};
+use smoltcp::phy::{self, Device, DeviceCapabilities, RxToken as _};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+use crate::drivers::driver_task_net;
 use crate::hal::driver_task::{DriverTaskContract, CYW43_WIFI_DRIVER_TASK_CONTRACT};
-use crate::hal::pi4_wifi::Pi4WifiState;
+use crate::hal::pi4_wifi::{Cyw43HostEapolRxSource, Pi4WifiState};
 use crate::hal::{
     Cyw43Hal, HalError, Hardware, SdioBusWidth, SdioFunction, WifiFirmwareBundle, WifiPowerState,
     WifiResetState,
@@ -37,6 +39,12 @@ use crate::net::{
 };
 use crate::net_consts::MAX_FRAME_LEN;
 use crate::rust_alloc::boxed::Box;
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+use pi4_driver_abi::{
+    DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+    DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
+    DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT,
+};
 
 const SDIO_STARTUP_CLOCK_HZ: u32 = 400_000;
 // Match Linux brcmfmac on Pi 4: request 50 MHz high-speed SDIO and let the
@@ -2945,8 +2953,251 @@ impl Cyw43OwnerRuntime {
     }
 }
 
+enum Cyw43Transport {
+    Direct(Box<Pi4WifiState>),
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    DriverTask(Cyw43DriverTaskTransport),
+}
+
+impl Cyw43Transport {
+    fn direct(state: Pi4WifiState) -> Self {
+        Self::Direct(Box::new(state))
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    const fn driver_task() -> Self {
+        Self::DriverTask(Cyw43DriverTaskTransport::new())
+    }
+
+    fn direct_mut(&mut self) -> Option<&mut Pi4WifiState> {
+        match self {
+            Self::Direct(state) => Some(state.as_mut()),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => None,
+        }
+    }
+
+    fn buffer_bounds(&self) -> Option<Range<usize>> {
+        match self {
+            Self::Direct(state) => {
+                let start = state.as_ref() as *const Pi4WifiState as usize;
+                Some(start..start + size_of::<Pi4WifiState>())
+            }
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(state) => {
+                let start = state as *const Cyw43DriverTaskTransport as usize;
+                Some(start..start + size_of::<Cyw43DriverTaskTransport>())
+            }
+        }
+    }
+
+    fn cyw43_control_plane_chunk_limit(&self) -> usize {
+        match self {
+            Self::Direct(state) => state.cyw43_control_plane_chunk_limit(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => FRAME_BUF_LEN,
+        }
+    }
+
+    fn cyw43_control_plane_write_chunk_limit(&self) -> usize {
+        match self {
+            Self::Direct(state) => state.cyw43_control_plane_write_chunk_limit(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => FRAME_BUF_LEN,
+        }
+    }
+
+    fn cyw43_control_plane_reply_chunk_limit(&self) -> usize {
+        match self {
+            Self::Direct(state) => state.cyw43_control_plane_reply_chunk_limit(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => FRAME_BUF_LEN,
+        }
+    }
+
+    fn cyw43_experimental_no_ht_transport(&self) -> bool {
+        match self {
+            Self::Direct(state) => state.cyw43_experimental_no_ht_transport(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => false,
+        }
+    }
+
+    fn cyw43_control_plane_probe_pending(&self) -> bool {
+        match self {
+            Self::Direct(state) => state.cyw43_control_plane_probe_pending(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => false,
+        }
+    }
+
+    fn cyw43_control_plane_startup_link_stabilized(&self) -> bool {
+        match self {
+            Self::Direct(state) => state.cyw43_control_plane_startup_link_stabilized(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => true,
+        }
+    }
+
+    fn cyw43_control_plane_startup_link_rescue_cycles(&self) -> u8 {
+        match self {
+            Self::Direct(state) => state.cyw43_control_plane_startup_link_rescue_cycles(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => 0,
+        }
+    }
+
+    fn cyw43_control_plane_reply_rearm_diag(&self) -> (&'static str, u8, u8, bool) {
+        match self {
+            Self::Direct(state) => state.cyw43_control_plane_reply_rearm_diag(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => ("driver-task-descriptor", 0, 0, false),
+        }
+    }
+
+    fn cyw43_cached_control_plane_exact_error(&self) -> Option<&'static str> {
+        match self {
+            Self::Direct(state) => state.cyw43_cached_control_plane_exact_error(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(state) => state.cached_exact_error,
+        }
+    }
+
+    fn promote_cached_control_plane_failure(&mut self, stage: &'static str, reason: &'static str) {
+        match self {
+            Self::Direct(state) => state.promote_cached_control_plane_failure(stage, reason),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(state) => state.cached_exact_error = Some(reason),
+        }
+    }
+
+    fn resume_cyw43_control_plane_reply_probe_on_startup_link(&mut self, stage: &'static str) {
+        match self {
+            Self::Direct(state) => {
+                state.resume_cyw43_control_plane_reply_probe_on_startup_link(stage);
+            }
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => {
+                let _ = stage;
+            }
+        }
+    }
+
+    fn finish_cyw43_control_plane_reply_wait(&mut self) {
+        match self {
+            Self::Direct(state) => state.finish_cyw43_control_plane_reply_wait(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => {}
+        }
+    }
+
+    fn log_cyw43_control_plane_snapshot(&mut self, stage: &'static str) {
+        match self {
+            Self::Direct(state) => state.log_cyw43_control_plane_snapshot(stage),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(state) => {
+                info!(
+                    "[cyw43] control-plane snapshot stage={stage} transport=driver-task cached_exact_error={}",
+                    state.cached_exact_error.unwrap_or("none")
+                );
+            }
+        }
+    }
+
+    fn cyw43_host_eapol_rx_source(&mut self) -> Cyw43HostEapolRxSource {
+        match self {
+            Self::Direct(state) => state.cyw43_host_eapol_rx_source(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => Cyw43HostEapolRxSource {
+                rframe_len: None,
+                int_status: None,
+                tohost_mailbox: None,
+                hostintmask: None,
+                function_int_mask: None,
+                watermark: None,
+                devctl: None,
+                mesbusy: None,
+                sdhci_int_status: 0,
+                io_enable: Some(0x06),
+                io_ready: Some(0x06),
+                io_interrupt_enable: None,
+                frame_indication: false,
+                host_interrupt: false,
+                card_interrupt: false,
+                function2_ready: true,
+            },
+        }
+    }
+
+    fn set_clock_hz(&mut self, hz: u32) -> Result<u32, HalError> {
+        match self {
+            Self::Direct(state) => state.set_clock_hz(hz),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(state) => {
+                state.effective_clock_hz = hz;
+                Ok(hz)
+            }
+        }
+    }
+
+    fn recommended_data_clock_hz(&self) -> u32 {
+        match self {
+            Self::Direct(state) => state.recommended_data_clock_hz(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(state) => state.recommended_data_clock_hz,
+        }
+    }
+
+    fn finish_cyw43_experimental_transport_probe(&mut self) {
+        match self {
+            Self::Direct(state) => state.finish_cyw43_experimental_transport_probe(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(_) => {}
+        }
+    }
+
+    fn read_cyw43_frame(&mut self, out: &mut [u8]) -> Result<usize, HalError> {
+        match self {
+            Self::Direct(state) => state.read_cyw43_frame(out),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Self::DriverTask(state) => state.read_cyw43_frame(out),
+        }
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+struct Cyw43DriverTaskTransport {
+    effective_clock_hz: u32,
+    recommended_data_clock_hz: u32,
+    cached_exact_error: Option<&'static str>,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl Cyw43DriverTaskTransport {
+    const fn new() -> Self {
+        Self {
+            effective_clock_hz: SDIO_DATA_CLOCK_HZ,
+            recommended_data_clock_hz: SDIO_DATA_CLOCK_HZ,
+            cached_exact_error: None,
+        }
+    }
+
+    fn read_cyw43_frame(&mut self, out: &mut [u8]) -> Result<usize, HalError> {
+        let Some((flags, token)) = driver_task_net::poll_cyw43_driver_task_any_frame() else {
+            return Ok(0);
+        };
+        let mut payload = [0u8; MAX_FRAME_LEN];
+        let payload_len = token.consume(|frame| {
+            let len = frame.len().min(payload.len());
+            payload[..len].copy_from_slice(&frame[..len]);
+            len
+        });
+        synthesize_driver_task_rx_frame(flags, &payload[..payload_len], out)
+    }
+}
+
 pub struct Cyw43NetDevice {
-    state: Box<Pi4WifiState>,
+    state: Cyw43Transport,
     probe: ProbeReport,
     mac: EthernetAddress,
     owner: Cyw43OwnerRuntime,
@@ -3101,7 +3352,7 @@ impl Cyw43NetDevice {
         progress.tick();
 
         let mut device = Self {
-            state: Box::new(state),
+            state: Cyw43Transport::direct(state),
             probe: ProbeReport {
                 effective_clock_hz: data_clock_hz,
                 ioex,
@@ -3133,7 +3384,10 @@ impl Cyw43NetDevice {
                 {
                     let snapshot_exact_error = log_cyw43_init_failure(
                         "cyw43-init-control-plane-hard-retry-fail",
-                        device.state.as_mut(),
+                        device
+                            .state
+                            .direct_mut()
+                            .ok_or(DriverError::Protocol("cyw43-direct-state"))?,
                         &retry_err,
                         true,
                     );
@@ -3148,7 +3402,10 @@ impl Cyw43NetDevice {
             } else {
                 let snapshot_exact_error = log_cyw43_init_failure(
                     "cyw43-init-control-plane-fail",
-                    device.state.as_mut(),
+                    device
+                        .state
+                        .direct_mut()
+                        .ok_or(DriverError::Protocol("cyw43-direct-state"))?,
                     &err,
                     true,
                 );
@@ -3189,6 +3446,68 @@ impl Cyw43NetDevice {
         Ok(device)
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub fn new_driver_task_runtime(
+        config: &ConsoleNetConfig,
+        firmware: WifiFirmwareBundle<'static>,
+    ) -> Result<Self, DriverError> {
+        let credentials = config
+            .wifi_credentials
+            .ok_or(DriverError::Config("wifi-credentials-missing"))?;
+        firmware.validate().map_err(DriverError::InvalidFirmware)?;
+
+        info!(
+            "[cyw43] driver-task control-plane init begin ssid_len={} psk_len={} fw={} nvram={} clm={} board={}",
+            credentials.ssid_len,
+            credentials.psk_len,
+            firmware.firmware.len(),
+            firmware.nvram.len(),
+            firmware.clm_blob.map_or(0, <[u8]>::len),
+            firmware.board_type,
+        );
+        let mut device = Self {
+            state: Cyw43Transport::driver_task(),
+            probe: ProbeReport {
+                effective_clock_hz: SDIO_DATA_CLOCK_HZ,
+                ioex: 0x06,
+                bus_width: SdioBusWidth::FourBit,
+                firmware: FirmwareLayout::from_bundle(firmware),
+            },
+            mac: EthernetAddress(DEFAULT_WIFI_MAC),
+            owner: Cyw43OwnerRuntime {
+                sdpcm_seq_max: 1,
+                ..Cyw43OwnerRuntime::default()
+            },
+            deferred_join_state: DeferredJoinState::Disabled,
+            host_wpa: HostWpaState::empty(),
+            rx_frame: Box::new([0; FRAME_BUF_LEN]),
+            tx_frame: Box::new([0; FRAME_BUF_LEN]),
+            control_response: Box::new([0; CONTROL_RESPONSE_BUF_LEN]),
+            glom_subframe_lens: HeaplessVec::new(),
+            glom_rx_ready: Box::new(Deque::new()),
+        };
+
+        if let Err(err) = device.init_control_plane(firmware, credentials, true) {
+            let cached = device
+                .state
+                .cyw43_cached_control_plane_exact_error()
+                .unwrap_or("none");
+            warn!(
+                "[cyw43] driver-task control-plane init failed err={err} cached_exact_error={cached}"
+            );
+            return Err(err);
+        }
+        info!(
+            "[cyw43] driver-task control-plane ready mac={} assoc={} link_up={} host_eapol_rx={} host_eapol_secure={}",
+            device.mac,
+            yes_no(device.owner.associated()),
+            yes_no(device.owner.link_up()),
+            device.owner.host_eapol_rx_packets,
+            yes_no(device.host_eapol_secure_complete()),
+        );
+        Ok(device)
+    }
+
     #[must_use]
     pub const fn probe_report(&self) -> ProbeReport {
         self.probe
@@ -3220,6 +3539,11 @@ impl Cyw43NetDevice {
         credentials: WifiCredentials,
         reason: &DriverError,
     ) -> Result<(), DriverError> {
+        if self.state.direct_mut().is_none() {
+            return Err(DriverError::Protocol(
+                "driver-task-control-plane-replay-unsupported",
+            ));
+        }
         warn!(
             "[cyw43] control-plane bootstrap hard-retry action=replay-firmware-control-bootstrap reason={reason} current_clock={}Hz write_chunk_limit={} reply_chunk_limit={} mode={}",
             self.probe.effective_clock_hz,
@@ -3232,23 +3556,25 @@ impl Cyw43NetDevice {
         );
 
         info!("[cyw43] step: control_plane_hard_retry(recover_transport)");
-        recover_startup_transport(
-            self.state.as_mut(),
-            "init_transport(control-plane-hard-retry)",
-        )?;
+        let state = self
+            .state
+            .direct_mut()
+            .ok_or(DriverError::Protocol("cyw43-direct-state"))?;
+        recover_startup_transport(state, "init_transport(control-plane-hard-retry)")?;
         info!("[cyw43] step: control_plane_hard_retry(set_bus_width=4bit)");
-        self.state.set_bus_width(SdioBusWidth::FourBit)?;
+        let state = self
+            .state
+            .direct_mut()
+            .ok_or(DriverError::Protocol("cyw43-direct-state"))?;
+        state.set_bus_width(SdioBusWidth::FourBit)?;
         info!("[cyw43] step: control_plane_hard_retry(prepare_firmware_upload_transport)");
-        self.state.prepare_cyw43_firmware_upload_transport()?;
+        state.prepare_cyw43_firmware_upload_transport()?;
         info!("[cyw43] step: control_plane_hard_retry(load_firmware)");
-        self.state.load_cyw43_firmware()?;
-        let (data_clock_hz, bus_width) =
-            prepare_initial_control_plane_transport(self.state.as_mut())?;
+        state.load_cyw43_firmware()?;
+        let (data_clock_hz, bus_width) = prepare_initial_control_plane_transport(state)?;
         self.probe.effective_clock_hz = data_clock_hz;
         self.probe.bus_width = bus_width;
-        self.probe.ioex = self
-            .state
-            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
+        self.probe.ioex = state.io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)?;
         self.reset_control_plane_bootstrap_state();
         info!(
             "[cyw43] control-plane bootstrap hard-retry ready clock={}Hz bus_width={} ioex=0x{:02x}",
@@ -5391,11 +5717,13 @@ impl Cyw43NetDevice {
         );
         let effective_clock_hz = self.state.set_clock_hz(target_clock_hz)?;
         self.probe.effective_clock_hz = effective_clock_hz;
-        rearm_control_plane_after_reply_wait(
-            self.state.as_mut(),
-            self.probe.effective_clock_hz,
-            original_reply_stage,
-        )?;
+        if let Some(state) = self.state.direct_mut() {
+            rearm_control_plane_after_reply_wait(
+                state,
+                self.probe.effective_clock_hz,
+                original_reply_stage,
+            )?;
+        }
         info!(
             "[cyw43] {retry_label} awaiting original reply cmd=0x{:08x} iface={} len={} ioctl_id={} clock={}Hz chunk_limit={} mode=bounded-no-ht",
             cmd as u32,
@@ -5431,11 +5759,13 @@ impl Cyw43NetDevice {
                     ),
                 )?;
                 self.probe.effective_clock_hz = resend_clock_hz;
-                rearm_control_plane_after_reply_wait(
-                    self.state.as_mut(),
-                    self.probe.effective_clock_hz,
-                    resend_stage,
-                )?;
+                if let Some(state) = self.state.direct_mut() {
+                    rearm_control_plane_after_reply_wait(
+                        state,
+                        self.probe.effective_clock_hz,
+                        resend_stage,
+                    )?;
+                }
                 let resend_bootstrap = if resend_clock_hz > SDIO_STARTUP_CLOCK_HZ {
                     "promoted-first-reply-retry"
                 } else {
@@ -5565,8 +5895,11 @@ impl Cyw43NetDevice {
                 self.state.cyw43_control_plane_reply_chunk_limit(),
             );
         }
-        self.state
-            .write_cyw43_frame(&mut self.tx_frame[..request_len])?;
+        self.write_control_frame_transport(
+            request_len,
+            control_header_len,
+            total_len.saturating_sub(control_header_len),
+        )?;
         if self.state.cyw43_experimental_no_ht_transport() && allow_speculative_retry_credit {
             if control_plane_retry_after_promoted_timeout_resend_uses_startup_link(
                 true,
@@ -6487,8 +6820,7 @@ impl Cyw43NetDevice {
                 seq,
             );
         }
-        self.state
-            .write_cyw43_frame(&mut self.tx_frame[..aligned_len])?;
+        self.write_data_frame_transport(aligned_len, bdc_offset + BDC_HEADER_LEN, packet.len())?;
         self.owner.tx_packets = self.owner.tx_packets.saturating_add(1);
         Ok(proof)
     }
@@ -6567,15 +6899,71 @@ impl Cyw43NetDevice {
             );
         }
 
-        match self
-            .state
-            .write_cyw43_frame(&mut self.tx_frame[..aligned_len])
-        {
+        match self.write_data_frame_transport(aligned_len, payload_offset, packet_len) {
             Ok(()) => {
                 self.owner.tx_packets = self.owner.tx_packets.saturating_add(1);
                 (result, Ok(proof))
             }
             Err(err) => (result, Err(DriverError::from(err))),
+        }
+    }
+
+    fn write_control_frame_transport(
+        &mut self,
+        frame_len: usize,
+        payload_offset: usize,
+        payload_len: usize,
+    ) -> Result<(), HalError> {
+        match &mut self.state {
+            Cyw43Transport::Direct(state) => {
+                state.write_cyw43_frame(&mut self.tx_frame[..frame_len])
+            }
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Cyw43Transport::DriverTask(_) => {
+                let payload_end = payload_offset
+                    .checked_add(payload_len)
+                    .ok_or(HalError::Unsupported("cyw43-control-payload-range"))?;
+                let payload = self
+                    .tx_frame
+                    .get(payload_offset..payload_end)
+                    .ok_or(HalError::Unsupported("cyw43-control-payload-range"))?;
+                if driver_task_net::submit_cyw43_driver_task_control_payload(
+                    payload,
+                    self.owner.control_tx_ext_header(),
+                ) {
+                    Ok(())
+                } else {
+                    Err(HalError::Unsupported("cyw43-control-frame-submit"))
+                }
+            }
+        }
+    }
+
+    fn write_data_frame_transport(
+        &mut self,
+        frame_len: usize,
+        payload_offset: usize,
+        payload_len: usize,
+    ) -> Result<(), HalError> {
+        match &mut self.state {
+            Cyw43Transport::Direct(state) => {
+                state.write_cyw43_frame(&mut self.tx_frame[..frame_len])
+            }
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            Cyw43Transport::DriverTask(_) => {
+                let payload_end = payload_offset
+                    .checked_add(payload_len)
+                    .ok_or(HalError::Unsupported("cyw43-data-payload-range"))?;
+                let payload = self
+                    .tx_frame
+                    .get(payload_offset..payload_end)
+                    .ok_or(HalError::Unsupported("cyw43-data-payload-range"))?;
+                if driver_task_net::submit_cyw43_driver_task_eth_payload(payload) {
+                    Ok(())
+                } else {
+                    Err(HalError::Unsupported("cyw43-eth-frame-submit"))
+                }
+            }
         }
     }
 
@@ -6777,8 +7165,7 @@ impl NetDevice for Cyw43NetDevice {
     }
 
     fn buffer_bounds(&self) -> Option<Range<usize>> {
-        let state = self.state.as_ref() as *const Pi4WifiState as usize
-            ..self.state.as_ref() as *const Pi4WifiState as usize + size_of::<Pi4WifiState>();
+        let state = self.state.buffer_bounds()?;
         let rx = self.rx_frame.as_ptr() as usize..self.rx_frame.as_ptr() as usize + FRAME_BUF_LEN;
         let tx = self.tx_frame.as_ptr() as usize..self.tx_frame.as_ptr() as usize + FRAME_BUF_LEN;
         let control = self.control_response.as_ptr() as usize
@@ -7119,6 +7506,46 @@ fn bdc_priority_for_packet(packet: &[u8]) -> u8 {
     } else {
         0
     }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn synthesize_driver_task_rx_frame(
+    flags: u16,
+    payload: &[u8],
+    out: &mut [u8],
+) -> Result<usize, HalError> {
+    let channel = flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK;
+    let (channel_byte, bdc_len) = match channel {
+        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL => (CHANNEL_CONTROL, 0),
+        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT => (CHANNEL_EVENT, 0),
+        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA => (CHANNEL_DATA, BDC_HEADER_LEN),
+        _ => return Err(HalError::Unsupported("cyw43-driver-task-rx-channel")),
+    };
+    let packet_len = SDPCM_HEADER_LEN
+        .checked_add(bdc_len)
+        .and_then(|value| value.checked_add(payload.len()))
+        .ok_or(HalError::Unsupported("cyw43-driver-task-rx-len"))?;
+    if packet_len > out.len() || packet_len > FRAME_BUF_LEN || packet_len > u16::MAX as usize {
+        return Err(HalError::Unsupported("cyw43-driver-task-rx-oversize"));
+    }
+    out[..packet_len].fill(0);
+    put_u16_le(out, 0, packet_len as u16);
+    put_u16_le(out, 2, !(packet_len as u16));
+    out[4] = 0;
+    out[5] = channel_byte;
+    out[6] = 0;
+    out[7] = SDPCM_HEADER_LEN as u8;
+    out[9] = ((flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK)
+        >> DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT) as u8;
+    let payload_offset = SDPCM_HEADER_LEN + bdc_len;
+    if bdc_len != 0 {
+        out[SDPCM_HEADER_LEN] = BDC_VERSION << BDC_VERSION_SHIFT;
+        out[SDPCM_HEADER_LEN + 1] = bdc_priority_for_packet(payload);
+        out[SDPCM_HEADER_LEN + 2] = 0;
+        out[SDPCM_HEADER_LEN + 3] = 0;
+    }
+    out[payload_offset..payload_offset + payload.len()].copy_from_slice(payload);
+    Ok(packet_len)
 }
 
 fn parse_event_payload(payload: &[u8]) -> Result<Option<Cyw43Event>, DriverError> {
@@ -7502,6 +7929,75 @@ mod tests {
         let mut frame = [0u8; 16];
         frame[0] = 1 << BDC_VERSION_SHIFT;
         assert_eq!(bdc_payload(&frame), None);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn driver_task_rx_synthesis_restores_legacy_sdpcm_view() {
+        let mut out = [0u8; FRAME_BUF_LEN];
+        let control_payload = [0xa5; CDC_HEADER_LEN];
+        let control_len = super::synthesize_driver_task_rx_frame(
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL
+                | (0x31 << pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT),
+            &control_payload,
+            &mut out,
+        )
+        .expect("control payload is synthesized");
+        let control = parse_rx_sdpcm_header(&out, control_len).expect("control header parses");
+        assert_eq!(control.channel, CHANNEL_CONTROL);
+        assert_eq!(control.credit, 0x31);
+        assert_eq!(
+            &out[control.payload_start..control.packet_len],
+            &control_payload
+        );
+
+        let event_payload = [
+            BDC_VERSION << BDC_VERSION_SHIFT,
+            0,
+            0,
+            0,
+            0x01,
+            0x02,
+            0x03,
+            0x04,
+        ];
+        let event_len = super::synthesize_driver_task_rx_frame(
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT
+                | (0x32 << pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT),
+            &event_payload,
+            &mut out,
+        )
+        .expect("event payload is synthesized");
+        let event = parse_rx_sdpcm_header(&out, event_len).expect("event header parses");
+        assert_eq!(event.channel, CHANNEL_EVENT);
+        assert_eq!(event.credit, 0x32);
+        assert_eq!(&out[event.payload_start..event.packet_len], &event_payload);
+        assert_eq!(
+            bdc_payload(&out[event.payload_start..event.packet_len]),
+            Some(&event_payload[BDC_HEADER_LEN..])
+        );
+
+        let ethernet = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02, 0x43, 0x4f, 0x48, 0x58, 0x55, 0x88, 0x8e,
+        ];
+        let data_len = super::synthesize_driver_task_rx_frame(
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+                | (0x33 << pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT),
+            &ethernet,
+            &mut out,
+        )
+        .expect("data payload is synthesized");
+        let data = parse_rx_sdpcm_header(&out, data_len).expect("data header parses");
+        assert_eq!(data.channel, CHANNEL_DATA);
+        assert_eq!(data.credit, 0x33);
+        assert_eq!(
+            data.packet_len,
+            SDPCM_HEADER_LEN + BDC_HEADER_LEN + ethernet.len()
+        );
+        assert_eq!(
+            bdc_payload(&out[data.payload_start..data.packet_len]),
+            Some(&ethernet[..])
+        );
     }
 
     #[test]

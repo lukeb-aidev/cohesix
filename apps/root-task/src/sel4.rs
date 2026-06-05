@@ -1824,6 +1824,18 @@ fn set_tcb_affinity_impl(
     };
 
     if result == seL4_NoError {
+        if emit_guard_breadcrumb {
+            let mut breadcrumb = HeaplessString::<96>::new();
+            let _ = fmt::write(
+                &mut breadcrumb,
+                format_args!("tcb=0x{tcb:04x} core={core} result=ok", tcb = guarded_tcb),
+            );
+            sel4_guard::uart_breadcrumb(
+                guard_stage,
+                "seL4_TCB_SetAffinity.return",
+                breadcrumb.as_str(),
+            );
+        }
         Ok(())
     } else {
         ::log::error!(

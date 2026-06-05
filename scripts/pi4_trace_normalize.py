@@ -205,6 +205,28 @@ USB_COLD_BOOT_MARKERS = (
 USB_STALE_UEFI_HINT_MARKERS = (
     "uefi vars: xhcipci=0 xhcireload=1 systemtablemode=1",
 )
+DRIVER_TASK_EXPECTED_AFFINITY_CORES = {
+    "serial": 1,
+    "usb-local-seat": 1,
+    "hdmi-text": 2,
+    "bcmgenet-v5": 3,
+    "cyw43455": 3,
+    "sdio-host": 3,
+    "pcie-root": 2,
+    "rtl8139": 2,
+    "virtio-net": 3,
+}
+REQUIRED_PI4_DRIVER_TASK_AFFINITY_CONTRACTS = frozenset(
+    (
+        "serial",
+        "usb-local-seat",
+        "hdmi-text",
+        "bcmgenet-v5",
+        "cyw43455",
+        "sdio-host",
+        "pcie-root",
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -303,6 +325,12 @@ class GateSummary:
     driver_task_affinity_proof: bool = False
     driver_task_affinity_configured: int = 0
     driver_task_affinity_applied: int = 0
+    driver_task_affinity_manifest_proof: bool = False
+    driver_task_affinity_manifest_matches: int = 0
+    driver_task_affinity_manifest_missing: int = len(
+        REQUIRED_PI4_DRIVER_TASK_AFFINITY_CONTRACTS
+    )
+    driver_task_affinity_manifest_mismatches: int = 0
     driver_task_notification_bind_deferred: bool = False
     driver_task_vspace_proof: bool = False
     driver_task_pointer_free_ipc_proof: bool = False
@@ -421,6 +449,18 @@ class GateSummary:
             ),
             "DRIVER_TASK_AFFINITY_CONFIGURED": self.driver_task_affinity_configured,
             "DRIVER_TASK_AFFINITY_APPLIED": self.driver_task_affinity_applied,
+            "DRIVER_TASK_AFFINITY_MANIFEST_PROOF": (
+                "yes" if self.driver_task_affinity_manifest_proof else "no"
+            ),
+            "DRIVER_TASK_AFFINITY_MANIFEST_MATCHES": (
+                self.driver_task_affinity_manifest_matches
+            ),
+            "DRIVER_TASK_AFFINITY_MANIFEST_MISSING": (
+                self.driver_task_affinity_manifest_missing
+            ),
+            "DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES": (
+                self.driver_task_affinity_manifest_mismatches
+            ),
             "DRIVER_TASK_NOTIFICATION_BIND_DEFERRED": (
                 "yes" if self.driver_task_notification_bind_deferred else "no"
             ),
@@ -1807,6 +1847,8 @@ def normalize_wifi_blocker(value: str) -> str:
         return "firmware-verify-readback"
     if lower in {"20739", "0x5103"} or "sdio-descriptor-transfer-failed" in lower:
         return "cyw43-sdio-descriptor-transfer-failed"
+    if lower in {"20737", "0x5101"} or "sdio-command-unavailable" in lower:
+        return "sdio-command-unavailable"
     if "function2-disabled" in lower:
         return "function2-disabled"
     if "firmware-verify-mismatch" in lower:
@@ -1863,6 +1905,8 @@ def normalize_wifi_exact(value: str) -> str:
         "0x5322": "cyw43-post-release-cardcap",
         "21283": "cyw43-backplane-chipcommon-read",
         "0x5323": "cyw43-backplane-chipcommon-read",
+        "20737": "sdio-command-unavailable",
+        "0x5101": "sdio-command-unavailable",
         "20738": "cyw43-sdio-descriptor-unavailable",
         "0x5102": "cyw43-sdio-descriptor-unavailable",
         "20739": "cyw43-sdio-descriptor-transfer-failed",
@@ -2601,6 +2645,10 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 if value and value not in {"none", "n/a"}:
                     value_label = value.lower().strip()
                     normalized_value = normalize_usb_blocker(value)
+                    if key == "result" and (
+                        value_label.startswith("0x") or value_label.isdecimal()
+                    ):
+                        continue
                     if (
                         key == "result"
                         and value
@@ -4149,7 +4197,8 @@ def summarize_wifi_failure_detail(
         if event.domain == "wifi"
         or (
             event.domain == "driver"
-            and event.fields.get("contract", "").lower() == "cyw43455"
+            and event.fields.get("contract", "").lower()
+            in {"cyw43455", "sdio-host"}
         )
         or (
             event.domain == "driver"
@@ -4200,6 +4249,16 @@ def summarize_wifi_failure_detail(
             not in {"ready", "deferred", "begin", "progress"}
         ):
             candidate = "cyw43-driver-task-replay"
+        if (
+            wifi_blocker == "sdio-card-select"
+            and event.domain == "driver"
+            and fields.get("contract", "").lower() == "sdio-host"
+            and fields.get("stage", "").lower().startswith("sdio-cmd")
+            and "driver_task_resource_init" in raw
+            and fields.get("status", "").lower()
+            not in {"ready", "deferred", "begin", "progress"}
+        ):
+            candidate = "sdio-card-select"
         if (
             wifi_blocker == "control-plane-reply-idle-loop"
             and "sdio xfer chunk" in raw
@@ -4472,6 +4531,10 @@ def summarize_driver_task_proofs(
     bool,  # affinity_proof
     int,  # affinity_configured
     int,  # affinity_applied
+    bool,  # affinity manifest proof
+    int,  # affinity manifest matches
+    int,  # affinity manifest missing
+    int,  # affinity manifest mismatches
     bool,  # vspace_proof
     bool,  # pointer_free_ipc_proof
     bool,  # owner_state_proof
@@ -4502,6 +4565,8 @@ def summarize_driver_task_proofs(
     affinity_proof = False
     affinity_configured = 0
     affinity_applied = 0
+    affinity_manifest_matches: set[str] = set()
+    affinity_manifest_mismatches = 0
     vspace_proof = False
     pointer_free_ipc_proof = False
     owner_state_hot_paths: set[str] = set()
@@ -4524,6 +4589,17 @@ def summarize_driver_task_proofs(
         )
         if driver_task_line:
             owner_state_line = "driver_task_owner_state" in raw
+            if raw.startswith("driver_task_boot ") or raw.startswith(
+                "driver_task_boot_smoke "
+            ):
+                contract = fields.get("contract")
+                if contract in DRIVER_TASK_EXPECTED_AFFINITY_CORES:
+                    expected_core = DRIVER_TASK_EXPECTED_AFFINITY_CORES[contract]
+                    affinity_core = parse_hex_int(fields.get("affinity_core"))
+                    if affinity_core == expected_core:
+                        affinity_manifest_matches.add(contract)
+                    else:
+                        affinity_manifest_mismatches += 1
             if "driver_task_default" in raw:
                 default_requested |= fields.get("requested", "").lower() in {
                     "dedicated",
@@ -4694,6 +4770,12 @@ def summarize_driver_task_proofs(
             hdmi_responsive = True
     required_roles = {"serial", "usb", "display", "net", "sdio", "pcie"}
     owner_state_proof = REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS.issubset(owner_state_hot_paths)
+    affinity_manifest_missing = len(
+        REQUIRED_PI4_DRIVER_TASK_AFFINITY_CONTRACTS - affinity_manifest_matches
+    )
+    affinity_manifest_proof = (
+        affinity_manifest_missing == 0 and affinity_manifest_mismatches == 0
+    )
     compatibility_free = not compatibility_contracts and (
         acceptance_compatibility_count in {None, 0}
     )
@@ -4735,6 +4817,10 @@ def summarize_driver_task_proofs(
         affinity_proof,
         affinity_configured,
         affinity_applied,
+        affinity_manifest_proof,
+        len(affinity_manifest_matches),
+        affinity_manifest_missing,
+        affinity_manifest_mismatches,
         vspace_proof,
         pointer_free_ipc_proof,
         owner_state_proof,
@@ -4912,6 +4998,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_affinity_proof,
         driver_task_affinity_configured,
         driver_task_affinity_applied,
+        driver_task_affinity_manifest_proof,
+        driver_task_affinity_manifest_matches,
+        driver_task_affinity_manifest_missing,
+        driver_task_affinity_manifest_mismatches,
         driver_task_vspace_proof,
         driver_task_pointer_free_ipc_proof,
         driver_task_owner_state_proof,
@@ -4955,8 +5045,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     )
     usb_driver_task_blocker = summarize_usb_driver_task_stall(event_list)
     if usb_driver_task_blocker is not None:
-        usb_gate = max(usb_gate, 1)
-        usb_blocker = usb_driver_task_blocker
+        if usb_gate <= 1:
+            usb_gate = max(usb_gate, 1)
+            usb_blocker = usb_driver_task_blocker
+        elif usb_blocker in {"unknown", "missing", "none"}:
+            usb_blocker = usb_driver_task_blocker
     net_driver_task_replay_events, net_driver_task_replay_blocker = (
         summarize_driver_task_replay_status(event_list, "net_driver_task_replay_status")
     )
@@ -4969,8 +5062,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         sdio_driver_task_replay_blocker,
     )
     if sdio_driver_task_replay_blocker != "none":
-        wifi_gate = max(wifi_gate, 1)
-        wifi_blocker = "sdio-driver-task-replay"
+        replay_gate, replay_blocker, replay_exact_default, replay_phase_default = (
+            classify_sdio_replay_gate(sdio_driver_task_replay_blocker)
+        )
+        wifi_gate = max(wifi_gate, replay_gate)
+        wifi_blocker = replay_blocker
         replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
             event_list, wifi_blocker
         )
@@ -4979,7 +5075,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             wifi_phase = replay_phase
             wifi_blocker_line = replay_line
         else:
-            wifi_exact = sdio_driver_task_replay_blocker
+            wifi_exact = replay_exact_default
+            wifi_phase = replay_phase_default
     elif net_driver_task_replay_blocker != "none":
         wifi_gate = max(wifi_gate, 1)
         wifi_blocker = "cyw43-driver-task-replay"
@@ -5050,6 +5147,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_affinity_proof=driver_task_affinity_proof,
         driver_task_affinity_configured=driver_task_affinity_configured,
         driver_task_affinity_applied=driver_task_affinity_applied,
+        driver_task_affinity_manifest_proof=driver_task_affinity_manifest_proof,
+        driver_task_affinity_manifest_matches=driver_task_affinity_manifest_matches,
+        driver_task_affinity_manifest_missing=driver_task_affinity_manifest_missing,
+        driver_task_affinity_manifest_mismatches=driver_task_affinity_manifest_mismatches,
         driver_task_notification_bind_deferred=driver_task_notification_bind_deferred,
         driver_task_vspace_proof=driver_task_vspace_proof,
         driver_task_pointer_free_ipc_proof=driver_task_pointer_free_ipc_proof,
@@ -5341,6 +5442,8 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
                 0x0210,
                 0x0211,
                 0x0202,
+                0x0500,
+                0x0501,
             }:
                 latest_usb_engine_detail = detail
             if contract == "pcie-root" and latest_usb_stage in {
@@ -5383,6 +5486,8 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
                     0x0215,
                     0x0216,
                     0x0217,
+                    0x0500,
+                    0x0501,
                 }:
                     return "usb-keyboard-enumeration-no-reply"
                 return "usb-engine-init-no-reply"
@@ -5448,6 +5553,20 @@ def summarize_driver_task_replay_status(
             stage = event.fields.get("stage", "unknown")
             return len(replay_events), f"{role}:{stage}:{status}"
     return len(replay_events), "none"
+
+
+def classify_sdio_replay_gate(replay_blocker: str) -> tuple[int, str, str, str]:
+    """Map SDIO owner replay stages onto user-facing WiFi gates."""
+
+    parts = replay_blocker.split(":", 2)
+    if len(parts) != 3:
+        return 1, "sdio-driver-task-replay", replay_blocker, "sdio-driver-task-replay"
+    _role, stage, status = parts
+    if stage.startswith("sdio-cmd"):
+        return 2, "sdio-card-select", f"{stage}-{status}", stage
+    if stage in {"hal-resource-prep", "descriptor-replay", "engine-init"}:
+        return 1, "sdio-driver-task-replay", f"{stage}-{status}", stage
+    return 1, "sdio-driver-task-replay", f"{stage}-{status}", stage
 
 
 def parse_expectations(expectations: Iterable[str]) -> dict[str, str]:
