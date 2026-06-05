@@ -101,6 +101,7 @@ static CYW43_LAST_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultSt
 pub(crate) struct Cyw43RuntimeCommandFaultStatus {
     pub stage: &'static str,
     pub op: u16,
+    pub flags: u16,
     pub target_addr: u32,
     pub payload_len: u16,
     pub total_len: u32,
@@ -131,6 +132,7 @@ fn record_sdio_runtime_command_fault_status(
     *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
         stage,
         op: 0,
+        flags: 0,
         target_addr: 0,
         payload_len: 0,
         total_len: 0,
@@ -646,6 +648,10 @@ where
             Err(err) => {
                 if !recovered {
                     if let Some(completion) = err.recoverable_completion() {
+                        let resume_offset =
+                            latest_cyw43_runtime_command_fault_status().and_then(|fault| {
+                                cyw43_firmware_resume_offset(fault, bundle.firmware.len())
+                            });
                         crate::hal::driver_task::emit_driver_task_resource_init_status(
                             contract,
                             DriverTaskHotPath::Cyw43Wifi,
@@ -657,6 +663,25 @@ where
                             hal,
                             "cyw43-firmware-recover",
                         )?;
+                        if let Some(resume_offset) = resume_offset {
+                            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                                contract,
+                                DriverTaskHotPath::Cyw43Wifi,
+                                "cyw43-firmware-recover",
+                                "resume-retained-stage",
+                                Some(completion),
+                            );
+                            complete_cyw43_linked_runtime_firmware_from_offset(
+                                hal,
+                                contract,
+                                bundle,
+                                reset_vector,
+                                resume_offset,
+                            )
+                            .map_err(Cyw43FirmwareInitError::into_net_error)?;
+                            clear_cyw43_runtime_command_fault_status();
+                            return Ok(());
+                        }
                         recovered = true;
                         continue;
                     }
@@ -762,7 +787,43 @@ where
         bundle.firmware,
         bundle.firmware.len(),
     )?;
+    complete_cyw43_linked_runtime_firmware_tail(hal, contract, bundle, reset_vector)
+}
 
+#[cfg(feature = "kernel")]
+fn complete_cyw43_linked_runtime_firmware_from_offset<H>(
+    hal: &mut H,
+    contract: DriverTaskContract,
+    bundle: crate::hal::WifiFirmwareBundle<'_>,
+    reset_vector: u32,
+    resume_offset: usize,
+) -> Result<(), Cyw43FirmwareInitError>
+where
+    H: Hardware<Error = HalError>,
+{
+    stream_cyw43_runtime_payload_from_offset(
+        hal,
+        contract,
+        DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+        CYW43_RAM_BASE_4345,
+        bundle.firmware,
+        bundle.firmware.len(),
+        resume_offset,
+        true,
+    )?;
+    complete_cyw43_linked_runtime_firmware_tail(hal, contract, bundle, reset_vector)
+}
+
+#[cfg(feature = "kernel")]
+fn complete_cyw43_linked_runtime_firmware_tail<H>(
+    hal: &mut H,
+    contract: DriverTaskContract,
+    bundle: crate::hal::WifiFirmwareBundle<'_>,
+    reset_vector: u32,
+) -> Result<(), Cyw43FirmwareInitError>
+where
+    H: Hardware<Error = HalError>,
+{
     let nvram = crate::hal::pi4_wifi::normalize_nvram(bundle.nvram);
     let nvram_offset = CYW43_RAM_BASE_4345
         .checked_add(CYW43_RAM_SIZE_4345_PI4)
@@ -812,6 +873,27 @@ where
     )
     .map_err(Cyw43FirmwareInitError::Command)?;
     Ok(())
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_firmware_resume_offset(
+    fault: Cyw43RuntimeCommandFaultStatus,
+    firmware_len: usize,
+) -> Option<usize> {
+    if fault.op != DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
+        || fault.payload_len == 0
+        || usize::try_from(fault.total_len).ok()? != firmware_len
+        || fault.target_addr < CYW43_RAM_BASE_4345
+    {
+        return None;
+    }
+    let offset = usize::try_from(fault.target_addr - CYW43_RAM_BASE_4345).ok()?;
+    let end = offset.checked_add(usize::from(fault.payload_len))?;
+    if end <= firmware_len {
+        Some(offset)
+    } else {
+        None
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -1287,7 +1369,7 @@ fn emit_cyw43_runtime_stream_progress(
 
 #[cfg(feature = "kernel")]
 fn stream_cyw43_runtime_payload<H>(
-    _hal: &mut H,
+    hal: &mut H,
     contract: DriverTaskContract,
     op: u16,
     base_addr: u32,
@@ -1297,9 +1379,33 @@ fn stream_cyw43_runtime_payload<H>(
 where
     H: Hardware<Error = HalError>,
 {
+    stream_cyw43_runtime_payload_from_offset(
+        hal, contract, op, base_addr, payload, total_len, 0, false,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn stream_cyw43_runtime_payload_from_offset<H>(
+    _hal: &mut H,
+    contract: DriverTaskContract,
+    op: u16,
+    base_addr: u32,
+    payload: &[u8],
+    total_len: usize,
+    start_offset: usize,
+    force_first_chunk_byte_mode: bool,
+) -> Result<(), Cyw43FirmwareInitError>
+where
+    H: Hardware<Error = HalError>,
+{
     let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
     let max_payload = cyw43_runtime_stream_payload_limit(desc_size)?;
-    let mut offset = 0usize;
+    if start_offset > payload.len() {
+        return Err(Cyw43FirmwareInitError::Runtime(
+            DriverTaskNetError::RuntimeInit("cyw43-stream-resume-offset"),
+        ));
+    }
+    let mut offset = start_offset;
     while offset < payload.len() {
         let chunk_len = (payload.len() - offset).min(max_payload);
         let target_addr = base_addr
@@ -1316,6 +1422,9 @@ where
             total_len: total_len as u32,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
+        if force_first_chunk_byte_mode && offset == start_offset {
+            descriptor.flags |= DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
+        }
         let mut attempts = 0usize;
         loop {
             match submit_cyw43_runtime_command_checked(
@@ -1518,6 +1627,7 @@ fn emit_cyw43_runtime_command_fault(
     *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
         stage,
         op: descriptor.op,
+        flags: descriptor.flags,
         target_addr: descriptor.target_addr,
         payload_len: descriptor.payload_len,
         total_len: descriptor.total_len,
@@ -1528,10 +1638,11 @@ fn emit_cyw43_runtime_command_fault(
     let mut line = heapless::String::<320>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_COMMAND_FAULT contract={} stage={} op={} target=0x{:08x} payload_len={} total_len={} detail={} reason={} result={}",
+        "CYW43_DRIVER_TASK_COMMAND_FAULT contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_len={} total_len={} detail={} reason={} result={}",
         contract.name,
         stage,
         descriptor.op,
+        descriptor.flags,
         descriptor.target_addr,
         descriptor.payload_len,
         descriptor.total_len,
@@ -1546,7 +1657,8 @@ fn emit_cyw43_runtime_command_fault(
 const fn cyw43_fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool {
     matches!(
         detail,
-        0x5102
+        0x5101
+            | 0x5102
             | 0x5103
             | 0x5104
             | 0x5310
@@ -2535,6 +2647,7 @@ mod tests {
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5323));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5321));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x531a));
+        assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5101));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5102));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5103));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5104));
@@ -2654,6 +2767,46 @@ mod tests {
         );
         assert!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES <= frame_payload);
         assert_eq!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES % 64, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_firmware_resume_offset_accepts_only_matching_firmware_faults() {
+        let fault = Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-chunk",
+            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
+            target_addr: CYW43_RAM_BASE_4345 + 0x1c00,
+            payload_len: 1024,
+            total_len: 609_309,
+            detail: 0x5103,
+            reason: "sdio-descriptor-transfer-failed",
+            result: 0x0500_0100,
+        };
+
+        assert_eq!(cyw43_firmware_resume_offset(fault, 609_309), Some(0x1c00));
+
+        assert_eq!(
+            cyw43_firmware_resume_offset(
+                Cyw43RuntimeCommandFaultStatus {
+                    op: DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
+                    ..fault
+                },
+                609_309
+            ),
+            None
+        );
+        assert_eq!(
+            cyw43_firmware_resume_offset(
+                Cyw43RuntimeCommandFaultStatus {
+                    target_addr: CYW43_RAM_BASE_4345 - 1,
+                    ..fault
+                },
+                609_309
+            ),
+            None
+        );
+        assert_eq!(cyw43_firmware_resume_offset(fault, 609_308), None);
     }
 
     #[cfg(feature = "kernel")]

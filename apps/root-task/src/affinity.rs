@@ -327,6 +327,88 @@ pub fn format_core_assignments(
     buf
 }
 
+#[cfg(feature = "kernel")]
+pub fn format_core_assignments_for_live_driver_profile(
+    policy: &generated::AffinityPolicy,
+    core: u8,
+) -> HeaplessString<128> {
+    let mut buf = HeaplessString::new();
+    push_core_assignment(&mut buf, policy.authority_core == Some(core), "authority");
+    push_core_assignment(
+        &mut buf,
+        core_slice_has(policy.ninedoor_cores, core),
+        "ninedoor",
+    );
+    push_core_assignment(
+        &mut buf,
+        core_slice_has(policy.provider_cores, core),
+        "provider",
+    );
+    push_core_assignment(
+        &mut buf,
+        core_slice_has(policy.worker_cores, core),
+        "worker",
+    );
+    push_live_driver_core_assignment(
+        &mut buf,
+        policy.drivers.serial == Some(core),
+        "serial",
+        crate::hal::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+    );
+    push_live_driver_core_assignment(
+        &mut buf,
+        policy.drivers.usb_local_seat == Some(core),
+        "usb",
+        crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+    );
+    push_live_driver_core_assignment(
+        &mut buf,
+        policy.drivers.hdmi_text == Some(core),
+        "hdmi",
+        crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+    );
+    push_live_driver_core_assignment(
+        &mut buf,
+        policy.drivers.bcmgenet_v5 == Some(core),
+        "genet",
+        crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+    );
+    push_live_driver_core_assignment(
+        &mut buf,
+        policy.drivers.cyw43455 == Some(core),
+        "cyw43",
+        crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+    );
+    push_live_driver_core_assignment(
+        &mut buf,
+        policy.drivers.rtl8139 == Some(core),
+        "rtl8139",
+        crate::hal::driver_task::RTL8139_DRIVER_TASK_CONTRACT,
+    );
+    push_live_driver_core_assignment(
+        &mut buf,
+        policy.drivers.virtio_net == Some(core),
+        "virtio",
+        crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+    );
+    push_live_driver_core_assignment(
+        &mut buf,
+        policy.drivers.sdio_host == Some(core),
+        "sdio",
+        crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+    );
+    push_live_driver_core_assignment(
+        &mut buf,
+        policy.drivers.pcie_root == Some(core),
+        "pcie",
+        crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+    );
+    if buf.is_empty() {
+        let _ = buf.push_str("none");
+    }
+    buf
+}
+
 fn push_core_assignment<const N: usize>(buf: &mut HeaplessString<N>, assigned: bool, label: &str) {
     if !assigned {
         return;
@@ -335,6 +417,19 @@ fn push_core_assignment<const N: usize>(buf: &mut HeaplessString<N>, assigned: b
         let _ = buf.push(',');
     }
     let _ = buf.push_str(label);
+}
+
+#[cfg(feature = "kernel")]
+fn push_live_driver_core_assignment<const N: usize>(
+    buf: &mut HeaplessString<N>,
+    assigned: bool,
+    label: &str,
+    contract: crate::hal::driver_task::DriverTaskContract,
+) {
+    if !crate::hal::driver_task::driver_task_contract_active_for_current_profile(contract) {
+        return;
+    }
+    push_core_assignment(buf, assigned, label);
 }
 
 fn core_slice_has(cores: &[u8], core: u8) -> bool {
@@ -444,7 +539,7 @@ where
         let _ = fmt::write(
             &mut line,
             format_args!(
-                "[smp] affinity probe core={} tasks={} task_allocation=multi",
+                "[smp] affinity probe core={} tasks={} task_allocation=manifest policy=live-driver-filter live_view=smp-activity",
                 core, tasks
             ),
         );
@@ -466,7 +561,7 @@ where
     };
 
     for core in 0..policy.max_cores {
-        let tasks = format_core_assignments(policy, core);
+        let tasks = format_core_assignments_for_live_driver_profile(policy, core);
         if tasks.as_str() != "none" {
             probe(core, tasks.as_str());
         }

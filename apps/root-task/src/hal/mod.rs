@@ -1277,36 +1277,43 @@ const DRIVER_TASK_BOOTSTRAP_CONTRACTS: &[DriverTaskContract] = &[
 ];
 
 #[cfg(feature = "kernel")]
-const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST: &[DriverTaskContract] = &[
+const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_SELECTED: &[DriverTaskContract] = &[
     SERIAL_DRIVER_TASK_CONTRACT,
-    SDIO_HOST_DRIVER_TASK_CONTRACT,
     PCIE_ROOT_DRIVER_TASK_CONTRACT,
     USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
     HDMI_TEXT_DRIVER_TASK_CONTRACT,
+    SDIO_HOST_DRIVER_TASK_CONTRACT,
     CYW43_WIFI_DRIVER_TASK_CONTRACT,
+];
+
+#[cfg(feature = "kernel")]
+const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_SELECTED: &[DriverTaskContract] = &[
+    SERIAL_DRIVER_TASK_CONTRACT,
+    PCIE_ROOT_DRIVER_TASK_CONTRACT,
+    USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+    HDMI_TEXT_DRIVER_TASK_CONTRACT,
     GENET_DRIVER_TASK_CONTRACT,
 ];
 
 #[cfg(feature = "kernel")]
-const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST: &[DriverTaskContract] = &[
+const PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_BASE: &[DriverTaskContract] = &[
     SERIAL_DRIVER_TASK_CONTRACT,
-    SDIO_HOST_DRIVER_TASK_CONTRACT,
     PCIE_ROOT_DRIVER_TASK_CONTRACT,
     USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
     HDMI_TEXT_DRIVER_TASK_CONTRACT,
-    GENET_DRIVER_TASK_CONTRACT,
-    CYW43_WIFI_DRIVER_TASK_CONTRACT,
 ];
 
 #[cfg(feature = "kernel")]
 fn physical_pi_driver_task_bootstrap_contracts() -> &'static [DriverTaskContract] {
     match driver_task::pi4_pre_root_net_bootstrap_selection() {
         driver_task::Pi4PreRootNetBootstrapSelection::Wired => {
-            PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST
+            PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_SELECTED
         }
-        driver_task::Pi4PreRootNetBootstrapSelection::Wifi
-        | driver_task::Pi4PreRootNetBootstrapSelection::Disabled => {
-            PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST
+        driver_task::Pi4PreRootNetBootstrapSelection::Wifi => {
+            PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_SELECTED
+        }
+        driver_task::Pi4PreRootNetBootstrapSelection::Disabled => {
+            PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_BASE
         }
     }
 }
@@ -2105,14 +2112,14 @@ fn finalize_driver_task_bootstrap_report(
     report.vspace_proof = all_configured && report.isolated_vspace_count == expected_count;
     report.pointer_free_ipc_proof =
         report.vspace_proof && report.pointer_free_ipc_count == expected_count;
-    let owner_hot_paths_complete = report.owner_state_hot_path_mask
-        & driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
-        == driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK;
+    let required_hot_path_mask = driver_task::current_pi4_acceptance_hot_path_mask();
+    let required_hot_path_count = driver_task::current_pi4_acceptance_hot_path_count();
+    let owner_hot_paths_complete =
+        report.owner_state_hot_path_mask & required_hot_path_mask == required_hot_path_mask;
     let runtime_images_acceptance_ready = report.runtime_image_acceptance_count
-        == driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATHS
-        && report.runtime_image_transport_mapped_hot_path_mask
-            & driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
-            == driver_task::REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK;
+        == required_hot_path_count
+        && report.runtime_image_transport_mapped_hot_path_mask & required_hot_path_mask
+            == required_hot_path_mask;
     report.owner_state_proof = report.vspace_proof
         && report.pointer_free_ipc_proof
         && owner_hot_paths_complete
@@ -4957,51 +4964,55 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn physical_pi_bootstrap_contracts_match_generated_runtime_hot_paths() {
-        for contracts in [
-            super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST,
-            super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST,
+        let wifi = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_SELECTED;
+        assert_eq!(wifi.len(), 6);
+        for contract in [
+            super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            super::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         ] {
-            assert_eq!(
-                contracts.len(),
-                super::driver_task::PI4_DRIVER_TASK_HOT_PATHS.len()
+            assert!(wifi.contains(&contract), "{}", contract.name);
+            assert!(
+                super::driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract)
+                    .is_some(),
+                "{}",
+                contract.name
             );
-            for hot_path in super::driver_task::PI4_DRIVER_TASK_HOT_PATHS {
-                let contract = hot_path.contract();
-                assert!(contracts.contains(&contract), "{}", contract.name);
-                assert!(
-                    super::driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract)
-                        .is_some(),
-                    "{}",
-                    contract.name
-                );
-            }
-            assert!(!contracts.contains(&super::driver_task::RTL8139_DRIVER_TASK_CONTRACT));
-            assert!(!contracts.contains(&super::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT));
         }
-        let cyw43_index = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST
-            .iter()
-            .position(|contract| *contract == super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT)
-            .expect("CYW43 contract must be present");
-        let genet_index = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIFI_FIRST
-            .iter()
-            .position(|contract| *contract == super::driver_task::GENET_DRIVER_TASK_CONTRACT)
-            .expect("GENET contract must be present");
-        assert!(
-            cyw43_index < genet_index,
-            "Wi-Fi-selected boots must expose CYW breadcrumbs before deferred GENET"
-        );
-        let wired_genet_index = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST
-            .iter()
-            .position(|contract| *contract == super::driver_task::GENET_DRIVER_TASK_CONTRACT)
-            .expect("GENET contract must be present");
-        let wired_cyw43_index = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_FIRST
-            .iter()
-            .position(|contract| *contract == super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT)
-            .expect("CYW43 contract must be present");
-        assert!(
-            wired_genet_index < wired_cyw43_index,
-            "wired-selected boots must expose GENET breadcrumbs before deferred CYW"
-        );
+        assert!(!wifi.contains(&super::driver_task::GENET_DRIVER_TASK_CONTRACT));
+        assert!(!wifi.contains(&super::driver_task::RTL8139_DRIVER_TASK_CONTRACT));
+        assert!(!wifi.contains(&super::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT));
+
+        let wired = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_WIRED_SELECTED;
+        assert_eq!(wired.len(), 5);
+        for contract in [
+            super::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            super::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            super::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            super::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            super::driver_task::GENET_DRIVER_TASK_CONTRACT,
+        ] {
+            assert!(wired.contains(&contract), "{}", contract.name);
+            assert!(
+                super::driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract)
+                    .is_some(),
+                "{}",
+                contract.name
+            );
+        }
+        assert!(!wired.contains(&super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT));
+        assert!(!wired.contains(&super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT));
+        assert!(!wired.contains(&super::driver_task::RTL8139_DRIVER_TASK_CONTRACT));
+        assert!(!wired.contains(&super::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT));
+
+        let base = super::PHYSICAL_PI_DRIVER_TASK_BOOTSTRAP_CONTRACTS_BASE;
+        assert_eq!(base.len(), 4);
+        assert!(!base.contains(&super::driver_task::GENET_DRIVER_TASK_CONTRACT));
+        assert!(!base.contains(&super::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT));
+        assert!(!base.contains(&super::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT));
     }
 
     #[cfg(feature = "kernel")]

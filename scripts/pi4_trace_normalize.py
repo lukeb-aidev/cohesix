@@ -2949,6 +2949,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     join_programming_f1_status_count = 0
     runtime_rx_host_latch_spam_count = 0
     legacy_gmode_stall_seen = False
+    startup_blackbox_blocker: str | None = None
+    startup_blackbox_gate = 0
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -3014,9 +3016,19 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, max(0, diag_gate - 1))
                 if diag_gate >= 7:
                     post_f2_progress_seen = True
-                blocker = normalize_wifi_blocker(name)
+                detail_blocker = normalize_wifi_blocker(
+                    fields.get("fault_detail", "")
+                )
+                blocker = (
+                    detail_blocker
+                    if detail_blocker != "none"
+                    else normalize_wifi_blocker(name)
+                )
                 if blocker == "none":
                     blocker = name
+                if diag_gate >= 5 and blocker not in {"none", "unknown"}:
+                    startup_blackbox_blocker = blocker
+                    startup_blackbox_gate = max(0, diag_gate - 1)
             continue
         if raw.startswith("netstats:"):
             if (
@@ -3859,6 +3871,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "wifi-driver-task-runtime-unproved",
         }:
             gate = max(gate, 1)
+            if gate >= 4 and blocker not in {"unknown", "none"}:
+                continue
             if blocker not in {
                 "control-plane",
                 "control-plane-bdc-event",
@@ -4004,6 +4018,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         blocker = "control-plane-legacy-gmode-stall"
     if blocker in precise_ht_blockers and not ht_available_seen and not post_f2_progress_seen:
         gate = min(gate, 4)
+    if (
+        startup_blackbox_blocker is not None
+        and startup_blackbox_gate >= 4
+        and gate <= startup_blackbox_gate
+    ):
+        blocker = startup_blackbox_blocker
     return gate, blocker
 
 
@@ -5065,30 +5085,32 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         replay_gate, replay_blocker, replay_exact_default, replay_phase_default = (
             classify_sdio_replay_gate(sdio_driver_task_replay_blocker)
         )
-        wifi_gate = max(wifi_gate, replay_gate)
-        wifi_blocker = replay_blocker
-        replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
-            event_list, wifi_blocker
-        )
-        if replay_exact != "none":
-            wifi_exact = replay_exact
-            wifi_phase = replay_phase
-            wifi_blocker_line = replay_line
-        else:
-            wifi_exact = replay_exact_default
-            wifi_phase = replay_phase_default
+        if wifi_blocker in {"unknown", "missing", "none"} or replay_gate > wifi_gate:
+            wifi_gate = max(wifi_gate, replay_gate)
+            wifi_blocker = replay_blocker
+            replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
+                event_list, wifi_blocker
+            )
+            if replay_exact != "none":
+                wifi_exact = replay_exact
+                wifi_phase = replay_phase
+                wifi_blocker_line = replay_line
+            else:
+                wifi_exact = replay_exact_default
+                wifi_phase = replay_phase_default
     elif net_driver_task_replay_blocker != "none":
-        wifi_gate = max(wifi_gate, 1)
-        wifi_blocker = "cyw43-driver-task-replay"
-        replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
-            event_list, wifi_blocker
-        )
-        if replay_exact != "none":
-            wifi_exact = replay_exact
-            wifi_phase = replay_phase
-            wifi_blocker_line = replay_line
-        else:
-            wifi_exact = net_driver_task_replay_blocker
+        if wifi_blocker in {"unknown", "missing", "none"}:
+            wifi_gate = max(wifi_gate, 1)
+            wifi_blocker = "cyw43-driver-task-replay"
+            replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
+                event_list, wifi_blocker
+            )
+            if replay_exact != "none":
+                wifi_exact = replay_exact
+                wifi_phase = replay_phase
+                wifi_blocker_line = replay_line
+            else:
+                wifi_exact = net_driver_task_replay_blocker
     if (
         wifi_deferred_resume_start is not None
         and net_driver_task_replay_events == 0
@@ -5193,7 +5215,16 @@ def summarize_driver_task_resource_init(events: Iterable[TraceEvent]) -> tuple[i
         for event in events
         if "driver_task_resource_init" in event.raw.lower()
     ]
-    non_blocking_statuses = {"ready", "deferred", "begin", "progress"}
+    non_blocking_statuses = {
+        "ready",
+        "deferred",
+        "begin",
+        "progress",
+        "preserved-ready",
+        "cached-ready",
+        "sdio-owner-replay",
+        "resume-retained-stage",
+    }
     for event in resource_events:
         status = event.fields.get("status", "unknown").lower()
         if status not in non_blocking_statuses:
@@ -5225,7 +5256,16 @@ def summarize_driver_task_frontiers(
     hdmi_boot_blocker: str | None = None
     usb_frontier = "none"
     wifi_pre_prompt_deferred = False
-    non_blocking_statuses = {"ready", "deferred", "begin", "progress"}
+    non_blocking_statuses = {
+        "ready",
+        "deferred",
+        "begin",
+        "progress",
+        "preserved-ready",
+        "cached-ready",
+        "sdio-owner-replay",
+        "resume-retained-stage",
+    }
 
     for event in events:
         raw = event.raw.lower()
@@ -5545,7 +5585,16 @@ def summarize_driver_task_replay_status(
     replay_events = [
         event for event in events if marker in event.raw.lower()
     ]
-    non_blocking_statuses = {"ready", "deferred", "begin", "progress"}
+    non_blocking_statuses = {
+        "ready",
+        "deferred",
+        "begin",
+        "progress",
+        "preserved-ready",
+        "cached-ready",
+        "sdio-owner-replay",
+        "resume-retained-stage",
+    }
     for event in replay_events:
         status = event.fields.get("blocker", "unknown").lower()
         if status not in non_blocking_statuses:

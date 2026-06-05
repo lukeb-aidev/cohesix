@@ -3023,17 +3023,43 @@ where
         }
 
         for core in 0..policy.max_cores {
-            let tasks = affinity::format_core_assignments(&policy, core);
+            let tasks = Self::format_smp_activity_core_assignments(&policy, core);
             let authority = policy.authority_core == Some(core);
             let serial = policy.drivers.serial == Some(core);
-            let local_seat = policy.drivers.usb_local_seat == Some(core)
-                || policy.drivers.hdmi_text == Some(core);
-            let net = policy.drivers.bcmgenet_v5 == Some(core)
-                || policy.drivers.cyw43455 == Some(core)
-                || policy.drivers.rtl8139 == Some(core)
-                || policy.drivers.virtio_net == Some(core)
-                || policy.drivers.sdio_host == Some(core)
-                || policy.drivers.pcie_root == Some(core);
+            let local_seat = Self::smp_activity_driver_assigned(
+                crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                policy.drivers.usb_local_seat,
+                core,
+            ) || Self::smp_activity_driver_assigned(
+                crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                policy.drivers.hdmi_text,
+                core,
+            );
+            let net = Self::smp_activity_driver_assigned(
+                crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+                policy.drivers.bcmgenet_v5,
+                core,
+            ) || Self::smp_activity_driver_assigned(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                policy.drivers.cyw43455,
+                core,
+            ) || Self::smp_activity_driver_assigned(
+                crate::hal::driver_task::RTL8139_DRIVER_TASK_CONTRACT,
+                policy.drivers.rtl8139,
+                core,
+            ) || Self::smp_activity_driver_assigned(
+                crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+                policy.drivers.virtio_net,
+                core,
+            ) || Self::smp_activity_driver_assigned(
+                crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+                policy.drivers.sdio_host,
+                core,
+            ) || Self::smp_activity_driver_assigned(
+                crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+                policy.drivers.pcie_root,
+                core,
+            );
             let rates = SmpActivityRates::from_snapshots(
                 previous, current, window_ms, authority, serial, local_seat, net,
             );
@@ -3056,6 +3082,146 @@ where
             ));
             self.emit_console_line(line.as_str());
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn format_smp_activity_core_assignments(
+        policy: &crate::generated::AffinityPolicy,
+        core: u8,
+    ) -> HeaplessString<128> {
+        let mut buf = HeaplessString::new();
+        Self::push_smp_activity_assignment(
+            &mut buf,
+            policy.authority_core == Some(core),
+            "authority",
+        );
+        Self::push_smp_activity_assignment(
+            &mut buf,
+            Self::core_slice_has(policy.ninedoor_cores, core),
+            "ninedoor",
+        );
+        Self::push_smp_activity_assignment(
+            &mut buf,
+            Self::core_slice_has(policy.provider_cores, core),
+            "provider",
+        );
+        Self::push_smp_activity_assignment(
+            &mut buf,
+            Self::core_slice_has(policy.worker_cores, core),
+            "worker",
+        );
+        Self::push_smp_activity_driver_assignment(
+            &mut buf,
+            crate::hal::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            policy.drivers.serial,
+            core,
+            "serial",
+        );
+        Self::push_smp_activity_driver_assignment(
+            &mut buf,
+            crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            policy.drivers.usb_local_seat,
+            core,
+            "usb",
+        );
+        Self::push_smp_activity_driver_assignment(
+            &mut buf,
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            policy.drivers.hdmi_text,
+            core,
+            "hdmi",
+        );
+        Self::push_smp_activity_driver_assignment(
+            &mut buf,
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            policy.drivers.bcmgenet_v5,
+            core,
+            "genet",
+        );
+        Self::push_smp_activity_driver_assignment(
+            &mut buf,
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            policy.drivers.cyw43455,
+            core,
+            "cyw43",
+        );
+        Self::push_smp_activity_driver_assignment(
+            &mut buf,
+            crate::hal::driver_task::RTL8139_DRIVER_TASK_CONTRACT,
+            policy.drivers.rtl8139,
+            core,
+            "rtl8139",
+        );
+        Self::push_smp_activity_driver_assignment(
+            &mut buf,
+            crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+            policy.drivers.virtio_net,
+            core,
+            "virtio",
+        );
+        Self::push_smp_activity_driver_assignment(
+            &mut buf,
+            crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            policy.drivers.sdio_host,
+            core,
+            "sdio",
+        );
+        Self::push_smp_activity_driver_assignment(
+            &mut buf,
+            crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            policy.drivers.pcie_root,
+            core,
+            "pcie",
+        );
+        if buf.is_empty() {
+            let _ = buf.push_str("none");
+        }
+        buf
+    }
+
+    #[cfg(feature = "kernel")]
+    fn smp_activity_driver_assigned(
+        contract: crate::hal::driver_task::DriverTaskContract,
+        assigned: Option<u8>,
+        core: u8,
+    ) -> bool {
+        assigned == Some(core)
+            && crate::hal::driver_task::driver_task_contract_active_for_current_profile(contract)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn push_smp_activity_driver_assignment<const N: usize>(
+        buf: &mut HeaplessString<N>,
+        contract: crate::hal::driver_task::DriverTaskContract,
+        assigned: Option<u8>,
+        core: u8,
+        label: &str,
+    ) {
+        Self::push_smp_activity_assignment(
+            buf,
+            Self::smp_activity_driver_assigned(contract, assigned, core),
+            label,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    fn push_smp_activity_assignment<const N: usize>(
+        buf: &mut HeaplessString<N>,
+        assigned: bool,
+        label: &str,
+    ) {
+        if !assigned {
+            return;
+        }
+        if !buf.is_empty() {
+            let _ = buf.push_str(",");
+        }
+        let _ = buf.push_str(label);
+    }
+
+    #[cfg(feature = "kernel")]
+    fn core_slice_has(cores: &[u8], core: u8) -> bool {
+        cores.iter().copied().any(|candidate| candidate == core)
     }
 
     #[cfg(not(feature = "kernel"))]
@@ -3174,14 +3340,15 @@ where
 
     fn emit_smp_activity_driver_contracts(&mut self) {
         use crate::hal::driver_task::{
-            builtin_isolation_summary, driver_task_runtime_proof, CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            GENET_DRIVER_TASK_CONTRACT, HDMI_TEXT_DRIVER_TASK_CONTRACT,
-            PCIE_ROOT_DRIVER_TASK_CONTRACT, RTL8139_DRIVER_TASK_CONTRACT,
-            SDIO_HOST_DRIVER_TASK_CONTRACT, SERIAL_DRIVER_TASK_CONTRACT,
-            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT, VIRTIO_NET_DRIVER_TASK_CONTRACT,
+            active_builtin_isolation_summary, driver_task_runtime_proof,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT,
+            HDMI_TEXT_DRIVER_TASK_CONTRACT, PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            RTL8139_DRIVER_TASK_CONTRACT, SDIO_HOST_DRIVER_TASK_CONTRACT,
+            SERIAL_DRIVER_TASK_CONTRACT, USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            VIRTIO_NET_DRIVER_TASK_CONTRACT,
         };
 
-        let summary = builtin_isolation_summary();
+        let summary = active_builtin_isolation_summary();
         let proof = driver_task_runtime_proof();
         let line = format_message(format_args!(
             "[smp] activity driver-proof contracts={} requested_dedicated={} dedicated={} compat={} substrate={} configured={} live={} failed={} hot_mask=0x{:x} compat_mask=0x{:x}",
@@ -3197,66 +3364,61 @@ where
             proof.compatibility_service_role_mask,
         ));
         self.emit_console_line(line.as_str());
-        let input_display =
-            format_message(format_args!(
-            "[smp] activity contracts serial={}:{}:{}/{}/{} usb={}:{}:{}/{}/{} hdmi={}:{}:{}/{}/{}",
-            SERIAL_DRIVER_TASK_CONTRACT.name,
-            SERIAL_DRIVER_TASK_CONTRACT.class.as_str(),
-            SERIAL_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
-            SERIAL_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
-            SERIAL_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
-            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.name,
-            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.class.as_str(),
-            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
-            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
-            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
-            HDMI_TEXT_DRIVER_TASK_CONTRACT.name,
-            HDMI_TEXT_DRIVER_TASK_CONTRACT.class.as_str(),
-            HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
-            HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
-            HDMI_TEXT_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
-        ));
-        self.emit_console_line(input_display.as_str());
-        let net_contracts = format_message(format_args!(
-            "[smp] activity contracts genet={}:{}:{}/{}/{} cyw43={}:{}:{}/{}/{} virtio={}:{}:{}/{}/{}",
-            GENET_DRIVER_TASK_CONTRACT.name,
-            GENET_DRIVER_TASK_CONTRACT.class.as_str(),
-            GENET_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
-            GENET_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
-            GENET_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT.name,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT.class.as_str(),
-            CYW43_WIFI_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
-            VIRTIO_NET_DRIVER_TASK_CONTRACT.name,
-            VIRTIO_NET_DRIVER_TASK_CONTRACT.class.as_str(),
-            VIRTIO_NET_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
-            VIRTIO_NET_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
-            VIRTIO_NET_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
-        ));
-        self.emit_console_line(net_contracts.as_str());
-        let bus_contracts = format_message(format_args!(
-            "[smp] activity contracts rtl8139={}:{}:{}/{}/{} sdio={}:{}:{}/{}/{} pcie={}:{}:{}/{}/{}",
-            RTL8139_DRIVER_TASK_CONTRACT.name,
-            RTL8139_DRIVER_TASK_CONTRACT.class.as_str(),
-            RTL8139_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
-            RTL8139_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
-            RTL8139_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
-            SDIO_HOST_DRIVER_TASK_CONTRACT.name,
-            SDIO_HOST_DRIVER_TASK_CONTRACT.class.as_str(),
-            SDIO_HOST_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
-            SDIO_HOST_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
-            SDIO_HOST_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
-            PCIE_ROOT_DRIVER_TASK_CONTRACT.name,
-            PCIE_ROOT_DRIVER_TASK_CONTRACT.class.as_str(),
-            PCIE_ROOT_DRIVER_TASK_CONTRACT.budget.max_ops_per_turn,
-            PCIE_ROOT_DRIVER_TASK_CONTRACT.budget.max_bytes_per_turn,
-            PCIE_ROOT_DRIVER_TASK_CONTRACT.budget.max_frames_per_turn,
-        ));
-        self.emit_console_line(bus_contracts.as_str());
+        #[cfg(feature = "kernel")]
+        {
+            let selected = crate::hal::driver_task::pi4_pre_root_net_bootstrap_selection();
+            let line = format_message(format_args!(
+                "[smp] activity selected profile={} net={} active_contracts=selected-only",
+                crate::hal::driver_task::CURRENT_DRIVER_TASK_RUNTIME_PROFILE.as_str(),
+                selected.as_str(),
+            ));
+            self.emit_console_line(line.as_str());
+        }
+        self.emit_smp_activity_contract_group(&[
+            ("serial", SERIAL_DRIVER_TASK_CONTRACT),
+            ("usb", USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT),
+            ("hdmi", HDMI_TEXT_DRIVER_TASK_CONTRACT),
+        ]);
+        self.emit_smp_activity_contract_group(&[
+            ("genet", GENET_DRIVER_TASK_CONTRACT),
+            ("cyw43", CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            ("virtio", VIRTIO_NET_DRIVER_TASK_CONTRACT),
+        ]);
+        self.emit_smp_activity_contract_group(&[
+            ("rtl8139", RTL8139_DRIVER_TASK_CONTRACT),
+            ("sdio", SDIO_HOST_DRIVER_TASK_CONTRACT),
+            ("pcie", PCIE_ROOT_DRIVER_TASK_CONTRACT),
+        ]);
         #[cfg(feature = "kernel")]
         crate::hal::driver_task::emit_boot_contract_proof();
+    }
+
+    fn emit_smp_activity_contract_group(
+        &mut self,
+        contracts: &[(&'static str, crate::hal::driver_task::DriverTaskContract)],
+    ) {
+        let mut line = HeaplessString::<256>::new();
+        let _ = write!(line, "[smp] activity contracts");
+        let mut emitted = false;
+        for (label, contract) in contracts.iter().copied() {
+            if !crate::hal::driver_task::driver_task_contract_active_for_current_profile(contract) {
+                continue;
+            }
+            emitted = true;
+            let _ = write!(
+                line,
+                " {}={}:{}:{}/{}/{}",
+                label,
+                contract.name,
+                contract.class.as_str(),
+                contract.budget.max_ops_per_turn,
+                contract.budget.max_bytes_per_turn,
+                contract.budget.max_frames_per_turn,
+            );
+        }
+        if emitted {
+            self.emit_console_line(line.as_str());
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -3280,20 +3442,86 @@ where
             Self::yes_no(proof.affinity_proof),
         ));
         self.emit_console_line(line.as_str());
-        let drivers = format_message(format_args!(
-            "[smp] activity affinity-drivers policy=manifest serial={} usb={} hdmi={} genet={} cyw43={} rtl8139={} virtio={} sdio={} pcie={} applied_proof={}",
-            Self::format_optional_core(policy.drivers.serial).as_str(),
-            Self::format_optional_core(policy.drivers.usb_local_seat).as_str(),
-            Self::format_optional_core(policy.drivers.hdmi_text).as_str(),
-            Self::format_optional_core(policy.drivers.bcmgenet_v5).as_str(),
-            Self::format_optional_core(policy.drivers.cyw43455).as_str(),
-            Self::format_optional_core(policy.drivers.rtl8139).as_str(),
-            Self::format_optional_core(policy.drivers.virtio_net).as_str(),
-            Self::format_optional_core(policy.drivers.sdio_host).as_str(),
-            Self::format_optional_core(policy.drivers.pcie_root).as_str(),
-            Self::yes_no(proof.affinity_proof),
-        ));
+        let mut drivers = HeaplessString::<256>::new();
+        let _ = write!(drivers, "[smp] activity affinity-drivers policy=selected");
+        Self::push_smp_activity_affinity_driver(
+            &mut drivers,
+            "serial",
+            crate::hal::driver_task::SERIAL_DRIVER_TASK_CONTRACT,
+            policy.drivers.serial,
+        );
+        Self::push_smp_activity_affinity_driver(
+            &mut drivers,
+            "usb",
+            crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            policy.drivers.usb_local_seat,
+        );
+        Self::push_smp_activity_affinity_driver(
+            &mut drivers,
+            "hdmi",
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            policy.drivers.hdmi_text,
+        );
+        Self::push_smp_activity_affinity_driver(
+            &mut drivers,
+            "genet",
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            policy.drivers.bcmgenet_v5,
+        );
+        Self::push_smp_activity_affinity_driver(
+            &mut drivers,
+            "cyw43",
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            policy.drivers.cyw43455,
+        );
+        Self::push_smp_activity_affinity_driver(
+            &mut drivers,
+            "rtl8139",
+            crate::hal::driver_task::RTL8139_DRIVER_TASK_CONTRACT,
+            policy.drivers.rtl8139,
+        );
+        Self::push_smp_activity_affinity_driver(
+            &mut drivers,
+            "virtio",
+            crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+            policy.drivers.virtio_net,
+        );
+        Self::push_smp_activity_affinity_driver(
+            &mut drivers,
+            "sdio",
+            crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            policy.drivers.sdio_host,
+        );
+        Self::push_smp_activity_affinity_driver(
+            &mut drivers,
+            "pcie",
+            crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            policy.drivers.pcie_root,
+        );
+        let _ = write!(
+            drivers,
+            " applied_proof={}",
+            Self::yes_no(proof.affinity_proof)
+        );
         self.emit_console_line(drivers.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn push_smp_activity_affinity_driver<const N: usize>(
+        line: &mut HeaplessString<N>,
+        label: &str,
+        contract: crate::hal::driver_task::DriverTaskContract,
+        core: Option<u8>,
+    ) {
+        if !crate::hal::driver_task::driver_task_contract_active_for_current_profile(contract) {
+            return;
+        }
+        let _ = write!(
+            line,
+            " {}={}",
+            label,
+            Self::format_optional_core(core).as_str()
+        );
     }
 
     #[cfg(not(feature = "kernel"))]
@@ -6155,10 +6383,11 @@ where
             "function2-ready",
             Self::wifi_startup_gate_status(7, proof_gate, failing_gate),
             format_args!(
-                "f2_enabled={} f2_ready={} f2_state={}",
+                "f2_enabled={} f2_ready={} f2_state={} dependency={}",
                 Self::yes_no(f2_enabled),
                 Self::yes_no(f2_ready),
                 snapshot.map_or("unknown", |snapshot| snapshot.control_plane_f2_state),
+                Self::wifi_gate_dependency_label(7, failing_gate),
             ),
             "firmware-channel",
         );
@@ -6167,7 +6396,7 @@ where
             "firmware-channel",
             Self::wifi_startup_gate_status(8, proof_gate, failing_gate),
             format_args!(
-                "exact={} sdhci={} reply_mode={}",
+                "exact={} sdhci={} reply_mode={} dependency={}",
                 if exact_error.is_empty() {
                     "none"
                 } else {
@@ -6175,6 +6404,7 @@ where
                 },
                 snapshot.map_or("unknown", |snapshot| snapshot.control_plane_sdhci_read_diag),
                 snapshot.map_or("unknown", |snapshot| snapshot.control_plane_reply_mode),
+                Self::wifi_gate_dependency_label(8, failing_gate),
             ),
             "dhcp-bound",
         );
@@ -6182,21 +6412,30 @@ where
             9,
             "dhcp-bound",
             Self::wifi_startup_gate_status(9, proof_gate, failing_gate),
-            format_args!("{}", self.wifi_diag_network_evidence()),
+            format_args!(
+                "{} dependency={}",
+                self.wifi_diag_network_evidence(),
+                Self::wifi_gate_dependency_label(9, failing_gate),
+            ),
             "nettest-netstats-cohsh",
         );
         self.emit_wifi_gate_line(
             10,
             "nettest-netstats-cohsh",
             Self::wifi_startup_gate_status(10, proof_gate, failing_gate),
-            format_args!("{}", self.wifi_diag_acceptance_evidence()),
+            format_args!(
+                "{} dependency={}",
+                self.wifi_diag_acceptance_evidence(),
+                Self::wifi_gate_dependency_label(10, failing_gate),
+            ),
             "acceptance-complete",
         );
         if let Some(fault) = fault {
             let fault_line = format_message(format_args!(
-                "wifi: evidence cyw43 stage={} op={} target=0x{:08x} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
+                "wifi: evidence cyw43 stage={} op={} flags=0x{:04x} target=0x{:08x} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
                 fault.stage,
                 fault.op,
+                fault.flags,
                 fault.target_addr,
                 fault.payload_len,
                 fault.total_len,
@@ -6206,11 +6445,17 @@ where
             ));
             self.emit_console_line(fault_line.as_str());
             let cmd53 = format_message(format_args!(
-                "wifi: evidence sdio_cmd53 func=runtime-private addr=0x{:08x} len={} block_mode=runtime-private op={} descriptor_status={}",
+                "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} len={} increment={} block_mode={} op={} descriptor_status={} transfer_stage={} transfer_status=0x{:06x} r5=0x{:04x}",
+                Self::wifi_cyw43_fault_cmd53_function(fault),
                 fault.target_addr,
                 fault.payload_len,
+                Self::wifi_cyw43_fault_cmd53_increment(fault),
+                Self::wifi_cyw43_fault_cmd53_mode(fault),
                 fault.op,
                 Self::wifi_cyw43_fault_descriptor_status(fault.detail),
+                Self::wifi_sdio_transfer_failure_stage(fault.result),
+                Self::wifi_sdio_transfer_failure_status(fault.result),
+                Self::wifi_sdio_transfer_failure_r5(fault.result),
             ));
             self.emit_console_line(cmd53.as_str());
         }
@@ -6260,6 +6505,18 @@ where
             "pass"
         } else {
             "blocked"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_gate_dependency_label(
+        gate: u8,
+        failing_gate: u8,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        if failing_gate != 0 && gate > failing_gate {
+            format_message(format_args!("not-reached-due-to-gate-{failing_gate}"))
+        } else {
+            format_message(format_args!("ready-for-direct-evidence"))
         }
     }
 
@@ -6329,6 +6586,41 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn wifi_cyw43_fault_cmd53_function(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> &'static str {
+        match fault.op {
+            2 | 3 => "1",
+            7 | 8 | 9 | 10 => "2",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_cyw43_fault_cmd53_increment(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> &'static str {
+        match fault.op {
+            2 | 3 => "yes",
+            7 | 8 | 9 | 10 => "no",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_cyw43_fault_cmd53_mode(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> &'static str {
+        match fault.op {
+            2 if fault.flags & 1 != 0 => "byte-retry",
+            2 => "block-first",
+            3 => "byte",
+            7 | 8 | 9 | 10 => "fifo-fixed",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     const fn wifi_cyw43_fault_descriptor_status(detail: u16) -> &'static str {
         match detail {
             0x5103 => "descriptor-transfer-failed",
@@ -6336,6 +6628,32 @@ where
             0x5104 => "host-config-failed",
             0x5101 => "runtime-command-unavailable",
             _ => "not-classified",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_sdio_transfer_failure_stage(result: u32) -> &'static str {
+        match (result >> 24) & 0xff {
+            1 => "inhibit",
+            2 => "command",
+            3 => "data-wait",
+            4 => "data-end",
+            5 => "response",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_sdio_transfer_failure_status(result: u32) -> u32 {
+        result & 0x00ff_ffff
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_sdio_transfer_failure_r5(result: u32) -> u32 {
+        if ((result >> 24) & 0xff) == 5 {
+            Self::wifi_sdio_transfer_failure_status(result) & 0xcb00
+        } else {
+            0
         }
     }
 
@@ -9537,6 +9855,39 @@ mod tests {
         assert_eq!(backoff.observe(false), Some(2));
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_diag_decodes_sdio_transfer_failure_result() {
+        type TestPump<'a> = EventPump<
+            'a,
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >;
+
+        let response_r5 = (5 << 24) | 0x0100;
+        assert_eq!(
+            TestPump::wifi_sdio_transfer_failure_stage(response_r5),
+            "response"
+        );
+        assert_eq!(
+            TestPump::wifi_sdio_transfer_failure_status(response_r5),
+            0x0100
+        );
+        assert_eq!(TestPump::wifi_sdio_transfer_failure_r5(response_r5), 0x0100);
+
+        let data_wait = (3 << 24) | 0x0000_8000;
+        assert_eq!(
+            TestPump::wifi_sdio_transfer_failure_stage(data_wait),
+            "data-wait"
+        );
+        assert_eq!(TestPump::wifi_sdio_transfer_failure_r5(data_wait), 0);
+    }
+
     #[cfg(feature = "net-console")]
     #[test]
     fn net_diag_idle_requires_zero_tx_drops() {
@@ -11663,8 +12014,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_and_usb_keyboards_share_parser_after_usb_polling_enabled() {
-        let driver = LoopbackSerial::<4096>::new();
-        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::repeated(2, 1);
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -12040,8 +12391,8 @@ mod tests {
     #[test]
     fn tail_command_emits_end_sentinel() {
         let _root_guard = ReachableRootGuard::new(1);
-        let driver = LoopbackSerial::<2048>::new();
-        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let store: TicketTable<4> = TicketTable::new();
@@ -12717,7 +13068,7 @@ mod tests {
         pump.serial_mut()
             .driver_mut()
             .push_rx(b"wifi dump-state\nusb status\n");
-        for _ in 0..8 {
+        for _ in 0..512 {
             pump.poll();
         }
         let command_transcript: Vec<u8> = pump
@@ -12897,16 +13248,13 @@ mod tests {
             .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
-        for _ in 0..8 {
+        let mut transcript = Vec::new();
+        for _ in 0..128 {
             pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         }
 
-        let transcript: Vec<u8> = pump
-            .serial_mut()
-            .driver_mut()
-            .drain_tx()
-            .into_iter()
-            .collect();
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
             rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=cyw43-command driver-task runtime init failed"),

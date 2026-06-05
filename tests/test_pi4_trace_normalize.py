@@ -878,6 +878,26 @@ def test_gate_summary_tracks_wifi_startup_blackbox_gates() -> None:
     assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
 
 
+def test_gate_summary_keeps_wifi_blackbox_fault_over_later_prompt_replay() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 5 name=backplane-window status=pass evidence=programmed=0x00198000 next=firmware-upload",
+            "wifi: gate 6 name=firmware-upload status=fail evidence=uploaded=no fault_detail=0x5103 next=function2-ready",
+            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0001 target=0x00199c00 payload_len=1024 total_len=609309 detail=0x5103 reason=sdio-descriptor-transfer-failed result=0x05000100",
+            "wifi: evidence sdio_cmd53 func=1 addr=0x00199c00 len=1024 increment=yes block_mode=byte-retry op=2 descriptor_status=descriptor-transfer-failed transfer_stage=response transfer_status=0x000100 r5=0x0100",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host selected=wifi-owner-link attempted=yes stage=load-fw blocker=unsupported",
+            "wifi: debug subcommand=load-fw result=error error=unsupported",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
+    assert gates.wifi_exact == "cyw43-sdio-descriptor-transfer-failed"
+    assert gates.wifi_phase == "cyw43-firmware-chunk"
+
+
 def test_gate_summary_labels_pre_prompt_wifi_sdio_driver_task_deferral() -> None:
     events = normalizer.parse_events(
         [

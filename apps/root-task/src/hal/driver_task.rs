@@ -73,6 +73,16 @@ pub enum Pi4PreRootNetBootstrapSelection {
 }
 
 impl Pi4PreRootNetBootstrapSelection {
+    /// Stable diagnostic label for the selected pre-root Pi 4 NIC.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Wired => "wired",
+            Self::Wifi => "wifi",
+        }
+    }
+
     #[cfg(feature = "kernel")]
     const fn as_u32(self) -> u32 {
         match self {
@@ -152,6 +162,38 @@ pub fn pi4_pre_root_net_bootstrap_selection() -> Pi4PreRootNetBootstrapSelection
     Pi4PreRootNetBootstrapSelection::from_u32(
         PI4_PRE_ROOT_NET_BOOTSTRAP_SELECTION.load(Ordering::Acquire),
     )
+}
+
+/// Returns whether a Pi 4 hardware contract is active for the selected boot NIC.
+#[must_use]
+pub const fn pi4_contract_active_for_selection(
+    selection: Pi4PreRootNetBootstrapSelection,
+    contract: DriverTaskContract,
+) -> bool {
+    match contract.kind {
+        DriverTaskKind::Serial
+        | DriverTaskKind::LocalSeatUsb
+        | DriverTaskKind::HdmiText
+        | DriverTaskKind::PcieRoot => true,
+        DriverTaskKind::WifiNic | DriverTaskKind::SdioHost => {
+            matches!(selection, Pi4PreRootNetBootstrapSelection::Wifi)
+        }
+        DriverTaskKind::WiredNic => matches!(selection, Pi4PreRootNetBootstrapSelection::Wired),
+        DriverTaskKind::VirtualNic => false,
+    }
+}
+
+/// Current-build admission for selected Pi 4 hardware contracts.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn pi4_contract_active_for_current_selection(contract: DriverTaskContract) -> bool {
+    if !matches!(
+        CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
+        DriverTaskRuntimeProfile::Pi4Hardware
+    ) {
+        return true;
+    }
+    pi4_contract_active_for_selection(pi4_pre_root_net_bootstrap_selection(), contract)
 }
 
 /// Whether this build is the physical Pi 4 owner-state cutover profile.
@@ -459,16 +501,20 @@ pub const fn root_fallback_allowed_for_profile(profile: DriverTaskRuntimeProfile
 /// reserves blocking reply-path service for post-prompt steady state. Network
 /// runtimes, USB local-seat proof, SDIO bus-owner proof, and PCIe root proof
 /// are allowed to make progress only after the root shell is available, so a
-/// selected or fallback NIC, wedged local-seat runtime, SDIO bus-owner runtime,
-/// or unresponsive PCIe root runtime cannot starve serial and display console
-/// availability.
+/// selected NIC, wedged local-seat runtime, SDIO bus-owner runtime, or
+/// unresponsive PCIe root runtime cannot starve serial and display console
+/// availability. Unselected Pi NIC contracts are not pre-root runtime-init
+/// candidates.
 #[must_use]
 pub const fn pre_root_runtime_init_deferred_for_profile(
     profile: DriverTaskRuntimeProfile,
-    _selection: Pi4PreRootNetBootstrapSelection,
+    selection: Pi4PreRootNetBootstrapSelection,
     contract: DriverTaskContract,
 ) -> bool {
     if !matches!(profile, DriverTaskRuntimeProfile::Pi4Hardware) {
+        return false;
+    }
+    if !pi4_contract_active_for_selection(selection, contract) {
         return false;
     }
     matches!(
@@ -1711,8 +1757,8 @@ pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
 const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
-const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = 64;
-const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = 64;
+const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
+const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 
 #[cfg(feature = "kernel")]
@@ -4536,6 +4582,97 @@ pub const REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK: usize = DriverTaskHotPath::Ser
 /// Current owner-state hot-path mask admitted for acceptance.
 pub const REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK: usize = REQUIRED_PI4_OWNER_STATE_HOT_PATH_MASK;
 
+/// Selected Pi 4 hardware hot-path mask. PCIe remains active because USB/VL805
+/// ownership depends on the PCIe root bus-owner runtime.
+#[must_use]
+pub const fn pi4_acceptance_hot_path_mask_for_selection(
+    selection: Pi4PreRootNetBootstrapSelection,
+) -> usize {
+    let base = DriverTaskHotPath::SerialConsole.owner_state_bit()
+        | DriverTaskHotPath::UsbKeyboard.owner_state_bit()
+        | DriverTaskHotPath::HdmiText.owner_state_bit()
+        | DriverTaskHotPath::PcieRoot.owner_state_bit();
+    match selection {
+        Pi4PreRootNetBootstrapSelection::Wifi => {
+            base | DriverTaskHotPath::Cyw43Wifi.owner_state_bit()
+                | DriverTaskHotPath::SdioHost.owner_state_bit()
+        }
+        Pi4PreRootNetBootstrapSelection::Wired => {
+            base | DriverTaskHotPath::GenetNic.owner_state_bit()
+        }
+        Pi4PreRootNetBootstrapSelection::Disabled => base,
+    }
+}
+
+/// Required Pi 4 role coverage for the selected boot NIC.
+#[must_use]
+pub const fn pi4_acceptance_role_mask_for_selection(
+    selection: Pi4PreRootNetBootstrapSelection,
+) -> usize {
+    let base = DRIVER_TASK_ROLE_SERIAL_BIT
+        | DRIVER_TASK_ROLE_USB_BIT
+        | DRIVER_TASK_ROLE_DISPLAY_BIT
+        | DRIVER_TASK_ROLE_PCIE_BIT;
+    match selection {
+        Pi4PreRootNetBootstrapSelection::Wifi => {
+            base | DRIVER_TASK_ROLE_NET_BIT | DRIVER_TASK_ROLE_SDIO_BIT
+        }
+        Pi4PreRootNetBootstrapSelection::Wired => base | DRIVER_TASK_ROLE_NET_BIT,
+        Pi4PreRootNetBootstrapSelection::Disabled => base,
+    }
+}
+
+/// Required dedicated-task count for the selected Pi 4 runtime set.
+#[must_use]
+pub const fn pi4_acceptance_hot_path_count_for_selection(
+    selection: Pi4PreRootNetBootstrapSelection,
+) -> usize {
+    match selection {
+        Pi4PreRootNetBootstrapSelection::Wifi => 6,
+        Pi4PreRootNetBootstrapSelection::Wired => 5,
+        Pi4PreRootNetBootstrapSelection::Disabled => 4,
+    }
+}
+
+/// Current selected Pi 4 hot-path mask.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn current_pi4_acceptance_hot_path_mask() -> usize {
+    if !matches!(
+        CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
+        DriverTaskRuntimeProfile::Pi4Hardware
+    ) {
+        return REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK;
+    }
+    pi4_acceptance_hot_path_mask_for_selection(pi4_pre_root_net_bootstrap_selection())
+}
+
+/// Current selected Pi 4 role mask.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn current_pi4_acceptance_role_mask() -> usize {
+    if !matches!(
+        CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
+        DriverTaskRuntimeProfile::Pi4Hardware
+    ) {
+        return REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK;
+    }
+    pi4_acceptance_role_mask_for_selection(pi4_pre_root_net_bootstrap_selection())
+}
+
+/// Current selected Pi 4 active runtime count.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn current_pi4_acceptance_hot_path_count() -> usize {
+    if !matches!(
+        CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
+        DriverTaskRuntimeProfile::Pi4Hardware
+    ) {
+        return REQUIRED_PI4_ACCEPTANCE_HOT_PATHS;
+    }
+    pi4_acceptance_hot_path_count_for_selection(pi4_pre_root_net_bootstrap_selection())
+}
+
 /// Pointer-free service handler for bus-owner roles whose concrete hardware
 /// queues are not allowed to fall back to root-owned pointer contexts.
 ///
@@ -5154,8 +5291,40 @@ pub struct DriverTaskIsolationSummary {
 /// Count built-in contract isolation modes after validation.
 #[must_use]
 pub fn builtin_isolation_summary() -> DriverTaskIsolationSummary {
+    builtin_isolation_summary_matching(|_| true)
+}
+
+/// Whether a contract is active for the current runtime profile and selected
+/// Pi 4 boot NIC.
+#[must_use]
+pub fn driver_task_contract_active_for_current_profile(contract: DriverTaskContract) -> bool {
+    #[cfg(feature = "kernel")]
+    {
+        if matches!(
+            CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
+            DriverTaskRuntimeProfile::Pi4Hardware
+        ) {
+            return pi4_contract_active_for_current_selection(contract);
+        }
+    }
+    let _ = contract;
+    true
+}
+
+/// Count only contracts admitted by the current profile and selected boot NIC.
+#[must_use]
+pub fn active_builtin_isolation_summary() -> DriverTaskIsolationSummary {
+    builtin_isolation_summary_matching(driver_task_contract_active_for_current_profile)
+}
+
+fn builtin_isolation_summary_matching(
+    mut active: impl FnMut(DriverTaskContract) -> bool,
+) -> DriverTaskIsolationSummary {
     let mut summary = DriverTaskIsolationSummary::default();
     for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
+        if !active(*contract) {
+            continue;
+        }
         if contract.validate().is_err() {
             continue;
         }
@@ -5183,9 +5352,22 @@ pub fn builtin_isolation_summary() -> DriverTaskIsolationSummary {
 /// acceptance bar.
 #[must_use]
 pub fn dedicated_driver_task_acceptance_ready() -> bool {
-    let summary = builtin_isolation_summary();
+    let summary = active_builtin_isolation_summary();
     let proof = driver_task_runtime_proof();
-    driver_task_acceptance_ready_for(summary, proof)
+    #[cfg(feature = "kernel")]
+    {
+        return driver_task_acceptance_ready_for_selected(
+            summary,
+            proof,
+            current_pi4_acceptance_role_mask(),
+            current_pi4_acceptance_hot_path_mask(),
+            current_pi4_acceptance_hot_path_count(),
+        );
+    }
+    #[cfg(not(feature = "kernel"))]
+    {
+        driver_task_acceptance_ready_for(summary, proof)
+    }
 }
 
 /// Evaluates dedicated-driver-task acceptance from explicit proof inputs.
@@ -5193,6 +5375,24 @@ pub fn dedicated_driver_task_acceptance_ready() -> bool {
 pub const fn driver_task_acceptance_ready_for(
     summary: DriverTaskIsolationSummary,
     proof: DriverTaskRuntimeProof,
+) -> bool {
+    driver_task_acceptance_ready_for_selected(
+        summary,
+        proof,
+        REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK,
+        REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK,
+        MIN_DEDICATED_PI4_DRIVER_TASKS,
+    )
+}
+
+/// Evaluates acceptance against an explicit selected-driver requirement set.
+#[must_use]
+pub const fn driver_task_acceptance_ready_for_selected(
+    summary: DriverTaskIsolationSummary,
+    proof: DriverTaskRuntimeProof,
+    required_role_mask: usize,
+    required_hot_path_mask: usize,
+    required_dedicated_tasks: usize,
 ) -> bool {
     proof.substrate_active
         && proof.capset_proof
@@ -5203,17 +5403,13 @@ pub const fn driver_task_acceptance_ready_for(
         && proof.vspace_proof
         && proof.pointer_free_ipc_proof
         && proof.owner_state_proof
-        && proof.owner_state_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-        && proof.owner_state_hot_path_mask & REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
-            == REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
+        && proof.owner_state_role_mask & required_role_mask == required_role_mask
+        && proof.owner_state_hot_path_mask & required_hot_path_mask == required_hot_path_mask
         && proof.broad_caps_leaked == 0
-        && proof.live_tcb_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-        && proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+        && proof.live_tcb_role_mask & required_role_mask == required_role_mask
+        && proof.hot_path_role_mask & required_role_mask == required_role_mask
         && proof.compatibility_service_role_mask & REQUIRED_DRIVER_TASK_ROLE_MASK == 0
-        && summary.dedicated_sel4_tasks >= MIN_DEDICATED_PI4_DRIVER_TASKS
+        && summary.dedicated_sel4_tasks >= required_dedicated_tasks
         && summary.root_task_compatibility == 0
 }
 
@@ -5230,6 +5426,9 @@ pub fn emit_boot_contract_proof() {
     } else {
         CURRENT_DRIVER_TASK_IPC_ABI
     };
+    let required_role_mask = current_pi4_acceptance_role_mask();
+    let required_hot_path_mask = current_pi4_acceptance_hot_path_mask();
+    let required_hot_path_count = current_pi4_acceptance_hot_path_count();
     let mut line = String::<192>::new();
     let _ = write!(
         line,
@@ -5245,13 +5444,23 @@ pub fn emit_boot_contract_proof() {
             "no"
         },
         if proof.substrate_active { "yes" } else { "no" },
-        if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-        {
+        if proof.hot_path_role_mask & required_role_mask == required_role_mask {
             "yes"
         } else {
             "no"
         },
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+
+    let mut line = String::<512>::new();
+    let _ = write!(
+        line,
+        "DRIVER_TASK_SELECTED profile={} selection={} required_roles=0x{:x} required_hot_paths=0x{:x} required_tasks={}",
+        CURRENT_DRIVER_TASK_RUNTIME_PROFILE.as_str(),
+        pi4_pre_root_net_bootstrap_selection().as_str(),
+        required_role_mask,
+        required_hot_path_mask,
+        required_hot_path_count,
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
 
@@ -5278,8 +5487,7 @@ pub fn emit_boot_contract_proof() {
         } else {
             "root-owned"
         },
-        if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-            == REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
+        if proof.hot_path_role_mask & required_role_mask == required_role_mask
         {
             "yes"
         } else {
@@ -5287,8 +5495,10 @@ pub fn emit_boot_contract_proof() {
         },
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
-
     for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
+        if !driver_task_contract_active_for_current_profile(*contract) {
+            continue;
+        }
         let mut line = String::<384>::new();
         let status = if contract.validate().is_ok() {
             "valid"
@@ -5390,7 +5600,7 @@ pub fn emit_boot_contract_proof() {
         crate::bootstrap::log::force_uart_line(line.as_str());
     }
 
-    let summary = builtin_isolation_summary();
+    let summary = active_builtin_isolation_summary();
     let mut line = String::<320>::new();
     let _ = write!(
         line,
@@ -5409,6 +5619,9 @@ pub fn emit_boot_contract_proof() {
     crate::bootstrap::log::force_uart_line(line.as_str());
 
     for hot_path in PI4_DRIVER_TASK_HOT_PATHS {
+        if required_hot_path_mask & hot_path.owner_state_bit() == 0 {
+            continue;
+        }
         let contract = hot_path.contract();
         let present = proof.owner_state_hot_path_mask & hot_path.owner_state_bit() != 0;
         let mut line = String::<192>::new();
@@ -5440,9 +5653,7 @@ pub fn emit_boot_contract_proof() {
         "driver-task-pointer-free-ipc-not-proven"
     } else if !proof.owner_state_proof {
         "driver-task-owner-state-not-proven"
-    } else if proof.hot_path_role_mask & REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-        != REQUIRED_DRIVER_TASK_ACCEPTANCE_ROLE_MASK
-    {
+    } else if proof.hot_path_role_mask & required_role_mask != required_role_mask {
         DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_MISSING
     } else if summary.root_task_compatibility != 0 {
         "root-task-compatibility-contracts-active"
@@ -5454,7 +5665,7 @@ pub fn emit_boot_contract_proof() {
         "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} owner_state_hot_paths=0x{:x} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
         if ready { "yes" } else { "no" },
         reason,
-        MIN_DEDICATED_PI4_DRIVER_TASKS,
+        required_hot_path_count,
         summary.dedicated_sel4_tasks,
         summary.root_task_compatibility,
         if proof.substrate_active { "active" } else { "inactive" },
@@ -5561,7 +5772,7 @@ mod tests {
             Pi4PreRootNetBootstrapSelection::Wifi,
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT
         ));
-        assert!(pre_root_runtime_init_deferred_for_profile(
+        assert!(!pre_root_runtime_init_deferred_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware,
             Pi4PreRootNetBootstrapSelection::Wifi,
             GENET_DRIVER_TASK_CONTRACT
@@ -5571,7 +5782,7 @@ mod tests {
             Pi4PreRootNetBootstrapSelection::Wifi,
             CYW43_WIFI_DRIVER_TASK_CONTRACT
         ));
-        assert!(pre_root_runtime_init_deferred_for_profile(
+        assert!(!pre_root_runtime_init_deferred_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware,
             Pi4PreRootNetBootstrapSelection::Wired,
             CYW43_WIFI_DRIVER_TASK_CONTRACT
@@ -5584,6 +5795,11 @@ mod tests {
         assert!(pre_root_runtime_init_deferred_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware,
             Pi4PreRootNetBootstrapSelection::Wifi,
+            SDIO_HOST_DRIVER_TASK_CONTRACT
+        ));
+        assert!(!pre_root_runtime_init_deferred_for_profile(
+            DriverTaskRuntimeProfile::Pi4Hardware,
+            Pi4PreRootNetBootstrapSelection::Wired,
             SDIO_HOST_DRIVER_TASK_CONTRACT
         ));
         assert!(pre_root_runtime_init_deferred_for_profile(
@@ -6288,6 +6504,10 @@ mod tests {
             ),
             DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS
         );
+        assert_eq!(
+            DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS,
+            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+        );
 
         command.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
         assert_eq!(
@@ -6297,6 +6517,10 @@ mod tests {
                 DriverTaskRingCommandMode::PromptSlice
             ),
             DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
+        );
+        assert_eq!(
+            DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS,
+            DRIVER_TASK_PROMPT_RING_ATTEMPTS
         );
     }
 
