@@ -462,9 +462,9 @@ pub(crate) fn usb_runtime_command_replay_ready(
 #[must_use]
 pub(crate) const fn local_seat_pre_root_runtime_init_allowed(
     physical_pi_owner_state: bool,
-    _pointer_free_ipc_proof: bool,
+    pointer_free_ipc_proof: bool,
 ) -> bool {
-    !physical_pi_owner_state
+    !physical_pi_owner_state || pointer_free_ipc_proof
 }
 
 /// Return whether display mirroring may submit a linked-runtime service turn.
@@ -482,8 +482,9 @@ pub(crate) const fn local_seat_linked_display_service_allowed(
 pub(crate) const fn local_seat_prompt_steady_service_allowed(
     physical_pi_owner_state: bool,
     root_console_ready: bool,
+    pointer_free_ipc_proof: bool,
 ) -> bool {
-    !physical_pi_owner_state || root_console_ready
+    !physical_pi_owner_state || root_console_ready || pointer_free_ipc_proof
 }
 
 /// Return whether prompt-side HDMI attach should retry after a transient miss.
@@ -504,8 +505,9 @@ pub(crate) const fn local_seat_display_attach_retry_allowed(
 pub(crate) const fn local_seat_keyboard_poll_suspends_on_missing_reply(
     physical_pi_owner_state: bool,
     root_console_ready: bool,
+    keyboard_ready: bool,
 ) -> bool {
-    physical_pi_owner_state && root_console_ready
+    physical_pi_owner_state && root_console_ready && !keyboard_ready
 }
 
 /// Return whether a display mirror miss should preserve the serial shell.
@@ -1439,6 +1441,22 @@ impl LocalSeatRuntime {
     /// Poll the platform local-seat input backend and enqueue discovered bytes.
     pub fn poll_backend_keyboard(&mut self) {
         if !self.backend_keyboard_polling_enabled {
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
+            {
+                if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                    && LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
+                {
+                    self.backend_keyboard_polling_enabled = true;
+                    self.backend_keyboard_poll_deferred_logged = false;
+                }
+            }
+        }
+        if !self.backend_keyboard_polling_enabled {
             if !self.backend_keyboard_poll_deferred_logged {
                 #[cfg(all(
                     feature = "kernel",
@@ -1502,6 +1520,7 @@ impl LocalSeatRuntime {
                     if local_seat_keyboard_poll_suspends_on_missing_reply(
                         true,
                         self.root_console_ready,
+                        keyboard_ready,
                     ) {
                         self.backend_keyboard_polling_enabled = false;
                         if !self.backend_keyboard_poll_deferred_logged {
@@ -1511,6 +1530,13 @@ impl LocalSeatRuntime {
                             self.backend_keyboard_poll_deferred_logged = true;
                         }
                     }
+                    self.refresh_usb_owner_record();
+                    self.refresh_hdmi_owner_record();
+                    return;
+                }
+                if LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire)
+                    && !LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
+                {
                     self.refresh_usb_owner_record();
                     self.refresh_hdmi_owner_record();
                     return;
@@ -1618,8 +1644,11 @@ impl LocalSeatRuntime {
                 }
                 self.driver_task_budget_overruns =
                     self.driver_task_budget_overruns.saturating_add(1);
-                if local_seat_keyboard_poll_suspends_on_missing_reply(true, self.root_console_ready)
-                {
+                if local_seat_keyboard_poll_suspends_on_missing_reply(
+                    true,
+                    self.root_console_ready,
+                    LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire),
+                ) {
                     self.backend_keyboard_polling_enabled = false;
                     if !self.backend_keyboard_poll_deferred_logged {
                         boot_log::force_uart_line(
@@ -2106,14 +2135,38 @@ const fn linked_local_seat_usb_detail_rank(detail: u16) -> u8 {
     target_arch = "aarch64",
     target_os = "none"
 ))]
+const fn linked_local_seat_usb_detail_warrants_recovery(detail: u16) -> bool {
+    matches!(
+        detail,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+    )
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 fn record_linked_local_seat_usb_detail(
     completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
 ) {
     if let Some(completion) = completion {
         if completion.detail != 0 {
             let old = LINKED_LOCAL_SEAT_USB_LAST_DETAIL.load(Ordering::Acquire) as u16;
-            if linked_local_seat_usb_detail_rank(completion.detail)
-                >= linked_local_seat_usb_detail_rank(old)
+            let old_rank = linked_local_seat_usb_detail_rank(old);
+            let new_rank = linked_local_seat_usb_detail_rank(completion.detail);
+            if new_rank >= old_rank
+                || (old_rank
+                    < linked_local_seat_usb_detail_rank(
+                        DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
+                    )
+                    && linked_local_seat_usb_detail_warrants_recovery(completion.detail))
             {
                 LINKED_LOCAL_SEAT_USB_LAST_DETAIL
                     .store(completion.detail as usize, Ordering::Release);
@@ -2304,6 +2357,7 @@ fn try_attach_linked_display_runtime(root_console_ready: bool) -> bool {
     if !local_seat_prompt_steady_service_allowed(
         crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
         root_console_ready,
+        crate::hal::driver_task::driver_task_runtime_proof().pointer_free_ipc_proof,
     ) {
         return false;
     }
@@ -2340,9 +2394,10 @@ fn try_attach_linked_display_runtime(root_console_ready: bool) -> bool {
             crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
         ),
     );
-    let hdmi_completion = run_local_seat_driver_task_ring_service(
+    let hdmi_completion = run_local_seat_driver_task_ring_service_with_prompt_state(
         crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
         hdmi_command,
+        root_console_ready,
     );
     let hdmi_ok = hdmi_completion.is_some_and(|completion| {
         completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
@@ -2422,6 +2477,7 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
     if !local_seat_prompt_steady_service_allowed(
         crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
         root_console_ready,
+        crate::hal::driver_task::driver_task_runtime_proof().pointer_free_ipc_proof,
     ) {
         return false;
     }
@@ -2517,7 +2573,11 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 None,
             );
         }
-        let pcie_completion = run_local_seat_driver_task_ring_service(pcie_contract, pcie_command);
+        let pcie_completion = run_local_seat_driver_task_ring_service_with_prompt_state(
+            pcie_contract,
+            pcie_command,
+            root_console_ready,
+        );
         let pcie_ready = pcie_completion.is_some_and(|completion| {
             completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                 && completion.result == 1
@@ -2622,7 +2682,11 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 None,
             );
         }
-        let mut usb_completion = run_local_seat_driver_task_ring_service(usb_contract, usb_command);
+        let mut usb_completion = run_local_seat_driver_task_ring_service_with_prompt_state(
+            usb_contract,
+            usb_command,
+            root_console_ready,
+        );
         record_linked_local_seat_usb_detail(usb_completion);
         let mut usb_controller_ready = local_seat_usb_engine_init_ready(usb_completion);
         let mut usb_keyboard_ready = local_seat_usb_keyboard_init_ready(usb_completion);
@@ -2643,8 +2707,11 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                     "begin",
                     None,
                 );
-                let resume_completion =
-                    run_local_seat_driver_task_ring_service(usb_contract, usb_command);
+                let resume_completion = run_local_seat_driver_task_ring_service_with_prompt_state(
+                    usb_contract,
+                    usb_command,
+                    root_console_ready,
+                );
                 record_linked_local_seat_usb_detail(resume_completion);
                 crate::hal::driver_task::emit_driver_task_resource_init_status(
                     usb_contract,
@@ -2751,7 +2818,11 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 None,
             );
         }
-        let resume_completion = run_local_seat_driver_task_ring_service(usb_contract, usb_command);
+        let resume_completion = run_local_seat_driver_task_ring_service_with_prompt_state(
+            usb_contract,
+            usb_command,
+            root_console_ready,
+        );
         record_linked_local_seat_usb_detail(resume_completion);
         if let Some(completion) = resume_completion {
             if local_seat_usb_keyboard_init_ready(Some(completion)) {
@@ -3120,22 +3191,41 @@ fn run_local_seat_driver_task_ring_service(
     contract: crate::hal::driver_task::DriverTaskContract,
     command: crate::hal::driver_task::DriverTaskCommandRecord,
 ) -> Option<crate::hal::driver_task::DriverTaskCompletionRecord> {
-    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-        #[cfg(feature = "usb")]
-        let prompt_slice_aux = matches!(
-            command.aux0,
-            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
-        );
-        #[cfg(not(feature = "usb"))]
-        let prompt_slice_aux = command.aux0 == pi4_driver_abi::DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+    run_local_seat_driver_task_ring_service_with_prompt_state(contract, command, true)
+}
 
-        if prompt_slice_aux {
+#[cfg(feature = "kernel")]
+fn run_local_seat_driver_task_ring_service_with_prompt_state(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+    root_console_ready: bool,
+) -> Option<crate::hal::driver_task::DriverTaskCompletionRecord> {
+    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        if local_seat_driver_task_prompt_slice_required(command.aux0, root_console_ready) {
             crate::hal::driver_task::run_driver_task_ring_service_prompt_slice(contract, command)
         } else {
             crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
         }
     } else {
         crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn local_seat_driver_task_prompt_slice_required(aux0: u32, root_console_ready: bool) -> bool {
+    if !root_console_ready {
+        return false;
+    }
+    #[cfg(feature = "usb")]
+    {
+        matches!(
+            aux0,
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
+        )
+    }
+    #[cfg(not(feature = "usb"))]
+    {
+        aux0 == pi4_driver_abi::DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
     }
 }
 
@@ -4168,10 +4258,45 @@ mod tests {
     }
 
     #[test]
-    fn local_seat_pre_root_runtime_init_defers_physical_pi_until_shell() {
+    fn local_seat_pre_root_runtime_init_requires_runtime_proof_on_physical_pi() {
         assert!(!local_seat_pre_root_runtime_init_allowed(true, false));
-        assert!(!local_seat_pre_root_runtime_init_allowed(true, true));
+        assert!(local_seat_pre_root_runtime_init_allowed(true, true));
         assert!(local_seat_pre_root_runtime_init_allowed(false, false));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn local_seat_usb_init_and_enum_use_prompt_slice_only_after_prompt() {
+        assert!(!local_seat_driver_task_prompt_slice_required(
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            false
+        ));
+        assert!(!local_seat_driver_task_prompt_slice_required(
+            DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            false
+        ));
+        assert!(local_seat_driver_task_prompt_slice_required(
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            true
+        ));
+        assert!(local_seat_driver_task_prompt_slice_required(
+            DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            true
+        ));
+        assert!(!local_seat_driver_task_prompt_slice_required(0, true));
+    }
+
+    #[test]
+    fn prompt_side_keyboard_poll_suspends_after_missing_driver_reply() {
+        assert!(!local_seat_keyboard_poll_suspends_on_missing_reply(
+            true, false, false
+        ));
+        assert!(local_seat_keyboard_poll_suspends_on_missing_reply(
+            true, true, false
+        ));
+        assert!(!local_seat_keyboard_poll_suspends_on_missing_reply(
+            true, true, true
+        ));
     }
 
     #[test]
@@ -4288,22 +4413,30 @@ mod tests {
     }
 
     #[test]
-    fn physical_pi_local_seat_steady_service_requires_root_prompt() {
-        assert!(!local_seat_prompt_steady_service_allowed(true, false));
-        assert!(local_seat_prompt_steady_service_allowed(true, true));
-        assert!(local_seat_prompt_steady_service_allowed(false, false));
+    fn physical_pi_local_seat_steady_service_accepts_prompt_or_runtime_proof() {
+        assert!(!local_seat_prompt_steady_service_allowed(
+            true, false, false
+        ));
+        assert!(local_seat_prompt_steady_service_allowed(true, true, false));
+        assert!(local_seat_prompt_steady_service_allowed(true, false, true));
+        assert!(local_seat_prompt_steady_service_allowed(
+            false, false, false
+        ));
     }
 
     #[test]
     fn physical_pi_keyboard_poll_suspends_after_missing_reply_once_shell_is_live() {
         assert!(!local_seat_keyboard_poll_suspends_on_missing_reply(
-            true, false
+            true, false, false
         ));
         assert!(local_seat_keyboard_poll_suspends_on_missing_reply(
-            true, true
+            true, true, false
         ));
         assert!(!local_seat_keyboard_poll_suspends_on_missing_reply(
-            false, true
+            true, true, true
+        ));
+        assert!(!local_seat_keyboard_poll_suspends_on_missing_reply(
+            false, true, false
         ));
     }
 

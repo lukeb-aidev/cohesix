@@ -56,6 +56,8 @@ const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
 // 8192-byte SDIO shared window so firmware upload avoids repeated root-side
 // CMD53 setup churn while still bounding each root service turn.
 const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize = 1024;
+const CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL: usize = 32 * 1024;
+const CYW43_RUNTIME_STREAM_COMMAND_RETRIES: usize = 2;
 const SDIO_GO_IDLE_COMMAND_INDEX: u32 = 0;
 const SDIO_CMD5_OCR_COMMAND_INDEX: u32 = 5;
 const SDIO_CMD3_RCA_COMMAND_INDEX: u32 = 3;
@@ -131,6 +133,18 @@ impl Cyw43CommandSubmitError {
             _ => None,
         }
     }
+
+    fn same_command_retry_completion(self) -> Option<DriverTaskCompletionRecord> {
+        match self {
+            Self::Completion(completion)
+                if completion.code == DriverTaskCompletionCode::Fault.as_u16()
+                    && cyw43_fault_detail_allows_same_command_retry(completion.detail) =>
+            {
+                Some(completion)
+            }
+            _ => None,
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -152,6 +166,13 @@ impl Cyw43FirmwareInitError {
     fn recoverable_completion(self) -> Option<DriverTaskCompletionRecord> {
         match self {
             Self::Command(err) => err.recoverable_completion(),
+            _ => None,
+        }
+    }
+
+    fn same_command_retry_completion(self) -> Option<DriverTaskCompletionRecord> {
+        match self {
+            Self::Command(err) => err.same_command_retry_completion(),
             _ => None,
         }
     }
@@ -556,7 +577,10 @@ where
                             "sdio-owner-replay",
                             Some(completion),
                         );
-                        force_replay_sdio_host_linked_runtime(hal, "cyw43-firmware-recover")?;
+                        replay_sdio_host_linked_runtime_preserving_hal(
+                            hal,
+                            "cyw43-firmware-recover",
+                        )?;
                         recovered = true;
                         continue;
                     }
@@ -751,7 +775,7 @@ where
 }
 
 #[cfg(feature = "kernel")]
-fn force_replay_sdio_host_linked_runtime<H>(
+fn replay_sdio_host_linked_runtime_preserving_hal<H>(
     hal: &mut H,
     stage: &'static str,
 ) -> Result<(), DriverTaskNetError>
@@ -766,7 +790,7 @@ where
         None,
     );
     SDIO_LINKED_RUNTIME_READY.store(0, Ordering::Release);
-    SDIO_HAL_RESOURCE_READY.store(0, Ordering::Release);
+    emit_sdio_driver_task_replay_status("hal-resource-prep", "preserved-ready");
     match init_sdio_host_linked_runtime(hal) {
         Ok(()) => {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -923,6 +947,44 @@ fn cyw43_runtime_stream_payload_limit(desc_size: usize) -> Result<usize, Cyw43Fi
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_runtime_stream_progress_due(
+    offset: usize,
+    chunk_len: usize,
+    total_len: usize,
+) -> bool {
+    let uploaded = offset + chunk_len;
+    offset == 0
+        || uploaded == total_len
+        || offset / CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL
+            != uploaded / CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_runtime_stream_progress(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    uploaded: usize,
+    total_len: usize,
+    target_addr: u32,
+    chunk_len: usize,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<192>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_STREAM_PROGRESS contract={} stage={} uploaded={} total_len={} target=0x{:08x} chunk_len={}",
+        contract.name,
+        stage,
+        uploaded,
+        total_len,
+        target_addr,
+        chunk_len,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
 fn stream_cyw43_runtime_payload<H>(
     _hal: &mut H,
     contract: DriverTaskContract,
@@ -946,27 +1008,62 @@ where
             .ok_or(Cyw43FirmwareInitError::Runtime(
                 DriverTaskNetError::RuntimeInit("cyw43-target-range"),
             ))?;
-        if let Err(err) = submit_cyw43_runtime_command_checked(
-            contract,
-            DriverRuntimeCyw43CommandDescriptor {
-                op,
-                target_addr,
-                payload_len: chunk_len as u16,
-                total_len: total_len as u32,
-                ..DriverRuntimeCyw43CommandDescriptor::empty()
-            },
-            &payload[offset..offset + chunk_len],
-        ) {
-            if let Some(completion) = err.recoverable_completion() {
-                crate::hal::driver_task::emit_driver_task_resource_init_status(
-                    contract,
-                    DriverTaskHotPath::Cyw43Wifi,
-                    cyw43_runtime_command_stage(op),
-                    "stream-fault-restart-required",
-                    Some(completion),
-                );
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op,
+            target_addr,
+            payload_len: chunk_len as u16,
+            total_len: total_len as u32,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        let mut attempts = 0usize;
+        loop {
+            match submit_cyw43_runtime_command_checked(
+                contract,
+                descriptor,
+                &payload[offset..offset + chunk_len],
+            ) {
+                Ok(_) => break,
+                Err(err) => {
+                    if let Some(completion) = err.same_command_retry_completion() {
+                        attempts = attempts.saturating_add(1);
+                        let status = if attempts < CYW43_RUNTIME_STREAM_COMMAND_RETRIES {
+                            "stream-fault-retry-same-window"
+                        } else {
+                            "stream-fault-retry-exhausted"
+                        };
+                        crate::hal::driver_task::emit_driver_task_resource_init_status(
+                            contract,
+                            DriverTaskHotPath::Cyw43Wifi,
+                            cyw43_runtime_command_stage(op),
+                            status,
+                            Some(completion),
+                        );
+                        if attempts < CYW43_RUNTIME_STREAM_COMMAND_RETRIES {
+                            continue;
+                        }
+                    } else if let Some(completion) = err.recoverable_completion() {
+                        crate::hal::driver_task::emit_driver_task_resource_init_status(
+                            contract,
+                            DriverTaskHotPath::Cyw43Wifi,
+                            cyw43_runtime_command_stage(op),
+                            "stream-fault-owner-recovery-required",
+                            Some(completion),
+                        );
+                    }
+                    return Err(Cyw43FirmwareInitError::Command(err));
+                }
             }
-            return Err(Cyw43FirmwareInitError::Command(err));
+        }
+        let uploaded = offset + chunk_len;
+        if cyw43_runtime_stream_progress_due(offset, chunk_len, payload.len()) {
+            emit_cyw43_runtime_stream_progress(
+                contract,
+                cyw43_runtime_command_stage(op),
+                uploaded,
+                payload.len(),
+                target_addr,
+                chunk_len,
+            );
         }
         offset += chunk_len;
     }
@@ -1152,6 +1249,11 @@ const fn cyw43_fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool {
             | 0x5323
             | 0x5329
     )
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_fault_detail_allows_same_command_retry(detail: u16) -> bool {
+    matches!(detail, 0x5103)
 }
 
 #[cfg(feature = "kernel")]
@@ -1818,12 +1920,14 @@ mod tests {
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5321));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x531a));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5102));
-        assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5103));
+        assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5103));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5104));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x5329));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5302));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5306));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x53ff));
+        assert!(cyw43_fault_detail_allows_same_command_retry(0x5103));
+        assert!(!cyw43_fault_detail_allows_same_command_retry(0x5102));
     }
 
     #[cfg(feature = "kernel")]
@@ -1843,6 +1947,22 @@ mod tests {
         let err = Cyw43FirmwareInitError::Command(Cyw43CommandSubmitError::Completion(completion));
 
         assert_eq!(err.recoverable_completion(), Some(completion));
+        assert_eq!(err.same_command_retry_completion(), None);
+        let transfer_failed = DriverTaskCompletionRecord {
+            sequence: 9,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: 0x5103,
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+        let retry =
+            Cyw43FirmwareInitError::Command(Cyw43CommandSubmitError::Completion(transfer_failed));
+        assert_eq!(retry.recoverable_completion(), None);
+        assert_eq!(retry.same_command_retry_completion(), Some(transfer_failed));
         let rejected = DriverTaskCompletionRecord {
             sequence: 8,
             code: DriverTaskCompletionCode::Fault.as_u16(),
@@ -1872,6 +1992,19 @@ mod tests {
         );
         assert!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES <= frame_payload);
         assert_eq!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES % 64, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_firmware_stream_progress_is_coarse_and_bounded() {
+        assert!(cyw43_runtime_stream_progress_due(0, 1024, 609_309));
+        assert!(!cyw43_runtime_stream_progress_due(1024, 1024, 609_309));
+        assert!(cyw43_runtime_stream_progress_due(
+            CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL - 1024,
+            1024,
+            609_309
+        ));
+        assert!(cyw43_runtime_stream_progress_due(608_256, 1053, 609_309));
     }
 
     #[cfg(feature = "kernel")]

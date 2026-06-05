@@ -4074,6 +4074,11 @@ fn bounded_spin_settle(stage: &'static str, loops: usize) {
         "[pi4-wifi] settle stage={stage} loops={loops}"
     ));
     spin_settle(loops);
+    if loops >= 1_000_000 {
+        emit_breadcrumb(format_args!(
+            "[pi4-wifi] settle stage={stage} status=done loops={loops}"
+        ));
+    }
 }
 
 #[inline]

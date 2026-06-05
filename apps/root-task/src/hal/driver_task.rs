@@ -21,9 +21,9 @@ use heapless::Deque;
 use pi4_driver_abi::{
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
     DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
-    DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_ENGINE_INIT_AUX,
+    DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+    DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -1710,9 +1710,9 @@ pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 /// Bounded send/yield attempts for the first linked-runtime ring handshake.
 pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
-const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = 8;
-const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = 512;
-const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = 16_384;
+const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
+const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = 64;
+const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = 64;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 
 #[cfg(feature = "kernel")]
@@ -2931,6 +2931,11 @@ fn driver_task_ring_call_trace_enabled(
     command: DriverTaskCommandRecord,
     _mode: DriverTaskRingCommandMode,
 ) -> bool {
+    if matches!(contract.kind, DriverTaskKind::WifiNic)
+        && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+    {
+        return false;
+    }
     if command.aux0 != 0
         || command.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE != 0
         || command.frame.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE != 0
@@ -6129,6 +6134,28 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn steady_ring_trace_suppresses_cyw43_bulk_descriptor_turns() {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 28,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+
+        assert!(!driver_task_ring_call_trace_enabled(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::Steady
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_descriptor_commands_get_long_bounded_init_window() {
         let mut command = DriverTaskCommandRecord::pi4_hot_path(
             0,
@@ -6193,7 +6220,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn usb_keyboard_poll_uses_tiny_prompt_window_without_timeout_spam() {
+    fn usb_keyboard_poll_uses_prompt_window_without_timeout_spam() {
         let command = DriverTaskCommandRecord::pi4_hot_path(
             0,
             DriverTaskHotPath::UsbKeyboard,

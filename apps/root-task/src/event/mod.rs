@@ -179,7 +179,7 @@ const MAX_BOOTSTRAP_WORDS: usize = crate::sel4::MSG_MAX_WORDS;
 #[cfg(feature = "kernel")]
 const BOOTSTRAP_IDLE_SPINS: usize = 512;
 
-const CONSOLE_BANNER: &str = "[Cohesix] Root console ready (type 'help' for commands)";
+const CONSOLE_BANNER: &str = "[Cohesix] Root console starting (type 'help' for commands)";
 const CONSOLE_PROMPT: &str = "cohesix> ";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
 #[cfg(feature = "kernel")]
@@ -221,7 +221,7 @@ const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
 #[cfg(feature = "kernel")]
 const SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS: u64 = 10_000;
 #[cfg(feature = "kernel")]
-const SERIAL_INPUT_IDLE_TRACE_LIMIT: u8 = 0;
+const SERIAL_INPUT_IDLE_TRACE_LIMIT: u8 = 2;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS: u64 = 750;
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -240,6 +240,13 @@ enum LocalSeatConsumePhase {
     PreRuntime,
     PriorityFollowup,
     PostRuntime,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalSeatEscapeState {
+    Idle,
+    Esc,
+    Csi,
 }
 
 #[cfg(test)]
@@ -1461,11 +1468,14 @@ where
     console_input_turn_output_budget: usize,
     local_seat_chunk_input_pending: bool,
     console_output_flush_active: bool,
+    local_seat_escape_state: LocalSeatEscapeState,
     pending_console_output: HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
     #[cfg(feature = "kernel")]
     serial_input_idle_trace_next_ms: u64,
     #[cfg(feature = "kernel")]
     serial_input_idle_trace_count: u8,
+    #[cfg(feature = "kernel")]
+    serial_input_idle_trace_waiting_for_quiet_output: bool,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_pending: bool,
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -1564,11 +1574,14 @@ where
             console_input_turn_output_budget: 0,
             local_seat_chunk_input_pending: false,
             console_output_flush_active: false,
+            local_seat_escape_state: LocalSeatEscapeState::Idle,
             pending_console_output: HeaplessVec::new(),
             #[cfg(feature = "kernel")]
             serial_input_idle_trace_next_ms: 0,
             #[cfg(feature = "kernel")]
             serial_input_idle_trace_count: 0,
+            #[cfg(feature = "kernel")]
+            serial_input_idle_trace_waiting_for_quiet_output: false,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_pending: false,
             #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -1609,8 +1622,18 @@ where
 
     /// Attach a local-seat runtime for keyboard ingress and mirrored egress.
     pub fn with_local_seat(mut self, runtime: &'a mut LocalSeatRuntime) -> Self {
+        runtime.register_boot_progress_backend();
         self.local_seat = Some(runtime);
         self
+    }
+
+    /// Mirror a pre-prompt boot progress line to HDMI when the local seat is
+    /// present.
+    pub fn publish_pre_root_boot_progress(&mut self, line: &str) {
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.register_boot_progress_backend();
+            runtime.mirror_line(line);
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -2043,9 +2066,30 @@ where
         }
     }
 
-    #[cfg(feature = "kernel")]
     /// Emit console audit messages once the UART bridge is connected.
     pub fn announce_console_ready(&mut self) {
+        self.emit_serial_line("Cohesix console ready");
+        self.emit_help_serial_only();
+        debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
+        #[cfg(feature = "kernel")]
+        boot_log::force_uart_line_raw("[mark] root-console.prompt.write.begin");
+        self.emit_prompt();
+        #[cfg(feature = "kernel")]
+        boot_log::set_serial_prompt_refresh_after_logs(
+            crate::generated::hardware_config().local_seat.enabled,
+        );
+        #[cfg(feature = "kernel")]
+        boot_log::force_uart_line_raw("[mark] root-console.prompt.write.ok");
+        self.serial.poll_io();
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.mark_root_console_ready();
+        }
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.mirror_line("Cohesix console ready");
+            runtime.mirror_line(CONSOLE_PROMPT);
+        }
+        self.schedule_post_prompt_local_seat_attach();
+        #[cfg(feature = "kernel")]
         if self.ninedoor.is_some() {
             if boot_log::switch_logger_to_log_buffer() {
                 boot_log::force_uart_line_raw(
@@ -2058,6 +2102,7 @@ where
             }
         }
         self.audit.info("console: attach uart");
+        #[cfg(feature = "kernel")]
         if let Some(bridge) = self.ninedoor.as_mut() {
             match bridge.log_stream(&mut *self.audit) {
                 Ok(()) => {
@@ -2107,45 +2152,13 @@ where
             );
         }
         self.emit_serial_line(CONSOLE_BANNER);
-        self.emit_serial_line("Cohesix console ready");
-        self.emit_help_serial_only();
+        self.emit_serial_line("Cohesix console starting");
         #[cfg(feature = "net-console")]
         if let Some(net) = self.net.as_mut() {
             let _ = net.send_console_line(
                 "[net-console] authenticate using AUTH <role> <token> to receive console output",
             );
         }
-        if let Some(runtime) = self.local_seat.as_mut() {
-            runtime.mark_root_console_ready();
-        }
-        if let Some(runtime) = self.local_seat.as_mut() {
-            #[cfg(not(all(
-                feature = "kernel",
-                feature = "usb",
-                target_arch = "aarch64",
-                target_os = "none"
-            )))]
-            let _ = runtime;
-            #[cfg(all(
-                feature = "kernel",
-                feature = "usb",
-                target_arch = "aarch64",
-                target_os = "none"
-            ))]
-            runtime.mirror_line("Cohesix console ready");
-        }
-        self.schedule_post_prompt_local_seat_attach();
-        debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
-        #[cfg(feature = "kernel")]
-        boot_log::force_uart_line_raw("[mark] root-console.prompt.write.begin");
-        self.emit_prompt();
-        #[cfg(feature = "kernel")]
-        boot_log::set_serial_prompt_refresh_after_logs(
-            crate::generated::hardware_config().local_seat.enabled,
-        );
-        #[cfg(feature = "kernel")]
-        boot_log::force_uart_line_raw("[mark] root-console.prompt.write.ok");
-        self.serial.poll_io();
         #[cfg(feature = "kernel")]
         {
             if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
@@ -2179,6 +2192,9 @@ where
                     );
                 }
             }
+        }
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.mirror_line("Cohesix console starting");
         }
         if !self.banner_emitted {
             log::info!(target: "event", "[event] root console banner emitted");
@@ -2412,6 +2428,14 @@ where
             || !self.pending_console_output.is_empty()
             || self.physical_console_input_pending_for_output()
         {
+            self.serial_input_idle_trace_waiting_for_quiet_output = true;
+            self.serial_input_idle_trace_next_ms = self
+                .now_ms
+                .saturating_add(SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS);
+            return;
+        }
+        if self.serial_input_idle_trace_waiting_for_quiet_output {
+            self.serial_input_idle_trace_waiting_for_quiet_output = false;
             self.serial_input_idle_trace_next_ms = self
                 .now_ms
                 .saturating_add(SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS);
@@ -2555,7 +2579,10 @@ where
                 }
                 let display_diag_ready = runtime.ensure_prompt_display_diagnostic_mirror();
                 runtime.enable_backend_keyboard_polling();
+                let usb_overruns_before = runtime.keyboard_trace().driver_task_budget_overruns;
                 let keyboard_probe = runtime.probe_backend_keyboard_once();
+                let usb_no_reply = !keyboard_probe.attached()
+                    && runtime.keyboard_trace().driver_task_budget_overruns > usb_overruns_before;
                 if verbose_attempt || keyboard_probe.attached() {
                     let usb_frontier =
                         "[drivers] USB frontier: prompt-settle linked-runtime probe armed; xHCI/keyboard state will mirror here";
@@ -2590,7 +2617,7 @@ where
                     );
                     boot_log::force_uart_line_raw(probe_line.as_str());
                 }
-                if !keyboard_probe.attached() {
+                if !keyboard_probe.attached() && !usb_no_reply {
                     self.post_prompt_local_seat_attach_pending = true;
                     self.post_prompt_local_seat_attach_idle_turns = 0;
                     self.post_prompt_local_seat_attach_retry_turns =
@@ -2607,6 +2634,10 @@ where
                         );
                         boot_log::force_uart_line_raw(retry_line.as_str());
                     }
+                } else if usb_no_reply {
+                    boot_log::force_uart_line_raw(
+                        "[local-seat] prompt-settle attach suspended reason=driver-task-no-reply action=serial-shell explicit=usb-probe-kbd",
+                    );
                 }
             }
         }
@@ -2828,8 +2859,10 @@ where
     #[allow(unsafe_code)]
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn emit_smp_snapshot(&mut self) -> bool {
-        self.emit_console_line("[smp] snapshot redirected reason=serial-safe use=smp-activity");
-        self.emit_smp_activity();
+        self.emit_console_line("[smp] debug scheduler dump begin");
+        let policy = crate::affinity::policy();
+        crate::affinity::debug_dump_per_core(&policy, |line| self.emit_console_line(line));
+        self.emit_console_line("[smp] debug scheduler dump end");
         true
     }
 
@@ -3748,7 +3781,7 @@ where
                 "  usb enable-kbd  - Arm runtime USB keyboard probing after boot",
             );
             self.emit_console_line(
-                "  usb probe-kbd   - Arm and immediately run one keyboard probe pass with contract trace",
+                "  usb probe-kbd   - Run one bounded keyboard probe slice with contract trace",
             );
             self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
             self.emit_ack_ok(
@@ -4230,15 +4263,26 @@ where
             let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
             let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
             let linked_gate = Self::usb_runtime_gate_for_linked_detail(linked_detail);
-            let linked_first_byte = self.local_seat.as_ref().is_some_and(|local_seat| {
+            let local_queue_first_byte = self.local_seat.as_ref().is_some_and(|local_seat| {
                 let trace = local_seat.keyboard_trace();
                 trace.backend_read_bytes != 0
                     || trace.accepted_bytes != 0
                     || trace.echoed_bytes != 0
             });
             let keyboard_ready = runtime.keyboard_ready || linked_keyboard_ready;
-            let first_report = runtime.first_report || linked_first_report || linked_first_byte;
-            let first_byte = runtime.first_byte || linked_first_byte;
+            let first_report = runtime.first_report || linked_first_report;
+            let first_byte = runtime.first_byte;
+            let prompt_polling_enabled = self
+                .local_seat
+                .as_ref()
+                .is_some_and(|local_seat| local_seat.backend_keyboard_polling_enabled());
+            let first_byte_source = if runtime.first_byte {
+                "linked-runtime-hid"
+            } else if local_queue_first_byte {
+                "local-seat-queue"
+            } else {
+                "none"
+            };
             let proof_gate = if first_byte {
                 runtime.proof_gate.max(10)
             } else if first_report {
@@ -4273,10 +4317,11 @@ where
                 runtime.blocker
             };
             let runtime_line = format_message(format_args!(
-                "usb: runtime_gate keyboard={} first_report={} first_byte={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x} result=0x{:08x}",
+                "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x} result=0x{:08x}",
                 Self::yes_no(keyboard_ready),
                 Self::yes_no(first_report),
                 Self::yes_no(first_byte),
+                first_byte_source,
                 proof_gate,
                 next_step,
                 blocker,
@@ -4284,6 +4329,16 @@ where
                 linked_result,
             ));
             self.emit_console_line(runtime_line.as_str());
+            let acceptance_line = format_message(format_args!(
+                "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} usable={} prompt_polling={} note=hid_keyboard_requires_first_report_for_input",
+                Self::yes_no(proof_gate >= 3),
+                Self::yes_no(keyboard_ready),
+                Self::yes_no(first_report),
+                Self::yes_no(first_byte),
+                Self::yes_no(first_byte),
+                Self::yes_no(prompt_polling_enabled),
+            ));
+            self.emit_console_line(acceptance_line.as_str());
             let runtime_contract = format_message(format_args!(
                 "usb: runtime_contract current={} expected={} blocker={} proof_gate={} target_gate=10 detail=0x{:04x} result=0x{:08x}",
                 Self::usb_runtime_step_label(proof_gate),
@@ -4294,16 +4349,27 @@ where
                 linked_result,
             ));
             self.emit_console_line(runtime_contract.as_str());
-            let (queued_reports, doorbell_pending, preserved_events, transfer_events) =
-                Self::usb_runtime_queue_fields(linked_result);
-            let runtime_queue = format_message(format_args!(
-                "usb: runtime_queue queued_reports={} doorbell_pending={} preserved_events={} transfer_events={}",
-                queued_reports,
-                Self::yes_no(doorbell_pending),
-                preserved_events,
-                transfer_events,
-            ));
-            self.emit_console_line(runtime_queue.as_str());
+            if linked_detail
+                == pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+            {
+                let (queued_reports, doorbell_pending, preserved_events, transfer_events) =
+                    Self::usb_runtime_queue_fields(linked_result);
+                let runtime_queue = format_message(format_args!(
+                    "usb: runtime_queue queued_reports={} doorbell_pending={} preserved_events={} transfer_events={}",
+                    queued_reports,
+                    Self::yes_no(doorbell_pending),
+                    preserved_events,
+                    transfer_events,
+                ));
+                self.emit_console_line(runtime_queue.as_str());
+            } else {
+                let runtime_progress = format_message(format_args!(
+                    "usb: runtime_progress phase=enumeration detail=0x{:04x} result=0x{:08x} queue=not-applicable",
+                    linked_detail,
+                    linked_result,
+                ));
+                self.emit_console_line(runtime_progress.as_str());
+            }
             let runtime_next_action = format_message(format_args!(
                 "usb: runtime_next_action action={} reason={} cold_reinit_limit=2 detail=0x{:04x}",
                 Self::usb_runtime_next_action_for_linked_detail(linked_detail),
@@ -4312,8 +4378,15 @@ where
             ));
             self.emit_console_line(runtime_next_action.as_str());
             let keyboard = crate::local_seat_pi4::latest_usb_keyboard_poll_status();
+            let keyboard_trace_source =
+                if linked_keyboard_ready || linked_first_report || runtime.first_byte {
+                    "linked-runtime"
+                } else {
+                    "root-backend"
+                };
             let keyboard_line = format_message(format_args!(
-                "usb: keyboard_trace polls={} reports={} no_report={} errors={} nonempty={} emitted={} dup={} zero={} lock={} scroll={} unmapped={}",
+                "usb: keyboard_trace source={} polls={} reports={} no_report={} errors={} nonempty={} emitted={} dup={} zero={} lock={} scroll={} unmapped={}",
+                keyboard_trace_source,
                 keyboard.poll_calls,
                 keyboard.reports,
                 keyboard.no_report,
@@ -5231,12 +5304,12 @@ where
             let next = match fault.detail {
                 0x5101 => "verify-sdio-owner-command-availability",
                 0x5102 => "verify-cyw43-to-sdio-descriptor-window",
-                0x5103 => "inspect-linked-sdio-cmd53-after-stage-reset-card-int-preserve",
+                0x5103 => "inspect-sdio-owner-cmd53-after-block-and-byte-retries",
                 0x5104 => "verify-sdio-host-config-replay",
                 _ => "inspect-cyw43-driver-task-fault-stage",
             };
             let next_line = format_message(format_args!(
-                "wifi: driver-task next_action={} source={} recovery_contract=firmware-stage-reset+card-int-preserve",
+                "wifi: driver-task next_action={} source={} recovery_contract=block-mode-first+byte-fallback+no-cmd0-cmd5",
                 next, source
             ));
             self.emit_console_line(next_line.as_str());
@@ -5924,6 +5997,11 @@ where
         } else {
             proof_gate.saturating_add(1).max(1)
         };
+        let reported_proof_gate = if let Some(gate) = fault_gate {
+            proof_gate.max(gate.saturating_sub(1))
+        } else {
+            proof_gate
+        };
         let active_blocker = fault
             .map(|fault| fault.reason)
             .unwrap_or_else(|| Self::wifi_startup_blocker_for_gate(failing_gate, exact_error));
@@ -6090,12 +6168,12 @@ where
         }
         let boundary = format_message(format_args!(
             "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain={} proof_gate={} target_gate=10",
-            active_blocker, proof_gate,
+            active_blocker, reported_proof_gate,
         ));
         self.emit_console_line(boundary.as_str());
         let next = format_message(format_args!(
             "wifi: next_action={} blocker={} proof_gate={} target_gate=10 source={}",
-            next_action, active_blocker, proof_gate, source,
+            next_action, active_blocker, reported_proof_gate, source,
         ));
         self.emit_console_line(next.as_str());
     }
@@ -6152,7 +6230,7 @@ where
         match detail {
             0x5101 => "verify-sdio-owner-command-availability",
             0x5102 => "verify-cyw43-to-sdio-descriptor-window",
-            0x5103 => "inspect-cyw43-sdio-cmd53-after-stage-reset-card-int-preserve",
+            0x5103 => "inspect-sdio-owner-cmd53-after-block-and-byte-retries",
             0x5104 => "verify-sdio-host-config-replay",
             0x5310..=0x531f => "inspect-cyw43-backplane-window",
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
@@ -7193,6 +7271,9 @@ where
                     .info("console: cleared serial input before local-seat");
             }
             for (index, &byte) in chunk[..read].iter().enumerate() {
+                if self.consume_local_seat_escape_byte(byte) {
+                    continue;
+                }
                 match byte {
                     b'\r' => {}
                     b'\n' => {
@@ -7224,6 +7305,29 @@ where
             }
         }
         consumed
+    }
+
+    fn consume_local_seat_escape_byte(&mut self, byte: u8) -> bool {
+        match self.local_seat_escape_state {
+            LocalSeatEscapeState::Idle if byte == 0x1b => {
+                self.local_seat_escape_state = LocalSeatEscapeState::Esc;
+                true
+            }
+            LocalSeatEscapeState::Idle => false,
+            LocalSeatEscapeState::Esc if byte == b'[' => {
+                self.local_seat_escape_state = LocalSeatEscapeState::Csi;
+                true
+            }
+            LocalSeatEscapeState::Esc => {
+                self.local_seat_escape_state = LocalSeatEscapeState::Idle;
+                true
+            }
+            LocalSeatEscapeState::Csi if byte.is_ascii_digit() || byte == b';' => true,
+            LocalSeatEscapeState::Csi => {
+                self.local_seat_escape_state = LocalSeatEscapeState::Idle;
+                true
+            }
+        }
     }
 
     fn process_console_line(&mut self, line: &HeaplessString<LINE>) {
@@ -9555,12 +9659,13 @@ mod tests {
         let transcript = core::str::from_utf8(emitted.as_slice()).unwrap();
 
         assert!(transcript.contains(CONSOLE_BANNER));
-        assert!(transcript.contains("Cohesix console ready"));
-        assert!(transcript.ends_with(CONSOLE_PROMPT));
+        assert!(transcript.contains("Cohesix console starting"));
+        assert!(!transcript.contains("Cohesix console ready"));
+        assert!(!transcript.contains(CONSOLE_PROMPT));
     }
 
     #[test]
-    fn start_cli_marks_local_seat_ready_and_schedules_post_prompt_attach() {
+    fn console_ready_announcement_enables_local_seat_attach() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -9585,8 +9690,18 @@ mod tests {
         let transcript = core::str::from_utf8(emitted.as_slice()).unwrap();
 
         assert!(transcript.contains(CONSOLE_BANNER));
-        assert!(transcript.ends_with(CONSOLE_PROMPT));
-        assert!((1..=8).contains(&pump.metrics().local_seat_output_keyboard_polls));
+        assert!(!transcript.contains(CONSOLE_PROMPT));
+        assert_eq!(pump.metrics().local_seat_output_keyboard_polls, 0);
+        #[cfg(all(feature = "kernel", feature = "usb"))]
+        assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+        assert!(!pump.local_seat.as_ref().unwrap().root_console_ready());
+
+        pump.announce_console_ready();
+        let ready_emitted = pump.serial_mut().driver_mut().drain_tx();
+        let ready_transcript = core::str::from_utf8(ready_emitted.as_slice()).unwrap();
+        assert!(ready_transcript.contains("Cohesix console ready"));
+        assert!(ready_transcript.contains("Commands:"));
+        assert!(ready_transcript.ends_with(CONSOLE_PROMPT));
         #[cfg(all(feature = "kernel", feature = "usb"))]
         assert!(pump.post_prompt_local_seat_attach_pending_for_test());
         drop(pump);
@@ -9595,6 +9710,37 @@ mod tests {
             .mirrored_lines_snapshot()
             .iter()
             .any(|line| line.as_str() == CONSOLE_PROMPT));
+    }
+
+    #[test]
+    fn pre_root_boot_progress_mirrors_to_local_seat_before_prompt() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 4,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.publish_pre_root_boot_progress("[boot] waiting for Wi-Fi");
+        assert!(!pump.local_seat.as_ref().unwrap().root_console_ready());
+        drop(pump);
+
+        assert!(local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line.as_str() == "[boot] waiting for Wi-Fi"));
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -9653,6 +9799,7 @@ mod tests {
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
 
         pump.start_cli();
+        pump.announce_console_ready();
         assert!(pump.post_prompt_local_seat_attach_pending_for_test());
         pump.serial_mut().driver_mut().push_rx(b"help\n");
 
@@ -10462,6 +10609,67 @@ mod tests {
         assert!(mirrored
             .iter()
             .any(|line| line.contains("[smp] activity end")));
+    }
+
+    #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
+    #[test]
+    fn smp_snapshot_stays_distinct_from_activity_on_non_debug_builds() {
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 512, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 42,
+        });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.serial_mut().driver_mut().push_rx(b"smp\n");
+
+        pump.poll();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(rendered.contains("ERR reason=unsupported"), "{rendered}");
+        assert!(
+            rendered.contains("ERR SMP reason=policy detail=unsupported"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("[smp] activity begin"), "{rendered}");
+        assert!(!rendered.contains("OK SMP mode=activity"), "{rendered}");
+    }
+
+    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
+    #[test]
+    fn smp_snapshot_emits_debug_dump_without_activity_telemetry() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 512, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 42,
+        });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.serial_mut().driver_mut().push_rx(b"smp\n");
+
+        pump.poll();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("[smp] debug scheduler dump begin"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[smp] debug scheduler dump end"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("[smp] activity begin"), "{rendered}");
+        assert!(rendered.contains("OK SMP mode=snapshot"), "{rendered}");
     }
 
     #[test]
@@ -11282,6 +11490,40 @@ mod tests {
         assert!(rendered.contains("PONG"), "{rendered}");
         assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
         assert!(rendered.contains("cohesix> "), "{rendered}");
+    }
+
+    #[test]
+    fn local_seat_ansi_arrow_sequence_does_not_enter_parser() {
+        let driver = LoopbackSerial::<1024>::new();
+        let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        local_seat.enqueue_keyboard_bytes(b"\x1b");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.poll();
+        pump.local_seat
+            .as_mut()
+            .expect("local seat remains attached")
+            .enqueue_keyboard_bytes(b"[A");
+        pump.poll();
+
+        assert!(pump.local_line.is_empty());
+        let tx = pump.serial_mut().driver_mut().drain_tx();
+        let rendered =
+            String::from_utf8(tx.into_iter().collect()).expect("serial output must be utf8");
+        assert!(!rendered.contains("ERR PARSE"), "{rendered}");
     }
 
     #[test]
