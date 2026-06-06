@@ -35,7 +35,7 @@ const ARMVSPACE_UNIFY_LABEL: seL4_Word = sel4_sys::ARMVSpaceUnify_Instruction as
 // Logging policy: per-op traces are gated to TRACE (or the `cache-trace` feature).
 // DEBUG emits rate-limited summaries only when trace logging is enabled;
 // WARN dumps recent ops on errors.
-const CACHE_RING_CAPACITY: usize = 2048;
+const CACHE_RING_CAPACITY: usize = 1920;
 const CACHE_DUMP_CHUNK: usize = 64;
 const ERROR_DUMP_RECENT: usize = 64;
 const SUMMARY_INTERVAL_MS: u64 = 1_000;

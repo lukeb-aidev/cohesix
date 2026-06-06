@@ -483,8 +483,9 @@ impl DriverRuntimeCyw43CommandDescriptor {
             || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX
             || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
             || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL;
-        let carries_payload = self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
-            || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+        let bulk_stream_payload = self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
+            || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK;
+        let carries_payload = bulk_stream_payload
             || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
             || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX;
         let zero_payload = self.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
@@ -503,12 +504,17 @@ impl DriverRuntimeCyw43CommandDescriptor {
             _ => self.flags == 0,
         };
         let payload_end = self.payload_offset as u32 + self.payload_len as u32;
+        let ring_payload = self.payload_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
+            && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32;
+        let shared_payload = self.payload_offset == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+            && payload_end
+                <= DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as u32
+                    + DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32;
         known_op
             && known_flags
             && ((carries_payload
                 && self.payload_len != 0
-                && self.payload_offset >= DRIVER_RUNTIME_RING_FRAME_OFFSET
-                && payload_end <= DRIVER_RUNTIME_RING_PAGE_BYTES as u32)
+                && (ring_payload || (bulk_stream_payload && shared_payload)))
                 || (zero_payload && self.payload_len == 0))
             && (self.total_len == 0 || self.total_len >= self.payload_len as u32)
     }
@@ -1481,6 +1487,13 @@ mod tests {
         descriptor.payload_offset = DRIVER_RUNTIME_RING_PAGE_BYTES - 128;
         descriptor.payload_len = 129;
         assert!(!descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
+        descriptor.payload_len = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES;
+        descriptor.total_len = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as u32;
+        assert!(descriptor.valid());
+        descriptor.payload_len = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES + 1;
+        descriptor.total_len = descriptor.payload_len as u32;
+        assert!(!descriptor.valid());
 
         descriptor = DriverRuntimeCyw43CommandDescriptor::empty();
         descriptor.op = DRIVER_RUNTIME_CYW43_OP_RX_POLL;
@@ -1504,6 +1517,9 @@ mod tests {
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
         assert!(descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
+        assert!(!descriptor.valid());
+        descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
         assert!(!descriptor.valid());
     }

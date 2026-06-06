@@ -488,14 +488,22 @@ xHCI bring-up, keyboard enumeration, retry progress, and first interrupt-report
 progress. The USB runtime detail word further identifies command-ring-ready,
 root-port-connected, device-addressed, device-descriptor, config-descriptor, HID
 endpoint, keyboard-ready, and first-report frontiers so xHCI-ready cannot hide
-the exact enumeration blocker. SDIO/Wi-Fi replay must split the first command proof into
+the exact enumeration blocker. When the linked USB runtime reports a changed
+enumeration frontier, serial also emits one `USB_RUNTIME_ENUM_SNAPSHOT` line
+with the compact root-port mask, slot, endpoint, scan pass, command-path, HID,
+and transfer-event flags; repeated identical snapshots stay quiet. SDIO/Wi-Fi
+replay must split the first command proof into
 `sdio-cmd0-go-idle` and `sdio-cmd5-ocr`; a CMD0 failure means the SDIO command
 path itself is broken, while a CMD5/OCR failure points at card response,
 power/reset, or CYW43-side readiness. CYW43 firmware replay must separately log
 `cyw43-transport-init`, `cyw43-firmware-prep`, `cyw43-firmware-chunk`,
 `cyw43-nvram-chunk`, `cyw43-nvram-tail`, and `cyw43-firmware-release` so the
 new driver model can distinguish pre-upload clock/core setup from the bulk RAM
-write path. These lines are debug telemetry only and
+write path. CYW43/SDIO owner-link transfer faults also emit one serial-only
+`CYW43_SDIO_OWNER_FAULT` line when the SDIO owner returns a telemetry frame,
+including the SDIO command argument, function/window address, byte/block shape,
+transfer mode, host-control/power/clock registers, present state, interrupt
+status, response0, and decoded transfer failure. These lines are debug telemetry only and
 do not satisfy driver-task acceptance until the matching owner-state proof is
 present.
 The Pi 4 gate summary must keep these diagnostic frontiers explicit with
@@ -980,16 +988,14 @@ transition, but it must not write SDHCI host-control registers directly.
   `bus:txglomalign` with the extended header shifts the CDC payload to offset
   20 before the firmware has enabled that framing and leaves the host polling
   for a reply the firmware never generates.
-- CYW43455 firmware upload preserves the Linux/brcmfmac block-mode Function 1
-  backplane shape while remaining inside the generated split-runtime payload
-  contract. Root streams 1024-byte, 64-byte-aligned firmware chunks over the
-  owner ring; the CYW43 runtime stages those chunks in the declared 8192-byte
-  SDIO shared-payload/RX window. Pre-release linked-runtime flushes preserve
-  that 8192-byte staging contract and first write the backplane through an
-  incrementing Function 1 block-mode CMD53 turn sized to the staged window; if
-  the SDIO owner reports a transfer failure, the runtime keeps the retained
-  window and retries through the bounded 256-byte incrementing byte-mode
-  fallback lane. The final partial window flushes on end-of-image. The
+- CYW43455 firmware upload preserves the Linux/brcmfmac Function 1 backplane
+  address and incrementing-CMD53 shape while remaining inside the generated
+  split-runtime payload contract. Root streams firmware through the declared
+  8192-byte SDIO shared-payload/RX owner window, and the linked runtime flushes
+  each pre-release stage as a Function 1 block-mode CMD53 transfer using 64-byte
+  Function 1 blocks. If that lane reports a transfer fault, the retained stage
+  replays through the conservative byte-mode retry clock ladder before reporting
+  exhausted retry proof. The final partial window flushes on end-of-image. The
   old monolithic HAL path could issue the full Linux 32704-byte 511-block turn
   from a 32 KiB window; the linked-runtime path must not claim that exact
   payload size unless the generated SDIO shared-payload contract is widened and
@@ -1445,8 +1451,10 @@ transition, but it must not write SDHCI host-control registers directly.
   reports an unchanged after-state when it skips the long live HT re-probe, and
   leaves the full transport snapshot to `wifi dump-state`. A CYW43 firmware-upload
   `0x5103` failure is reported as a CMD53 descriptor-transfer blocker with
-  `wifi: next_action=inspect-sdio-owner-cmd53-after-block-and-byte-retries`, not as a
-  generic disabled-network state. Operators can still run the explicit
+  `wifi: next_action=inspect-sdio-owner-cmd53-after-block-and-byte-retries`, and an
+  exhausted retained-stage ladder reports `0x5329` as `firmware-retry-exhausted`
+  while preserving the SDHCI transfer result. Neither case is a generic
+  disabled-network state. Operators can still run the explicit
   `wifi probe-ht` command when they want the stateful HT probe.
 - Wi-Fi association completion is event-pump driven for both explicit `wifi`
   and `auto` interface policies. While linked-runtime pointer-free proof is

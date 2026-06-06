@@ -81,6 +81,91 @@ use spin::Mutex;
     target_arch = "aarch64",
     target_os = "none"
 ))]
+const USB_ENUM_RESULT_ROOT_PORT_MASK: u32 = 0x0000_00ff;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_SLOT_SHIFT: u32 = 8;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_ENDPOINT_SHIFT: u32 = 16;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_SCAN_PASS_SHIFT: u32 = 21;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_SCAN_PASS_MASK: u32 = 0x3;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_ROOT_POWERED: u32 = 1 << 25;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_COMMAND_PATH: u32 = 1 << 26;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_PORT_EVENT: u32 = 1 << 27;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_HID_ENDPOINT: u32 = 1 << 28;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_PRESERVED_EVENT: u32 = 1 << 29;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_TRANSFER_EVENT: u32 = 1 << 30;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_ENUM_RESULT_ENDPOINT_READY: u32 = 1 << 31;
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LOCAL_SEAT_POLL_LOGGED: AtomicBool = AtomicBool::new(false);
 #[cfg(all(
     feature = "kernel",
@@ -1909,28 +1994,7 @@ fn adopt_linked_display_runtime_owner_state(reason: &'static str) -> bool {
 fn local_seat_usb_engine_init_ready(
     completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
 ) -> bool {
-    completion.is_some_and(|completion| {
-        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-            && completion.result == 1
-            && matches!(
-                completion.detail,
-                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
-                    | DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
-            )
-    })
+    completion.is_some_and(local_seat_usb_engine_progress)
 }
 
 #[cfg(all(
@@ -1943,8 +2007,7 @@ fn local_seat_usb_keyboard_init_ready(
     completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
 ) -> bool {
     completion.is_some_and(|completion| {
-        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-            && completion.result == 1
+        local_seat_usb_completion_progress(completion)
             && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
     })
 }
@@ -1958,11 +2021,50 @@ fn local_seat_usb_keyboard_init_ready(
 fn local_seat_usb_engine_init_status(
     completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
 ) -> &'static str {
-    let ready = completion.is_some_and(|completion| {
-        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-            && completion.result == 1
-    });
+    let ready = completion.is_some_and(local_seat_usb_engine_progress);
     local_seat_completion_status(completion, ready)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn local_seat_usb_completion_progress(
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) -> bool {
+    completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn local_seat_usb_engine_progress(
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) -> bool {
+    local_seat_usb_completion_progress(completion)
+        && matches!(
+            completion.detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
+        )
 }
 
 #[cfg(all(
@@ -1976,121 +2078,91 @@ fn local_seat_usb_keyboard_enum_status(
 ) -> &'static str {
     match completion {
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY =>
         {
             "ready"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED =>
         {
             "enable-slot-failed"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED =>
         {
             "address-device-failed"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED =>
         {
             "device-descriptor-failed"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED =>
         {
             "config-descriptor-failed"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED =>
         {
             "hub-attach-failed"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED =>
         {
             "hid-attach-failed"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN =>
         {
             "hid-endpoint-not-ready"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN =>
         {
             "hub-topology-no-keyboard"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY =>
         {
             "not-enumerated"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY =>
         {
             "command-ring-ready"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED =>
         {
             "root-port-connected"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED =>
         {
             "device-addressed"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR =>
         {
             "device-descriptor"
         }
         Some(completion)
-            if completion.code
-                == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && completion.result == 1
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR =>
         {
             "config-descriptor"
@@ -2115,8 +2187,7 @@ fn local_seat_usb_keyboard_enum_status(
 fn local_seat_usb_keyboard_enumeration_progress(
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
 ) -> bool {
-    completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-        && completion.result == 1
+    local_seat_usb_completion_progress(completion)
         && matches!(
             completion.detail,
             DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
@@ -2280,11 +2351,71 @@ fn publish_local_seat_usb_keyboard_owner_ready(
     target_arch = "aarch64",
     target_os = "none"
 ))]
+fn emit_linked_local_seat_usb_enumeration_snapshot(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) {
+    use core::fmt::Write;
+
+    let result = completion.result;
+    let root_mask = result & USB_ENUM_RESULT_ROOT_PORT_MASK;
+    let slot = (result >> USB_ENUM_RESULT_SLOT_SHIFT) & 0xff;
+    let endpoint = (result >> USB_ENUM_RESULT_ENDPOINT_SHIFT) & 0x1f;
+    let scan_pass = (result >> USB_ENUM_RESULT_SCAN_PASS_SHIFT) & USB_ENUM_RESULT_SCAN_PASS_MASK;
+    let mut line = heapless::String::<384>::new();
+    let _ = write!(
+        line,
+        "USB_RUNTIME_ENUM_SNAPSHOT contract={} detail=0x{:04x} result=0x{:08x} root_mask=0x{:02x} slot={} ep_id={} scan_pass={} root_power={} cmd_path={} port_event={} hid_ep={} preserved_event={} transfer_event={} endpoint_ready={}",
+        contract.name,
+        completion.detail,
+        result,
+        root_mask,
+        slot,
+        endpoint,
+        scan_pass,
+        local_seat_yes_no(result & USB_ENUM_RESULT_ROOT_POWERED != 0),
+        local_seat_yes_no(result & USB_ENUM_RESULT_COMMAND_PATH != 0),
+        local_seat_yes_no(result & USB_ENUM_RESULT_PORT_EVENT != 0),
+        local_seat_yes_no(result & USB_ENUM_RESULT_HID_ENDPOINT != 0),
+        local_seat_yes_no(result & USB_ENUM_RESULT_PRESERVED_EVENT != 0),
+        local_seat_yes_no(result & USB_ENUM_RESULT_TRANSFER_EVENT != 0),
+        local_seat_yes_no(result & USB_ENUM_RESULT_ENDPOINT_READY != 0),
+    );
+    boot_log::force_uart_line(line.as_str());
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const fn local_seat_yes_no(value: bool) -> &'static str {
+    if value {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 fn publish_local_seat_usb_enumeration_progress(
     contract: crate::hal::driver_task::DriverTaskContract,
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
 ) {
+    let previous_detail = LINKED_LOCAL_SEAT_USB_LAST_DETAIL.load(Ordering::Acquire);
+    let previous_result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire);
     record_linked_local_seat_usb_detail(Some(completion));
+    if previous_detail != completion.detail as usize
+        || previous_result != completion.result as usize
+    {
+        emit_linked_local_seat_usb_enumeration_snapshot(contract, completion);
+    }
     if completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY {
         publish_local_seat_usb_keyboard_ready(contract, completion);
         return;

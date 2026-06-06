@@ -569,6 +569,47 @@ def test_gate_summary_tracks_driver_task_manifest_affinity_from_boot_lines() -> 
     assert mismatch_record["DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES"] == 1
 
 
+def test_gate_summary_affinity_follows_selected_pi4_network_profile() -> None:
+    """Selected-only Pi 4 boots must prove only the active network driver path."""
+
+    wifi_events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wifi required_roles=0x3f",
+            "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
+            "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
+            "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
+            "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
+            "DRIVER_TASK_BOOT contract=sdio-host role=sdio started=yes affinity_core=3",
+            "DRIVER_TASK_BOOT contract=cyw43455 role=net started=yes affinity_core=3",
+            "[smp] activity selected profile=pi4-hardware net=wifi active_contracts=selected-only",
+        ]
+    )
+
+    wifi_record = normalizer.summarize_gates(wifi_events).to_record()
+    assert wifi_record["DRIVER_TASK_AFFINITY_MANIFEST_PROOF"] == "yes"
+    assert wifi_record["DRIVER_TASK_AFFINITY_MANIFEST_MATCHES"] == 6
+    assert wifi_record["DRIVER_TASK_AFFINITY_MANIFEST_MISSING"] == 0
+    assert wifi_record["DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES"] == 0
+
+    wired_events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wired required_roles=0x2f",
+            "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
+            "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
+            "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
+            "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
+            "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+            "[smp] activity selected profile=pi4-hardware net=wired active_contracts=selected-only",
+        ]
+    )
+
+    wired_record = normalizer.summarize_gates(wired_events).to_record()
+    assert wired_record["DRIVER_TASK_AFFINITY_MANIFEST_PROOF"] == "yes"
+    assert wired_record["DRIVER_TASK_AFFINITY_MANIFEST_MATCHES"] == 5
+    assert wired_record["DRIVER_TASK_AFFINITY_MANIFEST_MISSING"] == 0
+    assert wired_record["DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES"] == 0
+
+
 def test_gate_summary_explicit_pointer_free_ipc_no_overrides_abi_label() -> None:
     """A contradictory proof line must fail closed on the explicit proof field."""
 
@@ -878,6 +919,31 @@ def test_gate_summary_tracks_wifi_startup_blackbox_gates() -> None:
     assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
 
 
+def test_gate_summary_names_cyw43_firmware_retry_exhaustion() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 5 name=backplane-window status=pass "
+            "evidence=programmed=0x00198000 next=firmware-upload",
+            "wifi: gate 6 name=firmware-upload status=fail "
+            "evidence=uploaded=no fault_detail=0x5329 next=function2-ready",
+            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0001 "
+            "target=0x00198000 payload_len=512 total_len=609309 detail=0x5329 "
+            "reason=cyw43-firmware-retry-exhausted result=0x04208040",
+            "wifi: evidence sdio_cmd53 func=1 addr=0x00198000 len=512 "
+            "increment=yes block_mode=byte-retry op=2 "
+            "descriptor_status=cyw43-firmware-retry-exhausted "
+            "transfer_stage=data-end transfer_status=0x208040 r5=0x0000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "cyw43-firmware-retry-exhausted"
+    assert gates.wifi_exact == "cyw43-firmware-retry-exhausted"
+    assert gates.wifi_phase == "cyw43-firmware-chunk"
+
+
 def test_gate_summary_keeps_wifi_blackbox_fault_over_later_prompt_replay() -> None:
     events = normalizer.parse_events(
         [
@@ -895,6 +961,25 @@ def test_gate_summary_keeps_wifi_blackbox_fault_over_later_prompt_replay() -> No
     assert gates.wifi_gate == 5
     assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
     assert gates.wifi_exact == "cyw43-sdio-descriptor-transfer-failed"
+    assert gates.wifi_phase == "cyw43-firmware-chunk"
+
+
+def test_gate_summary_fails_closed_on_cyw43_firmware_upload_pass_with_fault() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 5 name=backplane-window status=pass evidence=programmed=0x00198000 next=firmware-upload",
+            "wifi: gate 6 name=firmware-upload status=pass evidence=uploaded=no verified=no fault_detail=0x0001 next=function2-ready",
+            "wifi: gate 7 name=function2-ready status=fail evidence=f2_enabled=no f2_ready=no next=firmware-channel",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00198800 payload_len=1024 total_len=609309 detail=1 reason=unknown result=0",
+            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00198800 payload_len=1024 total_len=609309 detail=0x0001 reason=unknown result=0x00000000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "cyw43-runtime-command-rejected"
+    assert gates.wifi_exact == "cyw43-runtime-command-rejected"
     assert gates.wifi_phase == "cyw43-firmware-chunk"
 
 
@@ -4352,6 +4437,26 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
 
     assert gates.usb_gate == 10
     assert gates.usb_blocker == "none"
+
+
+def test_gate_summary_tracks_usb_runtime_enum_snapshot_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0204 "
+            "result=0x0f00001f root_mask=0x1f slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0212 "
+            "result=0x0f00001f root_mask=0x1f slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 5
+    assert gates.usb_blocker == "enable-slot-failed"
 
 
 def test_gate_summary_tracks_usb_startup_blackbox_gates() -> None:

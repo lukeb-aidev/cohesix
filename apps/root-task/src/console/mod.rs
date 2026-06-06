@@ -160,9 +160,15 @@ impl CohesixConsole {
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn print_smp(&mut self) {
         self.emit_line("[smp] debug scheduler dump begin");
+        self.console.flush();
         let policy = affinity::policy();
-        affinity::debug_dump_per_core(&policy, |line| self.emit_line(line));
+        affinity::debug_dump_per_core(&policy, |line| {
+            self.emit_line(line);
+            self.console.flush();
+        });
+        self.console.flush();
         self.emit_line("[smp] debug scheduler dump end");
+        self.console.flush();
     }
 
     #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]

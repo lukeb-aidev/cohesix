@@ -3157,10 +3157,11 @@ impl<'a> KernelHal<'a> {
                 self.env
                     .map_page_copy_into_vspace(frame.cap(), vspace, vaddr, rights, attr, tracker)
                     .map_err(HalError::Sel4)?;
-                driver_task::publish_driver_task_shared_frame_cap(
+                driver_task::publish_driver_task_shared_frame(
                     hot_path.contract(),
                     page,
                     frame.cap() as usize,
+                    frame.ptr().as_ptr() as usize,
                 );
                 if let Some(builder) = init_descriptor.as_deref_mut() {
                     builder.add_shared_page(paddr)?;

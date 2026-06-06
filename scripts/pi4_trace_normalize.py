@@ -98,6 +98,25 @@ USB_PROGRESS_GATES = {
     "first-byte": 10,
     "console-byte": 10,
 }
+USB_RUNTIME_DETAIL_GATES = {
+    0x0201: (3, "usb-xhci-ready-keyboard-not-enumerated"),
+    0x0202: (8, "none"),
+    0x0204: (4, "command-ring-ready"),
+    0x0205: (5, "root-port-connected"),
+    0x0206: (6, "device-addressed"),
+    0x0207: (7, "device-descriptor"),
+    0x0208: (7, "config-descriptor"),
+    0x0210: (7, "hub-topology-no-keyboard"),
+    0x0211: (7, "hid-endpoint-not-ready"),
+    0x0212: (5, "enable-slot-failed"),
+    0x0213: (6, "address-device-failed"),
+    0x0214: (6, "device-descriptor-failed"),
+    0x0215: (7, "config-descriptor-failed"),
+    0x0216: (7, "hid-attach-failed"),
+    0x0217: (7, "hub-attach-failed"),
+    0x0500: (9, "hid-first-report"),
+    0x0501: (9, "keyboard-first-byte"),
+}
 WIFI_PROGRESS_GATES = {
     "function2-ready": 6,
     "firmware-channel-ready": 6,
@@ -216,17 +235,33 @@ DRIVER_TASK_EXPECTED_AFFINITY_CORES = {
     "rtl8139": 2,
     "virtio-net": 3,
 }
-REQUIRED_PI4_DRIVER_TASK_AFFINITY_CONTRACTS = frozenset(
-    (
-        "serial",
-        "usb-local-seat",
-        "hdmi-text",
-        "bcmgenet-v5",
-        "cyw43455",
-        "sdio-host",
-        "pcie-root",
-    )
+PI4_COMMON_DRIVER_TASK_AFFINITY_CONTRACTS = frozenset(
+    ("serial", "usb-local-seat", "hdmi-text", "pcie-root")
 )
+PI4_WIFI_DRIVER_TASK_AFFINITY_CONTRACTS = (
+    PI4_COMMON_DRIVER_TASK_AFFINITY_CONTRACTS | {"cyw43455", "sdio-host"}
+)
+PI4_WIRED_DRIVER_TASK_AFFINITY_CONTRACTS = (
+    PI4_COMMON_DRIVER_TASK_AFFINITY_CONTRACTS | {"bcmgenet-v5"}
+)
+REQUIRED_PI4_DRIVER_TASK_AFFINITY_CONTRACTS = (
+    PI4_WIFI_DRIVER_TASK_AFFINITY_CONTRACTS | PI4_WIRED_DRIVER_TASK_AFFINITY_CONTRACTS
+)
+
+
+def pi4_selected_driver_task_affinity_contracts(
+    selection: str, selected_only: bool
+) -> frozenset[str]:
+    """Return the affinity contract set required by a selected Pi 4 profile."""
+
+    normalized = selection.strip().lower()
+    if normalized in {"wifi", "cyw43", "cyw43455"}:
+        return PI4_WIFI_DRIVER_TASK_AFFINITY_CONTRACTS
+    if normalized in {"wired", "nic", "genet", "bcmgenet", "bcmgenet-v5"}:
+        return PI4_WIRED_DRIVER_TASK_AFFINITY_CONTRACTS
+    if selected_only:
+        return REQUIRED_PI4_DRIVER_TASK_AFFINITY_CONTRACTS
+    return REQUIRED_PI4_DRIVER_TASK_AFFINITY_CONTRACTS
 
 
 @dataclass(frozen=True)
@@ -720,7 +755,12 @@ def classify_domain(line: str) -> str | None:
         return "console"
     if "[cohesix:usb-trace]" in lower:
         return "usb"
-    if line.startswith("usb:") or line.startswith("USB:") or "[local-seat]" in lower:
+    if (
+        line.startswith("usb:")
+        or line.startswith("USB:")
+        or line.startswith("USB_RUNTIME_")
+        or "[local-seat]" in lower
+    ):
         return "usb"
     if line == "halting...":
         return "kernel"
@@ -1277,6 +1317,14 @@ def usb_progress_gate(value: str | None) -> int | None:
         return None
     label = value.lower().strip().replace("_", "-")
     return USB_PROGRESS_GATES.get(label)
+
+
+def usb_runtime_detail_gate_blocker(detail: int | None) -> tuple[int, str] | None:
+    """Return the gate/blocker represented by a USB runtime detail code."""
+
+    if detail is None:
+        return None
+    return USB_RUNTIME_DETAIL_GATES.get(detail)
 
 
 def usb_command_probe_success(
@@ -1847,6 +1895,8 @@ def normalize_wifi_blocker(value: str) -> str:
         return "firmware-verify-readback"
     if lower in {"20739", "0x5103"} or "sdio-descriptor-transfer-failed" in lower:
         return "cyw43-sdio-descriptor-transfer-failed"
+    if lower in {"21289", "0x5329"} or "firmware-retry-exhausted" in lower:
+        return "cyw43-firmware-retry-exhausted"
     if lower in {"20737", "0x5101"} or "sdio-command-unavailable" in lower:
         return "sdio-command-unavailable"
     if "function2-disabled" in lower:
@@ -1863,6 +1913,9 @@ def normalize_wifi_exact(value: str) -> str:
 
     lower = value.lower()
     cyw43_transport_details = {
+        "1": "cyw43-runtime-command-rejected",
+        "0x1": "cyw43-runtime-command-rejected",
+        "0x0001": "cyw43-runtime-command-rejected",
         "21264": "cyw43-transport-bus-link-missing",
         "0x5310": "cyw43-transport-bus-link-missing",
         "21265": "cyw43-transport-direct-sdio-init",
@@ -1899,6 +1952,10 @@ def normalize_wifi_exact(value: str) -> str:
         "0x5320": "cyw43-firmware-range",
         "21256": "cyw43-firmware-prep",
         "0x5308": "cyw43-firmware-prep",
+        "21257": "cyw43-descriptor-unavailable",
+        "0x5309": "cyw43-descriptor-unavailable",
+        "21258": "cyw43-descriptor-invalid",
+        "0x530a": "cyw43-descriptor-invalid",
         "21281": "cyw43-backplane-window",
         "0x5321": "cyw43-backplane-window",
         "21282": "cyw43-post-release-cardcap",
@@ -1911,6 +1968,8 @@ def normalize_wifi_exact(value: str) -> str:
         "0x5102": "cyw43-sdio-descriptor-unavailable",
         "20739": "cyw43-sdio-descriptor-transfer-failed",
         "0x5103": "cyw43-sdio-descriptor-transfer-failed",
+        "21289": "cyw43-firmware-retry-exhausted",
+        "0x5329": "cyw43-firmware-retry-exhausted",
     }
     if lower in cyw43_transport_details:
         return cyw43_transport_details[lower]
@@ -1962,6 +2021,32 @@ def wifi_progress_gate(value: str | None) -> int | None:
         return None
     label = value.lower().strip().replace("_", "-")
     return WIFI_PROGRESS_GATES.get(label)
+
+
+def wifi_firmware_stream_fault_blocker(event: TraceEvent) -> str | None:
+    """Return the firmware-upload blocker carried by a CYW43 stream fault."""
+
+    fields = event.fields
+    stage = (
+        fields.get("stage")
+        or fields.get("name")
+        or event.stage
+        or ""
+    ).lower()
+    op = fields.get("op", "").lower()
+    if stage not in {
+        "firmware-upload",
+        "cyw43-firmware-prep",
+        "cyw43-firmware-chunk",
+        "cyw43-nvram-chunk",
+    } and op not in {"1", "2", "3"}:
+        return None
+    status = fields.get("status", "").lower()
+    detail = fields.get("detail") or fields.get("fault_detail") or fields.get("reason") or ""
+    if status not in {"fail", "failed", "fault"} and not detail:
+        return None
+    exact = normalize_wifi_exact(detail) if detail else "cyw43-firmware-chunk"
+    return exact if exact != "none" else "cyw43-firmware-chunk"
 
 
 def wifi_ht_runtime_evidence(
@@ -2231,6 +2316,18 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, proof_gate)
                 runtime_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
                 blocker = "none" if runtime_blocker == "none" else runtime_blocker
+            continue
+        if raw.startswith("usb_runtime_enum_snapshot"):
+            detail_gate = usb_runtime_detail_gate_blocker(
+                parse_hex_int(fields.get("detail"))
+            )
+            if detail_gate is not None:
+                detail_proof_gate, detail_blocker = detail_gate
+                gate = max(gate, detail_proof_gate)
+                if detail_blocker != "none":
+                    blocker = detail_blocker
+                elif detail_proof_gate >= 8:
+                    blocker = "none"
             continue
         if "usb proof_summary" in raw:
             proof_gate = parse_hex_int(fields.get("gate"))
@@ -3006,6 +3103,33 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if diag_gate is not None:
             status = fields.get("status", "").lower()
             name = fields.get("name", "wifi-startup-gate")
+            firmware_stream_blocker_active = startup_blackbox_gate >= 5 and (
+                startup_blackbox_blocker is not None
+                and (
+                    startup_blackbox_blocker.startswith("cyw43-")
+                    or startup_blackbox_blocker.startswith("sdio-")
+                )
+            )
+            if (
+                diag_gate == 6
+                and status == "pass"
+                and (
+                    fields.get("uploaded", "").lower() == "no"
+                    or (parse_hex_int(fields.get("fault_detail")) or 0) != 0
+                )
+            ):
+                status = "fail"
+            elif firmware_stream_blocker_active and diag_gate > 6:
+                status = "blocked"
+            elif (
+                diag_gate == 7
+                and status == "pass"
+                and (
+                    fields.get("f2_enabled", "").lower() == "no"
+                    or fields.get("f2_ready", "").lower() == "no"
+                )
+            ):
+                status = "blocked"
             if status == "pass":
                 gate = max(gate, diag_gate)
                 if diag_gate >= 7:
@@ -3014,11 +3138,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     blocker = "none"
             elif status == "fail":
                 gate = max(gate, max(0, diag_gate - 1))
-                if diag_gate >= 7:
-                    post_f2_progress_seen = True
-                detail_blocker = normalize_wifi_blocker(
-                    fields.get("fault_detail", "")
-                )
+                detail_blocker = normalize_wifi_exact(fields.get("fault_detail", ""))
                 blocker = (
                     detail_blocker
                     if detail_blocker != "none"
@@ -3026,9 +3146,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 )
                 if blocker == "none":
                     blocker = name
-                if diag_gate >= 5 and blocker not in {"none", "unknown"}:
-                    startup_blackbox_blocker = blocker
-                    startup_blackbox_gate = max(0, diag_gate - 1)
+            if diag_gate >= 5 and blocker not in {"none", "unknown"}:
+                startup_blackbox_blocker = blocker
+                startup_blackbox_gate = max(0, diag_gate - 1)
+            continue
+        firmware_stream_blocker = wifi_firmware_stream_fault_blocker(event)
+        if firmware_stream_blocker is not None:
+            gate = max(gate, 5)
+            blocker = firmware_stream_blocker
+            startup_blackbox_blocker = firmware_stream_blocker
+            startup_blackbox_gate = max(startup_blackbox_gate, 5)
             continue
         if raw.startswith("netstats:"):
             if (
@@ -4032,6 +4159,15 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
 
     exact = "none"
     raw = event.raw.lower()
+    firmware_stream_blocker = wifi_firmware_stream_fault_blocker(event)
+    if firmware_stream_blocker is not None:
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("name")
+            or event.stage
+            or "firmware-upload"
+        )
+        return firmware_stream_blocker, phase
     if normalize_wifi_blocker(event.raw) == "control-plane-legacy-gmode-stall":
         phase = (
             event.fields.get("stage")
@@ -4168,6 +4304,8 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
         return 0
     if "post-write-no-irq-terminal" in raw:
         return 0
+    if wifi_firmware_stream_fault_blocker(event) == candidate:
+        return 0
     if candidate == "runtime-rx-host-latch-spam":
         return 1
     if "[cyw43] control-plane" in raw and "action=fail" in raw:
@@ -4260,6 +4398,9 @@ def summarize_wifi_failure_detail(
                 socram_core_ctrl_stage = event_stage
 
         candidate = normalize_wifi_blocker(raw)
+        firmware_stream_blocker = wifi_firmware_stream_fault_blocker(event)
+        if firmware_stream_blocker is not None and wifi_blocker == firmware_stream_blocker:
+            candidate = firmware_stream_blocker
         if (
             wifi_blocker == "cyw43-driver-task-replay"
             and event.domain == "driver"
@@ -4591,6 +4732,8 @@ def summarize_driver_task_proofs(
     pointer_free_ipc_proof = False
     owner_state_hot_paths: set[str] = set()
     active_net = "unknown"
+    selected_net = "unknown"
+    selected_only = False
     budget_overruns = 0
     latency_proofs = 0
     serial_responsive = False
@@ -4607,6 +4750,9 @@ def summarize_driver_task_proofs(
             or "budget_overrun" in raw
             or "budget overrun" in raw
         )
+        if "active_contracts" in fields:
+            selected_only |= fields.get("active_contracts", "").lower() == "selected-only"
+            selected_net = fields.get("net", selected_net).lower()
         if driver_task_line:
             owner_state_line = "driver_task_owner_state" in raw
             if raw.startswith("driver_task_boot ") or raw.startswith(
@@ -4620,6 +4766,8 @@ def summarize_driver_task_proofs(
                         affinity_manifest_matches.add(contract)
                     else:
                         affinity_manifest_mismatches += 1
+            if "driver_task_selected" in raw:
+                selected_net = fields.get("selection", selected_net).lower()
             if "driver_task_default" in raw:
                 default_requested |= fields.get("requested", "").lower() in {
                     "dedicated",
@@ -4790,8 +4938,11 @@ def summarize_driver_task_proofs(
             hdmi_responsive = True
     required_roles = {"serial", "usb", "display", "net", "sdio", "pcie"}
     owner_state_proof = REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS.issubset(owner_state_hot_paths)
+    expected_affinity_contracts = pi4_selected_driver_task_affinity_contracts(
+        selected_net, selected_only
+    )
     affinity_manifest_missing = len(
-        REQUIRED_PI4_DRIVER_TASK_AFFINITY_CONTRACTS - affinity_manifest_matches
+        expected_affinity_contracts - affinity_manifest_matches
     )
     affinity_manifest_proof = (
         affinity_manifest_missing == 0 and affinity_manifest_mismatches == 0
@@ -4887,6 +5038,28 @@ def line_has_hdmi_responsiveness(raw: str, fields: dict[str, str]) -> bool:
         or "display stats" in raw
         or fields.get("hdmi_responsive") in {"1", "true", "yes"}
     )
+
+
+WIFI_REPLAY_REFINABLE_BLOCKERS = frozenset(
+    (
+        "unknown",
+        "missing",
+        "none",
+        "wifi-driver-task-runtime-unproved",
+        "wifi-started-no-replay",
+        "root-prompt-printed",
+        "root-prompt-delayed",
+        "boot-deferred-local-seat-usb",
+        "boot-deferred-root-console",
+        "boot-waiting-for-wifi",
+    )
+)
+
+
+def wifi_replay_should_refine(blocker: str) -> bool:
+    """Return true when replay telemetry should replace a generic WiFi blocker."""
+
+    return blocker in WIFI_REPLAY_REFINABLE_BLOCKERS
 
 
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
@@ -5085,7 +5258,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         replay_gate, replay_blocker, replay_exact_default, replay_phase_default = (
             classify_sdio_replay_gate(sdio_driver_task_replay_blocker)
         )
-        if wifi_blocker in {"unknown", "missing", "none"} or replay_gate > wifi_gate:
+        if wifi_replay_should_refine(wifi_blocker) or replay_gate > wifi_gate:
             wifi_gate = max(wifi_gate, replay_gate)
             wifi_blocker = replay_blocker
             replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
@@ -5099,7 +5272,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 wifi_exact = replay_exact_default
                 wifi_phase = replay_phase_default
     elif net_driver_task_replay_blocker != "none":
-        if wifi_blocker in {"unknown", "missing", "none"}:
+        if wifi_replay_should_refine(wifi_blocker):
             wifi_gate = max(wifi_gate, 1)
             wifi_blocker = "cyw43-driver-task-replay"
             replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(

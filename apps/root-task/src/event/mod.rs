@@ -2860,9 +2860,15 @@ where
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn emit_smp_snapshot(&mut self) -> bool {
         self.emit_console_line("[smp] debug scheduler dump begin");
+        self.serial.flush_tx();
         let policy = crate::affinity::policy();
-        crate::affinity::debug_dump_per_core(&policy, |line| self.emit_console_line(line));
+        crate::affinity::debug_dump_per_core(&policy, |line| {
+            self.emit_console_line(line);
+            self.serial.flush_tx();
+        });
+        self.serial.flush_tx();
         self.emit_console_line("[smp] debug scheduler dump end");
+        self.serial.flush_tx();
         true
     }
 
@@ -6188,7 +6194,7 @@ where
         fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
         source: &str,
     ) {
-        let fault_gate = fault.map(Self::wifi_runtime_fault_gate);
+        let fault_gate: Option<u8> = fault.map(Self::wifi_runtime_fault_gate);
         let power_ready = snapshot.is_some_and(|snapshot| {
             matches!(snapshot.power_state, WifiPowerState::On)
                 && matches!(snapshot.reset_state, WifiResetState::Deasserted)
@@ -6527,6 +6533,9 @@ where
         if Self::wifi_runtime_fault_is_sdio_card_select(fault) {
             return 2;
         }
+        if Self::wifi_runtime_fault_is_firmware_stream(fault) {
+            return 6;
+        }
         Self::wifi_cyw43_fault_gate(fault.detail)
     }
 
@@ -6534,6 +6543,7 @@ where
     const fn wifi_cyw43_fault_gate(detail: u16) -> u8 {
         match detail {
             0x5101 | 0x5102 | 0x5103 | 0x5104 => 6,
+            0x5302 | 0x5303 | 0x5308 | 0x5309 | 0x530a => 6,
             0x5310..=0x531f => 5,
             0x5320..=0x532f => 4,
             _ => 8,
@@ -6547,6 +6557,9 @@ where
         if Self::wifi_runtime_fault_is_sdio_card_select(fault) {
             return "verify-sdio-cmd7-response-contract-and-host-status";
         }
+        if Self::wifi_runtime_fault_is_firmware_stream(fault) {
+            return "inspect-cyw43-firmware-shared-payload-and-sdio-owner-transfer";
+        }
         Self::wifi_cyw43_fault_next_action(fault.detail)
     }
 
@@ -6557,6 +6570,8 @@ where
             0x5102 => "verify-cyw43-to-sdio-descriptor-window",
             0x5103 => "inspect-sdio-owner-cmd53-after-block-and-byte-retries",
             0x5104 => "verify-sdio-host-config-replay",
+            0x5302 | 0x5303 | 0x5308 => "inspect-cyw43-firmware-upload",
+            0x5309 | 0x530a => "verify-cyw43-command-descriptor-shared-payload-window",
             0x5310..=0x531f => "inspect-cyw43-backplane-window",
             0x5320..=0x532f => "inspect-sdio-clock-and-card-state",
             _ => "inspect-cyw43-runtime-fault-stage",
@@ -6579,10 +6594,21 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_runtime_fault_is_firmware_stream(
+        fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
+    ) -> bool {
+        matches!(
+            fault.stage,
+            "cyw43-firmware-prep" | "cyw43-firmware-chunk" | "cyw43-nvram-chunk"
+        ) || matches!(fault.op, 1 | 2 | 3)
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_runtime_fault_implies_hal_power_ready(
         fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
     ) -> bool {
         Self::wifi_runtime_fault_is_sdio_card_select(fault)
+            || Self::wifi_runtime_fault_is_firmware_stream(fault)
     }
 
     #[cfg(feature = "kernel")]
@@ -6627,6 +6653,7 @@ where
             0x5102 => "descriptor-unavailable",
             0x5104 => "host-config-failed",
             0x5101 => "runtime-command-unavailable",
+            0x5329 => "firmware-retry-exhausted",
             _ => "not-classified",
         }
     }

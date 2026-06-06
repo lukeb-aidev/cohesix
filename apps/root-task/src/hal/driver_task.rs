@@ -14,7 +14,7 @@ use core::cell::UnsafeCell;
 #[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
 use core::sync::atomic::AtomicU64;
 #[cfg(feature = "kernel")]
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{fence, AtomicU32, AtomicUsize, Ordering};
 
 use heapless::Deque;
 #[cfg(feature = "kernel")]
@@ -23,7 +23,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
     DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_ENGINE_INIT_AUX,
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
-    DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -1771,6 +1772,7 @@ struct DriverTaskCommandSlot {
     ring_frame_cap: AtomicUsize,
     shared_frame_count: AtomicUsize,
     shared_frame_caps: [AtomicUsize; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
+    shared_frame_root_ptrs: [AtomicUsize; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
     request_seq: AtomicUsize,
     active: AtomicUsize,
     ring_handler: AtomicUsize,
@@ -1814,6 +1816,7 @@ impl DriverTaskCommandSlot {
             ring_frame_cap: AtomicUsize::new(0),
             shared_frame_count: AtomicUsize::new(0),
             shared_frame_caps: [AtomicUsize::new(0), AtomicUsize::new(0)],
+            shared_frame_root_ptrs: [AtomicUsize::new(0), AtomicUsize::new(0)],
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             ring_handler: AtomicUsize::new(0),
@@ -2130,6 +2133,17 @@ pub fn publish_driver_task_shared_frame_cap(
     page_index: usize,
     shared_frame_cap: usize,
 ) {
+    publish_driver_task_shared_frame(contract, page_index, shared_frame_cap, 0);
+}
+
+/// Publish one root CSpace cap and root mapping backing a shared-buffer page.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_shared_frame(
+    contract: DriverTaskContract,
+    page_index: usize,
+    shared_frame_cap: usize,
+    shared_frame_root_ptr: usize,
+) {
     if page_index >= DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
         return;
     }
@@ -2140,6 +2154,7 @@ pub fn publish_driver_task_shared_frame_cap(
         return;
     };
     slot.shared_frame_caps[page_index].store(shared_frame_cap, Ordering::Release);
+    slot.shared_frame_root_ptrs[page_index].store(shared_frame_root_ptr, Ordering::Release);
     let required_count = page_index.saturating_add(1);
     let current = slot.shared_frame_count.load(Ordering::Acquire);
     if required_count > current {
@@ -2214,8 +2229,11 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     slot.ring_root_ptr.store(0, Ordering::Release);
     slot.ring_frame_cap.store(0, Ordering::Release);
     slot.shared_frame_count.store(0, Ordering::Release);
-    for shared_frame_cap in &slot.shared_frame_caps {
-        shared_frame_cap.store(0, Ordering::Release);
+    let mut index = 0usize;
+    while index < DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
+        slot.shared_frame_caps[index].store(0, Ordering::Release);
+        slot.shared_frame_root_ptrs[index].store(0, Ordering::Release);
+        index = index.saturating_add(1);
     }
     slot.tcb.store(0, Ordering::Release);
     slot.steady_priority.store(0, Ordering::Release);
@@ -2602,7 +2620,67 @@ pub fn stage_driver_task_ring_payload_at(
     unsafe {
         core::ptr::copy_nonoverlapping(payload.as_ptr(), dst, payload.len());
     }
+    fence(Ordering::Release);
     DriverFrameDescriptor::new(offset as u32, payload.len() as u16, flags).ok()
+}
+
+/// Payload staged into the fixed driver shared-buffer window.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverTaskStagedSharedPayload {
+    /// Runtime-visible offset of the first staged byte.
+    pub offset: u16,
+    /// Number of staged bytes.
+    pub len: u16,
+    /// Frame flags associated with this payload.
+    pub flags: u16,
+}
+
+/// Stage a bounded payload into the driver-task shared-buffer pages.
+#[cfg(feature = "kernel")]
+pub fn stage_driver_task_shared_payload(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    flags: u16,
+) -> Option<DriverTaskStagedSharedPayload> {
+    if payload.is_empty() || payload.len() > DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES {
+        return None;
+    }
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let page_bytes = DRIVER_TASK_RING_PAGE_BYTES;
+    let required_pages = payload.len().saturating_add(page_bytes - 1) / page_bytes;
+    if required_pages == 0 || required_pages > DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
+        return None;
+    }
+    if slot.shared_frame_count.load(Ordering::Acquire) < required_pages {
+        return None;
+    }
+    let mut copied = 0usize;
+    while copied < payload.len() {
+        let page = copied / page_bytes;
+        let page_offset = copied % page_bytes;
+        let root_ptr = slot.shared_frame_root_ptrs[page].load(Ordering::Acquire);
+        if root_ptr == 0 {
+            return None;
+        }
+        let chunk = (page_bytes - page_offset).min(payload.len() - copied);
+        let dst = root_ptr.checked_add(page_offset)? as *mut u8;
+        // SAFETY: The destination is a HAL-published root mapping for one of
+        // the fixed shared-buffer pages. Bounds above keep the copy inside the
+        // declared shared window, and release ordering publishes bytes before
+        // the command descriptor can be consumed by the child runtime.
+        unsafe {
+            core::ptr::copy_nonoverlapping(payload.as_ptr().add(copied), dst, chunk);
+        }
+        copied = copied.saturating_add(chunk);
+    }
+    fence(Ordering::Release);
+    Some(DriverTaskStagedSharedPayload {
+        offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+        len: payload.len() as u16,
+        flags,
+    })
 }
 
 /// Stage a pointer-free runtime initialization descriptor into the shared ring.
@@ -3087,6 +3165,20 @@ fn driver_task_ring_attempt_limit(
 }
 
 #[cfg(feature = "kernel")]
+fn driver_task_ring_timeout_keeps_active(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+) -> bool {
+    mode == DriverTaskRingCommandMode::NonBlocking
+        && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && matches!(
+            command.aux0,
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
+        )
+}
+
+#[cfg(feature = "kernel")]
 const fn driver_task_ring_flags_for_mode(mode: DriverTaskRingCommandMode, flags: u16) -> u16 {
     if driver_task_ring_mode_uses_bounded_send(mode) {
         flags | DRIVER_TASK_RING_FLAG_ONE_WAY
@@ -3344,7 +3436,11 @@ fn run_driver_task_ring_command_with_mode(
         }
     }
 
-    if completion.sequence == request as u32 || mode != DriverTaskRingCommandMode::PromptSlice {
+    let keep_active_on_timeout = completion.sequence != request as u32
+        && driver_task_ring_timeout_keeps_active(contract, command, mode);
+    if completion.sequence == request as u32
+        || (mode != DriverTaskRingCommandMode::PromptSlice && !keep_active_on_timeout)
+    {
         slot.active.store(0, Ordering::Release);
     }
     if completion.sequence == request as u32 {
@@ -5847,6 +5943,9 @@ mod tests {
         let slot = slot_for_task_key(task_key).expect("slot");
         assert_eq!(slot.endpoint.load(Ordering::Acquire), 0);
         assert_eq!(slot.ring_root_ptr.load(Ordering::Acquire), 0);
+        assert_eq!(slot.shared_frame_count.load(Ordering::Acquire), 0);
+        assert_eq!(slot.shared_frame_caps[0].load(Ordering::Acquire), 0);
+        assert_eq!(slot.shared_frame_root_ptrs[0].load(Ordering::Acquire), 0);
         assert_eq!(slot.tcb.load(Ordering::Acquire), 0);
         assert_eq!(slot.steady_priority.load(Ordering::Acquire), 0);
         assert_eq!(slot.steady_priority_active.load(Ordering::Acquire), 0);
@@ -5890,6 +5989,31 @@ mod tests {
             DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY
         )
         .is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn stage_driver_task_shared_payload_uses_published_root_pages() {
+        let contract = SDIO_HOST_DRIVER_TASK_CONTRACT;
+        clear_driver_task_transport(contract);
+        let mut shared = [0u8; DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES];
+        publish_driver_task_shared_frame(contract, 0, 0x3000, shared.as_mut_ptr() as usize);
+        publish_driver_task_shared_frame(
+            contract,
+            1,
+            0x4000,
+            // SAFETY: The offset is inside the local test buffer and points to
+            // the second simulated shared page.
+            unsafe { shared.as_mut_ptr().add(DRIVER_TASK_RING_PAGE_BYTES) as usize },
+        );
+        let payload = [0xa5u8; DRIVER_TASK_RING_PAGE_BYTES + 17];
+        let staged =
+            stage_driver_task_shared_payload(contract, &payload, 0x20).expect("shared payload");
+        assert_eq!(staged.offset, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE);
+        assert_eq!(usize::from(staged.len), payload.len());
+        assert_eq!(staged.flags, 0x20);
+        assert_eq!(&shared[..payload.len()], payload);
+        clear_driver_task_transport(contract);
     }
 
     #[test]
@@ -6496,6 +6620,11 @@ mod tests {
             ),
             DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
         );
+        assert!(driver_task_ring_timeout_keeps_active(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
         assert_eq!(
             driver_task_ring_attempt_limit(
                 USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
@@ -6518,6 +6647,16 @@ mod tests {
             ),
             DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
         );
+        assert!(driver_task_ring_timeout_keeps_active(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+        assert!(!driver_task_ring_timeout_keeps_active(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::PromptSlice
+        ));
         assert_eq!(
             DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS,
             DRIVER_TASK_PROMPT_RING_ATTEMPTS
