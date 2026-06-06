@@ -167,6 +167,30 @@ def normalize_blocker(value: str) -> str:
     return replacements.get(clean, clean)
 
 
+USB_DETAIL_BLOCKERS = {
+    "0x0213": "address-device-failed",
+    "0213": "address-device-failed",
+    "531": "address-device-failed",
+}
+
+WIFI_DETAIL_BLOCKERS = {
+    "0x5329": "cyw43-firmware-retry-exhausted",
+    "5329": "cyw43-firmware-retry-exhausted",
+    "21289": "cyw43-firmware-retry-exhausted",
+}
+
+
+def normalized_detail_blocker(
+    fields: dict[str, str], mapping: dict[str, str]
+) -> str | None:
+    """Return a stable blocker name for known numeric detail fields."""
+
+    detail = fields.get("detail")
+    if detail is None:
+        return None
+    return mapping.get(detail.strip().lower())
+
+
 @dataclass
 class RingTracker:
     """Track begin/return/timeout driver-task ring evidence."""
@@ -407,6 +431,8 @@ def update_usb(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
     usb_line = (
         "usb" in lowered
         or "xhci" in lowered
+        or "local-seat" in lowered
+        or "keyboard runtime proof" in lowered
         or fields.get("contract") == "usb-local-seat"
         or fields.get("hot_path") == "usb-keyboard"
     )
@@ -424,15 +450,26 @@ def update_usb(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         )
     ):
         summary.usb_keyboard_route_seen = True
-    bytes_field = fields.get("bytes")
     if (
-        "first-byte" in lowered
-        or "console-byte" in lowered
-        or (bytes_field is not None and safe_int(bytes_field) > 0)
+        "runtime keyboard first-byte" in lowered
+        or "source=first-byte" in lowered
+        or fields.get("first_byte") == "yes"
+        or (
+            fields.get("proof_gate") == "10"
+            and fields.get("blocker") == "none"
+            and fields.get("keyboard") == "yes"
+        )
     ):
         summary.usb_first_byte_seen = True
+    structured_blocker = first_non_none(
+        (
+            fields.get("blocker"),
+            normalized_detail_blocker(fields, USB_DETAIL_BLOCKERS),
+        )
+    )
     blocker = first_non_none(
         (
+            structured_blocker if structured_blocker != "none" else None,
             fields.get("blocker"),
             fields.get("detail"),
             fields.get("reason"),
@@ -446,9 +483,11 @@ def update_usb(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         or "not-ready" in blocker
         or "no-reply" in blocker
         or "pcie-vl805" in blocker
+        or "address-device" in blocker
+        or "failed" in blocker
     ):
         summary.usb_blocker_seen = True
-        if summary.usb_blocker == "none":
+        if summary.usb_blocker == "none" or structured_blocker != "none":
             summary.usb_blocker = normalize_blocker(blocker)
 
 
@@ -475,14 +514,10 @@ def update_wifi(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         summary.wifi_sdio_seen = True
     if "cyw43" in lowered or "cyw43455" in lowered:
         summary.wifi_cyw43_seen = True
-    if any(
-        token in lowered
-        for token in (
-            "dhcp=bound",
-            "dhcp-bound",
-            "lease bound",
-            "dhcp_phase=bound",
-        )
+    if (
+        fields.get("dhcp") == "bound"
+        or fields.get("dhcp_phase") == "bound"
+        or "lease bound" in lowered
     ):
         summary.wifi_dhcp_seen = True
     if any(
@@ -497,14 +532,26 @@ def update_wifi(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         )
     ):
         summary.wifi_net_diag_seen = True
+    structured_blocker = first_non_none(
+        (
+            fields.get("reason")
+            if "cyw43" in fields.get("reason", "")
+            or "firmware" in fields.get("reason", "")
+            else None,
+            fields.get("descriptor_status"),
+            normalized_detail_blocker(fields, WIFI_DETAIL_BLOCKERS),
+            fields.get("blocker"),
+        )
+    )
     blocker = first_non_none(
         (
+            structured_blocker if structured_blocker != "none" else None,
             fields.get("exact_error"),
             fields.get("exact"),
             fields.get("cause"),
+            fields.get("reason"),
             fields.get("detail"),
             fields.get("blocker"),
-            fields.get("reason"),
         )
     )
     if blocker != "none" and (
@@ -514,9 +561,11 @@ def update_wifi(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         or "net-disabled" in blocker
         or "not-ready" in blocker
         or "timeout" in blocker
+        or "firmware-retry-exhausted" in blocker
+        or "failed" in blocker
     ):
         summary.wifi_blocker_seen = True
-        if summary.wifi_blocker == "none":
+        if summary.wifi_blocker == "none" or structured_blocker != "none":
             summary.wifi_blocker = normalize_blocker(blocker)
 
 

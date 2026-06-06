@@ -44,6 +44,8 @@ def _old_good_log() -> list[str]:
         "DRIVER_TASK_OWNER_STATE contract=usb-local-seat "
         "hot_path=usb-keyboard owner_state=driver-owned",
         "[local-seat] keyboard route=usb-keyboard parser=shared",
+        "[local-seat] runtime keyboard first-byte read=1 ascii=0x54 key=0x17",
+        "[local-seat] pi4 keyboard runtime proof result=online gate=10 source=first-byte",
         "USB_BURST bytes=16 drops=0",
         "DRIVER_TASK_SDIO_DEDICATED=yes",
         "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
@@ -180,6 +182,60 @@ def test_new_driver_model_advancement_keeps_stable_keys(
         assert f"{prefix}_PCIE_HAL_PREP_SEEN" in fields
         assert f"{prefix}_USB_KEYBOARD_ROUTE_SEEN" in fields
         assert f"{prefix}_WIFI_NET_DIAG_SEEN" in fields
+
+
+def test_latest_diagnostics_do_not_credit_usb_burst_or_dhcp_next_as_acceptance(
+    tmp_path: pathlib.Path,
+) -> None:
+    old_path = _write_log(tmp_path, "old.log", _old_good_log())
+    new_path = _write_log(
+        tmp_path,
+        "new.log",
+        [
+            "U-Boot 2026.01-dirty",
+            "[Cohesix] Root console ready (type 'help' for commands)",
+            "USB_BURST bytes=16 drops=0",
+            "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+            "proof_gate=5 target_gate=10 next=device-descriptor "
+            "blocker=address-device-failed",
+            "wifi: gate 8 name=firmware-channel status=blocked "
+            "evidence=dependency=not-reached next=dhcp-bound",
+            "wifi: evidence sdio_cmd53 func=1 addr=0x0001a000 len=256 "
+            "increment=yes block_mode=no mode=byte-narrow op=2 "
+            "source=owner-terminal",
+            "wifi: evidence sdio_status "
+            "descriptor_status=cyw43-firmware-retry-exhausted "
+            "transfer_stage=response transfer_status=0x000800 r5=0x0800 "
+            "retry=byte-narrow-fallback-exhausted host=0x06 clock=0x5007",
+            "wifi: evidence sdio_payload first=0x11 last=0x22 xor=0x33 "
+            "sum=0x00004444 owner_window=sdio-shared-8192",
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(MODULE_PATH),
+            "--old",
+            str(old_path),
+            "--new",
+            str(new_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    fields = _parse_env(result.stdout)
+
+    assert result.returncode == 0
+    assert fields["NEW_USB_FIRST_BYTE_SEEN"] == "no"
+    assert fields["NEW_USB_BLOCKER_SEEN"] == "yes"
+    assert fields["NEW_USB_BLOCKER"] == "address-device-failed"
+    assert fields["NEW_WIFI_DHCP_SEEN"] == "no"
+    assert fields["NEW_WIFI_BLOCKER_SEEN"] == "yes"
+    assert fields["NEW_WIFI_BLOCKER"] == "cyw43-firmware-retry-exhausted"
+    assert fields["COMPARISON_VERDICT"] == "regression"
 
 
 def test_latest_boot_slice_ignores_stale_good_prefix() -> None:

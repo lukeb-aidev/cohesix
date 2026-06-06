@@ -65,7 +65,7 @@ const CYW43_RUNTIME_STREAM_COMMAND_RETRIES: usize = 2;
 const SDIO_CMD53_BYTE_MODE_MAX: u16 = 512;
 const SDIO_FAULT_TELEMETRY_MAGIC: u32 = 0x5344_494f;
 const SDIO_FAULT_TELEMETRY_VERSION: u32 = 1;
-const SDIO_FAULT_TELEMETRY_BYTES: usize = 48;
+const SDIO_FAULT_TELEMETRY_BYTES: usize = 56;
 const SDIO_FAULT_TELEMETRY_ARG_OFFSET: usize = 8;
 const SDIO_FAULT_TELEMETRY_CMD_FLAGS_OFFSET: usize = 12;
 const SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET: usize = 16;
@@ -76,6 +76,8 @@ const SDIO_FAULT_TELEMETRY_RESPONSE0_OFFSET: usize = 32;
 const SDIO_FAULT_TELEMETRY_HOST_CLOCK_OFFSET: usize = 36;
 const SDIO_FAULT_TELEMETRY_FAILURE_OFFSET: usize = 40;
 const SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET: usize = 44;
+const SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET: usize = 48;
+const SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET: usize = 52;
 const SDIO_GO_IDLE_COMMAND_INDEX: u32 = 0;
 const SDIO_CMD5_OCR_COMMAND_INDEX: u32 = 5;
 const SDIO_CMD3_RCA_COMMAND_INDEX: u32 = 3;
@@ -109,6 +111,8 @@ static NET_RUNTIME_INIT_LEASE: Mutex<Option<NetRuntimeInitLease>> = Mutex::new(N
 #[cfg(feature = "kernel")]
 static CYW43_LAST_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultStatus>> =
     Mutex::new(None);
+#[cfg(feature = "kernel")]
+static CYW43_LAST_SDIO_OWNER_FAULT: Mutex<Option<Cyw43SdioOwnerFaultStatus>> = Mutex::new(None);
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -125,14 +129,57 @@ pub(crate) struct Cyw43RuntimeCommandFaultStatus {
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43SdioOwnerFaultStatus {
+    pub stage: &'static str,
+    pub op: u16,
+    pub cmd: u16,
+    pub arg: u32,
+    pub function: u8,
+    pub addr: u32,
+    pub target_addr: u32,
+    pub increment: bool,
+    pub write: bool,
+    pub block_mode: bool,
+    pub len: u16,
+    pub block_size: u16,
+    pub block_count: u16,
+    pub transfer_mode: u16,
+    pub host_control: u8,
+    pub power_control: u8,
+    pub clock_control: u16,
+    pub present_state: u32,
+    pub int_status: u32,
+    pub response0: u32,
+    pub block_size_count_reg: u32,
+    pub detail: u16,
+    pub reason: &'static str,
+    pub transfer_stage: &'static str,
+    pub transfer_status: u32,
+    pub r5: u32,
+    pub owner_window: &'static str,
+    pub retry: &'static str,
+    pub payload_first: u8,
+    pub payload_last: u8,
+    pub payload_xor: u8,
+    pub payload_sum: u32,
+}
+
+#[cfg(feature = "kernel")]
 pub(crate) fn latest_cyw43_runtime_command_fault_status() -> Option<Cyw43RuntimeCommandFaultStatus>
 {
     *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock()
 }
 
 #[cfg(feature = "kernel")]
+pub(crate) fn latest_cyw43_sdio_owner_fault_status() -> Option<Cyw43SdioOwnerFaultStatus> {
+    *CYW43_LAST_SDIO_OWNER_FAULT.lock()
+}
+
+#[cfg(feature = "kernel")]
 fn clear_cyw43_runtime_command_fault_status() {
     *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = None;
+    *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
 }
 
 #[cfg(feature = "kernel")]
@@ -154,6 +201,7 @@ fn record_sdio_runtime_command_fault_status(
         reason: cyw43_runtime_fault_reason(completion.detail),
         result: completion.result,
     });
+    *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
 }
 
 #[cfg(feature = "kernel")]
@@ -823,7 +871,7 @@ where
         bundle.firmware,
         bundle.firmware.len(),
         resume_offset,
-        true,
+        false,
     )?;
     complete_cyw43_linked_runtime_firmware_tail(hal, contract, bundle, reset_vector)
 }
@@ -1449,13 +1497,7 @@ where
                     if let Some(completion) = err.same_command_retry_completion() {
                         attempts = attempts.saturating_add(1);
                         let status = if attempts < CYW43_RUNTIME_STREAM_COMMAND_RETRIES {
-                            if descriptor.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
-                                && descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE == 0
-                            {
-                                "stream-fault-retry-byte-mode"
-                            } else {
-                                "stream-fault-retry-same-window"
-                            }
+                            "stream-fault-retry-runtime-ladder"
                         } else {
                             "stream-fault-retry-exhausted"
                         };
@@ -1467,9 +1509,6 @@ where
                             Some(completion),
                         );
                         if attempts < CYW43_RUNTIME_STREAM_COMMAND_RETRIES {
-                            if descriptor.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK {
-                                descriptor.flags |= DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
-                            }
                             continue;
                         }
                     } else if let Some(completion) = err.recoverable_completion() {
@@ -1715,6 +1754,7 @@ fn emit_cyw43_runtime_command_fault(
         reason: cyw43_runtime_fault_reason(completion.detail),
         result: completion.result,
     });
+    *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
     let mut line = heapless::String::<320>::new();
     let _ = write!(
         line,
@@ -1752,6 +1792,10 @@ struct SdioFaultTelemetry {
     clock_control: u16,
     failure_result: u32,
     block_size_count_reg: u32,
+    payload_first: u8,
+    payload_last: u8,
+    payload_xor: u8,
+    payload_sum: u32,
 }
 
 #[cfg(feature = "kernel")]
@@ -1769,6 +1813,7 @@ impl SdioFaultTelemetry {
         let len_block = le_u32_at(bytes, SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET)?;
         let count_mode = le_u32_at(bytes, SDIO_FAULT_TELEMETRY_COUNT_MODE_OFFSET)?;
         let host_clock = le_u32_at(bytes, SDIO_FAULT_TELEMETRY_HOST_CLOCK_OFFSET)?;
+        let payload_edge = le_u32_at(bytes, SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET)?;
         Some(Self {
             arg: le_u32_at(bytes, SDIO_FAULT_TELEMETRY_ARG_OFFSET)?,
             cmd: (cmd_flags & 0xffff) as u16,
@@ -1785,6 +1830,10 @@ impl SdioFaultTelemetry {
             clock_control: (host_clock >> 16) as u16,
             failure_result: le_u32_at(bytes, SDIO_FAULT_TELEMETRY_FAILURE_OFFSET)?,
             block_size_count_reg: le_u32_at(bytes, SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET)?,
+            payload_first: (payload_edge & 0xff) as u8,
+            payload_last: ((payload_edge >> 8) & 0xff) as u8,
+            payload_xor: ((payload_edge >> 16) & 0xff) as u8,
+            payload_sum: le_u32_at(bytes, SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET)?,
         })
     }
 
@@ -1831,6 +1880,42 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
     } else {
         completion.result
     };
+    let owner_window = cyw43_owner_window_label(descriptor);
+    let retry = cyw43_owner_retry_label(snapshot, descriptor, completion.detail);
+    *CYW43_LAST_SDIO_OWNER_FAULT.lock() = Some(Cyw43SdioOwnerFaultStatus {
+        stage,
+        op: descriptor.op,
+        cmd: snapshot.cmd,
+        arg: snapshot.arg,
+        function: snapshot.cmd53_function(),
+        addr: snapshot.cmd53_addr(),
+        target_addr: descriptor.target_addr,
+        increment: snapshot.cmd53_increment(),
+        write: snapshot.cmd53_write(),
+        block_mode: snapshot.cmd53_block_mode(),
+        len: snapshot.len,
+        block_size: snapshot.block_size,
+        block_count: snapshot.block_count,
+        transfer_mode: snapshot.transfer_mode,
+        host_control: snapshot.host_control,
+        power_control: snapshot.power_control,
+        clock_control: snapshot.clock_control,
+        present_state: snapshot.present_state,
+        int_status: snapshot.int_status,
+        response0: snapshot.response0,
+        block_size_count_reg: snapshot.block_size_count_reg,
+        detail: completion.detail,
+        reason: cyw43_runtime_fault_reason(completion.detail),
+        transfer_stage: sdio_transfer_failure_stage_label(result),
+        transfer_status: sdio_transfer_failure_status(result),
+        r5: sdio_transfer_failure_r5(result),
+        owner_window,
+        retry,
+        payload_first: snapshot.payload_first,
+        payload_last: snapshot.payload_last,
+        payload_xor: snapshot.payload_xor,
+        payload_sum: snapshot.payload_sum,
+    });
     let mut line = heapless::String::<512>::new();
     let _ = write!(
         line,
@@ -1862,10 +1947,24 @@ fn emit_cyw43_sdio_owner_fault_snapshot(
         sdio_transfer_failure_stage_label(result),
         sdio_transfer_failure_status(result),
         sdio_transfer_failure_r5(result),
-        cyw43_owner_window_label(descriptor),
-        cyw43_owner_retry_label(descriptor, completion.detail),
+        owner_window,
+        retry,
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    let mut payload_line = heapless::String::<192>::new();
+    let _ = write!(
+        payload_line,
+        "CYW43_SDIO_OWNER_PAYLOAD contract={} stage={} target=0x{:08x} len={} first=0x{:02x} last=0x{:02x} xor=0x{:02x} sum=0x{:08x}",
+        contract.name,
+        stage,
+        descriptor.target_addr,
+        snapshot.len,
+        snapshot.payload_first,
+        snapshot.payload_last,
+        snapshot.payload_xor,
+        snapshot.payload_sum,
+    );
+    crate::bootstrap::log::force_uart_line_raw(payload_line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -1906,13 +2005,26 @@ const fn cyw43_owner_window_label(descriptor: DriverRuntimeCyw43CommandDescripto
 
 #[cfg(feature = "kernel")]
 const fn cyw43_owner_retry_label(
+    snapshot: SdioFaultTelemetry,
     descriptor: DriverRuntimeCyw43CommandDescriptor,
     detail: u16,
 ) -> &'static str {
-    if detail == 0x5329 {
-        "retained-stage-exhausted"
-    } else if descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE != 0 {
+    if descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE != 0 {
         "forced-byte-mode"
+    } else if !snapshot.cmd53_block_mode() {
+        if detail == 0x5329 && snapshot.len < SDIO_CMD53_BYTE_MODE_MAX {
+            "byte-narrow-fallback-exhausted"
+        } else if detail == 0x5329 {
+            "byte-fallback-exhausted"
+        } else if snapshot.len < SDIO_CMD53_BYTE_MODE_MAX {
+            "byte-narrow-fallback"
+        } else {
+            "byte-fallback"
+        }
+    } else if detail == 0x5329 {
+        "block-retry-exhausted"
+    } else if snapshot.host_control & 0x04 == 0 || snapshot.clock_control != 0x5007 {
+        "block-clock-retry"
     } else {
         "primary"
     }
@@ -3111,6 +3223,16 @@ mod tests {
             SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET,
             0x0001_0200,
         );
+        put_le_u32(
+            &mut bytes,
+            SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET,
+            0x0033_2211,
+        );
+        put_le_u32(
+            &mut bytes,
+            SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET,
+            0x0000_4444,
+        );
 
         let snapshot = SdioFaultTelemetry::decode(&bytes).expect("valid telemetry");
 
@@ -3128,11 +3250,104 @@ mod tests {
         assert_eq!(snapshot.power_control, 0x0e);
         assert_eq!(snapshot.clock_control, 0x1234);
         assert_eq!(snapshot.failure_result, 0x0500_0100);
+        assert_eq!(snapshot.payload_first, 0x11);
+        assert_eq!(snapshot.payload_last, 0x22);
+        assert_eq!(snapshot.payload_xor, 0x33);
+        assert_eq!(snapshot.payload_sum, 0x4444);
         assert_eq!(
             sdio_transfer_failure_stage_label(snapshot.failure_result),
             "response"
         );
         assert_eq!(sdio_transfer_failure_r5(snapshot.failure_result), 0x0100);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_owner_retry_label_reports_actual_sdio_lane() {
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        let primary = SdioFaultTelemetry {
+            arg: (1 << 31) | (1 << 28) | (1 << 27) | (1 << 26),
+            cmd: 53,
+            flags: 0,
+            len: 2048,
+            block_size: 64,
+            block_count: 32,
+            transfer_mode: 0x0022,
+            present_state: 0,
+            int_status: 0,
+            response0: 0,
+            host_control: 0x06,
+            power_control: 0x0f,
+            clock_control: 0x5007,
+            failure_result: 0x0500_0800,
+            block_size_count_reg: 0,
+            payload_first: 0,
+            payload_last: 0,
+            payload_xor: 0,
+            payload_sum: 0,
+        };
+        let byte = SdioFaultTelemetry {
+            arg: (1 << 31) | (1 << 28) | (1 << 26) | 64,
+            cmd: 53,
+            flags: 0,
+            len: 64,
+            block_size: 64,
+            block_count: 1,
+            transfer_mode: 0x0002,
+            present_state: 0,
+            int_status: 0,
+            response0: 0,
+            host_control: 0x00,
+            power_control: 0x0f,
+            clock_control: 0x0007,
+            failure_result: 0x0500_0800,
+            block_size_count_reg: 0,
+            payload_first: 0,
+            payload_last: 0,
+            payload_xor: 0,
+            payload_sum: 0,
+        };
+        let byte512 = SdioFaultTelemetry {
+            len: SDIO_CMD53_BYTE_MODE_MAX,
+            block_size: SDIO_CMD53_BYTE_MODE_MAX,
+            ..byte
+        };
+
+        assert_eq!(
+            cyw43_owner_retry_label(primary, descriptor, 0x5103),
+            "primary"
+        );
+        assert_eq!(
+            cyw43_owner_retry_label(
+                SdioFaultTelemetry {
+                    host_control: 0x00,
+                    clock_control: 0x0007,
+                    ..primary
+                },
+                descriptor,
+                0x5103
+            ),
+            "block-clock-retry"
+        );
+        assert_eq!(
+            cyw43_owner_retry_label(byte, descriptor, 0x5103),
+            "byte-narrow-fallback"
+        );
+        assert_eq!(
+            cyw43_owner_retry_label(byte, descriptor, 0x5329),
+            "byte-narrow-fallback-exhausted"
+        );
+        assert_eq!(
+            cyw43_owner_retry_label(byte512, descriptor, 0x5103),
+            "byte-fallback"
+        );
+        assert_eq!(
+            cyw43_owner_retry_label(byte512, descriptor, 0x5329),
+            "byte-fallback-exhausted"
+        );
     }
 
     #[cfg(feature = "kernel")]

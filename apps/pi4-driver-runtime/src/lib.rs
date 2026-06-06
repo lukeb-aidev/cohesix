@@ -544,6 +544,14 @@ const USB_ROOT_PORT_RESET_SHORT_RETRY_SPINS: usize = 20_000;
 const USB_ROOT_PORT_RESET_LONG_RETRY_SPINS: usize = 200_000;
 const USB_STALE_UBOOT_ROOT_PORT_RESET_SETTLE_SPINS: usize = 200_000;
 const USB_LINKED_RUNTIME_SECOND_ROOT_PORT_RESET: bool = true;
+const USB_ADDRESS_DEVICE_SETTLE_SPINS: usize = 500_000;
+const USB_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS: usize = 50_000;
+const USB_FULL_SPEED_DESCRIPTOR_PRIME_LEN: usize = 64;
+const USB_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN: usize = 8;
+const USB_DEVICE_DESCRIPTOR_BYTES: usize = 18;
+const USB_DEVICE_DESCRIPTOR_RETRY_ATTEMPTS: usize = 2;
+const USB_CONFIGURATION_DESCRIPTOR_HEADER_BYTES: usize = 9;
+const USB_CONFIGURATION_DESCRIPTOR_RETRY_ATTEMPTS: usize = 3;
 const USB_ENUM_RESULT_ROOT_PORT_MASK: u32 = 0x0000_00ff;
 const USB_ENUM_RESULT_SLOT_SHIFT: u32 = 8;
 const USB_ENUM_RESULT_ENDPOINT_SHIFT: u32 = 16;
@@ -705,10 +713,11 @@ const SDIO_FUNC_READY_2: u8 = 0x04;
 const SDIO_FUNCTION1_BLOCK_SIZE: u16 = 64;
 const SDIO_FUNCTION2_BLOCK_SIZE: u16 = 512;
 const SDIO_CMD53_BYTE_MODE_MAX: usize = 512;
-const CYW43_FIRMWARE_BYTE_MODE_SAFE_CHUNK_BYTES: usize = SDIO_FUNCTION1_BLOCK_SIZE as usize;
+const CYW43_FIRMWARE_BYTE_MODE_SAFE_CHUNK_BYTES: usize = SDIO_CMD53_BYTE_MODE_MAX;
+const CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES: usize = 256;
+const CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES: usize = CYW43_FIRMWARE_STAGE_BYTES;
 const SDIO_FAULT_TELEMETRY_MAGIC: u32 = 0x5344_494f;
 const SDIO_FAULT_TELEMETRY_VERSION: u32 = 1;
-const SDIO_FAULT_TELEMETRY_BYTES: u16 = 48;
 const SDIO_FAULT_TELEMETRY_ARG_OFFSET: usize = 8;
 const SDIO_FAULT_TELEMETRY_CMD_FLAGS_OFFSET: usize = 12;
 const SDIO_FAULT_TELEMETRY_LEN_BLOCK_OFFSET: usize = 16;
@@ -719,6 +728,11 @@ const SDIO_FAULT_TELEMETRY_RESPONSE0_OFFSET: usize = 32;
 const SDIO_FAULT_TELEMETRY_HOST_CLOCK_OFFSET: usize = 36;
 const SDIO_FAULT_TELEMETRY_FAILURE_OFFSET: usize = 40;
 const SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET: usize = 44;
+const SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET: usize = 48;
+const SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET: usize = 52;
+const SDIO_FAULT_TELEMETRY_BYTES_EXTENDED: u16 = 56;
+const SDIO_FAULT_TELEMETRY_BYTES: u16 = SDIO_FAULT_TELEMETRY_BYTES_EXTENDED;
+const DMA_CACHE_LINE_BYTES: usize = 64;
 const CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES: usize = CYW43_FIRMWARE_BYTE_MODE_SAFE_CHUNK_BYTES;
 const CYW43_SDIO_FAST_CLOCK_HZ: u32 = 50_000_000;
 const CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ: [u32; 4] = [
@@ -903,6 +917,7 @@ struct UsbRuntimeState {
     kbd_enqueue: u16,
     kbd_cycle: bool,
     keyboard_slot: u8,
+    last_address_slot: u8,
     keyboard_port: u8,
     keyboard_endpoint_id: u8,
     keyboard_endpoint_address: u8,
@@ -958,6 +973,7 @@ impl UsbRuntimeState {
             kbd_enqueue: 0,
             kbd_cycle: true,
             keyboard_slot: 0,
+            last_address_slot: 0,
             keyboard_port: 0,
             keyboard_endpoint_id: 0,
             keyboard_endpoint_address: 0,
@@ -1110,6 +1126,7 @@ struct Cyw43RuntimeState {
     firmware_released: bool,
     firmware_upload_prepared: bool,
     firmware_byte_mode_fallback: bool,
+    firmware_narrow_byte_mode_fallback: bool,
     firmware_retry_clock_index: u8,
     nvram_tail_uploaded: bool,
     sdpcm_seq: u8,
@@ -1147,6 +1164,7 @@ impl Cyw43RuntimeState {
             firmware_released: false,
             firmware_upload_prepared: false,
             firmware_byte_mode_fallback: false,
+            firmware_narrow_byte_mode_fallback: false,
             firmware_retry_clock_index: 0,
             nvram_tail_uploaded: false,
             sdpcm_seq: 0,
@@ -1185,6 +1203,7 @@ impl Cyw43RuntimeState {
         self.firmware_released = false;
         self.firmware_upload_prepared = false;
         self.firmware_byte_mode_fallback = false;
+        self.firmware_narrow_byte_mode_fallback = false;
         self.firmware_retry_clock_index = 0;
         self.nvram_tail_uploaded = false;
         self.sdpcm_seq = 0;
@@ -2326,6 +2345,7 @@ fn service_sdio_host(command: DriverTaskCommandRecord) -> DriverTaskCompletionRe
             },
             transfer_mode,
             result,
+            command.frame,
         );
         sdio_recover_command_path();
         return DriverTaskCompletionRecord::fault_with_result_and_frame(
@@ -2440,6 +2460,7 @@ fn service_sdio_descriptor_command(command: DriverTaskCommandRecord) -> DriverTa
             block_count,
             transfer_mode,
             result,
+            frame,
         );
         sdio_recover_command_path();
         return DriverTaskCompletionRecord::fault_with_result_and_frame(
@@ -2495,6 +2516,7 @@ fn read_sdio_command_descriptor(
         return None;
     }
     let offset = frame.offset as usize;
+    driver_task_shared_load_barrier();
     Some(DriverRuntimeSdioCommandDescriptor {
         op: read_ring_u16(offset),
         function: read_ring_byte(offset + 2),
@@ -2519,7 +2541,7 @@ fn read_cyw43_command_descriptor(
         return None;
     }
     let offset = frame.offset as usize;
-    fence(Ordering::Acquire);
+    driver_task_shared_load_barrier();
     Some(DriverRuntimeCyw43CommandDescriptor {
         op: read_ring_u16(offset),
         flags: read_ring_u16(offset + 2),
@@ -2924,8 +2946,10 @@ fn sdio_write_fault_telemetry_frame(
     block_count: u16,
     transfer_mode: u16,
     failure_result: u32,
+    payload_frame: DriverFrameDescriptor,
 ) -> DriverFrameDescriptor {
     let offset = DRIVER_TASK_RING_FRAME_OFFSET;
+    let (payload_edge, payload_sum) = sdio_fault_payload_digest(flags, payload_frame);
     write_ring_u32(offset, SDIO_FAULT_TELEMETRY_MAGIC);
     write_ring_u32(offset + 4, SDIO_FAULT_TELEMETRY_VERSION);
     write_ring_u32(offset + SDIO_FAULT_TELEMETRY_ARG_OFFSET, arg);
@@ -2964,11 +2988,48 @@ fn sdio_write_fault_telemetry_frame(
         offset + SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET,
         sdio_read32(SDHCI_BLOCK_SIZE),
     );
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET,
+        payload_edge,
+    );
+    write_ring_u32(
+        offset + SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET,
+        payload_sum,
+    );
     DriverFrameDescriptor {
         offset: offset as u32,
         len: SDIO_FAULT_TELEMETRY_BYTES,
         flags: 0,
     }
+}
+
+fn sdio_fault_payload_digest(flags: u16, frame: DriverFrameDescriptor) -> (u32, u32) {
+    if flags & DRIVER_RUNTIME_SDIO_FLAG_DATA == 0
+        || flags & DRIVER_RUNTIME_SDIO_FLAG_WRITE == 0
+        || frame.len == 0
+    {
+        return (0, 0);
+    }
+    let len = usize::from(frame.len);
+    let mut first = 0u8;
+    let mut last = 0u8;
+    let mut xor = 0u8;
+    let mut sum = 0u32;
+    let mut index = 0usize;
+    while index < len {
+        let byte = read_runtime_payload_byte(frame.offset as usize + index);
+        if index == 0 {
+            first = byte;
+        }
+        last = byte;
+        xor ^= byte;
+        sum = sum.wrapping_add(u32::from(byte));
+        index = index.saturating_add(1);
+    }
+    (
+        u32::from(first) | (u32::from(last) << 8) | (u32::from(xor) << 16),
+        sum,
+    )
 }
 
 const fn sdio_r5_status(response: u32) -> u32 {
@@ -3279,16 +3340,25 @@ fn usb_pcie_bus_link_posted_write_flush(stage: u16, offset: usize, _value: u32) 
             DRIVER_TASK_PCIE_BUS_RING_VADDR as *mut DriverTaskCommandRecord,
             command,
         );
+        driver_task_shared_store_barrier();
         sel4_sys::seL4_SetMR(0, command.sequence as sel4_sys::seL4_Word);
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
         sel4_sys::seL4_NBSend(DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT, info);
         for _ in 0..USB_PCIE_BUS_LINK_ATTEMPTS {
             sel4_sys::seL4_Yield();
-            let completion = core::ptr::read_volatile(
+            let observed = core::ptr::read_volatile(
                 (DRIVER_TASK_PCIE_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
                     as *const DriverTaskCompletionRecord,
             );
-            if completion.sequence == command.sequence {
+            if observed.sequence == command.sequence {
+                driver_task_shared_load_barrier();
+                let completion = core::ptr::read_volatile(
+                    (DRIVER_TASK_PCIE_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                        as *const DriverTaskCompletionRecord,
+                );
+                if completion.sequence != command.sequence {
+                    continue;
+                }
                 return completion.code != COMPLETION_FAULT;
             }
         }
@@ -3455,16 +3525,25 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
             DRIVER_TASK_SDIO_BUS_RING_VADDR as *mut DriverTaskCommandRecord,
             command,
         );
+        driver_task_shared_store_barrier();
         sel4_sys::seL4_SetMR(0, command.sequence as sel4_sys::seL4_Word);
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
         sel4_sys::seL4_NBSend(DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT, info);
         for _ in 0..attempts {
             sel4_sys::seL4_Yield();
-            let mut completion = core::ptr::read_volatile(
+            let observed = core::ptr::read_volatile(
                 (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
                     as *const DriverTaskCompletionRecord,
             );
-            if completion.sequence == command.sequence {
+            if observed.sequence == command.sequence {
+                driver_task_shared_load_barrier();
+                let mut completion = core::ptr::read_volatile(
+                    (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                        as *const DriverTaskCompletionRecord,
+                );
+                if completion.sequence != command.sequence {
+                    continue;
+                }
                 if completion.code == COMPLETION_FAULT {
                     if let Some(frame) = cyw43_copy_sdio_fault_telemetry(completion.frame) {
                         completion.frame = frame;
@@ -3485,6 +3564,7 @@ fn cyw43_copy_sdio_fault_telemetry(frame: DriverFrameDescriptor) -> Option<Drive
     if frame.len != SDIO_FAULT_TELEMETRY_BYTES || !frame.in_ring_payload() {
         return None;
     }
+    driver_task_shared_load_barrier();
     let src = frame.offset as usize;
     for index in 0..usize::from(frame.len) {
         // SAFETY: `frame.in_ring_payload()` bounds-checks the SDIO owner ring
@@ -3512,6 +3592,7 @@ fn sdio_bus_link_write_descriptor(offset: usize, desc: DriverRuntimeSdioCommandD
             desc,
         );
     }
+    driver_task_shared_store_barrier();
 }
 
 #[cfg(target_os = "none")]
@@ -3557,6 +3638,7 @@ fn sdio_bus_link_copy_to_owner_payload(
             read_runtime_payload_byte(frame.offset as usize + index),
         );
     }
+    driver_task_shared_store_barrier();
     Some(())
 }
 
@@ -3578,6 +3660,7 @@ fn sdio_bus_link_copy_from_owner_payload(
     {
         return None;
     }
+    driver_task_shared_load_barrier();
     for index in 0..len {
         write_runtime_payload_byte(
             frame.offset as usize + index,
@@ -4601,19 +4684,41 @@ const fn cyw43_backplane_cmd53_increment(_byte_mode_fallback: bool) -> bool {
     true
 }
 
+#[cfg(test)]
 fn cyw43_backplane_write_chunk_shape(
     firmware_released: bool,
     byte_mode_fallback: bool,
+    remaining: usize,
+) -> (usize, u16, u16) {
+    cyw43_backplane_write_chunk_shape_for_lane(
+        firmware_released,
+        byte_mode_fallback,
+        false,
+        remaining,
+    )
+}
+
+fn cyw43_backplane_write_chunk_shape_for_lane(
+    firmware_released: bool,
+    byte_mode_fallback: bool,
+    narrow_byte_mode_fallback: bool,
     remaining: usize,
 ) -> (usize, u16, u16) {
     if firmware_released {
         let chunk_len = remaining.min(SDIO_FUNCTION2_BLOCK_SIZE as usize);
         (chunk_len, chunk_len as u16, 1)
     } else if byte_mode_fallback || CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY {
-        let chunk_len = remaining.min(CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES);
+        let byte_chunk = if narrow_byte_mode_fallback {
+            CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES
+        } else {
+            CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES
+        };
+        let chunk_len = remaining.min(byte_chunk);
         (chunk_len, chunk_len as u16, 0)
-    } else if remaining >= SDIO_FUNCTION1_BLOCK_SIZE as usize {
-        let block_count = (remaining / SDIO_FUNCTION1_BLOCK_SIZE as usize).min(511);
+    } else if remaining > SDIO_CMD53_BYTE_MODE_MAX {
+        let block_len = SDIO_FUNCTION1_BLOCK_SIZE as usize;
+        let max_block_len = CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES.min(511 * block_len);
+        let block_count = (remaining.min(max_block_len) / block_len).min(511);
         let chunk_len = block_count * SDIO_FUNCTION1_BLOCK_SIZE as usize;
         (chunk_len, SDIO_FUNCTION1_BLOCK_SIZE, block_count as u16)
     } else {
@@ -4638,10 +4743,24 @@ fn cyw43_prepare_firmware_upload_retry(state: &mut Cyw43RuntimeState) -> bool {
     if state.firmware_released {
         return false;
     }
-    state.firmware_byte_mode_fallback = true;
     state.backplane_window_valid = false;
-    while usize::from(state.firmware_retry_clock_index) < CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len()
-    {
+    loop {
+        if usize::from(state.firmware_retry_clock_index)
+            >= CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len()
+        {
+            if !state.firmware_byte_mode_fallback {
+                state.firmware_byte_mode_fallback = true;
+                state.firmware_narrow_byte_mode_fallback = false;
+                state.firmware_retry_clock_index = 0;
+                continue;
+            }
+            if !state.firmware_narrow_byte_mode_fallback {
+                state.firmware_narrow_byte_mode_fallback = true;
+                state.firmware_retry_clock_index = 0;
+                continue;
+            }
+            return false;
+        }
         let retry_index = usize::from(state.firmware_retry_clock_index);
         let clock_hz = CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ[retry_index];
         state.firmware_retry_clock_index = state.firmware_retry_clock_index.saturating_add(1);
@@ -4651,7 +4770,6 @@ fn cyw43_prepare_firmware_upload_retry(state: &mut Cyw43RuntimeState) -> bool {
             return true;
         }
     }
-    false
 }
 
 const fn cyw43_firmware_retry_card_if(retry_index: usize) -> u8 {
@@ -4703,12 +4821,15 @@ fn cyw43_prepare_retryable_firmware_command(state: &mut Cyw43RuntimeState) {
         return;
     }
     state.firmware_retry_clock_index = 0;
-    state.firmware_byte_mode_fallback = true;
+    state.firmware_byte_mode_fallback = false;
+    state.firmware_narrow_byte_mode_fallback = false;
     state.backplane_window_valid = false;
 }
 
 fn cyw43_firmware_upload_retries_exhausted(state: &Cyw43RuntimeState) -> bool {
     !state.firmware_released
+        && state.firmware_byte_mode_fallback
+        && state.firmware_narrow_byte_mode_fallback
         && usize::from(state.firmware_retry_clock_index)
             >= CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len()
 }
@@ -4844,16 +4965,12 @@ fn cyw43_backplane_write_ring_with_mode(
 ) -> bool {
     let mut done = 0usize;
     while done < len {
-        let mut attempts = 0usize;
         loop {
             let Some(chunk_addr) = addr.checked_add(done as u32) else {
                 return false;
             };
             if !cyw43_backplane_set_window(state, chunk_addr) {
-                if attempts < CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len()
-                    && cyw43_prepare_firmware_upload_retry(state)
-                {
-                    attempts = attempts.saturating_add(1);
+                if cyw43_prepare_firmware_upload_retry(state) {
                     continue;
                 }
                 let last_fault = cyw43_take_last_fault_detail();
@@ -4881,9 +4998,10 @@ fn cyw43_backplane_write_ring_with_mode(
             );
             let byte_mode_fallback =
                 force_byte_mode || state.firmware_byte_mode_fallback || edge_byte_mode;
-            let (chunk_len, block_size, block_count) = cyw43_backplane_write_chunk_shape(
+            let (chunk_len, block_size, block_count) = cyw43_backplane_write_chunk_shape_for_lane(
                 state.firmware_released,
                 byte_mode_fallback,
+                state.firmware_narrow_byte_mode_fallback,
                 transfer_remaining.min(window_remaining),
             );
             let frame = DriverFrameDescriptor {
@@ -4910,10 +5028,7 @@ fn cyw43_backplane_write_ring_with_mode(
             )
             .is_none()
             {
-                if attempts < CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len()
-                    && cyw43_prepare_firmware_upload_retry(state)
-                {
-                    attempts = attempts.saturating_add(1);
+                if cyw43_prepare_firmware_upload_retry(state) {
                     continue;
                 }
                 let last_fault = cyw43_take_last_fault_detail();
@@ -5045,6 +5160,18 @@ fn cyw43_stage_sdpcm_tx(state: &mut Cyw43RuntimeState, frame: DriverFrameDescrip
     cyw43_submit_sdpcm_frame(state, frame, true, false)
 }
 
+const fn cyw43_function2_cmd53_shape(request_len: usize) -> (u16, u16) {
+    if request_len >= CYW43_FUNCTION2_BLOCK_BYTES && request_len % CYW43_FUNCTION2_BLOCK_BYTES == 0
+    {
+        (
+            CYW43_FUNCTION2_BLOCK_BYTES as u16,
+            (request_len / CYW43_FUNCTION2_BLOCK_BYTES) as u16,
+        )
+    } else {
+        (request_len as u16, 0)
+    }
+}
+
 fn cyw43_ram_payload_bounds(addr: u32, len: u16) -> bool {
     let Some(end) = addr.checked_add(u32::from(len)) else {
         return false;
@@ -5141,14 +5268,7 @@ fn cyw43_submit_sdpcm_frame(
     for index in total_len..request_len {
         write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, 0);
     }
-    let (block_size, block_count) = if data_frame {
-        (
-            CYW43_FUNCTION2_BLOCK_BYTES as u16,
-            (request_len / CYW43_FUNCTION2_BLOCK_BYTES) as u16,
-        )
-    } else {
-        (request_len as u16, 1)
-    };
+    let (block_size, block_count) = cyw43_function2_cmd53_shape(request_len);
     let tx_frame = DriverFrameDescriptor {
         offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
         len: request_len as u16,
@@ -5156,7 +5276,14 @@ fn cyw43_submit_sdpcm_frame(
     };
     if sdio_execute_transfer(
         SDIO_CMD53,
-        sdio_cmd53_arg(true, 2, BACKPLANE_32BIT_FLAG, false, 0, request_len as u16),
+        sdio_cmd53_arg(
+            true,
+            2,
+            BACKPLANE_32BIT_FLAG,
+            false,
+            block_count,
+            request_len as u16,
+        ),
         DRIVER_RUNTIME_SDIO_FLAG_DATA
             | DRIVER_RUNTIME_SDIO_FLAG_WRITE
             | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
@@ -5199,13 +5326,21 @@ fn cyw43_runtime_poll_rx(
         len: request_len as u16,
         flags: 0,
     };
+    let (block_size, block_count) = cyw43_function2_cmd53_shape(request_len);
     if sdio_execute_transfer(
         SDIO_CMD53,
-        sdio_cmd53_arg(false, 2, BACKPLANE_32BIT_FLAG, false, 0, request_len as u16),
+        sdio_cmd53_arg(
+            false,
+            2,
+            BACKPLANE_32BIT_FLAG,
+            false,
+            block_count,
+            request_len as u16,
+        ),
         DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
         rx_frame,
-        CYW43_FUNCTION2_BLOCK_BYTES as u16,
-        (request_len / CYW43_FUNCTION2_BLOCK_BYTES) as u16,
+        block_size,
+        block_count,
     )
     .is_none()
     {
@@ -6301,9 +6436,9 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState) -> usize {
         if code != XHCI_COMPLETION_SUCCESS && code != XHCI_COMPLETION_SHORT_PACKET {
             continue;
         }
-        dma_load_barrier();
         let report_vaddr =
             dma_range.vaddr as usize + xhci_keyboard_report_buffer_offset(report_slot);
+        dma_invalidate_range(report_vaddr, XHCI_BOOT_REPORT_BYTES);
         let mut report = [0u8; USB_BOOT_REPORT_BYTES];
         for (index, byte) in report.iter_mut().enumerate() {
             *byte = read_dma_byte(report_vaddr + index);
@@ -6337,8 +6472,13 @@ const fn usb_keyboard_pending_result_has_transfer_event(result: u32) -> bool {
 }
 
 fn usb_runtime_enumeration_result(state: &UsbRuntimeState) -> u32 {
+    let snapshot_slot = if state.keyboard_slot != 0 {
+        state.keyboard_slot
+    } else {
+        state.last_address_slot
+    };
     (xhci_live_connected_root_port_mask(state) & USB_ENUM_RESULT_ROOT_PORT_MASK)
-        | (u32::from(state.keyboard_slot) << USB_ENUM_RESULT_SLOT_SHIFT)
+        | (u32::from(snapshot_slot) << USB_ENUM_RESULT_SLOT_SHIFT)
         | (u32::from(state.keyboard_endpoint_id & 0x1f) << USB_ENUM_RESULT_ENDPOINT_SHIFT)
         | ((u32::from(state.enumeration_root_scan_pass) & USB_ENUM_RESULT_SCAN_PASS_MASK)
             << USB_ENUM_RESULT_SCAN_PASS_SHIFT)
@@ -6444,15 +6584,7 @@ fn usb_reset_enumeration_cursor(state: &mut UsbRuntimeState) {
 }
 
 const fn usb_detail_warrants_cold_reinit(detail: u16) -> bool {
-    matches!(
-        detail,
-        DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
-            | DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
-            | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
-            | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
-            | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
-            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
-    )
+    matches!(detail, DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED)
 }
 
 fn usb_runtime_retry_keyboard_enumeration(state: &mut UsbRuntimeState) -> Option<u16> {
@@ -7036,6 +7168,99 @@ fn dma_load_barrier() {
     }
 }
 
+fn dma_cache_range(addr: usize, len: usize) -> Option<(usize, usize)> {
+    if len == 0 {
+        return None;
+    }
+    let start = addr & !(DMA_CACHE_LINE_BYTES - 1);
+    let end = addr
+        .saturating_add(len)
+        .saturating_add(DMA_CACHE_LINE_BYTES - 1)
+        & !(DMA_CACHE_LINE_BYTES - 1);
+    Some((start, end.max(start.saturating_add(DMA_CACHE_LINE_BYTES))))
+}
+
+fn dma_clean_range(addr: usize, len: usize) {
+    let Some((line, end)) = dma_cache_range(addr, len) else {
+        return;
+    };
+    core::sync::atomic::compiler_fence(Ordering::Release);
+    #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+    {
+        let mut line = line;
+        while line < end {
+            // SAFETY: The address range comes from descriptor-validated DMA
+            // buffers. Cleaning to PoC publishes CPU-written descriptors and
+            // payloads before the device can fetch them.
+            unsafe {
+                core::arch::asm!("dc cvac, {}", in(reg) line, options(nostack, preserves_flags));
+            }
+            line = line.saturating_add(DMA_CACHE_LINE_BYTES);
+        }
+        // SAFETY: Complete all cache maintenance before the following doorbell
+        // or MMIO pointer update becomes visible to the xHCI/SDIO device.
+        unsafe {
+            core::arch::asm!("dsb oshst", options(nostack, preserves_flags));
+        }
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
+    {
+        let _ = (line, end);
+    }
+    core::sync::atomic::compiler_fence(Ordering::Release);
+}
+
+fn dma_invalidate_range(addr: usize, len: usize) {
+    let Some((line, end)) = dma_cache_range(addr, len) else {
+        return;
+    };
+    dma_load_barrier();
+    #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+    {
+        let mut line = line;
+        while line < end {
+            // SAFETY: The address range comes from descriptor-validated DMA
+            // buffers. The device has completed the transfer before callers
+            // invalidate, so CPU reads below observe device-written bytes.
+            unsafe {
+                core::arch::asm!("dc ivac, {}", in(reg) line, options(nostack, preserves_flags));
+            }
+            line = line.saturating_add(DMA_CACHE_LINE_BYTES);
+        }
+        // SAFETY: Ensure invalidation completes before reading DMA memory.
+        unsafe {
+            core::arch::asm!("dsb oshld", options(nostack, preserves_flags));
+        }
+    }
+    #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
+    {
+        let _ = (line, end);
+    }
+    core::sync::atomic::compiler_fence(Ordering::Acquire);
+}
+
+fn driver_task_shared_store_barrier() {
+    fence(Ordering::Release);
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: Shared driver-task rings are mapped normal memory across TCBs.
+    // The store barrier publishes descriptor and payload writes before a
+    // send-side notification or completion sequence becomes observable.
+    unsafe {
+        core::arch::asm!("dmb ishst", options(nostack, preserves_flags));
+    }
+}
+
+fn driver_task_shared_load_barrier() {
+    fence(Ordering::Acquire);
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: Shared driver-task rings are mapped normal memory across TCBs.
+    // The load barrier pairs with the publisher before consuming descriptors,
+    // payload bytes, or completion fields written by another runtime.
+    unsafe {
+        core::arch::asm!("dmb ishld", options(nostack, preserves_flags));
+    }
+}
+
 #[cfg(target_os = "none")]
 fn read_dma_byte(addr: usize) -> u8 {
     // SAFETY: Callers construct `addr` from descriptor-validated runtime DMA
@@ -7130,8 +7355,17 @@ fn xhci_flush_posted_write(state: &UsbRuntimeState, stage: u16, offset: usize, v
     if usb_pcie_bus_link_posted_write_flush(stage, offset, value) {
         return true;
     }
-    let _ = usb_read32(state.cap_length as usize + XHCI_USBSTS);
+    if xhci_posted_write_flush_fallback_bar_read_allowed(owner_link_required, false) {
+        let _ = usb_read32(state.cap_length as usize + XHCI_USBSTS);
+    }
     xhci_posted_write_flush_acceptance_result(owner_link_required, false)
+}
+
+const fn xhci_posted_write_flush_fallback_bar_read_allowed(
+    owner_link_required: bool,
+    owner_link_flushed: bool,
+) -> bool {
+    !owner_link_required && !owner_link_flushed
 }
 
 const fn xhci_posted_write_flush_acceptance_result(
@@ -7196,10 +7430,12 @@ fn write_xhci_trb(base: usize, index: usize, trb: XhciTrb) {
     write_dma_u32(addr + 8, trb.status);
     dma_store_barrier();
     write_dma_u32(addr + 12, trb.control);
+    dma_clean_range(addr, XHCI_TRB_BYTES);
 }
 
 fn read_xhci_trb(base: usize, index: usize) -> XhciTrb {
     let addr = xhci_trb_addr(base, index);
+    dma_invalidate_range(addr, XHCI_TRB_BYTES);
     XhciTrb {
         parameter: read_dma_u64(addr),
         status: read_dma_u32(addr + 8),
@@ -7725,6 +7961,7 @@ fn xhci_prepare_contexts(
             transfer_payload | (transfer_payload << 16),
         );
     }
+    dma_clean_range(dma_base + XHCI_DMA_INPUT_CONTEXT_OFFSET, 0x2000);
     true
 }
 
@@ -7760,6 +7997,7 @@ fn xhci_evaluate_hub_context(
         (u32::from(device.root_port) << XHCI_SLOT_ROOT_HUB_PORT_SHIFT)
             | (u32::from(ports) << XHCI_SLOT_PORTS_SHIFT),
     );
+    dma_clean_range(dma_base + XHCI_DMA_INPUT_CONTEXT_OFFSET, 0x2000);
     let Some(input_ctx) = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_INPUT_CONTEXT_OFFSET)
     else {
         return false;
@@ -7869,6 +8107,7 @@ fn xhci_prepare_dma_structures(
     state.port_event_count = 0;
     state.enumeration_retry_cooldown = 0;
     usb_reset_enumeration_cursor(state);
+    dma_clean_range(dma_base, XHCI_DMA_ZERO_BYTES);
     let _ = event_base;
     true
 }
@@ -8064,8 +8303,22 @@ fn xhci_recover_command_ring(
         DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
     )?;
     let cmd_ring = xhci_dma_bus_addr(descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET)?;
+    let cmd_base = dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET;
     zero_dma_range(
-        dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET,
+        cmd_base,
+        XHCI_COMMAND_RING_TRBS.saturating_mul(XHCI_TRB_BYTES),
+    );
+    write_xhci_trb(
+        cmd_base,
+        XHCI_COMMAND_RING_TRBS - 1,
+        XhciTrb {
+            parameter: cmd_ring,
+            status: 0,
+            control: (XHCI_TRB_TYPE_LINK << 10) | XHCI_TRB_ENT,
+        },
+    );
+    dma_clean_range(
+        cmd_base,
         XHCI_COMMAND_RING_TRBS.saturating_mul(XHCI_TRB_BYTES),
     );
     state.cmd_enqueue = 0;
@@ -8091,14 +8344,12 @@ fn xhci_address_device(
     device: &UsbEnumerationDevice,
     control_packet: u32,
 ) -> bool {
+    let dma_base = dma_range.vaddr as usize;
     zero_dma_range(
-        dma_range.vaddr as usize + device.device_context_offset,
+        dma_base + device.device_context_offset,
         XHCI_DMA_DEVICE_CONTEXT_STRIDE,
     );
-    zero_dma_range(
-        dma_range.vaddr as usize + device.ep0_ring_offset,
-        XHCI_DMA_EP0_RING_STRIDE,
-    );
+    zero_dma_range(dma_base + device.ep0_ring_offset, XHCI_DMA_EP0_RING_STRIDE);
     if !xhci_prepare_contexts(
         state,
         descriptor,
@@ -8119,10 +8370,17 @@ fn xhci_address_device(
     else {
         return false;
     };
+    state.last_address_slot = device.slot;
     write_dma_u64(
-        dma_range.vaddr as usize + usize::from(device.slot).saturating_mul(8),
+        dma_base + usize::from(device.slot).saturating_mul(8),
         device_ctx,
     );
+    dma_clean_range(
+        dma_base + device.device_context_offset,
+        XHCI_DMA_DEVICE_CONTEXT_STRIDE,
+    );
+    dma_clean_range(dma_base + device.ep0_ring_offset, XHCI_DMA_EP0_RING_STRIDE);
+    dma_clean_range(dma_base + usize::from(device.slot).saturating_mul(8), 8);
     xhci_enqueue_command(
         state,
         descriptor,
@@ -8155,6 +8413,7 @@ fn xhci_control_transfer(
     let Some(data_bus) = xhci_dma_bus_addr(descriptor, dma_range, data_offset) else {
         return None;
     };
+    let data_vaddr = dma_range.vaddr as usize + data_offset;
     let setup_value = u64::from(setup[0])
         | (u64::from(setup[1]) << 8)
         | (u64::from(setup[2]) << 16)
@@ -8256,6 +8515,9 @@ fn xhci_control_transfer(
         &mut device.ep0_cycle,
         XHCI_COMMAND_RING_TRBS,
     );
+    if data_len != 0 {
+        dma_clean_range(data_vaddr, data_len);
+    }
     dma_store_barrier();
     if !xhci_ring_doorbell(state, device.slot, 1) {
         return None;
@@ -8273,7 +8535,7 @@ fn xhci_control_transfer(
         },
     );
     if transferred.is_some() && data_in {
-        dma_load_barrier();
+        dma_invalidate_range(data_vaddr, data_len);
     }
     transferred
 }
@@ -8306,6 +8568,57 @@ fn usb_get_descriptor(
         (len >> 8) as u8,
     ];
     xhci_control_transfer(state, descriptor, device, setup, offset, len, true)
+}
+
+fn usb_prime_full_speed_device_descriptor(
+    state: &mut UsbRuntimeState,
+    descriptor: DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+) -> bool {
+    if device.speed != XHCI_SPEED_FULL {
+        return true;
+    }
+    let transferred = usb_get_descriptor(
+        state,
+        descriptor,
+        device,
+        USB_DESCRIPTOR_DEVICE,
+        0,
+        XHCI_DMA_CONTROL_BUFFER_OFFSET,
+        USB_FULL_SPEED_DESCRIPTOR_PRIME_LEN,
+    );
+    match transferred {
+        Some(len) if len >= USB_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN => {}
+        _ => return false,
+    }
+    usb_spin_wait(USB_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS);
+    true
+}
+
+fn usb_read_device_descriptor(
+    state: &mut UsbRuntimeState,
+    descriptor: DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+) -> Option<usize> {
+    let _ = usb_prime_full_speed_device_descriptor(state, descriptor, device);
+    let mut attempts = 0usize;
+    while attempts < USB_DEVICE_DESCRIPTOR_RETRY_ATTEMPTS {
+        if let Some(transferred) = usb_get_descriptor(
+            state,
+            descriptor,
+            device,
+            USB_DESCRIPTOR_DEVICE,
+            0,
+            XHCI_DMA_CONTROL_BUFFER_OFFSET,
+            USB_DEVICE_DESCRIPTOR_BYTES,
+        ) {
+            return Some(transferred);
+        }
+        xhci_drain_events_preserving_port_changes(state, descriptor);
+        usb_spin_wait(USB_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS);
+        attempts = attempts.saturating_add(1);
+    }
+    None
 }
 
 fn usb_set_configuration(
@@ -8577,30 +8890,40 @@ fn usb_read_configuration(
     device: &mut UsbEnumerationDevice,
     dma_range: DriverRuntimeResourceRangeDescriptor,
 ) -> Option<(usize, u8)> {
-    if !usb_read_configuration_header(state, descriptor, device, dma_range) {
-        usb_spin_wait(USB_ROOT_PORT_RESET_SHORT_RETRY_SPINS);
-        if !usb_read_configuration_header(state, descriptor, device, dma_range) {
-            return None;
+    for attempt in 0..USB_CONFIGURATION_DESCRIPTOR_RETRY_ATTEMPTS {
+        if attempt != 0 {
+            usb_spin_wait(USB_ROOT_PORT_RESET_SHORT_RETRY_SPINS);
         }
+        if !usb_read_configuration_header(state, descriptor, device, dma_range) {
+            xhci_drain_events_preserving_port_changes(state, descriptor);
+            continue;
+        }
+        let config_vaddr = dma_range.vaddr as usize + XHCI_DMA_CONFIG_BUFFER_OFFSET;
+        let total_len = usize::from(read_dma_byte(config_vaddr + 2))
+            | (usize::from(read_dma_byte(config_vaddr + 3)) << 8);
+        let config_len = total_len
+            .min(USB_CONFIG_BUFFER_BYTES)
+            .max(USB_CONFIGURATION_DESCRIPTOR_HEADER_BYTES);
+        let Some(transferred) = usb_get_descriptor(
+            state,
+            descriptor,
+            device,
+            USB_DESCRIPTOR_CONFIGURATION,
+            0,
+            XHCI_DMA_CONFIG_BUFFER_OFFSET,
+            config_len,
+        ) else {
+            xhci_drain_events_preserving_port_changes(state, descriptor);
+            continue;
+        };
+        if transferred < config_len {
+            xhci_drain_events_preserving_port_changes(state, descriptor);
+            continue;
+        }
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR;
+        return Some((config_len, read_dma_byte(config_vaddr + 5)));
     }
-    let config_vaddr = dma_range.vaddr as usize + XHCI_DMA_CONFIG_BUFFER_OFFSET;
-    let total_len = usize::from(read_dma_byte(config_vaddr + 2))
-        | (usize::from(read_dma_byte(config_vaddr + 3)) << 8);
-    let config_len = total_len.min(USB_CONFIG_BUFFER_BYTES).max(9);
-    let transferred = usb_get_descriptor(
-        state,
-        descriptor,
-        device,
-        USB_DESCRIPTOR_CONFIGURATION,
-        0,
-        XHCI_DMA_CONFIG_BUFFER_OFFSET,
-        config_len,
-    )?;
-    if transferred < config_len {
-        return None;
-    }
-    state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR;
-    Some((config_len, read_dma_byte(config_vaddr + 5)))
+    None
 }
 
 fn usb_read_configuration_header(
@@ -8616,11 +8939,11 @@ fn usb_read_configuration_header(
         USB_DESCRIPTOR_CONFIGURATION,
         0,
         XHCI_DMA_CONFIG_BUFFER_OFFSET,
-        9,
+        USB_CONFIGURATION_DESCRIPTOR_HEADER_BYTES,
     ) else {
         return false;
     };
-    if transferred < 9 {
+    if transferred < USB_CONFIGURATION_DESCRIPTOR_HEADER_BYTES {
         return false;
     }
     let config_vaddr = dma_range.vaddr as usize + XHCI_DMA_CONFIG_BUFFER_OFFSET;
@@ -9017,6 +9340,7 @@ fn xhci_address_topology_device(
         for packet in packet_candidates.iter().copied().take(packet_count) {
             if xhci_address_device(state, descriptor, dma_range, &device, packet) {
                 state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED;
+                usb_spin_wait(USB_ADDRESS_DEVICE_SETTLE_SPINS);
                 *next_device_index = (*next_device_index).saturating_add(1);
                 return Some(device);
             }
@@ -9296,17 +9620,7 @@ fn usb_probe_device_for_keyboard(
     next_device_index: &mut usize,
     depth_remaining: u8,
 ) -> bool {
-    if usb_get_descriptor(
-        state,
-        descriptor,
-        &mut device,
-        USB_DESCRIPTOR_DEVICE,
-        0,
-        XHCI_DMA_CONTROL_BUFFER_OFFSET,
-        18,
-    )
-    .is_none()
-    {
+    if usb_read_device_descriptor(state, descriptor, &mut device).is_none() {
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED;
         return false;
     }
@@ -9381,6 +9695,27 @@ fn usb_keyboard_enumerate(
     usb_scan_root_ports_for_keyboard(state, descriptor, dma_range)
 }
 
+fn xhci_probe_command_path(
+    state: &mut UsbRuntimeState,
+    descriptor: DriverRuntimeInitDescriptor,
+) -> bool {
+    if state.command_path_proven {
+        return true;
+    }
+    let Some(slot) = xhci_enable_slot(state, descriptor) else {
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED;
+        return false;
+    };
+    let _ = xhci_disable_slot(state, descriptor, slot);
+    state.command_path_proven = true;
+    state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY;
+    true
+}
+
+const fn usb_root_port_frontier_publish_required(current_detail: u16, candidate_mask: u32) -> bool {
+    current_detail == DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY && candidate_mask != 0
+}
+
 fn usb_scan_root_ports_for_keyboard(
     state: &mut UsbRuntimeState,
     descriptor: DriverRuntimeInitDescriptor,
@@ -9400,6 +9735,14 @@ fn usb_scan_root_ports_for_keyboard(
         return false;
     }
 
+    if !state.command_path_proven {
+        let _ = xhci_probe_command_path(state, descriptor);
+        usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
+        state.enumeration_best_detail = best_detail;
+        state.init_detail = best_detail;
+        return false;
+    }
+
     if state.enumeration_root_scan_pass >= USB_ROOT_PORT_SCAN_PASSES as u8 {
         state.init_detail = best_detail;
         usb_reset_enumeration_cursor(state);
@@ -9408,6 +9751,12 @@ fn usb_scan_root_ports_for_keyboard(
 
     xhci_drain_events_preserving_port_changes(state, descriptor);
     let candidate_mask = xhci_root_port_candidate_mask(state);
+    if usb_root_port_frontier_publish_required(state.init_detail, candidate_mask) {
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED;
+        usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
+        state.enumeration_best_detail = best_detail;
+        return false;
+    }
     let max_port = state.max_ports.min(u32::BITS as u8);
     if candidate_mask == 0 || state.enumeration_root_next_port > max_port {
         usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
@@ -9498,6 +9847,10 @@ fn xhci_queue_keyboard_interrupt_in(
         return false;
     }
     zero_dma_range(
+        dma_range.vaddr as usize + report_offset,
+        XHCI_BOOT_REPORT_BYTES,
+    );
+    dma_clean_range(
         dma_range.vaddr as usize + report_offset,
         XHCI_BOOT_REPORT_BYTES,
     );
@@ -10470,12 +10823,14 @@ pub fn runtime_main(task_key: usize) -> ! {
             let _ = sel4_sys::seL4_Recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge);
         }
         let _ = badge;
+        driver_task_shared_load_barrier();
         // SAFETY: Root maps one command/completion ring page at the fixed
         // driver-local address before starting the runtime.
         let command = unsafe {
             core::ptr::read_volatile(DRIVER_TASK_RING_VADDR as *const DriverTaskCommandRecord)
         };
         let completion = service_command(task_key, command);
+        driver_task_shared_store_barrier();
         // SAFETY: The completion record lies in the same mapped ring page and
         // uses the fixed ABI layout shared with root.
         unsafe {
@@ -10485,6 +10840,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 completion,
             );
         }
+        driver_task_shared_store_barrier();
         #[cfg(not(sel4_config_kernel_mcs))]
         if command_expects_reply(command) {
             // SAFETY: Only `seL4_Call` installs the reply cap consumed here.
@@ -12228,6 +12584,10 @@ mod tests {
     #[test]
     fn cyw43_backplane_upload_uses_block_mode_before_firmware_release() {
         assert_eq!(
+            CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
+            CYW43_FIRMWARE_STAGE_BYTES
+        );
+        assert_eq!(
             cyw43_backplane_write_chunk_shape(false, false, 2048),
             (
                 2048,
@@ -12238,17 +12598,17 @@ mod tests {
         assert_eq!(
             cyw43_backplane_write_chunk_shape(false, false, CYW43_FIRMWARE_STAGE_BYTES),
             (
-                CYW43_FIRMWARE_STAGE_BYTES,
+                CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                (CYW43_FIRMWARE_STAGE_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
+                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
             )
         );
         assert_eq!(
             cyw43_backplane_write_chunk_shape(false, false, 32 * 1024),
             (
-                511 * SDIO_FUNCTION1_BLOCK_SIZE as usize,
+                CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                511
+                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
             )
         );
         assert_eq!(
@@ -12262,6 +12622,15 @@ mod tests {
         assert_eq!(
             CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES,
             CYW43_FIRMWARE_BYTE_MODE_SAFE_CHUNK_BYTES
+        );
+        assert_eq!(
+            CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES,
+            SDIO_CMD53_BYTE_MODE_MAX
+        );
+        assert_eq!(CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES, 256);
+        assert_ne!(
+            CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES,
+            SDIO_FUNCTION1_BLOCK_SIZE as usize
         );
         assert_eq!(
             cyw43_backplane_write_chunk_shape(false, false, 4),
@@ -12307,6 +12676,19 @@ mod tests {
             )
         );
         assert_eq!(
+            cyw43_backplane_write_chunk_shape_for_lane(
+                false,
+                true,
+                true,
+                CYW43_FIRMWARE_STAGE_BYTES
+            ),
+            (
+                CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES,
+                CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES as u16,
+                0
+            )
+        );
+        assert_eq!(
             CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES,
             CYW43_FIRMWARE_BYTE_MODE_SAFE_CHUNK_BYTES
         );
@@ -12318,7 +12700,11 @@ mod tests {
             0,
             CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES as u16,
         );
-        assert_eq!(arg & 0x1ff, CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES as u32);
+        assert_eq!(
+            CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES,
+            SDIO_CMD53_BYTE_MODE_MAX
+        );
+        assert_eq!(arg & 0x1ff, 0);
         assert_ne!(arg & (1 << 26), 0);
         let block_arg = sdio_cmd53_arg(
             true,
@@ -12336,9 +12722,9 @@ mod tests {
         assert_eq!(
             cyw43_backplane_write_chunk_shape(false, false, CYW43_FIRMWARE_STAGE_BYTES),
             (
-                CYW43_FIRMWARE_STAGE_BYTES,
+                CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                (CYW43_FIRMWARE_STAGE_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16,
+                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16,
             )
         );
         assert_eq!(
@@ -12354,8 +12740,8 @@ mod tests {
             1,
             cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
             true,
-            (CYW43_FIRMWARE_STAGE_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16,
-            CYW43_FIRMWARE_STAGE_BYTES as u16,
+            (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16,
+            CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
         );
         assert_ne!(arg & (1 << 27), 0);
         assert_ne!(arg & (1 << 26), 0);
@@ -12363,6 +12749,31 @@ mod tests {
             sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, SDHCI_INT_ERROR),
             (SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT << 24) | SDHCI_INT_ERROR
         );
+    }
+
+    #[test]
+    fn cyw43_function2_fifo_shape_matches_card_and_host_mode() {
+        let (block_size, block_count) =
+            cyw43_function2_cmd53_shape(CYW43_FUNCTION2_BLOCK_BYTES * 3);
+        assert_eq!(block_size, CYW43_FUNCTION2_BLOCK_BYTES as u16);
+        assert_eq!(block_count, 3);
+        let block_arg = sdio_cmd53_arg(
+            true,
+            2,
+            BACKPLANE_32BIT_FLAG,
+            false,
+            block_count,
+            (CYW43_FUNCTION2_BLOCK_BYTES * 3) as u16,
+        );
+        assert_ne!(block_arg & (1 << 27), 0);
+        assert_eq!(block_arg & 0x1ff, 3);
+
+        let (byte_size, byte_count) = cyw43_function2_cmd53_shape(96);
+        assert_eq!(byte_size, 96);
+        assert_eq!(byte_count, 0);
+        let byte_arg = sdio_cmd53_arg(true, 2, BACKPLANE_32BIT_FLAG, false, byte_count, 96);
+        assert_eq!(byte_arg & (1 << 27), 0);
+        assert_eq!(byte_arg & 0x1ff, 96);
     }
 
     #[test]
@@ -12430,6 +12841,16 @@ mod tests {
         );
         let failure =
             sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_END, SDHCI_INT_ERROR);
+        let payload = DriverFrameDescriptor {
+            offset: DRIVER_TASK_RING_PAGE_BYTES as u32,
+            len: SDIO_CMD53_BYTE_MODE_MAX as u16,
+            flags: 0,
+        };
+        write_runtime_payload_byte(payload.offset as usize, 0x11);
+        write_runtime_payload_byte(
+            payload.offset as usize + usize::from(payload.len).saturating_sub(1),
+            0x22,
+        );
 
         let frame = sdio_write_fault_telemetry_frame(
             SDIO_CMD53,
@@ -12442,6 +12863,7 @@ mod tests {
             1,
             transfer_mode,
             failure,
+            payload,
         );
 
         assert_eq!(frame.offset, DRIVER_TASK_RING_FRAME_OFFSET as u32);
@@ -12470,6 +12892,14 @@ mod tests {
         assert_eq!(
             read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_COUNT_MODE_OFFSET),
             u32::from(1u16) | (u32::from(transfer_mode) << 16)
+        );
+        assert_eq!(
+            read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET),
+            0x0033_2211
+        );
+        assert_eq!(
+            read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET + SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET),
+            0x33
         );
     }
 
@@ -12768,6 +13198,7 @@ mod tests {
     fn cyw43_firmware_upload_retry_starts_with_conservative_owner_lane() {
         let mut state = Cyw43RuntimeState::new();
         assert!(!state.firmware_byte_mode_fallback);
+        assert!(!state.firmware_narrow_byte_mode_fallback);
         assert_eq!(state.firmware_retry_clock_index, 0);
         assert_eq!(
             CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ,
@@ -12787,8 +13218,28 @@ mod tests {
                 | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED
         );
 
+        for expected_index in 1..=CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len() as u8 {
+            assert!(cyw43_prepare_firmware_upload_retry(&mut state));
+            assert!(!state.firmware_byte_mode_fallback);
+            assert!(!state.firmware_narrow_byte_mode_fallback);
+            assert_eq!(state.firmware_retry_clock_index, expected_index);
+        }
+        assert_eq!(
+            cyw43_backplane_write_chunk_shape(
+                false,
+                state.firmware_byte_mode_fallback,
+                CYW43_FIRMWARE_STAGE_BYTES
+            ),
+            (
+                CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
+                SDIO_FUNCTION1_BLOCK_SIZE,
+                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
+            )
+        );
+
         assert!(cyw43_prepare_firmware_upload_retry(&mut state));
         assert!(state.firmware_byte_mode_fallback);
+        assert!(!state.firmware_narrow_byte_mode_fallback);
         assert_eq!(state.firmware_retry_clock_index, 1);
         assert_eq!(
             cyw43_backplane_write_chunk_shape(false, true, CYW43_FIRMWARE_STAGE_BYTES),
@@ -12799,12 +13250,33 @@ mod tests {
             )
         );
 
+        for expected_index in 2..=CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len() as u8 {
+            assert!(cyw43_prepare_firmware_upload_retry(&mut state));
+            assert_eq!(state.firmware_retry_clock_index, expected_index);
+        }
+
         assert!(cyw43_prepare_firmware_upload_retry(&mut state));
-        assert_eq!(state.firmware_retry_clock_index, 2);
-        assert!(cyw43_prepare_firmware_upload_retry(&mut state));
-        assert_eq!(state.firmware_retry_clock_index, 3);
-        assert!(cyw43_prepare_firmware_upload_retry(&mut state));
-        assert_eq!(state.firmware_retry_clock_index, 4);
+        assert!(state.firmware_byte_mode_fallback);
+        assert!(state.firmware_narrow_byte_mode_fallback);
+        assert_eq!(state.firmware_retry_clock_index, 1);
+        assert_eq!(
+            cyw43_backplane_write_chunk_shape_for_lane(
+                false,
+                true,
+                state.firmware_narrow_byte_mode_fallback,
+                CYW43_FIRMWARE_STAGE_BYTES
+            ),
+            (
+                CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES,
+                CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES as u16,
+                0
+            )
+        );
+        for expected_index in 2..=CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len() as u8 {
+            assert!(cyw43_prepare_firmware_upload_retry(&mut state));
+            assert_eq!(state.firmware_retry_clock_index, expected_index);
+            assert!(state.firmware_narrow_byte_mode_fallback);
+        }
         assert!(!cyw43_prepare_firmware_upload_retry(&mut state));
         assert!(cyw43_firmware_upload_retries_exhausted(&state));
 
@@ -12812,6 +13284,23 @@ mod tests {
         assert_eq!(state.firmware_retry_clock_index, 0);
         assert!(!cyw43_firmware_upload_retries_exhausted(&state));
         assert!(state.firmware_byte_mode_fallback);
+        assert!(state.firmware_narrow_byte_mode_fallback);
+    }
+
+    #[test]
+    fn cyw43_retryable_firmware_command_restarts_block_mode_ladder() {
+        let mut state = Cyw43RuntimeState::new();
+        state.firmware_byte_mode_fallback = true;
+        state.firmware_narrow_byte_mode_fallback = true;
+        state.firmware_retry_clock_index = CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len() as u8;
+        state.backplane_window_valid = true;
+
+        cyw43_prepare_retryable_firmware_command(&mut state);
+
+        assert!(!state.firmware_byte_mode_fallback);
+        assert!(!state.firmware_narrow_byte_mode_fallback);
+        assert_eq!(state.firmware_retry_clock_index, 0);
+        assert!(!state.backplane_window_valid);
     }
 
     #[test]
@@ -13330,15 +13819,63 @@ mod tests {
     }
 
     #[test]
-    fn usb_runtime_cold_reinit_policy_targets_deep_enumeration_failures() {
-        assert!(usb_detail_warrants_cold_reinit(
+    fn usb_enumeration_publishes_root_port_frontier_once_after_command_ring() {
+        assert!(usb_root_port_frontier_publish_required(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY,
+            0x0000_0001
+        ));
+        assert!(!usb_root_port_frontier_publish_required(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY,
+            0
+        ));
+        assert!(!usb_root_port_frontier_publish_required(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED,
+            0x0000_0001
+        ));
+    }
+
+    #[test]
+    fn usb_enumeration_requires_command_path_before_live_port_scan() {
+        let mut state = UsbRuntimeState::new();
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY;
+        state.enumeration_root_powered = true;
+        state.enumeration_root_next_port = 1;
+        state.enumeration_best_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY;
+
+        assert!(!usb_scan_root_ports_for_keyboard(
+            &mut state,
+            DriverRuntimeInitDescriptor::empty(),
+            DriverRuntimeResourceRangeDescriptor::empty()
+        ));
+        assert!(!state.command_path_proven);
+        assert_eq!(
+            state.init_detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
+        );
+        assert_eq!(state.enumeration_root_next_port, 1);
+        assert_eq!(state.enumeration_root_scan_pass, 0);
+    }
+
+    #[test]
+    fn usb_runtime_cold_reinit_policy_targets_enable_slot_failures() {
+        assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
         ));
         assert!(usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
         ));
-        assert!(usb_detail_warrants_cold_reinit(
+        assert!(!usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+        ));
+        assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+        ));
+        assert!(!usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+        ));
+        assert!(!usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
         ));
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
@@ -13346,6 +13883,18 @@ mod tests {
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
         ));
+    }
+
+    #[test]
+    fn usb_linked_runtime_keeps_old_good_descriptor_settle_budget() {
+        assert_eq!(USB_ADDRESS_DEVICE_SETTLE_SPINS, 500_000);
+        assert_eq!(USB_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS, 50_000);
+        assert_eq!(USB_FULL_SPEED_DESCRIPTOR_PRIME_LEN, 64);
+        assert_eq!(USB_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN, 8);
+        assert_eq!(USB_DEVICE_DESCRIPTOR_BYTES, 18);
+        assert_eq!(USB_DEVICE_DESCRIPTOR_RETRY_ATTEMPTS, 2);
+        assert_eq!(USB_CONFIGURATION_DESCRIPTOR_HEADER_BYTES, 9);
+        assert_eq!(USB_CONFIGURATION_DESCRIPTOR_RETRY_ATTEMPTS, 3);
     }
 
     #[test]
@@ -13541,6 +14090,15 @@ mod tests {
         assert!(xhci_posted_write_flush_acceptance_result(false, false));
         assert!(xhci_posted_write_flush_acceptance_result(true, true));
         assert!(!xhci_posted_write_flush_acceptance_result(true, false));
+        assert!(xhci_posted_write_flush_fallback_bar_read_allowed(
+            false, false
+        ));
+        assert!(!xhci_posted_write_flush_fallback_bar_read_allowed(
+            true, false
+        ));
+        assert!(!xhci_posted_write_flush_fallback_bar_read_allowed(
+            false, true
+        ));
     }
 
     #[test]
@@ -13584,7 +14142,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_cold_reinit_returns_before_resuming_enumeration_scan() {
+    fn usb_deep_enumeration_failure_resumes_same_controller() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -13631,18 +14189,20 @@ mod tests {
             service_command(0, enumerate),
             DriverTaskCompletionRecord::progress_with_detail(
                 95,
-                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED,
                 USB_ENUM_RESULT_SNAPSHOT
+                    | USB_ENUM_RESULT_ROOT_POWERED
+                    | (3 << USB_ENUM_RESULT_SCAN_PASS_SHIFT)
             )
         );
         USB_RUNTIME_STATE.with_mut(|state| {
-            assert_eq!(state.enumeration_cold_reinit_attempts, 1);
-            assert!(!state.enumeration_root_powered);
-            assert_eq!(state.enumeration_root_scan_pass, 0);
-            assert_eq!(state.enumeration_root_next_port, 1);
+            assert_eq!(state.enumeration_cold_reinit_attempts, 0);
+            assert!(state.enumeration_root_powered);
+            assert_eq!(state.enumeration_root_scan_pass, 3);
+            assert_eq!(state.enumeration_root_next_port, 4);
             assert_eq!(
                 state.enumeration_best_detail,
-                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+                DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
             );
         });
     }

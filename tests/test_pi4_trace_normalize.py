@@ -931,8 +931,13 @@ def test_gate_summary_names_cyw43_firmware_retry_exhaustion() -> None:
             "reason=cyw43-firmware-retry-exhausted result=0x04208040",
             "wifi: evidence sdio_cmd53 func=1 addr=0x00198000 len=512 "
             "increment=yes block_mode=byte-retry op=2 "
+            "source=owner-terminal",
+            "wifi: evidence sdio_status "
             "descriptor_status=cyw43-firmware-retry-exhausted "
-            "transfer_stage=data-end transfer_status=0x208040 r5=0x0000",
+            "transfer_stage=data-end transfer_status=0x208040 r5=0x0000 "
+            "retry=byte512-fallback-exhausted host=0x06 clock=0x5007",
+            "wifi: evidence sdio_payload first=0x11 last=0x22 xor=0x33 "
+            "sum=0x00004444 owner_window=sdio-shared-8192",
         ]
     )
 
@@ -950,7 +955,9 @@ def test_gate_summary_keeps_wifi_blackbox_fault_over_later_prompt_replay() -> No
             "wifi: gate 5 name=backplane-window status=pass evidence=programmed=0x00198000 next=firmware-upload",
             "wifi: gate 6 name=firmware-upload status=fail evidence=uploaded=no fault_detail=0x5103 next=function2-ready",
             "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0001 target=0x00199c00 payload_len=1024 total_len=609309 detail=0x5103 reason=sdio-descriptor-transfer-failed result=0x05000100",
-            "wifi: evidence sdio_cmd53 func=1 addr=0x00199c00 len=1024 increment=yes block_mode=byte-retry op=2 descriptor_status=descriptor-transfer-failed transfer_stage=response transfer_status=0x000100 r5=0x0100",
+            "wifi: evidence sdio_cmd53 func=1 addr=0x00199c00 len=1024 increment=yes block_mode=byte-retry op=2 source=owner-terminal",
+            "wifi: evidence sdio_status descriptor_status=descriptor-transfer-failed transfer_stage=response transfer_status=0x000100 r5=0x0100 retry=byte512-fallback host=0x06 clock=0x5007",
+            "wifi: evidence sdio_payload first=0x44 last=0x55 xor=0x11 sum=0x00006666 owner_window=sdio-shared-8192",
             "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host selected=wifi-owner-link attempted=yes stage=load-fw blocker=unsupported",
             "wifi: debug subcommand=load-fw result=error error=unsupported",
         ]

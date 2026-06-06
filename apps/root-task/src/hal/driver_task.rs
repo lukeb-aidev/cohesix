@@ -1759,8 +1759,33 @@ pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
 const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
 const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
-const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
+const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS * 32;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
+const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = 33_554_432;
+
+#[cfg(feature = "kernel")]
+fn driver_task_shared_store_barrier() {
+    fence(Ordering::Release);
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: Driver-task rings are shared normal memory across root and linked
+    // runtimes. The store barrier publishes command and payload writes before
+    // IPC notification makes the sequence observable to the runtime.
+    unsafe {
+        core::arch::asm!("dmb ishst", options(nostack, preserves_flags));
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_shared_load_barrier() {
+    fence(Ordering::Acquire);
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: Driver-task rings are shared normal memory across root and linked
+    // runtimes. The load barrier pairs with runtime completion publication
+    // before root consumes the remaining completion fields or frame payload.
+    unsafe {
+        core::arch::asm!("dmb ishld", options(nostack, preserves_flags));
+    }
+}
 
 #[cfg(feature = "kernel")]
 struct DriverTaskCommandSlot {
@@ -3150,10 +3175,13 @@ fn driver_task_ring_attempt_limit(
     }
     if mode == DriverTaskRingCommandMode::NonBlocking
         && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
-        && matches!(
-            command.aux0,
-            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
-        )
+        && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX
+    {
+        return DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::NonBlocking
+        && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
     {
         return DRIVER_TASK_LONG_INIT_RING_ATTEMPTS;
     }
@@ -3335,6 +3363,7 @@ fn run_driver_task_ring_command_with_mode(
             core::ptr::write_volatile(completion_ptr, completion_reset);
             core::ptr::write_volatile(command_ptr, command);
         }
+        driver_task_shared_store_barrier();
         request
     };
     if request == 0 {
@@ -3351,6 +3380,12 @@ fn run_driver_task_ring_command_with_mode(
 
     // SAFETY: The completion pointer addresses the validated shared ring page.
     let mut completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+    if completion.sequence == request as u32 {
+        driver_task_shared_load_barrier();
+        // SAFETY: The matching sequence is re-read after the acquire barrier so
+        // the rest of the completion record is consumed from the published turn.
+        completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+    }
     let mut start_ticks = None;
     let trace_call = driver_task_ring_call_trace_enabled(contract, command, mode);
     let _priority_restore = if driver_task_ring_mode_uses_bounded_send(mode) {
@@ -3377,6 +3412,13 @@ fn run_driver_task_ring_command_with_mode(
                 // nonblocking send and published the primitive completion record.
                 completion = unsafe { core::ptr::read_volatile(completion_ptr) };
                 if completion.sequence == request as u32 {
+                    driver_task_shared_load_barrier();
+                    // SAFETY: The matching sequence is re-read after the acquire
+                    // barrier before root consumes completion fields or payload.
+                    completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+                    if completion.sequence != request as u32 {
+                        continue;
+                    }
                     if trace_call {
                         emit_driver_task_ring_call_return(contract, endpoint, request, completion);
                     }
@@ -3413,6 +3455,7 @@ fn run_driver_task_ring_command_with_mode(
             endpoint as sel4_sys::seL4_CPtr,
             sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
         );
+        driver_task_shared_load_barrier();
         // SAFETY: The completion pointer addresses the same validated ring
         // page; the reply boundary guarantees the isolated runtime had a chance
         // to publish the shared-frame result.
@@ -3431,6 +3474,13 @@ fn run_driver_task_ring_command_with_mode(
             // command through the shared frame.
             completion = unsafe { core::ptr::read_volatile(completion_ptr) };
             if completion.sequence == request as u32 {
+                driver_task_shared_load_barrier();
+                // SAFETY: The matching sequence is re-read after the acquire
+                // barrier before root consumes completion fields or payload.
+                completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+                if completion.sequence != request as u32 {
+                    continue;
+                }
                 break;
             }
         }
@@ -6643,6 +6693,15 @@ mod tests {
             driver_task_ring_attempt_limit(
                 USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
                 command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS
+        );
+        assert!(DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS > 20_000_000);
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
                 DriverTaskRingCommandMode::PromptSlice
             ),
             DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
@@ -6657,9 +6716,10 @@ mod tests {
             command,
             DriverTaskRingCommandMode::PromptSlice
         ));
-        assert_eq!(
-            DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS,
-            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+        assert!(DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS > DRIVER_TASK_PROMPT_RING_ATTEMPTS);
+        assert!(
+            DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
+                < DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS
         );
     }
 

@@ -480,7 +480,7 @@ static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED: AtomicBool = AtomicBool:
 #[cfg(all(feature = "kernel", feature = "usb"))]
 // A controller-ready completion can precede root-port and HID endpoint events by
 // a few linked-runtime turns; keep prompt settling bounded and non-blocking.
-const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 1;
+const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 3;
 
 #[cfg(all(
     feature = "kernel",
@@ -2880,7 +2880,15 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                     usb_command,
                     root_console_ready,
                 );
-                record_linked_local_seat_usb_detail(resume_completion);
+                if let Some(completion) = resume_completion {
+                    if local_seat_usb_keyboard_init_ready(Some(completion)) {
+                        publish_local_seat_usb_keyboard_ready(usb_contract, completion);
+                    } else if local_seat_usb_engine_init_ready(Some(completion)) {
+                        publish_local_seat_usb_enumeration_progress(usb_contract, completion);
+                    } else {
+                        record_linked_local_seat_usb_detail(Some(completion));
+                    }
+                }
                 crate::hal::driver_task::emit_driver_task_resource_init_status(
                     usb_contract,
                     crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,

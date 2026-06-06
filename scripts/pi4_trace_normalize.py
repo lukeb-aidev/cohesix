@@ -3068,6 +3068,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "outcome",
             "blocker",
             "cause",
+            "descriptor_status",
             "exact",
             "exact_error",
         ):

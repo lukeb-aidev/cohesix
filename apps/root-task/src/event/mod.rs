@@ -4605,6 +4605,14 @@ where
                 linked_result,
             ));
             self.emit_console_line(runtime_contract.as_str());
+            let linked_runtime_snapshot = format_message(format_args!(
+                "usb: linked_runtime_snapshot detail=0x{:04x} result=0x{:08x} proof_gate={} source=driver-task recovery_policy={}",
+                linked_detail,
+                linked_result,
+                linked_gate,
+                Self::usb_runtime_recovery_policy_for_linked_detail(linked_detail),
+            ));
+            self.emit_console_line(linked_runtime_snapshot.as_str());
             if linked_detail
                 == pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
                 || linked_detail
@@ -4629,9 +4637,10 @@ where
                 self.emit_console_line(runtime_progress.as_str());
             }
             let runtime_next_action = format_message(format_args!(
-                "usb: runtime_next_action action={} reason={} cold_reinit_limit=2 detail=0x{:04x}",
+                "usb: runtime_next_action action={} reason={} recovery_policy={} detail=0x{:04x}",
                 Self::usb_runtime_next_action_for_linked_detail(linked_detail),
                 blocker,
+                Self::usb_runtime_recovery_policy_for_linked_detail(linked_detail),
                 linked_detail,
             ));
             self.emit_console_line(runtime_next_action.as_str());
@@ -5118,13 +5127,15 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_next_action_for_linked_detail(detail: u16) -> &'static str {
         match detail {
-            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => {
+                "cold-reinit-and-reenumerate"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => {
-                "cold-reinit-and-reenumerate"
+                "continue-enumeration-same-controller"
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => "wait-first-report",
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => {
@@ -5142,6 +5153,24 @@ where
                 "continue-enumeration"
             }
             _ => "wait-driver-task-replay",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_recovery_policy_for_linked_detail(detail: u16) -> &'static str {
+        match detail {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => "cold-reinit",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => "same-controller",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => {
+                "hid-report-path"
+            }
+            _ => "continue-or-wait",
         }
     }
 
@@ -5569,13 +5598,7 @@ where
                 fault.result,
             ));
             self.emit_console_line(fault_line.as_str());
-            let next = match fault.detail {
-                0x5101 => "verify-sdio-owner-command-availability",
-                0x5102 => "verify-cyw43-to-sdio-descriptor-window",
-                0x5103 => "inspect-sdio-owner-cmd53-after-block-and-byte-retries",
-                0x5104 => "verify-sdio-host-config-replay",
-                _ => "inspect-cyw43-driver-task-fault-stage",
-            };
+            let next = Self::wifi_runtime_fault_next_action(fault);
             let next_line = format_message(format_args!(
                 "wifi: driver-task next_action={} source={} recovery_contract=block-mode-first+byte-fallback+no-cmd0-cmd5",
                 next, source
@@ -6246,7 +6269,7 @@ where
 
         let dhcp_pass = self.wifi_diag_dhcp_bound();
         let network_ready = self.wifi_diag_network_ready();
-        let proof_gate = Self::wifi_startup_proof_gate(
+        let proof_gate: u8 = Self::wifi_startup_proof_gate(
             power_ready,
             card_selected,
             f1_ready,
@@ -6258,14 +6281,14 @@ where
             dhcp_pass,
             network_ready,
         );
-        let failing_gate = if let Some(gate) = fault_gate {
+        let failing_gate: u8 = if let Some(gate) = fault_gate {
             gate
         } else if proof_gate >= 10 {
             0
         } else {
             proof_gate.saturating_add(1).max(1)
         };
-        let reported_proof_gate = if let Some(gate) = fault_gate {
+        let reported_proof_gate: u8 = if let Some(gate) = fault_gate {
             proof_gate.max(gate.saturating_sub(1))
         } else {
             proof_gate
@@ -6437,6 +6460,8 @@ where
             "acceptance-complete",
         );
         if let Some(fault) = fault {
+            let owner_fault =
+                crate::drivers::driver_task_net::latest_cyw43_sdio_owner_fault_status();
             let fault_line = format_message(format_args!(
                 "wifi: evidence cyw43 stage={} op={} flags=0x{:04x} target=0x{:08x} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
                 fault.stage,
@@ -6450,24 +6475,59 @@ where
                 fault.result,
             ));
             self.emit_console_line(fault_line.as_str());
-            let cmd53 = format_message(format_args!(
-                "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} len={} increment={} block_mode={} op={} descriptor_status={} transfer_stage={} transfer_status=0x{:06x} r5=0x{:04x}",
-                Self::wifi_cyw43_fault_cmd53_function(fault),
-                fault.target_addr,
-                fault.payload_len,
-                Self::wifi_cyw43_fault_cmd53_increment(fault),
-                Self::wifi_cyw43_fault_cmd53_mode(fault),
-                fault.op,
-                Self::wifi_cyw43_fault_descriptor_status(fault.detail),
-                Self::wifi_sdio_transfer_failure_stage(fault.result),
-                Self::wifi_sdio_transfer_failure_status(fault.result),
-                Self::wifi_sdio_transfer_failure_r5(fault.result),
-            ));
-            self.emit_console_line(cmd53.as_str());
+            if let Some(owner_fault) = owner_fault {
+                let cmd53 = format_message(format_args!(
+                    "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} target=0x{:08x} len={} increment={} block_mode={} mode={} op={} source=owner-terminal",
+                    owner_fault.function,
+                    owner_fault.addr,
+                    owner_fault.target_addr,
+                    owner_fault.len,
+                    Self::yes_no(owner_fault.increment),
+                    Self::yes_no(owner_fault.block_mode),
+                    Self::wifi_sdio_owner_mode_label(owner_fault),
+                    owner_fault.op,
+                ));
+                self.emit_console_line(cmd53.as_str());
+                let status = format_message(format_args!(
+                    "wifi: evidence sdio_status descriptor_status={} transfer_stage={} transfer_status=0x{:06x} r5=0x{:04x} retry={} host=0x{:02x} clock=0x{:04x}",
+                    owner_fault.reason,
+                    owner_fault.transfer_stage,
+                    owner_fault.transfer_status,
+                    owner_fault.r5,
+                    owner_fault.retry,
+                    owner_fault.host_control,
+                    owner_fault.clock_control,
+                ));
+                self.emit_console_line(status.as_str());
+                let payload = format_message(format_args!(
+                    "wifi: evidence sdio_payload first=0x{:02x} last=0x{:02x} xor=0x{:02x} sum=0x{:08x} owner_window={}",
+                    owner_fault.payload_first,
+                    owner_fault.payload_last,
+                    owner_fault.payload_xor,
+                    owner_fault.payload_sum,
+                    owner_fault.owner_window,
+                ));
+                self.emit_console_line(payload.as_str());
+            } else {
+                let cmd53 = format_message(format_args!(
+                    "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} len={} increment={} block_mode={} op={} descriptor_status={} transfer_stage={} transfer_status=0x{:06x} r5=0x{:04x} source=cyw43-descriptor",
+                    Self::wifi_cyw43_fault_cmd53_function(fault),
+                    fault.target_addr,
+                    fault.payload_len,
+                    Self::wifi_cyw43_fault_cmd53_increment(fault),
+                    Self::wifi_cyw43_fault_cmd53_mode(fault),
+                    fault.op,
+                    Self::wifi_cyw43_fault_descriptor_status(fault.detail),
+                    Self::wifi_sdio_transfer_failure_stage(fault.result),
+                    Self::wifi_sdio_transfer_failure_status(fault.result),
+                    Self::wifi_sdio_transfer_failure_r5(fault.result),
+                ));
+                self.emit_console_line(cmd53.as_str());
+            };
         }
         let boundary = format_message(format_args!(
-            "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain={} proof_gate={} target_gate=10",
-            active_blocker, reported_proof_gate,
+            "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain={} proof_gate={} frontier_gate={} failing_gate={} target_gate=10",
+            active_blocker, proof_gate, reported_proof_gate, failing_gate,
         ));
         self.emit_console_line(boundary.as_str());
         let next = format_message(format_args!(
@@ -6500,10 +6560,12 @@ where
     #[cfg(feature = "kernel")]
     const fn wifi_startup_gate_status(gate: u8, proof_gate: u8, failing_gate: u8) -> &'static str {
         if failing_gate != 0 {
-            if gate < failing_gate {
+            if gate <= proof_gate {
                 "pass"
             } else if gate == failing_gate {
                 "fail"
+            } else if gate < failing_gate {
+                "inferred"
             } else {
                 "blocked"
             }
@@ -6643,6 +6705,21 @@ where
             3 => "byte",
             7 | 8 | 9 | 10 => "fifo-fixed",
             _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_sdio_owner_mode_label(
+        fault: crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus,
+    ) -> &'static str {
+        if fault.cmd != 53 {
+            "non-cmd53"
+        } else if fault.block_mode {
+            "block"
+        } else if fault.len == 512 {
+            "byte512"
+        } else {
+            "byte-narrow"
         }
     }
 
@@ -12819,13 +12896,37 @@ mod tests {
             KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
                 pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             ),
-            "cold-reinit-and-reenumerate"
+            "continue-enumeration-same-controller"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+            ),
+            "continue-enumeration-same-controller"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
                 pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
             ),
             "cold-reinit-and-reenumerate"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_recovery_policy_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
+            ),
+            "cold-reinit"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_recovery_policy_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+            ),
+            "same-controller"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_recovery_policy_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+            ),
+            "hid-report-path"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
@@ -12856,6 +12957,27 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
             ),
             "hid-first-byte"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_startup_gate_status_marks_unproven_prefault_gates_as_inferred() {
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_gate_status(1, 1, 6),
+            "pass"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_gate_status(5, 1, 6),
+            "inferred"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_gate_status(6, 1, 6),
+            "fail"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_gate_status(7, 1, 6),
+            "blocked"
         );
     }
 
