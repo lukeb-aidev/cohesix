@@ -17,15 +17,15 @@ use core::mem;
 use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
-use font8x8::legacy::BASIC_LEGACY;
-use spin::Mutex;
-use usb_oxide::{
+use cohesix_usb::{
     class, completion, desc_type, find_hid_interfaces, hid_protocol, hid_subclass, hub_feature,
     hub_protocol, led, regs, request, scancode, scancode_to_ascii, set_xhci_diag_hook,
     set_xhci_port_access_hooks, set_xhci_posted_write_flush_hook, ConfigDesc, DeviceDesc, Dma,
     DmaShareError, EndpointDesc, HidDesc, HidDevice, HubDesc, SetupPacket, TtContext, UsbDevice,
     UsbError, XhciControllerParams, XhciCtrl, XhciFirmwareHandoff, XhciRuntimeSeedSnapshot,
 };
+use font8x8::legacy::BASIC_LEGACY;
+use spin::Mutex;
 
 use crate::bootstrap::log as boot_log;
 use crate::hal::{
@@ -202,7 +202,7 @@ const HUB_PORT_STATUS_QUICK_RETRY_DELAY_MS: u64 = 10;
 const HUB_SET_FEATURE_RETRY_DELAY_MS: u64 = 10;
 // Hub-class requests (SET/CLEAR_FEATURE, GET_STATUS) can be slower on
 // downstream combo hubs than baseline descriptor/control setup transactions.
-// Keep this aligned with usb-oxide's default control wait budget to avoid
+// Keep this aligned with Cohesix USB stack's default control wait budget to avoid
 // false timeouts during hub bring-up.
 const HUB_CLASS_CONTROL_WAIT_SPINS: usize = 20_000_000;
 // Use a fast first pass for hub control and port-status operations; keep a
@@ -2959,7 +2959,7 @@ fn xhci_linux_capture_full_reset_mailbox_reset_required(
     // of the endpoint after a cold boot. Any unseeded high-BAR full-reset lane
     // must first pass through the mailbox reset boundary; without live config
     // COMMAND proof, the promoted platform-reset lane is stopped by the local
-    // publication gate before usb-oxide can publish fresh xHCI ownership state.
+    // publication gate before Cohesix USB stack can publish fresh xHCI ownership state.
     xhci_linux_capture_full_reset_mailbox_reset_required_for_strategy(mmio, strategy)
 }
 
@@ -4823,7 +4823,7 @@ fn xhci_diag_stage_label(stage: u16) -> Option<&'static str> {
 
 #[inline]
 const fn xhci_root_port_connected(portsc: u32) -> bool {
-    (portsc & usb_oxide::regs::PORTSC_CCS) != 0 && (portsc & usb_oxide::regs::PORTSC_PP) != 0
+    (portsc & cohesix_usb::regs::PORTSC_CCS) != 0 && (portsc & cohesix_usb::regs::PORTSC_PP) != 0
 }
 
 #[inline]
@@ -4860,9 +4860,9 @@ fn usb_root_port_status_entry(index: usize, portsc: u32) -> UsbRootPortStatusEnt
         port: index.saturating_add(1) as u8,
         portsc,
         connected: xhci_root_port_connected(portsc),
-        enabled: (portsc & usb_oxide::regs::PORTSC_PED) != 0,
-        speed: usb_oxide::regs::portsc_speed(portsc),
-        link_state: usb_oxide::regs::portsc_pls(portsc),
+        enabled: (portsc & cohesix_usb::regs::PORTSC_PED) != 0,
+        speed: cohesix_usb::regs::portsc_speed(portsc),
+        link_state: cohesix_usb::regs::portsc_pls(portsc),
     }
 }
 
@@ -4944,7 +4944,7 @@ const fn xhci_port_status_change_event_port_index(
     param: u64,
     max_ports: usize,
 ) -> Option<usize> {
-    if trb_type as u32 != usb_oxide::trb_type::PORT_STATUS_CHANGE {
+    if trb_type as u32 != cohesix_usb::trb_type::PORT_STATUS_CHANGE {
         return None;
     }
     let port_id = ((param >> 24) & 0xff) as usize;
@@ -5361,10 +5361,10 @@ const fn xhci_dma_bus_policy_label() -> &'static str {
 
 fn log_xhci_root_port_statuses(port_statuses: &[u32], stage: &str) {
     for (index, portsc) in port_statuses.iter().copied().enumerate() {
-        let speed = usb_oxide::regs::portsc_speed(portsc);
-        let pls = usb_oxide::regs::portsc_pls(portsc);
+        let speed = cohesix_usb::regs::portsc_speed(portsc);
+        let pls = cohesix_usb::regs::portsc_pls(portsc);
         let connected = xhci_root_port_connected(portsc) as u8;
-        let enabled = ((portsc & usb_oxide::regs::PORTSC_PED) != 0) as u8;
+        let enabled = ((portsc & cohesix_usb::regs::PORTSC_PED) != 0) as u8;
         let mut line = heapless::String::<224>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
@@ -5476,7 +5476,7 @@ fn probe_xhci_capability_window(
         ),
     );
     boot_log::force_uart_line(mapped_line.as_str());
-    // Match usb-oxide's byte/halfword probe sequence. On Pi4, the combined
+    // Match Cohesix USB stack's byte/halfword probe sequence. On Pi4, the combined
     // 32-bit CAPBASE read is the exact first runtime xHCI touch still matching
     // the fatal halt signature, so keep the first access width-bounded here.
     log_xhci_cap_probe_read(mmio_base, "caplength", regs::CAPLENGTH);
@@ -6442,7 +6442,7 @@ fn prime_pinned_xhci_window(
 
     for &mmio in &candidates[..candidate_count] {
         // Keep early preseed small so later critical MMIO mappings (UART, etc.)
-        // are not starved during bootstrap. usb-oxide computes the runtime MMIO
+        // are not starved during bootstrap. Cohesix USB stack computes the runtime MMIO
         // span and this bounded window is enough for capability probing.
         let preseed_lengths = [
             XHCI_MMIO_PRESEED_BYTES_MAX,
@@ -11298,8 +11298,8 @@ impl UsbKeyboard {
     ) -> Option<KeyboardAttach> {
         let interfaces = find_hid_interfaces(config_blob);
         let mut protocol_none_candidates = Vec::<(
-            usb_oxide::InterfaceDesc,
-            usb_oxide::EndpointDesc,
+            cohesix_usb::InterfaceDesc,
+            cohesix_usb::EndpointDesc,
             Option<bool>,
         )>::new();
         let mut strict_keyboard_candidates = 0usize;
@@ -11441,7 +11441,8 @@ impl UsbKeyboard {
                 break;
             }
 
-            if dtype == desc_type::INTERFACE && len >= mem::size_of::<usb_oxide::InterfaceDesc>() {
+            if dtype == desc_type::INTERFACE && len >= mem::size_of::<cohesix_usb::InterfaceDesc>()
+            {
                 // SAFETY: Interface descriptor bytes may be unaligned in the
                 // configuration blob.
                 let iface = unsafe {
@@ -11449,7 +11450,7 @@ impl UsbKeyboard {
                         config_blob
                             .as_ptr()
                             .add(offset)
-                            .cast::<usb_oxide::InterfaceDesc>(),
+                            .cast::<cohesix_usb::InterfaceDesc>(),
                     )
                 };
                 in_target_interface = iface.interface_class == class::HID
@@ -11641,8 +11642,8 @@ impl UsbKeyboard {
 
     fn try_attach_hid_keyboard_candidate(
         device: Arc<UsbDevice<SeatDma>>,
-        iface: usb_oxide::InterfaceDesc,
-        ep_in: usb_oxide::EndpointDesc,
+        iface: cohesix_usb::InterfaceDesc,
+        ep_in: cohesix_usb::EndpointDesc,
         source: &str,
         require_boot_switch: bool,
         force_keyboard_mode: bool,
@@ -11816,7 +11817,7 @@ impl UsbKeyboard {
                         config_blob
                             .as_ptr()
                             .add(offset)
-                            .cast::<usb_oxide::InterfaceDesc>(),
+                            .cast::<cohesix_usb::InterfaceDesc>(),
                     )
                 };
                 if iface.interface_class == class::HUB {
@@ -12587,9 +12588,9 @@ impl UsbKeyboard {
         };
 
         const SPEED_CANDIDATES: [u8; 3] = [
-            usb_oxide::regs::SPEED_HIGH,
-            usb_oxide::regs::SPEED_FULL,
-            usb_oxide::regs::SPEED_LOW,
+            cohesix_usb::regs::SPEED_HIGH,
+            cohesix_usb::regs::SPEED_FULL,
+            cohesix_usb::regs::SPEED_LOW,
         ];
         for child_speed in SPEED_CANDIDATES {
             let mut line = heapless::String::<256>::new();
@@ -12681,9 +12682,9 @@ impl UsbKeyboard {
         }
 
         const SPEED_CANDIDATES: [u8; 3] = [
-            usb_oxide::regs::SPEED_HIGH,
-            usb_oxide::regs::SPEED_FULL,
-            usb_oxide::regs::SPEED_LOW,
+            cohesix_usb::regs::SPEED_HIGH,
+            cohesix_usb::regs::SPEED_FULL,
+            cohesix_usb::regs::SPEED_LOW,
         ];
         for child_speed in SPEED_CANDIDATES {
             if child_speed == primary_speed {
@@ -12788,9 +12789,9 @@ impl UsbKeyboard {
     ) -> HubChildProbeResult {
         let mut tt_port_raw = 0u8;
         let mut tt_ttt_raw = 0u8;
-        let tt_context = if (child_speed == usb_oxide::regs::SPEED_LOW
-            || child_speed == usb_oxide::regs::SPEED_FULL)
-            && device.speed() == usb_oxide::regs::SPEED_HIGH
+        let tt_context = if (child_speed == cohesix_usb::regs::SPEED_LOW
+            || child_speed == cohesix_usb::regs::SPEED_FULL)
+            && device.speed() == cohesix_usb::regs::SPEED_HIGH
         {
             tt_port_raw = downstream_port;
             tt_ttt_raw = hub_tt_think_time & 0x03;
@@ -14506,13 +14507,13 @@ impl UsbKeyboard {
 
     fn speed_from_hub_port_status(status: HubPortStatus, hub_protocol_code: u8) -> u8 {
         if hub_protocol_code == hub_protocol::SUPER_SPEED {
-            usb_oxide::regs::SPEED_SUPER
+            cohesix_usb::regs::SPEED_SUPER
         } else if status.high_speed() {
-            usb_oxide::regs::SPEED_HIGH
+            cohesix_usb::regs::SPEED_HIGH
         } else if status.low_speed() {
-            usb_oxide::regs::SPEED_LOW
+            cohesix_usb::regs::SPEED_LOW
         } else {
-            usb_oxide::regs::SPEED_FULL
+            cohesix_usb::regs::SPEED_FULL
         }
     }
 
@@ -16354,25 +16355,25 @@ mod tests {
     #[test]
     fn xhci_root_port_connected_requires_ccs_and_power() {
         assert!(!xhci_root_port_connected(0));
-        assert!(!xhci_root_port_connected(usb_oxide::regs::PORTSC_CCS));
+        assert!(!xhci_root_port_connected(cohesix_usb::regs::PORTSC_CCS));
         assert!(xhci_root_port_connected(
-            usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PP
+            cohesix_usb::regs::PORTSC_CCS | cohesix_usb::regs::PORTSC_PP
         ));
     }
 
     #[test]
     fn xhci_connected_mask_from_portsc_sets_bits_for_connected_ports_only() {
         let statuses = [
-            usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PP,
+            cohesix_usb::regs::PORTSC_CCS | cohesix_usb::regs::PORTSC_PP,
             0,
-            usb_oxide::regs::PORTSC_CCS | usb_oxide::regs::PORTSC_PED,
+            cohesix_usb::regs::PORTSC_CCS | cohesix_usb::regs::PORTSC_PED,
         ];
         assert_eq!(xhci_connected_mask_from_portsc(&statuses), 0b0001);
     }
 
     #[test]
     fn xhci_port_status_change_event_mask_decodes_one_based_port_id() {
-        let event_type = usb_oxide::trb_type::PORT_STATUS_CHANGE as u8;
+        let event_type = cohesix_usb::trb_type::PORT_STATUS_CHANGE as u8;
         assert_eq!(
             super::xhci_port_status_change_event_mask(event_type, 1 << 24, 5),
             0b0001
@@ -16391,7 +16392,7 @@ mod tests {
         );
         assert_eq!(
             super::xhci_port_status_change_event_mask(
-                usb_oxide::trb_type::TRANSFER_EVENT as u8,
+                cohesix_usb::trb_type::TRANSFER_EVENT as u8,
                 1 << 24,
                 5
             ),
@@ -16413,16 +16414,16 @@ mod tests {
 
     #[test]
     fn usb_root_port_status_entry_decodes_cached_portsc_without_live_reads() {
-        let portsc = usb_oxide::regs::PORTSC_CCS
-            | usb_oxide::regs::PORTSC_PED
-            | ((usb_oxide::regs::SPEED_HIGH as u32) << 10)
+        let portsc = cohesix_usb::regs::PORTSC_CCS
+            | cohesix_usb::regs::PORTSC_PED
+            | ((cohesix_usb::regs::SPEED_HIGH as u32) << 10)
             | (3 << 5);
         let entry = super::usb_root_port_status_entry(1, portsc);
         assert_eq!(entry.port, 2);
         assert_eq!(entry.portsc, portsc);
         assert!(entry.connected);
         assert!(entry.enabled);
-        assert_eq!(entry.speed, usb_oxide::regs::SPEED_HIGH);
+        assert_eq!(entry.speed, cohesix_usb::regs::SPEED_HIGH);
         assert_eq!(entry.link_state, 3);
     }
 

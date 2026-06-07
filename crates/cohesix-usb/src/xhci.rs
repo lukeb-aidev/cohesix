@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
+// Purpose: Cohesix-owned USB xHCI support for Pi4 local-seat diagnostics.
 // Copyright 2026 Lukas Bower
 use crate::{
     Dma, Result, UsbError, reg,
@@ -2136,7 +2136,7 @@ fn split_u64_reg_write_ops(offset: usize, val: u64) -> [(usize, u32); 2] {
 
 #[inline(always)]
 fn dcbaap_reg_write_ops(offset: usize, _current: u64, target: u64) -> [(usize, u32); 2] {
-    // Preserve the original usb-oxide split-write order. VL805 observes the
+    // Preserve the original Cohesix USB split-write order. VL805 observes the
     // low/high pair directly; publishing the high dword first can expose a
     // transient high-only DCBAAP base when a platform uses nonzero PCIe DMA
     // bus addresses.

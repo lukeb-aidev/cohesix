@@ -205,7 +205,8 @@ def test_latest_diagnostics_do_not_credit_usb_burst_or_dhcp_next_as_acceptance(
             "source=owner-terminal",
             "wifi: evidence sdio_status "
             "descriptor_status=cyw43-firmware-retry-exhausted "
-            "transfer_stage=response transfer_status=0x000800 r5=0x0800 "
+            "transfer_stage=response transfer_status=0x000800 "
+            "transfer_reason=sdio-r5-response r5=0x0800 "
             "retry=byte-narrow-fallback-exhausted host=0x06 clock=0x5007",
             "wifi: evidence sdio_payload first=0x11 last=0x22 xor=0x33 "
             "sum=0x00004444 owner_window=sdio-shared-8192",
@@ -236,6 +237,47 @@ def test_latest_diagnostics_do_not_credit_usb_burst_or_dhcp_next_as_acceptance(
     assert fields["NEW_WIFI_BLOCKER_SEEN"] == "yes"
     assert fields["NEW_WIFI_BLOCKER"] == "cyw43-firmware-retry-exhausted"
     assert fields["COMPARISON_VERDICT"] == "regression"
+
+
+def test_usb_runtime_ring_busy_overrides_stale_link_blocker(
+    tmp_path: pathlib.Path,
+) -> None:
+    old_path = _write_log(tmp_path, "old.log", _old_good_log())
+    new_path = _write_log(
+        tmp_path,
+        "new.log",
+        [
+            "U-Boot 2026.01-dirty",
+            "[Cohesix] Root console ready (type 'help' for commands)",
+            "[local-seat] usb keyboard unavailable detail=link-or-rc-not-ready",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=runtime-ring-submit status=busy "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+            "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+            "proof_gate=3 target_gate=10 next=command-ring-ready "
+            "blocker=xhci-ready detail=0x0201 result=0x03000001",
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(MODULE_PATH),
+            "--old",
+            str(old_path),
+            "--new",
+            str(new_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    fields = _parse_env(result.stdout)
+
+    assert result.returncode == 0
+    assert fields["NEW_USB_BLOCKER_SEEN"] == "yes"
+    assert fields["NEW_USB_BLOCKER"] == "runtime-ring-submit-busy"
 
 
 def test_latest_boot_slice_ignores_stale_good_prefix() -> None:

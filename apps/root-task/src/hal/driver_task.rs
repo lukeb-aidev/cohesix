@@ -1761,7 +1761,8 @@ const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING
 const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
 const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS * 32;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
-const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = 33_554_432;
+const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize =
+    DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS;
 
 #[cfg(feature = "kernel")]
 fn driver_task_shared_store_barrier() {
@@ -2698,6 +2699,11 @@ pub fn stage_driver_task_shared_payload(
         unsafe {
             core::ptr::copy_nonoverlapping(payload.as_ptr().add(copied), dst, chunk);
         }
+        let _ = crate::hal::cache::cache_clean(
+            sel4_sys::seL4_CapInitThreadVSpace,
+            root_ptr + page_offset,
+            chunk,
+        );
         copied = copied.saturating_add(chunk);
     }
     fence(Ordering::Release);
@@ -3198,12 +3204,11 @@ fn driver_task_ring_timeout_keeps_active(
     command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
 ) -> bool {
-    mode == DriverTaskRingCommandMode::NonBlocking
-        && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
-        && matches!(
-            command.aux0,
-            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
-        )
+    matches!(
+        mode,
+        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
+    ) && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX
 }
 
 #[cfg(feature = "kernel")]
@@ -6670,7 +6675,7 @@ mod tests {
             ),
             DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
         );
-        assert!(driver_task_ring_timeout_keeps_active(
+        assert!(!driver_task_ring_timeout_keeps_active(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             command,
             DriverTaskRingCommandMode::NonBlocking
@@ -6697,7 +6702,10 @@ mod tests {
             ),
             DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS
         );
-        assert!(DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS > 20_000_000);
+        assert_eq!(
+            DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS,
+            DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
+        );
         assert_eq!(
             driver_task_ring_attempt_limit(
                 USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
@@ -6711,16 +6719,12 @@ mod tests {
             command,
             DriverTaskRingCommandMode::NonBlocking
         ));
-        assert!(!driver_task_ring_timeout_keeps_active(
+        assert!(driver_task_ring_timeout_keeps_active(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             command,
             DriverTaskRingCommandMode::PromptSlice
         ));
         assert!(DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS > DRIVER_TASK_PROMPT_RING_ATTEMPTS);
-        assert!(
-            DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
-                < DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS
-        );
     }
 
     #[test]

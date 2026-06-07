@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
+// Purpose: Cohesix-owned USB xHCI support for Pi4 local-seat diagnostics.
 // Copyright 2026 Lukas Bower
 //! HID (Human Interface Device) support for keyboards and mice.
 //!
@@ -1121,8 +1121,11 @@ impl<H: Dma> HidDevice<H> {
     }
 
     fn next_free_report_buffer_index(&self, queued_reads: &[QueuedInterruptRead]) -> Option<usize> {
-        (0..self.report_bufs.len())
-            .find(|index| !queued_reads.iter().any(|queued| queued.buffer_index == *index))
+        (0..self.report_bufs.len()).find(|index| {
+            !queued_reads
+                .iter()
+                .any(|queued| queued.buffer_index == *index)
+        })
     }
 
     fn complete_interrupt_read(&self, trb_addr: u64) -> Option<usize> {
@@ -1588,15 +1591,16 @@ pub fn find_hid_interfaces(config_data: &[u8]) -> alloc::vec::Vec<(InterfaceDesc
 #[cfg(test)]
 mod tests {
     use super::{
-        KeyboardCompletionAction, KeyboardDecodeMode, KeyboardDecodeTransition,
-        KeyboardProtocolMode, BOOT_KEYBOARD_IDLE_DURATION, decode_keyboard_report_payload,
+        BOOT_KEYBOARD_IDLE_DURATION, HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH,
+        HID_LED_CONTROL_WAIT_SPINS, HidType, KeyboardCompletionAction, KeyboardDecodeMode,
+        KeyboardDecodeTransition, KeyboardProtocolMode, decode_keyboard_report_payload,
         decode_keyboard_report_payload_boot_compatible,
         decode_keyboard_report_payload_flexible_key_report, forced_keyboard_profile,
-        has_report_payload, keyboard_completion_action, keyboard_decode_transition,
-        keyboard_endpoint_id_matches, keyboard_payload_has_nonzero_outside_boot_window,
-        keyboard_payload_prefix, keyboard_report_payload_min_len, keyboard_usage_code_valid,
-        led, modifier, scancode, scancode_to_ascii, HidType, HID_LED_CONTROL_WAIT_SPINS,
-        HID_KEYBOARD_INTERRUPT_READ_QUEUE_DEPTH, interrupt_read_queue_depth,
+        has_report_payload, interrupt_read_queue_depth, keyboard_completion_action,
+        keyboard_decode_transition, keyboard_endpoint_id_matches,
+        keyboard_payload_has_nonzero_outside_boot_window, keyboard_payload_prefix,
+        keyboard_report_payload_min_len, keyboard_usage_code_valid, led, modifier, scancode,
+        scancode_to_ascii,
     };
     use crate::ring::completion;
 
@@ -1654,10 +1658,7 @@ mod tests {
         assert_eq!(led::NUM_LOCK, 0x01);
         assert_eq!(led::CAPS_LOCK, 0x02);
         assert_eq!(led::SCROLL_LOCK, 0x04);
-        assert_eq!(
-            led::NUM_LOCK | led::CAPS_LOCK | led::SCROLL_LOCK,
-            0x07
-        );
+        assert_eq!(led::NUM_LOCK | led::CAPS_LOCK | led::SCROLL_LOCK, 0x07);
         assert!(HID_LED_CONTROL_WAIT_SPINS < 20_000_000);
     }
 

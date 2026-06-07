@@ -168,9 +168,19 @@ def normalize_blocker(value: str) -> str:
 
 
 USB_DETAIL_BLOCKERS = {
+    "0x0201": "xhci-ready",
+    "0201": "xhci-ready",
+    "513": "xhci-ready",
     "0x0213": "address-device-failed",
     "0213": "address-device-failed",
     "531": "address-device-failed",
+}
+
+USB_BLOCKER_RANK = {
+    "runtime-ring-submit-busy": 100,
+    "address-device-failed": 90,
+    "xhci-ready": 80,
+    "link-or-rc-not-ready": 10,
 }
 
 WIFI_DETAIL_BLOCKERS = {
@@ -189,6 +199,12 @@ def normalized_detail_blocker(
     if detail is None:
         return None
     return mapping.get(detail.strip().lower())
+
+
+def usb_blocker_rank(blocker: str) -> int:
+    """Return comparison priority for USB blockers."""
+
+    return USB_BLOCKER_RANK.get(normalize_blocker(blocker), 50)
 
 
 @dataclass
@@ -461,8 +477,15 @@ def update_usb(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         )
     ):
         summary.usb_first_byte_seen = True
+    ring_submit_blocker = (
+        "runtime-ring-submit-busy"
+        if fields.get("stage") == "runtime-ring-submit"
+        and fields.get("status") == "busy"
+        else None
+    )
     structured_blocker = first_non_none(
         (
+            ring_submit_blocker,
             fields.get("blocker"),
             normalized_detail_blocker(fields, USB_DETAIL_BLOCKERS),
         )
@@ -484,11 +507,17 @@ def update_usb(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         or "no-reply" in blocker
         or "pcie-vl805" in blocker
         or "address-device" in blocker
+        or "xhci-ready" in blocker
+        or "runtime-ring-submit" in blocker
+        or "busy" in blocker
         or "failed" in blocker
     ):
         summary.usb_blocker_seen = True
-        if summary.usb_blocker == "none" or structured_blocker != "none":
-            summary.usb_blocker = normalize_blocker(blocker)
+        candidate = normalize_blocker(blocker)
+        if summary.usb_blocker == "none" or usb_blocker_rank(
+            candidate
+        ) > usb_blocker_rank(summary.usb_blocker):
+            summary.usb_blocker = candidate
 
 
 def update_wifi(summary: LogSummary, line: str, fields: dict[str, str]) -> None:

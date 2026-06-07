@@ -89,6 +89,7 @@ def parse_root_task_manifest_subset(text: str) -> dict[str, object]:
 def check_feature_bundles(errors: list[str]) -> None:
     cargo = load_root_task_cargo()
     features = cargo["features"]
+    old_usb_dependency = "usb" + "-oxide"
     require_feature(
         errors,
         features,
@@ -110,10 +111,14 @@ def check_feature_bundles(errors: list[str]) -> None:
     )
     require_feature(errors, features, "driver-tests-qemu", {"release-qemu"})
     require_feature(errors, features, "driver-tests-pi4", {"release-pi4"})
-    require_feature(errors, features, "usb", {"dep:usb-oxide"})
-    usb_oxide = cargo["dependencies"].get("usb-oxide", {})
-    if not isinstance(usb_oxide, dict) or not usb_oxide.get("optional"):
-        errors.append("apps/root-task/Cargo.toml: `usb-oxide` must be optional behind `usb`")
+    require_feature(errors, features, "usb", {"dep:cohesix-usb"})
+    cohesix_usb = cargo["dependencies"].get("cohesix-usb", {})
+    if not isinstance(cohesix_usb, dict) or not cohesix_usb.get("optional"):
+        errors.append("apps/root-task/Cargo.toml: `cohesix-usb` must stay optional")
+    if f"dep:{old_usb_dependency}" in set(features.get("usb", [])):
+        errors.append("apps/root-task/Cargo.toml: old USB package must not be selected")
+    if old_usb_dependency in cargo["dependencies"]:
+        errors.append("apps/root-task/Cargo.toml: old USB package must not be a dependency")
     if "net-backend-virtio" in set(features.get("release-pi4", [])):
         errors.append("apps/root-task/Cargo.toml: `release-pi4` must not select QEMU VirtIO")
 
@@ -251,6 +256,13 @@ def main() -> int:
             "pi4_pcie_dma_window_uses_linux_captured_bcm2711_dma_range",
             "pi4_xhci_dma_policy_never_tries_raw_phys_after_pcie_alias",
             "xhci_high_bar_runtime_runs_polling_only",
+        ],
+        "apps/pi4-driver-runtime/src/lib.rs": [
+            "usb_keyboard_payload_decoder_matches_former_hid_broad_layouts",
+            "usb_keyboard_interrupt_trbs_request_bounded_endpoint_packet_len",
+            "usb_command_wait_can_preserve_keyboard_transfer_event",
+            "usb_hub_topology_helpers_encode_route_tt_and_speed",
+            "usb_runtime_uses_pcie_owner_ring_for_posted_write_flushes",
         ],
         "apps/root-task/src/serial/mod.rs": [
             "poll_io_obeys_driver_task_budget",

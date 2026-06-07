@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
+// Purpose: Cohesix-owned USB xHCI support for Pi4 local-seat diagnostics.
 // Copyright 2026 Lukas Bower
 //! Bare-metal lightweight xHCI/USB stack for OS development.
 //!

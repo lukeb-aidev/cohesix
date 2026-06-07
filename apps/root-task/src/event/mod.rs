@@ -6477,10 +6477,13 @@ where
             self.emit_console_line(fault_line.as_str());
             if let Some(owner_fault) = owner_fault {
                 let cmd53 = format_message(format_args!(
-                    "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} target=0x{:08x} len={} increment={} block_mode={} mode={} op={} source=owner-terminal",
+                    "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} len={} increment={} block_mode={} mode={} op={} source=owner-terminal",
                     owner_fault.function,
                     owner_fault.addr,
                     owner_fault.target_addr,
+                    owner_fault.effective_target,
+                    owner_fault.chunk_offset,
+                    owner_fault.payload_offset,
                     owner_fault.len,
                     Self::yes_no(owner_fault.increment),
                     Self::yes_no(owner_fault.block_mode),
@@ -6489,10 +6492,11 @@ where
                 ));
                 self.emit_console_line(cmd53.as_str());
                 let status = format_message(format_args!(
-                    "wifi: evidence sdio_status descriptor_status={} transfer_stage={} transfer_status=0x{:06x} r5=0x{:04x} retry={} host=0x{:02x} clock=0x{:04x}",
+                    "wifi: evidence sdio_status descriptor_status={} transfer_stage={} transfer_status=0x{:06x} transfer_reason={} r5=0x{:04x} retry={} host=0x{:02x} clock=0x{:04x}",
                     owner_fault.reason,
                     owner_fault.transfer_stage,
                     owner_fault.transfer_status,
+                    owner_fault.transfer_reason,
                     owner_fault.r5,
                     owner_fault.retry,
                     owner_fault.host_control,
@@ -6500,7 +6504,9 @@ where
                 ));
                 self.emit_console_line(status.as_str());
                 let payload = format_message(format_args!(
-                    "wifi: evidence sdio_payload first=0x{:02x} last=0x{:02x} xor=0x{:02x} sum=0x{:08x} owner_window={}",
+                    "wifi: evidence sdio_payload chunk_off={} payload_off={} first=0x{:02x} last=0x{:02x} xor=0x{:02x} sum=0x{:08x} owner_window={}",
+                    owner_fault.chunk_offset,
+                    owner_fault.payload_offset,
                     owner_fault.payload_first,
                     owner_fault.payload_last,
                     owner_fault.payload_xor,
@@ -6526,8 +6532,8 @@ where
             };
         }
         let boundary = format_message(format_args!(
-            "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain={} proof_gate={} frontier_gate={} failing_gate={} target_gate=10",
-            active_blocker, proof_gate, reported_proof_gate, failing_gate,
+            "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain={} direct_proof_gate={} proof_gate={} frontier_gate={} failing_gate={} target_gate=10",
+            active_blocker, proof_gate, reported_proof_gate, reported_proof_gate, failing_gate,
         ));
         self.emit_console_line(boundary.as_str());
         let next = format_message(format_args!(

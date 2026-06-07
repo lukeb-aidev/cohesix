@@ -6470,14 +6470,15 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 ```
 Title/ID: m26b-usb-driver-task
 Goal: Move Pi 4 xHCI/HID keyboard service behind the realtime USB driver-task contract.
-Inputs: apps/root-task/src/local_seat_pi4.rs, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, third_party/usb-oxide/src/{xhci.rs,hid.rs,ram.rs}, apps/root-task/src/event/*, docs/DRIVERS.md.
+Inputs: apps/root-task/src/local_seat_pi4.rs, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, crates/cohesix-usb/src/{xhci.rs,hid.rs,ram.rs}, apps/root-task/src/event/*, docs/DRIVERS.md.
 Changes:
   - apps/root-task/src/local_seat_pi4.rs — route xHCI/HID polling and keyboard-byte publication through `driver-usb`.
   - apps/pi4-driver-runtime/src/lib.rs — own the direct-root-port xHCI command/event/EP0/interrupt-IN rings, root-port reset, slot/address/configuration, HID boot-protocol setup, and DMA report polling in the linked USB runtime.
-  - third_party/usb-oxide/src/* — add budget-aware poll entrypoints that yield cleanly without losing queued keyboard state.
+  - crates/cohesix-usb/src/* — retain the Cohesix-owned root-task local-seat compatibility/diagnostic USB implementation without any external USB stack dependency.
   - apps/root-task/src/event/* — consume bounded local-seat byte events and preserve USB priority over serial dispatch and all network work.
 Commands:
-  - cargo test --manifest-path third_party/usb-oxide/Cargo.toml --lib
+  - cargo test -p cohesix-usb --lib
+  - cargo test -p pi4-driver-runtime --lib -- --test-threads=1
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::tests
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests

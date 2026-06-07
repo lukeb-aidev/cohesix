@@ -1,5 +1,5 @@
 // Author: Lukas Bower
-// Purpose: Vendored usb-oxide source with Cohesix-specific timeout hardening for Pi4 local-seat initialization.
+// Purpose: Cohesix-owned USB xHCI support for Pi4 local-seat diagnostics.
 // Copyright 2026 Lukas Bower
 //! USB device abstraction and context structures.
 
@@ -1999,12 +1999,8 @@ impl<H: Dma> UsbDevice<H> {
         };
         let setup_trb_addr = ep0_ring.try_enqueue(host, setup_trb)?;
 
-        let data_bus = data_buf.share_range_for_device(
-            host,
-            offset,
-            data_len,
-            "xhci-control-out-prealloc",
-        )?;
+        let data_bus =
+            data_buf.share_range_for_device(host, offset, data_len, "xhci-control-out-prealloc")?;
         let data_trb = Trb {
             param: data_bus,
             status: setup.length as u32,
@@ -2019,7 +2015,8 @@ impl<H: Dma> UsbDevice<H> {
         };
         let status_trb_addr = ep0_ring.try_enqueue(host, status_trb)?;
         ep0_ring.sync_for_device(host, "xhci-ep0-ring-submit")?;
-        self.ctrl.emit_diag(0x03a4, setup_trb_addr, data_trb_addr, status_trb_addr);
+        self.ctrl
+            .emit_diag(0x03a4, setup_trb_addr, data_trb_addr, status_trb_addr);
 
         drop(ep0_ring);
         self.ctrl.ring_doorbell(self.slot_id, 1)?;

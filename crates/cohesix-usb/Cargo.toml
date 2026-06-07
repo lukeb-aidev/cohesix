@@ -1,0 +1,16 @@
+# Author: Lukas Bower
+# Purpose: Configure the Cohesix-owned no_std USB xHCI support crate.
+# Copyright 2026 Lukas Bower
+
+[package]
+name = "cohesix-usb"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "cohesix_usb"
+path = "src/lib.rs"
+
+[dependencies]
+spin = "0.10.0"

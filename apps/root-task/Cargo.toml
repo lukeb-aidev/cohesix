@@ -72,7 +72,7 @@ timers-arch-counter = []
 timer-trace = []
 cap-probes = []   # gate experimental cap ops (tests/bench only)
 net = []
-usb = ["dep:usb-oxide"]
+usb = ["dep:cohesix-usb"]
 control-trace = []
 canonical_cspace = ["kernel"]
 bootstrap-minimal = []
@@ -143,7 +143,7 @@ trace-model = { path = "../../crates/trace-model" }
 cohesix-net-constants = { workspace = true }
 cohsh-core = { workspace = true }
 font8x8 = { version = "0.3.1", default-features = false }
-usb-oxide = { version = "0.2.1", optional = true }
+cohesix-usb = { path = "../../crates/cohesix-usb", optional = true }
 [dependencies.sel4-sys]
 version = "0.0.28"
 optional = true

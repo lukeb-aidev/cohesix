@@ -64,8 +64,9 @@ Use this order when sources disagree:
    `apps/root-task/src/hal/dma.rs`, `apps/root-task/src/hal/cache.rs`,
    `apps/root-task/src/hal/bcmgenet.rs`, `apps/root-task/src/hal/pi4_wifi.rs`,
    `apps/root-task/src/hal/pi4_pcie.rs`, `apps/root-task/src/sel4.rs`,
-   `apps/root-task/src/local_seat_pi4.rs`, and
-   `third_party/usb-oxide/src/xhci.rs`.
+   `apps/root-task/src/local_seat_pi4.rs`,
+   `apps/pi4-driver-runtime/src/lib.rs`, and the Cohesix-owned
+   `crates/cohesix-usb/src/xhci.rs` compatibility implementation.
 4. Cohesix normative docs: `AGENTS.md`, `docs/BUILD_PLAN.md`,
    `docs/HARDWARE_BRINGUP.md`, `docs/ARCHITECTURE.md`,
    `docs/INTERFACES.md`, and `docs/SECURITY.md`.
@@ -107,6 +108,12 @@ Use this order when sources disagree:
 Linux, U-Boot, OpenBSD, and WHD are design references only. They may define
 probe order, register contracts, recovery ladders, and expected evidence, but
 their source code must not be copied into Cohesix.
+
+The USB implementation is fully in-tree. The `usb` Cargo feature selects the
+internal `cohesix-usb` crate; there is no external or `third_party` USB stack
+dependency. Any reintroduction of an external USB package, generated Cargo patch,
+or documentation path outside the workspace-owned USB crates is driver-model
+drift and must be fixed in the same change.
 
 ## seL4 Driver Model
 
@@ -1768,12 +1775,13 @@ active path is Cohesix-owned cold start:
   match transfer events back to the submitted transfer TRB before decoding that
   DMA buffer; a single read requeued only after the next event-loop turn can miss
   fast press/release transitions during console-output stalls.
-  `usb-oxide` therefore preallocates a dedicated one-byte HID output-report DMA
-  buffer during keyboard attach and uses it for Caps Lock, Num Lock, and Scroll
-  Lock `SET_REPORT(Output)` updates after the seal. LED sync is optional: if a
-  keyboard stalls, rejects, or times out the output report, Cohesix logs that
-  the LED path is unavailable, disables later LED writes for that keyboard, and
-  keeps the software lock state and normal input path running.
+  The linked USB runtime therefore reserves a dedicated one-byte HID
+  output-report DMA slot during keyboard attach and uses it for Caps Lock, Num
+  Lock, and Scroll Lock `SET_REPORT(Output)` updates after the seal. LED sync is
+  optional: if a keyboard stalls, rejects, or times out the output report,
+  Cohesix logs that the LED path is unavailable, disables later LED writes for
+  that keyboard, and keeps the software lock state and normal input path
+  running.
 - Root-port reset before Address Device follows the U-Boot retry envelope:
   retry reset/enable timeouts up to five attempts with a short first settle and
   longer subsequent settles, but do not synthesize a device when live root-port
@@ -2064,6 +2072,17 @@ frame path are proven independently.
 
 Required Cohesix shape:
 
+- The active Pi 4 USB acceptance path is the linked `pi4-driver-usb` runtime in
+  `apps/pi4-driver-runtime/src/lib.rs`. It owns the direct-root-port xHCI command
+  ring, event ring, EP0 control path, interrupt-IN keyboard queue, DMA report
+  buffers, HID decode, and local-seat first-byte publication under the
+  driver-task contract.
+- `crates/cohesix-usb` is a Cohesix-owned no-`std` USB/xHCI support crate used by
+  root-task local-seat compatibility diagnostics and policy tests. It may provide
+  xHCI, descriptor, hub, HID, LED, and MSC functionality, but it is not an
+  external dependency and it does not close Pi 4 driver-task acceptance by
+  itself. Hardware acceptance requires linked-runtime owner-state proof plus the
+  USB 10-gate evidence below.
 - PCIe root-complex and VL805 BAR/COMMAND proof belongs to HAL.
 - Bootloader stop-state evidence is diagnostic. Current Pi 4 USB profiles have
   no xHCI ownership handoff opt-in; stop-state, preserve-state, and U-Boot
@@ -2093,6 +2112,10 @@ Required Cohesix shape:
   non-zero report bytes emits `0x0416 tag=usb-hid-report-flexible-key-fallback`
   before decoding via the flexible path, so Gate 9 failures stay attributable to
   report decoding instead of being misread as HAL/DMA/MMIO or SDIO contention.
+  The linked runtime requests a bounded endpoint-packet report buffer, sizes the
+  decoded payload from the xHCI transfer event's remaining-length field, accepts
+  report-ID-prefixed, compact, and bitmap keyboard payloads, and invalidates the
+  whole requested DMA range before decoding.
 - USB keyboard input is a distinct local-seat physical-console source, not a
   UART alias. The event pump clears an unfinished UART line when USB keyboard
   bytes arrive and defers concurrent UART command dispatch until the next
@@ -2154,11 +2177,23 @@ Cohesix has two release driver targets:
   seat, GENETv5, CYW43455 Wi-Fi, USB, PCIe/VL805, SDIO, MMIO, and
   cache-maintained DMA.
 
-Both release bundles include TCP and USB; the `usb` feature owns the
-`usb-oxide` dependency so USB cannot silently disappear from a release-target
-compile. Do not test driver changes with ad hoc feature strings when the target
-bundle applies. Use the focused aliases:
+Both release bundles include TCP and USB. The active Pi 4 USB acceptance path is
+the linked runtime in `apps/pi4-driver-runtime/src/lib.rs`; remaining root-task
+local-seat compatibility code lives in the internal `cohesix-usb` crate. Release
+proof comes from runtime parity tests plus root-task local-seat diagnostics. Do
+not test driver changes with ad hoc feature strings when the target bundle
+applies. Use the focused aliases:
 
+- `cargo test -p cohesix-usb --lib`
+  covers the internal no-`std` xHCI/USB support crate used by root-task
+  compatibility diagnostics: controller setup, command/event rings, descriptors,
+  hubs, HID report decode, keyboard LED output reports, MSC helpers, and bounded
+  Pi 4 xHCI policy.
+- `cargo test -p pi4-driver-runtime --lib -- --test-threads=1`
+  covers the linked Pi 4 runtime implementation for USB, SDIO/CYW43, HDMI,
+  serial, and GENET. USB-specific coverage includes the driver-task xHCI
+  command/event/EP0/interrupt-IN path, posted-write owner-link flushes, HID
+  report buffering/decoding, and keyboard publication.
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib`
   is not the staged command because it runs unrelated root-task tests too; use
   the focused filters below instead.
@@ -2240,6 +2275,8 @@ Changes:
 Commands:
   - rg -n "ARCH_AARCH64|PLAT_|ARM_GIC|SMMU|AARCH64_USER_CACHE|IRQ" seL4/build/kernel/gen_config/kernel/gen_config.yaml seL4/build/kernel/gen_headers/plat/platform_gen.h
   - python3 scripts/ci/check_driver_test_coverage.py
+  - cargo test -p cohesix-usb --lib
+  - cargo test -p pi4-driver-runtime --lib -- --test-threads=1
   - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::rtl8139
   - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::virtio
   - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci

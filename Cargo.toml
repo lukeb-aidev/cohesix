@@ -40,13 +40,11 @@ members = [
     "crates/sel4-panicking",
     "crates/sel4-runtime",
     "crates/sel4-sys",
+    "crates/cohesix-usb",
     "crates/net-constants",
     "tools/coh-rtc",
     "tools/security-nist",
     "tests",
-]
-exclude = [
-    "third_party/usb-oxide",
 ]
 resolver = "2"
 
@@ -89,4 +87,3 @@ pi4-driver-abi = { path = "crates/pi4-driver-abi" }
 
 [patch.crates-io]
 sel4-sys = { path = "crates/sel4-sys" }
-usb-oxide = { path = "third_party/usb-oxide" }

@@ -76,7 +76,10 @@ release bundles are the supported target configurations when using
 `release-qemu`. Focused driver validation uses `driver-tests-qemu` and
 `driver-tests-pi4` so the two target surfaces can be tested without ad hoc
 feature strings. Both release bundles include TCP and the `usb` feature, which
-selects the `usb-oxide` dependency.
+selects the internal `cohesix-usb` crate for root-task local-seat compatibility
+diagnostics. Active Pi 4 USB acceptance still comes from the linked
+`pi4-driver-usb` runtime and its owner-state proof, not from compatibility code
+alone.
 
 ## Event Pump Overview
 

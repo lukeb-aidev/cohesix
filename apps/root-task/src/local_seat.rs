@@ -620,6 +620,16 @@ const fn linked_local_seat_usb_attach_probe_required(
     !controller_attached || (enumeration_pending && !keyboard_ready)
 }
 
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn linked_local_seat_usb_pre_prompt_retry_deferred(
+    controller_attached: bool,
+    keyboard_ready: bool,
+    enumeration_pending: bool,
+    root_console_ready: bool,
+) -> bool {
+    controller_attached && enumeration_pending && !keyboard_ready && !root_console_ready
+}
+
 /// Deterministic local-seat initialisation outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalSeatInit {
@@ -1595,6 +1605,16 @@ impl LocalSeatRuntime {
                 let keyboard_ready = LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire);
                 let enumeration_pending =
                     LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire);
+                if linked_local_seat_usb_pre_prompt_retry_deferred(
+                    controller_attached,
+                    keyboard_ready,
+                    enumeration_pending,
+                    self.root_console_ready,
+                ) {
+                    self.refresh_usb_owner_record();
+                    self.refresh_hdmi_owner_record();
+                    return;
+                }
                 if linked_local_seat_usb_attach_probe_required(
                     controller_attached,
                     keyboard_ready,
@@ -2662,6 +2682,7 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
         crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
         display_runtime_ring_service_driver_task,
     );
+    let mut usb_enumeration_no_reply = false;
     if !LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire) {
         let _ = crate::hal::driver_task::register_pi4_bus_ring_service(
             crate::hal::driver_task::PCIE_ROOT_DRIVER_TASK_CONTRACT,
@@ -2880,6 +2901,7 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                     usb_command,
                     root_console_ready,
                 );
+                let resume_replied = resume_completion.is_some();
                 if let Some(completion) = resume_completion {
                     if local_seat_usb_keyboard_init_ready(Some(completion)) {
                         publish_local_seat_usb_keyboard_ready(usb_contract, completion);
@@ -2896,6 +2918,10 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                     local_seat_usb_keyboard_enum_status(resume_completion),
                     resume_completion,
                 );
+                if !resume_replied {
+                    usb_enumeration_no_reply = true;
+                    break;
+                }
                 if local_seat_usb_engine_init_ready(resume_completion) {
                     usb_completion = resume_completion;
                     usb_controller_ready = true;
@@ -2968,6 +2994,9 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
         } else {
             return false;
         }
+    }
+    if usb_enumeration_no_reply && !root_console_ready {
+        return LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire);
     }
     if LINKED_LOCAL_SEAT_RUNTIME_ATTACHED.load(Ordering::Acquire)
         && !LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
@@ -4663,6 +4692,23 @@ mod tests {
     #[test]
     fn linked_usb_enumeration_resume_remains_bounded_per_retry() {
         assert!((1..=3).contains(&LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn linked_usb_pending_enumeration_defers_retry_until_prompt() {
+        assert!(linked_local_seat_usb_pre_prompt_retry_deferred(
+            true, false, true, false
+        ));
+        assert!(!linked_local_seat_usb_pre_prompt_retry_deferred(
+            true, false, true, true
+        ));
+        assert!(!linked_local_seat_usb_pre_prompt_retry_deferred(
+            false, false, true, false
+        ));
+        assert!(!linked_local_seat_usb_pre_prompt_retry_deferred(
+            true, true, true, false
+        ));
     }
 
     #[test]
