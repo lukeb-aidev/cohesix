@@ -12,8 +12,6 @@
 
 #![allow(unsafe_code)]
 
-#[cfg(feature = "kernel")]
-use core::sync::atomic::AtomicBool;
 use core::sync::atomic::{AtomicU64, Ordering};
 #[cfg(feature = "kernel")]
 use core::{
@@ -25,9 +23,6 @@ use core::{
 pub mod cache;
 
 pub mod driver_task;
-
-#[cfg(feature = "kernel")]
-pub mod bcmgenet;
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod dma;
@@ -45,8 +40,6 @@ pub mod virtio_mmio;
 
 #[cfg(feature = "kernel")]
 use crate::affinity::{self, DriverAffinityTarget};
-#[cfg(feature = "kernel")]
-use crate::drivers::cyw43;
 #[cfg(feature = "kernel")]
 use crate::hal::driver_task::{
     DriverTaskBootstrapReport, DriverTaskContract, DriverTaskContractError, DriverTaskRuntimeProof,
@@ -1250,12 +1243,6 @@ impl<T> Hardware for T where T: PciHal + Cyw43Hal {}
 #[cfg(feature = "kernel")]
 pub struct KernelHal<'a> {
     env: KernelEnv<'a>,
-    #[cfg(not(all(
-        target_arch = "aarch64",
-        target_os = "none",
-        not(feature = "net-backend-virtio")
-    )))]
-    pi4_wifi: Option<pi4_wifi::Pi4WifiState>,
     driver_tasks: heapless::Vec<KernelDriverTaskHandle, MAX_KERNEL_DRIVER_TASKS>,
     driver_task_report: DriverTaskBootstrapReport,
 }
@@ -2330,31 +2317,12 @@ pub struct KernelWifiDebugHandle {
 }
 
 #[cfg(feature = "kernel")]
-static WIFI_DEBUG_HAL_BORROWED: AtomicBool = AtomicBool::new(false);
-
-#[cfg(feature = "kernel")]
-struct KernelWifiDebugBorrow;
-
-#[cfg(feature = "kernel")]
-impl Drop for KernelWifiDebugBorrow {
-    fn drop(&mut self) {
-        WIFI_DEBUG_HAL_BORROWED.store(false, Ordering::Release);
-    }
-}
-
-#[cfg(feature = "kernel")]
 impl<'a> KernelHal<'a> {
     /// Construct a new HAL instance wrapping the supplied [`KernelEnv`].
     #[must_use]
     pub fn new(env: KernelEnv<'a>) -> Self {
         Self {
             env,
-            #[cfg(not(all(
-                target_arch = "aarch64",
-                target_os = "none",
-                not(feature = "net-backend-virtio")
-            )))]
-            pi4_wifi: None,
             driver_tasks: heapless::Vec::new(),
             driver_task_report: DriverTaskBootstrapReport::default(),
         }
@@ -3877,32 +3845,6 @@ impl<'a> KernelHal<'a> {
             Err(HalError::Sel4(first_error))
         }
     }
-
-    fn pi4_wifi_state(&mut self) -> Result<&mut pi4_wifi::Pi4WifiState, HalError> {
-        #[cfg(all(
-            target_arch = "aarch64",
-            target_os = "none",
-            not(feature = "net-backend-virtio")
-        ))]
-        {
-            return Err(HalError::Unsupported(
-                "pi4-wifi-driver-task-runtime-required",
-            ));
-        }
-        #[cfg(not(all(
-            target_arch = "aarch64",
-            target_os = "none",
-            not(feature = "net-backend-virtio")
-        )))]
-        {
-            if self.pi4_wifi.is_none() {
-                self.pi4_wifi = Some(pi4_wifi::Pi4WifiState::new(self)?);
-            }
-            self.pi4_wifi
-                .as_mut()
-                .ok_or(HalError::Unsupported("pi4-wifi-state"))
-        }
-    }
 }
 
 #[cfg(feature = "kernel")]
@@ -3916,79 +3858,43 @@ impl KernelWifiDebugHandle {
         }
     }
 
-    fn borrow_hal(&mut self) -> Result<KernelWifiDebugBorrow, HalError> {
+    fn linked_runtime_required(&self) -> HalError {
         if self.hal_ptr == 0 {
-            return Err(HalError::Unsupported("wifi-debug-handle"));
+            HalError::Unsupported("wifi-debug-handle")
+        } else {
+            HalError::Unsupported("pi4-wifi-driver-task-runtime-required")
         }
-        WIFI_DEBUG_HAL_BORROWED
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| KernelWifiDebugBorrow)
-            .map_err(|_| HalError::Unsupported("wifi-debug-handle-busy"))
-    }
-
-    #[allow(unsafe_code)]
-    fn with_hal<R>(
-        &mut self,
-        f: impl FnOnce(&mut KernelHal<'static>) -> Result<R, HalError>,
-    ) -> Result<R, HalError> {
-        let _borrow = self.borrow_hal()?;
-        // SAFETY: `hal_ptr` is derived from the leaked bootstrap `KernelHal`
-        // and remains valid for the process lifetime. `borrow_hal` enforces that
-        // only one Wi-Fi debug turn materializes a mutable HAL reference at a
-        // time; the root event loop remains the owner of when this adapter runs.
-        let hal = unsafe { &mut *(self.hal_ptr as *mut KernelHal<'static>) };
-        f(hal)
     }
 }
 
 #[cfg(feature = "kernel")]
 impl WifiDebugOps for KernelWifiDebugHandle {
-    fn dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
-        self.with_hal(|hal| hal.pi4_wifi_state()?.debug_dump_state(stage))
+    fn dump_state(&mut self, _stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
+        Err(self.linked_runtime_required())
     }
 
     fn firmware_contract_trace(&mut self) -> Option<WifiFirmwareContractTrace> {
-        self.with_hal(|hal| {
-            hal.pi4_wifi_state()
-                .map(|state| state.debug_firmware_contract_trace())
-        })
-        .ok()
+        None
     }
 
     fn sdhci_contract_trace(&mut self) -> Option<WifiSdhciContractTrace> {
-        self.with_hal(|hal| {
-            hal.pi4_wifi_state()
-                .map(|state| state.debug_sdhci_contract_trace())
-        })
-        .ok()
+        None
     }
 
     fn control_plane_trace(&mut self) -> Option<WifiControlPlaneTrace> {
-        self.with_hal(|hal| {
-            hal.pi4_wifi_state()
-                .map(|state| state.debug_control_plane_trace())
-        })
-        .ok()
+        None
     }
 
     fn probe_ht_clock(&mut self) -> Result<bool, HalError> {
-        self.with_hal(|hal| hal.pi4_wifi_state()?.debug_probe_ht_clock())
+        Err(self.linked_runtime_required())
     }
 
     fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
-        self.with_hal(|hal| {
-            let state = hal.pi4_wifi_state()?;
-            cyw43::debug_load_firmware_from_transport(state)?;
-            state.debug_dump_state("console-load-fw")
-        })
+        Err(self.linked_runtime_required())
     }
 
     fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
-        self.with_hal(|hal| {
-            let state = hal.pi4_wifi_state()?;
-            cyw43::debug_retry_transport_and_firmware(state)?;
-            state.debug_dump_state("console-retry")
-        })
+        Err(self.linked_runtime_required())
     }
 }
 
@@ -4059,88 +3965,12 @@ impl<'a> PciHal for KernelHal<'a> {
 #[cfg(feature = "kernel")]
 impl<'a> Cyw43Hal for KernelHal<'a> {
     fn wifi_firmware_bundle(&self) -> Result<WifiFirmwareBundle<'static>, Self::Error> {
-        #[cfg(all(
-            target_arch = "aarch64",
-            target_os = "none",
-            not(feature = "net-backend-virtio")
-        ))]
-        {
-            Ok(WifiFirmwareBundle::new(
-                pi4_wifi::PI4_WIFI_FIRMWARE,
-                pi4_wifi::PI4_WIFI_NVRAM,
-                Some(pi4_wifi::PI4_WIFI_CLM_BLOB),
-                pi4_wifi::PI4_WIFI_BOARD_TYPE,
-            ))
-        }
-        #[cfg(not(all(
-            target_arch = "aarch64",
-            target_os = "none",
-            not(feature = "net-backend-virtio")
-        )))]
-        {
-            Ok(self
-                .pi4_wifi
-                .as_ref()
-                .map(pi4_wifi::Pi4WifiState::firmware_bundle)
-                .unwrap_or_else(|| {
-                    WifiFirmwareBundle::new(
-                        pi4_wifi::PI4_WIFI_FIRMWARE,
-                        pi4_wifi::PI4_WIFI_NVRAM,
-                        Some(pi4_wifi::PI4_WIFI_CLM_BLOB),
-                        pi4_wifi::PI4_WIFI_BOARD_TYPE,
-                    )
-                }))
-        }
-    }
-
-    fn wifi_set_power(&mut self, state: WifiPowerState) -> Result<(), Self::Error> {
-        self.pi4_wifi_state()?.set_power(state)
-    }
-
-    fn wifi_set_reset(&mut self, state: WifiResetState) -> Result<(), Self::Error> {
-        self.pi4_wifi_state()?.set_reset(state)
-    }
-
-    fn sdio_reset_host(&mut self) -> Result<(), Self::Error> {
-        self.pi4_wifi_state()?.reset_host()
-    }
-
-    fn sdio_set_bus_width(&mut self, width: SdioBusWidth) -> Result<(), Self::Error> {
-        self.pi4_wifi_state()?.set_bus_width(width)
-    }
-
-    fn sdio_set_clock_hz(&mut self, target_hz: u32) -> Result<u32, Self::Error> {
-        self.pi4_wifi_state()?.set_clock_hz(target_hz)
-    }
-
-    fn sdio_io_direct_read(
-        &mut self,
-        function: SdioFunction,
-        addr: u32,
-    ) -> Result<u8, Self::Error> {
-        self.pi4_wifi_state()?.io_direct_read(function, addr)
-    }
-
-    fn sdio_io_direct_write(
-        &mut self,
-        function: SdioFunction,
-        addr: u32,
-        value: u8,
-    ) -> Result<(), Self::Error> {
-        self.pi4_wifi_state()?
-            .io_direct_write(function, addr, value)
-    }
-
-    fn sdio_io_extended(
-        &mut self,
-        function: SdioFunction,
-        addr: u32,
-        increment_addr: bool,
-        write: bool,
-        buffer: &mut [u8],
-    ) -> Result<(), Self::Error> {
-        self.pi4_wifi_state()?
-            .io_extended(function, addr, increment_addr, write, buffer)
+        Ok(WifiFirmwareBundle::new(
+            pi4_wifi::PI4_WIFI_FIRMWARE,
+            pi4_wifi::PI4_WIFI_NVRAM,
+            Some(pi4_wifi::PI4_WIFI_CLM_BLOB),
+            pi4_wifi::PI4_WIFI_BOARD_TYPE,
+        ))
     }
 }
 

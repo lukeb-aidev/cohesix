@@ -13502,7 +13502,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_retryable_firmware_command_restarts_linked_conservative_lane() {
+    fn cyw43_retryable_firmware_command_restarts_block_mode_ladder() {
         let mut state = Cyw43RuntimeState::new();
         state.firmware_byte_mode_fallback = true;
         state.firmware_narrow_byte_mode_fallback = true;
@@ -13511,9 +13511,9 @@ mod tests {
 
         cyw43_prepare_retryable_firmware_command(&mut state);
 
-        assert!(state.firmware_byte_mode_fallback);
-        assert!(state.firmware_narrow_byte_mode_fallback);
-        assert_eq!(state.firmware_retry_clock_index, 1);
+        assert!(!state.firmware_byte_mode_fallback);
+        assert!(!state.firmware_narrow_byte_mode_fallback);
+        assert_eq!(state.firmware_retry_clock_index, 0);
         assert!(!state.backplane_window_valid);
     }
 

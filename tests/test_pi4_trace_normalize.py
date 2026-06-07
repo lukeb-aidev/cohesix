@@ -4655,7 +4655,7 @@ def test_gate_summary_preserves_legacy_gmode_frontier_over_partial_hint_snapshot
     events = normalizer.parse_events(
         [
             "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=gmode action=fail err=cyw43 protocol error: ioctl-timeout",
             "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
             "exact=cyw43-control-plane-partial-hint-visibility",
@@ -4678,10 +4678,10 @@ def test_gate_summary_prefers_boot_control_plane_line_over_later_nettest() -> No
             "[pi4-wifi] firmware stage=control-plane-reply "
             "action=post-write-no-irq-terminal empty_poll=64/64 "
             "exact_error=",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=apsta-enable action=fail err=unsupported operation: "
             "cyw43-control-plane-hintless-firstread-no-irq",
-            "[WARN root_task::drivers::cyw43] [cyw43] init failure "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] init failure "
             "stage=cyw43-init-control-plane-fail err=unsupported operation: "
             "cyw43-control-plane-hintless-firstread-no-irq",
             "cohesix> nettest",
@@ -4703,8 +4703,8 @@ def test_gate_summary_tracks_wsec_pmk_bad_argument_over_stale_hint() -> None:
     events = normalizer.parse_events(
         [
             "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane step=join "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane step=join "
             "action=fail err=cyw43 ioctl 0x0000010c failed status=0xfffffffe",
             "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
             "exact=cyw43-control-plane-partial-hint-visibility",
@@ -4723,20 +4723,20 @@ def test_gate_summary_tracks_wsec_pmk_bad_argument_after_supplicant_fallbacks() 
     events = normalizer.parse_events(
         [
             "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
-            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join: firmware-supplicant "
             "path=primary-plain unsupported status=0xffffffe9 action=try-bsscfg-wrapper "
             "reason=known-good-cyw43-fwsup-shape",
-            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join: firmware-supplicant "
             "path=bsscfg-wrapper unsupported status=0xffffffe9 "
             "action=continue-host-eapol-required reason=firmware-offload-unavailable",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane reply "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane reply "
             "cmd=0x0000010c id=26 status=0xfffffffe response_len=0 copied=0",
-            "[WARN root_task::drivers::cyw43] [cyw43] join: linux-pmk rejected "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join: linux-pmk rejected "
             "action=retry-legacy-hex-pmk status=0xfffffffe",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane reply "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane reply "
             "cmd=0x0000010c id=27 status=0xfffffffe response_len=0 copied=0",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane step=join "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane step=join "
             "action=fail err=cyw43 ioctl 0x0000010c failed status=0xfffffffe",
             "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
             "exact=cyw43-control-plane-partial-hint-visibility",
@@ -4756,10 +4756,10 @@ def test_gate_summary_tracks_firmware_supplicant_unsupported_over_stale_hint() -
     events = normalizer.parse_events(
         [
             "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane reply "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=join action=begin",
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane reply "
             "cmd=0x00000107 id=31 status=0xffffffe9 response_len=0 copied=0",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane step=join "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane step=join "
             "action=fail err=cyw43 ioctl 0x00000107 failed status=0xffffffe9",
             "wifi: f2_state=linux-configured exact_error="
             "cyw43-control-plane-partial-hint-visibility",
@@ -4781,8 +4781,8 @@ def test_gate_summary_tracks_firmware_supplicant_unsupported_over_stale_hint() -
 def test_gate_summary_labels_direct_firmware_supplicant_failure_as_join_security() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
-            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join: firmware-supplicant "
             "path=primary-plain unsupported status=0xffffffe9 action=try-bsscfg-wrapper "
             "reason=known-good-cyw43-fwsup-shape",
         ]
@@ -4799,14 +4799,14 @@ def test_gate_summary_labels_direct_firmware_supplicant_failure_as_join_security
 def test_gate_summary_prefers_terminal_wrapper_supplicant_failure_line() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
-            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join: firmware-supplicant "
             "path=primary-plain unsupported status=0xffffffe9 action=try-bsscfg-wrapper "
             "reason=known-good-cyw43-fwsup-shape",
-            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join: firmware-supplicant "
             "path=bsscfg-wrapper unsupported status=0xffffffe9 action=fail-secure "
             "reason=host-eapol-supplicant-required",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane step=join "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane step=join "
             "action=fail err=cyw43 protocol error: firmware-supplicant-unsupported",
         ]
     )
@@ -4822,11 +4822,11 @@ def test_gate_summary_prefers_terminal_wrapper_supplicant_failure_line() -> None
 def test_gate_summary_reports_host_eapol_required_after_probe_join() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
-            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join: firmware-supplicant "
             "path=bsscfg-wrapper unsupported status=0xffffffe9 "
             "action=continue-host-eapol-required reason=firmware-offload-unavailable",
-            "[INFO root_task::drivers::cyw43] [cyw43] join pending mode=deferred "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] join pending mode=deferred "
             "polls=0 ssid_len=6 psk_len=12 secure=yes fwsup=no "
             "completion_rule=host-eapol-required",
         ]
@@ -4843,13 +4843,13 @@ def test_gate_summary_reports_host_eapol_required_after_probe_join() -> None:
 def test_gate_summary_reports_host_eapol_required_after_fail_closed_join_submit() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
-            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join: firmware-supplicant "
             "path=bsscfg-wrapper unsupported status=0xffffffe9 "
             "action=continue-host-eapol-required reason=firmware-offload-unavailable",
-            "[INFO root_task::drivers::cyw43] [cyw43] join request "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] join request "
             "path=primary-bsscfg:join action=ready ssid_len=12",
-            "[WARN root_task::drivers::cyw43] [cyw43] join failed "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join failed "
             "reason=host-eapol-required rx_poll=eapol-only dhcp=blocked tx=blocked "
             "mode=join-submit ssid_len=12 psk_len=12",
         ]
@@ -4866,25 +4866,25 @@ def test_gate_summary_reports_host_eapol_required_after_fail_closed_join_submit(
 def test_gate_summary_reports_host_eapol_required_after_proof_window() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=begin",
-            "[WARN root_task::drivers::cyw43] [cyw43] join: firmware-supplicant "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=join action=begin",
+            "[WARN root_task::drivers::driver_task_net] [cyw43] join: firmware-supplicant "
             "path=bsscfg-wrapper unsupported status=0xffffffe9 "
             "action=continue-host-eapol-required reason=firmware-offload-unavailable",
-            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol proof window "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] host-eapol proof window "
             "armed mode=join-submit polls=4608 pre_assoc_polls=512 "
             "post_assoc_polls=4096 rx_poll=eapol-only dhcp=blocked tx=blocked "
             "ssid_len=12 psk_len=12",
-            "[WARN root_task::drivers::cyw43] [cyw43] host-eapol proof count=1 "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] host-eapol proof count=1 "
             "msg=m1 len=117 eapol_ver=2 type=3 body_len=99 body_ok=yes "
             "key_desc=2 key_info=0x008a key_ver=2 pairwise=yes ack=yes "
             "mic=no install=no secure=no encrypted=no nonce=yes replay=yes "
             "kde_len=0 next_action=derive-ptk-send-m2 action=drop "
             "status=host-eapol-required",
-            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol proof window "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] host-eapol proof window "
             "result=eapol-seen mode=join-submit polls=92 assoc=link-up "
             "assoc_poll=88 post_assoc_polls=4 eapol_rx_delta=1 eapol_rx_total=1 "
             "events=2 control=0 empty_polls=89 action=continue-eapol-only-rx",
-            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol pending "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] host-eapol pending "
             "mode=join-submit status=wifi-host-eapol-pending assoc=yes "
             "rx=eapol-only data=blocked creds=12/12 eapol_rx=1 "
             "limit=60000 action=wait-m1",
@@ -4902,10 +4902,10 @@ def test_gate_summary_reports_host_eapol_required_after_proof_window() -> None:
 def test_gate_summary_preserves_live_host_eapol_pending_label() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol proof window "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] host-eapol proof window "
             "result=not-yet-seen mode=join-submit polls=16384 assoc=link-up "
             "eapol_rx_delta=0 eapol_rx_total=0 action=defer-eapol-only-rx",
-            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol pending "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] host-eapol pending "
             "mode=join-submit status=wifi-host-eapol-pending assoc=yes "
             "rx=eapol-only data=blocked creds=12/12 eapol_rx=0 "
             "limit=60000 action=wait-m1",
@@ -4924,10 +4924,10 @@ def test_gate_summary_preserves_live_host_eapol_pending_label() -> None:
 def test_gate_summary_preserves_host_eapol_required_over_deferred_eapol_start() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] join failed "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] join failed "
             "reason=host-eapol-required rx_poll=eapol-only dhcp=blocked tx=blocked "
             "mode=join-submit ssid_len=12 psk_len=12",
-            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] host-eapol "
             "action=eapol-start mode=deferred polls=2048 limit=60000",
         ]
     )
@@ -4944,12 +4944,12 @@ def test_gate_summary_preserves_host_eapol_after_ready_and_panic() -> None:
         [
             "[pi4-wifi] sdio irq bind irq=158 trigger=Level handler=3225 "
             "notification=3226 badge=159",
-            "[INFO root_task::drivers::cyw43] [cyw43] join pending mode=deferred "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] join pending mode=deferred "
             "polls=0 ssid_len=12 psk_len=12 secure=yes fwsup=no "
             "completion_rule=host-eapol-required",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=join action=ready",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane step=init-complete action=ready",
-            "[INFO root_task::drivers::cyw43] [cyw43] ready: mac=88-a2-9e-66-59-10 "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=join action=ready",
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane step=init-complete action=ready",
+            "[INFO root_task::drivers::driver_task_net] [cyw43] ready: mac=88-a2-9e-66-59-10 "
             "clock=41666666Hz bus_width=4 ioex=0x06",
             "[INFO root_task::net::stack] [net-console] cyw43455 device initialized: "
             "mac=88-a2-9e-66-59-10 interface=wifi bringup_status=wifi-host-eapol-required",
@@ -4974,7 +4974,7 @@ def test_gate_summary_tracks_bdc_event_over_stale_partial_hint_visibility() -> N
             "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
             "[pi4-wifi] firmware stage=control-plane-reply "
             "action=strict-frame-indicated-ready frame_len=12",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=clm-download action=fail err=cyw43 protocol error: bdc-event",
             "[pi4-wifi] control-plane snapshot cyw43-init-control-plane-fail "
             "diag f2=set/set/set blocker=interrupt-programming-drift",
@@ -5002,7 +5002,7 @@ def test_gate_summary_tracks_bdc_event_after_firmware_readback_warning() -> None
             "action=linux-f2-write-shape frame_len=1536",
             "[pi4-wifi] firmware stage=control-plane-reply "
             "action=post-write-hintless-firstread-ready frame_len=12",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=clm-download action=fail err=cyw43 protocol error: bdc-event",
             "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
             "exact=cyw43-control-plane-partial-hint-visibility",
@@ -5084,12 +5084,12 @@ def test_gate_summary_preserves_host_card_int_no_dongle_source_over_later_diag_s
             "iordy=0x06 irq_bound=true",
             "[local-seat] pi4 keyboard runtime proof result=online gate=10 "
             "source=first-byte",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "preinit step=mpc action=begin",
-            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] iovar set failed "
             "name=mpc err=unsupported operation: "
             "cyw43-control-plane-host-card-int-no-dongle-source",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "preinit step=mpc action=fail err=unsupported operation: "
             "cyw43-control-plane-host-card-int-no-dongle-source",
             "wifi: boot_failure source=live stage=cyw43-init-control-plane-fail "
@@ -5116,16 +5116,16 @@ def test_gate_summary_preserves_host_card_int_no_dongle_source_over_later_diag_s
 def test_gate_summary_treats_pre_mpc_bus_rxglom_disable_as_progress_not_rxglom_blocker() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=bus-rxglom-disable-bounded-rx action=begin",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane reply "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane reply "
             "cmd=0x00000107 id=10 status=0x00000000 response_len=15 "
             "copied=15 sdpcm_seq=10 sdpcm_credit=30",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=bus-rxglom-disable-bounded-rx action=ready",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "preinit step=mpc action=begin",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "preinit step=mpc action=fail err=unsupported operation: "
             "cyw43-control-plane-host-card-int-no-dongle-source",
         ]
@@ -5250,7 +5250,7 @@ def test_gate_summary_preserves_deferred_wifi_failure_over_root_wait() -> None:
 def test_gate_summary_preserves_cyw43_mac_length_failure() -> None:
     events = normalizer.parse_events(
         [
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=read-mac action=fail err=cyw43 protocol error: "
             "cur-etheraddr-len",
             "[net-console] deferred failed detail=cyw43 protocol error: "
@@ -5382,14 +5382,14 @@ def test_gate_summary_reports_post_join_programming_latch_loop_over_recovered_r5
             "phase=command-r5 resp=0x00009000 r5=0x8000",
             "[pi4-wifi] firmware stage=control-plane-reply "
             "action=strict-frame-indicated-ready frame_len=28",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "reply cmd=0x00000107 id=6 status=0x00000000 response_len=1420",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=up action=ready",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=gmode action=skip optional=yes "
             "reason=linux-station-path-does-not-set-legacy-gmode",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=begin",
             *[
                 "[pi4-wifi] sdio xfer chunk fn=1 op=read base=0x0c020 "
@@ -5418,11 +5418,11 @@ def test_gate_summary_reports_post_join_programming_latch_loop_over_recovered_r5
 def test_gate_summary_reports_primary_bsscfg_wrapper_join_security_loop() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "reply cmd=0x00000002 id=18 status=0x00000000 response_len=0",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=up action=ready",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=begin",
             "[pi4-wifi] firmware stage=control-plane-write "
             "action=linux-f2-write-shape frame_len=56",
@@ -5438,9 +5438,9 @@ def test_gate_summary_reports_primary_bsscfg_wrapper_join_security_loop() -> Non
                 "source_state=host-card-int-latch-only"
                 for _ in range(8)
             ],
-            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] iovar set failed "
             "name=bsscfg:wsec err=cyw43 protocol error: ioctl-timeout",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=fail err=cyw43 protocol error: ioctl-timeout",
         ]
     )
@@ -5457,11 +5457,11 @@ def test_gate_summary_reports_primary_bsscfg_wrapper_join_security_loop() -> Non
 def test_gate_summary_reports_bsscfg_supplicant_wrapper_join_security_loop() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=begin",
-            "[INFO root_task::drivers::cyw43] [cyw43] iovar set begin "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] iovar set begin "
             "name=bsscfg:sup_wpa len=8",
-            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] iovar set failed "
             "name=bsscfg:sup_wpa err=cyw43 protocol error: ioctl-no-progress-after-frame "
             "exact=cyw43-join-security-bsscfg-sup-wpa-loop",
         ]
@@ -5478,11 +5478,11 @@ def test_gate_summary_reports_bsscfg_supplicant_wrapper_join_security_loop() -> 
 def test_gate_summary_reports_wsec_first_join_security_loop() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "reply cmd=0x00000002 id=18 status=0x00000000 response_len=0",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=up action=ready",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=begin",
             "[pi4-wifi] firmware stage=control-plane-write "
             "action=linux-f2-write-shape frame_len=48",
@@ -5498,9 +5498,9 @@ def test_gate_summary_reports_wsec_first_join_security_loop() -> None:
                 "source_state=host-card-int-latch-only"
                 for _ in range(8)
             ],
-            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] iovar set failed "
             "name=wsec err=cyw43 protocol error: ioctl-timeout",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=fail err=cyw43 protocol error: ioctl-timeout",
         ]
     )
@@ -5517,14 +5517,14 @@ def test_gate_summary_reports_wsec_first_join_security_loop() -> None:
 def test_gate_summary_reports_runtime_rx_host_latch_spam_before_eapol() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=up action=ready",
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=begin",
-            "[INFO root_task::drivers::cyw43] [cyw43] join pending "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] join pending "
             "mode=deferred polls=0 ssid_len=12 psk_len=12 secure=yes "
             "completion_rule=host-eapol-required",
-            "[INFO root_task::drivers::cyw43] [cyw43] host-eapol "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] host-eapol "
             "poll mode=deferred polls=1 limit=60000 assoc=yes eapol_rx=0 "
             "eapol_start_sent=7 action=wait-m1",
             *[
@@ -5556,13 +5556,13 @@ def test_gate_summary_reports_runtime_rx_host_latch_spam_before_eapol() -> None:
 def test_gate_summary_reports_wpa_auth_initial_join_security_loop() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=begin",
-            "[INFO root_task::drivers::cyw43] [cyw43] iovar set begin "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] iovar set begin "
             "name=wpa_auth len=4",
             "[pi4-wifi] firmware stage=control-plane-write "
             "action=linux-f2-write-shape frame_len=52",
-            "[INFO root_task::drivers::cyw43] [cyw43] event type=54 "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] event type=54 "
             "flags=0x0000 status=0x00000000 reason=0x00000000 auth=0x00000000",
             *[
                 "[pi4-wifi] firmware stage=control-plane-reply "
@@ -5570,12 +5570,12 @@ def test_gate_summary_reports_wpa_auth_initial_join_security_loop() -> None:
                 "source=0x00000000 source_readable=y card_int=y progress=no"
                 for _ in range(8)
             ],
-            "[WARN root_task::drivers::cyw43] [cyw43] ioctl "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] ioctl "
             "no-progress-after-frame cmd=0x00000107 id=19 no_progress_polls=128 "
             "nonmatching_frames=1 cached_exact_error= action=fail-fast",
-            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] iovar set failed "
             "name=wpa_auth err=cyw43 protocol error: ioctl-no-progress-after-frame",
-            "[WARN root_task::drivers::cyw43] [cyw43] control-plane "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=fail err=cyw43 protocol error: ioctl-no-progress-after-frame",
         ]
     )
@@ -5592,18 +5592,18 @@ def test_gate_summary_reports_wpa_auth_initial_join_security_loop() -> None:
 def test_gate_summary_reports_wpa_auth_final_join_security_loop() -> None:
     events = normalizer.parse_events(
         [
-            "[INFO root_task::drivers::cyw43] [cyw43] control-plane "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "step=join action=begin",
-            "[INFO root_task::drivers::cyw43] [cyw43] iovar set begin "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] iovar set begin "
             "name=wpa_auth len=4",
-            "[INFO root_task::drivers::cyw43] [cyw43] iovar set ready "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] iovar set ready "
             "name=wpa_auth len=4",
-            "[INFO root_task::drivers::cyw43] [cyw43] iovar set begin "
+            "[INFO root_task::drivers::driver_task_net] [cyw43] iovar set begin "
             "name=wpa_auth len=4",
-            "[WARN root_task::drivers::cyw43] [cyw43] ioctl "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] ioctl "
             "no-progress-after-frame cmd=0x00000107 id=24 no_progress_polls=128 "
             "nonmatching_frames=1 cached_exact_error= action=fail-fast",
-            "[WARN root_task::drivers::cyw43] [cyw43] iovar set failed "
+            "[WARN root_task::drivers::driver_task_net] [cyw43] iovar set failed "
             "name=wpa_auth err=cyw43 protocol error: ioctl-no-progress-after-frame",
         ]
     )

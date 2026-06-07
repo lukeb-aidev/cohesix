@@ -16,7 +16,7 @@
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use smoltcp::phy::{self, Device, DeviceCapabilities, RxToken as _, TxToken as _};
+use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 use spin::Mutex;
@@ -744,6 +744,16 @@ where
     Err(DriverTaskNetError::RuntimeInit(
         "cyw43-control-plane-linked-runtime-required",
     ))
+}
+
+#[cfg(feature = "kernel")]
+fn reset_cyw43_control_plane_state() {
+    CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
+    CYW43_ASSOCIATED.store(0, Ordering::Release);
+    CYW43_LINK_UP.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_RX.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_START.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]

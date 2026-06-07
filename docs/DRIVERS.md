@@ -62,8 +62,9 @@ Use this order when sources disagree:
    `apps/root-task/src/generated/*`, and `out/manifests/*`.
 3. Cohesix HAL and driver implementation: `apps/root-task/src/hal/mod.rs`,
    `apps/root-task/src/hal/dma.rs`, `apps/root-task/src/hal/cache.rs`,
-   `apps/root-task/src/hal/bcmgenet.rs`, `apps/root-task/src/hal/pi4_wifi.rs`,
+   `apps/root-task/src/hal/pi4_wifi.rs`,
    `apps/root-task/src/hal/pi4_pcie.rs`, `apps/root-task/src/sel4.rs`,
+   `apps/root-task/src/drivers/driver_task_net.rs`,
    `apps/root-task/src/local_seat_pi4.rs`,
    `apps/pi4-driver-runtime/src/lib.rs`, and the Cohesix-owned
    `crates/cohesix-usb/src/xhci.rs` compatibility implementation.
@@ -585,13 +586,13 @@ service shape: RX drains first in bounded 128-byte bursts, TX staging keeps a
 4096-byte queue, echo/edit records are best-effort and never flush synchronously
 while parsing input, and one driver-task TX frame may carry up to the 1024-byte
 serial byte/operation budget. Until then, the HAL-owned mini-UART fallback
-remains a diagnostic shell only and does not credit serial owner-state acceptance. GENET/CYW43
-and USB/local-seat root callers are ring clients on the physical Pi branch; the
-old root-resident `BcmGenetDevice`, `Cyw43NetDevice`, and `Pi4LocalSeat`
-constructors remain only in compatibility paths and cannot count as owner-state
-proof. The physical Pi `KernelHal` build does not carry a direct `Pi4WifiState`
-slot and direct Wi-Fi HAL state construction returns
-`pi4-wifi-driver-task-runtime-required`. Emergency early serial output remains
+remains a diagnostic shell only and does not credit serial owner-state acceptance.
+GENET/CYW43 and USB/local-seat root callers are ring clients on the physical Pi
+branch; the old root-resident direct net-device modules have been removed, and
+`Pi4LocalSeat` remains diagnostic compatibility only. The physical Pi
+`KernelHal` build does not carry a direct `Pi4WifiState` slot, and root Wi-Fi
+debug hooks return `pi4-wifi-driver-task-runtime-required` instead of
+constructing root-owned SDIO/CYW43 state. Emergency early serial output remains
 the only intended Pi root-owned escape hatch before or outside the driver-task
 substrate. If a linked ring-backed hardware owner is unavailable, the service
 turn fails closed with `DeviceUnavailable` instead of falling back to
@@ -1265,8 +1266,10 @@ transition, but it must not write SDHCI host-control registers directly.
   predicate is true. Blocking join attempts and timed-out deferred
   attempts must stop normal smoltcp receive polling so the root console is not
   flooded with no-progress Function 1 `SDIO_INT_STATUS` latch reads;
-  prompt-side `wifi diag`, `wifi retry`, and related diagnostics remain the
-  explicit way to ask the HAL for another live probe. During the join-submit
+  prompt-side `wifi diag` and `wifi dump-state` render cached or linked-runtime
+  evidence, while stateful `wifi probe-ht`, `wifi load-fw`, and `wifi retry`
+  fail closed with `pi4-wifi-driver-task-runtime-required` when no linked
+  runtime can satisfy the request. During the join-submit
   proof window, Cohesix records `SET_SSID` as join-acceptance evidence only; the
   post-association EAPOL proof budget starts only after an association/reassociation
   or link-up event leaves the driver in the associated state, so the M1 window is
@@ -1458,9 +1461,11 @@ transition, but it must not write SDHCI host-control registers directly.
   mirrored individually, but Wi-Fi progress banners keep a 5-10 s visible
   cadence while long startup work is active.
 - Pi 4 local-seat USB is not a reason to disable Wi-Fi diagnostics. The serial
-  console retains the HAL-backed Wi-Fi debug path after root-console handoff so
-  `wifi diag`, `wifi load-fw`, and `wifi retry` can exercise CYW43455 without
-  preventing boot from reaching the shell. Once a terminal boot/control-plane
+  console retains the Wi-Fi debug grammar after root-console handoff, but direct
+  root-owned CYW43455/SDIO exercise is removed: `wifi diag` and `wifi dump-state`
+  report cached or linked-runtime command-fault evidence, while `wifi load-fw`,
+  `wifi retry`, and live `wifi probe-ht` return bounded runtime-required errors
+  unless the linked runtime has supplied the required state. Once a terminal boot/control-plane
   failure is preserved, `wifi diag` is passive and compact: it emits the
   readiness/network summary, renders the `wifi: diag recorder=startup-blackbox ...`
   ten-gate table from cached snapshot or linked-runtime CYW43 fault evidence,
@@ -1473,7 +1478,8 @@ transition, but it must not write SDHCI host-control registers directly.
   (`forced-byte-mode-conservative`, `byte-conservative`, or
   `byte-narrow-conservative`). Neither case is a generic disabled-network
   state. Operators can still run the explicit
-  `wifi probe-ht` command when they want the stateful HT probe.
+  `wifi probe-ht` command when linked-runtime state can support the stateful HT
+  probe; otherwise it reports the same driver-task-runtime-required boundary.
 - Wi-Fi association completion is event-pump driven for both explicit `wifi`
   and `auto` interface policies. While linked-runtime pointer-free proof is
   incomplete, Pi 4 local-seat Wi-Fi boots preserve the selected Wi-Fi policy but
@@ -2231,13 +2237,6 @@ applies. Use the focused aliases:
   covers QEMU VirtIO slot bounds and register mapping authority.
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart`
   covers QEMU and Pi 4 UART physical address constants.
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet`
-  covers GENET descriptor, ring, link, and DMA address invariants.
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43`
-  covers CYW43 protocol state, Linux-shaped join payloads, first-reply
-  recovery, and bounded SDPCM/CDC behavior.
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet`
-  covers GENET HAL MMIO coverage and DMA policy.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie`
   covers BCM2711 PCIe/VL805 BAR, INTx/MSI, posted-write, DMA-window, and page
   mapping contracts.
@@ -2308,9 +2307,6 @@ Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests::poll_io_obeys_driver_task_budget
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::serial_input_skips_ready_network_data_poll_for_driver_task_turn
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::

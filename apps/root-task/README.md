@@ -128,9 +128,7 @@ cargo test -p root-task --no-default-features --features driver-tests-qemu --lib
 cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::pci
 cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::virtio_mmio
 cargo test -p root-task --no-default-features --features driver-tests-qemu --lib hal::uart
-cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet
-cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43
-cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::bcmgenet
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::driver_task_net
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::

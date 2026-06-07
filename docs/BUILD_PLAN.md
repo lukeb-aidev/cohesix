@@ -6270,12 +6270,12 @@ Deliverables:
 
 Title/ID: m26a-genet-driver-task
 Goal: Promote GENET from in-root compatibility driver to isolated frame driver task.
-Inputs: apps/root-task/src/drivers/bcmgenet.rs, apps/root-task/src/hal/bcmgenet.rs, apps/root-task/src/net/*.
+Inputs: apps/root-task/src/drivers/driver_task_net.rs, apps/root-task/src/net/*, apps/pi4-driver-runtime/src/lib.rs.
 Changes:
-  - apps/root-task/src/drivers/bcmgenet.rs — move DMA ring ownership, TX reclaim, RX refill, and IRQ service into `driver-genet`; the compatibility path already bounds one service turn to an 8-frame RX drain and 32-completion TX reclaim cap so wired load cannot monopolize serial/USB turns while migration proof is pending.
+  - apps/root-task/src/drivers/driver_task_net.rs — keep root as the GENET ring client only and fail closed when the linked runtime has not returned owner progress.
+  - apps/pi4-driver-runtime/src/lib.rs — keep DMA ring ownership, TX reclaim, RX refill, and service turns in the linked `driver-genet` runtime.
   - apps/root-task/src/net/* — consume bounded Ethernet-frame IPC from the GENET task while keeping smoltcp/listener semantics in root.
 Commands:
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
 Checks:
   - GENET static IPv4 reachability is preserved, ring pressure is observable, and serial/HDMI remain responsive under wired load.
@@ -6285,22 +6285,23 @@ Deliverables:
 Compatibility baseline tasks below are retained because they describe the original 26a GENET/static-IPv4 behavior that must keep working. They do not close reopened 26a by themselves; closure now requires both the baseline behavior and the driver-task substrate/migration checks above.
 
 Title/ID: m26a-bcmgenet-driver
-Goal: Add HAL-bound Broadcom GENETv5 NIC backend for Raspberry Pi 4 bring-up.
-Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/*, apps/root-task/src/hal/*, docs/SECURITY.md, Linux `bcmgenet` + Linux `bcm2711` DT binding notes + U-Boot `bcmgenet` bring-up notes (reference-only).
+Goal: Preserve HAL-declared Broadcom GENETv5 NIC behavior through the linked Pi driver runtime.
+Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/driver_task_net.rs, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, apps/root-task/src/hal/*, docs/SECURITY.md, Linux `bcmgenet` + Linux `bcm2711` DT binding notes + U-Boot `bcmgenet` bring-up notes (reference-only).
 Changes:
-  - apps/root-task/src/drivers/bcmgenet.rs — GENETv5 register/ring/IRQ/PHY implementation with bounded queues and HAL-backed MMIO/IRQ/DMA/MDIO access only.
-  - apps/root-task/src/drivers/mod.rs — expose bcmgenet backend.
-  - apps/root-task/src/net/mod.rs + apps/root-task/src/net/stack.rs — backend selection and init wiring.
+  - apps/root-task/src/drivers/driver_task_net.rs — keep root as the GENET ring client only and fail closed when linked runtime owner-state proof is missing.
+  - apps/pi4-driver-runtime/src/lib.rs — carry the GENETv5 register/ring/IRQ/PHY implementation inside the linked `driver-genet` runtime with HAL-declared MMIO/IRQ/DMA/MDIO resources only.
+  - apps/root-task/src/net/mod.rs + apps/root-task/src/net/stack.rs — backend selection and ring-client init wiring.
   - docs/ARCHITECTURE.md + docs/SECURITY.md — record GENET design-reference provenance and explicit no-code-lift policy.
 Commands:
   - cargo check -p root-task
-  - cargo test -p root-task --features "kernel net-console" bcmgenet
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::driver_task_net
+  - cargo test -p pi4-driver-runtime
   - rg -n "EFI_|boot_services|runtime_services|uefi::" apps/root-task/src tools/coh-rtc/src
 Checks:
   - Link-up, RX/TX smoke, and deterministic error paths are covered by unit/integration tests.
-  - GENET runtime paths remain HAL-only; no direct MMIO/firmware-service usage appears outside HAL-owned modules.
+  - GENET hardware service remains in the linked runtime with HAL-declared resources; root exposes only the bounded ring client.
 Deliverables:
-  - Pi 4 GENETv5 backend integrated behind existing net abstractions with documented source provenance order (Linux `bcmgenet` -> Linux `bcm2711` DT -> U-Boot `bcmgenet`) and reference-only compliance.
+  - Pi 4 GENETv5 linked-runtime backend integrated behind existing net abstractions with documented source provenance order (Linux `bcmgenet` -> Linux `bcm2711` DT -> U-Boot `bcmgenet`) and reference-only compliance.
 
 Title/ID: m26a-static-ipv4-profile-gate
 Goal: Make Pi 4 U-Boot static IPv4 config manifest-authoritative and profile-gated.
@@ -6433,8 +6434,6 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::tests`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::bcmgenet`
 - `cargo test -p root-task net:: -- --nocapture`
 - `cargo test -p coh-rtc`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
@@ -6490,14 +6489,13 @@ Deliverables:
 
 Title/ID: m26b-wifi-driver-task
 Goal: Move CYW43/SDIO Wi-Fi service behind a dedicated driver task with bounded control/data budgets.
-Inputs: apps/root-task/src/drivers/cyw43.rs, apps/root-task/src/hal/pi4_wifi.rs, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, apps/root-task/src/net/*, docs/DRIVERS.md.
+Inputs: apps/root-task/src/drivers/driver_task_net.rs, apps/root-task/src/hal/pi4_wifi.rs, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, apps/root-task/src/net/*, docs/DRIVERS.md.
 Changes:
   - apps/root-task/src/hal/pi4_wifi.rs — grant only SDIO, power/reset, firmware-bundle, IRQ/OOB, and DMA/ring resources declared for `driver-wifi`.
-  - apps/root-task/src/drivers/cyw43.rs — move SDIO credit waits, firmware/control replies, RX/TX queues, EAPOL admission, and glom/deaggregation into the Wi-Fi driver task.
+  - apps/root-task/src/drivers/driver_task_net.rs — keep root as the CYW43 ring client only and fail closed when linked SDIO/CYW43 service has not returned owner progress.
   - crates/pi4-driver-abi/src/lib.rs + apps/pi4-driver-runtime/src/lib.rs — define fixed-layout SDIO CMD52/CMD53/POLL_IRQ command records and service them in the linked SDIO runtime as the bus-owner ABI that CYW43 must use.
   - apps/root-task/src/net/* — consume bounded Ethernet-frame IPC without changing authenticated TCP console semantics.
 Commands:
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::cyw43
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib net::
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
@@ -6533,10 +6531,10 @@ Deliverables:
 
 Title/ID: m26b-net-control-priority
 Goal: Split network-control and network-data work so EAPOL/DHCP/TCP ACK progress is prioritized without starving physical input.
-Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/cyw43.rs, apps/root-task/src/event/*.
+Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/driver_task_net.rs, apps/pi4-driver-runtime/src/lib.rs, apps/root-task/src/event/*.
 Changes:
   - apps/root-task/src/net/* — add diagnostics and scheduling hooks for network-control vs network-data service classes.
-  - apps/root-task/src/drivers/cyw43.rs — expose separate counters for EAPOL/DHCP/control progress and bulk RX/TX data.
+  - apps/root-task/src/drivers/driver_task_net.rs + apps/pi4-driver-runtime/src/lib.rs — expose ring-client/runtime counters for EAPOL/DHCP/control progress and bulk RX/TX data.
   - apps/root-task/src/event/* — preserve USB/serial priority before either network class.
 Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests
