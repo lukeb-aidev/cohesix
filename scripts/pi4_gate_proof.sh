@@ -339,6 +339,8 @@ run_normalizer() {
         args+=("--expect-not" "USB_BLOCKER=cmd-doorbell-write-halt")
         args+=("--expect-not" "USB_BLOCKER=cmd-fetch-timeout")
         args+=("--expect-not" "USB_BLOCKER=cmd-event-ring-timeout")
+        args+=("--expect-not" "USB_BLOCKER=command-event-ring-not-proven")
+        args+=("--expect-not" "USB_BLOCKER=enable-slot-completion-pending")
         args+=("--expect-not" "USB_BLOCKER=cmd-poll-only-timeout")
         args+=("--expect-not" "USB_BLOCKER=cmd-live-timeout-snapshot-missing")
         args+=("--expect-not" "USB_BLOCKER=cmd-timeout")

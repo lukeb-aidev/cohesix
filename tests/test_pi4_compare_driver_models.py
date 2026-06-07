@@ -239,6 +239,48 @@ def test_latest_diagnostics_do_not_credit_usb_burst_or_dhcp_next_as_acceptance(
     assert fields["COMPARISON_VERDICT"] == "regression"
 
 
+def test_latest_diagnostics_classify_cyw43_descriptor_invalid(
+    tmp_path: pathlib.Path,
+) -> None:
+    old_path = _write_log(tmp_path, "old.log", _old_good_log())
+    new_path = _write_log(
+        tmp_path,
+        "new.log",
+        [
+            "U-Boot 2026.01-dirty",
+            "[Cohesix] Root console ready (type 'help' for commands)",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00200000 "
+            "payload_off=4096 payload_len=8192 total_len=609309 detail=21258 "
+            "reason=cyw43-descriptor-invalid result=0x00000004",
+            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0000 "
+            "target=0x00200000 payload_off=4096 payload_len=8192 "
+            "total_len=609309 detail=0x530a reason=cyw43-descriptor-invalid "
+            "result=0x00000004",
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(MODULE_PATH),
+            "--old",
+            str(old_path),
+            "--new",
+            str(new_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    fields = _parse_env(result.stdout)
+
+    assert result.returncode == 0
+    assert fields["NEW_WIFI_BLOCKER_SEEN"] == "yes"
+    assert fields["NEW_WIFI_BLOCKER"] == "cyw43-descriptor-invalid"
+
+
 def test_usb_runtime_ring_busy_overrides_stale_link_blocker(
     tmp_path: pathlib.Path,
 ) -> None:
@@ -255,7 +297,7 @@ def test_usb_runtime_ring_busy_overrides_stale_link_blocker(
             "acceptance=no code=none detail=none result=none frame_len=0",
             "usb: runtime_gate keyboard=no first_report=no first_byte=no "
             "proof_gate=3 target_gate=10 next=command-ring-ready "
-            "blocker=xhci-ready detail=0x0201 result=0x03000001",
+            "blocker=command-event-ring-not-proven detail=0x0201 result=0x03000001",
         ],
     )
 

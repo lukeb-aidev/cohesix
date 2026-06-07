@@ -5022,6 +5022,7 @@ where
     const fn usb_runtime_gate_for_linked_detail(detail: u16) -> u8 {
         match detail {
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => 3,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING => 4,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => 4,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED => 5,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => 5,
@@ -5046,6 +5047,9 @@ where
     const fn usb_runtime_next_for_linked_detail(detail: u16) -> &'static str {
         match detail {
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => "command-ring-ready",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING => {
+                "command-ring-ready"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => {
                 "root-port-connected"
             }
@@ -5083,7 +5087,12 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_blocker_for_linked_detail(detail: u16) -> &'static str {
         match detail {
-            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => "xhci-ready",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => {
+                "command-event-ring-not-proven"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING => {
+                "enable-slot-completion-pending"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => {
                 "command-ring-ready"
             }
@@ -5127,6 +5136,12 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_next_action_for_linked_detail(detail: u16) -> &'static str {
         match detail {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => {
+                "submit-enable-slot-command"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING => {
+                "poll-enable-slot-completion"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => {
                 "cold-reinit-and-reenumerate"
             }
@@ -5159,6 +5174,12 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_recovery_policy_for_linked_detail(detail: u16) -> &'static str {
         match detail {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => {
+                "same-controller-command-proof"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING => {
+                "same-controller-command-proof"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => "cold-reinit",
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
@@ -5604,10 +5625,11 @@ where
         self.emit_wifi_driver_task_startup_blackbox(fault, source);
         if let Some(fault) = fault {
             let fault_line = format_message(format_args!(
-                "wifi: cyw43 fault stage={} op={} target=0x{:08x} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
+                "wifi: cyw43 fault stage={} op={} target=0x{:08x} payload_off={} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
                 fault.stage,
                 fault.op,
                 fault.target_addr,
+                fault.payload_offset,
                 fault.payload_len,
                 fault.total_len,
                 fault.detail,
@@ -5617,7 +5639,7 @@ where
             self.emit_console_line(fault_line.as_str());
             let next = Self::wifi_runtime_fault_next_action(fault);
             let next_line = format_message(format_args!(
-                "wifi: driver-task next_action={} source={} recovery_contract=block-primary+retained-stage-byte-owner-replay",
+                "wifi: driver-task next_action={} source={} recovery_contract=block-primary+progress-bounded-owner-replay",
                 next, source
             ));
             self.emit_console_line(next_line.as_str());
@@ -6480,11 +6502,12 @@ where
             let owner_fault =
                 crate::drivers::driver_task_net::latest_cyw43_sdio_owner_fault_status();
             let fault_line = format_message(format_args!(
-                "wifi: evidence cyw43 stage={} op={} flags=0x{:04x} target=0x{:08x} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
+                "wifi: evidence cyw43 stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
                 fault.stage,
                 fault.op,
                 fault.flags,
                 fault.target_addr,
+                fault.payload_offset,
                 fault.payload_len,
                 fault.total_len,
                 fault.detail,
@@ -6492,6 +6515,18 @@ where
                 fault.result,
             ));
             self.emit_console_line(fault_line.as_str());
+            if Self::wifi_runtime_fault_is_sdio_card_select(fault) {
+                let sdio_command = format_message(format_args!(
+                    "wifi: evidence sdio_command cmd={} arg=0x{:08x} response_flags=0x{:04x} stage={} detail=0x{:04x} result=0x{:08x}",
+                    fault.op,
+                    fault.target_addr,
+                    fault.flags,
+                    fault.stage,
+                    fault.detail,
+                    fault.result,
+                ));
+                self.emit_console_line(sdio_command.as_str());
+            }
             if let Some(owner_fault) = owner_fault {
                 let cmd53 = format_message(format_args!(
                     "wifi: evidence sdio_cmd53 func={} addr=0x{:08x} target=0x{:08x} effective=0x{:08x} chunk_off={} payload_off={} len={} increment={} block_mode={} mode={} op={} source=owner-terminal",
@@ -6674,7 +6709,11 @@ where
                 | "sdio-cmd5-ready"
                 | "sdio-cmd3-rca"
                 | "sdio-cmd7-select"
+                | "sdio-cmd7-select-pre-recover"
+                | "sdio-cmd7-select-host-recover"
                 | "sdio-cmd7-select-r1-fallback"
+                | "sdio-cmd7-select-r1-host-recover"
+                | "sdio-card-init-restart-host-recover"
         )
     }
 
@@ -12870,6 +12909,12 @@ mod tests {
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
+            ),
+            4
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
                 pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
             ),
             5
@@ -12915,6 +12960,36 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn linked_usb_runtime_detail_next_actions_are_actionable() {
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+            ),
+            "submit-enable-slot-command"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_blocker_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+            ),
+            "command-event-ring-not-proven"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
+            ),
+            "poll-enable-slot-completion"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_recovery_policy_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+            ),
+            "same-controller-command-proof"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_recovery_policy_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
+            ),
+            "same-controller-command-proof"
+        );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
                 pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED

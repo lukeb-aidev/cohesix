@@ -24,7 +24,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_ENGINE_INIT_AUX,
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
     DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_RING_PROGRESS_BYTES, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED, DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+    DRIVER_RUNTIME_RING_PROGRESS_OFFSET, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_USB_ENUMERATE_AUX,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -1774,9 +1778,11 @@ pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
 const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
 const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
-const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS * 32;
+const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS * 4;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
-const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_LONG_INIT_RING_ATTEMPTS;
+const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
+const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
+const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
 
 #[cfg(feature = "kernel")]
 fn driver_task_shared_store_barrier() {
@@ -1803,6 +1809,80 @@ fn driver_task_shared_load_barrier() {
 }
 
 #[cfg(feature = "kernel")]
+fn driver_task_ring_clean_command_records(ring_root_ptr: usize) {
+    let _ = crate::hal::cache::cache_clean(
+        sel4_sys::seL4_CapInitThreadVSpace,
+        ring_root_ptr,
+        core::mem::size_of::<DriverTaskCommandRecord>(),
+    );
+    let _ = crate::hal::cache::cache_clean(
+        sel4_sys::seL4_CapInitThreadVSpace,
+        ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET,
+        core::mem::size_of::<DriverTaskCompletionRecord>(),
+    );
+    driver_task_shared_store_barrier();
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DriverTaskRingProgressRecord {
+    magic: u32,
+    sequence: u32,
+    phase: u32,
+    aux0: u32,
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_reset_progress_record(ring_root_ptr: usize) {
+    let progress_ptr = (ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize) as *mut u32;
+    // SAFETY: The progress record uses the first four primitive words in the
+    // HAL-owned owner-state metadata window of the mapped ring page.
+    unsafe {
+        core::ptr::write_volatile(progress_ptr, 0);
+        core::ptr::write_volatile(progress_ptr.add(1), 0);
+        core::ptr::write_volatile(progress_ptr.add(2), 0);
+        core::ptr::write_volatile(progress_ptr.add(3), 0);
+    }
+    let _ = crate::hal::cache::cache_clean(
+        sel4_sys::seL4_CapInitThreadVSpace,
+        ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize,
+        DRIVER_RUNTIME_RING_PROGRESS_BYTES as usize,
+    );
+    driver_task_shared_store_barrier();
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_read_progress_record(ring_root_ptr: usize) -> DriverTaskRingProgressRecord {
+    let _ = crate::hal::cache::cache_invalidate(
+        sel4_sys::seL4_CapInitThreadVSpace,
+        ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize,
+        DRIVER_RUNTIME_RING_PROGRESS_BYTES as usize,
+    );
+    driver_task_shared_load_barrier();
+    let progress_ptr = (ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize) as *const u32;
+    // SAFETY: The progress record is a fixed primitive-only record in the
+    // HAL-owned ring page and is bounded by the owner-state metadata region.
+    unsafe {
+        DriverTaskRingProgressRecord {
+            magic: core::ptr::read_volatile(progress_ptr),
+            sequence: core::ptr::read_volatile(progress_ptr.add(1)),
+            phase: core::ptr::read_volatile(progress_ptr.add(2)),
+            aux0: core::ptr::read_volatile(progress_ptr.add(3)),
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_invalidate_completion_record(ring_root_ptr: usize) {
+    let _ = crate::hal::cache::cache_invalidate(
+        sel4_sys::seL4_CapInitThreadVSpace,
+        ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET,
+        core::mem::size_of::<DriverTaskCompletionRecord>(),
+    );
+    driver_task_shared_load_barrier();
+}
+
+#[cfg(feature = "kernel")]
 struct DriverTaskCommandSlot {
     tcb: AtomicUsize,
     steady_priority: AtomicUsize,
@@ -1815,6 +1895,7 @@ struct DriverTaskCommandSlot {
     shared_frame_root_ptrs: [AtomicUsize; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
     request_seq: AtomicUsize,
     active: AtomicUsize,
+    timeout_resumes: AtomicUsize,
     ring_handler: AtomicUsize,
     ring_context: AtomicUsize,
     ring_service_kind: AtomicUsize,
@@ -1859,6 +1940,7 @@ impl DriverTaskCommandSlot {
             shared_frame_root_ptrs: [AtomicUsize::new(0), AtomicUsize::new(0)],
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
+            timeout_resumes: AtomicUsize::new(0),
             ring_handler: AtomicUsize::new(0),
             ring_context: AtomicUsize::new(0),
             ring_service_kind: AtomicUsize::new(DriverTaskRingServiceKind::None.as_usize()),
@@ -2660,7 +2742,12 @@ pub fn stage_driver_task_ring_payload_at(
     unsafe {
         core::ptr::copy_nonoverlapping(payload.as_ptr(), dst, payload.len());
     }
-    fence(Ordering::Release);
+    let _ = crate::hal::cache::cache_clean(
+        sel4_sys::seL4_CapInitThreadVSpace,
+        ring_root_ptr + offset,
+        payload.len(),
+    );
+    driver_task_shared_store_barrier();
     DriverFrameDescriptor::new(offset as u32, payload.len() as u16, flags).ok()
 }
 
@@ -2720,7 +2807,7 @@ pub fn stage_driver_task_shared_payload(
         );
         copied = copied.saturating_add(chunk);
     }
-    fence(Ordering::Release);
+    driver_task_shared_store_barrier();
     Some(DriverTaskStagedSharedPayload {
         offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
         len: payload.len() as u16,
@@ -3072,6 +3159,76 @@ fn emit_driver_task_ring_call_timeout(
 }
 
 #[cfg(feature = "kernel")]
+fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
+    match phase {
+        0 => "none",
+        DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED => "command-observed",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => "engine-init-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE => "engine-init-done",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED => "engine-init-failed",
+        _ => "unknown",
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_ring_call_progress(
+    contract: DriverTaskContract,
+    request: usize,
+    command: DriverTaskCommandRecord,
+    progress: DriverTaskRingProgressRecord,
+) {
+    use core::fmt::Write;
+    use heapless::String;
+
+    let mut line = String::<320>::new();
+    let valid = progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC;
+    let _ = write!(
+        line,
+        "DRIVER_TASK_RING_PROGRESS contract={} request={} expected_aux0=0x{:08x} marker_valid={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x}",
+        contract.name,
+        request,
+        command.aux0,
+        if valid { "yes" } else { "no" },
+        progress.sequence,
+        progress.phase,
+        driver_task_ring_progress_phase_label(progress.phase),
+        progress.aux0,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_ring_call_abort(
+    contract: DriverTaskContract,
+    endpoint: usize,
+    request: usize,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+    reason: &'static str,
+    timeout_count: usize,
+) {
+    use core::fmt::Write;
+    use heapless::String;
+
+    let mut line = String::<320>::new();
+    let _ = write!(
+        line,
+        "DRIVER_TASK_RING_CALL_ABORT contract={} endpoint=0x{:04x} request={} mode={} reason={} timeout_count={} opcode={} arg0={} aux0=0x{:08x} frame_len={}",
+        contract.name,
+        endpoint,
+        request,
+        mode.as_str(),
+        reason,
+        timeout_count,
+        command.opcode,
+        command.arg0,
+        command.aux0,
+        command.frame.len,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DriverTaskRingCommandMode {
     Steady,
@@ -3205,6 +3362,11 @@ fn driver_task_ring_attempt_limit(
     {
         return DRIVER_TASK_LONG_INIT_RING_ATTEMPTS;
     }
+    if mode == DriverTaskRingCommandMode::NonBlocking
+        && command.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX
+    {
+        return DRIVER_TASK_LONG_INIT_RING_ATTEMPTS;
+    }
     if matches!(contract.kind, DriverTaskKind::WifiNic) && command.aux0 != 0 {
         DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
     } else {
@@ -3218,11 +3380,41 @@ fn driver_task_ring_timeout_keeps_active(
     command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
 ) -> bool {
-    matches!(
+    driver_task_ring_timeout_keep_active_limit(contract, command, mode) != 0
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_timeout_keep_active_limit(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+) -> usize {
+    let keep_active = matches!(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
     ) && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
-        && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX
+        && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX;
+    keep_active
+        .then_some(DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT)
+        .unwrap_or(0)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_timeout_keep_decision(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+) -> (bool, usize) {
+    let limit = driver_task_ring_timeout_keep_active_limit(contract, command, mode);
+    if limit == 0 {
+        return (false, 0);
+    }
+    let timeout_count = slot
+        .timeout_resumes
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
+    (timeout_count < limit, timeout_count)
 }
 
 #[cfg(feature = "kernel")]
@@ -3372,9 +3564,11 @@ fn run_driver_task_ring_command_with_mode(
             .wrapping_add(1)
             .max(1);
         slot.request_seq.store(request, Ordering::Release);
+        slot.timeout_resumes.store(0, Ordering::Release);
         command.sequence = request as u32;
         let completion_reset =
             DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand);
+        driver_task_ring_reset_progress_record(ring_root_ptr);
         // SAFETY: `ring_root_ptr` is the root mapping of one HAL-owned frame that
         // was also mapped into the driver VSpace at `DRIVER_TASK_RING_VADDR`. The
         // fixed records are page-local, primitive-only, and naturally aligned.
@@ -3382,11 +3576,12 @@ fn run_driver_task_ring_command_with_mode(
             core::ptr::write_volatile(completion_ptr, completion_reset);
             core::ptr::write_volatile(command_ptr, command);
         }
-        driver_task_shared_store_barrier();
+        driver_task_ring_clean_command_records(ring_root_ptr);
         request
     };
     if request == 0 {
         slot.active.store(0, Ordering::Release);
+        slot.timeout_resumes.store(0, Ordering::Release);
         return None;
     }
 
@@ -3397,10 +3592,11 @@ fn run_driver_task_ring_command_with_mode(
         sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
     }
 
+    driver_task_ring_invalidate_completion_record(ring_root_ptr);
     // SAFETY: The completion pointer addresses the validated shared ring page.
     let mut completion = unsafe { core::ptr::read_volatile(completion_ptr) };
     if completion.sequence == request as u32 {
-        driver_task_shared_load_barrier();
+        driver_task_ring_invalidate_completion_record(ring_root_ptr);
         // SAFETY: The matching sequence is re-read after the acquire barrier so
         // the rest of the completion record is consumed from the published turn.
         completion = unsafe { core::ptr::read_volatile(completion_ptr) };
@@ -3423,15 +3619,18 @@ fn run_driver_task_ring_command_with_mode(
         let attempts = driver_task_ring_attempt_limit(contract, command, mode);
         if completion.sequence != request as u32 {
             let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
-            for _ in 0..attempts {
+            for attempt in 0..attempts {
                 crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
                 crate::sel4::yield_now();
+                if attempt % DRIVER_TASK_RING_CACHE_POLL_INTERVAL == 0 {
+                    driver_task_ring_invalidate_completion_record(ring_root_ptr);
+                }
                 // SAFETY: The completion pointer addresses the same validated ring
                 // page. A matching sequence means the isolated runtime observed the
                 // nonblocking send and published the primitive completion record.
                 completion = unsafe { core::ptr::read_volatile(completion_ptr) };
                 if completion.sequence == request as u32 {
-                    driver_task_shared_load_barrier();
+                    driver_task_ring_invalidate_completion_record(ring_root_ptr);
                     // SAFETY: The matching sequence is re-read after the acquire
                     // barrier before root consumes completion fields or payload.
                     completion = unsafe { core::ptr::read_volatile(completion_ptr) };
@@ -3450,6 +3649,12 @@ fn run_driver_task_ring_command_with_mode(
         if completion.sequence != request as u32 && trace_call {
             emit_driver_task_ring_call_timeout(
                 contract, endpoint, request, command, mode, attempts,
+            );
+            emit_driver_task_ring_call_progress(
+                contract,
+                request,
+                command,
+                driver_task_ring_read_progress_record(ring_root_ptr),
             );
         }
     } else if physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs))
@@ -3474,7 +3679,7 @@ fn run_driver_task_ring_command_with_mode(
             endpoint as sel4_sys::seL4_CPtr,
             sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
         );
-        driver_task_shared_load_barrier();
+        driver_task_ring_invalidate_completion_record(ring_root_ptr);
         // SAFETY: The completion pointer addresses the same validated ring
         // page; the reply boundary guarantees the isolated runtime had a chance
         // to publish the shared-frame result.
@@ -3485,15 +3690,18 @@ fn run_driver_task_ring_command_with_mode(
     } else {
         start_ticks = driver_task_counter_ticks();
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
-        for _ in 0..256 {
+        for attempt in 0..256 {
             crate::sel4::send_nb_unchecked(endpoint as sel4_sys::seL4_CPtr, info);
             crate::sel4::yield_now();
+            if attempt % DRIVER_TASK_RING_CACHE_POLL_INTERVAL == 0 {
+                driver_task_ring_invalidate_completion_record(ring_root_ptr);
+            }
             // SAFETY: The completion pointer addresses the same validated ring
             // page; a matching sequence means the isolated trampoline observed the
             // command through the shared frame.
             completion = unsafe { core::ptr::read_volatile(completion_ptr) };
             if completion.sequence == request as u32 {
-                driver_task_shared_load_barrier();
+                driver_task_ring_invalidate_completion_record(ring_root_ptr);
                 // SAFETY: The matching sequence is re-read after the acquire
                 // barrier before root consumes completion fields or payload.
                 completion = unsafe { core::ptr::read_volatile(completion_ptr) };
@@ -3505,12 +3713,29 @@ fn run_driver_task_ring_command_with_mode(
         }
     }
 
-    let keep_active_on_timeout = completion.sequence != request as u32
-        && driver_task_ring_timeout_keeps_active(contract, command, mode);
-    if completion.sequence == request as u32
-        || (mode != DriverTaskRingCommandMode::PromptSlice && !keep_active_on_timeout)
-    {
+    let mut timeout_count = 0usize;
+    let keep_active_on_timeout = if completion.sequence != request as u32 {
+        let (keep_active, count) =
+            driver_task_ring_timeout_keep_decision(slot, contract, command, mode);
+        timeout_count = count;
+        keep_active
+    } else {
+        false
+    };
+    if completion.sequence == request as u32 || !keep_active_on_timeout {
         slot.active.store(0, Ordering::Release);
+        slot.timeout_resumes.store(0, Ordering::Release);
+        if completion.sequence != request as u32 && timeout_count != 0 {
+            emit_driver_task_ring_call_abort(
+                contract,
+                endpoint,
+                request,
+                command,
+                mode,
+                "timeout-resume-limit",
+                timeout_count,
+            );
+        }
     }
     if completion.sequence == request as u32 {
         if let (Some(start_ticks), Some(end_ticks), Some(counter_frequency)) = (
@@ -6615,6 +6840,37 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn pre_root_engine_init_commands_get_long_bounded_window() {
+        for (contract, hot_path) in [
+            (HDMI_TEXT_DRIVER_TASK_CONTRACT, DriverTaskHotPath::HdmiText),
+            (PCIE_ROOT_DRIVER_TASK_CONTRACT, DriverTaskHotPath::PcieRoot),
+            (SDIO_HOST_DRIVER_TASK_CONTRACT, DriverTaskHotPath::SdioHost),
+        ] {
+            let command = runtime_engine_init_command(
+                hot_path,
+                DriverTaskBudgetGrant::from_contract(contract),
+            );
+            assert_eq!(
+                driver_task_ring_attempt_limit(
+                    contract,
+                    command,
+                    DriverTaskRingCommandMode::NonBlocking
+                ),
+                DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
+            );
+            assert_eq!(
+                driver_task_ring_attempt_limit(
+                    contract,
+                    command,
+                    DriverTaskRingCommandMode::PromptSlice
+                ),
+                DRIVER_TASK_PROMPT_RING_ATTEMPTS
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn prompt_side_local_seat_commands_use_short_nonblocking_window() {
         let command = DriverTaskCommandRecord::pi4_hot_path(
             0,
@@ -6718,8 +6974,9 @@ mod tests {
         );
         assert_eq!(
             DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS,
-            DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
+            DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4
         );
+        assert!(DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS < DRIVER_TASK_LONG_INIT_RING_ATTEMPTS);
         assert!(
             DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS
                 > DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
@@ -6742,7 +6999,19 @@ mod tests {
             command,
             DriverTaskRingCommandMode::PromptSlice
         ));
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice
+            ),
+            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
         assert!(DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS > DRIVER_TASK_PROMPT_RING_ATTEMPTS);
+        assert_eq!(
+            DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS,
+            DRIVER_TASK_PROMPT_RING_ATTEMPTS * 4
+        );
     }
 
     #[test]

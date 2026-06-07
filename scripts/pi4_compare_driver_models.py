@@ -168,9 +168,12 @@ def normalize_blocker(value: str) -> str:
 
 
 USB_DETAIL_BLOCKERS = {
-    "0x0201": "xhci-ready",
-    "0201": "xhci-ready",
-    "513": "xhci-ready",
+    "0x0201": "command-event-ring-not-proven",
+    "0201": "command-event-ring-not-proven",
+    "513": "command-event-ring-not-proven",
+    "0x0203": "enable-slot-completion-pending",
+    "0203": "enable-slot-completion-pending",
+    "515": "enable-slot-completion-pending",
     "0x0213": "address-device-failed",
     "0213": "address-device-failed",
     "531": "address-device-failed",
@@ -179,11 +182,18 @@ USB_DETAIL_BLOCKERS = {
 USB_BLOCKER_RANK = {
     "runtime-ring-submit-busy": 100,
     "address-device-failed": 90,
-    "xhci-ready": 80,
+    "enable-slot-completion-pending": 85,
+    "command-event-ring-not-proven": 80,
     "link-or-rc-not-ready": 10,
 }
 
 WIFI_DETAIL_BLOCKERS = {
+    "0x5101": "sdio-command-unavailable",
+    "5101": "sdio-command-unavailable",
+    "20737": "sdio-command-unavailable",
+    "0x530a": "cyw43-descriptor-invalid",
+    "530a": "cyw43-descriptor-invalid",
+    "21258": "cyw43-descriptor-invalid",
     "0x5329": "cyw43-firmware-retry-exhausted",
     "5329": "cyw43-firmware-retry-exhausted",
     "21289": "cyw43-firmware-retry-exhausted",
@@ -507,7 +517,8 @@ def update_usb(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         or "no-reply" in blocker
         or "pcie-vl805" in blocker
         or "address-device" in blocker
-        or "xhci-ready" in blocker
+        or "command-event-ring-not-proven" in blocker
+        or "enable-slot-completion-pending" in blocker
         or "runtime-ring-submit" in blocker
         or "busy" in blocker
         or "failed" in blocker
@@ -634,6 +645,8 @@ def summarize_log(label: str, lines: list[str]) -> LogSummary:
             rings.record_return(fields)
         if "driver_task_ring_call_timeout" in lowered:
             rings.record_timeout(fields)
+        if "driver_task_ring_call_abort" in lowered:
+            rings.record_return(fields)
         if "[panic]" in lowered or "panicked at " in lowered:
             summary.panic_seen = True
             mark_halt(summary, "panic")

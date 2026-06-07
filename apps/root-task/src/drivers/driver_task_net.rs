@@ -60,11 +60,14 @@ const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
 const CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL: usize = 32 * 1024;
 const CYW43_RUNTIME_STREAM_COMMAND_RETRIES: usize = 2;
-const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 32;
+const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 192;
+const CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT: usize = 24;
 const CYW43_BACKPLANE_ADDRESS_MASK: u32 = 0x7fff;
 const CYW43_BACKPLANE_WINDOW_MASK: u32 = 0xffff_8000;
 const CYW43_BACKPLANE_32BIT_FLAG: u32 = 0x8000;
 const SDIO_CMD53_BYTE_MODE_MAX: u16 = 512;
+const CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT: usize = SDIO_CMD53_BYTE_MODE_MAX as usize;
+const CYW43_RUNTIME_FIRMWARE_TAIL_PAD_MAX_BYTES: usize = 4096;
 const SDHCI_INT_ERROR: u32 = 1 << 15;
 const SDHCI_INT_TIMEOUT: u32 = 1 << 16;
 const SDHCI_INT_CRC: u32 = 1 << 17;
@@ -97,6 +100,7 @@ const SDIO_OCR_3V2_3V4: u32 = 0x00ff_8000;
 const SDIO_CMD5_READY_ATTEMPTS: usize = 16;
 const SDIO_CMD7_SELECT_FALLBACK_COMMAND_INDEX: u32 = SDIO_CMD7_SELECT_COMMAND_INDEX;
 const SDIO_CMD7_SELECT_ATTEMPTS: usize = 4;
+const SDIO_CARD_INIT_RESTART_ATTEMPTS: usize = 2;
 const SDIO_CMD7_SELECT_SETTLE_SPINS: usize = 10_000;
 const SDIO_STARTUP_CLOCK_HZ: u32 = 400_000;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
@@ -128,6 +132,7 @@ pub(crate) struct Cyw43RuntimeCommandFaultStatus {
     pub op: u16,
     pub flags: u16,
     pub target_addr: u32,
+    pub payload_offset: u16,
     pub payload_len: u16,
     pub total_len: u32,
     pub detail: u16,
@@ -204,17 +209,25 @@ fn clear_cyw43_runtime_command_fault_status() {
 
 #[cfg(feature = "kernel")]
 fn record_sdio_runtime_command_fault_status(
+    contract: DriverTaskContract,
     stage: &'static str,
+    command_index: Option<u32>,
+    argument: u32,
+    response_flags: u16,
     completion: DriverTaskCompletionRecord,
 ) {
+    use core::fmt::Write;
+
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
         return;
     }
+    let op = command_index.unwrap_or(0) as u16;
     *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
         stage,
-        op: 0,
-        flags: 0,
-        target_addr: 0,
+        op,
+        flags: response_flags,
+        target_addr: argument,
+        payload_offset: 0,
         payload_len: 0,
         total_len: 0,
         detail: completion.detail,
@@ -222,6 +235,26 @@ fn record_sdio_runtime_command_fault_status(
         result: completion.result,
     });
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
+    let transfer_stage = sdio_transfer_failure_stage_label(completion.result);
+    let transfer_status = sdio_transfer_failure_status(completion.result);
+    let transfer_reason = sdio_transfer_failure_reason_label(completion.result);
+    let mut line = heapless::String::<320>::new();
+    let _ = write!(
+        line,
+        "SDIO_DRIVER_TASK_COMMAND_FAULT contract={} stage={} cmd={} arg=0x{:08x} flags=0x{:04x} detail=0x{:04x} reason={} result=0x{:08x} xfer_stage={} xfer_status=0x{:06x} xfer_reason={}",
+        contract.name,
+        stage,
+        op,
+        argument,
+        response_flags,
+        completion.detail,
+        cyw43_runtime_fault_reason(completion.detail),
+        completion.result,
+        transfer_stage,
+        transfer_status,
+        transfer_reason,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -667,6 +700,8 @@ where
         .ok_or(DriverTaskNetError::RuntimeInit("cyw43-rstvec"))?;
     clear_cyw43_runtime_command_fault_status();
     let mut recovery_attempts = 0usize;
+    let mut last_resume_offset = None;
+    let mut same_resume_offset_attempts = 0usize;
     let mut next_resume: Option<(usize, bool)> = None;
     loop {
         let result = if let Some((resume_offset, force_resume_byte_mode)) = next_resume.take() {
@@ -701,6 +736,18 @@ where
                 }
                 let force_resume_byte_mode =
                     resume_fault.is_some_and(cyw43_firmware_resume_forces_byte_mode);
+                if let Some(resume_offset) = resume_offset {
+                    if last_resume_offset == Some(resume_offset) {
+                        same_resume_offset_attempts = same_resume_offset_attempts.saturating_add(1);
+                    } else {
+                        last_resume_offset = Some(resume_offset);
+                        same_resume_offset_attempts = 1;
+                    }
+                    if same_resume_offset_attempts > CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT
+                    {
+                        return Err(err.into_net_error());
+                    }
+                }
                 crate::hal::driver_task::emit_driver_task_resource_init_status(
                     contract,
                     DriverTaskHotPath::Cyw43Wifi,
@@ -716,6 +763,7 @@ where
                         recovery_attempts,
                         resume_offset,
                         force_resume_byte_mode,
+                        same_resume_offset_attempts,
                     );
                     crate::hal::driver_task::emit_driver_task_resource_init_status(
                         contract,
@@ -895,8 +943,17 @@ fn cyw43_firmware_resume_offset(
         return None;
     }
     let offset = usize::try_from(fault.target_addr - CYW43_RAM_BASE_4345).ok()?;
-    let end = offset.checked_add(usize::from(fault.payload_len))?;
-    if end <= firmware_len {
+    let payload_len = usize::from(fault.payload_len);
+    let end = offset.checked_add(payload_len)?;
+    let padded_tail_end = firmware_len
+        .checked_add(CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT - 1)?
+        / CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT
+        * CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT;
+    if end <= firmware_len
+        || (offset < firmware_len
+            && end <= padded_tail_end
+            && payload_len <= CYW43_RUNTIME_FIRMWARE_TAIL_PAD_MAX_BYTES)
+    {
         Some(offset)
     } else {
         None
@@ -1063,6 +1120,28 @@ fn sdio_owner_recovery_can_preserve_ready_state() -> bool {
 
 #[cfg(feature = "kernel")]
 fn submit_sdio_card_init_probe(contract: DriverTaskContract) -> bool {
+    for attempt in 0..SDIO_CARD_INIT_RESTART_ATTEMPTS {
+        if attempt != 0 {
+            emit_sdio_driver_task_replay_status("sdio-card-init-restart", "begin");
+            if !submit_sdio_host_config_probe(
+                contract,
+                "sdio-card-init-restart-host-recover",
+                SDIO_STARTUP_CLOCK_HZ,
+                0,
+            ) {
+                continue;
+            }
+            sdio_cmd7_select_settle();
+        }
+        if submit_sdio_card_init_probe_once(contract) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(feature = "kernel")]
+fn submit_sdio_card_init_probe_once(contract: DriverTaskContract) -> bool {
     if !submit_sdio_host_config_probe(
         contract,
         "sdio-host-startup-config",
@@ -1178,13 +1257,23 @@ fn sdio_command_probe_ready(
 fn report_sdio_command_probe(
     contract: DriverTaskContract,
     stage: &'static str,
+    command_index: Option<u32>,
+    argument: u32,
+    response_flags: u16,
     completion: Option<DriverTaskCompletionRecord>,
     ready: bool,
 ) {
     if ready {
         clear_cyw43_runtime_command_fault_status();
     } else if let Some(completion) = completion {
-        record_sdio_runtime_command_fault_status(stage, completion);
+        record_sdio_runtime_command_fault_status(
+            contract,
+            stage,
+            command_index,
+            argument,
+            response_flags,
+            completion,
+        );
     }
     let status = driver_task_resource_completion_status(completion, ready);
     emit_sdio_driver_task_replay_status(stage, status);
@@ -1201,6 +1290,14 @@ fn report_sdio_command_probe(
 fn submit_sdio_cmd7_select_probe(contract: DriverTaskContract, rca: u32) -> bool {
     let mut last_completion = None;
     emit_sdio_driver_task_replay_status("sdio-cmd7-select", "begin");
+    if !submit_sdio_host_config_probe(
+        contract,
+        "sdio-cmd7-select-pre-recover",
+        SDIO_STARTUP_CLOCK_HZ,
+        0,
+    ) {
+        return false;
+    }
     for attempt in 0..SDIO_CMD7_SELECT_ATTEMPTS {
         if attempt != 0
             && !submit_sdio_host_config_probe(
@@ -1219,7 +1316,15 @@ fn submit_sdio_cmd7_select_probe(contract: DriverTaskContract, rca: u32) -> bool
             DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
         );
         if sdio_command_probe_ready(completion, true) {
-            report_sdio_command_probe(contract, "sdio-cmd7-select", completion, true);
+            report_sdio_command_probe(
+                contract,
+                "sdio-cmd7-select",
+                Some(SDIO_CMD7_SELECT_COMMAND_INDEX),
+                rca,
+                DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
+                completion,
+                true,
+            );
             return true;
         }
         last_completion = completion;
@@ -1245,7 +1350,15 @@ fn submit_sdio_cmd7_select_probe(contract: DriverTaskContract, rca: u32) -> bool
             DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
         );
         if sdio_command_probe_ready(completion, true) {
-            report_sdio_command_probe(contract, "sdio-cmd7-select-r1-fallback", completion, true);
+            report_sdio_command_probe(
+                contract,
+                "sdio-cmd7-select-r1-fallback",
+                Some(SDIO_CMD7_SELECT_FALLBACK_COMMAND_INDEX),
+                rca,
+                DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+                completion,
+                true,
+            );
             return true;
         }
         last_completion = completion;
@@ -1254,6 +1367,9 @@ fn submit_sdio_cmd7_select_probe(contract: DriverTaskContract, rca: u32) -> bool
     report_sdio_command_probe(
         contract,
         "sdio-cmd7-select-r1-fallback",
+        Some(SDIO_CMD7_SELECT_FALLBACK_COMMAND_INDEX),
+        rca,
+        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
         last_completion,
         false,
     );
@@ -1276,7 +1392,7 @@ fn submit_sdio_host_config_probe(
         ..DriverRuntimeSdioCommandDescriptor::empty()
     };
     if !descriptor.valid() {
-        report_sdio_command_probe(contract, stage, None, false);
+        report_sdio_command_probe(contract, stage, None, target_hz, flags, None, false);
         return false;
     }
     let desc_size = core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>();
@@ -1284,7 +1400,7 @@ fn submit_sdio_host_config_probe(
     encode_sdio_descriptor(&mut scratch, descriptor);
     let Some(staged) = crate::hal::driver_task::stage_driver_task_ring_frame(contract, &scratch, 0)
     else {
-        report_sdio_command_probe(contract, stage, None, false);
+        report_sdio_command_probe(contract, stage, None, target_hz, flags, None, false);
         return false;
     };
     let command = DriverTaskCommandRecord::pi4_hot_path(
@@ -1299,7 +1415,7 @@ fn submit_sdio_host_config_probe(
     );
     let completion = run_driver_task_net_service(contract, command);
     let ready = sdio_command_probe_ready(completion, false);
-    report_sdio_command_probe(contract, stage, completion, ready);
+    report_sdio_command_probe(contract, stage, None, target_hz, flags, completion, ready);
     ready
 }
 
@@ -1316,7 +1432,15 @@ fn submit_sdio_command_probe(
     let completion =
         submit_sdio_command_probe_raw(contract, command_index, argument, response_flags);
     let ready = sdio_command_probe_ready(completion, allow_zero_result);
-    report_sdio_command_probe(contract, stage, completion, ready);
+    report_sdio_command_probe(
+        contract,
+        stage,
+        Some(command_index),
+        argument,
+        response_flags,
+        completion,
+        ready,
+    );
     completion
         .filter(|_| ready)
         .map(|completion| completion.result)
@@ -1378,21 +1502,113 @@ fn emit_cyw43_runtime_stream_progress(
 }
 
 #[cfg(feature = "kernel")]
-fn emit_cyw43_runtime_firmware_recovery(
+fn emit_cyw43_runtime_stream_tail_padding(
     contract: DriverTaskContract,
-    attempt: usize,
-    resume_offset: usize,
-    force_byte_mode: bool,
+    stage: &'static str,
+    offset: usize,
+    total_len: usize,
+    target_addr: u32,
+    chunk_len: usize,
+    padded_len: usize,
 ) {
     use core::fmt::Write;
 
     let mut line = heapless::String::<192>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_FIRMWARE_RECOVERY contract={} attempt={} resume_offset={} force_byte={}",
-        contract.name, attempt, resume_offset, force_byte_mode,
+        "CYW43_DRIVER_TASK_STREAM_TAIL_PAD contract={} stage={} offset={} total_len={} target=0x{:08x} chunk_len={} padded_len={}",
+        contract.name, stage, offset, total_len, target_addr, chunk_len, padded_len,
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_runtime_firmware_recovery(
+    contract: DriverTaskContract,
+    attempt: usize,
+    resume_offset: usize,
+    force_byte_mode: bool,
+    same_offset_attempts: usize,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<192>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_FIRMWARE_RECOVERY contract={} attempt={} resume_offset={} force_byte={} same_offset_attempts={}",
+        contract.name, attempt, resume_offset, force_byte_mode, same_offset_attempts,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_runtime_firmware_tail_padded_len(
+    op: u16,
+    offset: usize,
+    payload_len: usize,
+    chunk_len: usize,
+    max_payload: usize,
+) -> usize {
+    if op != DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
+        || offset > payload_len
+        || chunk_len == 0
+        || chunk_len != payload_len - offset
+        || chunk_len % CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT == 0
+    {
+        return chunk_len;
+    }
+    let padded = ((chunk_len + CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT - 1)
+        / CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT)
+        * CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT;
+    if padded <= max_payload && padded <= CYW43_RUNTIME_FIRMWARE_TAIL_PAD_MAX_BYTES {
+        padded
+    } else {
+        chunk_len
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn submit_cyw43_runtime_stream_command(
+    contract: DriverTaskContract,
+    op: u16,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    payload: &[u8],
+) -> Result<(), Cyw43FirmwareInitError> {
+    let mut attempts = 0usize;
+    loop {
+        match submit_cyw43_runtime_command_checked(contract, descriptor, payload) {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                if let Some(completion) = err.same_command_retry_completion() {
+                    attempts = attempts.saturating_add(1);
+                    let status = if attempts < CYW43_RUNTIME_STREAM_COMMAND_RETRIES {
+                        "stream-fault-retry-runtime-ladder"
+                    } else {
+                        "stream-fault-retry-exhausted"
+                    };
+                    crate::hal::driver_task::emit_driver_task_resource_init_status(
+                        contract,
+                        DriverTaskHotPath::Cyw43Wifi,
+                        cyw43_runtime_command_stage(op),
+                        status,
+                        Some(completion),
+                    );
+                    if attempts < CYW43_RUNTIME_STREAM_COMMAND_RETRIES {
+                        continue;
+                    }
+                } else if let Some(completion) = err.recoverable_completion() {
+                    crate::hal::driver_task::emit_driver_task_resource_init_status(
+                        contract,
+                        DriverTaskHotPath::Cyw43Wifi,
+                        cyw43_runtime_command_stage(op),
+                        "stream-fault-owner-recovery-required",
+                        Some(completion),
+                    );
+                }
+                return Err(Cyw43FirmwareInitError::Command(err));
+            }
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -1450,47 +1666,45 @@ where
             total_len: total_len as u32,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
+        if op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK {
+            descriptor.arg0 = chunk_len as u32;
+        }
         if force_first_chunk_byte_mode && offset == start_offset {
             descriptor.flags |= DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
         }
-        let mut attempts = 0usize;
-        loop {
-            match submit_cyw43_runtime_command_checked(
+        let padded_chunk_len = cyw43_runtime_firmware_tail_padded_len(
+            op,
+            offset,
+            payload.len(),
+            chunk_len,
+            max_payload,
+        );
+        if padded_chunk_len > chunk_len {
+            let mut padded_payload = [0u8; CYW43_RUNTIME_FIRMWARE_TAIL_PAD_MAX_BYTES];
+            padded_payload[..chunk_len].copy_from_slice(&payload[offset..offset + chunk_len]);
+            descriptor.payload_len = padded_chunk_len as u16;
+            emit_cyw43_runtime_stream_tail_padding(
                 contract,
+                cyw43_runtime_command_stage(op),
+                offset,
+                payload.len(),
+                target_addr,
+                chunk_len,
+                padded_chunk_len,
+            );
+            submit_cyw43_runtime_stream_command(
+                contract,
+                op,
+                descriptor,
+                &padded_payload[..padded_chunk_len],
+            )?;
+        } else {
+            submit_cyw43_runtime_stream_command(
+                contract,
+                op,
                 descriptor,
                 &payload[offset..offset + chunk_len],
-            ) {
-                Ok(_) => break,
-                Err(err) => {
-                    if let Some(completion) = err.same_command_retry_completion() {
-                        attempts = attempts.saturating_add(1);
-                        let status = if attempts < CYW43_RUNTIME_STREAM_COMMAND_RETRIES {
-                            "stream-fault-retry-runtime-ladder"
-                        } else {
-                            "stream-fault-retry-exhausted"
-                        };
-                        crate::hal::driver_task::emit_driver_task_resource_init_status(
-                            contract,
-                            DriverTaskHotPath::Cyw43Wifi,
-                            cyw43_runtime_command_stage(op),
-                            status,
-                            Some(completion),
-                        );
-                        if attempts < CYW43_RUNTIME_STREAM_COMMAND_RETRIES {
-                            continue;
-                        }
-                    } else if let Some(completion) = err.recoverable_completion() {
-                        crate::hal::driver_task::emit_driver_task_resource_init_status(
-                            contract,
-                            DriverTaskHotPath::Cyw43Wifi,
-                            cyw43_runtime_command_stage(op),
-                            "stream-fault-owner-recovery-required",
-                            Some(completion),
-                        );
-                    }
-                    return Err(Cyw43FirmwareInitError::Command(err));
-                }
-            }
+            )?;
         }
         let uploaded = offset + chunk_len;
         if cyw43_runtime_stream_progress_due(offset, chunk_len, payload.len()) {
@@ -1746,6 +1960,7 @@ fn emit_cyw43_runtime_command_fault(
         op: descriptor.op,
         flags: descriptor.flags,
         target_addr: descriptor.target_addr,
+        payload_offset: descriptor.payload_offset,
         payload_len: descriptor.payload_len,
         total_len: descriptor.total_len,
         detail: completion.detail,
@@ -1753,15 +1968,16 @@ fn emit_cyw43_runtime_command_fault(
         result: completion.result,
     });
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
-    let mut line = heapless::String::<320>::new();
+    let mut line = heapless::String::<384>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_COMMAND_FAULT contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_len={} total_len={} detail={} reason={} result={}",
+        "CYW43_DRIVER_TASK_COMMAND_FAULT contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} detail={} reason={} result={}",
         contract.name,
         stage,
         descriptor.op,
         descriptor.flags,
         descriptor.target_addr,
+        descriptor.payload_offset,
         descriptor.payload_len,
         descriptor.total_len,
         completion.detail,
@@ -3448,7 +3664,58 @@ mod tests {
         );
         assert!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES > SDIO_CMD53_BYTE_MODE_MAX as usize);
         assert_eq!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES % 64, 0);
-        assert_eq!(CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS, 32);
+        assert_eq!(CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS, 192);
+        assert_eq!(CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT, 24);
+        assert_eq!(CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT, 512);
+        assert_eq!(CYW43_RUNTIME_FIRMWARE_TAIL_PAD_MAX_BYTES, 4096);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_firmware_tail_padding_preserves_block_mode_shape() {
+        let firmware_len = 609_309usize;
+        let tail_offset = firmware_len - 3101;
+
+        assert_eq!(
+            cyw43_runtime_firmware_tail_padded_len(
+                DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+                tail_offset,
+                firmware_len,
+                3101,
+                CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES
+            ),
+            3584
+        );
+        assert_eq!(
+            cyw43_runtime_firmware_tail_padded_len(
+                DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+                0,
+                firmware_len,
+                CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES,
+                CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES
+            ),
+            CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES
+        );
+        assert_eq!(
+            cyw43_runtime_firmware_tail_padded_len(
+                DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
+                tail_offset,
+                firmware_len,
+                3101,
+                CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES
+            ),
+            3101
+        );
+        assert_eq!(
+            cyw43_runtime_firmware_tail_padded_len(
+                DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+                firmware_len - 5000,
+                firmware_len,
+                5000,
+                CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES
+            ),
+            5000
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -3459,6 +3726,7 @@ mod tests {
             op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
             flags: DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
             target_addr: CYW43_RAM_BASE_4345 + 0x1c00,
+            payload_offset: 4096,
             payload_len: 1024,
             total_len: 609_309,
             detail: 0x5103,
@@ -3467,6 +3735,17 @@ mod tests {
         };
 
         assert_eq!(cyw43_firmware_resume_offset(fault, 609_309), Some(0x1c00));
+        assert_eq!(
+            cyw43_firmware_resume_offset(
+                Cyw43RuntimeCommandFaultStatus {
+                    target_addr: CYW43_RAM_BASE_4345 + 606_208,
+                    payload_len: 3584,
+                    ..fault
+                },
+                609_309
+            ),
+            Some(606_208)
+        );
 
         assert_eq!(
             cyw43_firmware_resume_offset(
@@ -3493,19 +3772,27 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_firmware_resume_forces_byte_mode_after_owner_recovery_fault() {
+    fn cyw43_firmware_resume_retries_retry_exhaustion_on_primary_lane() {
         let fault = Cyw43RuntimeCommandFaultStatus {
             stage: "cyw43-firmware-chunk",
             op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
             flags: 0,
             target_addr: CYW43_RAM_BASE_4345,
+            payload_offset: 4096,
             payload_len: 1024,
             total_len: 609_309,
             detail: 0x5329,
             reason: "cyw43-firmware-retry-exhausted",
             result: 0x0420_8040,
         };
-        assert!(cyw43_firmware_resume_forces_byte_mode(fault));
+        assert!(!cyw43_firmware_resume_forces_byte_mode(fault));
+        assert!(cyw43_firmware_resume_forces_byte_mode(
+            Cyw43RuntimeCommandFaultStatus {
+                detail: 0x5103,
+                reason: "sdio-owner-response-fault",
+                ..fault
+            }
+        ));
         assert!(!cyw43_firmware_resume_forces_byte_mode(
             Cyw43RuntimeCommandFaultStatus {
                 op: DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,

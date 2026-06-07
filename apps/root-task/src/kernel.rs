@@ -4698,14 +4698,15 @@ fn bootstrap<P: Platform>(
         );
         boot_log::force_uart_line(probe_line.as_str());
         if required_local_seat_probe_should_abort(hardware.local_seat.required, probe_result) {
-            let mut line = heapless::String::<192>::new();
+            let mut line = heapless::String::<224>::new();
             let _ = write!(
                 line,
-                "[local-seat] abort required=true reason=keyboard-probe-failed detail={}",
+                "[local-seat] abort required=true reason=keyboard-probe-failed detail={} action=halt-before-shell telemetry=driver-task-boot-contract",
                 probe_result.as_str()
             );
             console.writeln_prefixed(line.as_str());
             boot_log::force_uart_line(line.as_str());
+            crate::hal::driver_task::emit_boot_contract_proof();
             return Err(BootError::Fatal(format!(
                 "local-seat required keyboard probe failed: {}",
                 probe_result.as_str()
@@ -7642,7 +7643,7 @@ mod tests {
     }
 
     #[test]
-    fn required_local_seat_probe_aborts_only_for_real_backend_absence() {
+    fn required_local_seat_probe_aborts_only_for_backend_absence() {
         use crate::local_seat::LocalSeatKeyboardProbeResult::{
             Attached, BackendUnavailable, DeferredUntilRootConsole, KeyboardUnavailable,
         };

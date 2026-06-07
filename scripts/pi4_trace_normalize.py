@@ -99,8 +99,9 @@ USB_PROGRESS_GATES = {
     "console-byte": 10,
 }
 USB_RUNTIME_DETAIL_GATES = {
-    0x0201: (3, "usb-xhci-ready-keyboard-not-enumerated"),
+    0x0201: (3, "command-event-ring-not-proven"),
     0x0202: (8, "none"),
+    0x0203: (4, "enable-slot-completion-pending"),
     0x0204: (4, "command-ring-ready"),
     0x0205: (5, "root-port-connected"),
     0x0206: (6, "device-addressed"),
@@ -149,10 +150,12 @@ USB_OUTCOME_BLOCKERS = {
     "config-descriptor",
     "config-descriptor-failed",
     "config-parse",
+    "command-event-ring-not-proven",
     "device-descriptor",
     "device-descriptor-failed",
     "driver-task-runtime-deferred",
     "enable-slot-failed",
+    "enable-slot-completion-pending",
     "hid-attach-failed",
     "hid-first-report",
     "hid-endpoint-not-ready",
@@ -377,6 +380,7 @@ class GateSummary:
     driver_task_ring_call_return: int = 0
     driver_task_ring_call_outstanding: int = 0
     driver_task_ring_call_timeout: int = 0
+    driver_task_ring_call_abort: int = 0
     driver_task_bootstrap_deferred: int = 0
     driver_task_resource_init: int = 0
     driver_task_resource_blocker: str = "none"
@@ -515,6 +519,7 @@ class GateSummary:
             "DRIVER_TASK_RING_CALL_RETURN": self.driver_task_ring_call_return,
             "DRIVER_TASK_RING_CALL_OUTSTANDING": self.driver_task_ring_call_outstanding,
             "DRIVER_TASK_RING_CALL_TIMEOUT": self.driver_task_ring_call_timeout,
+            "DRIVER_TASK_RING_CALL_ABORT": self.driver_task_ring_call_abort,
             "DRIVER_TASK_BOOTSTRAP_DEFERRED": self.driver_task_bootstrap_deferred,
             "DRIVER_TASK_RESOURCE_INIT": self.driver_task_resource_init,
             "DRIVER_TASK_RESOURCE_BLOCKER": self.driver_task_resource_blocker,
@@ -5229,6 +5234,32 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         for event in event_list
         if "driver_task_ring_call_timeout" in event.raw.lower()
     )
+    driver_task_ring_call_abort = sum(
+        1
+        for event in event_list
+        if "driver_task_ring_call_abort" in event.raw.lower()
+    )
+    if driver_task_ring_call_abort:
+        aborted_requests: set[int] = set()
+        for event in event_list:
+            raw = event.raw.lower()
+            if "driver_task_ring_call_abort" not in raw:
+                continue
+            request = parse_hex_int(event.fields.get("request"))
+            if request is not None:
+                aborted_requests.add(request)
+        if aborted_requests:
+            open_begins = 0
+            for event in event_list:
+                raw = event.raw.lower()
+                if "driver_task_ring_call_begin" not in raw:
+                    continue
+                request = parse_hex_int(event.fields.get("request"))
+                if request in aborted_requests:
+                    open_begins += 1
+            driver_task_ring_call_outstanding = max(
+                0, driver_task_ring_call_outstanding - open_begins
+            )
     driver_task_bootstrap_deferred = sum(
         1
         for event in event_list
@@ -5358,6 +5389,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_ring_call_return=driver_task_ring_call_return,
         driver_task_ring_call_outstanding=driver_task_ring_call_outstanding,
         driver_task_ring_call_timeout=driver_task_ring_call_timeout,
+        driver_task_ring_call_abort=driver_task_ring_call_abort,
         driver_task_bootstrap_deferred=driver_task_bootstrap_deferred,
         driver_task_resource_init=driver_task_resource_init,
         driver_task_resource_blocker=driver_task_resource_blocker,
@@ -5521,6 +5553,7 @@ def summarize_driver_task_frontiers(
             (
                 "driver_task_ring_call_return" in raw
                 or "driver_task_ring_call_timeout" in raw
+                or "driver_task_ring_call_abort" in raw
             )
             and contract == "serial"
         ):
@@ -5648,6 +5681,7 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
             detail = parse_hex_int(fields.get("detail"))
             if contract == "usb-local-seat" and detail in {
                 0x0201,
+                0x0203,
                 0x0204,
                 0x0205,
                 0x0206,
@@ -5676,6 +5710,7 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
         elif (
             "driver_task_ring_call_return" in raw
             or "driver_task_ring_call_timeout" in raw
+            or "driver_task_ring_call_abort" in raw
         ):
             outstanding.pop(request, None)
             latest_usb_blocking_call = False
@@ -5716,7 +5751,9 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
             latest_usb_status == "blocked-keyboard-enumeration"
             and latest_usb_engine_detail == 0x0201
         ):
-            return "usb-xhci-ready-keyboard-not-enumerated"
+            return "command-event-ring-not-proven"
+        if latest_usb_engine_detail == 0x0203:
+            return "enable-slot-completion-pending"
         if latest_usb_status in {
             "command-ring-ready",
             "root-port-connected",
@@ -5785,7 +5822,7 @@ def classify_sdio_replay_gate(replay_blocker: str) -> tuple[int, str, str, str]:
     if len(parts) != 3:
         return 1, "sdio-driver-task-replay", replay_blocker, "sdio-driver-task-replay"
     _role, stage, status = parts
-    if stage.startswith("sdio-cmd"):
+    if stage.startswith("sdio-cmd") or stage.startswith("sdio-card-init"):
         return 2, "sdio-card-select", f"{stage}-{status}", stage
     if stage in {"hal-resource-prep", "descriptor-replay", "engine-init"}:
         return 1, "sdio-driver-task-replay", f"{stage}-{status}", stage

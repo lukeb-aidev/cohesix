@@ -234,8 +234,11 @@ flowchart TD
 The diagram is intentionally split between runtime transport and owner-state
 proof. The generated manifest keeps seven Pi 4 runtime images
 acceptance-eligible, including `sdio-host` with its HAL-declared SDHCI MMIO
-page. Fresh Pi evidence must still prove the active hardware state machines
-make real progress from driver-local state. The transport boundary is no longer a one-page smoke loader:
+page, but a physical boot creates the selected-only active set for the requested
+network role. A Wi-Fi boot uses the common local-seat/serial/display/PCIe set
+plus `sdio-host` and `cyw43455`; a wired boot uses the common set plus `genet`.
+Fresh Pi evidence must still prove the active hardware state machines make real
+progress from driver-local state. The transport boundary is no longer a one-page smoke loader:
 root now maps bounded multi-page `PT_LOAD` runtime images and semantic
 MMIO/DMA/shared resource ranges before submitting the pointer-free init
 descriptor.
@@ -273,12 +276,13 @@ proof from the linked-runtime model.
   reason to spin or trust old handoff state.
 - If xHCI engine-init reaches controller-ready before HID readiness, the linked
   USB runtime must keep enumeration alive through bounded prompt-side service:
-  preserve current-boot Port Status Change events, power/sample root ports,
-  keep controller init separate from the explicit keyboard-enumeration aux
-  command, retry hub/HID enumeration during bounded resume turns, report the
-  last enumeration frontier during ordinary prompt polls, and publish owner-state
-  only after first-report proof. Keyboard-ready is an endpoint frontier, not an
-  owner-state proof.
+  preserve current-boot Port Status Change events, submit the gate-4 Enable Slot
+  proof once, poll its completion in bounded resume slices, power/sample root
+  ports only after command completion, keep controller init separate from the
+  explicit keyboard-enumeration aux command, retry hub/HID enumeration during
+  bounded resume turns, report the last enumeration frontier during ordinary
+  prompt polls, and publish owner-state only after first-report proof.
+  Keyboard-ready is an endpoint frontier, not an owner-state proof.
 - Wi-Fi replay is independent of USB. CYW43/SDIO descriptor replay and selected
   network progress must not wait for HID readiness, and USB polling must not
   mask Wi-Fi blockers; both lanes remain subordinate to serial/HDMI
@@ -343,7 +347,7 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 | `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
 | `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | linked image receives the HAL-declared SDHCI MMIO page plus shared pages, services fixed-layout CMD52/CMD53/POLL_IRQ turns, and must report dedicated-role plus owner-state descriptor proof before 26b SDIO acceptance is credited |
-| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | isolated child VSpace using the linked `pi4-driver-pcie` image | linked image requires declared PCIe MMIO/shared pages and services bounded 32-bit read/write/posted-write-flush turns inside the mapped aperture; broader root-complex/VL805 handoff still needs Pi proof and completion |
+| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | isolated child VSpace using the linked `pi4-driver-pcie` image | linked image requires declared PCIe MMIO/shared pages, adopts the HAL-prepared aperture at engine init, and services bounded 32-bit read/write/posted-write-flush turns inside that aperture; broader root-complex/VL805 handoff still needs Pi proof and completion |
 
 The final isolated-image contract is now generated rather than hand-authored in
 HAL. `configs/root_task.toml` and `configs/root_task_pi4_uboot_aarch64.toml`
@@ -393,8 +397,10 @@ The same Pi 4 manifest now defaults the first boot to DHCP/`auto` networking and
 requires the local-seat path, so a no-saved-policy boot exercises GENET DHCP and
 fails visibly if the HDMI/USB runtime cannot initialize.
 
-Physical Pi bootstrap creates only the seven generated linked-runtime hardware
-contracts: serial, SDIO, PCIe, USB/local-seat, HDMI text, CYW43, and GENET.
+Physical Pi bootstrap creates only selected generated linked-runtime hardware
+contracts from the acceptance-eligible set: serial, SDIO, PCIe, USB/local-seat,
+HDMI text, CYW43, and GENET. Wi-Fi and wired boots do not both activate their
+network runtime unless the manifest policy selects both.
 RTL8139 and virtio-net remain QEMU compatibility contracts, not physical Pi
 trampoline work. For each successfully created physical Pi driver TCB, the HAL allocates the TCB
 object, child CNode, command endpoint, notification, IPC frame, stack frame,
@@ -442,27 +448,20 @@ completion record and returns to `Recv` without issuing `Reply`; a missing
 completion must turn red and leave the root task runnable instead of trapping
 boot inside `seL4_Call`.
 This bounded bootstrap proof is resource-initialization evidence only: it must
-not be treated as final owner-state or driver acceptance.
-HDMI engine init is a
+not be treated as final owner-state or driver acceptance. HDMI engine init is a
 zero-frame `Service` command carrying `DRIVER_RUNTIME_ENGINE_INIT_AUX`; only
-actual text/framebuffer updates use the HDMI `SubmitFrame` opcode. Both the
-pre-root HDMI engine-init retry and early text render are bounded nonblocking
-proof attempts, so either frontier can fail red without hiding the UART prompt.
-After the prompt is printed, root retries the concise HDMI console-ready mirror
-before SDIO, PCIe, GENET, or CYW43 replay. Prompt-side descriptor replay remains
-bounded send/yield service so a missing bus or network completion cannot steal
-the visible serial shell; any no-reply frontier is logged and retried only by
-the next explicit service path.
-The shell-first deferral is the serial-safety boundary: no bus, network, USB, or
-display proof may hold the first prompt hostage, and repeated no-reply display
-mirroring must be circuit-broken instead of retried per console line. If the
-linked HDMI runtime still does not reply, root may use
-the HAL-mapped firmware framebuffer as a diagnostic-only mirror and must log
+actual text/framebuffer updates use the HDMI `SubmitFrame` opcode. For required
+Pi 4 local-seat/network boots, selected driver owner-state is a pre-shell gate:
+USB/local-seat, HDMI text, PCIe, SDIO/CYW43 or GENET as selected, and serial must
+reach their required resource-init frontier before the root prompt is published.
+The safety boundary is telemetry, not shell-first bypass. Every pre-shell driver
+turn must emit bounded `DRIVER_TASK_RESOURCE_INIT`, `DRIVER_TASK_RING_CALL_*`,
+and `DRIVER_TASK_ACCEPTANCE` evidence before halting or retrying, so a missing
+bus, no-reply runtime, or network completion cannot fail as an opaque freeze.
+If the linked HDMI runtime still does not reply, root may use the HAL-mapped
+firmware framebuffer as a diagnostic-only mirror and must log
 `[local-seat] root HDMI diagnostic mirror active ... acceptance=red`; that is
-visible debug output, not driver-task owner-state acceptance. Prompt-side
-USB keyboard polling, HDMI mirroring, and network/bus replay remain separate
-service turns after the serial shell is visible unless their pre-root owner-state
-proof has already returned.
+visible debug output, not driver-task owner-state acceptance.
 Root-console startup publishes its raw UART start/end markers and the serial
 prompt before any NineDoor log-stream attachment. On Pi 4 local-seat boots,
 post-prompt driver diagnostics remain on the serial UART and the logger reprints
@@ -486,7 +485,12 @@ after completion, and `DRIVER_TASK_RING_CALL_TIMEOUT` if a bounded diagnostic
 bootstrap handshake cannot prove receive/completion progress; timeout breadcrumbs
 include the command mode, opcode, hot-path argument, aux word, and frame length
 so a stalled boot log identifies the exact resource-init or service turn that
-failed to complete. Non-acceptance resource initialization breadcrumbs use
+failed to complete. Isolated runtimes also update a primitive progress marker
+in the fixed ring metadata window before command dispatch and around
+zero-frame engine init. On timeout, root emits `DRIVER_TASK_RING_PROGRESS` so
+the next boot distinguishes an IPC delivery miss from a runtime that observed
+the command and then stalled inside role-specific initialization.
+Non-acceptance resource initialization breadcrumbs use
 `DRIVER_TASK_RESOURCE_INIT ... stage=... status=... acceptance=no` for descriptor
 record, descriptor bootstrap, deferred descriptor replay, engine-init,
 owner-state rejection, and first command probes. Ring submit failures use the
@@ -498,18 +502,28 @@ USB/local-seat must report `usb-prereq-pcie-replay`, `usb-xhci-init`,
 `usb-keyboard-enumeration`, prompt-side `usb-keyboard-enumeration-retry`, and
 `usb-keyboard-first-report` separately so a Pi log can distinguish PCIe replay,
 xHCI bring-up, keyboard enumeration, retry progress, and first interrupt-report
-progress. The USB runtime detail word further identifies command-ring-ready,
-root-port-connected, device-addressed, device-descriptor, config-descriptor, HID
-endpoint, keyboard-ready, and first-report frontiers so xHCI-ready cannot hide
-the exact enumeration blocker. When the linked USB runtime reports a changed
+progress. The USB runtime detail word further identifies command-ring-pending,
+command-ring-ready, root-port-connected, device-addressed, device-descriptor,
+config-descriptor, HID endpoint, keyboard-ready, and first-report frontiers so
+xHCI-ready cannot hide the exact enumeration blocker. When the linked USB runtime reports a changed
 enumeration frontier, serial also emits one `USB_RUNTIME_ENUM_SNAPSHOT` line
 with the compact root-port mask, slot, endpoint, scan pass, command-path, HID,
-and transfer-event flags; repeated identical snapshots stay quiet. SDIO/Wi-Fi
+and transfer-event flags; command-proof snapshots additionally report whether
+the line is a command-proof turn plus the consumed event count, Enable Slot
+slot-or-poll count, compact last xHCI event code, and ERDP acknowledgement
+deferred/failure count. The command-proof result does not live-sample
+`PORTSC`; root-port masks are only reported after command proof unlocks
+root-port sampling. Repeated identical snapshots stay quiet. SDIO/Wi-Fi
 replay must split the first command proof into
-`sdio-cmd0-go-idle` and `sdio-cmd5-ocr`; a CMD0 failure means the SDIO command
-path itself is broken, while a CMD5/OCR failure points at card response,
-power/reset, or CYW43-side readiness. CYW43 firmware replay must separately log
-`cyw43-transport-init`, `cyw43-firmware-prep`, `cyw43-firmware-chunk`,
+	`sdio-cmd0-go-idle`, `sdio-cmd5-ocr`, `sdio-cmd5-ready`,
+	`sdio-cmd3-rca`, and `sdio-cmd7-select`; a CMD0 failure means the
+	SDIO command path itself is broken, a CMD5/OCR failure points at card
+	response, power/reset, or CYW43-side readiness, and a CMD7 failure is the
+	card-select boundary before firmware upload. Command-level SDIO failures emit
+	`SDIO_DRIVER_TASK_COMMAND_FAULT` with command index, argument, response flags,
+	detail, result, and decoded transfer stage/status/reason so CMD7 card-select
+	faults cannot be confused with later CMD53 firmware-transfer faults. CYW43 firmware replay must separately log
+	`cyw43-transport-init`, `cyw43-firmware-prep`, `cyw43-firmware-chunk`,
 `cyw43-nvram-chunk`, `cyw43-nvram-tail`, and `cyw43-firmware-release` so the
 new driver model can distinguish pre-upload clock/core setup from the bulk RAM
 write path. CYW43/SDIO owner-link transfer faults also emit one serial-only
@@ -925,7 +939,10 @@ leave the line stuck.
   events until after it DMA-publishes Enable Slot and rings doorbell `0`; the
   wait loop then skips and acknowledges those PSC events, inserts the same
   bounded prompt-safe wait used for other unexpected events, and still accepts
-  only the matching Command Completion Event as gate-4 proof. Do not unmask
+  only the matching Command Completion Event as gate-4 proof. The proof turn
+  returns after Enable Slot completion and no longer issues same-turn Disable
+  Slot cleanup, because the first real enumeration Address Device turn is the
+  next ownership proof and must not be hidden behind cleanup latency. Do not unmask
   external xHCI interrupt delivery until a milestone explicitly proves it.
 
 ### SDIO/CYW43455
@@ -1007,12 +1024,28 @@ transition, but it must not write SDHCI host-control registers directly.
   8192-byte SDIO shared-payload/RX owner window, and the linked runtime now
   starts each pre-release stage with the old-good high-speed 4-bit Function 1
   block-mode CMD53 lane, bounded to subtransfers inside the 8192-byte owner
-  window. A retained-stage retry replays the exact owner window through the
-  conservative byte lane after a real SDIO owner transfer fault, first as
-  `forced-byte-mode-conservative` and then as `byte-conservative` or
-  `byte-narrow-conservative` before reporting exhausted retry proof. The final
-  partial window flushes on end-of-image.
-  The old
+  window. A retained-stage retry replays the exact owner window after a real
+  SDIO owner transfer fault. The linked runtime keeps a bounded firmware-stage
+  scratch buffer because the incoming firmware command payload and the retained
+  backplane-write window both use the generated shared-payload offset `4096`.
+  Before flushing a retained stage that overlaps the incoming payload window, the
+  runtime preserves the incoming bytes in driver-owned state; a retry must never
+  clobber the next contiguous firmware chunk. Lower-level owner response faults
+  may still force the first replay through the conservative byte lane, but terminal `0x5329`
+  retry-exhausted proof re-enters the primary block lane after SDIO owner replay
+  instead of hammering the last failed 64-byte byte turn. Root reports the
+	  recovery attempt, resume offset, byte-forcing decision, and same-offset count;
+	  the 192-attempt recovery budget is progress-aware and fails closed after 24
+	  attempts at the same firmware offset. The final partial firmware window is
+	  zero-padded to a 512-byte boundary inside the declared owner window so the
+	  pre-release upload remains on the old-good Function 1 block-mode CMD53 lane
+	  instead of ending with fragile 29/64-byte byte-mode tail writes; root emits
+	  `CYW43_DRIVER_TASK_STREAM_TAIL_PAD` when that padding is active. The linked
+	  runtime treats those final padding bytes as physical transfer padding only:
+	  firmware chunk descriptors carry the logical byte count in `arg0`, and
+	  stream-complete accounting advances by that declared logical length, not by
+	  the padded owner payload length. Runtime rejects non-final, oversized, or
+	  non-zero final padding before issuing the SDIO owner transfer. The old
   monolithic HAL path could issue the full Linux 32704-byte 511-block turn from
   a 32 KiB window; the linked-runtime path must not claim that exact payload
   size unless the generated SDIO shared-payload contract is widened and hardware
@@ -1470,14 +1503,21 @@ transition, but it must not write SDHCI host-control registers directly.
   readiness/network summary, renders the `wifi: diag recorder=startup-blackbox ...`
   ten-gate table from cached snapshot or linked-runtime CYW43 fault evidence,
   reports an unchanged after-state when it skips the long live HT re-probe, and
-  leaves the full transport snapshot to `wifi dump-state`. A CYW43 firmware-upload
-  `0x5103` failure is reported as a CMD53 descriptor-transfer blocker with
-  `wifi: next_action=inspect-sdio-owner-cmd53-after-block-and-byte-retries`, and an
-  exhausted retained-stage ladder reports `0x5329` as `firmware-retry-exhausted`
-  while preserving the SDHCI transfer result plus the actual owner-lane label
-  (`forced-byte-mode-conservative`, `byte-conservative`, or
-  `byte-narrow-conservative`). Neither case is a generic disabled-network
-  state. Operators can still run the explicit
+	  leaves the full transport snapshot to `wifi dump-state`. A CYW43 firmware-upload
+	  `0x5101` failure on an `sdio-cmd*` or `sdio-card-init*` stage is reported
+		  as an SDIO command-unavailable card-select blocker; it is earlier than
+		  CYW43 firmware upload, DHCP, `nettest`, and `netstats` acceptance. A
+		  `0x5103` failure is reported as a CMD53 descriptor-transfer blocker with
+		  `wifi: next_action=inspect-sdio-owner-cmd53-after-block-and-byte-retries`, and an
+	  exhausted retained-stage ladder reports `0x5329` as `firmware-retry-exhausted`
+	  while preserving the SDHCI transfer result plus the actual owner-lane label
+	  (`forced-byte-mode-conservative`, `byte-conservative`, or
+	  `byte-narrow-conservative`). A `0x530a` `cyw43-descriptor-invalid` failure
+	  is earlier than SDIO owner execution: serial evidence must include the
+	  producer `payload_off`, `payload_len`, total length, and runtime result-bit
+	  predicate so the next pass can distinguish stale ring visibility from a true
+	  ABI-shape mismatch. None of these cases is a generic disabled-network state.
+	  Operators can still run the explicit
   `wifi probe-ht` command when linked-runtime state can support the stateful HT
   probe; otherwise it reports the same driver-task-runtime-required boundary.
 - Wi-Fi association completion is event-pump driven for both explicit `wifi`
@@ -1628,13 +1668,16 @@ active path is Cohesix-owned cold start:
   The command proof is Enable Slot, matching U-Boot's first non-root-hub xHCI
   allocation gate. Already-posted current-boot Port Status Change events remain
   on the event ring and are skipped/acknowledged while the Enable Slot command
-  is outstanding. The U-Boot-shaped Enable Slot lane must not perform a
-  same-command re-doorbell or pre-poll event-ring debug sync; after the DB0
-  posted-write flush it immediately enters the command-event wait and only the
-  matching Command Completion Event can advance the gate. No Op is only a
-  diagnostic helper and must not unlock root-port sampling. There is no
-  pre-command `ERDP.EHB` acknowledgement, no pre-command PSC drain, and no
-  same-command re-doorbell counted as proof.
+  is outstanding. The U-Boot-shaped Enable Slot lane rings DB0 exactly when it
+  submits the command; later prompt-safe poll turns must not re-ring an already
+  outstanding Enable Slot command. Only the matching Command Completion Event
+  can advance the gate. The proof turn reports
+  `command-ring-pending` while completion is outstanding, records command-ring
+  readiness only after the matching Command Completion Event, and returns before
+  any Disable Slot cleanup, so a cleanup stall cannot masquerade as missing
+  gate-4 proof. No Op is only a diagnostic helper and must not unlock root-port
+  sampling. There is no pre-command `ERDP.EHB` acknowledgement, no pre-command
+  PSC drain, and no same-command re-doorbell.
   `ERDP.EHB` acknowledgement publishes the low/control dword before the high
   DMA-alias dword and drains both writes through HAL only after an event has
   been consumed; if the event-ring dequeue pointer cannot be translated to the
@@ -1649,53 +1692,48 @@ active path is Cohesix-owned cold start:
   readbacks; it must not use an xHCI BAR read as the drain. A missing platform
   posted-write hook is a hard failure for the Pi 4 high-BAR VL805
   ownership-register, command-doorbell, and endpoint-doorbell paths.
-- If the first U-Boot-shaped Enable Slot attempt times out after consuming
-  current-boot PSC events, Cohesix may run exactly one bounded command recovery
-  lane: stop the controller, poll `USBSTS.HCH` with a bounded U-Boot-style halt
-  window, assert HCRST, require bounded HCRST clear and post-reset `USBSTS.CNR`
-  clear, then republish fresh DCBAA/command/event rings in U-Boot register order
-  (`DCBAAP`, `CRCR`, initial `ERDP`, `ERSTSZ`, `ERSTBA`), write `DNCTRL=0`,
-  start the controller with `USBCMD=RUN`, and apply the U-Boot post-start
-  poll-only interrupter state (`IMOD=0`, `IMAN=0`) before submitting a new
-  Enable Slot. Recovery
-  uses the same U-Boot cold-publish `CRCR` rule: after its local HCRST settle,
-  the Pi 4 `platform-reset-complete` recovery lane performs the pre-`RUN` live
-  `CRCR` seed read and preserves those low bits before writing the fresh command
-  ring pointer. Other recovery lanes preserve low bits from a trusted snapshot or
-  publish from a zero reserved-bit seed when no live read is allowed.
-  The recovery lane still must not use xHCI BAR reads, `USBSTS`, or `PORTSC` as
-  proof before command completion, and it must not acknowledge `ERDP.EHB` before
-  the retry command completes. If both the cold U-Boot-shaped Enable Slot and
-  this fresh U-Boot-shaped recovery lane time out while current-boot PSC events
-  prove that the event ring is live, Cohesix may run one bounded
-  Linux-captured command-event-generation fallback. That fallback is not
-  U-Boot proof; it must be logged as
-  `linux-captured-command-event-generation-after-uboot-timeout`, use a
-  one-shot command path with no hidden retry, reset and republish fresh
-  command/event rings again so the fallback Enable Slot TRB is at the published
-  `CRCR` dequeue pointer, perform the Linux-captured event-ring/IMAN
-  acknowledgement through HAL-drained paths, write the captured Linux
-  command-event controls (`DNCTRL=2`, `IMOD=0xa0`, `IMAN.IE`, and
-  `USBCMD.RUN|INTE`), then ring DB0 for that fresh Enable Slot command. A
-  fallback command queued behind an already timed-out TRB is
-  `cmd-stale-crcr-dequeue`, not proof. Only a matching Command Completion Event
-  from that bounded fallback advances gate 4, and the cleanup lane must identify
-  `cleanup_generation=linux-captured-command-event-generation`. Stale legacy
-  Linux-shaped labels, pre-command status reads, post-enqueue event-generation
-  replay without the preceding U-Boot recovery timeout, interrupt-delivery bits
-  without MSI ownership, or a same-command re-doorbell are not proof.
+- If the first U-Boot-shaped Enable Slot proof does not complete within the
+  bounded poll slices, the linked runtime reports `enable-slot-failed` and
+  returns to root instead of running a second same-turn command recovery lane.
+  A poll turn may consume only a small bounded number of event-ring entries
+  before returning `command-ring-pending`; this keeps root prompt slices
+  responsive while preserving PSC and keyboard-transfer events for later
+  enumeration. In the Enable Slot command-proof lane only, the runtime may
+  defer ERDP acknowledgement until a later full command/control wait so a toxic
+  ERDP write cannot turn a proof slice into a shell-blocking no-reply. The
+  command-proof snapshot does not read `PORTSC`; the low result bits carry
+  consumed event count until the matching completion unlocks root-port sampling.
+  The `USB_RUNTIME_ENUM_SNAPSHOT` command-proof fields are diagnostic only and
+  cannot advance beyond gate 4 without the matching Command Completion Event.
+  Prompt-side retry may then cold-reinitialize the xHC under the normal
+  driver-task budget and immediately run the next keyboard enumeration turn.
+  Any Linux-captured command-event-generation helper remains diagnostic-only
+  and cannot advance gate 4 unless it is separately authorized by a future
+  milestone and logs a matching Command Completion Event under its own label.
+  Stale legacy Linux-shaped labels, pre-command status reads, post-enqueue
+  event-generation replay, interrupt-delivery bits without MSI ownership, or a
+  same-command re-doorbell are not proof.
 - Prompt-side USB retry must be bounded and decisive. A linked-runtime retry may
-  cold-reinitialize the xHC on command-ring or Enable Slot proof stalls, then
+  cold-reinitialize the xHC on terminal Enable Slot proof failure, then
   immediately attempts the next keyboard enumeration turn instead of spending a
   long shell-blocking cooldown. Address, descriptor, config, HID attach, and hub
   attach failures preserve same-controller state so retries do not erase slot,
   port, or descriptor progress.
   Plain `xhci-ready` is progress toward Enable Slot proof, not a reset-worthy
   stall; resetting there can loop forever at gate 3 and prevent gate 4 command
-  proof. The command-completion spin budget is shorter than the control-transfer
-  wait budget so a no-reply child runtime exposes `command-ring-ready` or
-  `usb-keyboard-enumeration` failure quickly, and only `keyboard-ready` plus
-  first HID report/byte proof can clear USB acceptance.
+  proof. Prompt diagnostics therefore label the next action as
+  `submit-enable-slot-command` at `xhci-ready` and
+  `poll-enable-slot-completion` at `command-ring-pending`, with recovery policy
+  `same-controller-command-proof` for both. The command-proof polling slice is
+  shorter than the full command/control-transfer wait budgets so a no-reply
+  child runtime exposes `command-event-ring-not-proven`,
+  `enable-slot-completion-pending`, or `enable-slot-failed` quickly, and only
+  `keyboard-ready` plus first HID report/byte proof can clear USB acceptance.
+  Root preserves an in-flight linked-runtime USB enumeration request only for a
+  bounded number of no-reply slices; after that it logs
+  `DRIVER_TASK_RING_CALL_ABORT reason=timeout-resume-limit`, clears the active
+  latch, and allows a fresh enumeration turn so a stale request cannot wedge
+  serial prompt responsiveness.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. USB keyboard availability must not depend on the
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local
@@ -1704,11 +1742,13 @@ active path is Cohesix-owned cold start:
   if `hw.local_seat.required=true`, `coh-rtc` requires matching
   `hw.devices[]` entries for the configured keyboard/display IDs with
   `required=true`. A missing manifest device remains fatal before ticket
-  publication, but a driver-task backend that is intentionally unavailable
-  before the serial prompt is not fatal: the serial shell must come up first
-  and the local-seat runtime keeps polling once prompt-safe service turns are
-  allowed. A present backend with no keyboard ready on the first bounded probe
-  keeps polling instead of falling back to serial-only. When
+  publication, and a required driver-task backend that is unavailable, has not
+  replied, or has not yet proven owner-state before the serial prompt remains a
+  pre-shell failure. Before halting, root must emit the exact driver-task
+  resource-init frontier plus the boot-contract summary (`DRIVER_TASK_SELECTED`,
+  `DRIVER_TASK_OWNER_STATE`, and `DRIVER_TASK_ACCEPTANCE`) so the next boot log
+  identifies the failed gate. A present backend with no keyboard ready on the
+  first bounded probe keeps polling instead of falling back to serial-only. When
   `required=false`, backend failures degrade to serial-only diagnostics with
   explicit `[local-seat]` boot lines and no repeated xHCI probing.
   The root console then waits in the event pump until Wi-Fi association and
@@ -2247,7 +2287,7 @@ applies. Use the focused aliases:
   covers target-neutral local-seat parser, keyboard queue, mirror, and USB/Wi-Fi
   command policy helpers.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::`
-  covers Pi 4 local-seat USB/VL805/xHCI policy, Enable Slot plus Disable Slot
+  covers Pi 4 local-seat USB/VL805/xHCI policy, bounded Enable Slot
   command-ring proof, event-ring polling, PCIe DMA aliasing, and HAL
   interrupt-source ordering.
 - `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`

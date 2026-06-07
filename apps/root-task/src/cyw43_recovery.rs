@@ -7,8 +7,12 @@
 
 use pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK;
 
+const CYW43_FIRMWARE_RETRY_EXHAUSTED_DETAIL: u16 = 0x5329;
+
 pub(crate) const fn firmware_resume_forces_byte_mode(op: u16, detail: u16) -> bool {
-    op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK && fault_detail_allows_sdio_owner_recovery(detail)
+    op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
+        && detail != CYW43_FIRMWARE_RETRY_EXHAUSTED_DETAIL
+        && fault_detail_allows_sdio_owner_recovery(detail)
 }
 
 pub(crate) const fn fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool {
@@ -46,10 +50,14 @@ mod tests {
     };
 
     #[test]
-    fn firmware_resume_forces_byte_mode_after_owner_recovery_fault() {
-        assert!(firmware_resume_forces_byte_mode(
+    fn firmware_resume_retries_retry_exhaustion_on_primary_lane() {
+        assert!(!firmware_resume_forces_byte_mode(
             DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
             0x5329
+        ));
+        assert!(firmware_resume_forces_byte_mode(
+            DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            0x5103
         ));
         assert!(!firmware_resume_forces_byte_mode(
             DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,

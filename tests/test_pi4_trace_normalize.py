@@ -345,6 +345,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_RING_CALL_RETURN": 0,
         "DRIVER_TASK_RING_CALL_OUTSTANDING": 0,
         "DRIVER_TASK_RING_CALL_TIMEOUT": 0,
+        "DRIVER_TASK_RING_CALL_ABORT": 0,
         "DRIVER_TASK_BOOTSTRAP_DEFERRED": 0,
         "DRIVER_TASK_RESOURCE_INIT": 0,
         "DRIVER_TASK_RESOURCE_BLOCKER": "none",
@@ -866,6 +867,28 @@ def test_gate_summary_tracks_driver_task_ring_call_timeout() -> None:
     assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
 
 
+def test_gate_summary_tracks_driver_task_ring_call_abort() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RING_CALL_BEGIN contract=usb-local-seat endpoint=0x07a4 "
+            "request=5 opcode=1 flags=0x2000 arg0=2 arg1=2 aux0=0x55534245",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=usb-local-seat endpoint=0x07a4 "
+            "request=5 mode=prompt-slice attempts=512 opcode=1 arg0=2 "
+            "aux0=0x55534245 frame_len=0",
+            "DRIVER_TASK_RING_CALL_ABORT contract=usb-local-seat endpoint=0x07a4 "
+            "request=5 mode=prompt-slice reason=timeout-resume-limit "
+            "timeout_count=3 opcode=1 arg0=2 aux0=0x55534245 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_RING_CALL_BEGIN"] == 1
+    assert record["DRIVER_TASK_RING_CALL_RETURN"] == 0
+    assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
+    assert record["DRIVER_TASK_RING_CALL_ABORT"] == 1
+    assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 0
+
+
 def test_gate_summary_preserves_pcie_vl805_usb_blocker_over_keyboard_ready() -> None:
     events = normalizer.parse_events(
         [
@@ -950,6 +973,36 @@ def test_gate_summary_names_cyw43_firmware_retry_exhaustion() -> None:
     assert gates.wifi_phase == "cyw43-firmware-chunk"
 
 
+def test_gate_summary_names_june7_cyw43_firmware_owner_fault_shape() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 5 name=backplane-window status=pass "
+            "evidence=programmed=0x00198000 next=firmware-upload",
+            "wifi: gate 6 name=firmware-upload status=fail "
+            "evidence=uploaded=no fault_detail=0x5329 next=function2-ready",
+            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0000 "
+            "target=0x0021a000 payload_len=8192 total_len=609309 detail=0x5329 "
+            "reason=cyw43-firmware-retry-exhausted result=0x05000800",
+            "wifi: evidence sdio_cmd53 func=1 addr=0x0021b800 len=64 "
+            "increment=yes block_mode=no op=2 source=owner-terminal",
+            "wifi: evidence sdio_status "
+            "descriptor_status=cyw43-firmware-retry-exhausted "
+            "transfer_stage=response transfer_status=0x000800 "
+            "transfer_reason=sdio-r5-response r5=0x0800 "
+            "retry=byte-narrow-conservative-exhausted host=0x06 clock=0x5007",
+            "wifi: evidence sdio_payload first=0x11 last=0x22 xor=0x33 "
+            "sum=0x00004444 owner_window=sdio-shared-8192",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "cyw43-firmware-retry-exhausted"
+    assert gates.wifi_exact == "cyw43-firmware-retry-exhausted"
+    assert gates.wifi_phase == "cyw43-firmware-chunk"
+
+
 def test_gate_summary_keeps_wifi_blackbox_fault_over_later_prompt_replay() -> None:
     events = normalizer.parse_events(
         [
@@ -988,6 +1041,29 @@ def test_gate_summary_fails_closed_on_cyw43_firmware_upload_pass_with_fault() ->
     assert gates.wifi_gate == 5
     assert gates.wifi_blocker == "cyw43-runtime-command-rejected"
     assert gates.wifi_exact == "cyw43-runtime-command-rejected"
+    assert gates.wifi_phase == "cyw43-firmware-chunk"
+
+
+def test_gate_summary_tracks_cyw43_descriptor_invalid_fault() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: gate 5 name=backplane-window status=pass evidence=programmed=0x00198000 next=firmware-upload",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-firmware-chunk op=2 flags=0x0000 target=0x00200000 "
+            "payload_off=4096 payload_len=8192 total_len=609309 detail=21258 "
+            "reason=cyw43-descriptor-invalid result=0x00000004",
+            "wifi: evidence cyw43 stage=cyw43-firmware-chunk op=2 flags=0x0000 "
+            "target=0x00200000 payload_off=4096 payload_len=8192 "
+            "total_len=609309 detail=0x530a reason=cyw43-descriptor-invalid "
+            "result=0x00000004",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "cyw43-descriptor-invalid"
+    assert gates.wifi_exact == "cyw43-descriptor-invalid"
     assert gates.wifi_phase == "cyw43-firmware-chunk"
 
 
@@ -1341,7 +1417,7 @@ def test_gate_summary_labels_usb_first_report_enumeration_blocker() -> None:
     record = normalizer.summarize_gates(events).to_record()
     assert (
         record["USB_BLOCKER"]
-        == "usb-xhci-ready-keyboard-not-enumerated"
+        == "command-event-ring-not-proven"
     )
     assert (
         record["USB_DRIVER_TASK_FRONTIER"]
@@ -1480,6 +1556,31 @@ def test_gate_summary_tracks_split_sdio_command_probe_blockers() -> None:
     assert record["WIFI_BLOCKER"] == "sdio-card-select"
     assert record["WIFI_EXACT"] == "sdio-command-unavailable"
     assert record["WIFI_PHASE"] == "sdio-cmd5-ocr"
+
+
+def test_gate_summary_tracks_sdio_cmd7_command_fault() -> None:
+    events = normalizer.parse_events(
+        [
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=sdio-cmd7-select-r1-fallback "
+            "blocker=fault",
+            "SDIO_DRIVER_TASK_COMMAND_FAULT contract=sdio-host "
+            "stage=sdio-cmd7-select-r1-fallback cmd=7 arg=0x00010000 "
+            "flags=0x0002 detail=0x5101 reason=sdio-command-unavailable "
+            "result=0x02018040 xfer_stage=command xfer_status=0x018040 "
+            "xfer_reason=sdhci-command",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 2
+    assert record["WIFI_BLOCKER"] == "sdio-card-select"
+    assert record["WIFI_EXACT"] == "sdio-command-unavailable"
+    assert record["WIFI_PHASE"] == "sdio-cmd7-select-r1-fallback"
+    assert (
+        record["SDIO_DRIVER_TASK_REPLAY_BLOCKER"]
+        == "sdio-host:sdio-cmd7-select-r1-fallback:fault"
+    )
 
 
 def test_gate_summary_labels_cyw43_transport_substage_fault_detail() -> None:
@@ -4465,6 +4566,24 @@ def test_gate_summary_tracks_usb_runtime_enum_snapshot_detail() -> None:
 
     assert gates.usb_gate == 5
     assert gates.usb_blocker == "enable-slot-failed"
+
+
+def test_gate_summary_tracks_usb_command_ring_pending_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000001 root_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=1 cmd_slot_or_polls=1 cmd_event_type=0 "
+            "cmd_ack_failures=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "enable-slot-completion-pending"
 
 
 def test_gate_summary_tracks_usb_startup_blackbox_gates() -> None:

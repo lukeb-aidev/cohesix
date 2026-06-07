@@ -51,6 +51,7 @@ use pi4_driver_abi::{DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_USB_ENUM
 ))]
 use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING,
     DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR,
     DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED,
@@ -2071,6 +2072,7 @@ fn local_seat_usb_engine_progress(
         && matches!(
             completion.detail,
             DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
@@ -2160,6 +2162,12 @@ fn local_seat_usb_keyboard_enum_status(
         }
         Some(completion)
             if local_seat_usb_completion_progress(completion)
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING =>
+        {
+            "command-ring-pending"
+        }
+        Some(completion)
+            if local_seat_usb_completion_progress(completion)
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY =>
         {
             "command-ring-ready"
@@ -2212,6 +2220,7 @@ fn local_seat_usb_keyboard_enumeration_progress(
         && matches!(
             completion.detail,
             DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
@@ -2238,6 +2247,7 @@ fn local_seat_usb_keyboard_enumeration_progress(
 const fn linked_local_seat_usb_detail_rank(detail: u16) -> u8 {
     match detail {
         DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY => 3,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING => 4,
         DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => 4,
         DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
         | DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => 5,
@@ -2379,14 +2389,21 @@ fn emit_linked_local_seat_usb_enumeration_snapshot(
     use core::fmt::Write;
 
     let result = completion.result;
-    let root_mask = result & USB_ENUM_RESULT_ROOT_PORT_MASK;
+    let root_or_events = result & USB_ENUM_RESULT_ROOT_PORT_MASK;
     let slot = (result >> USB_ENUM_RESULT_SLOT_SHIFT) & 0xff;
     let endpoint = (result >> USB_ENUM_RESULT_ENDPOINT_SHIFT) & 0x1f;
     let scan_pass = (result >> USB_ENUM_RESULT_SCAN_PASS_SHIFT) & USB_ENUM_RESULT_SCAN_PASS_MASK;
-    let mut line = heapless::String::<384>::new();
+    let command_proof = matches!(
+        completion.detail,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+    );
+    let root_mask = if command_proof { 0 } else { root_or_events };
+    let command_events_seen = if command_proof { root_or_events } else { 0 };
+    let mut line = heapless::String::<512>::new();
     let _ = write!(
         line,
-        "USB_RUNTIME_ENUM_SNAPSHOT contract={} detail=0x{:04x} result=0x{:08x} root_mask=0x{:02x} slot={} ep_id={} scan_pass={} root_power={} cmd_path={} port_event={} hid_ep={} preserved_event={} transfer_event={} endpoint_ready={}",
+        "USB_RUNTIME_ENUM_SNAPSHOT contract={} detail=0x{:04x} result=0x{:08x} root_mask=0x{:02x} slot={} ep_id={} scan_pass={} root_power={} cmd_path={} port_event={} hid_ep={} preserved_event={} transfer_event={} endpoint_ready={} cmd_proof={} cmd_events_seen={} cmd_slot_or_polls={} cmd_event_type={} cmd_ack_failures={}",
         contract.name,
         completion.detail,
         result,
@@ -2401,6 +2418,11 @@ fn emit_linked_local_seat_usb_enumeration_snapshot(
         local_seat_yes_no(result & USB_ENUM_RESULT_PRESERVED_EVENT != 0),
         local_seat_yes_no(result & USB_ENUM_RESULT_TRANSFER_EVENT != 0),
         local_seat_yes_no(result & USB_ENUM_RESULT_ENDPOINT_READY != 0),
+        local_seat_yes_no(command_proof),
+        command_events_seen,
+        if command_proof { slot } else { 0 },
+        if command_proof { endpoint } else { 0 },
+        if command_proof { scan_pass } else { 0 },
     );
     boot_log::force_uart_line(line.as_str());
 }

@@ -21,6 +21,8 @@ pub const DRIVER_RUNTIME_USB_ENUMERATE_AUX: u32 = 0x5553_4245;
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY: u16 = 0x0201;
 /// USB runtime init detail: xHCI controller and boot keyboard endpoint are ready.
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY: u16 = 0x0202;
+/// USB runtime init detail: Enable Slot command is submitted and waiting for completion.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING: u16 = 0x0203;
 /// USB service detail: keyboard endpoint is armed, but no interrupt report has arrived.
 pub const DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING: u16 = 0x0500;
 /// USB service detail: a HID interrupt report arrived, but no console byte was emitted.
@@ -159,6 +161,20 @@ pub const DRIVER_RUNTIME_RESOURCE_PAGE_BYTES: u64 = 4096;
 pub const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
 /// Bytes in one command/completion ring page.
 pub const DRIVER_RUNTIME_RING_PAGE_BYTES: u16 = 4096;
+/// Fixed offset of the runtime progress marker in one ring page.
+pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
+/// Bytes in the runtime progress marker.
+pub const DRIVER_RUNTIME_RING_PROGRESS_BYTES: u16 = 16;
+/// Runtime progress-marker magic.
+pub const DRIVER_RUNTIME_RING_PROGRESS_MAGIC: u32 = 0x4452_5047;
+/// Runtime has observed the staged command.
+pub const DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED: u32 = 1;
+/// Runtime is entering the role-specific engine-init path.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN: u32 = 3;
+/// Runtime completed the role-specific engine-init path.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE: u32 = 4;
+/// Runtime rejected the role-specific engine-init path.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED: u32 = 5;
 /// Offset namespace base for runtime shared-buffer payloads referenced by an
 /// owner-ring descriptor.
 pub const DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE: u16 = DRIVER_RUNTIME_RING_PAGE_BYTES;
@@ -445,7 +461,9 @@ pub struct DriverRuntimeCyw43CommandDescriptor {
     pub payload_len: u16,
     /// Total stream length for chunked transfers.
     pub total_len: u32,
-    /// Operation-specific argument.
+    /// Operation-specific argument. Firmware chunk commands use this as the
+    /// logical firmware byte count when the physical payload carries final-tail
+    /// transfer padding.
     pub arg0: u32,
     /// Operation-specific argument.
     pub arg1: u32,
