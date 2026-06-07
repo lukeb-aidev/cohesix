@@ -132,7 +132,7 @@ strip_root_task_for_pi_image() {
     mkdir -p "$ROOT_TASK_STRIP_DIR"
     STRIPPED_ROOT_TASK_ELF="${ROOT_TASK_STRIP_DIR}/root-task"
     cp -f "$src" "$STRIPPED_ROOT_TASK_ELF"
-    "$strip_tool" --strip-all "$STRIPPED_ROOT_TASK_ELF"
+    "$strip_tool" --strip-all --remove-section=.comment "$STRIPPED_ROOT_TASK_ELF"
     require_file "$STRIPPED_ROOT_TASK_ELF"
     [[ -s "$STRIPPED_ROOT_TASK_ELF" ]] || fail "stripped root-task ELF is empty"
 
@@ -1105,6 +1105,8 @@ package_driver_runtime_raw_cpio() {
     local runtime_artifact_dir="${ROOT_DIR}/target/aarch64-unknown-none/release"
     local strip_tool
     local bin
+    local generic_runtime="${runtime_bin}/pi4-driver-runtime"
+    local dedup_driver_runtimes=1
 
     assert_driver_runtime_elf_budgets "$runtime_artifact_dir"
     strip_tool="$(find_aarch64_strip || true)"
@@ -1123,9 +1125,43 @@ package_driver_runtime_raw_cpio() {
     do
         require_file "${runtime_artifact_dir}/${bin}"
         install -m 0755 "${runtime_artifact_dir}/${bin}" "${runtime_bin}/${bin}"
-        "$strip_tool" --strip-all "${runtime_bin}/${bin}"
+        "$strip_tool" \
+            --strip-all \
+            --remove-section=.comment \
+            --remove-section=.eh_frame \
+            --remove-section=.eh_frame_hdr \
+            "${runtime_bin}/${bin}"
         log "Staged isolated driver runtime: ${bin}"
     done
+    cp -f "${runtime_bin}/pi4-driver-serial" "$generic_runtime"
+    for bin in \
+        pi4-driver-serial \
+        pi4-driver-usb \
+        pi4-driver-hdmi \
+        pi4-driver-genet \
+        pi4-driver-cyw43 \
+        pi4-driver-sdio \
+        pi4-driver-pcie
+    do
+        if ! cmp -s "$generic_runtime" "${runtime_bin}/${bin}"; then
+            dedup_driver_runtimes=0
+            break
+        fi
+    done
+    if [[ "$dedup_driver_runtimes" == "1" ]]; then
+        rm -f \
+            "${runtime_bin}/pi4-driver-serial" \
+            "${runtime_bin}/pi4-driver-usb" \
+            "${runtime_bin}/pi4-driver-hdmi" \
+            "${runtime_bin}/pi4-driver-genet" \
+            "${runtime_bin}/pi4-driver-cyw43" \
+            "${runtime_bin}/pi4-driver-sdio" \
+            "${runtime_bin}/pi4-driver-pcie"
+        log "Deduplicated identical Pi4 driver runtimes as cohesix/bin/pi4-driver-runtime"
+    else
+        rm -f "$generic_runtime"
+        log "Pi4 driver runtimes differ; keeping per-role runtime images"
+    fi
 
     (
         cd "$runtime_root"

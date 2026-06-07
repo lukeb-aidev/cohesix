@@ -21,8 +21,6 @@ use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 use spin::Mutex;
 
-use crate::drivers::bcmgenet::{BcmGenetDevice, DriverError as BcmGenetDriverError};
-use crate::drivers::cyw43::{Cyw43NetDevice, DriverError as Cyw43DriverError};
 use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
     DriverTaskCompletionCode, DriverTaskCompletionRecord, DriverTaskContract, DriverTaskFaultCode,
@@ -56,12 +54,13 @@ const DRIVER_TASK_NET_STATUS: &str = "driver-task-ring-client";
 const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
 const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
 // Keep root-to-runtime firmware chunks aligned to the linked runtime's declared
-// SDIO owner window so pre-release upload starts with Function 1 block-mode CMD53
-// turns and retains byte-mode only for the explicit retry lane.
+// SDIO owner window so retained-stage recovery can replay an exact failed
+// backplane window without restarting the whole firmware stream.
 const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
 const CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL: usize = 32 * 1024;
 const CYW43_RUNTIME_STREAM_COMMAND_RETRIES: usize = 2;
+const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 32;
 const CYW43_BACKPLANE_ADDRESS_MASK: u32 = 0x7fff;
 const CYW43_BACKPLANE_WINDOW_MASK: u32 = 0xffff_8000;
 const CYW43_BACKPLANE_32BIT_FLAG: u32 = 0x8000;
@@ -116,9 +115,6 @@ static CYW43_HOST_EAPOL_START: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_SECURE: AtomicU32 = AtomicU32::new(0);
 static SDIO_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static SDIO_HAL_RESOURCE_READY: AtomicU32 = AtomicU32::new(0);
-static GENET_RUNTIME: Mutex<Option<BcmGenetDevice>> = Mutex::new(None);
-static CYW43_RUNTIME: Mutex<Option<Cyw43NetDevice>> = Mutex::new(None);
-static NET_RUNTIME_INIT_LEASE: Mutex<Option<NetRuntimeInitLease>> = Mutex::new(None);
 #[cfg(feature = "kernel")]
 static CYW43_LAST_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultStatus>> =
     Mutex::new(None);
@@ -379,31 +375,6 @@ fn emit_sdio_driver_task_replay_status(stage: &'static str, status: &'static str
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
-
-type NetRuntimeInitFn = unsafe fn(
-    usize,
-    ConsoleNetConfig,
-    NetStage,
-    DriverTaskHotPath,
-) -> Result<(), DriverTaskNetError>;
-
-#[derive(Clone, Copy)]
-struct NetRuntimeInitLease {
-    hal_ptr: usize,
-    config: ConsoleNetConfig,
-    stage: NetStage,
-    init: NetRuntimeInitFn,
-}
-
-// SAFETY: The physical Pi driver-task path serializes access through one
-// contract ring service turn at a time. Root holds only the ring client; the
-// service state is protected by `GENET_RUNTIME`.
-unsafe impl Send for BcmGenetDevice {}
-
-// SAFETY: The physical Pi driver-task path serializes access through one
-// contract ring service turn at a time. Root holds only the ring client; the
-// service state is protected by `CYW43_RUNTIME`.
-unsafe impl Send for Cyw43NetDevice {}
 
 /// Error surfaced by driver-task NIC clients.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -674,37 +645,8 @@ where
         return Err(DriverTaskNetError::RuntimeInit(hot_path.as_str()));
     }
 
-    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
-        contract,
-        hot_path.as_u32() as usize,
-        runtime_ring_service,
-    );
-    *NET_RUNTIME_INIT_LEASE.lock() = Some(NetRuntimeInitLease {
-        hal_ptr: hal as *mut H as usize,
-        config,
-        stage,
-        init: init_runtime_for_hal::<H>,
-    });
-    let mut command = DriverTaskCommandRecord::pi4_hot_path(
-        0,
-        hot_path,
-        DriverTaskBudgetGrant::from_contract(contract),
-        DriverFrameDescriptor {
-            offset: 0,
-            len: 0,
-            flags: 0,
-        },
-    );
-    command.aux0 = DRIVER_RUNTIME_NET_INIT_AUX;
-    let result = run_driver_task_net_service(contract, command).is_some_and(|completion| {
-        completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
-    });
-    if result {
-        Ok(())
-    } else {
-        let _ = NET_RUNTIME_INIT_LEASE.lock().take();
-        Err(DriverTaskNetError::RuntimeInit(hot_path.as_str()))
-    }
+    let _ = (hal, config, stage);
+    Err(DriverTaskNetError::RuntimeInit(hot_path.as_str()))
 }
 
 #[cfg(feature = "kernel")]
@@ -724,55 +666,66 @@ where
     let reset_vector = firmware_reset_vector(bundle.firmware)
         .ok_or(DriverTaskNetError::RuntimeInit("cyw43-rstvec"))?;
     clear_cyw43_runtime_command_fault_status();
-    let mut recovered = false;
+    let mut recovery_attempts = 0usize;
+    let mut next_resume: Option<(usize, bool)> = None;
     loop {
-        match complete_cyw43_linked_runtime_firmware_once(hal, contract, bundle, reset_vector) {
+        let result = if let Some((resume_offset, force_resume_byte_mode)) = next_resume.take() {
+            complete_cyw43_linked_runtime_firmware_from_offset(
+                hal,
+                contract,
+                bundle,
+                reset_vector,
+                resume_offset,
+                force_resume_byte_mode,
+            )
+        } else {
+            complete_cyw43_linked_runtime_firmware_once(hal, contract, bundle, reset_vector)
+        };
+        match result {
             Ok(()) => {
                 clear_cyw43_runtime_command_fault_status();
                 return Ok(());
             }
             Err(err) => {
-                if !recovered {
-                    if let Some(completion) = err.recoverable_completion() {
-                        let resume_offset =
-                            latest_cyw43_runtime_command_fault_status().and_then(|fault| {
-                                cyw43_firmware_resume_offset(fault, bundle.firmware.len())
-                            });
-                        crate::hal::driver_task::emit_driver_task_resource_init_status(
-                            contract,
-                            DriverTaskHotPath::Cyw43Wifi,
-                            "cyw43-firmware-recover",
-                            "sdio-owner-replay",
-                            Some(completion),
-                        );
-                        replay_sdio_host_linked_runtime_preserving_hal(
-                            hal,
-                            "cyw43-firmware-recover",
-                        )?;
-                        if let Some(resume_offset) = resume_offset {
-                            crate::hal::driver_task::emit_driver_task_resource_init_status(
-                                contract,
-                                DriverTaskHotPath::Cyw43Wifi,
-                                "cyw43-firmware-recover",
-                                "resume-retained-stage",
-                                Some(completion),
-                            );
-                            complete_cyw43_linked_runtime_firmware_from_offset(
-                                hal,
-                                contract,
-                                bundle,
-                                reset_vector,
-                                resume_offset,
-                            )
-                            .map_err(Cyw43FirmwareInitError::into_net_error)?;
-                            clear_cyw43_runtime_command_fault_status();
-                            return Ok(());
-                        }
-                        recovered = true;
-                        continue;
-                    }
+                if recovery_attempts >= CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS {
+                    return Err(err.into_net_error());
                 }
-                return Err(err.into_net_error());
+                let Some(completion) = err.recoverable_completion() else {
+                    return Err(err.into_net_error());
+                };
+                let resume_fault = latest_cyw43_runtime_command_fault_status();
+                let resume_offset = resume_fault
+                    .and_then(|fault| cyw43_firmware_resume_offset(fault, bundle.firmware.len()));
+                if resume_offset.is_none() && recovery_attempts != 0 {
+                    return Err(err.into_net_error());
+                }
+                let force_resume_byte_mode =
+                    resume_fault.is_some_and(cyw43_firmware_resume_forces_byte_mode);
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    contract,
+                    DriverTaskHotPath::Cyw43Wifi,
+                    "cyw43-firmware-recover",
+                    "sdio-owner-replay",
+                    Some(completion),
+                );
+                replay_sdio_host_linked_runtime_preserving_hal(hal, "cyw43-firmware-recover")?;
+                recovery_attempts = recovery_attempts.saturating_add(1);
+                if let Some(resume_offset) = resume_offset {
+                    emit_cyw43_runtime_firmware_recovery(
+                        contract,
+                        recovery_attempts,
+                        resume_offset,
+                        force_resume_byte_mode,
+                    );
+                    crate::hal::driver_task::emit_driver_task_resource_init_status(
+                        contract,
+                        DriverTaskHotPath::Cyw43Wifi,
+                        "cyw43-firmware-recover",
+                        "resume-retained-stage",
+                        Some(completion),
+                    );
+                    next_resume = Some((resume_offset, force_resume_byte_mode));
+                }
             }
         }
     }
@@ -786,54 +739,11 @@ fn complete_cyw43_linked_runtime_control_plane<H>(
 where
     H: Hardware<Error = HalError>,
 {
+    let _ = (hal, config);
     reset_cyw43_control_plane_state();
-    let bundle = hal
-        .wifi_firmware_bundle()
-        .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-control-firmware-bundle"))?;
-    let device = Cyw43NetDevice::new_driver_task_runtime(&config, bundle)
-        .map_err(|_err: Cyw43DriverError| DriverTaskNetError::RuntimeInit("cyw43-control-plane"))?;
-    publish_cyw43_control_plane_counters(device.counters());
-    *CYW43_RUNTIME.lock() = Some(device);
-    Ok(())
-}
-
-#[cfg(feature = "kernel")]
-fn reset_cyw43_control_plane_state() {
-    CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
-    CYW43_ASSOCIATED.store(0, Ordering::Release);
-    CYW43_LINK_UP.store(0, Ordering::Release);
-    CYW43_HOST_EAPOL_RX.store(0, Ordering::Release);
-    CYW43_HOST_EAPOL_START.store(0, Ordering::Release);
-    CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
-}
-
-#[cfg(feature = "kernel")]
-fn publish_cyw43_control_plane_counters(counters: NetDeviceCounters) {
-    CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
-    CYW43_ASSOCIATED.store(
-        if counters.wifi_assoc != 0 { 1 } else { 0 },
-        Ordering::Release,
-    );
-    CYW43_LINK_UP.store(
-        if counters.wifi_link_up != 0 { 1 } else { 0 },
-        Ordering::Release,
-    );
-    CYW43_HOST_EAPOL_RX.store(
-        counters.wifi_host_eapol_rx.min(u64::from(u32::MAX)) as u32,
-        Ordering::Release,
-    );
-    CYW43_HOST_EAPOL_START.store(
-        counters.wifi_host_eapol_start.min(u64::from(u32::MAX)) as u32,
-        Ordering::Release,
-    );
-    CYW43_HOST_EAPOL_SECURE.store(
-        if counters.wifi_host_eapol_secure != 0 {
-            1
-        } else {
-            0
-        },
-        Ordering::Release,
-    );
+    Err(DriverTaskNetError::RuntimeInit(
+        "cyw43-control-plane-linked-runtime-required",
+    ))
 }
 
 #[cfg(feature = "kernel")]
@@ -883,6 +793,7 @@ fn complete_cyw43_linked_runtime_firmware_from_offset<H>(
     bundle: crate::hal::WifiFirmwareBundle<'_>,
     reset_vector: u32,
     resume_offset: usize,
+    force_first_chunk_byte_mode: bool,
 ) -> Result<(), Cyw43FirmwareInitError>
 where
     H: Hardware<Error = HalError>,
@@ -895,7 +806,7 @@ where
         bundle.firmware,
         bundle.firmware.len(),
         resume_offset,
-        false,
+        force_first_chunk_byte_mode,
     )?;
     complete_cyw43_linked_runtime_firmware_tail(hal, contract, bundle, reset_vector)
 }
@@ -980,6 +891,11 @@ fn cyw43_firmware_resume_offset(
     } else {
         None
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_firmware_resume_forces_byte_mode(fault: Cyw43RuntimeCommandFaultStatus) -> bool {
+    crate::cyw43_recovery::firmware_resume_forces_byte_mode(fault.op, fault.detail)
 }
 
 #[cfg(feature = "kernel")]
@@ -1447,6 +1363,24 @@ fn emit_cyw43_runtime_stream_progress(
         total_len,
         target_addr,
         chunk_len,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_runtime_firmware_recovery(
+    contract: DriverTaskContract,
+    attempt: usize,
+    resume_offset: usize,
+    force_byte_mode: bool,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<192>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_FIRMWARE_RECOVERY contract={} attempt={} resume_offset={} force_byte={}",
+        contract.name, attempt, resume_offset, force_byte_mode,
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
@@ -2161,9 +2095,24 @@ const fn cyw43_owner_retry_label(
     detail: u16,
 ) -> &'static str {
     if descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE != 0 {
-        "forced-byte-mode"
+        if snapshot.host_control & 0x06 == 0 {
+            "forced-byte-mode-conservative"
+        } else {
+            "forced-byte-mode-promoted"
+        }
     } else if !snapshot.cmd53_block_mode() {
-        if detail == 0x5329 && snapshot.len < SDIO_CMD53_BYTE_MODE_MAX {
+        if snapshot.host_control & 0x06 == 0
+            && detail == 0x5329
+            && snapshot.len < SDIO_CMD53_BYTE_MODE_MAX
+        {
+            "byte-narrow-conservative-exhausted"
+        } else if snapshot.host_control & 0x06 == 0 && detail == 0x5329 {
+            "byte-conservative-exhausted"
+        } else if snapshot.host_control & 0x06 == 0 && snapshot.len < SDIO_CMD53_BYTE_MODE_MAX {
+            "byte-narrow-conservative"
+        } else if snapshot.host_control & 0x06 == 0 {
+            "byte-conservative"
+        } else if detail == 0x5329 && snapshot.len < SDIO_CMD53_BYTE_MODE_MAX {
             "byte-narrow-fallback-exhausted"
         } else if detail == 0x5329 {
             "byte-fallback-exhausted"
@@ -2267,31 +2216,12 @@ fn le_u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
 
 #[cfg(feature = "kernel")]
 const fn cyw43_fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool {
-    matches!(
-        detail,
-        0x5101
-            | 0x5102
-            | 0x5103
-            | 0x5104
-            | 0x5310
-            | 0x531a
-            | 0x531b
-            | 0x531c
-            | 0x531d
-            | 0x531e
-            | 0x531f
-            | 0x5321
-            | 0x5323
-            | 0x5329
-            | 0x532a
-            | 0x532b
-            | 0x532c
-    )
+    crate::cyw43_recovery::fault_detail_allows_sdio_owner_recovery(detail)
 }
 
 #[cfg(feature = "kernel")]
 const fn cyw43_fault_detail_allows_same_command_retry(detail: u16) -> bool {
-    matches!(detail, 0x5103)
+    crate::cyw43_recovery::fault_detail_allows_same_command_retry(detail)
 }
 
 #[cfg(feature = "kernel")]
@@ -2392,37 +2322,6 @@ fn firmware_reset_vector(firmware: &[u8]) -> Option<u32> {
     Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
-unsafe fn init_runtime_for_hal<H>(
-    hal_ptr: usize,
-    config: ConsoleNetConfig,
-    stage: NetStage,
-    hot_path: DriverTaskHotPath,
-) -> Result<(), DriverTaskNetError>
-where
-    H: Hardware<Error = HalError>,
-{
-    // SAFETY: `init_runtime_via_driver_task` publishes this temporary HAL lease
-    // immediately before a synchronous driver-task init command. Root does not
-    // touch the borrowed HAL again until the completion record is observed, and
-    // the lease is cleared before steady-state service begins.
-    let hal = unsafe { &mut *(hal_ptr as *mut H) };
-    match hot_path {
-        DriverTaskHotPath::GenetNic => {
-            let device = BcmGenetDevice::create_with_stage(hal, &config, stage)
-                .map_err(|_err: BcmGenetDriverError| DriverTaskNetError::RuntimeInit("genet"))?;
-            *GENET_RUNTIME.lock() = Some(device);
-            Ok(())
-        }
-        DriverTaskHotPath::Cyw43Wifi => {
-            let device = Cyw43NetDevice::create_with_stage(hal, &config, stage)
-                .map_err(|_err: Cyw43DriverError| DriverTaskNetError::RuntimeInit("cyw43"))?;
-            *CYW43_RUNTIME.lock() = Some(device);
-            Ok(())
-        }
-        _ => Err(DriverTaskNetError::RuntimeInit("net-hot-path")),
-    }
-}
-
 /// Service one pointer-free NIC runtime command from the driver-task ring.
 pub fn service_runtime_command(
     hot_path: DriverTaskHotPath,
@@ -2473,71 +2372,28 @@ fn service_runtime_init_command(
     hot_path: DriverTaskHotPath,
     command: DriverTaskCommandRecord,
 ) -> DriverTaskCompletionRecord {
+    let _ = hot_path;
     if command.frame.len != 0 {
         return DriverTaskCompletionRecord::fault(
             command.sequence,
             DriverTaskFaultCode::RejectedCommand,
         );
     }
-    let Some(lease) = NET_RUNTIME_INIT_LEASE.lock().take() else {
-        return DriverTaskCompletionRecord::fault(
-            command.sequence,
-            DriverTaskFaultCode::DeviceUnavailable,
-        );
-    };
-    // SAFETY: The lease was installed by the synchronous root-side init caller
-    // for this exact driver-task turn and is consumed before steady state.
-    match unsafe { (lease.init)(lease.hal_ptr, lease.config, lease.stage, hot_path) } {
-        Ok(()) => DriverTaskCompletionRecord::progress(command.sequence, 1),
-        Err(_) => DriverTaskCompletionRecord::fault(
-            command.sequence,
-            DriverTaskFaultCode::DeviceUnavailable,
-        ),
-    }
+    DriverTaskCompletionRecord::fault(command.sequence, DriverTaskFaultCode::DeviceUnavailable)
 }
 
 fn service_genet(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
-    let mut runtime = GENET_RUNTIME.lock();
-    let Some(device) = runtime.as_mut() else {
-        return DriverTaskCompletionRecord::fault(
-            command.sequence,
-            DriverTaskFaultCode::DeviceUnavailable,
-        );
-    };
-    service_device(
-        GENET_DRIVER_TASK_CONTRACT,
-        DriverTaskHotPath::GenetNic,
-        device,
-        command,
-    )
+    DriverTaskCompletionRecord::fault(command.sequence, DriverTaskFaultCode::DeviceUnavailable)
 }
 
 fn service_cyw43(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
-    let mut runtime = CYW43_RUNTIME.lock();
-    let Some(device) = runtime.as_mut() else {
-        return DriverTaskCompletionRecord::fault(
-            command.sequence,
-            DriverTaskFaultCode::DeviceUnavailable,
-        );
-    };
-    service_device(
-        CYW43_WIFI_DRIVER_TASK_CONTRACT,
-        DriverTaskHotPath::Cyw43Wifi,
-        device,
-        command,
-    )
+    DriverTaskCompletionRecord::fault(command.sequence, DriverTaskFaultCode::DeviceUnavailable)
 }
 
 fn runtime_ready(hot_path: DriverTaskHotPath) -> bool {
     match hot_path {
-        DriverTaskHotPath::GenetNic => {
-            GENET_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0
-                || GENET_RUNTIME.lock().is_some()
-        }
-        DriverTaskHotPath::Cyw43Wifi => {
-            CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0
-                || CYW43_RUNTIME.lock().is_some()
-        }
+        DriverTaskHotPath::GenetNic => GENET_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0,
+        DriverTaskHotPath::Cyw43Wifi => CYW43_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0,
         _ => false,
     }
 }
@@ -2558,91 +2414,12 @@ fn cyw43_driver_task_bringup_status_label() -> Option<&'static str> {
     Some("wifi-associating")
 }
 
-fn runtime_mac(hot_path: DriverTaskHotPath) -> Option<EthernetAddress> {
+const fn runtime_mac(hot_path: DriverTaskHotPath) -> Option<EthernetAddress> {
     match hot_path {
-        DriverTaskHotPath::GenetNic => GENET_RUNTIME.lock().as_ref().map(NetDevice::mac),
-        DriverTaskHotPath::Cyw43Wifi => CYW43_RUNTIME.lock().as_ref().map(NetDevice::mac),
+        DriverTaskHotPath::GenetNic => Some(GENET_DRIVER_TASK_MAC),
+        DriverTaskHotPath::Cyw43Wifi => Some(CYW43_DRIVER_TASK_MAC),
         _ => None,
     }
-}
-
-fn service_device<D>(
-    contract: DriverTaskContract,
-    hot_path: DriverTaskHotPath,
-    device: &mut D,
-    command: DriverTaskCommandRecord,
-) -> DriverTaskCompletionRecord
-where
-    D: NetDevice,
-{
-    if command.opcode != hot_path.opcode().as_u16()
-        || command.arg0 != hot_path.as_u32()
-        || command.arg1 != hot_path.role_bit() as u32
-    {
-        return DriverTaskCompletionRecord::fault(
-            command.sequence,
-            DriverTaskFaultCode::RejectedCommand,
-        );
-    }
-
-    if command.frame.len != 0 {
-        return service_tx(contract, device, command);
-    }
-    service_rx(contract, device, command)
-}
-
-fn service_tx<D>(
-    contract: DriverTaskContract,
-    device: &mut D,
-    command: DriverTaskCommandRecord,
-) -> DriverTaskCompletionRecord
-where
-    D: NetDevice,
-{
-    let Some(frame) =
-        crate::hal::driver_task::driver_task_ring_frame_bytes(contract, command.frame)
-    else {
-        return DriverTaskCompletionRecord::fault(
-            command.sequence,
-            DriverTaskFaultCode::RejectedCommand,
-        );
-    };
-    let Some(tx) = device.transmit(Instant::from_millis(0)) else {
-        return DriverTaskCompletionRecord::idle(command.sequence);
-    };
-    let len = frame.len().min(MAX_FRAME_LEN);
-    tx.consume(len, |buffer| {
-        buffer[..len].copy_from_slice(&frame[..len]);
-    });
-    DriverTaskCompletionRecord::progress(command.sequence, len as u32)
-}
-
-fn service_rx<D>(
-    contract: DriverTaskContract,
-    device: &mut D,
-    command: DriverTaskCommandRecord,
-) -> DriverTaskCompletionRecord
-where
-    D: NetDevice,
-{
-    let Some((rx, _tx)) = device.receive(Instant::from_millis(0)) else {
-        return DriverTaskCompletionRecord::idle(command.sequence);
-    };
-    let mut scratch = [0u8; MAX_FRAME_LEN];
-    let len = rx.consume(|frame| {
-        let len = frame.len().min(MAX_FRAME_LEN);
-        scratch[..len].copy_from_slice(&frame[..len]);
-        len
-    });
-    let Some(descriptor) =
-        crate::hal::driver_task::stage_driver_task_ring_frame(contract, &scratch[..len], 0)
-    else {
-        return DriverTaskCompletionRecord::fault(
-            command.sequence,
-            DriverTaskFaultCode::DeviceUnavailable,
-        );
-    };
-    DriverTaskCompletionRecord::frame_ready(command.sequence, descriptor)
 }
 
 /// RX token backed by a frame copied out of the driver-task shared ring.
@@ -3481,6 +3258,10 @@ mod tests {
             op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
+        let forced_descriptor = DriverRuntimeCyw43CommandDescriptor {
+            flags: DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
+            ..descriptor
+        };
         let primary = SdioFaultTelemetry {
             arg: (1 << 31) | (1 << 28) | (1 << 27) | (1 << 26),
             cmd: 53,
@@ -3547,19 +3328,34 @@ mod tests {
         );
         assert_eq!(
             cyw43_owner_retry_label(byte, descriptor, 0x5103),
-            "byte-narrow-fallback"
+            "byte-narrow-conservative"
         );
         assert_eq!(
             cyw43_owner_retry_label(byte, descriptor, 0x5329),
-            "byte-narrow-fallback-exhausted"
+            "byte-narrow-conservative-exhausted"
         );
         assert_eq!(
             cyw43_owner_retry_label(byte512, descriptor, 0x5103),
-            "byte-fallback"
+            "byte-conservative"
         );
         assert_eq!(
             cyw43_owner_retry_label(byte512, descriptor, 0x5329),
-            "byte-fallback-exhausted"
+            "byte-conservative-exhausted"
+        );
+        assert_eq!(
+            cyw43_owner_retry_label(byte512, forced_descriptor, 0x5103),
+            "forced-byte-mode-conservative"
+        );
+        assert_eq!(
+            cyw43_owner_retry_label(
+                SdioFaultTelemetry {
+                    host_control: 0x06,
+                    ..byte512
+                },
+                forced_descriptor,
+                0x5103
+            ),
+            "forced-byte-mode-promoted"
         );
     }
 
@@ -3642,6 +3438,7 @@ mod tests {
         );
         assert!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES > SDIO_CMD53_BYTE_MODE_MAX as usize);
         assert_eq!(CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES % 64, 0);
+        assert_eq!(CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS, 32);
     }
 
     #[cfg(feature = "kernel")]
@@ -3682,6 +3479,35 @@ mod tests {
             None
         );
         assert_eq!(cyw43_firmware_resume_offset(fault, 609_308), None);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_firmware_resume_forces_byte_mode_after_owner_recovery_fault() {
+        let fault = Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-chunk",
+            op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+            flags: 0,
+            target_addr: CYW43_RAM_BASE_4345,
+            payload_len: 1024,
+            total_len: 609_309,
+            detail: 0x5329,
+            reason: "cyw43-firmware-retry-exhausted",
+            result: 0x0420_8040,
+        };
+        assert!(cyw43_firmware_resume_forces_byte_mode(fault));
+        assert!(!cyw43_firmware_resume_forces_byte_mode(
+            Cyw43RuntimeCommandFaultStatus {
+                op: DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
+                ..fault
+            }
+        ));
+        assert!(!cyw43_firmware_resume_forces_byte_mode(
+            Cyw43RuntimeCommandFaultStatus {
+                detail: 0x5302,
+                ..fault
+            }
+        ));
     }
 
     #[cfg(feature = "kernel")]

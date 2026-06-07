@@ -55,8 +55,6 @@ use super::{
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
-use crate::drivers::bcmgenet::{BcmGenetDevice, DriverError as BcmGenetDriverError};
-use crate::drivers::cyw43::{Cyw43NetDevice, DriverError as Cyw43DriverError};
 use crate::drivers::driver_task_net::{
     Cyw43DriverTaskDevice, DriverTaskNetError, GenetDriverTaskDevice,
 };
@@ -190,8 +188,6 @@ type DefaultNetDevice = Rtl8139Device;
 #[derive(Debug)]
 pub enum DefaultDriverError {
     Rtl8139(Rtl8139DriverError),
-    BcmGenet(BcmGenetDriverError),
-    Cyw43(Cyw43DriverError),
     DriverTaskNet(DriverTaskNetError),
     #[cfg(feature = "net-backend-virtio")]
     Virtio(VirtioDriverError),
@@ -201,8 +197,6 @@ impl fmt::Display for DefaultDriverError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Rtl8139(err) => write!(f, "{err}"),
-            Self::BcmGenet(err) => write!(f, "{err}"),
-            Self::Cyw43(err) => write!(f, "{err}"),
             Self::DriverTaskNet(err) => write!(f, "{err}"),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(err) => write!(f, "{err}"),
@@ -214,8 +208,6 @@ impl NetDriverError for DefaultDriverError {
     fn is_absent(&self) -> bool {
         match self {
             Self::Rtl8139(err) => err.is_absent(),
-            Self::BcmGenet(err) => err.is_absent(),
-            Self::Cyw43(err) => err.is_absent(),
             Self::DriverTaskNet(err) => err.is_absent(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(err) => err.is_absent(),
@@ -226,18 +218,6 @@ impl NetDriverError for DefaultDriverError {
 impl From<Rtl8139DriverError> for DefaultDriverError {
     fn from(value: Rtl8139DriverError) -> Self {
         Self::Rtl8139(value)
-    }
-}
-
-impl From<BcmGenetDriverError> for DefaultDriverError {
-    fn from(value: BcmGenetDriverError) -> Self {
-        Self::BcmGenet(value)
-    }
-}
-
-impl From<Cyw43DriverError> for DefaultDriverError {
-    fn from(value: Cyw43DriverError) -> Self {
-        Self::Cyw43(value)
     }
 }
 
@@ -256,8 +236,6 @@ impl From<VirtioDriverError> for DefaultDriverError {
 
 pub enum DefaultNetStack {
     Rtl8139(Box<NetStack<Rtl8139Device>>),
-    BcmGenet(Box<NetStack<BcmGenetDevice>>),
-    Cyw43(Box<NetStack<Cyw43NetDevice>>),
     GenetDriverTask(Box<NetStack<GenetDriverTaskDevice>>),
     Cyw43DriverTask(Box<NetStack<Cyw43DriverTaskDevice>>),
     #[cfg(feature = "net-backend-virtio")]
@@ -1747,10 +1725,6 @@ fn check_bootinfo_wrap(mark: &'static str) -> Result<(), DefaultNetConsoleError>
     Ok(())
 }
 
-fn physical_pi_net_owner_state_cutover_active() -> bool {
-    crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
-}
-
 fn init_genet_driver_task_console<H>(
     hal: &mut H,
     config: ConsoleNetConfig,
@@ -1867,14 +1841,10 @@ where
         config.policy.dhcp.max_retries
     );
     info!(
-        "[net-console] layout sizes: stack.rtl8139={} stack.bcmgenet={} stack.cyw43={} stack.genet_dt={} stack.cyw43_dt={} dev.bcmgenet={} dev.cyw43={} dev.genet_dt={} dev.cyw43_dt={} enum.default={}",
+        "[net-console] layout sizes: stack.rtl8139={} stack.genet_dt={} stack.cyw43_dt={} dev.genet_dt={} dev.cyw43_dt={} enum.default={}",
         mem::size_of::<NetStack<Rtl8139Device>>(),
-        mem::size_of::<NetStack<BcmGenetDevice>>(),
-        mem::size_of::<NetStack<Cyw43NetDevice>>(),
         mem::size_of::<NetStack<GenetDriverTaskDevice>>(),
         mem::size_of::<NetStack<Cyw43DriverTaskDevice>>(),
-        mem::size_of::<BcmGenetDevice>(),
-        mem::size_of::<Cyw43NetDevice>(),
         mem::size_of::<GenetDriverTaskDevice>(),
         mem::size_of::<Cyw43DriverTaskDevice>(),
         mem::size_of::<DefaultNetStack>(),
@@ -1894,88 +1864,37 @@ where
             check_bootinfo_wrap("net.init.wrap.after-new.rtl8139")?;
             Ok(DefaultNetStack::Rtl8139(stack))
         }
-        NetBackend::BcmGenet if physical_pi_net_owner_state_cutover_active() => {
-            match config.policy.interface {
-                NetInterfacePolicy::Wired => init_genet_driver_task_console(
-                    hal,
-                    config,
-                    backend,
-                    "net.init.wrap.after-new.genet-driver-task",
-                ),
-                NetInterfacePolicy::Wifi => init_cyw43_driver_task_console(
-                    hal,
-                    config,
-                    backend,
-                    "net.init.wrap.after-new.cyw43-driver-task",
-                ),
-                NetInterfacePolicy::Auto => {
-                    if config.wifi_credentials.is_some() {
-                        init_cyw43_driver_task_console(
-                            hal,
-                            config,
-                            backend,
-                            "net.init.wrap.after-new.cyw43-driver-task-auto",
-                        )
-                    } else {
-                        info!(
-                            "[net-console] auto policy missing Wi-Fi credentials; selecting wired driver-task backend"
-                        );
-                        init_genet_driver_task_console(
-                            hal,
-                            config,
-                            backend,
-                            "net.init.wrap.after-new.genet-driver-task-auto",
-                        )
-                    }
-                }
-            }
-        }
         NetBackend::BcmGenet => match config.policy.interface {
-            NetInterfacePolicy::Wired => {
-                let stack = NetStack::<BcmGenetDevice>::new(hal, config, backend)
-                    .map_err(convert_console_error::<BcmGenetDriverError>)?;
-                check_bootinfo_wrap("net.init.wrap.after-new.bcmgenet")?;
-                Ok(DefaultNetStack::BcmGenet(stack))
-            }
-            NetInterfacePolicy::Wifi => {
-                let stack = NetStack::<Cyw43NetDevice>::new(hal, config, backend)
-                    .map_err(convert_console_error::<Cyw43DriverError>)?;
-                check_bootinfo_wrap("net.init.wrap.after-new.cyw43")?;
-                Ok(DefaultNetStack::Cyw43(stack))
-            }
+            NetInterfacePolicy::Wired => init_genet_driver_task_console(
+                hal,
+                config,
+                backend,
+                "net.init.wrap.after-new.genet-driver-task",
+            ),
+            NetInterfacePolicy::Wifi => init_cyw43_driver_task_console(
+                hal,
+                config,
+                backend,
+                "net.init.wrap.after-new.cyw43-driver-task",
+            ),
             NetInterfacePolicy::Auto => {
                 if config.wifi_credentials.is_some() {
-                    match NetStack::<Cyw43NetDevice>::new(hal, config, backend) {
-                        Ok(stack) => {
-                            check_bootinfo_wrap("net.init.wrap.after-new.cyw43-auto")?;
-                            Ok(DefaultNetStack::Cyw43(stack))
-                        }
-                        Err(err) => {
-                            if !cyw43_auto_fallback_allowed(&err) {
-                                let console_err = convert_console_error::<Cyw43DriverError>(err);
-                                warn!(
-                                    "[net-console] auto fallback refused: wifi init failed err={console_err}"
-                                );
-                                return Err(console_err);
-                            }
-                            warn!(
-                                    "[net-console] auto fallback: wifi init failed err={}; using wired backend",
-                                    convert_console_error::<Cyw43DriverError>(err)
-                                );
-                            let stack = NetStack::<BcmGenetDevice>::new(hal, config, backend)
-                                .map_err(convert_console_error::<BcmGenetDriverError>)?;
-                            check_bootinfo_wrap("net.init.wrap.after-new.bcmgenet-auto")?;
-                            Ok(DefaultNetStack::BcmGenet(stack))
-                        }
-                    }
+                    init_cyw43_driver_task_console(
+                        hal,
+                        config,
+                        backend,
+                        "net.init.wrap.after-new.cyw43-driver-task-auto",
+                    )
                 } else {
                     info!(
-                            "[net-console] auto policy missing Wi-Fi credentials; selecting wired backend"
-                        );
-                    let stack = NetStack::<BcmGenetDevice>::new(hal, config, backend)
-                        .map_err(convert_console_error::<BcmGenetDriverError>)?;
-                    check_bootinfo_wrap("net.init.wrap.after-new.bcmgenet-auto")?;
-                    Ok(DefaultNetStack::BcmGenet(stack))
+                        "[net-console] auto policy missing Wi-Fi credentials; selecting wired driver-task backend"
+                    );
+                    init_genet_driver_task_console(
+                        hal,
+                        config,
+                        backend,
+                        "net.init.wrap.after-new.genet-driver-task-auto",
+                    )
                 }
             }
         },
@@ -1987,10 +1906,6 @@ where
             Ok(DefaultNetStack::Virtio(stack))
         }
     }
-}
-
-fn cyw43_auto_fallback_allowed(err: &NetStackError<Cyw43DriverError>) -> bool {
-    matches!(err, NetStackError::Driver(driver_err) if driver_err.is_absent())
 }
 
 fn convert_console_error<E>(err: NetStackError<E>) -> DefaultNetConsoleError
@@ -5724,8 +5639,6 @@ impl DefaultNetStack {
     pub fn hardware_address(&self) -> EthernetAddress {
         match self {
             Self::Rtl8139(stack) => stack.hardware_address(),
-            Self::BcmGenet(stack) => stack.hardware_address(),
-            Self::Cyw43(stack) => stack.hardware_address(),
             Self::GenetDriverTask(stack) => stack.hardware_address(),
             Self::Cyw43DriverTask(stack) => stack.hardware_address(),
             #[cfg(feature = "net-backend-virtio")]
@@ -5737,8 +5650,6 @@ impl DefaultNetStack {
     pub fn ipv4_address(&self) -> Ipv4Address {
         match self {
             Self::Rtl8139(stack) => stack.ipv4_address(),
-            Self::BcmGenet(stack) => stack.ipv4_address(),
-            Self::Cyw43(stack) => stack.ipv4_address(),
             Self::GenetDriverTask(stack) => stack.ipv4_address(),
             Self::Cyw43DriverTask(stack) => stack.ipv4_address(),
             #[cfg(feature = "net-backend-virtio")]
@@ -5750,8 +5661,6 @@ impl DefaultNetStack {
     pub fn console_listen_port(&self) -> u16 {
         match self {
             Self::Rtl8139(stack) => stack.console_listen_port(),
-            Self::BcmGenet(stack) => stack.console_listen_port(),
-            Self::Cyw43(stack) => stack.console_listen_port(),
             Self::GenetDriverTask(stack) => stack.console_listen_port(),
             Self::Cyw43DriverTask(stack) => stack.console_listen_port(),
             #[cfg(feature = "net-backend-virtio")]
@@ -5763,8 +5672,6 @@ impl DefaultNetStack {
     pub fn prefix_len(&self) -> u8 {
         match self {
             Self::Rtl8139(stack) => stack.prefix_len(),
-            Self::BcmGenet(stack) => stack.prefix_len(),
-            Self::Cyw43(stack) => stack.prefix_len(),
             Self::GenetDriverTask(stack) => stack.prefix_len(),
             Self::Cyw43DriverTask(stack) => stack.prefix_len(),
             #[cfg(feature = "net-backend-virtio")]
@@ -5776,8 +5683,6 @@ impl DefaultNetStack {
     pub fn gateway(&self) -> Option<Ipv4Address> {
         match self {
             Self::Rtl8139(stack) => stack.gateway(),
-            Self::BcmGenet(stack) => stack.gateway(),
-            Self::Cyw43(stack) => stack.gateway(),
             Self::GenetDriverTask(stack) => stack.gateway(),
             Self::Cyw43DriverTask(stack) => stack.gateway(),
             #[cfg(feature = "net-backend-virtio")]
@@ -5816,30 +5721,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     }
                     return self.poll_with_time(now_ms);
                 }
-                let mut root_pointer_context =
-                    NetRootPointerRingContext::new(self as *mut Self, hot_path);
-                crate::hal::driver_task::register_driver_task_root_context_ring_service(
-                    contract,
-                    &mut root_pointer_context as *mut NetRootPointerRingContext as usize,
-                    net_ring_service_driver_task::<D>,
-                );
-                let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-                    0,
-                    hot_path,
-                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-                    crate::hal::driver_task::DriverFrameDescriptor {
-                        offset: 0,
-                        len: 0,
-                        flags: NET_RING_FLAG_ROOT_POINTER_NON_ACCEPTANCE,
-                    },
-                );
-                command.aux0 = now_ms as u32;
-                command.aux1 = (now_ms >> 32) as u32;
-                if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
-                    return completion.code
-                        == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                        && completion.result != 0;
-                }
+                let _ = hot_path;
+                return false;
             }
             let mut context = NetDriverTaskContext::<D> {
                 stack: self as *mut NetStack<D> as usize,
@@ -5901,38 +5784,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     }
                     return self.poll_budgeted_with_time(now_ms, budget);
                 }
-                let mut root_pointer_context =
-                    NetRootPointerRingContext::new(self as *mut Self, hot_path);
-                crate::hal::driver_task::register_driver_task_root_context_ring_service(
-                    contract,
-                    &mut root_pointer_context as *mut NetRootPointerRingContext as usize,
-                    net_ring_service_driver_task::<D>,
-                );
-                let mut command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-                    0,
-                    hot_path,
-                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-                    crate::hal::driver_task::DriverFrameDescriptor {
-                        offset: 0,
-                        len: 0,
-                        flags: NET_RING_FLAG_BUDGETED | NET_RING_FLAG_ROOT_POINTER_NON_ACCEPTANCE,
-                    },
-                );
-                command.aux0 = now_ms as u32;
-                command.aux1 = (now_ms >> 32) as u32;
-                if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
-                    if completion.code
-                        == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                    {
-                        return unpack_net_poll_result(completion.result as usize);
-                    }
-                    if completion.code
-                        == crate::hal::driver_task::DriverTaskCompletionCode::Idle.as_u16()
-                    {
-                        return Ok(false);
-                    }
-                    return Err(DriverServiceBudgetError::OperationsExhausted);
-                }
+                let _ = hot_path;
+                return Err(DriverServiceBudgetError::OperationsExhausted);
             }
             let mut context = NetDriverTaskContext::<D> {
                 stack: self as *mut NetStack<D> as usize,
@@ -6507,8 +6360,6 @@ impl NetPoller for DefaultNetStack {
     fn poll(&mut self, now_ms: u64) -> bool {
         match self {
             Self::Rtl8139(stack) => stack.poll(now_ms),
-            Self::BcmGenet(stack) => stack.poll(now_ms),
-            Self::Cyw43(stack) => stack.poll(now_ms),
             Self::GenetDriverTask(stack) => stack.poll(now_ms),
             Self::Cyw43DriverTask(stack) => stack.poll(now_ms),
             #[cfg(feature = "net-backend-virtio")]
@@ -6523,8 +6374,6 @@ impl NetPoller for DefaultNetStack {
     ) -> Result<bool, DriverServiceBudgetError> {
         match self {
             Self::Rtl8139(stack) => stack.poll_with_budget(now_ms, budget),
-            Self::BcmGenet(stack) => stack.poll_with_budget(now_ms, budget),
-            Self::Cyw43(stack) => stack.poll_with_budget(now_ms, budget),
             Self::GenetDriverTask(stack) => stack.poll_with_budget(now_ms, budget),
             Self::Cyw43DriverTask(stack) => stack.poll_with_budget(now_ms, budget),
             #[cfg(feature = "net-backend-virtio")]
@@ -6535,8 +6384,6 @@ impl NetPoller for DefaultNetStack {
     fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {
         match self {
             Self::Rtl8139(stack) => stack.driver_task_contract(),
-            Self::BcmGenet(stack) => stack.driver_task_contract(),
-            Self::Cyw43(stack) => stack.driver_task_contract(),
             Self::GenetDriverTask(stack) => stack.driver_task_contract(),
             Self::Cyw43DriverTask(stack) => stack.driver_task_contract(),
             #[cfg(feature = "net-backend-virtio")]
@@ -6547,8 +6394,6 @@ impl NetPoller for DefaultNetStack {
     fn telemetry(&self) -> NetTelemetry {
         match self {
             Self::Rtl8139(stack) => stack.telemetry(),
-            Self::BcmGenet(stack) => stack.telemetry(),
-            Self::Cyw43(stack) => stack.telemetry(),
             Self::GenetDriverTask(stack) => stack.telemetry(),
             Self::Cyw43DriverTask(stack) => stack.telemetry(),
             #[cfg(feature = "net-backend-virtio")]
@@ -6559,8 +6404,6 @@ impl NetPoller for DefaultNetStack {
     fn stats(&self) -> NetCounters {
         match self {
             Self::Rtl8139(stack) => stack.stats(),
-            Self::BcmGenet(stack) => stack.stats(),
-            Self::Cyw43(stack) => stack.stats(),
             Self::GenetDriverTask(stack) => stack.stats(),
             Self::Cyw43DriverTask(stack) => stack.stats(),
             #[cfg(feature = "net-backend-virtio")]
@@ -6571,8 +6414,6 @@ impl NetPoller for DefaultNetStack {
     fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
         match self {
             Self::Rtl8139(stack) => stack.drain_console_lines(now_ms, visitor),
-            Self::BcmGenet(stack) => stack.drain_console_lines(now_ms, visitor),
-            Self::Cyw43(stack) => stack.drain_console_lines(now_ms, visitor),
             Self::GenetDriverTask(stack) => stack.drain_console_lines(now_ms, visitor),
             Self::Cyw43DriverTask(stack) => stack.drain_console_lines(now_ms, visitor),
             #[cfg(feature = "net-backend-virtio")]
@@ -6583,8 +6424,6 @@ impl NetPoller for DefaultNetStack {
     fn send_console_line(&mut self, line: &str) -> bool {
         match self {
             Self::Rtl8139(stack) => stack.send_console_line(line),
-            Self::BcmGenet(stack) => stack.send_console_line(line),
-            Self::Cyw43(stack) => stack.send_console_line(line),
             Self::GenetDriverTask(stack) => stack.send_console_line(line),
             Self::Cyw43DriverTask(stack) => stack.send_console_line(line),
             #[cfg(feature = "net-backend-virtio")]
@@ -6595,8 +6434,6 @@ impl NetPoller for DefaultNetStack {
     fn request_disconnect(&mut self) {
         match self {
             Self::Rtl8139(stack) => stack.request_disconnect(),
-            Self::BcmGenet(stack) => stack.request_disconnect(),
-            Self::Cyw43(stack) => stack.request_disconnect(),
             Self::GenetDriverTask(stack) => stack.request_disconnect(),
             Self::Cyw43DriverTask(stack) => stack.request_disconnect(),
             #[cfg(feature = "net-backend-virtio")]
@@ -6607,8 +6444,6 @@ impl NetPoller for DefaultNetStack {
     fn drain_console_events(&mut self, visitor: &mut dyn FnMut(NetConsoleEvent)) {
         match self {
             Self::Rtl8139(stack) => stack.drain_console_events(visitor),
-            Self::BcmGenet(stack) => stack.drain_console_events(visitor),
-            Self::Cyw43(stack) => stack.drain_console_events(visitor),
             Self::GenetDriverTask(stack) => stack.drain_console_events(visitor),
             Self::Cyw43DriverTask(stack) => stack.drain_console_events(visitor),
             #[cfg(feature = "net-backend-virtio")]
@@ -6619,8 +6454,6 @@ impl NetPoller for DefaultNetStack {
     fn ingest_snapshot(&self) -> IngestSnapshot {
         match self {
             Self::Rtl8139(stack) => stack.ingest_snapshot(),
-            Self::BcmGenet(stack) => stack.ingest_snapshot(),
-            Self::Cyw43(stack) => stack.ingest_snapshot(),
             Self::GenetDriverTask(stack) => stack.ingest_snapshot(),
             Self::Cyw43DriverTask(stack) => stack.ingest_snapshot(),
             #[cfg(feature = "net-backend-virtio")]
@@ -6631,8 +6464,6 @@ impl NetPoller for DefaultNetStack {
     fn active_console_conn_id(&self) -> Option<u64> {
         match self {
             Self::Rtl8139(stack) => stack.active_console_conn_id(),
-            Self::BcmGenet(stack) => stack.active_console_conn_id(),
-            Self::Cyw43(stack) => stack.active_console_conn_id(),
             Self::GenetDriverTask(stack) => stack.active_console_conn_id(),
             Self::Cyw43DriverTask(stack) => stack.active_console_conn_id(),
             #[cfg(feature = "net-backend-virtio")]
@@ -6643,8 +6474,6 @@ impl NetPoller for DefaultNetStack {
     fn inject_console_line(&mut self, line: &str) {
         match self {
             Self::Rtl8139(stack) => stack.inject_console_line(line),
-            Self::BcmGenet(stack) => stack.inject_console_line(line),
-            Self::Cyw43(stack) => stack.inject_console_line(line),
             Self::GenetDriverTask(stack) => stack.inject_console_line(line),
             Self::Cyw43DriverTask(stack) => stack.inject_console_line(line),
             #[cfg(feature = "net-backend-virtio")]
@@ -6655,8 +6484,6 @@ impl NetPoller for DefaultNetStack {
     fn reset(&mut self) {
         match self {
             Self::Rtl8139(stack) => stack.reset(),
-            Self::BcmGenet(stack) => stack.reset(),
-            Self::Cyw43(stack) => stack.reset(),
             Self::GenetDriverTask(stack) => stack.reset(),
             Self::Cyw43DriverTask(stack) => stack.reset(),
             #[cfg(feature = "net-backend-virtio")]
@@ -6667,8 +6494,6 @@ impl NetPoller for DefaultNetStack {
     fn console_listen_port(&self) -> u16 {
         match self {
             Self::Rtl8139(stack) => stack.console_listen_port(),
-            Self::BcmGenet(stack) => stack.console_listen_port(),
-            Self::Cyw43(stack) => stack.console_listen_port(),
             Self::GenetDriverTask(stack) => stack.console_listen_port(),
             Self::Cyw43DriverTask(stack) => stack.console_listen_port(),
             #[cfg(feature = "net-backend-virtio")]
@@ -6679,8 +6504,6 @@ impl NetPoller for DefaultNetStack {
     fn start_self_test(&mut self, now_ms: u64) -> NetSelfTestStartResult {
         match self {
             Self::Rtl8139(stack) => stack.start_self_test(now_ms),
-            Self::BcmGenet(stack) => stack.start_self_test(now_ms),
-            Self::Cyw43(stack) => stack.start_self_test(now_ms),
             Self::GenetDriverTask(stack) => stack.start_self_test(now_ms),
             Self::Cyw43DriverTask(stack) => stack.start_self_test(now_ms),
             #[cfg(feature = "net-backend-virtio")]
@@ -6691,8 +6514,6 @@ impl NetPoller for DefaultNetStack {
     fn self_test_report(&self) -> NetSelfTestReport {
         match self {
             Self::Rtl8139(stack) => stack.self_test_report(),
-            Self::BcmGenet(stack) => stack.self_test_report(),
-            Self::Cyw43(stack) => stack.self_test_report(),
             Self::GenetDriverTask(stack) => stack.self_test_report(),
             Self::Cyw43DriverTask(stack) => stack.self_test_report(),
             #[cfg(feature = "net-backend-virtio")]
@@ -6703,8 +6524,6 @@ impl NetPoller for DefaultNetStack {
     fn status_report(&self) -> NetStatusReport {
         match self {
             Self::Rtl8139(stack) => stack.status_report(),
-            Self::BcmGenet(stack) => stack.status_report(),
-            Self::Cyw43(stack) => stack.status_report(),
             Self::GenetDriverTask(stack) => stack.status_report(),
             Self::Cyw43DriverTask(stack) => stack.status_report(),
             #[cfg(feature = "net-backend-virtio")]

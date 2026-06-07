@@ -61,6 +61,8 @@ mod net_consts;
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 pub(crate) mod drivers;
 
+pub(crate) mod cyw43_recovery;
+
 #[cfg(feature = "net-console")]
 pub mod net;
 

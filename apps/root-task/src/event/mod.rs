@@ -5159,7 +5159,8 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_recovery_policy_for_linked_detail(detail: u16) -> &'static str {
         match detail {
-            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => "cold-reinit",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => "cold-reinit",
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
@@ -5181,6 +5182,15 @@ where
             ((result >> 8) & 0x1) != 0,
             (result >> 16) & 0xff,
             (result >> 24) & 0xff,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_detail_has_queue_result(detail: u16) -> bool {
+        matches!(
+            detail,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
         )
     }
 
@@ -5233,8 +5243,13 @@ where
             } else {
                 proof_gate.saturating_add(1).max(1)
             };
+            let queue_result = Self::usb_runtime_detail_has_queue_result(linked_detail);
             let (queued_reports, doorbell_pending, preserved_events, transfer_events) =
-                Self::usb_runtime_queue_fields(linked_result);
+                if queue_result {
+                    Self::usb_runtime_queue_fields(linked_result)
+                } else {
+                    (0, false, 0, 0)
+                };
             let active_blocker = if proof_gate >= 10 {
                 "none"
             } else if keyboard_ready && !first_report {
@@ -5318,7 +5333,8 @@ where
                 "command-event-rings",
                 Self::usb_startup_gate_status(4, proof_gate, failing_gate),
                 format_args!(
-                    "queued_reports={} doorbell={} preserved_events={} transfer_events={}",
+                    "queue_result={} queued_reports={} doorbell={} preserved_events={} transfer_events={}",
+                    if queue_result { "yes" } else { "no" },
                     queued_reports,
                     Self::yes_no(doorbell_pending),
                     preserved_events,
@@ -5402,7 +5418,8 @@ where
                 "acceptance-complete",
             );
             let evidence = format_message(format_args!(
-                "usb: evidence xhci transfer_ring_queued={} doorbell={} preserved_events={} transfer_events={} endpoint=interrupt-in first_report_policy=deep-queue-rering-doorbell cerr=3 max_packet=runtime-private interval=runtime-private source=linked-runtime-result",
+                "usb: evidence xhci queue_result={} transfer_ring_queued={} doorbell={} preserved_events={} transfer_events={} endpoint=interrupt-in first_report_policy=deep-queue-rering-doorbell cerr=3 max_packet=runtime-private interval=runtime-private source=linked-runtime-result",
+                if queue_result { "yes" } else { "no" },
                 queued_reports,
                 Self::yes_no(doorbell_pending),
                 preserved_events,
@@ -5600,7 +5617,7 @@ where
             self.emit_console_line(fault_line.as_str());
             let next = Self::wifi_runtime_fault_next_action(fault);
             let next_line = format_message(format_args!(
-                "wifi: driver-task next_action={} source={} recovery_contract=block-mode-first+byte-fallback+no-cmd0-cmd5",
+                "wifi: driver-task next_action={} source={} recovery_contract=block-primary+retained-stage-byte-owner-replay",
                 next, source
             ));
             self.emit_console_line(next_line.as_str());
@@ -12998,6 +13015,12 @@ mod tests {
             KernelConsoleTestPump::usb_runtime_queue_fields(0x0000_0020),
             (32, false, 0, 0)
         );
+        assert!(!KernelConsoleTestPump::usb_runtime_detail_has_queue_result(
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+        ));
+        assert!(KernelConsoleTestPump::usb_runtime_detail_has_queue_result(
+            pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+        ));
     }
 
     #[cfg(feature = "kernel")]

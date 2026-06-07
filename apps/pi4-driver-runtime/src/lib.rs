@@ -539,12 +539,12 @@ const USB_KEYBOARD_ATTACH_RANK_NONE: u8 = 0xff;
 const USB_ENDPOINT_ATTR_INTERRUPT: u8 = 3;
 const USB_ENDPOINT_DIR_IN: u8 = 0x80;
 const USB_XHCI_SPINS: usize = 1_000_000;
-const USB_CONTROL_TRANSFER_SPINS: usize = 20_000_000;
-const USB_COMMAND_COMPLETION_SPINS: usize = USB_XHCI_SPINS;
+const USB_CONTROL_TRANSFER_SPINS: usize = USB_XHCI_SPINS;
+const USB_COMMAND_COMPLETION_SPINS: usize = USB_XHCI_SPINS / 32;
 const USB_ROOT_PORT_POWER_SETTLE_SPINS: usize = USB_XHCI_SPINS / 16;
 const USB_ROOT_PORT_SCAN_PASSES: usize = 4;
 const USB_ENUMERATION_RETRY_COOLDOWN_TURNS: u8 = 1;
-const USB_ENUMERATION_COLD_REINIT_LIMIT: u8 = 2;
+const USB_ENUMERATION_COLD_REINIT_LIMIT: u8 = 4;
 const USB_ROOT_PORT_RESET_MAX_TRIES: usize = 5;
 const USB_ROOT_PORT_RESET_SHORT_RETRY_SPINS: usize = 20_000;
 const USB_ROOT_PORT_RESET_LONG_RETRY_SPINS: usize = 200_000;
@@ -720,7 +720,7 @@ const SDIO_FUNCTION1_BLOCK_SIZE: u16 = 64;
 const SDIO_FUNCTION2_BLOCK_SIZE: u16 = 512;
 const SDIO_CMD53_BYTE_MODE_MAX: usize = 512;
 const CYW43_FIRMWARE_BYTE_MODE_SAFE_CHUNK_BYTES: usize = SDIO_CMD53_BYTE_MODE_MAX;
-const CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES: usize = 256;
+const CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES: usize = 64;
 const CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES: usize = CYW43_FIRMWARE_STAGE_BYTES / 2;
 const SDIO_FAULT_TELEMETRY_MAGIC: u32 = 0x5344_494f;
 const SDIO_FAULT_TELEMETRY_VERSION: u32 = 1;
@@ -4228,6 +4228,12 @@ fn cyw43_prepare_firmware_upload_transport(state: &mut Cyw43RuntimeState) -> Res
     cyw43_prepare_socram_for_armcr4_upload(state)?;
     cyw43_reset_firmware_stage(state);
     state.firmware_upload_prepared = true;
+    if CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY {
+        if !cyw43_force_conservative_firmware_byte_replay(state) {
+            return Err(FAULT_CYW43_TRANSPORT_HOST_BUS_WIDTH);
+        }
+        state.firmware_narrow_byte_mode_fallback = true;
+    }
     Ok(())
 }
 
@@ -4773,8 +4779,15 @@ fn cyw43_prepare_firmware_upload_retry(state: &mut Cyw43RuntimeState) -> bool {
         let retry_index = usize::from(state.firmware_retry_clock_index);
         let clock_hz = CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ[retry_index];
         state.firmware_retry_clock_index = state.firmware_retry_clock_index.saturating_add(1);
-        let _ = cyw43_sdio_cmd52_write(0, SDIO_CCCR_IF, cyw43_firmware_retry_card_if(retry_index));
-        let flags = cyw43_firmware_retry_host_flags(retry_index);
+        let _ = cyw43_sdio_cmd52_write(
+            0,
+            SDIO_CCCR_IF,
+            cyw43_firmware_retry_card_if_for_lane(state.firmware_byte_mode_fallback, retry_index),
+        );
+        let flags = cyw43_firmware_retry_host_flags_for_lane(
+            state.firmware_byte_mode_fallback,
+            retry_index,
+        );
         if cyw43_configure_sdio_host(clock_hz, flags) {
             return true;
         }
@@ -4795,6 +4808,42 @@ const fn cyw43_firmware_retry_host_flags(retry_index: usize) -> u16 {
     } else {
         DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT
             | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED
+    }
+}
+
+const fn cyw43_firmware_retry_card_if_for_lane(byte_mode_fallback: bool, retry_index: usize) -> u8 {
+    if byte_mode_fallback {
+        0
+    } else {
+        cyw43_firmware_retry_card_if(retry_index)
+    }
+}
+
+const fn cyw43_firmware_retry_host_flags_for_lane(
+    byte_mode_fallback: bool,
+    retry_index: usize,
+) -> u16 {
+    if byte_mode_fallback {
+        0
+    } else {
+        cyw43_firmware_retry_host_flags(retry_index)
+    }
+}
+
+fn cyw43_force_conservative_firmware_byte_replay(state: &mut Cyw43RuntimeState) -> bool {
+    if state.firmware_released {
+        return false;
+    }
+    state.firmware_byte_mode_fallback = true;
+    state.firmware_narrow_byte_mode_fallback = false;
+    state.firmware_retry_clock_index = 1;
+    state.backplane_window_valid = false;
+    let _ = cyw43_sdio_cmd52_write(0, SDIO_CCCR_IF, 0);
+    if cyw43_configure_sdio_host(CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ[0], 0) {
+        true
+    } else {
+        cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_HOST_BUS_WIDTH);
+        false
     }
 }
 
@@ -4829,9 +4878,14 @@ fn cyw43_prepare_retryable_firmware_command(state: &mut Cyw43RuntimeState) {
     if state.firmware_released {
         return;
     }
-    state.firmware_retry_clock_index = 0;
-    state.firmware_byte_mode_fallback = false;
-    state.firmware_narrow_byte_mode_fallback = false;
+    if CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY {
+        let _ = cyw43_force_conservative_firmware_byte_replay(state);
+        state.firmware_narrow_byte_mode_fallback = true;
+    } else {
+        state.firmware_retry_clock_index = 0;
+        state.firmware_byte_mode_fallback = false;
+        state.firmware_narrow_byte_mode_fallback = false;
+    }
     state.backplane_window_valid = false;
 }
 
@@ -4914,9 +4968,8 @@ fn cyw43_stage_firmware_chunk(
         .checked_add(u32::from(state.firmware_stage_len))
         != Some(target_addr)
     {
-        if force_byte_mode {
-            state.firmware_byte_mode_fallback = true;
-            state.backplane_window_valid = false;
+        if force_byte_mode && !cyw43_force_conservative_firmware_byte_replay(state) {
+            return false;
         }
         if cyw43_firmware_stage_covers(state, target_addr, payload_len) {
             return cyw43_flush_firmware_stage(state);
@@ -4939,9 +4992,8 @@ fn cyw43_stage_firmware_chunk(
         state.firmware_stage[stage_len + index] = read_runtime_payload_byte(payload_offset + index);
     }
     state.firmware_stage_len = next_stage_len as u16;
-    if force_byte_mode {
-        state.firmware_byte_mode_fallback = true;
-        state.backplane_window_valid = false;
+    if force_byte_mode && !cyw43_force_conservative_firmware_byte_replay(state) {
+        return false;
     }
     if next_stage_len == CYW43_FIRMWARE_STAGE_BYTES || stream_complete {
         if cyw43_flush_firmware_stage(state) {
@@ -6604,7 +6656,11 @@ fn usb_reset_enumeration_cursor(state: &mut UsbRuntimeState) {
 }
 
 const fn usb_detail_warrants_cold_reinit(detail: u16) -> bool {
-    matches!(detail, DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED)
+    matches!(
+        detail,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
+    )
 }
 
 fn usb_runtime_retry_keyboard_enumeration(state: &mut UsbRuntimeState) -> Option<u16> {
@@ -6626,7 +6682,7 @@ fn usb_runtime_retry_keyboard_enumeration(state: &mut UsbRuntimeState) -> Option
         DRIVER_RUNTIME_RESOURCE_KIND_DMA,
         DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
     )?;
-    let before = state.init_detail;
+    let mut before = state.init_detail;
     if usb_detail_warrants_cold_reinit(before)
         && state.enumeration_cold_reinit_attempts < USB_ENUMERATION_COLD_REINIT_LIMIT
     {
@@ -6642,7 +6698,7 @@ fn usb_runtime_retry_keyboard_enumeration(state: &mut UsbRuntimeState) -> Option
             return Some(before);
         }
         usb_reset_enumeration_cursor(state);
-        return usb_runtime_enumeration_detail(state).or(Some(state.init_detail));
+        before = state.init_detail;
     }
     if usb_keyboard_enumerate(state, descriptor, dma_range) {
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
@@ -10684,16 +10740,22 @@ fn sdio_clear_post_clock_inhibit() -> bool {
 }
 
 fn sdio_recover_command_path() -> bool {
+    let clock = sdio_read16(SDHCI_CLOCK_CONTROL);
+    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     let reset_ok = sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+    sdio_write16(SDHCI_CLOCK_CONTROL, clock & !SDHCI_CLOCK_CARD_EN);
+    runtime_spin(SDHCI_CLOCK_RECOVERY_SETTLE_SPINS);
+    sdio_write16(SDHCI_CLOCK_CONTROL, clock);
+    let post_clock_reset_ok = sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     let present = sdio_read32(SDHCI_PRESENT_STATE);
     if present & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT) != 0 {
-        let clock = sdio_read16(SDHCI_CLOCK_CONTROL);
         sdio_write16(SDHCI_CLOCK_CONTROL, clock & !SDHCI_CLOCK_CARD_EN);
         runtime_spin(SDHCI_CLOCK_RECOVERY_SETTLE_SPINS);
         sdio_write16(SDHCI_CLOCK_CONTROL, clock);
     }
-    reset_ok && sdio_wait_inhibit_clear(true)
+    reset_ok && post_clock_reset_ok && sdio_wait_inhibit_clear(true)
 }
 
 fn sdio_prepped_registers_ready(power: u8, clock: u16, reset: u8, present: u32) -> bool {
@@ -12743,7 +12805,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_backplane_upload_uses_block_mode_before_firmware_release() {
+    fn cyw43_backplane_upload_uses_block_primary_before_firmware_release() {
         assert_eq!(
             CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
             CYW43_FIRMWARE_STAGE_BYTES / 2
@@ -12755,18 +12817,14 @@ mod tests {
         );
         assert_eq!(
             cyw43_backplane_write_chunk_shape(false, false, 2048),
-            (
-                2048,
-                SDIO_FUNCTION1_BLOCK_SIZE,
-                (2048 / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
-            )
+            (2048, SDIO_FUNCTION1_BLOCK_SIZE, 32)
         );
         assert_eq!(
             cyw43_backplane_write_chunk_shape(false, false, CYW43_FIRMWARE_STAGE_BYTES),
             (
                 CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
+                64
             )
         );
         assert_eq!(
@@ -12774,7 +12832,7 @@ mod tests {
             (
                 CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
                 SDIO_FUNCTION1_BLOCK_SIZE,
-                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
+                64
             )
         );
         assert_eq!(
@@ -12793,8 +12851,8 @@ mod tests {
             CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES,
             SDIO_CMD53_BYTE_MODE_MAX
         );
-        assert_eq!(CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES, 256);
-        assert_ne!(
+        assert_eq!(CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES, 64);
+        assert_eq!(
             CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES,
             SDIO_FUNCTION1_BLOCK_SIZE as usize
         );
@@ -12884,9 +12942,14 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_linked_pre_release_owner_upload_uses_block_mode_first() {
+    fn cyw43_linked_pre_release_owner_upload_uses_block_primary_with_byte_replay() {
         assert_eq!(
-            cyw43_backplane_write_chunk_shape(false, false, CYW43_FIRMWARE_STAGE_BYTES),
+            cyw43_backplane_write_chunk_shape_for_lane(
+                false,
+                CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY,
+                true,
+                CYW43_FIRMWARE_STAGE_BYTES
+            ),
             (
                 CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
                 SDIO_FUNCTION1_BLOCK_SIZE,
@@ -12907,7 +12970,7 @@ mod tests {
             cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
             true,
             (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16,
-            CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES as u16,
+            SDIO_FUNCTION1_BLOCK_SIZE,
         );
         assert_ne!(arg & (1 << 27), 0);
         assert_ne!(arg & (1 << 26), 0);
@@ -13383,52 +13446,23 @@ mod tests {
             DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT
                 | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED
         );
-
-        for expected_index in 1..=CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len() as u8 {
-            assert!(cyw43_prepare_firmware_upload_retry(&mut state));
-            assert!(!state.firmware_byte_mode_fallback);
-            assert!(!state.firmware_narrow_byte_mode_fallback);
-            assert_eq!(state.firmware_retry_clock_index, expected_index);
-        }
+        assert_eq!(cyw43_firmware_retry_card_if_for_lane(true, 1), 0);
+        assert_eq!(cyw43_firmware_retry_host_flags_for_lane(true, 1), 0);
         assert_eq!(
-            cyw43_backplane_write_chunk_shape(
-                false,
-                state.firmware_byte_mode_fallback,
-                CYW43_FIRMWARE_STAGE_BYTES
-            ),
-            (
-                CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES,
-                SDIO_FUNCTION1_BLOCK_SIZE,
-                (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16
-            )
+            cyw43_firmware_retry_host_flags_for_lane(false, 1),
+            DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT
+                | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED
         );
 
-        assert!(cyw43_prepare_firmware_upload_retry(&mut state));
-        assert!(state.firmware_byte_mode_fallback);
-        assert!(!state.firmware_narrow_byte_mode_fallback);
-        assert_eq!(state.firmware_retry_clock_index, 1);
-        assert_eq!(
-            cyw43_backplane_write_chunk_shape(false, true, CYW43_FIRMWARE_STAGE_BYTES),
-            (
-                CYW43_FIRMWARE_BYTE_MODE_SAFE_CHUNK_BYTES,
-                CYW43_FIRMWARE_BYTE_MODE_SAFE_CHUNK_BYTES as u16,
-                0
-            )
-        );
-
-        for expected_index in 2..=CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len() as u8 {
-            assert!(cyw43_prepare_firmware_upload_retry(&mut state));
-            assert_eq!(state.firmware_retry_clock_index, expected_index);
-        }
-
-        assert!(cyw43_prepare_firmware_upload_retry(&mut state));
+        assert!(cyw43_force_conservative_firmware_byte_replay(&mut state));
+        state.firmware_narrow_byte_mode_fallback = true;
         assert!(state.firmware_byte_mode_fallback);
         assert!(state.firmware_narrow_byte_mode_fallback);
         assert_eq!(state.firmware_retry_clock_index, 1);
         assert_eq!(
             cyw43_backplane_write_chunk_shape_for_lane(
                 false,
-                true,
+                state.firmware_byte_mode_fallback,
                 state.firmware_narrow_byte_mode_fallback,
                 CYW43_FIRMWARE_STAGE_BYTES
             ),
@@ -13438,6 +13472,7 @@ mod tests {
                 0
             )
         );
+
         for expected_index in 2..=CYW43_SDIO_FIRMWARE_RETRY_CLOCKS_HZ.len() as u8 {
             assert!(cyw43_prepare_firmware_upload_retry(&mut state));
             assert_eq!(state.firmware_retry_clock_index, expected_index);
@@ -13454,7 +13489,20 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_retryable_firmware_command_restarts_block_mode_ladder() {
+    fn cyw43_forced_byte_replay_primes_conservative_owner_lane() {
+        let mut state = Cyw43RuntimeState::new();
+        state.backplane_window_valid = true;
+
+        assert!(cyw43_force_conservative_firmware_byte_replay(&mut state));
+
+        assert!(state.firmware_byte_mode_fallback);
+        assert!(!state.firmware_narrow_byte_mode_fallback);
+        assert_eq!(state.firmware_retry_clock_index, 1);
+        assert!(!state.backplane_window_valid);
+    }
+
+    #[test]
+    fn cyw43_retryable_firmware_command_restarts_linked_conservative_lane() {
         let mut state = Cyw43RuntimeState::new();
         state.firmware_byte_mode_fallback = true;
         state.firmware_narrow_byte_mode_fallback = true;
@@ -13463,9 +13511,9 @@ mod tests {
 
         cyw43_prepare_retryable_firmware_command(&mut state);
 
-        assert!(!state.firmware_byte_mode_fallback);
-        assert!(!state.firmware_narrow_byte_mode_fallback);
-        assert_eq!(state.firmware_retry_clock_index, 0);
+        assert!(state.firmware_byte_mode_fallback);
+        assert!(state.firmware_narrow_byte_mode_fallback);
+        assert_eq!(state.firmware_retry_clock_index, 1);
         assert!(!state.backplane_window_valid);
     }
 
@@ -13996,14 +14044,14 @@ mod tests {
     #[test]
     fn usb_runtime_retries_keyboard_enumeration_without_long_cooldown() {
         assert_eq!(USB_ENUMERATION_RETRY_COOLDOWN_TURNS, 1);
-        assert_eq!(USB_ENUMERATION_COLD_REINIT_LIMIT, 2);
+        assert_eq!(USB_ENUMERATION_COLD_REINIT_LIMIT, 4);
         assert_eq!(USB_ROOT_PORT_SCAN_PASSES, 4);
         assert!(USB_LINKED_RUNTIME_SECOND_ROOT_PORT_RESET);
         assert_eq!(USB_STALE_UBOOT_ROOT_PORT_RESET_SETTLE_SPINS, 200_000);
-        assert_eq!(USB_CONTROL_TRANSFER_SPINS, 20_000_000);
-        assert_eq!(USB_COMMAND_COMPLETION_SPINS, USB_XHCI_SPINS);
+        assert_eq!(USB_CONTROL_TRANSFER_SPINS, USB_XHCI_SPINS);
+        assert_eq!(USB_COMMAND_COMPLETION_SPINS, USB_XHCI_SPINS / 32);
         assert!(USB_COMMAND_COMPLETION_SPINS < USB_CONTROL_TRANSFER_SPINS);
-        assert!(USB_CONTROL_TRANSFER_SPINS > USB_XHCI_SPINS);
+        assert_eq!(USB_CONTROL_TRANSFER_SPINS, USB_XHCI_SPINS);
     }
 
     #[test]
@@ -14079,7 +14127,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_runtime_cold_reinit_policy_targets_enable_slot_failures() {
+    fn usb_runtime_cold_reinit_policy_targets_command_proof_stalls() {
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
         ));
@@ -14097,6 +14145,9 @@ mod tests {
         ));
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
+        ));
+        assert!(usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
         ));
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY

@@ -1458,7 +1458,10 @@ fn embedded_driver_runtime_payload() -> Option<&'static [u8]> {
     (!payload.is_empty()).then_some(payload)
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
+const GENERIC_PI4_DRIVER_RUNTIME_ARTIFACT: &str = "cohesix/bin/pi4-driver-runtime";
+
+#[cfg(any(feature = "kernel", test))]
 fn read_cpio_hex(bytes: &[u8]) -> Option<usize> {
     let mut value = 0usize;
     for &byte in bytes {
@@ -1473,12 +1476,12 @@ fn read_cpio_hex(bytes: &[u8]) -> Option<usize> {
     Some(value)
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 fn align4(value: usize) -> Option<usize> {
     value.checked_add(3).map(|v| v & !3)
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 fn cpio_entry_data<'a>(archive: &'a [u8], name: &str) -> Option<&'a [u8]> {
     const HEADER_LEN: usize = 110;
     const MAGIC: &[u8; 6] = b"070701";
@@ -1517,7 +1520,7 @@ fn cpio_entry_data<'a>(archive: &'a [u8], name: &str) -> Option<&'a [u8]> {
     None
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 fn cpio_entry_data_with_optional_wrapper<'a>(payload: &'a [u8], name: &str) -> Option<&'a [u8]> {
     if let Some(data) = cpio_entry_data(payload, name) {
         return Some(data);
@@ -1533,6 +1536,18 @@ fn cpio_entry_data_with_optional_wrapper<'a>(payload: &'a [u8], name: &str) -> O
         offset = offset.saturating_add(1);
     }
     None
+}
+
+#[cfg(any(feature = "kernel", test))]
+fn cpio_driver_runtime_entry_data<'a>(payload: &'a [u8], artifact: &str) -> Option<&'a [u8]> {
+    cpio_entry_data_with_optional_wrapper(payload, artifact).or_else(|| {
+        artifact
+            .strip_prefix("cohesix/bin/pi4-driver-")
+            .and_then(|suffix| (!suffix.is_empty()).then_some(()))
+            .and_then(|()| {
+                cpio_entry_data_with_optional_wrapper(payload, GENERIC_PI4_DRIVER_RUNTIME_ARTIFACT)
+            })
+    })
 }
 
 /// Return the linked driver runtime image bytes for a Pi 4 hot path.
@@ -1565,7 +1580,7 @@ fn driver_runtime_image_bytes_from_payloads<'a>(
     )
 }
 
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 fn driver_runtime_image_bytes_from_payloads_for_profile<'a>(
     artifact: &str,
     bootinfo_payload: Option<&'a [u8]>,
@@ -1574,14 +1589,14 @@ fn driver_runtime_image_bytes_from_payloads_for_profile<'a>(
 ) -> Option<&'a [u8]> {
     if require_embedded_payload {
         return embedded_payload
-            .and_then(|payload| cpio_entry_data_with_optional_wrapper(payload, artifact));
+            .and_then(|payload| cpio_driver_runtime_entry_data(payload, artifact));
     }
     if let Some(payload) = bootinfo_payload {
-        if let Some(image) = cpio_entry_data_with_optional_wrapper(payload, artifact) {
+        if let Some(image) = cpio_driver_runtime_entry_data(payload, artifact) {
             return Some(image);
         }
     }
-    embedded_payload.and_then(|payload| cpio_entry_data_with_optional_wrapper(payload, artifact))
+    embedded_payload.and_then(|payload| cpio_driver_runtime_entry_data(payload, artifact))
 }
 
 fn generated_runtime_image_spec_for_hot_path(
@@ -1761,8 +1776,7 @@ const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING
 const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
 const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS * 32;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
-const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize =
-    DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS;
+const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_LONG_INIT_RING_ATTEMPTS;
 
 #[cfg(feature = "kernel")]
 fn driver_task_shared_store_barrier() {
@@ -6704,7 +6718,11 @@ mod tests {
         );
         assert_eq!(
             DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS,
-            DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
+            DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
+        );
+        assert!(
+            DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS
+                > DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
         );
         assert_eq!(
             driver_task_ring_attempt_limit(
@@ -7219,7 +7237,6 @@ mod tests {
         assert!(pcie.region_pages(DriverTaskRuntimeRegionKind::Mmio) >= 10);
     }
 
-    #[cfg(feature = "kernel")]
     #[test]
     fn cpio_runtime_payload_lookup_accepts_uimage_wrapped_archive() {
         fn pad4(bytes: &mut Vec<u8>) {
@@ -7272,7 +7289,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "kernel")]
     #[test]
     fn physical_pi_runtime_payload_lookup_requires_embedded_cpio() {
         fn pad4(bytes: &mut Vec<u8>) {
@@ -7363,6 +7379,68 @@ mod tests {
             driver_runtime_image_bytes_from_payloads_for_profile(
                 "cohesix/bin/pi4-driver-missing",
                 Some(&primary),
+                Some(&embedded),
+                true,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn physical_pi_runtime_payload_lookup_accepts_deduplicated_runtime_entry() {
+        fn pad4(bytes: &mut Vec<u8>) {
+            while bytes.len() % 4 != 0 {
+                bytes.push(0);
+            }
+        }
+
+        fn append_entry(bytes: &mut Vec<u8>, name: &str, data: &[u8]) {
+            let namesize = name.len() + 1;
+            let header = format!(
+                "070701{ino:08x}{mode:08x}{uid:08x}{gid:08x}{nlink:08x}{mtime:08x}{filesize:08x}{devmajor:08x}{devminor:08x}{rdevmajor:08x}{rdevminor:08x}{namesize:08x}{check:08x}",
+                ino = 1,
+                mode = 0o100755,
+                uid = 0,
+                gid = 0,
+                nlink = 1,
+                mtime = 0,
+                filesize = data.len(),
+                devmajor = 0,
+                devminor = 0,
+                rdevmajor = 0,
+                rdevminor = 0,
+                namesize = namesize,
+                check = 0,
+            );
+            bytes.extend_from_slice(header.as_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.push(0);
+            pad4(bytes);
+            bytes.extend_from_slice(data);
+            pad4(bytes);
+        }
+
+        let mut embedded = Vec::new();
+        append_entry(
+            &mut embedded,
+            GENERIC_PI4_DRIVER_RUNTIME_ARTIFACT,
+            b"generic-runtime-elf",
+        );
+        append_entry(&mut embedded, "TRAILER!!!", &[]);
+
+        assert_eq!(
+            driver_runtime_image_bytes_from_payloads_for_profile(
+                "cohesix/bin/pi4-driver-usb",
+                None,
+                Some(&embedded),
+                true,
+            ),
+            Some(&b"generic-runtime-elf"[..])
+        );
+        assert_eq!(
+            driver_runtime_image_bytes_from_payloads_for_profile(
+                "cohesix/bin/not-a-driver-runtime",
+                None,
                 Some(&embedded),
                 true,
             ),

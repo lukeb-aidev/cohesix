@@ -1740,6 +1740,7 @@ impl LocalSeatRuntime {
                             publish_local_seat_usb_enumeration_progress(contract, completion);
                             return;
                         }
+                        record_linked_local_seat_usb_detail(Some(completion));
                         if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_PENDING_LOGGED
                             .swap(true, Ordering::AcqRel)
                         {

@@ -352,9 +352,14 @@ declare `root_task.driver_images` for `serial-console`, `usb-keyboard`,
 `scripts/cohesix-build-run.sh` stages linked `pi4-driver-*` runtime image
 binaries, and `scripts/pi4-image-build.sh` packages those images into the raw
 driver-runtime CPIO embedded in the Pi 4 root-task image. The U-Boot-staged CPIO
-is audit/packaging evidence only for physical Pi owner-state boots. Those
-binaries now implement fixed command/completion ring service engines for the
-active Pi 4 hardware
+is audit/packaging evidence only for physical Pi owner-state boots. When the
+stripped role images are byte-identical, the Pi image script deduplicates the
+physical CPIO to one `cohesix/bin/pi4-driver-runtime` entry and root-task uses
+that generic entry as a fallback for generated `cohesix/bin/pi4-driver-*`
+artifact names; if any role image diverges, the package keeps the per-role
+entries. The generated per-role specs remain the authority for code pages,
+stack pages, resources, and hot-path admission. Those binaries now implement
+fixed command/completion ring service engines for the active Pi 4 hardware
 owners, including `sdio-host`, so physical Pi bootstrap debugs linked-image
 hardware turns instead of shared-root service TCBs. The serial image handles bounded mini-UART
 init/RX/TX. HDMI renders to a mapped framebuffer, PCIe services primitive MMIO
@@ -998,17 +1003,21 @@ transition, but it must not write SDHCI host-control registers directly.
 - CYW43455 firmware upload preserves the Linux/brcmfmac Function 1 backplane
   address and incrementing-CMD53 shape while remaining inside the generated
   split-runtime payload contract. Root streams firmware through the declared
-  8192-byte SDIO shared-payload/RX owner window, and the linked runtime flushes
-  each pre-release stage as a Function 1 block-mode CMD53 transfer using 64-byte
-  Function 1 blocks. If that lane reports a transfer fault, the retained stage
-  replays through the conservative byte-mode retry clock ladder before reporting
-  exhausted retry proof. The final partial window flushes on end-of-image. The
-  old monolithic HAL path could issue the full Linux 32704-byte 511-block turn
-  from a 32 KiB window; the linked-runtime path must not claim that exact
-  payload size unless the generated SDIO shared-payload contract is widened and
-  hardware proof catches up. Do not encode a block-mode count of zero for a
-  512-block command; zero count is only valid for 512-byte byte-mode CMD53
-  transfers. The split-runtime `sdio-host` owner must program
+  8192-byte SDIO shared-payload/RX owner window, and the linked runtime now
+  starts each pre-release stage with the old-good high-speed 4-bit Function 1
+  block-mode CMD53 lane, bounded to subtransfers inside the 8192-byte owner
+  window. A retained-stage retry replays the exact owner window through the
+  conservative byte lane after a real SDIO owner transfer fault, first as
+  `forced-byte-mode-conservative` and then as `byte-conservative` or
+  `byte-narrow-conservative` before reporting exhausted retry proof. The final
+  partial window flushes on end-of-image.
+  The old
+  monolithic HAL path could issue the full Linux 32704-byte 511-block turn from
+  a 32 KiB window; the linked-runtime path must not claim that exact payload
+  size unless the generated SDIO shared-payload contract is widened and hardware
+  proof catches up. Do not encode a block-mode count of zero for a 512-block
+  command; zero count is only valid for 512-byte byte-mode CMD53 transfers. The
+  split-runtime `sdio-host` owner must program
   `SDHCI_TRNS_MULTI` for any CMD53 block-mode turn with more than one block,
   including CYW43 firmware upload chunks delivered through the CYW43-to-SDIO
   bus link. If the SDIO owner reports a firmware transfer fault such as
@@ -1460,8 +1469,10 @@ transition, but it must not write SDHCI host-control registers directly.
   `0x5103` failure is reported as a CMD53 descriptor-transfer blocker with
   `wifi: next_action=inspect-sdio-owner-cmd53-after-block-and-byte-retries`, and an
   exhausted retained-stage ladder reports `0x5329` as `firmware-retry-exhausted`
-  while preserving the SDHCI transfer result. Neither case is a generic
-  disabled-network state. Operators can still run the explicit
+  while preserving the SDHCI transfer result plus the actual owner-lane label
+  (`forced-byte-mode-conservative`, `byte-conservative`, or
+  `byte-narrow-conservative`). Neither case is a generic disabled-network
+  state. Operators can still run the explicit
   `wifi probe-ht` command when they want the stateful HT probe.
 - Wi-Fi association completion is event-pump driven for both explicit `wifi`
   and `auto` interface policies. While linked-runtime pointer-free proof is
@@ -1667,6 +1678,18 @@ active path is Cohesix-owned cold start:
   Linux-shaped labels, pre-command status reads, post-enqueue event-generation
   replay without the preceding U-Boot recovery timeout, interrupt-delivery bits
   without MSI ownership, or a same-command re-doorbell are not proof.
+- Prompt-side USB retry must be bounded and decisive. A linked-runtime retry may
+  cold-reinitialize the xHC on command-ring or Enable Slot proof stalls, then
+  immediately attempts the next keyboard enumeration turn instead of spending a
+  long shell-blocking cooldown. Address, descriptor, config, HID attach, and hub
+  attach failures preserve same-controller state so retries do not erase slot,
+  port, or descriptor progress.
+  Plain `xhci-ready` is progress toward Enable Slot proof, not a reset-worthy
+  stall; resetting there can loop forever at gate 3 and prevent gate 4 command
+  proof. The command-completion spin budget is shorter than the control-transfer
+  wait budget so a no-reply child runtime exposes `command-ring-ready` or
+  `usb-keyboard-enumeration` failure quickly, and only `keyboard-ready` plus
+  first HID report/byte proof can clear USB acceptance.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. USB keyboard availability must not depend on the
   Wi-Fi/CYW43 bring-up reaching the cooperative event loop first. When local
