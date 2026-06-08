@@ -8040,7 +8040,7 @@ fn hdmi_render_frame(frame: DriverFrameDescriptor) -> usize {
 
 fn hdmi_render_boot_diagnostics(descriptor: &DriverRuntimeInitDescriptor) {
     let mut state = HdmiRenderState::from_descriptor(descriptor);
-    state.clear_screen();
+    state.clear_full_framebuffer();
     state.put_str("Cohesix HDMI linked runtime\n");
     state.put_str("framebuffer descriptor ready\n");
     state.put_str("waiting for console mirror\n");
@@ -8099,7 +8099,7 @@ impl HdmiRenderState {
             b'\n' => self.newline(),
             b'\r' => self.col = 0,
             0x0c => {
-                self.clear_screen();
+                self.clear_full_framebuffer();
                 self.row = 0;
                 self.col = 0;
             }
@@ -8147,26 +8147,26 @@ impl HdmiRenderState {
 
     fn scroll_up_one_text_row(&mut self) {
         let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
-            self.clear_screen();
+            self.clear_text_area();
             self.row = 0;
             self.col = 0;
             return;
         };
         let text_height = self.rows.saturating_mul(CHAR_HEIGHT).min(self.height);
         if text_height <= CHAR_HEIGHT || self.pitch == 0 || self.width == 0 {
-            self.clear_screen();
+            self.clear_text_area();
             self.row = 0;
             self.col = 0;
             return;
         }
         let Some(row_bytes) = self.width.checked_mul(bytes_per_pixel) else {
-            self.clear_screen();
+            self.clear_text_area();
             self.row = 0;
             self.col = 0;
             return;
         };
         if row_bytes == 0 || row_bytes > self.pitch {
-            self.clear_screen();
+            self.clear_text_area();
             self.row = 0;
             self.col = 0;
             return;
@@ -8211,9 +8211,30 @@ impl HdmiRenderState {
         self.col = 0;
     }
 
-    #[cfg_attr(not(target_os = "none"), allow(dead_code))]
-    fn clear_screen(&mut self) {
+    fn clear_text_area(&mut self) {
         self.fill_rect(0, 0, self.width, self.height, HDMI_BG_COLOR);
+    }
+
+    fn clear_full_framebuffer(&mut self) {
+        let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
+            self.clear_text_area();
+            return;
+        };
+        if self.framebuffer_width == 0
+            || self.framebuffer_height == 0
+            || self.pitch == 0
+            || self.framebuffer_len == 0
+        {
+            return;
+        }
+        for y in 0..self.framebuffer_height {
+            for x in 0..self.framebuffer_width {
+                let Some(byte_off) = self.framebuffer_offset(x, y, bytes_per_pixel) else {
+                    continue;
+                };
+                write_framebuffer_pixel(self.framebuffer + byte_off, HDMI_BG_COLOR, bytes_per_pixel);
+            }
+        }
     }
 
     fn draw_char(&mut self, byte: u8) {
@@ -16851,10 +16872,10 @@ mod tests {
         assert_eq!(
             safe,
             HdmiSafeArea {
-                x: 32,
-                y: 24,
-                width: 576,
-                height: 432,
+                x: 12,
+                y: 16,
+                width: 616,
+                height: 448,
             }
         );
         assert_eq!(safe.width % CHAR_WIDTH, 0);
