@@ -1245,7 +1245,7 @@ def test_gate_summary_tracks_current_serial_runtime_init_outstanding() -> None:
         [
             "DRIVER_TASK_RESOURCE_INIT contract=serial hot_path=serial-console "
             "stage=runtime-descriptor-bootstrap status=no-reply "
-            "acceptance=no code=none detail=none result=none frame_len=1344",
+            "acceptance=no code=none detail=none result=none frame_len=1472",
             "DRIVER_TASK_RING_CALL_BEGIN contract=serial endpoint=0x0649 "
             "request=10 opcode=1 flags=0x0000 arg0=0 arg1=3 "
             "aux0=0x53455249 aux1=0 frame_len=0",
@@ -1262,13 +1262,13 @@ def test_gate_summary_tracks_hdmi_usb_and_wifi_frontiers() -> None:
         [
             "DRIVER_TASK_RESOURCE_INIT contract=hdmi-text hot_path=hdmi-text "
             "stage=runtime-descriptor-bootstrap status=ready acceptance=no "
-            "code=1 detail=0 result=1 frame_len=1344",
+            "code=1 detail=0 result=1 frame_len=1472",
             "DRIVER_TASK_RESOURCE_INIT contract=hdmi-text hot_path=hdmi-text "
             "stage=hdmi-engine-init status=no-reply acceptance=no "
             "code=none detail=none result=none frame_len=0",
             "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
             "hot_path=usb-keyboard stage=runtime-descriptor-bootstrap "
-            "status=ready acceptance=no code=1 detail=0 result=1 frame_len=1344",
+            "status=ready acceptance=no code=1 detail=0 result=1 frame_len=1472",
             "DRIVER_TASK_RESOURCE_INIT contract=pcie-root hot_path=pcie-root "
             "stage=usb-prereq-pcie-replay status=no-reply acceptance=no "
             "code=none detail=none result=none frame_len=0",

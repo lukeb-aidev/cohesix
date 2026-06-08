@@ -77,6 +77,24 @@ pub const DRIVER_RUNTIME_CYW43_OP_RX_POLL: u16 = 8;
 pub const DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP: u16 = 9;
 /// CYW43 operation: poll only SDPCM control and event frames.
 pub const DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL: u16 = 10;
+/// CYW43 transport detail: no transport substage has run.
+pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START: u16 = 0x5400;
+/// CYW43 transport detail: SDIO bus-owner link was validated.
+pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY: u16 = 0x5401;
+/// CYW43 transport detail: card-select/adoption stage is ready.
+pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY: u16 = 0x5402;
+/// CYW43 transport detail: Function 1 block size is programmed.
+pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_BLOCK_READY: u16 = 0x5403;
+/// CYW43 transport detail: Function 2 block size is programmed.
+pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F2_BLOCK_READY: u16 = 0x5404;
+/// CYW43 transport detail: Function 1 is enabled and ready.
+pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_ENABLED: u16 = 0x5405;
+/// CYW43 transport detail: startup host clock/bus-width state is programmed.
+pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY: u16 = 0x5406;
+/// CYW43 transport detail: backplane ALP/window/chipcommon proof completed.
+pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BACKPLANE_READY: u16 = 0x5407;
+/// CYW43 transport detail: transport is ready for firmware prep/upload.
+pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY: u16 = 0x5408;
 /// CYW43 command flag: force Function 1 backplane writes through byte-mode retry.
 pub const DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE: u16 = 1 << 0;
 /// CYW43 command flag: transmit control frames with the Linux SDPCM hw extension.
@@ -127,6 +145,8 @@ pub const DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE: u16 = 4;
 pub const DRIVER_RUNTIME_SDIO_OP_POLL_IRQ: u16 = 5;
 /// SDIO bus-owner operation: apply host-controller clock and bus-width state.
 pub const DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG: u16 = 6;
+/// SDIO bus-owner operation: issue a bounded raw card command with no data phase.
+pub const DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND: u16 = 7;
 /// SDIO response kind: no response.
 pub const DRIVER_RUNTIME_SDIO_RESP_NONE: u8 = 0;
 /// SDIO response kind: OCR/R4 response.
@@ -146,7 +166,7 @@ pub const DRIVER_RUNTIME_FRAMEBUFFER_VADDR: u64 = 0x7100_0000;
 /// Maximum MMIO page descriptors carried in one init descriptor.
 pub const DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES: usize = 16;
 /// Maximum DMA page descriptors carried in one init descriptor.
-pub const DRIVER_RUNTIME_INIT_MAX_DMA_PAGES: usize = 64;
+pub const DRIVER_RUNTIME_INIT_MAX_DMA_PAGES: usize = 80;
 /// Maximum root/driver shared pages carried in one init descriptor.
 pub const DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES: usize = 16;
 /// Maximum IRQ descriptors carried in one init descriptor.
@@ -259,6 +279,10 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_FLUSHED: u32 = 95;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN: u32 = 72;
 /// USB runtime is programming the enabled-slot count.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN: u32 = 73;
+/// USB runtime wrote the enabled-slot count.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_WRITTEN: u32 = 103;
+/// USB runtime flushed the enabled-slot count write.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_FLUSHED: u32 = 104;
 /// USB runtime is programming the primary interrupter control register.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN: u32 = 74;
 /// USB runtime is programming the interrupter moderation register.
@@ -281,6 +305,16 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN: u32 = 99;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN: u32 = 100;
 /// USB runtime flushed the high 32-bit half of ERDP.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED: u32 = 101;
+/// USB runtime is publishing the xHCI scratchpad array through DCBAA slot 0.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_BEGIN: u32 = 102;
+/// USB runtime wrote DCBAA slot 0 with the scratchpad pointer-array address.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_WRITTEN: u32 = 105;
+/// USB runtime cleaned DCBAA slot 0 after writing the scratchpad array pointer.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_CLEANED: u32 = 106;
+/// USB runtime filled the xHCI scratchpad pointer array.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_FILLED: u32 = 107;
+/// USB runtime cleaned the xHCI scratchpad pointer array.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_CLEANED: u32 = 108;
 /// USB runtime is requesting xHCI controller run state.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN: u32 = 79;
 /// USB runtime published xHCI command/event rings.
@@ -329,6 +363,48 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO: u32 = 46;
 pub const DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43: u32 = 47;
 /// Runtime is publishing the command completion record.
 pub const DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH: u32 = 48;
+/// CYW43 runtime started a restartable transport substage.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_BEGIN: u32 = 110;
+/// CYW43 runtime validated the SDIO bus-owner link.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_READY: u32 = 111;
+/// CYW43 runtime is adopting the SDIO card-selected owner state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_ADOPT_BEGIN: u32 = 119;
+/// CYW43 runtime is asking the SDIO owner to replay startup host config.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_HOST_CONFIG_BEGIN: u32 = 125;
+/// CYW43 runtime is asking the SDIO owner to issue CMD0.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD0_BEGIN: u32 = 126;
+/// CYW43 runtime is asking the SDIO owner to issue CMD5 for OCR discovery.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD5_OCR_BEGIN: u32 = 127;
+/// CYW43 runtime is asking the SDIO owner to issue CMD5 for card readiness.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD5_READY_BEGIN: u32 = 128;
+/// CYW43 runtime is asking the SDIO owner to issue CMD3 for RCA assignment.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD3_RCA_BEGIN: u32 = 129;
+/// CYW43 runtime is asking the SDIO owner to issue CMD7 for card selection.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD7_SELECT_BEGIN: u32 = 130;
+/// CYW43 runtime proved card selection/adoption.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY: u32 = 112;
+/// CYW43 runtime is programming Function 1 block size.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN: u32 = 120;
+/// CYW43 runtime programmed Function 1 block size.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY: u32 = 113;
+/// CYW43 runtime is programming Function 2 block size.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_F2_BLOCK_BEGIN: u32 = 121;
+/// CYW43 runtime programmed Function 2 block size.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_F2_BLOCK_READY: u32 = 114;
+/// CYW43 runtime is enabling SDIO Function 1.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_ENABLE_BEGIN: u32 = 122;
+/// CYW43 runtime enabled Function 1.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_ENABLED: u32 = 115;
+/// CYW43 runtime is programming startup host clock and bus width.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_CONFIG_BEGIN: u32 = 123;
+/// CYW43 runtime programmed startup host clock/bus width.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_READY: u32 = 116;
+/// CYW43 runtime is proving ALP/backplane transport.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN: u32 = 124;
+/// CYW43 runtime proved backplane transport.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY: u32 = 117;
+/// CYW43 runtime completed transport init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY: u32 = 118;
 /// Offset namespace base for runtime shared-buffer payloads referenced by an
 /// owner-ring descriptor.
 pub const DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE: u16 = DRIVER_RUNTIME_RING_PAGE_BYTES;
@@ -493,12 +569,14 @@ pub struct DriverRuntimeSdioCommandDescriptor {
     pub function: u8,
     /// [`DRIVER_RUNTIME_SDIO_RESP_*`] value.
     pub response_kind: u8,
-    /// SDIO register/window address.
+    /// SDIO register/window address, or raw card-command argument for
+    /// [`DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND`].
     pub addr: u32,
     /// Data payload offset inside the fixed command ring page or the bounded
     /// runtime shared-buffer payload window.
     pub data_offset: u16,
-    /// Data bytes for byte-mode transfers.
+    /// Data bytes for byte-mode transfers, or raw command index for
+    /// [`DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND`].
     pub len: u16,
     /// Block size for CMD53 block-mode transfers.
     pub block_size: u16,
@@ -546,8 +624,10 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_READ
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ
-            || self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG;
+            || self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG
+            || self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND;
         let host_config = self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG;
+        let card_command = self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND;
         let known_response = self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_OCR
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_SHORT
@@ -561,7 +641,7 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
         let effective_len = if read_result {
             1
-        } else if host_config {
+        } else if host_config || card_command {
             0
         } else if self.block_count != 0 {
             (self.block_count as u32).saturating_mul(self.block_size as u32)
@@ -578,7 +658,7 @@ impl DriverRuntimeSdioCommandDescriptor {
         known_op
             && known_response
             && self.function <= 7
-            && (host_config || self.addr < (1 << 17))
+            && (host_config || card_command || self.addr < (1 << 17))
             && (!host_config
                 || (self.function == 0
                     && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
@@ -588,6 +668,14 @@ impl DriverRuntimeSdioCommandDescriptor {
                     && self.block_count == 0
                     && self.reserved == 0
                     && self.addr <= 100_000_000))
+            && (!card_command
+                || (self.function == 0
+                    && self.data_offset == 0
+                    && self.len <= 63
+                    && self.block_size == 0
+                    && self.block_count == 0
+                    && self.flags == 0
+                    && self.reserved == 0))
             && (!cmd52 || (self.len == 1 && self.block_count == 0 && self.block_size == 0))
             && (!cmd53
                 || ((self.len != 0 || self.block_count != 0)
@@ -595,7 +683,9 @@ impl DriverRuntimeSdioCommandDescriptor {
                         || (self.block_size != 0
                             && self.block_size <= 512
                             && self.block_count <= 511))))
-            && (host_config || (effective_len != 0 && (ring_payload || shared_payload)))
+            && (host_config
+                || card_command
+                || (effective_len != 0 && (ring_payload || shared_payload)))
     }
 }
 
@@ -1237,6 +1327,7 @@ mod tests {
     fn init_descriptor_is_bounded_for_ring_payload() {
         assert!(core::mem::size_of::<DriverRuntimeInitDescriptor>() <= 1536);
         assert_eq!(core::mem::align_of::<DriverRuntimeInitDescriptor>(), 8);
+        assert!(DRIVER_RUNTIME_INIT_MAX_DMA_PAGES >= 80);
     }
 
     #[test]
@@ -1616,6 +1707,39 @@ mod tests {
         assert!(!descriptor.valid());
         descriptor.len = 0;
         descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
+        assert!(!descriptor.valid());
+    }
+
+    #[test]
+    fn sdio_command_descriptor_validates_raw_card_commands() {
+        let mut descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY,
+            addr: 0x0001_0000,
+            data_offset: 0,
+            len: 7,
+            block_size: 0,
+            block_count: 0,
+            flags: 0,
+            reserved: 0,
+            timeout_us: 1000,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.len = 64;
+        assert!(!descriptor.valid());
+        descriptor.len = 7;
+        descriptor.function = 1;
+        assert!(!descriptor.valid());
+        descriptor.function = 0;
+        descriptor.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
+        assert!(!descriptor.valid());
+        descriptor.flags = 0;
+        descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
+        assert!(!descriptor.valid());
+        descriptor.data_offset = 0;
+        descriptor.block_count = 1;
         assert!(!descriptor.valid());
     }
 

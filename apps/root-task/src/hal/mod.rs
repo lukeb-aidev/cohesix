@@ -4100,8 +4100,8 @@ mod tests {
             64,
             16,
             512,
-            16,
-            2,
+            128,
+            32,
             true,
             false,
         );
@@ -4123,7 +4123,7 @@ mod tests {
                 0,
             )
             .unwrap();
-        for index in 0..16 {
+        for index in 0..128 {
             builder.add_dma_page(0x4000_0000 + index * 0x1000).unwrap();
         }
         builder
@@ -4132,12 +4132,12 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_DMA,
                 super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR,
                 0x4000_0000,
-                16,
+                128,
                 0,
                 true,
             )
             .unwrap();
-        for index in 0..2 {
+        for index in 0..32 {
             builder
                 .add_shared_page(0x5000_0000 + index * 0x1000)
                 .unwrap();
@@ -4148,7 +4148,7 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_SHARED,
                 super::driver_task::DRIVER_TASK_SHARED_BUFFER_VADDR,
                 0x5000_0000,
-                2,
+                32,
                 0,
                 true,
             )
@@ -4172,9 +4172,13 @@ mod tests {
             pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_KIND_DMA,
             pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
             super::driver_task::DRIVER_TASK_DMA_BUFFER_VADDR as u64,
-            16,
+            128,
             pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_FLAG_PADDR_CONTIGUOUS
         ));
+        assert_eq!(
+            descriptor.dma_page_count,
+            pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_DMA_PAGES as u16
+        );
         assert_eq!(
             descriptor.mmio_page_count,
             pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_MMIO_PAGES as u16
@@ -4183,8 +4187,8 @@ mod tests {
             super::driver_task::DriverTaskHotPath::UsbKeyboard.as_u32(),
             super::driver_task::DRIVER_TASK_ROLE_USB_BIT as u32,
             512,
-            16,
-            2,
+            128,
+            32,
         ));
     }
 

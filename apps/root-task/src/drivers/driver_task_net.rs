@@ -33,17 +33,22 @@ use crate::net::{
     MAX_FRAME_LEN,
 };
 use pi4_driver_abi::{
-    DriverRuntimeCyw43CommandDescriptor, DriverRuntimeSdioCommandDescriptor,
-    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
-    DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
-    DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL, DRIVER_RUNTIME_CYW43_OP_ETH_TX,
-    DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK, DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
-    DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK, DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL,
-    DRIVER_RUNTIME_CYW43_OP_RELEASE, DRIVER_RUNTIME_CYW43_OP_RX_POLL,
-    DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT, DRIVER_RUNTIME_NET_INIT_AUX,
-    DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE, DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
-    DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT, DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
-    DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
+    DriverRuntimeCyw43CommandDescriptor, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
+    DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME, DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+    DRIVER_RUNTIME_CYW43_OP_ETH_TX, DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+    DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP, DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
+    DRIVER_RUNTIME_CYW43_OP_NVRAM_TAIL, DRIVER_RUNTIME_CYW43_OP_RELEASE,
+    DRIVER_RUNTIME_CYW43_OP_RX_POLL, DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BACKPLANE_READY,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_BLOCK_READY,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_ENABLED,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F2_BLOCK_READY,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY, DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START, DRIVER_RUNTIME_NET_INIT_AUX,
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
 };
 
 const GENET_DRIVER_TASK_MAC: EthernetAddress =
@@ -60,6 +65,7 @@ const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
 const CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL: usize = 32 * 1024;
 const CYW43_RUNTIME_STREAM_COMMAND_RETRIES: usize = 2;
+const CYW43_RUNTIME_TRANSPORT_PHASE_ATTEMPTS: usize = 128;
 const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 192;
 const CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT: usize = 24;
 const CYW43_BACKPLANE_ADDRESS_MASK: u32 = 0x7fff;
@@ -104,18 +110,6 @@ const SDIO_FAULT_TELEMETRY_FAILURE_OFFSET: usize = 40;
 const SDIO_FAULT_TELEMETRY_BLOCK_REG_OFFSET: usize = 44;
 const SDIO_FAULT_TELEMETRY_PAYLOAD_EDGE_OFFSET: usize = 48;
 const SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET: usize = 52;
-const SDIO_GO_IDLE_COMMAND_INDEX: u32 = 0;
-const SDIO_CMD5_OCR_COMMAND_INDEX: u32 = 5;
-const SDIO_CMD3_RCA_COMMAND_INDEX: u32 = 3;
-const SDIO_CMD7_SELECT_COMMAND_INDEX: u32 = 7;
-const SDIO_R4_READY: u32 = 1 << 31;
-const SDIO_OCR_3V2_3V4: u32 = 0x00ff_8000;
-const SDIO_CMD5_READY_ATTEMPTS: usize = 16;
-const SDIO_CMD7_SELECT_FALLBACK_COMMAND_INDEX: u32 = SDIO_CMD7_SELECT_COMMAND_INDEX;
-const SDIO_CMD7_SELECT_ATTEMPTS: usize = 4;
-const SDIO_CARD_INIT_RESTART_ATTEMPTS: usize = 2;
-const SDIO_CMD7_SELECT_SETTLE_SPINS: usize = 10_000;
-const SDIO_STARTUP_CLOCK_HZ: u32 = 400_000;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -231,56 +225,6 @@ pub(crate) fn latest_sdio_runtime_replay_status() -> Option<SdioRuntimeReplaySta
 fn clear_cyw43_runtime_command_fault_status() {
     *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = None;
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
-}
-
-#[cfg(feature = "kernel")]
-fn record_sdio_runtime_command_fault_status(
-    contract: DriverTaskContract,
-    stage: &'static str,
-    command_index: Option<u32>,
-    argument: u32,
-    response_flags: u16,
-    completion: DriverTaskCompletionRecord,
-) {
-    use core::fmt::Write;
-
-    if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
-        return;
-    }
-    let op = command_index.unwrap_or(0) as u16;
-    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
-        stage,
-        op,
-        flags: response_flags,
-        target_addr: argument,
-        payload_offset: 0,
-        payload_len: 0,
-        total_len: 0,
-        detail: completion.detail,
-        reason: cyw43_runtime_fault_reason(completion.detail),
-        result: completion.result,
-    });
-    *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
-    let transfer_stage = sdio_transfer_failure_stage_label(completion.result);
-    let transfer_status = sdio_transfer_failure_status(completion.result);
-    let transfer_reason = sdio_transfer_failure_reason_label(completion.result);
-    let mut line = heapless::String::<320>::new();
-    let _ = write!(
-        line,
-        "SDIO_DRIVER_TASK_COMMAND_FAULT contract={} stage={} cmd={} arg=0x{:08x} flags=0x{:04x} detail=0x{:04x} reason={} result=0x{:08x} xfer_stage={} xfer_status=0x{:06x} xfer_reason={}",
-        contract.name,
-        stage,
-        op,
-        argument,
-        response_flags,
-        completion.detail,
-        cyw43_runtime_fault_reason(completion.detail),
-        completion.result,
-        transfer_stage,
-        transfer_status,
-        transfer_reason,
-    );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -849,6 +793,13 @@ where
     cyw43_submit_bcdc_ssid(contract, credentials, "cyw43-control-ssid")?;
     let _observed = cyw43_poll_control_plane_frames("cyw43-control-poll");
     if credentials.has_psk() {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-host-eapol",
+            "required",
+            None,
+        );
         return Err(DriverTaskNetError::RuntimeInit("host-eapol-required"));
     }
     CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
@@ -924,6 +875,13 @@ fn cyw43_submit_control_frame_checked(
     payload: &[u8],
     stage: &'static str,
 ) -> Result<(), DriverTaskNetError> {
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        DriverTaskHotPath::Cyw43Wifi,
+        stage,
+        "begin",
+        None,
+    );
     let completion = submit_cyw43_runtime_command_checked(
         contract,
         DriverRuntimeCyw43CommandDescriptor {
@@ -946,6 +904,13 @@ fn cyw43_submit_control_frame_checked(
         );
         Ok(())
     } else {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "fail",
+            Some(completion),
+        );
         Err(DriverTaskNetError::RuntimeInit(stage))
     }
 }
@@ -993,15 +958,7 @@ where
     H: Hardware<Error = HalError>,
 {
     init_sdio_host_linked_runtime(hal).map_err(Cyw43FirmwareInitError::Runtime)?;
-    submit_cyw43_runtime_command_checked(
-        contract,
-        DriverRuntimeCyw43CommandDescriptor {
-            op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
-            ..DriverRuntimeCyw43CommandDescriptor::empty()
-        },
-        &[],
-    )
-    .map_err(Cyw43FirmwareInitError::Command)?;
+    complete_cyw43_linked_runtime_transport(contract).map_err(Cyw43FirmwareInitError::Command)?;
     submit_cyw43_runtime_command_checked(
         contract,
         DriverRuntimeCyw43CommandDescriptor {
@@ -1020,6 +977,25 @@ where
         bundle.firmware.len(),
     )?;
     complete_cyw43_linked_runtime_firmware_tail(hal, contract, bundle, reset_vector)
+}
+
+#[cfg(feature = "kernel")]
+fn complete_cyw43_linked_runtime_transport(
+    contract: DriverTaskContract,
+) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
+    let descriptor = DriverRuntimeCyw43CommandDescriptor {
+        op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+        ..DriverRuntimeCyw43CommandDescriptor::empty()
+    };
+    for _ in 0..CYW43_RUNTIME_TRANSPORT_PHASE_ATTEMPTS {
+        let completion = submit_cyw43_runtime_command_checked(contract, descriptor, &[])?;
+        if completion.detail == DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY {
+            return Ok(completion);
+        }
+    }
+    Err(Cyw43CommandSubmitError::Runtime(
+        DriverTaskNetError::RuntimeInit("cyw43-transport-phase-budget"),
+    ))
 }
 
 #[cfg(feature = "kernel")]
@@ -1187,26 +1163,24 @@ where
         status,
         completion,
     );
-    let card_init_ok = initialized && submit_sdio_card_init_probe(contract);
-    if card_init_ok
-        && crate::hal::driver_task::register_driver_task_runtime_owner_state(
-            DriverTaskHotPath::SdioHost,
-        )
-    {
+    if !initialized {
+        return Err(DriverTaskNetError::RuntimeInit("sdio-host-linked-runtime"));
+    }
+    if crate::hal::driver_task::register_driver_task_runtime_owner_state(
+        DriverTaskHotPath::SdioHost,
+    ) {
         SDIO_LINKED_RUNTIME_READY.store(1, Ordering::Release);
         emit_sdio_driver_task_replay_status("owner-state", "ready");
         Ok(())
     } else {
-        if card_init_ok {
-            crate::hal::driver_task::emit_driver_task_resource_init_status(
-                contract,
-                DriverTaskHotPath::SdioHost,
-                "sdio-owner-state",
-                "descriptor-rejected",
-                None,
-            );
-            emit_sdio_driver_task_replay_status("owner-state", "descriptor-rejected");
-        }
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::SdioHost,
+            "sdio-owner-state",
+            "descriptor-rejected",
+            None,
+        );
+        emit_sdio_driver_task_replay_status("owner-state", "descriptor-rejected");
         Err(DriverTaskNetError::RuntimeInit("sdio-host-linked-runtime"))
     }
 }
@@ -1265,334 +1239,6 @@ where
 #[cfg(feature = "kernel")]
 fn sdio_owner_recovery_can_preserve_ready_state() -> bool {
     SDIO_LINKED_RUNTIME_READY.load(Ordering::Acquire) != 0
-}
-
-#[cfg(feature = "kernel")]
-fn submit_sdio_card_init_probe(contract: DriverTaskContract) -> bool {
-    for attempt in 0..SDIO_CARD_INIT_RESTART_ATTEMPTS {
-        if attempt != 0 {
-            emit_sdio_driver_task_replay_status("sdio-card-init-restart", "begin");
-            if !submit_sdio_host_config_probe(
-                contract,
-                "sdio-card-init-restart-host-recover",
-                SDIO_STARTUP_CLOCK_HZ,
-                0,
-            ) {
-                continue;
-            }
-            sdio_cmd7_select_settle();
-        }
-        if submit_sdio_card_init_probe_once(contract) {
-            return true;
-        }
-    }
-    false
-}
-
-#[cfg(feature = "kernel")]
-fn submit_sdio_card_init_probe_once(contract: DriverTaskContract) -> bool {
-    if !submit_sdio_host_config_probe(
-        contract,
-        "sdio-host-startup-config",
-        SDIO_STARTUP_CLOCK_HZ,
-        0,
-    ) {
-        return false;
-    }
-    if submit_sdio_command_probe(
-        contract,
-        "sdio-cmd0-go-idle",
-        SDIO_GO_IDLE_COMMAND_INDEX,
-        0,
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
-        true,
-    )
-    .is_none()
-    {
-        return false;
-    }
-    let Some(ocr) = submit_sdio_command_probe(
-        contract,
-        "sdio-cmd5-ocr",
-        SDIO_CMD5_OCR_COMMAND_INDEX,
-        0,
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
-        false,
-    ) else {
-        return false;
-    };
-    if ocr & SDIO_OCR_3V2_3V4 == 0 {
-        return false;
-    }
-    let desired_ocr = ocr & SDIO_OCR_3V2_3V4;
-    let mut ready_ocr = 0;
-    for _ in 0..SDIO_CMD5_READY_ATTEMPTS {
-        let Some(response) = submit_sdio_command_probe(
-            contract,
-            "sdio-cmd5-ready",
-            SDIO_CMD5_OCR_COMMAND_INDEX,
-            desired_ocr,
-            DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR,
-            false,
-        ) else {
-            return false;
-        };
-        ready_ocr = response;
-        if ready_ocr & SDIO_R4_READY != 0 {
-            break;
-        }
-    }
-    if ready_ocr & SDIO_R4_READY == 0 {
-        return false;
-    }
-    let Some(rca_response) = submit_sdio_command_probe(
-        contract,
-        "sdio-cmd3-rca",
-        SDIO_CMD3_RCA_COMMAND_INDEX,
-        0,
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        false,
-    ) else {
-        return false;
-    };
-    let rca = rca_response & 0xffff_0000;
-    if rca == 0 {
-        return false;
-    }
-    submit_sdio_cmd7_select_probe(contract, rca)
-}
-
-#[cfg(feature = "kernel")]
-fn sdio_cmd7_select_settle() {
-    for _ in 0..SDIO_CMD7_SELECT_SETTLE_SPINS {
-        core::hint::spin_loop();
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn submit_sdio_command_probe_raw(
-    contract: DriverTaskContract,
-    command_index: u32,
-    argument: u32,
-    response_flags: u16,
-) -> Option<DriverTaskCompletionRecord> {
-    let mut command = DriverTaskCommandRecord::pi4_hot_path(
-        0,
-        DriverTaskHotPath::SdioHost,
-        DriverTaskBudgetGrant::from_contract(contract),
-        DriverFrameDescriptor {
-            offset: 0,
-            len: 0,
-            flags: 0,
-        },
-    );
-    command.aux0 = (command_index << 16) | u32::from(response_flags);
-    command.aux1 = argument;
-    run_driver_task_net_service(contract, command)
-}
-
-#[cfg(feature = "kernel")]
-fn sdio_command_probe_ready(
-    completion: Option<DriverTaskCompletionRecord>,
-    allow_zero_result: bool,
-) -> bool {
-    completion.is_some_and(|completion| {
-        completion.code == DriverTaskCompletionCode::Progress.as_u16()
-            && (allow_zero_result || completion.result != 0)
-    })
-}
-
-#[cfg(feature = "kernel")]
-fn report_sdio_command_probe(
-    contract: DriverTaskContract,
-    stage: &'static str,
-    command_index: Option<u32>,
-    argument: u32,
-    response_flags: u16,
-    completion: Option<DriverTaskCompletionRecord>,
-    ready: bool,
-) {
-    if ready {
-        clear_cyw43_runtime_command_fault_status();
-    } else if let Some(completion) = completion {
-        record_sdio_runtime_command_fault_status(
-            contract,
-            stage,
-            command_index,
-            argument,
-            response_flags,
-            completion,
-        );
-    }
-    let status = driver_task_resource_completion_status(completion, ready);
-    emit_sdio_driver_task_replay_status(stage, status);
-    crate::hal::driver_task::emit_driver_task_resource_init_status(
-        contract,
-        DriverTaskHotPath::SdioHost,
-        stage,
-        status,
-        completion,
-    );
-}
-
-#[cfg(feature = "kernel")]
-fn submit_sdio_cmd7_select_probe(contract: DriverTaskContract, rca: u32) -> bool {
-    let mut last_completion = None;
-    emit_sdio_driver_task_replay_status("sdio-cmd7-select", "begin");
-    if !submit_sdio_host_config_probe(
-        contract,
-        "sdio-cmd7-select-pre-recover",
-        SDIO_STARTUP_CLOCK_HZ,
-        0,
-    ) {
-        return false;
-    }
-    for attempt in 0..SDIO_CMD7_SELECT_ATTEMPTS {
-        if attempt != 0
-            && !submit_sdio_host_config_probe(
-                contract,
-                "sdio-cmd7-select-host-recover",
-                SDIO_STARTUP_CLOCK_HZ,
-                0,
-            )
-        {
-            break;
-        }
-        let completion = submit_sdio_command_probe_raw(
-            contract,
-            SDIO_CMD7_SELECT_COMMAND_INDEX,
-            rca,
-            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
-        );
-        if sdio_command_probe_ready(completion, true) {
-            report_sdio_command_probe(
-                contract,
-                "sdio-cmd7-select",
-                Some(SDIO_CMD7_SELECT_COMMAND_INDEX),
-                rca,
-                DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY,
-                completion,
-                true,
-            );
-            return true;
-        }
-        last_completion = completion;
-        sdio_cmd7_select_settle();
-    }
-
-    emit_sdio_driver_task_replay_status("sdio-cmd7-select-r1-fallback", "begin");
-    for attempt in 0..SDIO_CMD7_SELECT_ATTEMPTS {
-        if attempt != 0
-            && !submit_sdio_host_config_probe(
-                contract,
-                "sdio-cmd7-select-r1-host-recover",
-                SDIO_STARTUP_CLOCK_HZ,
-                0,
-            )
-        {
-            break;
-        }
-        let completion = submit_sdio_command_probe_raw(
-            contract,
-            SDIO_CMD7_SELECT_FALLBACK_COMMAND_INDEX,
-            rca,
-            DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        );
-        if sdio_command_probe_ready(completion, true) {
-            report_sdio_command_probe(
-                contract,
-                "sdio-cmd7-select-r1-fallback",
-                Some(SDIO_CMD7_SELECT_FALLBACK_COMMAND_INDEX),
-                rca,
-                DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-                completion,
-                true,
-            );
-            return true;
-        }
-        last_completion = completion;
-        sdio_cmd7_select_settle();
-    }
-    report_sdio_command_probe(
-        contract,
-        "sdio-cmd7-select-r1-fallback",
-        Some(SDIO_CMD7_SELECT_FALLBACK_COMMAND_INDEX),
-        rca,
-        DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        last_completion,
-        false,
-    );
-    false
-}
-
-#[cfg(feature = "kernel")]
-fn submit_sdio_host_config_probe(
-    contract: DriverTaskContract,
-    stage: &'static str,
-    target_hz: u32,
-    flags: u16,
-) -> bool {
-    emit_sdio_driver_task_replay_status(stage, "begin");
-    let descriptor = DriverRuntimeSdioCommandDescriptor {
-        op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
-        addr: target_hz,
-        flags,
-        timeout_us: 100_000,
-        ..DriverRuntimeSdioCommandDescriptor::empty()
-    };
-    if !descriptor.valid() {
-        report_sdio_command_probe(contract, stage, None, target_hz, flags, None, false);
-        return false;
-    }
-    let desc_size = core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>();
-    let mut scratch = [0u8; core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()];
-    encode_sdio_descriptor(&mut scratch, descriptor);
-    let Some(staged) = crate::hal::driver_task::stage_driver_task_ring_frame(contract, &scratch, 0)
-    else {
-        report_sdio_command_probe(contract, stage, None, target_hz, flags, None, false);
-        return false;
-    };
-    let command = DriverTaskCommandRecord::pi4_hot_path(
-        0,
-        DriverTaskHotPath::SdioHost,
-        DriverTaskBudgetGrant::from_contract(contract),
-        DriverFrameDescriptor {
-            offset: staged.offset,
-            len: desc_size as u16,
-            flags: staged.flags,
-        },
-    );
-    let completion = run_driver_task_net_service(contract, command);
-    let ready = sdio_command_probe_ready(completion, false);
-    report_sdio_command_probe(contract, stage, None, target_hz, flags, completion, ready);
-    ready
-}
-
-#[cfg(feature = "kernel")]
-fn submit_sdio_command_probe(
-    contract: DriverTaskContract,
-    stage: &'static str,
-    command_index: u32,
-    argument: u32,
-    response_flags: u16,
-    allow_zero_result: bool,
-) -> Option<u32> {
-    emit_sdio_driver_task_replay_status(stage, "begin");
-    let completion =
-        submit_sdio_command_probe_raw(contract, command_index, argument, response_flags);
-    let ready = sdio_command_probe_ready(completion, allow_zero_result);
-    report_sdio_command_probe(
-        contract,
-        stage,
-        Some(command_index),
-        argument,
-        response_flags,
-        completion,
-        ready,
-    );
-    completion
-        .filter(|_| ready)
-        .map(|completion| completion.result)
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -2051,6 +1697,7 @@ fn submit_staged_cyw43_runtime_descriptor(
     );
     command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
     let Some(completion) = run_driver_task_net_service(contract, command) else {
+        record_cyw43_runtime_command_no_reply(contract, stage, descriptor);
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             contract,
             DriverTaskHotPath::Cyw43Wifi,
@@ -2089,6 +1736,51 @@ fn submit_staged_cyw43_runtime_descriptor(
         );
         Err(Cyw43CommandSubmitError::Completion(completion))
     }
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_runtime_command_no_reply(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+) {
+    use core::fmt::Write;
+
+    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
+        stage,
+        op: descriptor.op,
+        flags: descriptor.flags,
+        target_addr: descriptor.target_addr,
+        payload_offset: descriptor.payload_offset,
+        payload_len: descriptor.payload_len,
+        total_len: descriptor.total_len,
+        detail: 0,
+        reason: "cyw43-runtime-command-no-reply",
+        result: 0,
+    });
+    *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
+    let mut line = heapless::String::<384>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={}",
+        contract.name,
+        stage,
+        descriptor.op,
+        descriptor.flags,
+        descriptor.target_addr,
+        descriptor.payload_offset,
+        descriptor.payload_len,
+        descriptor.total_len,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(not(feature = "kernel"))]
+fn record_cyw43_runtime_command_no_reply(
+    _contract: DriverTaskContract,
+    _stage: &'static str,
+    _descriptor: DriverRuntimeCyw43CommandDescriptor,
+) {
 }
 
 #[cfg(feature = "kernel")]
@@ -2645,6 +2337,23 @@ pub(crate) const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
         0x532b => "cyw43-post-release-function2-ready",
         0x532c => "cyw43-post-release-corecontrol",
         0x53ff => "cyw43-command",
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START => "cyw43-transport-phase-start",
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY => {
+            "cyw43-transport-phase-bus-link-ready"
+        }
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY => "cyw43-transport-phase-card-ready",
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_BLOCK_READY => {
+            "cyw43-transport-phase-f1-block-ready"
+        }
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F2_BLOCK_READY => {
+            "cyw43-transport-phase-f2-block-ready"
+        }
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_ENABLED => "cyw43-transport-phase-f1-enabled",
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY => "cyw43-transport-phase-host-ready",
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BACKPLANE_READY => {
+            "cyw43-transport-phase-backplane-ready"
+        }
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY => "cyw43-transport-phase-ready",
         _ => "unknown",
     }
 }
@@ -2662,8 +2371,11 @@ fn encode_cyw43_descriptor(out: &mut [u8], descriptor: DriverRuntimeCyw43Command
     put_le_u32(out, 24, descriptor.reserved);
 }
 
-#[cfg(feature = "kernel")]
-fn encode_sdio_descriptor(out: &mut [u8], descriptor: DriverRuntimeSdioCommandDescriptor) {
+#[cfg(test)]
+fn encode_sdio_descriptor(
+    out: &mut [u8],
+    descriptor: pi4_driver_abi::DriverRuntimeSdioCommandDescriptor,
+) {
     put_le_u16(out, 0, descriptor.op);
     out[2] = descriptor.function;
     out[3] = descriptor.response_kind;
@@ -3452,27 +3164,30 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn sdio_host_config_descriptor_encoder_matches_runtime_abi() {
-        let descriptor = DriverRuntimeSdioCommandDescriptor {
-            op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
-            addr: SDIO_STARTUP_CLOCK_HZ,
-            flags: DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT,
+        const TEST_SDIO_STARTUP_CLOCK_HZ: u32 = 400_000;
+        let descriptor = pi4_driver_abi::DriverRuntimeSdioCommandDescriptor {
+            op: pi4_driver_abi::DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+            addr: TEST_SDIO_STARTUP_CLOCK_HZ,
+            flags: pi4_driver_abi::DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT,
             timeout_us: 100_000,
-            ..DriverRuntimeSdioCommandDescriptor::empty()
+            ..pi4_driver_abi::DriverRuntimeSdioCommandDescriptor::empty()
         };
-        let mut bytes = [0u8; core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()];
+        let mut bytes =
+            [0u8; core::mem::size_of::<pi4_driver_abi::DriverRuntimeSdioCommandDescriptor>()];
 
         encode_sdio_descriptor(&mut bytes, descriptor);
 
         assert_eq!(
             &bytes[0..2],
-            &DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG.to_le_bytes()
+            &pi4_driver_abi::DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG.to_le_bytes()
         );
         assert_eq!(bytes[2], 0);
         assert_eq!(bytes[3], pi4_driver_abi::DRIVER_RUNTIME_SDIO_RESP_NONE);
-        assert_eq!(&bytes[4..8], &SDIO_STARTUP_CLOCK_HZ.to_le_bytes());
+        assert_eq!(&bytes[4..8], &TEST_SDIO_STARTUP_CLOCK_HZ.to_le_bytes());
         assert_eq!(
             &bytes[16..18],
-            &DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT.to_le_bytes()
+            &pi4_driver_abi::DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT
+                .to_le_bytes()
         );
         assert_eq!(&bytes[20..24], &100_000u32.to_le_bytes());
     }
