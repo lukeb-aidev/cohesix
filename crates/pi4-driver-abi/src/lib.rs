@@ -241,8 +241,20 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE: u32 = 22;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY: u32 = 23;
 /// USB runtime is programming the xHCI Device Context Base Address Array.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN: u32 = 70;
+/// USB runtime wrote the low 32-bit half of DCBAAP.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_LOW_WRITTEN: u32 = 90;
+/// USB runtime wrote the high 32-bit half of DCBAAP.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_WRITTEN: u32 = 91;
+/// USB runtime flushed the high 32-bit half of DCBAAP.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_FLUSHED: u32 = 92;
 /// USB runtime is programming the xHCI command ring control register.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN: u32 = 71;
+/// USB runtime wrote the low 32-bit half of CRCR.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_LOW_WRITTEN: u32 = 93;
+/// USB runtime wrote the high 32-bit half of CRCR.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_WRITTEN: u32 = 94;
+/// USB runtime flushed the high 32-bit half of CRCR.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_FLUSHED: u32 = 95;
 /// USB runtime is quiescing device notification delivery.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN: u32 = 72;
 /// USB runtime is programming the enabled-slot count.
@@ -255,8 +267,20 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN: u32 = 75;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN: u32 = 76;
 /// USB runtime is programming the event-ring segment-table address.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN: u32 = 77;
+/// USB runtime wrote the low 32-bit half of ERSTBA.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_LOW_WRITTEN: u32 = 96;
+/// USB runtime wrote the high 32-bit half of ERSTBA.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_WRITTEN: u32 = 97;
+/// USB runtime flushed the high 32-bit half of ERSTBA.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_FLUSHED: u32 = 98;
 /// USB runtime is programming the event-ring dequeue pointer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN: u32 = 78;
+/// USB runtime wrote the low 32-bit half of ERDP.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN: u32 = 99;
+/// USB runtime wrote the high 32-bit half of ERDP.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN: u32 = 100;
+/// USB runtime flushed the high 32-bit half of ERDP.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED: u32 = 101;
 /// USB runtime is requesting xHCI controller run state.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN: u32 = 79;
 /// USB runtime published xHCI command/event rings.

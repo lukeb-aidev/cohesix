@@ -186,7 +186,7 @@ def main() -> int:
             "release-pi4",
             "driver-tests-qemu",
             "driver-tests-pi4",
-            "MMIO, IRQ, DMA, PCI, SDIO, power/reset, and firmware service calls are HAL",
+            "HAL owns resource admission for MMIO, IRQ, DMA, PCI, SDIO, board-level",
             "Tests cover touched logic paths",
         ],
     )

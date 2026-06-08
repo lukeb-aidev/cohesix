@@ -94,13 +94,27 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB, DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED, DRIVER_RUNTIME_SDIO_FLAG_DATA,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_FLUSHED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_LOW_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_FLUSHED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_LOW_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_FLUSHED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_LOW_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE, DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
+    DRIVER_RUNTIME_SDIO_FLAG_DATA,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR, DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_FLAG_WRITE,
@@ -245,6 +259,7 @@ const ENGINE_STATE_HW_READY: u32 = 1 << 5;
 
 const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
+const HDMI_SAFE_AREA_MARGIN_DIVISOR: usize = 50;
 const FB_BYTES_PER_PIXEL_32: usize = 4;
 const HDMI_FG_COLOR: u32 = 0xffff_ffff;
 const HDMI_BG_COLOR: u32 = 0xff00_0000;
@@ -8036,6 +8051,10 @@ fn hdmi_render_boot_diagnostics(descriptor: &DriverRuntimeInitDescriptor) {
 struct HdmiRenderState {
     framebuffer: usize,
     framebuffer_len: usize,
+    framebuffer_width: usize,
+    framebuffer_height: usize,
+    safe_x: usize,
+    safe_y: usize,
     width: usize,
     height: usize,
     pitch: usize,
@@ -8048,22 +8067,30 @@ struct HdmiRenderState {
 
 impl HdmiRenderState {
     fn from_descriptor(descriptor: &DriverRuntimeInitDescriptor) -> Self {
-        let width = descriptor.framebuffer.width as usize;
-        let height = descriptor.framebuffer.height as usize;
+        let framebuffer_width = descriptor.framebuffer.width as usize;
+        let framebuffer_height = descriptor.framebuffer.height as usize;
         let pitch = descriptor.framebuffer.pitch as usize;
-        let rows = (height / CHAR_HEIGHT).max(1);
-        let framebuffer_len = pitch.saturating_mul(height);
+        let safe_area = hdmi_safe_area_for_framebuffer(framebuffer_width, framebuffer_height);
+        let cols = (safe_area.width / CHAR_WIDTH).max(1);
+        let rows = (safe_area.height / CHAR_HEIGHT).max(1);
+        let row = (HDMI_CURSOR_ROW.load(Ordering::Acquire) as usize).min(rows.saturating_sub(1));
+        let col = (HDMI_CURSOR_COL.load(Ordering::Acquire) as usize).min(cols);
+        let framebuffer_len = pitch.saturating_mul(framebuffer_height);
         Self {
             framebuffer: descriptor.framebuffer.vaddr as usize,
             framebuffer_len,
-            width,
-            height,
+            framebuffer_width,
+            framebuffer_height,
+            safe_x: safe_area.x,
+            safe_y: safe_area.y,
+            width: safe_area.width,
+            height: safe_area.height,
             pitch,
             format: descriptor.framebuffer.format,
-            cols: (width / CHAR_WIDTH).max(1),
+            cols,
             rows,
-            row: HDMI_CURSOR_ROW.load(Ordering::Acquire) as usize,
-            col: HDMI_CURSOR_COL.load(Ordering::Acquire) as usize,
+            row,
+            col,
         }
     }
 
@@ -8146,10 +8173,16 @@ impl HdmiRenderState {
         }
         let copy_rows = text_height.saturating_sub(CHAR_HEIGHT);
         for y in 0..copy_rows {
-            let Some(dst_off) = self.framebuffer_offset(0, y, bytes_per_pixel) else {
+            let Some(dst_off) =
+                self.framebuffer_offset(self.safe_x, self.safe_y + y, bytes_per_pixel)
+            else {
                 continue;
             };
-            let Some(src_off) = self.framebuffer_offset(0, y + CHAR_HEIGHT, bytes_per_pixel) else {
+            let Some(src_off) = self.framebuffer_offset(
+                self.safe_x,
+                self.safe_y + y + CHAR_HEIGHT,
+                bytes_per_pixel,
+            ) else {
                 continue;
             };
             let Some(dst_end) = dst_off.checked_add(row_bytes) else {
@@ -8218,10 +8251,19 @@ impl HdmiRenderState {
         if x >= self.width || y >= self.height {
             return;
         }
+        let Some(abs_x) = self.safe_x.checked_add(x) else {
+            return;
+        };
+        let Some(abs_y) = self.safe_y.checked_add(y) else {
+            return;
+        };
+        if abs_x >= self.framebuffer_width || abs_y >= self.framebuffer_height {
+            return;
+        }
         let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
             return;
         };
-        let Some(byte_off) = self.framebuffer_offset(x, y, bytes_per_pixel) else {
+        let Some(byte_off) = self.framebuffer_offset(abs_x, abs_y, bytes_per_pixel) else {
             return;
         };
         write_framebuffer_pixel(self.framebuffer + byte_off, color, bytes_per_pixel);
@@ -8236,12 +8278,52 @@ impl HdmiRenderState {
     }
 
     fn framebuffer_offset(&self, x: usize, y: usize, bytes_per_pixel: usize) -> Option<usize> {
+        if x >= self.framebuffer_width || y >= self.framebuffer_height {
+            return None;
+        }
         let row_off = y.checked_mul(self.pitch)?;
         let col_off = x.checked_mul(bytes_per_pixel)?;
         let byte_off = row_off.checked_add(col_off)?;
         let end = byte_off.checked_add(bytes_per_pixel)?;
         (end <= self.framebuffer_len).then_some(byte_off)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HdmiSafeArea {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+}
+
+fn hdmi_safe_area_for_framebuffer(width: usize, height: usize) -> HdmiSafeArea {
+    let (x, safe_width) = hdmi_safe_axis(width, CHAR_WIDTH);
+    let (y, safe_height) = hdmi_safe_axis(height, CHAR_HEIGHT);
+    HdmiSafeArea {
+        x,
+        y,
+        width: safe_width,
+        height: safe_height,
+    }
+}
+
+fn hdmi_safe_axis(total: usize, cell: usize) -> (usize, usize) {
+    if total == 0 {
+        return (0, 0);
+    }
+    if total <= cell {
+        return (0, total);
+    }
+    let min_visible = cell.min(total);
+    let desired_margin = (total / HDMI_SAFE_AREA_MARGIN_DIVISOR).max(1);
+    let max_margin = total.saturating_sub(min_visible) / 2;
+    let margin = desired_margin.min(max_margin);
+    let available = total.saturating_sub(margin.saturating_mul(2));
+    let cells = (available / cell).max(1);
+    let aligned = cells.saturating_mul(cell).min(available);
+    let offset = margin.saturating_add(available.saturating_sub(aligned) / 2);
+    (offset, aligned)
 }
 
 #[cfg(test)]
@@ -8951,17 +9033,26 @@ fn pcie_bus_link_flush_posted_write(_offset: u32) -> bool {
     true
 }
 
-fn xhci_write64_flush_posted(
+fn xhci_write64_high_flush_posted(
+    sequence: u32,
+    aux0: u32,
     state: &UsbRuntimeState,
     offset: usize,
     value: u64,
-    low_stage: u16,
     high_stage: u16,
+    low_written_phase: u32,
+    high_written_phase: u32,
+    high_flushed_phase: u32,
 ) -> bool {
-    usb_write64(offset, value);
-    let low_ok = xhci_flush_posted_write(state, low_stage, offset, value as u32);
-    let high_ok = xhci_flush_posted_write(state, high_stage, offset + 4, (value >> 32) as u32);
-    low_ok && high_ok
+    usb_write32(offset, value as u32);
+    publish_runtime_progress(sequence, low_written_phase, aux0);
+    usb_write32(offset + 4, (value >> 32) as u32);
+    publish_runtime_progress(sequence, high_written_phase, aux0);
+    if !xhci_flush_posted_write(state, high_stage, offset + 4, (value >> 32) as u32) {
+        return false;
+    }
+    publish_runtime_progress(sequence, high_flushed_phase, aux0);
+    true
 }
 
 const fn xhci_portsc_neutral(status: u32) -> u32 {
@@ -11899,22 +11990,30 @@ fn usb_runtime_init_hw(
         DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN,
         aux0,
     );
-    if !xhci_write64_flush_posted(
+    if !xhci_write64_high_flush_posted(
+        sequence,
+        aux0,
         state,
         op_base + XHCI_DCBAAP,
         dcbaa,
-        XHCI_FLUSH_STAGE_INIT_LOW,
         XHCI_FLUSH_STAGE_INIT_HIGH,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_LOW_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_FLUSHED,
     ) {
         return None;
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN, aux0);
-    if !xhci_write64_flush_posted(
+    if !xhci_write64_high_flush_posted(
+        sequence,
+        aux0,
         state,
         op_base + XHCI_CRCR,
         cmd_ring | 1,
-        XHCI_FLUSH_STAGE_INIT_LOW,
         XHCI_FLUSH_STAGE_INIT_HIGH,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_LOW_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_FLUSHED,
     ) {
         return None;
     }
@@ -11976,22 +12075,30 @@ fn usb_runtime_init_hw(
         DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN,
         aux0,
     );
-    if !xhci_write64_flush_posted(
+    if !xhci_write64_high_flush_posted(
+        sequence,
+        aux0,
         state,
         int_base + XHCI_ERSTBA,
         erst,
-        XHCI_FLUSH_STAGE_INIT_LOW,
         XHCI_FLUSH_STAGE_INIT_HIGH,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_LOW_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_FLUSHED,
     ) {
         return None;
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN, aux0);
-    if !xhci_write64_flush_posted(
+    if !xhci_write64_high_flush_posted(
+        sequence,
+        aux0,
         state,
         int_base + XHCI_ERDP,
         event_ring | (1 << 3),
-        XHCI_FLUSH_STAGE_ERDP_LOW,
         XHCI_FLUSH_STAGE_ERDP_HIGH,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED,
     ) {
         return None;
     }
@@ -16737,6 +16844,52 @@ mod tests {
     }
 
     #[test]
+    fn hdmi_safe_area_insets_and_aligns_text_surface() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let safe = hdmi_safe_area_for_framebuffer(640, 480);
+        assert_eq!(
+            safe,
+            HdmiSafeArea {
+                x: 32,
+                y: 24,
+                width: 576,
+                height: 432,
+            }
+        );
+        assert_eq!(safe.width % CHAR_WIDTH, 0);
+        assert_eq!(safe.height % CHAR_HEIGHT, 0);
+        assert!(safe.x > 0);
+        assert!(safe.y > 0);
+        assert!(safe.x + safe.width < 640);
+        assert!(safe.y + safe.height < 480);
+
+        HDMI_CURSOR_ROW.store(999, Ordering::Release);
+        HDMI_CURSOR_COL.store(999, Ordering::Release);
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 640,
+            height: 480,
+            pitch: 640 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        let state = HdmiRenderState::from_descriptor(&descriptor);
+        assert_eq!(state.framebuffer_width, 640);
+        assert_eq!(state.framebuffer_height, 480);
+        assert_eq!(state.safe_x, 32);
+        assert_eq!(state.safe_y, 24);
+        assert_eq!(state.width, 576);
+        assert_eq!(state.height, 432);
+        assert_eq!(state.cols, 72);
+        assert_eq!(state.rows, 27);
+        assert_eq!(state.row, 26);
+        assert_eq!(state.col, 72);
+    }
+
+    #[test]
     fn hdmi_linked_runtime_renders_after_framebuffer_descriptor() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -16854,7 +17007,7 @@ mod tests {
             vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
             paddr: 0x3000_0000,
             width: 64,
-            height: (CHAR_HEIGHT * 2) as u32,
+            height: (CHAR_HEIGHT * 3) as u32,
             pitch: 64 * 4,
             format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
         };
