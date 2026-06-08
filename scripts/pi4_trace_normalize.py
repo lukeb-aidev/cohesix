@@ -154,6 +154,7 @@ USB_OUTCOME_BLOCKERS = {
     "device-descriptor",
     "device-descriptor-failed",
     "driver-task-runtime-deferred",
+    "enumeration-disabled-bootloader-owned",
     "enable-slot-failed",
     "enable-slot-completion-pending",
     "hid-attach-failed",
@@ -1114,6 +1115,8 @@ def normalize_usb_blocker(value: str) -> str:
         or "serial-shell-first" in lower
     ):
         return "driver-task-runtime-deferred"
+    if "enumeration-disabled-bootloader-owned" in lower:
+        return "enumeration-disabled-bootloader-owned"
     if "cmd-controller-not-running" in lower:
         return "cmd-controller-not-running"
     if "cmd-controller-not-ready" in lower:
@@ -1364,6 +1367,29 @@ def usb_command_probe_success(
     if label.startswith("enable-slot-recovery-ok"):
         return cleanup == "uboot-poll-only" and recovery == "enable-slot-timeout"
     return label.endswith("-ok") or label.endswith("-ok-cleanup-failed")
+
+
+def usb_command_probe_result_success(
+    raw: str,
+    fields: dict[str, str],
+    command_recovery_source: str | None = None,
+) -> bool:
+    """Return true when a result= command probe can credit linked-runtime proof."""
+
+    lower = raw.lower()
+    if "command-probe" not in lower:
+        return False
+    if "[local-seat] xhci" in lower:
+        result = fields.get("result", "").lower().strip()
+        event = fields.get("event_generation", "").lower().strip()
+        if not (result.endswith("-ok-cleanup-failed") and "uboot" in event):
+            return False
+    return usb_command_probe_success(
+        fields.get("result", ""),
+        fields.get("event_generation"),
+        fields.get("cleanup_generation"),
+        fields.get("recovery_source") or command_recovery_source,
+    )
 
 
 def parse_hex_int(value: str | None) -> int | None:
@@ -2711,13 +2737,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 fields.get("recovery_source") or command_recovery_source,
             )
             or (
-                usb_command_probe_success(
-                    fields.get("result", ""),
-                    fields.get("event_generation"),
-                    fields.get("cleanup_generation"),
-                    fields.get("recovery_source") or command_recovery_source,
-                )
-                and "command-probe" in raw
+                usb_command_probe_result_success(raw, fields, command_recovery_source)
             )
             or fields.get("verdict", "").startswith("command-ring-ready")
         ):
@@ -2727,6 +2747,10 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = outcome_blocker
             else:
                 blocker = "none"
+        elif "[local-seat] xhci" in raw.lower() and "command-probe" in raw.lower():
+            gate = max(gate, 3)
+            if blocker in {"unknown", "none", "cmd-poll-pending"}:
+                blocker = "cmd-event-ring-timeout"
         elif (
             "command-probe" in raw
             and fields.get("result", "").startswith("enable-slot-recovery-ok")
@@ -4366,6 +4390,10 @@ def summarize_wifi_failure_detail(
         )
         or (
             event.domain == "driver"
+            and event.fields.get("role", "").lower() in {"cyw43-wifi", "sdio-host"}
+        )
+        or (
+            event.domain == "driver"
             and normalize_wifi_blocker(event.raw) == "wifi-driver-task-runtime-unproved"
         )
     ):
@@ -4420,12 +4448,35 @@ def summarize_wifi_failure_detail(
             wifi_blocker == "sdio-card-select"
             and event.domain == "driver"
             and fields.get("contract", "").lower() == "sdio-host"
-            and fields.get("stage", "").lower().startswith("sdio-cmd")
+            and (
+                fields.get("stage", "").lower().startswith("sdio-cmd")
+                or fields.get("stage", "").lower().startswith("sdio-first")
+            )
             and "driver_task_resource_init" in raw
             and fields.get("status", "").lower()
             not in {"ready", "deferred", "begin", "progress"}
         ):
             candidate = "sdio-card-select"
+        replay_status = fields.get("blocker", "").lower()
+        if (
+            wifi_blocker == "sdio-card-select"
+            and "sdio_driver_task_replay_status" in raw
+            and fields.get("stage", "").lower() in {"engine-init", "sdio-first-command"}
+            and replay_status not in {"", "none", "begin", "ready", "success"}
+        ):
+            candidate = "sdio-card-select"
+        if (
+            wifi_blocker == "sdio-driver-task-replay"
+            and "sdio_driver_task_replay_status" in raw
+            and replay_status not in {"", "none", "begin", "ready", "success"}
+        ):
+            candidate = "sdio-driver-task-replay"
+        if (
+            wifi_blocker == "cyw43-driver-task-replay"
+            and "net_driver_task_replay_status" in raw
+            and replay_status not in {"", "none", "begin", "ready", "success"}
+        ):
+            candidate = "cyw43-driver-task-replay"
         if (
             wifi_blocker == "control-plane-reply-idle-loop"
             and "sdio xfer chunk" in raw
@@ -4532,6 +4583,16 @@ def summarize_wifi_failure_detail(
             blocker_matched = True
             blocker_priority = candidate_priority
             exact = event_exact
+            if candidate in {
+                "sdio-driver-task-replay",
+                "cyw43-driver-task-replay",
+                "sdio-card-select",
+            } and (
+                "sdio_driver_task_replay_status" in raw
+                or "net_driver_task_replay_status" in raw
+            ):
+                replay_stage = fields.get("stage") or event.stage or "driver-task-replay"
+                exact = f"{replay_stage}-{replay_status or 'unknown'}"
             if candidate == "join-programming-host-latch-loop":
                 exact = "cyw43-join-programming-host-latch-loop"
             if candidate == "runtime-rx-host-latch-spam":
@@ -5048,6 +5109,7 @@ def line_has_hdmi_responsiveness(raw: str, fields: dict[str, str]) -> bool:
 
 WIFI_REPLAY_REFINABLE_BLOCKERS = frozenset(
     (
+        "",
         "unknown",
         "missing",
         "none",
@@ -5539,11 +5601,6 @@ def summarize_driver_task_frontiers(
             if contract == "hdmi-text" and status == "failed":
                 hdmi_boot_blocker = "boot-failed"
 
-        if "root hdmi diagnostic mirror unavailable" in raw:
-            detail = fields.get("detail", "").lower()
-            if detail:
-                hdmi_engine_blocker = detail
-
         if "driver_task_ring_call_begin" in raw and contract == "serial":
             aux0 = fields.get("aux0", "").lower()
             request = parse_hex_int(fields.get("request"))
@@ -5597,9 +5654,25 @@ def summarize_driver_task_frontiers(
             if stage == "hdmi-owner-state" and status == "ready":
                 hdmi_owner_state_ready = True
 
-        if contract == "pcie-root" and stage == "usb-prereq-pcie-replay":
+        if (
+            contract == "pcie-root"
+            and stage == "usb-prereq-pcie-replay"
+            and (
+                usb_frontier == "none"
+                or usb_frontier.startswith("usb-prereq-")
+                or usb_frontier == "usb-runtime-descriptor-bootstrap-ready"
+            )
+        ):
             usb_frontier = f"usb-prereq-pcie-replay-{status}"
-        if contract == "pcie-root" and stage == "usb-prereq-pcie-engine-init":
+        if (
+            contract == "pcie-root"
+            and stage == "usb-prereq-pcie-engine-init"
+            and (
+                usb_frontier == "none"
+                or usb_frontier.startswith("usb-prereq-")
+                or usb_frontier == "usb-runtime-descriptor-bootstrap-ready"
+            )
+        ):
             usb_frontier = f"usb-prereq-pcie-engine-init-{status}"
         if hot_path == "usb-keyboard" and stage:
             if status not in non_blocking_statuses:
@@ -5667,6 +5740,7 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
     latest_usb_status: str | None = None
     latest_usb_engine_detail: int | None = None
     latest_usb_blocking_call = False
+    latest_pcie_prereq_blocker: str | None = None
     for event in events:
         if event.domain != "driver":
             continue
@@ -5698,7 +5772,7 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
                 "usb-prereq-pcie-replay",
                 "usb-prereq-pcie-engine-init",
             } and latest_usb_status not in {"ready", "deferred", "begin", "progress"}:
-                return f"{latest_usb_stage}-{latest_usb_status}"
+                latest_pcie_prereq_blocker = f"{latest_usb_stage}-{latest_usb_status}"
             continue
         request = parse_hex_int(fields.get("request"))
         if request is None:
@@ -5780,11 +5854,15 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
             "blocked-pcie-runtime",
             "blocked-pcie-hal-prep",
         }:
+            if latest_usb_status.startswith("blocked-pcie") and latest_pcie_prereq_blocker:
+                return latest_pcie_prereq_blocker
             return f"{latest_usb_stage}-{latest_usb_status}"
         if latest_usb_status == "begin" and latest_usb_blocking_call:
             return "usb-engine-init-blocking-call-stalled"
     if any(mode == "blocking" for mode in outstanding.values()):
         return "usb-driver-task-blocking-call-stalled"
+    if latest_pcie_prereq_blocker is not None:
+        return latest_pcie_prereq_blocker
     return None
 
 
@@ -5822,9 +5900,15 @@ def classify_sdio_replay_gate(replay_blocker: str) -> tuple[int, str, str, str]:
     if len(parts) != 3:
         return 1, "sdio-driver-task-replay", replay_blocker, "sdio-driver-task-replay"
     _role, stage, status = parts
-    if stage.startswith("sdio-cmd") or stage.startswith("sdio-card-init"):
+    if (
+        stage.startswith("sdio-cmd")
+        or stage.startswith("sdio-card-init")
+        or stage.startswith("sdio-first")
+    ):
         return 2, "sdio-card-select", f"{stage}-{status}", stage
-    if stage in {"hal-resource-prep", "descriptor-replay", "engine-init"}:
+    if stage == "engine-init":
+        return 2, "sdio-card-select", f"{stage}-{status}", stage
+    if stage in {"hal-resource-prep", "descriptor-replay"}:
         return 1, "sdio-driver-task-replay", f"{stage}-{status}", stage
     return 1, "sdio-driver-task-replay", f"{stage}-{status}", stage
 

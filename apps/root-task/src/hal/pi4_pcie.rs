@@ -590,7 +590,6 @@ fn notify_vl805_reset_after_pcie_ready(
     pcie_spin_delay(VL805_POST_PCIE_RESET_NOTIFY_SETTLE_SPINS);
     let result_label = match result {
         pi4_wifi::Vl805ResetNotifyResult::Acked => "mailbox-notify+settle",
-        pi4_wifi::Vl805ResetNotifyResult::PostedFallback => "mailbox-posted-fallback+settle",
     };
     let mut done = heapless::String::<256>::new();
     let _ = core::fmt::Write::write_fmt(

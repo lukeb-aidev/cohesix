@@ -605,14 +605,14 @@ fn wait_for_net_console_before_root_console<
     let mut next_status_ms = PRE_ROOT_NET_CONSOLE_WAIT_STATUS_MS;
     let mut polls = 0u32;
     boot_log::force_uart_line(
-        "[net-console] root console waiting reason=wifi-not-ready action=wait-for-wifi",
+        "[net-console] root console bounded-wait reason=wifi-not-ready action=wait-for-wifi",
     );
     pump.publish_pre_root_boot_progress(
-        "[boot] waiting for Wi-Fi before root console action=driver-settle",
+        "[boot] bounded Wi-Fi release before root console action=driver-settle",
     );
     log::info!(
         target: "net-console",
-        "[net-console] root console waiting for Wi-Fi association/addressing before prompt"
+        "[net-console] root console running bounded Wi-Fi release before prompt"
     );
 
     loop {

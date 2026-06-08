@@ -65,9 +65,8 @@ Use this order when sources disagree:
    `apps/root-task/src/hal/pi4_wifi.rs`,
    `apps/root-task/src/hal/pi4_pcie.rs`, `apps/root-task/src/sel4.rs`,
    `apps/root-task/src/drivers/driver_task_net.rs`,
-   `apps/root-task/src/local_seat_pi4.rs`,
-   `apps/pi4-driver-runtime/src/lib.rs`, and the Cohesix-owned
-   `crates/cohesix-usb/src/xhci.rs` compatibility implementation.
+   `apps/root-task/src/local_seat.rs`, and
+   `apps/pi4-driver-runtime/src/lib.rs`.
 4. Cohesix normative docs: `AGENTS.md`, `docs/BUILD_PLAN.md`,
    `docs/HARDWARE_BRINGUP.md`, `docs/ARCHITECTURE.md`,
    `docs/INTERFACES.md`, and `docs/SECURITY.md`.
@@ -110,11 +109,11 @@ Linux, U-Boot, OpenBSD, and WHD are design references only. They may define
 probe order, register contracts, recovery ladders, and expected evidence, but
 their source code must not be copied into Cohesix.
 
-The USB implementation is fully in-tree. The `usb` Cargo feature selects the
-internal `cohesix-usb` crate; there is no external or `third_party` USB stack
-dependency. Any reintroduction of an external USB package, generated Cargo patch,
-or documentation path outside the workspace-owned USB crates is driver-model
-drift and must be fixed in the same change.
+The USB implementation is fully in-tree in the linked `pi4-driver-runtime`
+image. The root-task `usb` Cargo feature exposes only the ring-client local-seat
+surface; it does not select a root-owned USB implementation crate. Any
+reintroduction of an external USB package, generated Cargo patch, or root-owned
+USB support crate is driver-model drift and must be fixed in the same change.
 
 ## seL4 Driver Model
 
@@ -133,8 +132,10 @@ that authority through capabilities. The kernel provides the mechanisms:
 - DMA safety is outside the standard verified proof unless an IOMMU/SMMU
   configuration constrains device writes.
 
-For Cohesix, the root task remains the privileged driver owner. Drivers must
-depend on the narrow HAL trait that represents the resource they need:
+For Cohesix, the root task remains the privileged resource-admission and seL4
+bootstrap authority. Pi 4 hardware service is owned by linked driver runtimes
+after HAL admission, and drivers must depend on the narrow HAL trait that
+represents the resource they need:
 
 - `DeviceHal`: MMIO, device-untyped coverage, DMA frames, DMA guard pages,
   and IRQ notification binding/acknowledgement.
@@ -142,7 +143,9 @@ depend on the narrow HAL trait that represents the resource they need:
   topology. Do not assume this is the active Pi 4 VL805 path; current
   `KernelHal::pci_topology()` returns `None`, and Pi 4 VL805 ownership is
   proven by `apps/root-task/src/hal/pi4_pcie.rs`.
-- `Cyw43Hal`: SDIO, power/reset, firmware, and Wi-Fi transport support.
+- `Cyw43Hal`: firmware bundle admission for the linked CYW43/SDIO runtimes;
+  SDIO, power/reset, and Wi-Fi transport service belong to linked-runtime
+  descriptors, not root-owned HAL calls.
 
 The compatibility `Hardware` facade may remain where legacy call sites span
 several domains, but new driver logic should prefer the narrowest trait.
@@ -270,10 +273,12 @@ proof from the linked-runtime model.
   load or engine-init evidence does not prove display acceptance until a bounded
   text/framebuffer render is visible or fails red with an explicit diagnostic
   mirror marker.
-- USB must replay PCIe/VL805 descriptor state before xHCI engine init, and that
-  engine-init call must return or fail closed. Missing EXT_CFG, BAR/COMMAND,
-  DMA-window, or poll-only ownership proof is a PCIe/VL805 blocker, not a
-  reason to spin or trust old handoff state.
+- USB must replay PCIe/VL805 descriptor state and complete HAL-owned live
+  PCIe/VL805 adoption before xHCI engine init. The linked PCIe child adopts that
+  descriptor as the bounded port read/write/flush owner; a separate PCIe
+  engine-init reply is diagnostic evidence, not a pre-USB hard gate. Missing
+  EXT_CFG, BAR/COMMAND, DMA-window, or poll-only ownership proof is still a
+  PCIe/VL805 blocker, not a reason to spin or trust old handoff state.
 - If xHCI engine-init reaches controller-ready before HID readiness, the linked
   USB runtime must keep enumeration alive through bounded prompt-side service:
   preserve current-boot Port Status Change events, submit the gate-4 Enable Slot
@@ -314,8 +319,9 @@ dedicated driver task uses seL4 scheduling contexts when the active MCS kernel
 profile provides them. On non-MCS profiles, the same HAL contract is enforced
 with TCB priority/domain policy plus bounded IPC and poll turns.
 
-The Pi 4 source path attempts to create root-owned seL4 TCBs for every
-built-in hardware contract during boot. QEMU virtio compatibility builds keep
+The Pi 4 source path attempts to create root-created, root-revocable child seL4
+TCBs for every built-in linked-runtime hardware contract during boot. QEMU
+virtio compatibility builds keep
 the same contract declarations but deliberately skip live driver-task bootstrap
 before network init (`qemu-virtio-pre-net-resource-guard`) so scarce seL4
 object/page-table budget remains available for the virtio TCP regression path.
@@ -340,14 +346,14 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 | Contract | Role | Manifest affinity target | Current VSpace | Current hot path |
 | --- | --- | --- | --- | --- |
 | `serial` | serial console | `serial` | isolated child VSpace using the linked `pi4-driver-serial` image; emergency early UART remains root-owned | linked image services the fixed-ring smoke path plus bounded mini-UART init/RX/TX; generated spec is acceptance-eligible, but fresh Pi proof is still required |
-| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image requires a semantic xHCI MMIO range, DMA/shared pages, the VL805 PCIe DMA bus alias, and a pointer-free USB-to-PCIe bus link before engine init; root maps the PCIe owner ring at `0x70e01000` and mints the owner endpoint at child slot `9` so USB can flush VL805 posted writes without owning PCIe MMIO; the DMA arena is described by page descriptors and may be physically non-contiguous; the runtime now owns a direct-root-port xHCI keyboard path with command/event/EP0/interrupt-IN rings, root-port reset, slot/address/configure-endpoint commands, HID boot-protocol setup, duplicate-key suppression, and DMA report polling; hub keyboards and VL805 timing still need Pi hardware proof |
-| `hdmi-text` | HDMI text mirror | `hdmi-text` | isolated child VSpace using the linked `pi4-driver-hdmi` image | linked image requires framebuffer metadata plus declared resources and renders bounded text frames directly into the mapped framebuffer |
+| `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image requires a semantic xHCI MMIO range, DMA/shared pages, the VL805 PCIe DMA bus alias, and a pointer-free USB-to-PCIe bus link before engine init; root maps the PCIe owner ring at `0x70e01000` and mints the owner endpoint at child slot `9` so USB can flush VL805 posted writes without owning PCIe MMIO; the DMA arena is described by page descriptors and may be physically non-contiguous; the runtime now owns a direct-root-port xHCI keyboard path with command/event/EP0/interrupt-IN rings, root-port reset, slot/address/configure-endpoint commands, HID boot-protocol setup, duplicate-key suppression, arrow-key ANSI escape publication, and DMA report polling; hub keyboards and VL805 timing still need Pi hardware proof |
+| `hdmi-text` | HDMI text mirror | `hdmi-text` | isolated child VSpace using the linked `pi4-driver-hdmi` image | linked image requires framebuffer metadata plus declared resources and renders bounded text frames directly into the mapped framebuffer; engine init only validates/resources the text sink and does not clear the full framebuffer, while clear/redraw is driven by submitted text frames |
 | `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | isolated child VSpace using the linked `pi4-driver-genet` image | linked image requires declared GENET MMIO/DMA/shared pages before engine init; the descriptor ring now uses a 32-RX/32-TX page-described DMA arena so non-contiguous physical pages remain safe; it programs UMAC/RGMII, MDIO PHY speed, MAC address, RX/TX descriptor rings, bounded TX submission, RX drain, and TX completion reclaim inside the runtime; useful link/DHCP progress still needs Pi hardware proof |
 | `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image requires shared control buffers plus the pointer-free CYW43-to-SDIO bus-link descriptor before engine init; root maps the SDIO owner ring at `0x70e00000` and the owner two-page data window at `0x70e01000` so the descriptor advertises `shared_offset=4096` and `shared_len=8192`; CYW43 no longer receives direct SDHCI MMIO or a DMA arena, so SDIO register authority belongs to `sdio-host`; Wi-Fi association/DHCP and WPA/EAPOL still need Pi hardware proof of the SDIO owner-link service path |
 | `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
 | `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | linked image receives the HAL-declared SDHCI MMIO page plus shared pages, services fixed-layout CMD52/CMD53/POLL_IRQ turns, and must report dedicated-role plus owner-state descriptor proof before 26b SDIO acceptance is credited |
-| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | isolated child VSpace using the linked `pi4-driver-pcie` image | linked image requires declared PCIe MMIO/shared pages, adopts the HAL-prepared aperture at engine init, and services bounded 32-bit read/write/posted-write-flush turns inside that aperture; broader root-complex/VL805 handoff still needs Pi proof and completion |
+| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | isolated child VSpace using the linked `pi4-driver-pcie` image | linked image requires declared PCIe MMIO/shared pages, adopts the HAL-prepared aperture at engine init, and services bounded 32-bit read/write/posted-write-flush turns inside that aperture; service ordering remains network-control, but the seL4 TCB priority is raised to the USB local-seat priority because USB posted-write flushes synchronously depend on this owner runtime; broader root-complex/VL805 handoff still needs Pi proof and completion |
 
 The final isolated-image contract is now generated rather than hand-authored in
 HAL. `configs/root_task.toml` and `configs/root_task_pi4_uboot_aarch64.toml`
@@ -451,17 +457,21 @@ This bounded bootstrap proof is resource-initialization evidence only: it must
 not be treated as final owner-state or driver acceptance. HDMI engine init is a
 zero-frame `Service` command carrying `DRIVER_RUNTIME_ENGINE_INIT_AUX`; only
 actual text/framebuffer updates use the HDMI `SubmitFrame` opcode. For required
-Pi 4 local-seat/network boots, selected driver owner-state is a pre-shell gate:
-USB/local-seat, HDMI text, PCIe, SDIO/CYW43 or GENET as selected, and serial must
-reach their required resource-init frontier before the root prompt is published.
-The safety boundary is telemetry, not shell-first bypass. Every pre-shell driver
-turn must emit bounded `DRIVER_TASK_RESOURCE_INIT`, `DRIVER_TASK_RING_CALL_*`,
-and `DRIVER_TASK_ACCEPTANCE` evidence before halting or retrying, so a missing
-bus, no-reply runtime, or network completion cannot fail as an opaque freeze.
-If the linked HDMI runtime still does not reply, root may use the HAL-mapped
-firmware framebuffer as a diagnostic-only mirror and must log
-`[local-seat] root HDMI diagnostic mirror active ... acceptance=red`; that is
-visible debug output, not driver-task owner-state acceptance.
+Pi 4 local-seat/network boots, selected drivers must reach their required
+resource-init frontier before the root prompt is published, and owner-state
+acceptance remains red until each linked runtime makes real service progress from
+driver-local state. The safety boundary is telemetry, not opaque panic: every
+pre-shell driver turn must emit bounded `DRIVER_TASK_RESOURCE_INIT`,
+`DRIVER_TASK_RING_CALL_*`, and `DRIVER_TASK_ACCEPTANCE` evidence before the root
+shell continues, halts, or retries. A no-reply linked runtime may block
+acceptance, but it must not hide the diagnostic shell when HAL has already proved
+the required local-seat backend resource frontier. Root must not retain or use a
+framebuffer write path as an HDMI fallback; visible HDMI progress is produced
+only by the linked `hdmi-text` runtime, while UART remains the complete log
+stream.
+The linked HDMI runtime treats form-feed as a clear-and-home text command so
+root can redraw bounded high-impact scrollback by submitting frames; root still
+does not map or write the framebuffer on physical Pi 4.
 Root-console startup publishes its raw UART start/end markers and the serial
 prompt before any NineDoor log-stream attachment. On Pi 4 local-seat boots,
 post-prompt driver diagnostics remain on the serial UART and the logger reprints
@@ -489,7 +499,28 @@ failed to complete. Isolated runtimes also update a primitive progress marker
 in the fixed ring metadata window before command dispatch and around
 zero-frame engine init. On timeout, root emits `DRIVER_TASK_RING_PROGRESS` so
 the next boot distinguishes an IPC delivery miss from a runtime that observed
-the command and then stalled inside role-specific initialization.
+the command and then stalled inside role-specific initialization. The current
+marker ladder includes `command-validated`, `runtime-ready`,
+`engine-init-dispatch`, `engine-init-enter`, `engine-init-aux-match`,
+`engine-init-frame-ready`, `engine-init-descriptor-loaded`,
+`engine-init-descriptor-ready`, `engine-init-resource-check-begin`,
+`engine-init-resource-check-failed`, `engine-init-resources-ready`,
+`engine-init-hw-begin`, `engine-init-hw-done`, and
+`engine-init-hw-failed`; USB then reports `usb-caps-read`,
+`usb-controller-halted`, `usb-reset-done`, `usb-dma-ready`,
+`usb-rings-ready`, and `usb-run-requested`, while SDIO reports
+`sdio-reset-begin`, `sdio-power-ready`, `sdio-clock-ready`, and `sdio-ready`.
+HDMI frame submission reports `hdmi-frame-begin`, `hdmi-frame-done`, or
+`hdmi-frame-failed` so first-draw stalls do not collapse into generic runtime
+readiness.
+No-reply timeouts for linked SDIO engine init and USB local-seat
+init/enumeration keep the active ring slot for bounded resumes instead of
+immediately zeroing the command. This preserves a late child completion or a
+stable progress marker and prevents repeated no-detail replays from hiding the
+true frontier. HDMI engine init is intentionally different: descriptor replay
+arms the text sink when the framebuffer resources validate, and a no-reply
+empty engine-init must not be used as a precondition for the first bounded text
+frame through the linked `hdmi-text` runtime.
 Non-acceptance resource initialization breadcrumbs use
 `DRIVER_TASK_RESOURCE_INIT ... stage=... status=... acceptance=no` for descriptor
 record, descriptor bootstrap, deferred descriptor replay, engine-init,
@@ -602,30 +633,31 @@ while parsing input, and one driver-task TX frame may carry up to the 1024-byte
 serial byte/operation budget. Until then, the HAL-owned mini-UART fallback
 remains a diagnostic shell only and does not credit serial owner-state acceptance.
 GENET/CYW43 and USB/local-seat root callers are ring clients on the physical Pi
-branch; the old root-resident direct net-device modules have been removed, and
-`Pi4LocalSeat` remains diagnostic compatibility only. The physical Pi
-`KernelHal` build does not carry a direct `Pi4WifiState` slot, and root Wi-Fi
-debug hooks return `pi4-wifi-driver-task-runtime-required` instead of
-constructing root-owned SDIO/CYW43 state. Emergency early serial output remains
-the only intended Pi root-owned escape hatch before or outside the driver-task
-substrate. If a linked ring-backed hardware owner is unavailable, the service
-turn fails closed with `DeviceUnavailable` instead of falling back to
-root-driving the hardware. On the strict Pi owner-ring path, SDIO command and
+branch; the old root-resident direct net-device modules and `Pi4LocalSeat`
+runtime have been removed. The physical Pi `KernelHal` build does not carry a
+direct `Pi4WifiState` slot, and root Wi-Fi debug hooks return
+`pi4-wifi-driver-task-runtime-required` instead of constructing root-owned
+SDIO/CYW43 state. Emergency early serial output remains the only intended Pi
+root-owned escape hatch before or outside the driver-task substrate. If a linked
+ring-backed hardware owner is unavailable, the service turn fails closed with
+`DeviceUnavailable` instead of falling back to root-driving the hardware. On the
+strict Pi owner-ring path, SDIO command and
 single-frame data calls consume the linked-runtime completion and return before
-the root SDHCI body. PCIe runtime engine init is adopt-only: it may validate the
-live root-complex/VL805 tuple, refresh bounded windows and masks, and assign the
-VL805 BAR/COMMAND if the already-live link proves ready, but it must not assert
-BCM2711 `SW_INIT_1` or PERST from the prompt-side linked-runtime service turn.
-Full PCIe reset/power sequencing stays in the HAL-owned platform proof path, and
-PCIe physical port read/write/flush helpers return from linked-runtime
-completions before root MMIO. Full CYW43 firmware and SDPCM ownership, GENET
-DMA, USB/xHCI event-ring ownership, and broader VL805 handoff still need fresh
-Pi proof and remaining hardware-state completion.
+the root SDHCI body. PCIe runtime descriptor replay is adopt-only: after HAL has
+proved the live root-complex/VL805 tuple, refreshed bounded windows and masks,
+and assigned the VL805 BAR/COMMAND, the linked PCIe runtime marks the descriptor
+as ready to serve bounded port read/write/flush turns. It must not assert BCM2711
+`SW_INIT_1` or PERST from the prompt-side linked-runtime service turn. Full PCIe
+reset/power sequencing stays in the HAL-owned platform proof path, and PCIe
+physical port read/write/flush helpers return from linked-runtime completions
+before root MMIO. Full CYW43 firmware and SDPCM ownership, GENET DMA,
+USB/xHCI event-ring ownership, and broader VL805 handoff still need fresh Pi
+proof and remaining hardware-state completion.
 
 Boot logs must expose the distinction with these breadcrumbs:
 
 - `DRIVER_TASK_DEFAULT requested=dedicated required=yes substrate_active=<yes|no> live_hot_paths=<yes|no>`
-- `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=<isolated|shared-root> vspace_cap=<cap> code_vaddr=<addr> ring_vaddr=<addr> ipc_abi=<abi> pointer_free_ipc=<yes|no> runtime_image=<transport-mapped|declared-only|none> runtime_declared=<mask> runtime_mapped=<mask> runtime_acceptance=<yes|no> owner_state=<driver-owned|root-owned|not-proven> owner_state_reason=<reason>`
+- `DRIVER_TASK_BOOT contract=<name> role=<role> tcb=<cap> cnode=<cap> endpoint=<cap> notification=<cap> started=<yes|no> affinity_core=<n> isolation_cspace=restricted vspace=<isolated|shared-root> vspace_cap=<cap> code_vaddr=<addr> ring_vaddr=<addr> ipc_abi=<abi> pointer_free_ipc=<yes|no> runtime_image=<transport-mapped|declared-only|none> runtime_declared=<mask> runtime_mapped=<mask> runtime_acceptance=<yes|no> owner_state=<driver-owned|linked-runtime-owner-state-missing|not-proven> owner_state_reason=<reason>`
   where `runtime_acceptance=yes` means the image/descriptor is structurally
   eligible, while `owner_state=driver-owned` is emitted only after a
   driver-specific owner-state registration has occurred
@@ -645,14 +677,17 @@ Boot logs must expose the distinction with these breadcrumbs:
   task starts, reports the runtime-image declared and mapped region masks plus
   the actual linked trampoline `code_vaddr`, and proves a fixed-layout
   command/completion ring without callback or context pointers. The root-visible
-  ring frame remains intentional because root is the ring client. This may
+  ring frame remains intentional because root is the ring client; every
+  root/runtime command-completion ring and client-visible owner bus-link ring is
+  mapped uncached on both sides so completion/progress publication is not
+  dependent on ad hoc child cache maintenance. This may
   update `DRIVER_TASK_SUBSTRATE` to a full-contract QEMU transport report and must
   still fail full Pi 4 dedicated-driver-task acceptance because Pi hardware
   roles and hardware hot-path ownership are not proved by QEMU.
-- `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured=<n> failed=<n> live_tcb_count=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> runtime_image_declared=<n> runtime_transport_mapped=<n> runtime_acceptance=<n> runtime_declared_hot_paths=<mask> runtime_mapped_hot_paths=<mask> owner_state=<driver-owned|root-owned|not-proven>`
+- `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary configured=<n> failed=<n> live_tcb_count=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> runtime_image_declared=<n> runtime_transport_mapped=<n> runtime_acceptance=<n> runtime_declared_hot_paths=<mask> runtime_mapped_hot_paths=<mask> owner_state=<driver-owned|linked-runtime-owner-state-missing|not-proven>`
   is also emitted through the root console path during QEMU smoke runs so the
   proof remains visible after the boot logger switches away from early UART.
-- `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> owner_state=<driver-owned|root-owned> live_hot_paths=<yes|no>`
+- `DRIVER_TASK_SUBSTRATE active=<yes|no> task_count=<n> failed_count=<n> live_tcb_count=<n> root_authority_retained=yes fault_endpoint_ready=<yes|no> revoke_ready=<yes|no> broad_caps_leaked=<n> sched=<yes|no> affinity=<per-driver|missing> affinity_configured=<n> affinity_applied=<n> vspace=<isolated|shared-root> ipc_abi=<abi> pointer_free_ipc=<yes|no> owner_state=<driver-owned|linked-runtime-owner-state-missing> live_hot_paths=<yes|no>`
 - one `DRIVER_TASK_OWNER_STATE contract=<name> hot_path=<serial-console|usb-keyboard|hdmi-text|genet-nic|cyw43-wifi|sdio-host|pcie-root> owner_state=<driver-owned|missing> descriptor=<present|missing> root_pointer=<no|unknown>` line per current acceptance hot path
 - one `SCHED_CONTRACT` line per built-in contract, including `live_tcb` and
   `hot_path`; role-specific dedicated proof is credited only when both fields
@@ -762,16 +797,16 @@ their explicit credit-wait probes because they are part of join/security
 progress, not ordinary bulk data service.
 
 Root-task compatibility remains only for early/emergency serial and QEMU/host
-compatibility. The only steady-state root fallback admission point is the HAL
-`admit_root_task_compatibility_service` gate, which records
+compatibility. The only steady-state root-context compatibility admission point
+is the HAL `admit_root_task_compatibility_service` gate, which records
 `RootTaskCompatibility` and returns false for the physical Pi 4 profile. Any
 callback-pointer service turn records compatibility evidence even if the call
 rendezvoused with a live seL4 TCB, because the callback ABI still passes
-root-memory pointers. Physical Pi 4 steady-state driver paths do not use those
-compatibility fallbacks; if the ring-backed hardware owner is not available,
-the path fails closed instead of root-driving the hardware. Declared
-`max_service_us` budgets remain contract metadata; latency proof must come from
-observed service/latency fields.
+root-memory pointers. Physical Pi 4 USB, CYW43 Wi-Fi, and SDIO steady-state
+driver paths have no root-owned fallback service: if the ring-backed hardware
+owner is not available, the path fails closed instead of root-driving the
+hardware. Declared `max_service_us` budgets remain contract metadata; latency
+proof must come from observed service/latency fields.
 
 `DRIVER_TASK_SUBSTRATE_READY=yes` means boot evidence saw the nine-task
 substrate with no bootstrap failures. `DRIVER_TASK_DEDICATED_READY=yes` is
@@ -812,8 +847,10 @@ only through HAL-returned mapped pages or device-specific HAL transport methods.
   `KernelHal::wait_and_service_irq`.
 - DMA frame allocation, guard-page reservation, pinning, and cache maintenance
   are HAL-owned.
-- Firmware, mailbox, power, reset, clock, SDHCI, and SDIO CMD52/CMD53 access
-  for CYW43455 belongs behind `Cyw43Hal` / `pi4_wifi`.
+- Firmware bundle admission, mailbox support, cached diagnostics, and declared
+  SDIO/CYW43 runtime resources belong behind `Cyw43Hal` / `pi4_wifi`; steady
+  power/reset, clock, SDHCI, SDIO CMD52/CMD53, and Wi-Fi transport service
+  belongs to linked runtime descriptors.
 - Pi 4 BCM2711 PCIe root-complex/VL805 config access belongs behind
   `pi4_pcie`; drivers must not derive config space from the xHCI BAR.
 
@@ -858,6 +895,9 @@ device-specific bus-address policy.
 - Allocate DMA memory only through `DeviceHal::alloc_dma_frame*`.
 - Use `alloc_dma_frame_low*` when the device has a low-address window.
 - Use `seL4_ARM_Page_Uncached` when the driver contract requires uncached DMA.
+- Map driver-task command/completion rings and pointer-free owner bus-link rings
+  uncached in every participant VSpace; barriers alone are not cache
+  maintenance.
 - Pin every device-shared range with `hal::dma::pin` before publishing it to a
   device; the pin API accepts only a HAL-admitted DMA range derived from
   HAL-owned DMA backing, not arbitrary raw addresses.
@@ -899,15 +939,17 @@ Device-visible address policy is not generic:
   the driver-task pointer-free proof is present, the boot path runs bounded USB
   keyboard/xHCI service before the root prompt. When the net-console policy
   selects Wi-Fi (`wifi`, or `auto` with credentials) and the same proof is
-  present, root resumes the SDIO/CYW43 linked runtime before announcing console
-  readiness. If that proof is missing, root skips the hidden post-prompt Wi-Fi
-  replay and leaves a serial-diagnostic blocker instead of printing a prompt and
-  then monopolizing it. The `Cohesix console ready` banner means the serial
-  event pump can accept input; it does not imply Wi-Fi association, DHCP, or
-  TCP-console readiness. QEMU virtio and Pi 4 wired NIC paths still use their
-  immediate net-init flow.
-- CYW43455 SDIO traffic is host-driven through SDHCI/CMD52/CMD53; the driver
-  must not publish arbitrary DMA addresses to the Wi-Fi firmware path.
+  present, root resumes bounded SDIO/CYW43 linked-runtime work before announcing
+  console readiness, but Wi-Fi readiness and DHCP are not allowed to suppress the
+  serial diagnostic shell beyond the bounded pre-root release window. If that
+  proof is missing, root skips the hidden post-prompt Wi-Fi replay and leaves a
+  serial-diagnostic blocker instead of printing a prompt and then monopolizing
+  it. The `Cohesix console ready` banner means the serial event pump can accept
+  input; it does not imply Wi-Fi association, DHCP, or TCP-console readiness.
+  QEMU virtio and Pi 4 wired NIC paths still use their immediate net-init flow.
+- CYW43455 SDIO traffic is linked-runtime-driven through bounded
+  SDHCI/CMD52/CMD53 owner descriptors; the driver must not publish arbitrary DMA
+  addresses to the Wi-Fi firmware path.
 
 ### IRQ Ordering
 
@@ -1471,25 +1513,30 @@ transition, but it must not write SDHCI host-control registers directly.
   serial-origin output is staged in small cooperative chunks instead of holding
   the UART in a blocking write across a whole line. HID boot keyboards use idle
   duration `0` once Cohesix owns xHCI, so Wi-Fi cannot strand the event ring
-  behind periodic empty completions; HDMI echoes accepted USB keyboard bytes
-  immediately at parser ingress. HID polling drains a burst of interrupt-IN
-  reports in one pass and keeps 32 keyboard interrupt-IN reads armed on the
-  poll-only Pi 4 path, so press/release/next-key sequences can complete while
-  console output, HDMI echo, or bounded Wi-Fi diagnostics are in progress. When
+  behind periodic empty completions. HID polling drains a burst of interrupt-IN
+  reports in one pass, keeps 128 keyboard interrupt-IN reads armed on the
+  poll-only Pi 4 path, and uses a bounded EP0 `GET_REPORT` input fallback when
+  no interrupt event arrives, so press/release/next-key sequences can complete
+  while serial output or bounded Wi-Fi diagnostics are in progress. When
   deferred Pi 4 Wi-Fi starts, verbose driver diagnostics stay on the serial
   UART with prompt refresh after each log line so HDMI, serial, and unavailable
   9P log access cannot diverge behind a hidden boot-log backlog.
   `usb status` exposes low-volume keyboard capture counters for HID
   reports/filtering, local-seat queue accept/drain/echo, event-loop
   keyboard-priority turns, and output-side keyboard service polls so missed
-  keystrokes can be attributed without adding UART spam. `usb diag` also emits
-  the passive `usb: diag recorder=startup-blackbox ...` ten-gate table from
-  cached HAL/runtime evidence, followed by the active failure domain and
-  `usb: next_action=...`; it does not run the live xHCI probe path. HDMI progress mirrors
-  high-impact driver-resource milestones as concise `[drivers] ...` lines once
-  a display sink is available; those same concise lines are also emitted on the
-  UART so serial captures include every HDMI-visible driver frontier. The UART
-  retains the full `DRIVER_TASK_RESOURCE_INIT` record as the detailed
+  keystrokes can be attributed without adding UART spam. `usb status`,
+  `usb diag`, and `usb probe-kbd` also report the latest cached
+  `usb: linked_runtime_progress ...` marker when a linked-runtime call timed
+  out before completion, including the phase label, mapped ten-gate frontier,
+  blocker, and next action. `usb diag` also emits the passive
+  `usb: diag recorder=startup-blackbox ...` ten-gate table from cached
+  HAL/runtime evidence, followed by the active failure domain and
+  `usb: next_action=...`; it does not run the live xHCI probe path. HDMI progress
+  routes only high-impact driver-resource milestones as concise `[drivers] ...`
+  lines through the linked `hdmi-text` runtime once it is ready; those same
+  concise lines are also emitted on the UART so serial captures include every
+  HDMI-visible driver frontier. The UART retains every diagnostic message plus
+  the full `DRIVER_TASK_RESOURCE_INIT` record as the detailed
   machine-readable source of truth. Successful CYW43 firmware chunks are not
   mirrored individually, but Wi-Fi progress banners keep a 5-10 s visible
   cadence while long startup work is active.
@@ -1498,7 +1545,13 @@ transition, but it must not write SDHCI host-control registers directly.
   root-owned CYW43455/SDIO exercise is removed: `wifi diag` and `wifi dump-state`
   report cached or linked-runtime command-fault evidence, while `wifi load-fw`,
   `wifi retry`, and live `wifi probe-ht` return bounded runtime-required errors
-  unless the linked runtime has supplied the required state. Once a terminal boot/control-plane
+  unless the linked runtime has supplied the required state. `wifi diag`,
+  `wifi dump-state`, `wifi load-fw`, `wifi retry`, and `wifi probe-ht` all replay
+  the cached SDIO linked-runtime progress marker when present, including the
+  mapped Wi-Fi gate, blocker, and next action, so a prompt capture distinguishes
+  descriptor replay, resource validation, SDIO card-select, firmware upload,
+  DHCP, `nettest`, and `netstats` frontiers without constructing a root-owned
+  SDIO/CYW43 driver. Once a terminal boot/control-plane
   failure is preserved, `wifi diag` is passive and compact: it emits the
   readiness/network summary, renders the `wifi: diag recorder=startup-blackbox ...`
   ten-gate table from cached snapshot or linked-runtime CYW43 fault evidence,
@@ -1742,17 +1795,25 @@ active path is Cohesix-owned cold start:
   if `hw.local_seat.required=true`, `coh-rtc` requires matching
   `hw.devices[]` entries for the configured keyboard/display IDs with
   `required=true`. A missing manifest device remains fatal before ticket
-  publication, and a required driver-task backend that is unavailable, has not
-  replied, or has not yet proven owner-state before the serial prompt remains a
-  pre-shell failure. Before halting, root must emit the exact driver-task
-  resource-init frontier plus the boot-contract summary (`DRIVER_TASK_SELECTED`,
-  `DRIVER_TASK_OWNER_STATE`, and `DRIVER_TASK_ACCEPTANCE`) so the next boot log
-  identifies the failed gate. A present backend with no keyboard ready on the
-  first bounded probe keeps polling instead of falling back to serial-only. When
-  `required=false`, backend failures degrade to serial-only diagnostics with
-  explicit `[local-seat]` boot lines and no repeated xHCI probing.
-  The root console then waits in the event pump until Wi-Fi association and
-  addressing are reachable. USB and Wi-Fi may only be interleaved at explicit
+  publication. A required backend that cannot replay descriptors or cannot obtain
+  HAL-owned PCIe/VL805 proof remains a pre-shell failure. Once that static
+  resource frontier is proved, a no-reply xHCI engine-init, missing xHCI
+  controller readiness, missing HID report, or missing PCIe owner-state
+  acceptance proof is a red acceptance state and must not suppress the
+  diagnostic shell. Before halting or continuing degraded, root must emit the
+  exact driver-task resource-init frontier plus the boot-contract summary
+  (`DRIVER_TASK_SELECTED`, `DRIVER_TASK_OWNER_STATE`, and
+  `DRIVER_TASK_ACCEPTANCE`) so the next boot log identifies the failed gate. A
+  present backend with no keyboard ready on the first bounded probe keeps
+  polling instead of falling back to serial-only, and the pre-shell
+  `[local-seat] required keyboard not ready yet ...` line includes a
+  `frontier=...` label such as `usb-engine-init-no-reply` so a dynamic runtime
+  timeout is not collapsed into generic backend absence. When `required=false`,
+  backend failures degrade to serial-only diagnostics with explicit
+  `[local-seat]` boot lines and no repeated xHCI probing.
+  The root console may run a bounded pre-root Wi-Fi release window, then starts
+  the serial shell with Wi-Fi acceptance still red until association and
+  addressing are proved. USB and Wi-Fi may only be interleaved at explicit
   boot/event-pump phase boundaries where the root task is not holding
   overlapping HAL ownership.
 - Root-port state is cold-boot live evidence only. After mailbox reset, live
@@ -2146,12 +2207,11 @@ Required Cohesix shape:
   ring, event ring, EP0 control path, interrupt-IN keyboard queue, DMA report
   buffers, HID decode, and local-seat first-byte publication under the
   driver-task contract.
-- `crates/cohesix-usb` is a Cohesix-owned no-`std` USB/xHCI support crate used by
-  root-task local-seat compatibility diagnostics and policy tests. It may provide
-  xHCI, descriptor, hub, HID, LED, and MSC functionality, but it is not an
-  external dependency and it does not close Pi 4 driver-task acceptance by
-  itself. Hardware acceptance requires linked-runtime owner-state proof plus the
-  USB 10-gate evidence below.
+- Root-task local-seat code is a linked-runtime client only. It may report
+  local queue and prompt evidence, but it does not contain a root-owned USB/xHCI
+  implementation and does not close Pi 4 driver-task acceptance by itself.
+  Hardware acceptance requires linked-runtime owner-state proof plus the USB
+  10-gate evidence below.
 - PCIe root-complex and VL805 BAR/COMMAND proof belongs to HAL.
 - Bootloader stop-state evidence is diagnostic. Current Pi 4 USB profiles have
   no xHCI ownership handoff opt-in; stop-state, preserve-state, and U-Boot
@@ -2170,17 +2230,23 @@ Required Cohesix shape:
   `IMOD=0`), flush DCBAAP/CRCR/ERST/ERDP/CONFIG/DNCTRL/RUN and every doorbell
   through the pointer-free PCIe owner link, and use neutral PORTSC writes that
   do not mirror `PED`, `PR`, or change bits except as explicit RW1C
-  acknowledgements. A direct `USBSTS` read is only a local drain fallback when
-  the PCIe owner link is unavailable and cannot close USB acceptance.
+  acknowledgements. Physical Pi USB no longer performs a local BAR-read drain
+  when the PCIe owner link is unavailable; the flush step fails closed until
+  the linked PCIe owner acknowledges it.
 - Root-port reads known to be toxic must stay behind explicit HAL gates.
 - USB keyboard feeds only the existing root-console parser after decoding USB
   HID Usage Page `0x07` keyboard usages to bounded ASCII/control bytes.
-- HID keyboard polling first accepts strict boot-protocol reports, then uses a
-  bounded compatibility fallback for report-protocol keyboards that expose
-  compact or bitmap reports. A key-empty boot-looking payload with additional
-  non-zero report bytes emits `0x0416 tag=usb-hid-report-flexible-key-fallback`
-  before decoding via the flexible path, so Gate 9 failures stay attributable to
-  report decoding instead of being misread as HAL/DMA/MMIO or SDIO contention.
+  Arrow usages are decoded to normal ANSI cursor sequences. Up and down arrows
+  therefore drive both the existing root-console history parser and the linked
+  HDMI high-impact scrollback renderer; left and right arrows are preserved for
+  parser-side cursor behavior.
+- HID keyboard polling first accepts strict boot-protocol reports, then uses the
+  linked-runtime flexible report decoder for report-protocol keyboards that
+  expose compact or bitmap reports. A key-empty boot-looking payload with
+  additional non-zero report bytes emits
+  `0x0416 tag=usb-hid-report-flexible-key` before decoding via the flexible
+  path, so Gate 9 failures stay attributable to report decoding instead of
+  being misread as HAL/DMA/MMIO or SDIO contention.
   The linked runtime requests a bounded endpoint-packet report buffer, sizes the
   decoded payload from the xHCI transfer event's remaining-length field, accepts
   report-ID-prefixed, compact, and bitmap keyboard payloads, and invalidates the
@@ -2191,10 +2257,13 @@ Required Cohesix shape:
   no-keyboard-input turn. A later UART command still clears an unfinished
   local-seat line before dispatch, so serial and USB input cannot concatenate
   stale partial commands.
-  Accepted local-seat command output is mirrored directly to HDMI and to UART
-  through a best-effort TX mirror so slow serial output cannot starve xHCI
-  polling or typed HDMI echo. `usb status` reports local-seat keyboard-drop
-  counters without deferred HDMI queue/drop counters.
+  Accepted local-seat command output is emitted on UART; HDMI is not a general
+  command-output mirror on physical Pi 4. The linked HDMI path is reserved for
+  high-impact progress lines and real-time local-seat input feedback, so slow or
+  verbose console output cannot starve xHCI polling through display rendering.
+  Up/down keyboard scrollback redraws only the bounded high-impact HDMI history
+  through linked `SubmitFrame` commands. `usb status` reports local-seat
+  keyboard-drop counters without deferred HDMI queue/drop counters.
 - Operator proof uses a single 10-gate USB ladder: 1 controller candidate, 2 live
   PCIe/VL805 ownership, 3 controller-ready, 4 command-ring completion, 5
   root-port connection, 6 device address, 7 descriptors/configuration, 8 HID
@@ -2247,17 +2316,12 @@ Cohesix has two release driver targets:
   cache-maintained DMA.
 
 Both release bundles include TCP and USB. The active Pi 4 USB acceptance path is
-the linked runtime in `apps/pi4-driver-runtime/src/lib.rs`; remaining root-task
-local-seat compatibility code lives in the internal `cohesix-usb` crate. Release
-proof comes from runtime parity tests plus root-task local-seat diagnostics. Do
-not test driver changes with ad hoc feature strings when the target bundle
+the linked runtime in `apps/pi4-driver-runtime/src/lib.rs`; root-task
+local-seat code is a ring-client control surface only. Release proof comes from
+runtime parity tests plus root-task local-seat diagnostics. Do not test driver
+changes with ad hoc feature strings when the target bundle
 applies. Use the focused aliases:
 
-- `cargo test -p cohesix-usb --lib`
-  covers the internal no-`std` xHCI/USB support crate used by root-task
-  compatibility diagnostics: controller setup, command/event rings, descriptors,
-  hubs, HID report decode, keyboard LED output reports, MSC helpers, and bounded
-  Pi 4 xHCI policy.
 - `cargo test -p pi4-driver-runtime --lib -- --test-threads=1`
   covers the linked Pi 4 runtime implementation for USB, SDIO/CYW43, HDMI,
   serial, and GENET. USB-specific coverage includes the driver-task xHCI
@@ -2285,11 +2349,7 @@ applies. Use the focused aliases:
   contracts.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::`
   covers target-neutral local-seat parser, keyboard queue, mirror, and USB/Wi-Fi
-  command policy helpers.
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::`
-  covers Pi 4 local-seat USB/VL805/xHCI policy, bounded Enable Slot
-  command-ring proof, event-ring polling, PCIe DMA aliasing, and HAL
-  interrupt-source ordering.
+  command policy helpers for the linked-runtime client path.
 - `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`
   covers HAL cache-clean/invalidate/error paths and DMA pin/sync/unpin audit
   ordering.
@@ -2337,7 +2397,6 @@ Changes:
 Commands:
   - rg -n "ARCH_AARCH64|PLAT_|ARM_GIC|SMMU|AARCH64_USER_CACHE|IRQ" seL4/build/kernel/gen_config/kernel/gen_config.yaml seL4/build/kernel/gen_headers/plat/platform_gen.h
   - python3 scripts/ci/check_driver_test_coverage.py
-  - cargo test -p cohesix-usb --lib
   - cargo test -p pi4-driver-runtime --lib -- --test-threads=1
   - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::rtl8139
   - cargo test -p root-task --no-default-features --features driver-tests-qemu --lib drivers::virtio
@@ -2350,7 +2409,6 @@ Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::
   - cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance
   - scripts/ci/test_plan_run.sh --list
   - scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>

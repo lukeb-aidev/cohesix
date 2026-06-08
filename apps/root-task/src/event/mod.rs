@@ -1627,12 +1627,12 @@ where
         self
     }
 
-    /// Mirror a pre-prompt boot progress line to HDMI when the local seat is
-    /// present.
+    /// Route a pre-prompt high-impact boot progress line to HDMI when the
+    /// linked display runtime is available.
     pub fn publish_pre_root_boot_progress(&mut self, line: &str) {
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.register_boot_progress_backend();
-            runtime.mirror_line(line);
+            runtime.mirror_high_impact_line(line);
         }
     }
 
@@ -2083,8 +2083,6 @@ where
         self.serial.poll_io();
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();
-        }
-        if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mirror_line("Cohesix console ready");
             runtime.mirror_line(CONSOLE_PROMPT);
         }
@@ -2192,9 +2190,6 @@ where
                     );
                 }
             }
-        }
-        if let Some(runtime) = self.local_seat.as_mut() {
-            runtime.mirror_line("Cohesix console starting");
         }
         if !self.banner_emitted {
             log::info!(target: "event", "[event] root console banner emitted");
@@ -2577,7 +2572,7 @@ where
                         "[local-seat] prompt-settle attach begin action=arm-cooperative",
                     );
                 }
-                let display_diag_ready = runtime.ensure_prompt_display_diagnostic_mirror();
+                let linked_display_ready = runtime.ensure_prompt_linked_display_ready();
                 runtime.enable_backend_keyboard_polling();
                 let usb_overruns_before = runtime.keyboard_trace().driver_task_budget_overruns;
                 let keyboard_probe = runtime.probe_backend_keyboard_once();
@@ -2585,9 +2580,9 @@ where
                     && runtime.keyboard_trace().driver_task_budget_overruns > usb_overruns_before;
                 if verbose_attempt || keyboard_probe.attached() {
                     let usb_frontier =
-                        "[drivers] USB frontier: prompt-settle linked-runtime probe armed; xHCI/keyboard state will mirror here";
+                        "[drivers] USB frontier: prompt-settle linked-runtime probe armed; xHCI/keyboard state preserved";
                     boot_log::force_uart_line_raw(usb_frontier);
-                    runtime.mirror_line(usb_frontier);
+                    runtime.mirror_high_impact_line(usb_frontier);
                 }
                 #[cfg(feature = "net-console")]
                 {
@@ -2597,7 +2592,7 @@ where
                             wifi_detail
                         ));
                         boot_log::force_uart_line_raw(wifi_frontier.as_str());
-                        runtime.mirror_line(wifi_frontier.as_str());
+                        runtime.mirror_high_impact_line(wifi_frontier.as_str());
                     }
                 }
                 if verbose_attempt || keyboard_probe.attached() {
@@ -2605,8 +2600,8 @@ where
                     let _ =
                         write!(
                         line,
-                        "[local-seat] prompt-settle attach end result=armed-cooperative display_diag={}",
-                        if display_diag_ready { "ready" } else { "deferred" }
+                        "[local-seat] prompt-settle attach end result=armed-cooperative linked_display={}",
+                        if linked_display_ready { "ready" } else { "deferred" }
                     );
                     boot_log::force_uart_line_raw(line.as_str());
                     let mut probe_line = HeaplessString::<128>::new();
@@ -2881,7 +2876,9 @@ where
     fn emit_smp_activity(&mut self) {
         let snapshot = self.smp_activity_snapshot();
         let previous = self.last_smp_activity_snapshot;
-        self.emit_console_line("[smp] activity begin source=userspace benchmark=off hdmi=mirrored");
+        self.emit_console_line(
+            "[smp] activity begin source=userspace benchmark=off hdmi=high-impact-only",
+        );
         self.emit_smp_activity_pump();
         self.emit_smp_activity_local_seat();
         self.emit_smp_activity_net();
@@ -2956,10 +2953,8 @@ where
         let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
         #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let linked_first_report = false;
-        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-        let linked_first_byte = crate::local_seat_pi4::usb_runtime_first_byte_seen();
-        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
-        let linked_first_byte = false;
+        let linked_first_byte =
+            trace.backend_read_bytes != 0 || trace.accepted_bytes != 0 || trace.echoed_bytes != 0;
         let metrics = self.metrics;
         let line = format_message(format_args!(
             "[smp] activity local-seat runtime=present attached={} keyboard_device={} display={} backend_poll={} keyboard_ready={} first_report={} first_byte={} queued={} accepted={} drained={} echoed={} drop={} hdmi_drop={}",
@@ -4088,18 +4083,8 @@ where
                     polling_enabled,
                     Some("action=diag-before-probe"),
                 );
-                #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-                {
-                    if let Some(preflight) = self
-                        .local_seat
-                        .as_ref()
-                        .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
-                    {
-                        self.emit_usb_probe_preflight(preflight);
-                    }
-                }
                 self.emit_console_line(
-                    "usb: diag action=probe-skipped reason=no-live-mmio use=usb-probe-kbd",
+                    "usb: diag action=probe-skipped reason=linked-runtime-only use=usb-status",
                 );
                 let (backend_attached, polling_enabled) = {
                     let local_seat = match self.local_seat.as_mut() {
@@ -4144,16 +4129,6 @@ where
             }
             UsbDebugCommand::ProbeKeyboard => {
                 self.emit_console_line("usb: probing local-seat keyboard now");
-                #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-                {
-                    if let Some(preflight) = self
-                        .local_seat
-                        .as_ref()
-                        .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
-                    {
-                        self.emit_usb_probe_preflight(preflight);
-                    }
-                }
                 let (backend_attached, polling_enabled) = {
                     let local_seat = match self.local_seat.as_mut() {
                         Some(local_seat) => local_seat,
@@ -4192,66 +4167,6 @@ where
             RefusalReason::Policy,
             Some(detail.as_str()),
         );
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    ))]
-    fn emit_usb_probe_preflight(&mut self, status: crate::local_seat_pi4::UsbProbePreflightStatus) {
-        let route_line = format_message(format_args!(
-            "usb: golden_path preflight route={} attempt={}/{} current={} next={} origin={} handoff={} seed={} halt_guard={} publish_guard={}",
-            status.route,
-            status.strategy_idx,
-            status.strategy_count,
-            status.current_step,
-            status.next_step,
-            status.origin,
-            status.handoff,
-            status.seed,
-            status.halt_guard,
-            status.publish,
-        ));
-        self.emit_console_line(route_line.as_str());
-        let mut edge_line = format_message(format_args!(
-            "usb: golden_path preflight policy={} dma={} bus={} poll_only={} followup={} expected_diag=0x{:04x}",
-            status.policy,
-            if status.prefer_high { "high" } else { "low" },
-            if status.pcie_dma_window {
-                "pcie-window"
-            } else {
-                "phys"
-            },
-            if status.poll_only { "yes" } else { "no" },
-            status.followup_step,
-            status.expected_diag_stage,
-        ));
-        if let Some(tag) = status.expected_diag_tag {
-            let _ = write!(edge_line, " expected_tag={tag}");
-        }
-        if let Some(exact) = status.expected_diag_exact {
-            let _ = write!(edge_line, " expected_exact={exact}");
-        }
-        self.emit_console_line(edge_line.as_str());
-        let plan_line = format_message(format_args!(
-            "usb: golden_path preflight ctor={} pre={} legacy={} run={} publish={} post_ready={}",
-            status.constructor,
-            status.pre_reset,
-            status.legacy,
-            status.run,
-            status.publish,
-            status.post_ready_irq,
-        ));
-        self.emit_console_line(plan_line.as_str());
-        let irq_line = format_message(format_args!(
-            "usb: irq_contract preflight expected=bridge+intx+msi post_ready={} poll_only={} irq27=timer-only",
-            status.post_ready_irq,
-            if status.poll_only { "yes" } else { "no" },
-        ));
-        self.emit_console_line(irq_line.as_str());
-        self.emit_usb_ownership_contract(&status.ownership);
     }
 
     #[cfg(feature = "kernel")]
@@ -4320,236 +4235,59 @@ where
             self.metrics.local_seat_output_keyboard_polls,
         ));
         self.emit_console_line(pump_line.as_str());
-        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-        {
-            let ownership = self
-                .local_seat
-                .as_ref()
-                .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
-                .map_or_else(
-                    crate::local_seat_pi4::latest_usb_ownership_contract_status,
-                    |preflight| preflight.ownership,
-                );
-            self.emit_usb_ownership_contract(&ownership);
-        }
-        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-        let diag_exact_issue = crate::local_seat_pi4::latest_xhci_diag_status()
-            .as_ref()
-            .and_then(|status| status.exact_issue);
-        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let diag_exact_issue = None;
-        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-        let (mut verdict, mut focus) =
-            Self::usb_capture_verdict(backend_attached, polling_enabled, diag_exact_issue);
-        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let (verdict, focus) =
             Self::usb_capture_verdict(backend_attached, polling_enabled, diag_exact_issue);
-        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-        if let Some(route) = crate::local_seat_pi4::latest_usb_probe_route_status() {
-            let route_line = format_message(format_args!(
-                "usb: golden_path route={} attempt={}/{} current={} next={} proof_gate={} target_gate=10 origin={} handoff={} seed={} halt_guard={} publish_guard={}",
-                route.route,
-                route.strategy_idx,
-                route.strategy_count,
-                route.current_step,
-                route.next_step,
-                route.proof_gate,
-                route.origin,
-                route.handoff,
-                route.seed,
-                route.halt_guard,
-                Self::usb_publish_guard_for_origin(route.origin),
-            ));
-            self.emit_console_line(route_line.as_str());
-            let mut progress_line = HeaplessString::<512>::new();
-            let _ = write!(
-                progress_line,
-                "usb: golden_path outcome={} command_probe={} pathway={} progress={} proof_gate={} policy={} dma={} bus={} poll_only={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} detect_passes={}",
-                route.outcome,
-                route.command_probe,
-                route.pathway_idx,
-                route.progress,
-                route.proof_gate,
-                route.policy,
-                if route.prefer_high { "high" } else { "low" },
-                if route.pcie_dma_window {
-                    "pcie-window"
-                } else {
-                    "phys"
-                },
-                if route.poll_only { "yes" } else { "no" },
-                route.connected_mask,
-                route.event_candidate_mask,
-                route.detect_passes,
-            );
-            if let Some(port) = route.port {
-                let _ = write!(progress_line, " port={port}");
-            }
-            if route.slow_recheck {
-                let _ = write!(progress_line, " slow_recheck=yes");
-            }
-            if let Some(stage) = route.diag_stage {
-                let _ = write!(progress_line, " diag_stage=0x{stage:04x}");
-                let _ = write!(
-                    progress_line,
-                    " diag_fresh={}",
-                    if route.diag_fresh { "yes" } else { "no" }
-                );
-                if let Some(tag) = route.diag_tag {
-                    let _ = write!(progress_line, " diag_tag={tag}");
-                }
-                if let Some(exact) = route.diag_exact {
-                    let _ = write!(progress_line, " diag_exact={exact}");
-                }
-            }
-            self.emit_console_line(progress_line.as_str());
-            let enum_line = format_message(format_args!(
-                "usb: enum_state phase={} outcome={} proof_gate={} port={} connected_mask=0x{:04x} event_candidate_mask=0x{:04x} command_probe={} next={}",
-                route.progress,
-                route.outcome,
-                route.proof_gate,
-                route.port.unwrap_or(0),
-                route.connected_mask,
-                route.event_candidate_mask,
-                route.command_probe,
-                route.next_step,
-            ));
-            self.emit_console_line(enum_line.as_str());
-            let irq_line = format_message(format_args!(
-                "usb: irq_contract irq27={} bridge={} intx={} msi={} controller_gate={}",
-                if route.irq27_bound { "yes" } else { "no" },
-                if route.bridge_irq_bound { "yes" } else { "no" },
-                if route.intx_irq_bound { "yes" } else { "no" },
-                if route.msi_irq_bound { "yes" } else { "no" },
-                route.controller_gate,
-            ));
-            self.emit_console_line(irq_line.as_str());
-            let contract_line = format_message(format_args!(
-                "usb: contract current={} expected={} blocker={} touch_policy={} strategy={} seed={} publish_guard={} diag_fresh={}",
-                route.current_step,
-                Self::usb_contract_expected_step(&route),
-                Self::usb_contract_blocker(&route),
-                Self::usb_contract_touch_policy(&route),
-                route.policy,
-                route.seed,
-                Self::usb_publish_guard_for_origin(route.origin),
-                if route.diag_fresh { "yes" } else { "no" },
-            ));
-            self.emit_console_line(contract_line.as_str());
-            if let Some(stage) = route.diag_stage {
-                let mut diag_line = format_message(format_args!(
-                    "usb: diag_contract stage=0x{stage:04x} diag_fresh={}",
-                    if route.diag_fresh { "yes" } else { "no" },
-                ));
-                if let Some(tag) = route.diag_tag {
-                    let _ = write!(diag_line, " tag={tag}");
-                }
-                if let Some(exact) = route.diag_exact {
-                    let _ = write!(diag_line, " exact={exact}");
-                }
-                self.emit_console_line(diag_line.as_str());
-
-                let mut values_line = format_message(format_args!("usb: diag_values"));
-                if let Some((a_label, b_label, c_label)) = route.diag_value_labels {
-                    let _ = write!(
-                        values_line,
-                        " {a_label}=0x{:016x} {b_label}=0x{:016x} {c_label}=0x{:016x}",
-                        route.diag_a, route.diag_b, route.diag_c
-                    );
-                } else {
-                    let _ = write!(
-                        values_line,
-                        " a=0x{:016x} b=0x{:016x} c=0x{:016x}",
-                        route.diag_a, route.diag_b, route.diag_c
-                    );
-                }
-                self.emit_console_line(values_line.as_str());
-            }
-            if let Some((route_verdict, route_focus)) = Self::usb_route_capture_verdict(&route) {
-                verdict = route_verdict;
-                focus = route_focus;
-            }
-        }
         let verdict_line = format_message(format_args!("usb: verdict={verdict} focus={focus}"));
         self.emit_console_line(verdict_line.as_str());
         #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-        if let Some(diag) = crate::local_seat_pi4::latest_xhci_diag_status() {
-            let mut diag_line =
-                format_message(format_args!("usb: xhci stage=0x{:04x}", diag.stage));
-            if let Some(tag) = diag.tag {
-                let _ = write!(diag_line, " tag={tag}");
-            }
-            if let Some(exact_issue) = diag.exact_issue {
-                let _ = write!(diag_line, " exact={exact_issue}");
-            }
-            self.emit_console_line(diag_line.as_str());
-            let mut values_line = format_message(format_args!("usb: xhci values"));
-            if let Some((a_label, b_label, c_label)) = diag.value_labels {
-                let _ = write!(
-                    values_line,
-                    " {a_label}=0x{:016x} {b_label}=0x{:016x} {c_label}=0x{:016x}",
-                    diag.a, diag.b, diag.c
-                );
-            } else {
-                let _ = write!(
-                    values_line,
-                    " a=0x{:016x} b=0x{:016x} c=0x{:016x}",
-                    diag.a, diag.b, diag.c
-                );
-            }
-            self.emit_console_line(values_line.as_str());
-        }
-        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-        if let Some(history) = crate::local_seat_pi4::latest_xhci_diag_history_status() {
-            self.emit_usb_xhci_diag_history(&history);
-        } else {
-            self.emit_console_line("usb: xhci_recent total=0 count=0 focus=latest-xhci-diag");
-        }
-        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
-        if let Some(ports) = crate::local_seat_pi4::latest_xhci_root_port_status() {
-            self.emit_usb_root_ports(&ports);
-        } else {
-            self.emit_console_line("usb: ports cached=no count=0 connected_mask=0x0000");
-        }
-        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         {
-            let runtime = crate::local_seat_pi4::latest_usb_runtime_proof_status();
+            let linked_controller_ready =
+                crate::local_seat::linked_local_seat_usb_controller_ready();
             let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
             let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
             let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
             let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
-            let linked_gate = Self::usb_runtime_gate_for_linked_detail(linked_detail);
-            let local_queue_first_byte = self.local_seat.as_ref().is_some_and(|local_seat| {
-                let trace = local_seat.keyboard_trace();
-                trace.backend_read_bytes != 0
-                    || trace.accepted_bytes != 0
-                    || trace.echoed_bytes != 0
-            });
-            let keyboard_ready = runtime.keyboard_ready || linked_keyboard_ready;
-            let first_report = runtime.first_report || linked_first_report;
-            let first_byte = runtime.first_byte;
+            let linked_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
+                crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            );
+            let linked_gate = Self::usb_runtime_gate_for_linked_detail(linked_detail).max(
+                linked_progress.map_or(0, |progress| {
+                    Self::usb_runtime_gate_for_progress_phase(progress.phase)
+                }),
+            );
+            let local_trace = self
+                .local_seat
+                .as_ref()
+                .map(|local_seat| local_seat.keyboard_trace())
+                .unwrap_or_default();
+            let first_byte = local_trace.backend_read_bytes != 0
+                || local_trace.accepted_bytes != 0
+                || local_trace.echoed_bytes != 0;
+            let keyboard_ready = linked_keyboard_ready;
+            let first_report = linked_first_report;
             let prompt_polling_enabled = self
                 .local_seat
                 .as_ref()
                 .is_some_and(|local_seat| local_seat.backend_keyboard_polling_enabled());
-            let first_byte_source = if runtime.first_byte {
-                "linked-runtime-hid"
-            } else if local_queue_first_byte {
+            let first_byte_source = if first_byte {
                 "local-seat-queue"
             } else {
                 "none"
             };
             let proof_gate = if first_byte {
-                runtime.proof_gate.max(10)
+                linked_gate.max(10)
             } else if first_report {
-                runtime.proof_gate.max(9)
+                linked_gate.max(9)
             } else if keyboard_ready {
-                runtime.proof_gate.max(8)
-            } else if linked_gate != 0 {
-                runtime.proof_gate.max(linked_gate)
+                linked_gate.max(8)
+            } else if linked_controller_ready {
+                linked_gate.max(3)
             } else {
-                runtime.proof_gate
+                linked_gate
             };
+            let progress_next = linked_progress
+                .map(|progress| Self::usb_runtime_next_action_for_progress_phase(progress.phase));
             let next_step = if first_byte {
                 "keyboard-first-byte"
             } else if first_report {
@@ -4558,9 +4296,13 @@ where
                 "keyboard-first-report"
             } else if linked_detail != 0 {
                 Self::usb_runtime_next_for_linked_detail(linked_detail)
+            } else if let Some(progress_next) = progress_next {
+                progress_next
             } else {
-                runtime.next_step
+                "linked-runtime-init"
             };
+            let progress_blocker = linked_progress
+                .map(|progress| Self::usb_runtime_blocker_for_progress_phase(progress.phase));
             let blocker = if first_byte {
                 "none"
             } else if first_report {
@@ -4569,8 +4311,10 @@ where
                 "hid-first-report"
             } else if linked_detail != 0 {
                 Self::usb_runtime_blocker_for_linked_detail(linked_detail)
+            } else if let Some(progress_blocker) = progress_blocker {
+                progress_blocker
             } else {
-                runtime.blocker
+                "linked-runtime-no-detail"
             };
             let runtime_line = format_message(format_args!(
                 "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x} result=0x{:08x}",
@@ -4613,6 +4357,24 @@ where
                 Self::usb_runtime_recovery_policy_for_linked_detail(linked_detail),
             ));
             self.emit_console_line(linked_runtime_snapshot.as_str());
+            if let Some(progress) = linked_progress {
+                let progress_line = format_message(format_args!(
+                    "usb: linked_runtime_progress marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} gate={} blocker={} next_action={}",
+                    Self::yes_no(progress.marker_valid),
+                    progress.sequence,
+                    progress.phase,
+                    progress.phase_name,
+                    progress.aux0,
+                    Self::usb_runtime_gate_for_progress_phase(progress.phase),
+                    Self::usb_runtime_blocker_for_progress_phase(progress.phase),
+                    Self::usb_runtime_next_action_for_progress_phase(progress.phase),
+                ));
+                self.emit_console_line(progress_line.as_str());
+            } else {
+                self.emit_console_line(
+                    "usb: linked_runtime_progress marker_valid=no sequence=0 phase=0 phase_name=none aux0=0x00000000 gate=0 blocker=none next_action=submit-linked-runtime-command",
+                );
+            }
             if linked_detail
                 == pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
                 || linked_detail
@@ -4644,223 +4406,24 @@ where
                 linked_detail,
             ));
             self.emit_console_line(runtime_next_action.as_str());
-            let keyboard = crate::local_seat_pi4::latest_usb_keyboard_poll_status();
-            let keyboard_trace_source =
-                if linked_keyboard_ready || linked_first_report || runtime.first_byte {
-                    "linked-runtime"
-                } else {
-                    "root-backend"
-                };
+            let keyboard_trace_source = if linked_keyboard_ready || linked_first_report {
+                "linked-runtime"
+            } else {
+                "local-seat-queue"
+            };
             let keyboard_line = format_message(format_args!(
-                "usb: keyboard_trace source={} polls={} reports={} no_report={} errors={} nonempty={} emitted={} dup={} zero={} lock={} scroll={} unmapped={}",
+                "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} accepted={} drained={} echoed={} dropped={} overruns={}",
                 keyboard_trace_source,
-                keyboard.poll_calls,
-                keyboard.reports,
-                keyboard.no_report,
-                keyboard.errors,
-                keyboard.non_empty_reports,
-                keyboard.emitted_bytes,
-                keyboard.duplicate_keys,
-                keyboard.zero_keys,
-                keyboard.lock_keys,
-                keyboard.scroll_keys,
-                keyboard.unmapped_keys,
+                local_trace.backend_poll_calls,
+                local_trace.backend_read_bytes,
+                local_trace.queued_bytes,
+                local_trace.accepted_bytes,
+                local_trace.drained_bytes,
+                local_trace.echoed_bytes,
+                local_trace.dropped_bytes,
+                local_trace.driver_task_budget_overruns,
             ));
             self.emit_console_line(keyboard_line.as_str());
-            let keyboard_last_line = format_message(format_args!(
-                "usb: keyboard_trace_last modifiers=0x{:02x} keys=0x{:02x},0x{:02x},0x{:02x} emitted_key=0x{:02x} emitted_ascii=0x{:02x}",
-                keyboard.last_modifiers,
-                keyboard.last_key0,
-                keyboard.last_key1,
-                keyboard.last_key2,
-                keyboard.last_emitted_key,
-                keyboard.last_emitted_ascii,
-            ));
-            self.emit_console_line(keyboard_last_line.as_str());
-        }
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    ))]
-    fn emit_usb_xhci_diag_history(
-        &mut self,
-        history: &crate::local_seat_pi4::UsbXhciDiagHistoryStatus,
-    ) {
-        let summary = format_message(format_args!(
-            "usb: xhci_recent total={} count={} focus=latest-xhci-diag",
-            history.total_lines, history.count,
-        ));
-        self.emit_console_line(summary.as_str());
-        for (index, entry) in history.entries.iter().take(history.count).enumerate() {
-            let status = entry.status;
-            let mut line = format_message(format_args!(
-                "usb: xhci_recent[{}] line={} stage=0x{:04x}",
-                index, entry.line_no, status.stage,
-            ));
-            if let Some(tag) = status.tag {
-                let _ = write!(line, " tag={tag}");
-            }
-            if let Some(exact_issue) = status.exact_issue {
-                let _ = write!(line, " exact={exact_issue}");
-            }
-            if let Some((a_label, b_label, c_label)) = status.value_labels {
-                let _ = write!(
-                    line,
-                    " {a_label}=0x{:016x} {b_label}=0x{:016x} {c_label}=0x{:016x}",
-                    status.a, status.b, status.c
-                );
-            } else {
-                let _ = write!(
-                    line,
-                    " a=0x{:016x} b=0x{:016x} c=0x{:016x}",
-                    status.a, status.b, status.c
-                );
-            }
-            self.emit_console_line(line.as_str());
-        }
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    ))]
-    fn emit_usb_root_ports(&mut self, ports: &crate::local_seat_pi4::UsbRootPortStatus) {
-        let summary = format_message(format_args!(
-            "usb: ports cached=yes count={} connected_mask=0x{:04x}",
-            ports.count, ports.connected_mask,
-        ));
-        self.emit_console_line(summary.as_str());
-        for entry in ports.entries.iter().take(ports.count) {
-            let line = format_message(format_args!(
-                "usb: port{} portsc=0x{:08x} ccs={} ped={} speed={} pls={}",
-                entry.port,
-                entry.portsc,
-                if entry.connected { "yes" } else { "no" },
-                if entry.enabled { "yes" } else { "no" },
-                entry.speed,
-                entry.link_state,
-            ));
-            self.emit_console_line(line.as_str());
-        }
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    ))]
-    fn emit_usb_ownership_contract(
-        &mut self,
-        status: &crate::local_seat_pi4::UsbOwnershipContractStatus,
-    ) {
-        let evidence = format_message(format_args!(
-            "usb: ownership_contract cfg_window={} cfg_source={} cfg_writes={} cfg_replay={} mailbox={} fresh_ownership={}",
-            status.cfg_window,
-            status.cfg_source,
-            status.cfg_writes,
-            if status.cfg_replay_ready { "yes" } else { "no" },
-            status.mailbox_reset_state,
-            status.fresh_ownership,
-        ));
-        self.emit_console_line(evidence.as_str());
-
-        let command = format_message(format_args!(
-            "usb: ownership_command cmd={} cmd_source={} cmd_ready={} cmd_replay={} bar0={} bar0_source={}",
-            Self::format_optional_u16(status.command),
-            status.command_source,
-            if status.command_ready { "yes" } else { "no" },
-            if status.command_replay_ready { "yes" } else { "no" },
-            Self::format_optional_usize_hex(status.bar0),
-            status.bar0_source,
-        ));
-        self.emit_console_line(command.as_str());
-
-        let guard =
-            Self::usb_ownership_publish_guard(status.command_replay_ready, status.fresh_ownership);
-        let proof = format_message(format_args!(
-            "usb: ownership_proof proof_gate={} target_gate=10 cfg_replay={} cfg_live={} cmd_replay={} cmd_live={} cmd={} mailbox={} bar0={} publish_guard={}",
-            status.proof_gate,
-            if status.cfg_replay_ready { "yes" } else { "no" },
-            Self::usb_ownership_cfg_live_proven(status.cfg_source),
-            if status.command_replay_ready {
-                "yes"
-            } else {
-                "no"
-            },
-            Self::usb_ownership_command_live_proven(status.command_source),
-            Self::format_optional_u16(status.command),
-            status.mailbox_reset_state,
-            Self::format_optional_usize_hex(status.bar0),
-            guard,
-        ));
-        self.emit_console_line(proof.as_str());
-
-        let current = if status.blocker == "none" {
-            "ownership-ready"
-        } else {
-            status.blocker
-        };
-        let blocker = format_message(format_args!(
-            "usb: ownership_blocker current={} expected=vl805-config-window+command+bar0+mailbox observed={} blocker={} next={}",
-            current,
-            if status.cfg_replay_ready {
-                "ready"
-            } else {
-                "missing-or-disabled"
-            },
-            status.blocker,
-            status.next_step,
-        ));
-        self.emit_console_line(blocker.as_str());
-    }
-
-    #[cfg(feature = "kernel")]
-    fn usb_ownership_publish_guard(
-        command_replay_ready: bool,
-        fresh_ownership: &str,
-    ) -> &'static str {
-        if command_replay_ready && fresh_ownership == "allowed" {
-            "allow-runtime-publish"
-        } else if !command_replay_ready {
-            "block-dcbaap-static-command"
-        } else {
-            "block-unproven-ownership"
-        }
-    }
-
-    #[cfg(feature = "kernel")]
-    fn usb_ownership_cfg_live_proven(cfg_source: &str) -> &'static str {
-        if cfg_source == "hal-ext-cfg-proof" {
-            "yes"
-        } else {
-            "no"
-        }
-    }
-
-    #[cfg(feature = "kernel")]
-    fn usb_ownership_command_live_proven(command_source: &str) -> &'static str {
-        if command_source == "hal-ext-cfg-proof" {
-            "yes"
-        } else {
-            "no"
-        }
-    }
-
-    #[cfg(feature = "kernel")]
-    fn usb_publish_guard_for_origin(origin: &str) -> &'static str {
-        match origin {
-            "reset-owned-stop-seed" | "seeded-cold-start" => "block-legacy-handoff",
-            "stop-state-resetless-reinit" => "rings-post-run",
-            "live-runtime-default" | "mailbox-reset-complete" => "rings-pre-run",
-            "uboot-fresh-init" | "stop-state-preserve" => "block-legacy-handoff",
-            _ => "unknown",
         }
     }
 
@@ -4887,122 +4450,6 @@ where
             None if !backend_attached => ("backend-not-attached", "probe-controller"),
             None if polling_enabled => ("probe-in-progress", "poll-keyboard"),
             None => ("no-controller-edge-yet", "probe-keyboard"),
-        }
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        any(target_os = "none", test)
-    ))]
-    fn usb_route_capture_verdict(
-        route: &crate::local_seat_pi4::UsbProbeRouteStatus,
-    ) -> Option<(&'static str, &'static str)> {
-        if route.controller_gate != "none" {
-            Some(("policy-skip-before-run", "controller-gate"))
-        } else if route.outcome == "enumeration-disabled-bootloader-owned" {
-            Some(("policy-skip-before-run", "fresh-ownership"))
-        } else if route.outcome == "controller-init-failed" {
-            Some(("controller-init-edge", "controller-init"))
-        } else if route.command_probe == "enable-slot-ok" {
-            if route.next_step == "none" {
-                Some(("keyboard-route-ready", "none"))
-            } else {
-                Some(("command-ring-ready", "safe-port-state"))
-            }
-        } else if route.command_probe == "no-op-ok" {
-            Some((
-                "command-ring-ready-no-port-event",
-                "safe-port-event-required",
-            ))
-        } else if route.command_probe != "n/a" {
-            Some(("command-ring-edge", "command-ring-probe"))
-        } else if route.progress == "controller-ready" && route.event_candidate_mask != 0 {
-            Some(("controller-ready-port-event", "command-ring-probe"))
-        } else if route.progress == "controller-ready" && route.connected_mask == 0 {
-            Some(("controller-ready-no-port", "root-port-detect"))
-        } else if matches!(
-            route.outcome,
-            "address-failed"
-                | "device-desc-failed"
-                | "config-desc-failed"
-                | "config-parse-failed"
-                | "invalid-config-value"
-                | "set-config-failed"
-                | "hid-init-failed"
-                | "no-keyboard-found"
-        ) {
-            Some(("enum-failure", route.current_step))
-        } else {
-            None
-        }
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        any(target_os = "none", test)
-    ))]
-    fn usb_contract_expected_step(
-        route: &crate::local_seat_pi4::UsbProbeRouteStatus,
-    ) -> &'static str {
-        if route.controller_gate != "none" {
-            "controller-gate-clear"
-        } else {
-            route.next_step
-        }
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        any(target_os = "none", test)
-    ))]
-    fn usb_contract_touch_policy(
-        route: &crate::local_seat_pi4::UsbProbeRouteStatus,
-    ) -> &'static str {
-        match route.origin {
-            "stop-state-preserve" | "seeded-cold-start" | "uboot-fresh-init" => {
-                "legacy-handoff-blocked"
-            }
-            "stop-state-resetless-reinit" => "resetless-reinit",
-            "live-runtime-default" | "mailbox-reset-complete" => "cold-boot-owned",
-            _ => "diagnostic-fallback",
-        }
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        any(target_os = "none", test)
-    ))]
-    fn usb_contract_blocker(route: &crate::local_seat_pi4::UsbProbeRouteStatus) -> &'static str {
-        if route.controller_gate != "none" {
-            route.controller_gate
-        } else if route.command_probe == "enable-slot-ok" {
-            if route.next_step == "none" {
-                "none"
-            } else if route.proof_gate >= 8 {
-                route.next_step
-            } else {
-                "safe-port-state"
-            }
-        } else if route.command_probe == "no-op-ok" {
-            "safe-port-event-required"
-        } else if route.command_probe != "n/a" {
-            route.command_probe
-        } else if let Some(exact) = route.diag_exact {
-            exact
-        } else if route.outcome != "pending" {
-            route.outcome
-        } else if route.progress == "controller-ready" && route.connected_mask == 0 {
-            "no-connected-port"
-        } else {
-            "none"
         }
     }
 
@@ -5040,6 +4487,184 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING => 8,
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => 9,
             _ => 0,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_gate_for_progress_phase(phase: u32) -> u8 {
+        match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY => 1,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => 3,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => 4,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE => 4,
+            _ => 0,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_blocker_for_progress_phase(phase: u32) -> &'static str {
+        match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
+                "usb-engine-init-descriptor-ready-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN => {
+                "usb-engine-init-resource-check-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED => {
+                "usb-engine-init-resource-check-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID => {
+                "usb-resource-descriptor-invalid"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH => {
+                "usb-resource-hot-path-mismatch"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING => {
+                "usb-resource-xhci-mmio-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING => {
+                "usb-resource-dma-arena-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING => {
+                "usb-resource-shared-pages-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING => {
+                "usb-resource-pcie-bus-link-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY => {
+                "usb-engine-init-resource-subcheck-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
+                "usb-engine-init-hardware-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ => {
+                "usb-xhci-controller-halt-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED => "usb-xhci-reset-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE => {
+                "usb-xhci-dma-setup-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY => {
+                "usb-xhci-ring-setup-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => {
+                "usb-xhci-run-transition-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => {
+                "usb-xhci-command-ring-proof-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED => {
+                "usb-engine-init-failed"
+            }
+            _ => "usb-linked-runtime-progress-no-reply",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_next_action_for_progress_phase(phase: u32) -> &'static str {
+        match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
+                "inspect-linked-usb-runtime-resource-check"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN => {
+                "inspect-linked-usb-descriptor-resource-scan"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED => {
+                "inspect-usb-runtime-init-descriptor-ranges-and-bus-link"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID => {
+                "inspect-usb-runtime-init-descriptor-header"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH => {
+                "inspect-usb-runtime-hot-path-and-role-bit"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING => {
+                "inspect-usb-xhci-mmio-resource-range"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING => {
+                "inspect-usb-dma-arena-resource-range"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING => {
+                "inspect-usb-shared-page-resource-range"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING => {
+                "inspect-usb-pcie-pointer-free-bus-link"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY => {
+                "inspect-next-usb-resource-subcheck"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
+                "inspect-xhci-capability-read-and-halt-loop"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ => {
+                "inspect-xhci-halt-status-loop"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED => {
+                "inspect-xhci-reset-completion-loop"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE => {
+                "inspect-xhci-dma-and-scratchpad-layout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY => {
+                "inspect-xhci-command-event-ring-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => {
+                "inspect-xhci-run-transition-and-posted-write-flush"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => {
+                "poll-enable-slot-completion"
+            }
+            _ => "inspect-linked-usb-runtime-progress",
         }
     }
 
@@ -5220,36 +4845,34 @@ where
         self.emit_console_line("usb: diag recorder=startup-blackbox mode=passive source=cached");
         #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         {
-            let ownership = self
-                .local_seat
-                .as_ref()
-                .and_then(|local_seat| local_seat.backend_keyboard_probe_preflight_status())
-                .map_or_else(
-                    crate::local_seat_pi4::latest_usb_ownership_contract_status,
-                    |preflight| preflight.ownership,
-                );
-            let route = crate::local_seat_pi4::latest_usb_probe_route_status();
-            let runtime = crate::local_seat_pi4::latest_usb_runtime_proof_status();
+            let linked_controller_ready =
+                crate::local_seat::linked_local_seat_usb_controller_ready();
             let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
             let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
-            let linked_gate = Self::usb_runtime_gate_for_linked_detail(linked_detail);
+            let linked_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
+                crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            );
+            let linked_gate = Self::usb_runtime_gate_for_linked_detail(linked_detail).max(
+                linked_progress.map_or(0, |progress| {
+                    Self::usb_runtime_gate_for_progress_phase(progress.phase)
+                }),
+            );
             let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
             let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
-            let linked_first_byte = self.local_seat.as_ref().is_some_and(|local_seat| {
-                let trace = local_seat.keyboard_trace();
-                trace.backend_read_bytes != 0
-                    || trace.accepted_bytes != 0
-                    || trace.echoed_bytes != 0
-            });
-            let keyboard_ready = runtime.keyboard_ready || linked_keyboard_ready;
-            let first_report = runtime.first_report || linked_first_report;
-            let first_byte = runtime.first_byte || linked_first_byte;
-            let route_gate = route.map_or(0, |status| status.proof_gate);
-            let mut proof_gate = ownership
-                .proof_gate
-                .max(route_gate)
-                .max(runtime.proof_gate)
-                .max(linked_gate);
+            let local_trace = self
+                .local_seat
+                .as_ref()
+                .map(|local_seat| local_seat.keyboard_trace())
+                .unwrap_or_default();
+            let keyboard_ready = linked_keyboard_ready;
+            let first_report = linked_first_report;
+            let first_byte = local_trace.backend_read_bytes != 0
+                || local_trace.accepted_bytes != 0
+                || local_trace.echoed_bytes != 0;
+            let mut proof_gate = linked_gate;
+            if linked_controller_ready {
+                proof_gate = proof_gate.max(3);
+            }
             if keyboard_ready {
                 proof_gate = proof_gate.max(8);
             }
@@ -5279,10 +4902,10 @@ where
                 "keyboard-first-byte"
             } else if linked_detail != 0 {
                 Self::usb_runtime_blocker_for_linked_detail(linked_detail)
-            } else if ownership.blocker != "none" {
-                ownership.blocker
+            } else if let Some(progress) = linked_progress {
+                Self::usb_runtime_blocker_for_progress_phase(progress.phase)
             } else {
-                "insufficient-cached-proof"
+                "linked-runtime-no-detail"
             };
             let next_action = if proof_gate >= 10 {
                 "acceptance-complete"
@@ -5292,50 +4915,46 @@ where
                 "inspect-hid-report-to-console-byte-path"
             } else if linked_detail != 0 {
                 Self::usb_runtime_next_action_for_linked_detail(linked_detail)
-            } else if ownership.blocker != "none" {
-                ownership.next_step
+            } else if let Some(progress) = linked_progress {
+                Self::usb_runtime_next_action_for_progress_phase(progress.phase)
             } else {
-                "capture-linked-runtime-detail"
+                "wait-linked-runtime-init"
             };
-            let route_progress = route.map_or("unavailable", |status| status.progress);
-            let route_outcome = route.map_or("unavailable", |status| status.outcome);
-            let connected_mask = route.map_or(0, |status| status.connected_mask);
-            let event_candidate_mask = route.map_or(0, |status| status.event_candidate_mask);
-            let command_probe = route.map_or("unavailable", |status| status.command_probe);
-            let controller_gate = route.map_or("unavailable", |status| status.controller_gate);
-            let diag_stage = route.and_then(|status| status.diag_stage).unwrap_or(0);
+            if let Some(progress) = linked_progress {
+                let progress_line = format_message(format_args!(
+                    "usb: diag linked_runtime_progress marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} gate={} blocker={} next_action={}",
+                    Self::yes_no(progress.marker_valid),
+                    progress.sequence,
+                    progress.phase,
+                    progress.phase_name,
+                    progress.aux0,
+                    Self::usb_runtime_gate_for_progress_phase(progress.phase),
+                    Self::usb_runtime_blocker_for_progress_phase(progress.phase),
+                    Self::usb_runtime_next_action_for_progress_phase(progress.phase),
+                ));
+                self.emit_console_line(progress_line.as_str());
+            }
 
             self.emit_usb_gate_line(
                 1,
                 "hal-resources",
                 Self::usb_startup_gate_status(1, proof_gate, failing_gate),
                 format_args!(
-                    "ownership_gate={} cfg={} cmd={} bar0={} mailbox={}",
-                    ownership.proof_gate,
-                    if ownership.cfg_replay_ready {
-                        "yes"
-                    } else {
-                        "no"
-                    },
-                    if ownership.command_ready { "yes" } else { "no" },
-                    Self::format_optional_usize_hex(ownership.bar0),
-                    ownership.mailbox_reset_state,
+                    "owner=driver-task linked_controller={} detail=0x{:04x}",
+                    Self::yes_no(linked_controller_ready),
+                    linked_detail,
                 ),
-                if ownership.proof_gate >= 1 {
-                    "pcie-vl805"
-                } else {
-                    ownership.next_step
-                },
+                "pcie-vl805",
             );
             self.emit_usb_gate_line(
                 2,
                 "pcie-vl805",
                 Self::usb_startup_gate_status(2, proof_gate, failing_gate),
                 format_args!(
-                    "backend_attached={} command_probe={} controller_gate={}",
+                    "backend_attached={} linked_controller={} runtime_result=0x{:08x}",
                     Self::yes_no(backend_attached),
-                    command_probe,
-                    controller_gate,
+                    Self::yes_no(linked_controller_ready),
+                    linked_result,
                 ),
                 "xhci-operational",
             );
@@ -5344,8 +4963,8 @@ where
                 "xhci-operational",
                 Self::usb_startup_gate_status(3, proof_gate, failing_gate),
                 format_args!(
-                    "route_progress={} route_outcome={} diag_stage=0x{:04x}",
-                    route_progress, route_outcome, diag_stage,
+                    "linked_detail=0x{:04x} linked_gate={}",
+                    linked_detail, linked_gate,
                 ),
                 "command-event-rings",
             );
@@ -5368,8 +4987,8 @@ where
                 "root-port-connected",
                 Self::usb_startup_gate_status(5, proof_gate, failing_gate),
                 format_args!(
-                    "connected_mask=0x{:04x} event_candidate_mask=0x{:04x}",
-                    connected_mask, event_candidate_mask,
+                    "linked_detail=0x{:04x} result=0x{:08x}",
+                    linked_detail, linked_result,
                 ),
                 "device-addressed",
             );
@@ -5384,10 +5003,7 @@ where
                 7,
                 "config-and-hid-descriptors",
                 Self::usb_startup_gate_status(7, proof_gate, failing_gate),
-                format_args!(
-                    "linked_detail=0x{:04x} route_progress={}",
-                    linked_detail, route_progress
-                ),
+                format_args!("linked_detail=0x{:04x}", linked_detail),
                 "keyboard-ready",
             );
             self.emit_usb_gate_line(
@@ -5395,8 +5011,7 @@ where
                 "keyboard-ready",
                 Self::usb_startup_gate_status(8, proof_gate, failing_gate),
                 format_args!(
-                    "runtime={} linked={} polling={}",
-                    Self::yes_no(runtime.keyboard_ready),
+                    "linked={} polling={}",
                     Self::yes_no(linked_keyboard_ready),
                     if polling_enabled {
                         "enabled"
@@ -5426,15 +5041,9 @@ where
                 format_args!(
                     "first_byte={} backend_bytes={} accepted={} echoed={}",
                     Self::yes_no(first_byte),
-                    self.local_seat.as_ref().map_or(0, |local_seat| local_seat
-                        .keyboard_trace()
-                        .backend_read_bytes),
-                    self.local_seat
-                        .as_ref()
-                        .map_or(0, |local_seat| local_seat.keyboard_trace().accepted_bytes),
-                    self.local_seat
-                        .as_ref()
-                        .map_or(0, |local_seat| local_seat.keyboard_trace().echoed_bytes),
+                    local_trace.backend_read_bytes,
+                    local_trace.accepted_bytes,
+                    local_trace.echoed_bytes,
                 ),
                 "acceptance-complete",
             );
@@ -5588,7 +5197,11 @@ where
     const fn wifi_command_supports_driver_task_snapshot(command: WifiDebugCommand) -> bool {
         matches!(
             command,
-            WifiDebugCommand::DumpState | WifiDebugCommand::Diag | WifiDebugCommand::ProbeHt
+            WifiDebugCommand::DumpState
+                | WifiDebugCommand::Diag
+                | WifiDebugCommand::ProbeHt
+                | WifiDebugCommand::LoadFirmware
+                | WifiDebugCommand::Retry
         )
     }
 
@@ -5604,10 +5217,15 @@ where
             return false;
         }
         let fault = crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status();
-        if source == "debug-handle-unavailable" && self.net_unavailable_detail.is_none() {
+        let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
+        if source == "debug-handle-unavailable"
+            && self.net_unavailable_detail.is_none()
+            && fault.is_none()
+            && sdio_status.is_none()
+        {
             return false;
         }
-        if self.net_unavailable_detail.is_none() && fault.is_none() {
+        if self.net_unavailable_detail.is_none() && fault.is_none() && sdio_status.is_none() {
             return false;
         }
 
@@ -6231,6 +5849,7 @@ where
             firmware_trace,
             control_trace,
             fault,
+            None,
             "snapshot",
         );
     }
@@ -6244,7 +5863,16 @@ where
         self.emit_console_line(
             "wifi: diag recorder=startup-blackbox mode=passive source=driver-task",
         );
-        self.emit_wifi_startup_gates_from_evidence(None, None, None, fault, source);
+        let sdio_runtime_status =
+            crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
+        self.emit_wifi_startup_gates_from_evidence(
+            None,
+            None,
+            None,
+            fault,
+            sdio_runtime_status,
+            source,
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -6254,9 +5882,19 @@ where
         firmware_trace: Option<WifiFirmwareContractTrace>,
         control_trace: Option<WifiControlPlaneTrace>,
         fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+        sdio_runtime_status: Option<crate::drivers::driver_task_net::SdioRuntimeReplayStatus>,
         source: &str,
     ) {
-        let fault_gate: Option<u8> = fault.map(Self::wifi_runtime_fault_gate);
+        let cyw43_fault_gate: Option<u8> = fault.map(Self::wifi_runtime_fault_gate);
+        let sdio_replay_gate: Option<u8> =
+            sdio_runtime_status.and_then(Self::wifi_sdio_runtime_replay_gate);
+        let sdio_runtime_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
+            crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+        );
+        let sdio_progress_gate = sdio_runtime_progress
+            .and_then(|progress| Self::wifi_sdio_runtime_progress_gate(progress.phase));
+        let driver_task_gate: Option<u8> =
+            cyw43_fault_gate.or(sdio_replay_gate).or(sdio_progress_gate);
         let power_ready = snapshot.is_some_and(|snapshot| {
             matches!(snapshot.power_state, WifiPowerState::On)
                 && matches!(snapshot.reset_state, WifiResetState::Deasserted)
@@ -6314,30 +5952,50 @@ where
             f1_ready,
             ht_ready,
             backplane_ready,
-            firmware_uploaded && fault_gate != Some(6),
+            firmware_uploaded && cyw43_fault_gate != Some(6),
             f2_enabled && f2_ready,
-            channel_ready && fault_gate.is_none(),
+            channel_ready && cyw43_fault_gate.is_none(),
             dhcp_pass,
             network_ready,
         );
-        let failing_gate: u8 = if let Some(gate) = fault_gate {
+        let failing_gate: u8 = if let Some(gate) = driver_task_gate {
             gate
         } else if proof_gate >= 10 {
             0
         } else {
             proof_gate.saturating_add(1).max(1)
         };
-        let reported_proof_gate: u8 = if let Some(gate) = fault_gate {
+        let reported_proof_gate: u8 = if let Some(gate) = driver_task_gate {
             proof_gate.max(gate.saturating_sub(1))
         } else {
             proof_gate
         };
-        let active_blocker = fault
-            .map(|fault| fault.reason)
-            .unwrap_or_else(|| Self::wifi_startup_blocker_for_gate(failing_gate, exact_error));
-        let next_action = fault
-            .map(Self::wifi_runtime_fault_next_action)
-            .unwrap_or_else(|| Self::wifi_startup_next_action_for_gate(failing_gate, exact_error));
+        let active_blocker = if let Some(fault) = fault {
+            fault.reason
+        } else if let Some(status) = sdio_runtime_status {
+            if sdio_replay_gate.is_some() {
+                Self::wifi_sdio_runtime_replay_blocker(status)
+            } else {
+                Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
+            }
+        } else if let Some(progress) = sdio_runtime_progress {
+            Self::wifi_sdio_runtime_progress_blocker(progress.phase)
+        } else {
+            Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
+        };
+        let next_action = if let Some(fault) = fault {
+            Self::wifi_runtime_fault_next_action(fault)
+        } else if let Some(status) = sdio_runtime_status {
+            if sdio_replay_gate.is_some() {
+                Self::wifi_sdio_runtime_replay_next_action(status)
+            } else {
+                Self::wifi_startup_next_action_for_gate(failing_gate, exact_error)
+            }
+        } else if let Some(progress) = sdio_runtime_progress {
+            Self::wifi_sdio_runtime_progress_next_action(progress.phase)
+        } else {
+            Self::wifi_startup_next_action_for_gate(failing_gate, exact_error)
+        };
         let gate1_power = if let Some(snapshot) = snapshot {
             Self::wifi_power_label(snapshot.power_state)
         } else if fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready) {
@@ -6364,9 +6022,39 @@ where
                 "stage={} detail=0x{:04x} result=0x{:08x}",
                 fault.stage, fault.detail, fault.result,
             ))
+        } else if let Some(status) = sdio_runtime_status {
+            format_message(format_args!(
+                "stage={} status={} phase={} phase_name={} marker_valid={} source=linked-runtime",
+                status.stage,
+                status.status,
+                sdio_runtime_progress.map_or(0, |progress| progress.phase),
+                sdio_runtime_progress.map_or("none", |progress| progress.phase_name),
+                sdio_runtime_progress.map_or("no", |progress| Self::yes_no(progress.marker_valid)),
+            ))
+        } else if let Some(progress) = sdio_runtime_progress {
+            format_message(format_args!(
+                "stage=engine-init status=progress-only phase={} phase_name={} marker_valid={} source=linked-runtime",
+                progress.phase,
+                progress.phase_name,
+                Self::yes_no(progress.marker_valid),
+            ))
         } else {
             format_message(format_args!("card=unknown rca=0x0000 ocr=0x00000000"))
         };
+        if let Some(progress) = sdio_runtime_progress {
+            let progress_line = format_message(format_args!(
+                "wifi: sdio linked_runtime_progress marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} gate={} blocker={} next_action={}",
+                Self::yes_no(progress.marker_valid),
+                progress.sequence,
+                progress.phase,
+                progress.phase_name,
+                progress.aux0,
+                Self::wifi_sdio_runtime_progress_gate(progress.phase).unwrap_or(0),
+                Self::wifi_sdio_runtime_progress_blocker(progress.phase),
+                Self::wifi_sdio_runtime_progress_next_action(progress.phase),
+            ));
+            self.emit_console_line(progress_line.as_str());
+        }
 
         self.emit_wifi_gate_line(
             1,
@@ -6657,6 +6345,227 @@ where
             return 6;
         }
         Self::wifi_cyw43_fault_gate(fault.detail)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_sdio_runtime_replay_gate(
+        status: crate::drivers::driver_task_net::SdioRuntimeReplayStatus,
+    ) -> Option<u8> {
+        if matches!(status.status, "ready" | "preserved-ready") {
+            return None;
+        }
+        match status.stage {
+            "descriptor-replay" => Some(1),
+            "engine-init" | "owner-state" | "sdio-card-init-restart" => Some(2),
+            "sdio-cmd0-go-idle"
+            | "sdio-cmd5-ocr"
+            | "sdio-cmd5-ready"
+            | "sdio-cmd3-rca"
+            | "sdio-cmd7-select"
+            | "sdio-cmd7-select-pre-recover"
+            | "sdio-cmd7-select-host-recover"
+            | "sdio-cmd7-select-r1-fallback"
+            | "sdio-cmd7-select-r1-host-recover"
+            | "sdio-card-init-restart-host-recover" => Some(2),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_sdio_runtime_replay_blocker(
+        status: crate::drivers::driver_task_net::SdioRuntimeReplayStatus,
+    ) -> &'static str {
+        if status.stage == "engine-init" && status.status == "no-reply" {
+            return "sdio-engine-init-no-reply";
+        }
+        if status.stage == "descriptor-replay" && status.status == "pending" {
+            return "sdio-descriptor-replay-pending";
+        }
+        if status.stage == "owner-state" && status.status == "descriptor-rejected" {
+            return "sdio-owner-state-descriptor-rejected";
+        }
+        match status.stage {
+            "descriptor-replay" => "sdio-descriptor-replay",
+            "engine-init" => "sdio-engine-init",
+            "owner-state" => "sdio-owner-state",
+            "sdio-card-init-restart" => "sdio-card-init-restart",
+            _ => "sdio-linked-runtime-replay",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_sdio_runtime_replay_next_action(
+        status: crate::drivers::driver_task_net::SdioRuntimeReplayStatus,
+    ) -> &'static str {
+        match status.stage {
+            "descriptor-replay" => "verify-linked-sdio-runtime-descriptor-replay",
+            "engine-init" => "inspect-linked-sdio-runtime-engine-init-dispatch",
+            "owner-state" => "verify-linked-sdio-owner-state-descriptor",
+            "sdio-card-init-restart" => "replay-linked-sdio-card-init-sequence",
+            _ => "inspect-linked-sdio-runtime-replay-status",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_sdio_runtime_progress_gate(phase: u32) -> Option<u8> {
+        match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => Some(2),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_sdio_runtime_progress_blocker(phase: u32) -> &'static str {
+        match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
+                "sdio-engine-init-descriptor-ready-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN => {
+                "sdio-engine-init-resource-check-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED => {
+                "sdio-engine-init-resource-check-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID => {
+                "sdio-resource-descriptor-invalid"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH => {
+                "sdio-resource-hot-path-mismatch"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING => {
+                "sdio-resource-sdhci-mmio-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING => {
+                "sdio-resource-dma-arena-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING => {
+                "sdio-resource-shared-pages-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING => {
+                "sdio-resource-bus-link-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT => {
+                "sdio-resource-forbidden-window-present"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY => {
+                "sdio-engine-init-resource-subcheck-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
+                "sdio-engine-init-hardware-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN => "sdio-reset-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY => "sdio-power-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY => "sdio-clock-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => "sdio-card-select-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED => {
+                "sdio-engine-init-failed"
+            }
+            _ => "sdio-linked-runtime-progress-no-reply",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_sdio_runtime_progress_next_action(phase: u32) -> &'static str {
+        match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
+                "inspect-linked-sdio-runtime-resource-check"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN => {
+                "inspect-linked-sdio-descriptor-resource-scan"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED => {
+                "inspect-sdio-runtime-init-descriptor-mmio-range"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID => {
+                "inspect-sdio-runtime-init-descriptor-header"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH => {
+                "inspect-sdio-runtime-hot-path-and-role-bit"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING => {
+                "inspect-sdio-sdhci-mmio-resource-range"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING => {
+                "inspect-sdio-dma-resource-range"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING => {
+                "inspect-sdio-shared-page-resource-range"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING => {
+                "inspect-sdio-owner-bus-link"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT => {
+                "inspect-sdio-resource-authority-window"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY => {
+                "inspect-next-sdio-resource-subcheck"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
+                "inspect-sdhci-reset-first-mmio-access"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN => {
+                "inspect-sdhci-reset-completion-loop"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY => {
+                "inspect-sdhci-clock-enable-loop"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY => {
+                "inspect-sdhci-command-inhibit-and-card-detect"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => {
+                "replay-linked-sdio-card-init-sequence"
+            }
+            _ => "inspect-linked-sdio-runtime-progress",
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -11177,7 +11086,9 @@ mod tests {
         let rendered = String::from_utf8(transcript.into_iter().collect())
             .expect("serial output must be utf8");
         assert!(
-            rendered.contains("[smp] activity begin source=userspace benchmark=off hdmi=mirrored"),
+            rendered.contains(
+                "[smp] activity begin source=userspace benchmark=off hdmi=high-impact-only"
+            ),
             "{rendered}"
         );
         assert!(
@@ -11212,8 +11123,9 @@ mod tests {
         drop(pump);
 
         let mirrored = local_seat.mirrored_lines_snapshot();
-        assert!(mirrored.iter().any(|line| line
-            .contains("[smp] activity begin source=userspace benchmark=off hdmi=mirrored")));
+        assert!(mirrored.iter().any(|line| line.contains(
+            "[smp] activity begin source=userspace benchmark=off hdmi=high-impact-only"
+        )));
         assert!(mirrored
             .iter()
             .any(|line| line.contains("[smp] activity end")));
@@ -12865,16 +12777,6 @@ mod tests {
         assert!(serial_chunk_bytes <= crate::serial::DEFAULT_TX_CAPACITY / 2);
     }
 
-    #[cfg(all(feature = "kernel", feature = "usb"))]
-    #[test]
-    fn pi4_hdmi_progress_refresh_contract_is_rate_limited() {
-        let (usb_tick_ms, wifi_loop_tick_loops, wifi_emit_interval_ticks) =
-            crate::local_seat_pi4::hdmi_progress_refresh_contract_for_test();
-
-        assert!((5_000..=10_000).contains(&usb_tick_ms));
-        assert!(wifi_loop_tick_loops * wifi_emit_interval_ticks >= 64_000_000);
-    }
-
     #[cfg(feature = "kernel")]
     #[test]
     fn usb_runtime_step_labels_keep_gate9_distinct_from_online() {
@@ -13076,6 +12978,28 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_startup_gate_status(7, 1, 6),
             "blocked"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_sdio_replay_no_reply_reports_linked_runtime_blocker() {
+        let status = crate::drivers::driver_task_net::SdioRuntimeReplayStatus {
+            stage: "engine-init",
+            status: "no-reply",
+        };
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_replay_gate(status),
+            Some(2)
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_replay_blocker(status),
+            "sdio-engine-init-no-reply"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_replay_next_action(status),
+            "inspect-linked-sdio-runtime-engine-init-dispatch"
         );
     }
 
@@ -13627,6 +13551,100 @@ mod tests {
         assert_eq!(wifi.calls.as_slice(), &["probe-ht"]);
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_load_fw_reports_runtime_required_driver_task_snapshot() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut cause = HeaplessString::<192>::new();
+        let _ = cause.push_str("sdio-host driver-task runtime init failed");
+        let mut wifi = FakeWifiDebug::new();
+        wifi.runtime_required = true;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network_unavailable_detail(Some(cause))
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi load-fw\n");
+        for _ in 0..8 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=sdio-host driver-task runtime init failed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: debug subcommand=load-fw action=complete profile=stateful mode=one-shot result=ok source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=load-fw scope=serial-local source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+        assert_eq!(wifi.calls.as_slice(), &["load-fw"]);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_retry_reports_runtime_required_driver_task_snapshot() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut cause = HeaplessString::<192>::new();
+        let _ = cause.push_str("sdio-host driver-task runtime init failed");
+        let mut wifi = FakeWifiDebug::new();
+        wifi.runtime_required = true;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network_unavailable_detail(Some(cause))
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi retry\n");
+        for _ in 0..8 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=sdio-host driver-task runtime init failed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: debug subcommand=retry action=complete profile=stateful mode=one-shot result=ok source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=retry scope=serial-local source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+        assert_eq!(wifi.calls.as_slice(), &["retry"]);
+    }
+
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_wifi_diag_unavailable_returns_error_and_prompt() {
@@ -13846,8 +13864,9 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered
-                .contains("usb: diag action=probe-skipped reason=no-live-mmio use=usb-probe-kbd"),
+            rendered.contains(
+                "usb: diag action=probe-skipped reason=linked-runtime-only use=usb-status"
+            ),
             "{rendered}"
         );
         assert!(
@@ -13911,99 +13930,6 @@ mod tests {
             "{rendered}"
         );
         assert!(rendered.contains("cohesix> "), "{rendered}");
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn usb_ownership_publish_guard_reports_command_and_fresh_ownership_gate() {
-        type TestPump<'a> = EventPump<
-            'a,
-            LoopbackSerial<16>,
-            TestTimer,
-            NullIpc,
-            TicketTable<4>,
-            16,
-            16,
-            DEFAULT_LINE_CAPACITY,
-        >;
-
-        assert_eq!(
-            TestPump::usb_ownership_publish_guard(true, "allowed"),
-            "allow-runtime-publish"
-        );
-        assert_eq!(
-            TestPump::usb_ownership_publish_guard(false, "allowed"),
-            "block-dcbaap-static-command"
-        );
-        assert_eq!(
-            TestPump::usb_ownership_publish_guard(true, "blocked"),
-            "block-unproven-ownership"
-        );
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn usb_ownership_proof_labels_replay_separately_from_live_proof() {
-        type TestPump<'a> = EventPump<
-            'a,
-            LoopbackSerial<16>,
-            TestTimer,
-            NullIpc,
-            TicketTable<4>,
-            16,
-            16,
-            DEFAULT_LINE_CAPACITY,
-        >;
-
-        assert_eq!(
-            TestPump::usb_ownership_cfg_live_proven("bcm2711-ext-cfg"),
-            "no"
-        );
-        assert_eq!(
-            TestPump::usb_ownership_command_live_proven("linux-capture-static"),
-            "no"
-        );
-        assert_eq!(
-            TestPump::usb_ownership_cfg_live_proven("hal-ext-cfg-proof"),
-            "yes"
-        );
-        assert_eq!(
-            TestPump::usb_ownership_command_live_proven("hal-ext-cfg-proof"),
-            "yes"
-        );
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn usb_route_publish_guard_matches_known_runtime_origins() {
-        type TestPump<'a> = EventPump<
-            'a,
-            LoopbackSerial<16>,
-            TestTimer,
-            NullIpc,
-            TicketTable<4>,
-            16,
-            16,
-            DEFAULT_LINE_CAPACITY,
-        >;
-
-        assert_eq!(
-            TestPump::usb_publish_guard_for_origin("reset-owned-stop-seed"),
-            "block-legacy-handoff"
-        );
-        assert_eq!(
-            TestPump::usb_publish_guard_for_origin("stop-state-resetless-reinit"),
-            "rings-post-run"
-        );
-        assert_eq!(
-            TestPump::usb_publish_guard_for_origin("mailbox-reset-complete"),
-            "rings-pre-run"
-        );
-        assert_eq!(
-            TestPump::usb_publish_guard_for_origin("uboot-fresh-init"),
-            "block-legacy-handoff"
-        );
-        assert_eq!(TestPump::usb_publish_guard_for_origin("unknown"), "unknown");
     }
 
     #[cfg(feature = "kernel")]
@@ -14829,69 +14755,6 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::usb_capture_verdict(true, true, Some("usbcmd-run-store-wedged"),),
             ("run-transition-edge", "usbcmd-run")
-        );
-    }
-
-    #[cfg(all(feature = "kernel", feature = "usb", target_arch = "aarch64"))]
-    #[test]
-    fn usb_route_contract_does_not_report_completed_route_as_blocked() {
-        let mut route = crate::local_seat_pi4::UsbProbeRouteStatus {
-            route: "trusted-high-bar-mailbox-reset",
-            pathway_idx: 1,
-            strategy_idx: 1,
-            strategy_count: 1,
-            policy: "platform-reset-complete",
-            origin: "mailbox-reset-complete",
-            handoff: "platform-reset-complete",
-            seed: "none",
-            halt_guard: "skip-live-halt-read",
-            current_step: "keyboard-ready",
-            next_step: "none",
-            proof_gate: 8,
-            progress: "keyboard-ready",
-            outcome: "keyboard-ready",
-            prefer_high: false,
-            pcie_dma_window: true,
-            poll_only: true,
-            port: Some(1),
-            connected_mask: 0x0001,
-            event_candidate_mask: 0,
-            command_probe: "enable-slot-ok",
-            detect_passes: 1,
-            slow_recheck: false,
-            irq27_bound: false,
-            bridge_irq_bound: true,
-            intx_irq_bound: true,
-            msi_irq_bound: false,
-            controller_gate: "none",
-            diag_fresh: true,
-            diag_stage: None,
-            diag_tag: None,
-            diag_exact: None,
-            diag_a: 0,
-            diag_b: 0,
-            diag_c: 0,
-            diag_value_labels: None,
-        };
-
-        assert_eq!(KernelConsoleTestPump::usb_contract_blocker(&route), "none");
-        assert_eq!(
-            KernelConsoleTestPump::usb_route_capture_verdict(&route),
-            Some(("keyboard-route-ready", "none"))
-        );
-
-        route.next_step = "safe-port-state";
-        route.proof_gate = 4;
-        route.current_step = "command-ring";
-        route.progress = "controller-ready";
-
-        assert_eq!(
-            KernelConsoleTestPump::usb_contract_blocker(&route),
-            "safe-port-state"
-        );
-        assert_eq!(
-            KernelConsoleTestPump::usb_route_capture_verdict(&route),
-            Some(("command-ring-ready", "safe-port-state"))
         );
     }
 

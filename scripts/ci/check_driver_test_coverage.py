@@ -32,6 +32,18 @@ def require_tokens(errors: list[str], rel_path: str, tokens: list[str]) -> None:
             errors.append(f"{rel_path}: missing `{token}`")
 
 
+def require_absent_tokens(errors: list[str], rel_path: str, tokens: list[str]) -> None:
+    text = read_text(rel_path)
+    for token in tokens:
+        if token in text:
+            errors.append(f"{rel_path}: forbidden retired driver token `{token}`")
+
+
+def require_path_absent(errors: list[str], rel_path: str) -> None:
+    if (ROOT / rel_path).exists():
+        errors.append(f"{rel_path}: retired root-owned driver path must be absent")
+
+
 def require_feature(
     errors: list[str], features: dict[str, list[str]], name: str, required: set[str]
 ) -> None:
@@ -111,10 +123,11 @@ def check_feature_bundles(errors: list[str]) -> None:
     )
     require_feature(errors, features, "driver-tests-qemu", {"release-qemu"})
     require_feature(errors, features, "driver-tests-pi4", {"release-pi4"})
-    require_feature(errors, features, "usb", {"dep:cohesix-usb"})
-    cohesix_usb = cargo["dependencies"].get("cohesix-usb", {})
-    if not isinstance(cohesix_usb, dict) or not cohesix_usb.get("optional"):
-        errors.append("apps/root-task/Cargo.toml: `cohesix-usb` must stay optional")
+    retired_usb_dependency = "cohesix" + "-usb"
+    if f"dep:{retired_usb_dependency}" in set(features.get("usb", [])):
+        errors.append("apps/root-task/Cargo.toml: `usb` must not select the retired root-owned USB crate")
+    if retired_usb_dependency in cargo["dependencies"]:
+        errors.append("apps/root-task/Cargo.toml: retired root-owned USB crate must not be a dependency")
     if f"dep:{old_usb_dependency}" in set(features.get("usb", [])):
         errors.append("apps/root-task/Cargo.toml: old USB package must not be selected")
     if old_usb_dependency in cargo["dependencies"]:
@@ -126,6 +139,44 @@ def check_feature_bundles(errors: list[str]) -> None:
 def main() -> int:
     errors: list[str] = []
     check_feature_bundles(errors)
+    require_path_absent(errors, "apps/root-task/src/local_seat_pi4.rs")
+    require_path_absent(errors, "crates/cohesix-usb")
+    require_absent_tokens(
+        errors,
+        "Cargo.toml",
+        [
+            "crates/cohesix-usb",
+            "usb-oxide",
+        ],
+    )
+    require_absent_tokens(
+        errors,
+        "apps/root-task/src/local_seat.rs",
+        [
+            "LocalSeatUsbOwnerRuntimeRecord",
+            "LocalSeatHdmiOwnerRuntimeRecord",
+            "root-runtime-pointer",
+        ],
+    )
+    require_absent_tokens(
+        errors,
+        "apps/root-task/src/hal/pi4_wifi.rs",
+        [
+            "pub struct Pi4WifiState",
+            "Cyw43HostEapolRxSource",
+        ],
+    )
+    require_absent_tokens(
+        errors,
+        "apps/root-task/src/hal/mod.rs",
+        [
+            "fn wifi_set_power",
+            "fn wifi_set_reset",
+            "fn sdio_reset_host",
+            "fn sdio_io_direct_read",
+            "fn sdio_io_extended",
+        ],
+    )
 
     require_tokens(
         errors,
@@ -152,7 +203,6 @@ def main() -> int:
             "driver-tests-pi4 --lib hal::pi4_pcie",
             "driver-tests-pi4 --lib hal::pi4_wifi",
             "driver-tests-pi4 --lib local_seat::",
-            "driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::",
             "--features release-qemu",
             "--features release-pi4",
             "--features cache-maintenance --test cache_maintenance",
@@ -171,7 +221,6 @@ def main() -> int:
             "driver-tests-pi4 --lib hal::pi4_pcie",
             "driver-tests-pi4 --lib hal::pi4_wifi",
             "driver-tests-pi4 --lib local_seat::",
-            "driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::",
             "--features release-qemu",
             "--features release-pi4",
             "--features cache-maintenance --test cache_maintenance",
@@ -228,21 +277,17 @@ def main() -> int:
             "slot_paddr_enforces_bounded_qemu_virt_window",
         ],
         "apps/root-task/src/lib.rs": [
-            'feature = "usb"',
-            'any(target_os = "none", test)',
-            "mod local_seat_pi4",
+            "pub mod local_seat;",
         ],
         "apps/root-task/src/event/mod.rs": [
             "serial_input_skips_ready_network_data_poll_for_driver_task_turn",
             "serial_tx_backlog_skips_ready_network_data_poll_for_driver_task_turn",
             "local_seat_input_skips_ready_network_poll_for_keyboard_turn",
         ],
-        "apps/root-task/src/local_seat_pi4.rs": [
-            "driver_coverage_pi4_local_seat_usb_vl805_dma_contracts",
-            "pre_reset_irq_quiesce_requires_hal_source_clear_before_ack",
-            "pi4_pcie_dma_window_uses_linux_captured_bcm2711_dma_range",
-            "pi4_xhci_dma_policy_never_tries_raw_phys_after_pcie_alias",
-            "xhci_high_bar_runtime_runs_polling_only",
+        "apps/root-task/src/local_seat.rs": [
+            "local_seat_usb_init_and_enum_use_prompt_slice_only_after_prompt",
+            "linked_local_seat_usb_keyboard_ready",
+            "register_driver_task_runtime_owner_state",
         ],
         "apps/pi4-driver-runtime/src/lib.rs": [
             "genet_tx_len_status",

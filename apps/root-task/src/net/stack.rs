@@ -5719,6 +5719,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                             && completion.result != 0;
                         return self.poll_with_time(now_ms) || ring_progress;
                     }
+                    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+                        return false;
+                    }
                     return self.poll_with_time(now_ms);
                 }
                 let _ = hot_path;
@@ -5781,6 +5784,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         return self
                             .poll_budgeted_with_time(now_ms, budget)
                             .map(|root_progress| root_progress || ring_progress);
+                    }
+                    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+                        return Err(DriverServiceBudgetError::OperationsExhausted);
                     }
                     return self.poll_budgeted_with_time(now_ms, budget);
                 }

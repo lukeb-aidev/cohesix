@@ -810,10 +810,10 @@ fn pi4_pre_root_net_bootstrap_selection(
 }
 
 fn required_local_seat_probe_should_abort(
-    required: bool,
-    result: local_seat::LocalSeatKeyboardProbeResult,
+    _required: bool,
+    _result: local_seat::LocalSeatKeyboardProbeResult,
 ) -> bool {
-    required && result == local_seat::LocalSeatKeyboardProbeResult::BackendUnavailable
+    false
 }
 
 fn required_local_seat_probe_should_continue_polling(
@@ -4716,11 +4716,13 @@ fn bootstrap<P: Platform>(
             probe_result,
         ) {
             runtime.enable_backend_keyboard_polling();
-            let mut line = heapless::String::<192>::new();
+            crate::hal::driver_task::emit_boot_contract_proof();
+            let mut line = heapless::String::<256>::new();
             let _ = write!(
                 line,
-                "[local-seat] required keyboard not ready yet detail={} action=serial-shell-then-continue-polling",
-                probe_result.as_str()
+                "[local-seat] required keyboard not ready yet detail={} frontier={} action=serial-shell-then-continue-polling acceptance=red telemetry=driver-task-boot-contract",
+                probe_result.as_str(),
+                local_seat::linked_local_seat_usb_frontier_label()
             );
             console.writeln_prefixed(line.as_str());
             boot_log::force_uart_line(line.as_str());
@@ -4973,16 +4975,16 @@ fn bootstrap<P: Platform>(
                 let mut line = heapless::String::<192>::new();
                 let _ = write!(
                     line,
-                    "[net-console] deferred reason={reason} action=root-console-wait-for-wifi"
+                    "[net-console] deferred reason={reason} action=bounded-pre-root-wifi-release"
                 );
                 boot_log::force_uart_line(line.as_str());
                 console.writeln_prefixed(line.as_str());
                 boot_log::force_uart_line(
-	                    "[boot] wifi net-console deferred; root console waits for Wi-Fi readiness or terminal failure",
-	                );
+                    "[boot] wifi net-console deferred; root console uses bounded Wi-Fi release before serial shell",
+                );
                 log::info!(
-	                    "[net-console] Pi4 local-seat Wi-Fi net-console deferred to pre-root-console wait reason={reason}"
-	                );
+                    "[net-console] Pi4 local-seat Wi-Fi net-console deferred to pre-root-console wait reason={reason}"
+                );
                 let detail = pi4_local_usb_boot_wifi_defer_detail(reason);
                 (None, false, Some(detail), net_backend_label, Some(config))
             } else {
@@ -7643,7 +7645,7 @@ mod tests {
     }
 
     #[test]
-    fn required_local_seat_probe_aborts_only_for_backend_absence() {
+    fn required_local_seat_probe_never_aborts_after_backend_constructed() {
         use crate::local_seat::LocalSeatKeyboardProbeResult::{
             Attached, BackendUnavailable, DeferredUntilRootConsole, KeyboardUnavailable,
         };
@@ -7652,7 +7654,7 @@ mod tests {
             true,
             DeferredUntilRootConsole
         ));
-        assert!(super::required_local_seat_probe_should_abort(
+        assert!(!super::required_local_seat_probe_should_abort(
             true,
             BackendUnavailable
         ));
@@ -7683,7 +7685,7 @@ mod tests {
             true,
             DeferredUntilRootConsole
         ));
-        assert!(!super::required_local_seat_probe_should_continue_polling(
+        assert!(super::required_local_seat_probe_should_continue_polling(
             true,
             BackendUnavailable
         ));

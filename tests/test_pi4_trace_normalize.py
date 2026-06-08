@@ -1523,8 +1523,43 @@ def test_gate_summary_tracks_net_and_sdio_replay_blockers() -> None:
         record["SDIO_DRIVER_TASK_REPLAY_BLOCKER"]
         == "sdio-host:sdio-first-command:fault"
     )
-    assert record["WIFI_BLOCKER"] == "sdio-driver-task-replay"
+    assert record["WIFI_BLOCKER"] == "sdio-card-select"
     assert record["WIFI_REPLAY_FRONTIER"] == "sdio-driver-task-replay"
+
+
+def test_gate_summary_keeps_boot_sdio_replay_over_later_wifi_prompt_error() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=descriptor-replay blocker=ready",
+            "DRIVER_TASK_RESOURCE_INIT contract=sdio-host hot_path=sdio-host "
+            "stage=cyw43-sdio-prereq status=begin acceptance=no code=none "
+            "detail=none result=none frame_len=0",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=descriptor-replay "
+            "blocker=ready",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=engine-init "
+            "blocker=begin",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=engine-init "
+            "blocker=no-reply",
+            "DRIVER_TASK_RESOURCE_INIT contract=sdio-host hot_path=sdio-host "
+            "stage=sdio-engine-init status=no-reply acceptance=no code=none "
+            "detail=none result=none frame_len=0",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-sdio-prereq blocker=failed",
+            "wifi: debug subcommand=load-fw action=complete profile=stateful "
+            "mode=one-shot result=error error=unsupported operation: "
+            "pi4-wifi-driver-task-runtime-required",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_BLOCKER"] == "sdio-card-select"
+    assert record["WIFI_EXACT"] == "engine-init-no-reply"
+    assert record["WIFI_PHASE"] == "engine-init"
+    assert record["WIFI_BLOCKER_LINE"] == 5
 
 
 def test_gate_summary_tracks_split_sdio_command_probe_blockers() -> None:
@@ -2837,7 +2872,7 @@ def test_gate_summary_rejects_deferred_capture_after_command_proof() -> None:
             "[local-seat] xhci.diag stage=0x0110 tag=controller-init-complete",
             "[local-seat] xhci root-port sample skipped "
             "reason=platform-reset-portsc-toxic",
-            "[local-seat] xhci root-port command-probe result=enable-slot-ok",
+            "usb: linked_runtime command-probe result=enable-slot-ok",
             "[local-seat] xhci root-port deferred-capture "
             "mask=0x0001 source=pi4-linux-capture command_probe=enable-slot-ok",
             "[local-seat] usb root-enum deferred-port "
@@ -4397,12 +4432,27 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         assert normalizer.normalize_wifi_blocker(raw) == expected
 
 
-def test_gate_summary_tracks_usb_command_ring_ready_success() -> None:
+def test_gate_summary_rejects_legacy_local_seat_command_probe_success() -> None:
     events = normalizer.parse_events(
         [
             "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
             "usb: contract current=controller-ready expected=command-ring-recovery",
             "[local-seat] xhci root-port command-probe result=enable-slot-ok",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 3
+    assert gates.usb_blocker == "cmd-event-ring-timeout"
+
+
+def test_gate_summary_tracks_linked_runtime_command_ring_ready_success() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: ownership_contract cfg_window=mapped cfg_source=runtime-mapped",
+            "usb: contract current=controller-ready expected=command-ring-recovery",
+            "usb: linked_runtime command-probe result=enable-slot-ok",
         ]
     )
 

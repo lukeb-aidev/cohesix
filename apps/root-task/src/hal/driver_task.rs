@@ -25,10 +25,47 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
     DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
     DRIVER_RUNTIME_RING_PROGRESS_BYTES, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
-    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE,
-    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED, DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
-    DRIVER_RUNTIME_RING_PROGRESS_OFFSET, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
-    DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE, DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED, DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+    DRIVER_RUNTIME_RING_PROGRESS_OFFSET, DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FRAMEBUFFER_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FRAMEBUFFER_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -491,9 +528,11 @@ pub const fn callback_dispatch_allowed_for_profile(profile: DriverTaskRuntimePro
     }
 }
 
-/// Returns whether a root-owned compatibility hot path may run for a profile.
+/// Returns whether a root-context compatibility hot path may run for a profile.
 #[must_use]
-pub const fn root_fallback_allowed_for_profile(profile: DriverTaskRuntimeProfile) -> bool {
+pub const fn root_compatibility_service_allowed_for_profile(
+    profile: DriverTaskRuntimeProfile,
+) -> bool {
     match profile {
         DriverTaskRuntimeProfile::Pi4Hardware => false,
         DriverTaskRuntimeProfile::QemuCompatibility | DriverTaskRuntimeProfile::HostTest => true,
@@ -550,21 +589,23 @@ pub const fn steady_state_callback_dispatch_allowed(_contract: DriverTaskContrac
     callback_dispatch_allowed_for_profile(CURRENT_DRIVER_TASK_RUNTIME_PROFILE)
 }
 
-/// Current-build admission for root-owned steady-state compatibility turns.
+/// Current-build admission for root-context steady-state compatibility turns.
 #[must_use]
-pub const fn steady_state_root_fallback_allowed(_contract: DriverTaskContract) -> bool {
-    root_fallback_allowed_for_profile(CURRENT_DRIVER_TASK_RUNTIME_PROFILE)
+pub const fn steady_state_root_compatibility_service_allowed(
+    _contract: DriverTaskContract,
+) -> bool {
+    root_compatibility_service_allowed_for_profile(CURRENT_DRIVER_TASK_RUNTIME_PROFILE)
 }
 
-/// Admit and record a root-owned compatibility service turn when the current
+/// Admit and record a root-context compatibility service turn when the current
 /// profile is explicitly allowed to use one.
 ///
-/// This is the only steady-state root-fallback admission point. Physical Pi 4
+/// This is the only steady-state root-context admission point. Physical Pi 4
 /// builds return false, forcing the caller to fail closed until the relevant
 /// hardware path is serviced by a ring-backed driver task.
 #[cfg(feature = "kernel")]
 pub fn admit_root_task_compatibility_service(contract: DriverTaskContract) -> bool {
-    if !steady_state_root_fallback_allowed(contract) {
+    if !steady_state_root_compatibility_service_allowed(contract) {
         return false;
     }
     record_driver_task_service(contract, DriverTaskIsolation::RootTaskCompatibility);
@@ -1346,29 +1387,6 @@ static HDMI_RUNTIME_FRAMEBUFFER_WIDTH: AtomicUsize = AtomicUsize::new(0);
 static HDMI_RUNTIME_FRAMEBUFFER_HEIGHT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(feature = "kernel")]
 static HDMI_RUNTIME_FRAMEBUFFER_PITCH: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "kernel")]
-static HDMI_RUNTIME_ROOT_FRAMEBUFFER_VADDR: AtomicUsize = AtomicUsize::new(0);
-#[cfg(feature = "kernel")]
-static HDMI_RUNTIME_ROOT_FRAMEBUFFER_MAP_LEN: AtomicUsize = AtomicUsize::new(0);
-
-/// Root diagnostic framebuffer mapping published while HDMI ownership is still
-/// being proved by the isolated runtime.
-#[cfg(feature = "kernel")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct HdmiRuntimeRootFramebufferMapping {
-    /// Physical framebuffer base reported by firmware/DT.
-    pub paddr: usize,
-    /// Root-task virtual address of the visible framebuffer start.
-    pub vaddr: usize,
-    /// Visible width in pixels.
-    pub width: usize,
-    /// Visible height in pixels.
-    pub height: usize,
-    /// Pitch in bytes.
-    pub pitch: usize,
-    /// Total mapped byte span including the first-page offset.
-    pub map_len: usize,
-}
 
 /// Publish the boot payload that may contain linked Pi 4 driver runtime images.
 #[cfg(feature = "kernel")]
@@ -1391,14 +1409,6 @@ pub fn publish_hdmi_runtime_framebuffer_hint(
     HDMI_RUNTIME_FRAMEBUFFER_PITCH.store(pitch, Ordering::Release);
 }
 
-/// Publish a root diagnostic mapping for the framebuffer pages also copied into
-/// the HDMI driver runtime VSpace.
-#[cfg(feature = "kernel")]
-pub fn publish_hdmi_runtime_root_framebuffer_mapping(vaddr: usize, map_len: usize) {
-    HDMI_RUNTIME_ROOT_FRAMEBUFFER_VADDR.store(vaddr, Ordering::Release);
-    HDMI_RUNTIME_ROOT_FRAMEBUFFER_MAP_LEN.store(map_len, Ordering::Release);
-}
-
 /// Return the bootloader framebuffer metadata staged for the linked HDMI runtime.
 #[cfg(feature = "kernel")]
 pub fn hdmi_runtime_framebuffer_hint() -> Option<DriverRuntimeFramebufferDescriptor> {
@@ -1418,29 +1428,6 @@ pub fn hdmi_runtime_framebuffer_hint() -> Option<DriverRuntimeFramebufferDescrip
         format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
     };
     descriptor.valid().then_some(descriptor)
-}
-
-/// Return the root diagnostic framebuffer mapping, if HAL published one.
-#[cfg(feature = "kernel")]
-#[must_use]
-pub fn hdmi_runtime_root_framebuffer_mapping() -> Option<HdmiRuntimeRootFramebufferMapping> {
-    let paddr = HDMI_RUNTIME_FRAMEBUFFER_PADDR.load(Ordering::Acquire);
-    let vaddr = HDMI_RUNTIME_ROOT_FRAMEBUFFER_VADDR.load(Ordering::Acquire);
-    let width = HDMI_RUNTIME_FRAMEBUFFER_WIDTH.load(Ordering::Acquire);
-    let height = HDMI_RUNTIME_FRAMEBUFFER_HEIGHT.load(Ordering::Acquire);
-    let pitch = HDMI_RUNTIME_FRAMEBUFFER_PITCH.load(Ordering::Acquire);
-    let map_len = HDMI_RUNTIME_ROOT_FRAMEBUFFER_MAP_LEN.load(Ordering::Acquire);
-    if paddr == 0 || vaddr == 0 || width == 0 || height == 0 || pitch == 0 || map_len == 0 {
-        return None;
-    }
-    Some(HdmiRuntimeRootFramebufferMapping {
-        paddr,
-        vaddr,
-        width,
-        height,
-        pitch,
-        map_len,
-    })
 }
 
 #[cfg(feature = "kernel")]
@@ -1609,8 +1596,8 @@ fn generated_runtime_image_spec_for_hot_path(
     crate::generated::driver_runtime_image_for_hot_path(hot_path.as_str())
 }
 
-fn fallback_runtime_image_spec(hot_path: DriverTaskHotPath) -> DriverTaskRuntimeImageSpec {
-    DriverTaskRuntimeImageSpec::new(hot_path, 1, 1, 0, 0, 0, true, false)
+fn missing_runtime_image_spec(hot_path: DriverTaskHotPath) -> DriverTaskRuntimeImageSpec {
+    DriverTaskRuntimeImageSpec::new(hot_path, 0, 0, 0, 0, 0, false, false)
 }
 
 fn runtime_image_spec_from_generated(
@@ -1654,7 +1641,7 @@ pub fn pi4_driver_task_runtime_image_spec(
 ) -> DriverTaskRuntimeImageSpec {
     generated_runtime_image_spec_for_hot_path(hot_path)
         .map(|generated| runtime_image_spec_from_generated(hot_path, generated))
-        .unwrap_or_else(|| fallback_runtime_image_spec(hot_path))
+        .unwrap_or_else(|| missing_runtime_image_spec(hot_path))
 }
 
 /// Returns the Pi 4 runtime-image spec for a driver-task contract when the
@@ -1776,8 +1763,9 @@ pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 /// Bounded send/yield attempts for the first linked-runtime ring handshake.
 pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
+const DRIVER_TASK_HDMI_FRAME_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
 const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
-const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
+const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS;
 const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS * 4;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
@@ -1896,6 +1884,10 @@ struct DriverTaskCommandSlot {
     request_seq: AtomicUsize,
     active: AtomicUsize,
     timeout_resumes: AtomicUsize,
+    last_progress_magic: AtomicU32,
+    last_progress_sequence: AtomicU32,
+    last_progress_phase: AtomicU32,
+    last_progress_aux0: AtomicU32,
     ring_handler: AtomicUsize,
     ring_context: AtomicUsize,
     ring_service_kind: AtomicUsize,
@@ -1941,6 +1933,10 @@ impl DriverTaskCommandSlot {
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             timeout_resumes: AtomicUsize::new(0),
+            last_progress_magic: AtomicU32::new(0),
+            last_progress_sequence: AtomicU32::new(0),
+            last_progress_phase: AtomicU32::new(0),
+            last_progress_aux0: AtomicU32::new(0),
             ring_handler: AtomicUsize::new(0),
             ring_context: AtomicUsize::new(0),
             ring_service_kind: AtomicUsize::new(DriverTaskRingServiceKind::None.as_usize()),
@@ -1970,6 +1966,36 @@ impl DriverTaskCommandSlot {
             result: AtomicUsize::new(0),
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct DriverTaskRingProgressSnapshot {
+    pub(crate) marker_valid: bool,
+    pub(crate) sequence: u32,
+    pub(crate) phase: u32,
+    pub(crate) phase_name: &'static str,
+    pub(crate) aux0: u32,
+}
+
+#[cfg(feature = "kernel")]
+fn record_driver_task_ring_progress(
+    slot: &DriverTaskCommandSlot,
+    progress: DriverTaskRingProgressRecord,
+) {
+    if progress.magic != DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+        && slot.last_progress_magic.load(Ordering::Acquire) == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+    {
+        return;
+    }
+    slot.last_progress_magic
+        .store(progress.magic, Ordering::Release);
+    slot.last_progress_sequence
+        .store(progress.sequence, Ordering::Release);
+    slot.last_progress_phase
+        .store(progress.phase, Ordering::Release);
+    slot.last_progress_aux0
+        .store(progress.aux0, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -2060,6 +2086,28 @@ fn slot_for_task_key(task_key: usize) -> Option<&'static DriverTaskCommandSlot> 
         DRIVER_TASK_KEY_PCIE_ROOT => Some(&DRIVER_TASK_SLOT_PCIE_ROOT),
         _ => None,
     }
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn latest_driver_task_ring_progress(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskRingProgressSnapshot> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let magic = slot.last_progress_magic.load(Ordering::Acquire);
+    let sequence = slot.last_progress_sequence.load(Ordering::Acquire);
+    let phase = slot.last_progress_phase.load(Ordering::Acquire);
+    let aux0 = slot.last_progress_aux0.load(Ordering::Acquire);
+    if magic == 0 && sequence == 0 && phase == 0 && aux0 == 0 {
+        return None;
+    }
+    Some(DriverTaskRingProgressSnapshot {
+        marker_valid: magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+        sequence,
+        phase,
+        phase_name: driver_task_ring_progress_phase_label(phase),
+        aux0,
+    })
 }
 
 #[cfg(feature = "kernel")]
@@ -3163,9 +3211,60 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
     match phase {
         0 => "none",
         DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED => "command-observed",
+        DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED => "command-validated",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => "engine-init-begin",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE => "engine-init-done",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED => "engine-init-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY => "runtime-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH => "runtime-mismatch",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH => "engine-init-dispatch",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER => "engine-init-enter",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH => "engine-init-aux-match",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY => "engine-init-frame-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED => {
+            "engine-init-descriptor-loaded"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => "engine-init-descriptor-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN => {
+            "engine-init-resource-check-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED => {
+            "engine-init-resource-check-failed"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID => "resource-descriptor-valid",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID => "resource-descriptor-invalid",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_READY => "resource-hot-path-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH => "resource-hot-path-mismatch",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY => "resource-totals-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING => "resource-mmio-missing",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY => "resource-mmio-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING => "resource-dma-missing",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_READY => "resource-dma-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING => "resource-shared-missing",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY => "resource-shared-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FRAMEBUFFER_MISSING => "resource-framebuffer-missing",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FRAMEBUFFER_READY => "resource-framebuffer-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING => "resource-bus-link-missing",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY => "resource-bus-link-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT => "resource-forbidden-present",
+        DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY => "resource-role-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY => "engine-init-resources-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => "engine-init-hw-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE => "engine-init-hw-done",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED => "engine-init-hw-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ => "usb-caps-read",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED => "usb-controller-halted",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE => "usb-reset-done",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY => "usb-dma-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => "usb-rings-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => "usb-run-requested",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN => "sdio-reset-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY => "sdio-power-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY => "sdio-clock-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => "sdio-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_BEGIN => "hdmi-frame-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE => "hdmi-frame-done",
+        DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED => "hdmi-frame-failed",
         _ => "unknown",
     }
 }
@@ -3233,7 +3332,6 @@ fn emit_driver_task_ring_call_abort(
 enum DriverTaskRingCommandMode {
     Steady,
     Bootstrap,
-    BootstrapCall,
     NonBlocking,
     PromptSlice,
 }
@@ -3244,7 +3342,6 @@ impl DriverTaskRingCommandMode {
         match self {
             DriverTaskRingCommandMode::Steady => "steady",
             DriverTaskRingCommandMode::Bootstrap => "bootstrap",
-            DriverTaskRingCommandMode::BootstrapCall => "bootstrap-call",
             DriverTaskRingCommandMode::NonBlocking => "nonblocking",
             DriverTaskRingCommandMode::PromptSlice => "prompt-slice",
         }
@@ -3279,7 +3376,7 @@ fn driver_task_ring_call_trace_enabled(
     }
     if matches!(
         contract.kind,
-        DriverTaskKind::Serial | DriverTaskKind::LocalSeatUsb | DriverTaskKind::HdmiText
+        DriverTaskKind::Serial | DriverTaskKind::LocalSeatUsb
     ) {
         return false;
     }
@@ -3343,10 +3440,13 @@ fn driver_task_ring_attempt_limit(
     }
     if mode == DriverTaskRingCommandMode::NonBlocking
         && command.aux0 == 0
-        && matches!(
-            contract.kind,
-            DriverTaskKind::Serial | DriverTaskKind::HdmiText
-        )
+        && matches!(contract.kind, DriverTaskKind::HdmiText)
+    {
+        return DRIVER_TASK_HDMI_FRAME_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::NonBlocking
+        && command.aux0 == 0
+        && matches!(contract.kind, DriverTaskKind::Serial)
     {
         return DRIVER_TASK_PROMPT_RING_ATTEMPTS;
     }
@@ -3389,14 +3489,31 @@ fn driver_task_ring_timeout_keep_active_limit(
     command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
 ) -> usize {
-    let keep_active = matches!(
+    if matches!(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
     ) && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
-        && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX;
-    keep_active
-        .then_some(DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT)
-        .unwrap_or(0)
+        && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX
+    {
+        DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if matches!(
+        mode,
+        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
+    ) && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
+    {
+        DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if mode == DriverTaskRingCommandMode::NonBlocking
+        && command.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX
+        && matches!(
+            contract.kind,
+            DriverTaskKind::LocalSeatUsb | DriverTaskKind::SdioHost
+        )
+    {
+        DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else {
+        0
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -3447,19 +3564,6 @@ pub fn run_driver_task_ring_command_bootstrap(
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
     run_driver_task_ring_command_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
-}
-
-/// Execute a bootstrap command through a reply rendezvous without latency proof.
-#[cfg(feature = "kernel")]
-pub fn run_driver_task_ring_command_bootstrap_call(
-    contract: DriverTaskContract,
-    command: DriverTaskCommandRecord,
-) -> Option<DriverTaskCompletionRecord> {
-    run_driver_task_ring_command_with_mode(
-        contract,
-        command,
-        DriverTaskRingCommandMode::BootstrapCall,
-    )
 }
 
 /// Execute a linked-runtime command with bounded nonblocking sends.
@@ -3650,12 +3754,9 @@ fn run_driver_task_ring_command_with_mode(
             emit_driver_task_ring_call_timeout(
                 contract, endpoint, request, command, mode, attempts,
             );
-            emit_driver_task_ring_call_progress(
-                contract,
-                request,
-                command,
-                driver_task_ring_read_progress_record(ring_root_ptr),
-            );
+            let progress = driver_task_ring_read_progress_record(ring_root_ptr);
+            record_driver_task_ring_progress(slot, progress);
+            emit_driver_task_ring_call_progress(contract, request, command, progress);
         }
     } else if physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs))
     {
@@ -3768,19 +3869,6 @@ pub fn run_driver_task_ring_service_bootstrap(
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
     run_driver_task_ring_service_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
-}
-
-/// Execute a bootstrap service turn through a reply rendezvous without latency proof.
-#[cfg(feature = "kernel")]
-pub fn run_driver_task_ring_service_bootstrap_call(
-    contract: DriverTaskContract,
-    command: DriverTaskCommandRecord,
-) -> Option<DriverTaskCompletionRecord> {
-    run_driver_task_ring_service_with_mode(
-        contract,
-        command,
-        DriverTaskRingCommandMode::BootstrapCall,
-    )
 }
 
 /// Execute one registered driver service turn through bounded nonblocking IPC.
@@ -4413,6 +4501,9 @@ impl DriverTaskContract {
     /// seL4-style priority value for this contract's scheduling class.
     #[must_use]
     pub const fn sel4_priority(self) -> u8 {
+        if matches!(self.kind, DriverTaskKind::PcieRoot) {
+            return DriverTaskClass::RealtimeInput.sel4_priority();
+        }
         self.class.sel4_priority()
     }
 
@@ -5875,7 +5966,7 @@ pub fn emit_boot_contract_proof() {
         if proof.owner_state_proof {
             "driver-owned"
         } else {
-            "root-owned"
+            "linked-runtime-owner-state-missing"
         },
         if proof.hot_path_role_mask & required_role_mask == required_role_mask
         {
@@ -6070,7 +6161,7 @@ pub fn emit_boot_contract_proof() {
         if proof.owner_state_proof {
             "driver-owned"
         } else {
-            "root-owned"
+            "linked-runtime-owner-state-missing"
         },
         proof.owner_state_hot_path_mask,
         proof.live_tcb_role_mask,
@@ -6113,6 +6204,14 @@ mod tests {
             GENET_DRIVER_TASK_CONTRACT.sel4_priority()
                 > HDMI_TEXT_DRIVER_TASK_CONTRACT.sel4_priority()
         );
+        assert_eq!(
+            PCIE_ROOT_DRIVER_TASK_CONTRACT.sel4_priority(),
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.sel4_priority()
+        );
+        assert!(
+            PCIE_ROOT_DRIVER_TASK_CONTRACT.sel4_priority()
+                > SDIO_HOST_DRIVER_TASK_CONTRACT.sel4_priority()
+        );
         assert!(
             SERIAL_DRIVER_TASK_CONTRACT.service_order()
                 < SDIO_HOST_DRIVER_TASK_CONTRACT.service_order()
@@ -6124,6 +6223,7 @@ mod tests {
 
         assert!(SERIAL_DRIVER_TASK_CONTRACT.preempts_network_data());
         assert!(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.preempts_network_data());
+        assert!(PCIE_ROOT_DRIVER_TASK_CONTRACT.preempts_network_data());
         assert!(SDIO_HOST_DRIVER_TASK_CONTRACT.preempts_network_data());
         assert!(!CYW43_WIFI_DRIVER_TASK_CONTRACT.preempts_network_data());
         assert!(!GENET_DRIVER_TASK_CONTRACT.preempts_network_data());
@@ -6441,7 +6541,7 @@ mod tests {
         assert!(!callback_dispatch_allowed_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware
         ));
-        assert!(!root_fallback_allowed_for_profile(
+        assert!(!root_compatibility_service_allowed_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware
         ));
     }
@@ -6734,12 +6834,12 @@ mod tests {
             usb,
             DriverTaskRingCommandMode::Steady
         ));
-        assert!(!driver_task_ring_call_trace_enabled(
+        assert!(driver_task_ring_call_trace_enabled(
             HDMI_TEXT_DRIVER_TASK_CONTRACT,
             hdmi,
             DriverTaskRingCommandMode::Steady
         ));
-        assert!(!driver_task_ring_call_trace_enabled(
+        assert!(driver_task_ring_call_trace_enabled(
             HDMI_TEXT_DRIVER_TASK_CONTRACT,
             hdmi,
             DriverTaskRingCommandMode::NonBlocking
@@ -6866,6 +6966,17 @@ mod tests {
                 ),
                 DRIVER_TASK_PROMPT_RING_ATTEMPTS
             );
+            assert_eq!(
+                driver_task_ring_timeout_keeps_active(
+                    contract,
+                    command,
+                    DriverTaskRingCommandMode::NonBlocking
+                ),
+                matches!(
+                    contract.kind,
+                    DriverTaskKind::LocalSeatUsb | DriverTaskKind::SdioHost
+                )
+            );
         }
     }
 
@@ -6889,8 +7000,9 @@ mod tests {
                 command,
                 DriverTaskRingCommandMode::NonBlocking
             ),
-            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+            DRIVER_TASK_HDMI_FRAME_RING_ATTEMPTS
         );
+        assert!(DRIVER_TASK_HDMI_FRAME_RING_ATTEMPTS > DRIVER_TASK_PROMPT_RING_ATTEMPTS);
     }
 
     #[cfg(feature = "kernel")]
@@ -6945,11 +7057,19 @@ mod tests {
             ),
             DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
         );
-        assert!(!driver_task_ring_timeout_keeps_active(
+        assert!(driver_task_ring_timeout_keeps_active(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             command,
             DriverTaskRingCommandMode::NonBlocking
         ));
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
         assert_eq!(
             driver_task_ring_attempt_limit(
                 USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
@@ -6960,8 +7080,9 @@ mod tests {
         );
         assert_eq!(
             DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS,
-            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+            DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS
         );
+        assert!(DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS > DRIVER_TASK_PROMPT_RING_ATTEMPTS);
 
         command.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
         assert_eq!(
@@ -7199,9 +7320,6 @@ mod tests {
         assert!(!driver_task_ring_mode_uses_bounded_send(
             DriverTaskRingCommandMode::Steady
         ));
-        assert!(!driver_task_ring_mode_uses_bounded_send(
-            DriverTaskRingCommandMode::BootstrapCall
-        ));
         assert_eq!(
             driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::Bootstrap, 0),
             DRIVER_TASK_RING_FLAG_ONE_WAY
@@ -7218,12 +7336,7 @@ mod tests {
             driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::Steady, 0),
             0
         );
-        assert_eq!(
-            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::BootstrapCall, 0),
-            0
-        );
         assert!(!DriverTaskRingCommandMode::Bootstrap.records_latency());
-        assert!(!DriverTaskRingCommandMode::BootstrapCall.records_latency());
         assert!(DriverTaskRingCommandMode::PromptSlice.records_latency());
     }
 
@@ -8074,19 +8187,19 @@ mod tests {
         assert!(!callback_dispatch_allowed_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware
         ));
-        assert!(!root_fallback_allowed_for_profile(
+        assert!(!root_compatibility_service_allowed_for_profile(
             DriverTaskRuntimeProfile::Pi4Hardware
         ));
         assert!(callback_dispatch_allowed_for_profile(
             DriverTaskRuntimeProfile::QemuCompatibility
         ));
-        assert!(root_fallback_allowed_for_profile(
+        assert!(root_compatibility_service_allowed_for_profile(
             DriverTaskRuntimeProfile::QemuCompatibility
         ));
         assert!(callback_dispatch_allowed_for_profile(
             DriverTaskRuntimeProfile::HostTest
         ));
-        assert!(root_fallback_allowed_for_profile(
+        assert!(root_compatibility_service_allowed_for_profile(
             DriverTaskRuntimeProfile::HostTest
         ));
     }

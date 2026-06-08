@@ -77,7 +77,6 @@ host_matrix=(
   "cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::nettest_reports_wifi_host_eapol_pending_detail"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4,net-console --lib event::tests::netstats_emits_compact_status_line"
   "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::"
-  "cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::"
   "cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance"
   "cargo test -p sel4-sys --lib"
   "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/SMP_build\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu"

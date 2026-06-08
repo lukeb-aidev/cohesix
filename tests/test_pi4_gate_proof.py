@@ -382,7 +382,7 @@ def test_gate_proof_rejects_missing_root_console_prompt(
                 "U-Boot 2026.01-dirty",
                 "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
                 "[cohesix:root-task] Cohesix boot: root-task online",
-                "[local-seat] xhci root-port command-probe result=enable-slot-ok",
+                "usb: linked_runtime command-probe result=enable-slot-ok",
                 "wifi: firmware-ready",
             ]
         ),
@@ -597,7 +597,7 @@ def test_gate_proof_rejects_pointer_free_ring_without_owner_state(
             [
                 "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
                 *_driver_task_boot_affinity_lines(),
-                "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=root-owned live_hot_paths=yes",
+                "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 task_count=9 failed_count=0 live_tcb_count=9 root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes affinity=per-driver affinity_configured=9 affinity_applied=9 vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=linked-runtime-owner-state-missing live_hot_paths=yes",
                 "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=18",
                 "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=22",
                 "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=44",
@@ -605,7 +605,7 @@ def test_gate_proof_rejects_pointer_free_ring_without_owner_state(
                 "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=73",
                 "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=31",
                 "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated observed_service_us=36",
-                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=driver-task-owner-state-not-proven substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=root-owned required=7 dedicated=7 compatibility=0",
+                "DRIVER_TASK_ACCEPTANCE dedicated_ready=no reason=driver-task-owner-state-not-proven substrate=active capset=pass fault=pass revoke=pass sched=pass affinity=pass vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=linked-runtime-owner-state-missing required=7 dedicated=7 compatibility=0",
                 "SERIAL_ECHO p95_us=800 max_gap_us=1200",
                 "USB_BURST bytes=256 drops=0 max_latency_us=900",
                 "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
@@ -724,7 +724,7 @@ def test_gate_proof_rejects_root_task_panic(tmp_path: pathlib.Path) -> None:
                 "U-Boot 2026.01-dirty",
                 "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
                 "[cohesix:root-task] Cohesix boot: root-task online",
-                "[local-seat] xhci root-port command-probe result=enable-slot-ok",
+                "usb: linked_runtime command-probe result=enable-slot-ok",
                 "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
                 "BOOTINFO_SNAPSHOT_CORRUPTED phase=net.init last_mark=net.init.device "
                 "pre=0x0b0f1ce5ca4ecafe post=0x00000000001e2839 "

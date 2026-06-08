@@ -75,11 +75,10 @@ release bundles are the supported target configurations when using
 `cohesix-dev` layers QEMU trace/self-test diagnostics on top of
 `release-qemu`. Focused driver validation uses `driver-tests-qemu` and
 `driver-tests-pi4` so the two target surfaces can be tested without ad hoc
-feature strings. Both release bundles include TCP and the `usb` feature, which
-selects the internal `cohesix-usb` crate for root-task local-seat compatibility
-diagnostics. Active Pi 4 USB acceptance still comes from the linked
-`pi4-driver-usb` runtime and its owner-state proof, not from compatibility code
-alone.
+feature strings. Both release bundles include TCP and the `usb` feature. On the
+Pi 4 profile, USB acceptance comes only from the linked `pi4-driver-usb` runtime
+and its owner-state proof; root-task local-seat code is a ring client and does
+not select a root-owned USB implementation crate.
 
 ## Event Pump Overview
 
@@ -132,7 +131,7 @@ cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib 
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_pcie
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::
-cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat_pi4::driver_coverage_tests::driver_coverage_pi4_local_seat_usb_vl805_dma_contracts
+cargo test -p pi4-driver-runtime --lib -- --test-threads=1
 cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance
 SEL4_BUILD_DIR=$REPO/seL4/SMP_build cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-qemu
 SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4

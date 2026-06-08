@@ -1131,102 +1131,6 @@ pub trait Cyw43Hal: DeviceHal {
     {
         Err(HalError::Unsupported("wifi-firmware-bundle").into())
     }
-
-    /// Drives the Wi-Fi power control line.
-    fn wifi_set_power(&mut self, _state: WifiPowerState) -> Result<(), Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("wifi-power").into())
-    }
-
-    /// Drives the Wi-Fi reset control line.
-    fn wifi_set_reset(&mut self, _state: WifiResetState) -> Result<(), Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("wifi-reset").into())
-    }
-
-    /// Returns whether the Wi-Fi out-of-band interrupt line is pending.
-    fn wifi_oob_irq_pending(&self) -> Result<bool, Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("wifi-oob-irq").into())
-    }
-
-    /// Acknowledges a Wi-Fi out-of-band interrupt indication.
-    fn wifi_ack_oob_irq(&mut self) -> Result<(), Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("wifi-oob-irq-ack").into())
-    }
-
-    /// Resets the SDIO host/controller before Wi-Fi attach.
-    fn sdio_reset_host(&mut self) -> Result<(), Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("sdio-reset-host").into())
-    }
-
-    /// Applies the requested SDIO bus width and returns the effective width in bits.
-    fn sdio_set_bus_width(&mut self, _width: SdioBusWidth) -> Result<(), Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("sdio-set-bus-width").into())
-    }
-
-    /// Applies the requested SDIO clock and returns the effective clock rate in hertz.
-    fn sdio_set_clock_hz(&mut self, _target_hz: u32) -> Result<u32, Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("sdio-set-clock").into())
-    }
-
-    /// Executes a CMD52-style SDIO direct read.
-    fn sdio_io_direct_read(
-        &mut self,
-        _function: SdioFunction,
-        _addr: u32,
-    ) -> Result<u8, Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("sdio-io-direct-read").into())
-    }
-
-    /// Executes a CMD52-style SDIO direct write.
-    fn sdio_io_direct_write(
-        &mut self,
-        _function: SdioFunction,
-        _addr: u32,
-        _value: u8,
-    ) -> Result<(), Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("sdio-io-direct-write").into())
-    }
-
-    /// Executes a CMD53-style SDIO extended transfer in-place.
-    fn sdio_io_extended(
-        &mut self,
-        _function: SdioFunction,
-        _addr: u32,
-        _increment_addr: bool,
-        _write: bool,
-        _buffer: &mut [u8],
-    ) -> Result<(), Self::Error>
-    where
-        Self::Error: From<HalError>,
-    {
-        Err(HalError::Unsupported("sdio-io-extended").into())
-    }
 }
 
 /// Compatibility façade for callers that still need the current full HAL
@@ -1733,20 +1637,36 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         return Ok(false);
     }
 
-    let command = driver_task::runtime_engine_init_command(
+    let mut engine_ready = true;
+    driver_task::emit_driver_task_resource_init_status(
+        contract,
+        driver_task::DriverTaskHotPath::HdmiText,
+        "hdmi-engine-init",
+        "ready",
+        None,
+    );
+    let mut banner = false;
+    let frame = driver_task::stage_driver_task_ring_frame(contract, b"\x0cStarting HDMI\n", 0)
+        .ok_or(HalError::Unsupported(
+            "driver-runtime-hdmi-early-banner-stage",
+        ))?;
+    let draw_command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
         spec.hot_path,
         driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        frame,
     );
-    let completion = driver_task::run_driver_task_ring_command_nonblocking(contract, command);
-    let engine_ready = matches!(
-        completion,
+    let draw_completion =
+        driver_task::run_driver_task_ring_command_nonblocking(contract, draw_command);
+    let draw_ready = matches!(
+        draw_completion,
         Some(done)
             if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                && done.result == 1
+                && done.result != 0
     );
-    let status = if engine_ready {
+    let draw_status = if draw_ready {
         "ready"
-    } else if completion.is_some() {
+    } else if draw_completion.is_some() {
         "unexpected-completion"
     } else {
         "no-reply"
@@ -1754,10 +1674,15 @@ fn bootstrap_linked_runtime_engine_for_early_console(
     driver_task::emit_driver_task_resource_init_status(
         contract,
         driver_task::DriverTaskHotPath::HdmiText,
-        "hdmi-engine-init",
-        status,
-        completion,
+        "hdmi-first-draw",
+        draw_status,
+        draw_completion,
     );
+    if draw_ready {
+        banner = true;
+    } else {
+        engine_ready = false;
+    }
     if !engine_ready {
         crate::bootstrap::log::force_uart_line(
             "DRIVER_TASK_HDMI_EARLY_READY contract=hdmi-text engine_init=no owner_state=no banner=no action=serial-continues",
@@ -1768,8 +1693,8 @@ fn bootstrap_linked_runtime_engine_for_early_console(
     let owner_state = driver_task::register_driver_task_runtime_owner_state(
         driver_task::DriverTaskHotPath::HdmiText,
     );
-    let banner = if owner_state {
-        let frame = driver_task::stage_driver_task_ring_frame(contract, b"Starting HDMI\n", 0)
+    if owner_state && !banner {
+        let frame = driver_task::stage_driver_task_ring_frame(contract, b"\x0cStarting HDMI\n", 0)
             .ok_or(HalError::Unsupported(
                 "driver-runtime-hdmi-early-banner-stage",
             ))?;
@@ -1779,15 +1704,13 @@ fn bootstrap_linked_runtime_engine_for_early_console(
             driver_task::DriverTaskBudgetGrant::from_contract(contract),
             frame,
         );
-        matches!(
+        banner = matches!(
             driver_task::run_driver_task_ring_command_nonblocking(contract, command),
             Some(done)
                 if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
                     && done.result != 0
-        )
-    } else {
-        false
-    };
+        );
+    }
     let mut line = heapless::String::<160>::new();
     let _ = fmt::Write::write_fmt(
         &mut line,
@@ -2642,7 +2565,7 @@ impl<'a> KernelHal<'a> {
             .map_err(HalError::Sel4)?;
         let mut ring_frame = self
             .env
-            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Uncached)
             .map_err(HalError::Sel4)?;
         let stack_frame = self
             .env
@@ -2913,7 +2836,6 @@ impl<'a> KernelHal<'a> {
             return Err(HalError::Unsupported("driver-runtime-hdmi-fb-pages"));
         }
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
-        let mut root_vaddr_base: Option<usize> = None;
         for page in 0..page_count {
             let paddr = page_base
                 .checked_add(page.saturating_mul(page_bytes))
@@ -2922,19 +2844,6 @@ impl<'a> KernelHal<'a> {
                 .checked_add(page.saturating_mul(page_bytes))
                 .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-vaddr"))?;
             let frame = self.env.map_device(paddr).map_err(HalError::Sel4)?;
-            let root_vaddr = frame.ptr().as_ptr() as usize;
-            if let Some(first) = root_vaddr_base {
-                let expected = first
-                    .checked_add(page.saturating_mul(page_bytes))
-                    .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-root-vaddr"))?;
-                if root_vaddr != expected {
-                    return Err(HalError::Unsupported(
-                        "driver-runtime-hdmi-fb-root-noncontiguous",
-                    ));
-                }
-            } else {
-                root_vaddr_base = Some(root_vaddr);
-            }
             self.env
                 .map_page_copy_into_vspace(
                     frame.cap(),
@@ -2949,10 +2858,6 @@ impl<'a> KernelHal<'a> {
         framebuffer.vaddr = DRIVER_RUNTIME_FRAMEBUFFER_VADDR
             .checked_add(page_offset as u64)
             .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-vaddr"))?;
-        let root_framebuffer_vaddr = root_vaddr_base
-            .and_then(|vaddr| vaddr.checked_add(page_offset))
-            .ok_or(HalError::Unsupported("driver-runtime-hdmi-fb-root-vaddr"))?;
-        driver_task::publish_hdmi_runtime_root_framebuffer_mapping(root_framebuffer_vaddr, map_len);
         if let Some(builder) = init_descriptor.as_deref_mut() {
             builder.set_framebuffer_region(framebuffer, page_base, map_len, page_count)?;
         }
@@ -3194,7 +3099,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_SDIO_BUS_RING_VADDR,
                 sel4_sys::seL4_CapRights_ReadWrite,
-                sel4_sys::seL4_ARM_Page_Default,
+                sel4_sys::seL4_ARM_Page_Uncached,
                 tracker,
             )
             .map_err(HalError::Sel4)?;
@@ -3210,7 +3115,7 @@ impl<'a> KernelHal<'a> {
                     vspace,
                     vaddr,
                     sel4_sys::seL4_CapRights_ReadWrite,
-                    sel4_sys::seL4_ARM_Page_Default,
+                    sel4_sys::seL4_ARM_Page_Uncached,
                     tracker,
                 )
                 .map_err(HalError::Sel4)?;
@@ -3258,7 +3163,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_PCIE_BUS_RING_VADDR,
                 sel4_sys::seL4_CapRights_ReadWrite,
-                sel4_sys::seL4_ARM_Page_Default,
+                sel4_sys::seL4_ARM_Page_Uncached,
                 tracker,
             )
             .map_err(HalError::Sel4)?;
@@ -3332,7 +3237,7 @@ impl<'a> KernelHal<'a> {
 
         let mut ring_frame = self
             .env
-            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+            .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Uncached)
             .map_err(HalError::Sel4)?;
         let mut ipc_frame = self
             .env
@@ -3446,7 +3351,7 @@ impl<'a> KernelHal<'a> {
                 vspace,
                 driver_task::DRIVER_TASK_RING_VADDR,
                 data_rights,
-                sel4_sys::seL4_ARM_Page_Default,
+                sel4_sys::seL4_ARM_Page_Uncached,
                 &mut tracker,
             )
             .map_err(HalError::Sel4)?;

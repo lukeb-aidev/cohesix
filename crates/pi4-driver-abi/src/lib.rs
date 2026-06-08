@@ -169,12 +169,102 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_BYTES: u16 = 16;
 pub const DRIVER_RUNTIME_RING_PROGRESS_MAGIC: u32 = 0x4452_5047;
 /// Runtime has observed the staged command.
 pub const DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED: u32 = 1;
+/// Runtime has validated the command role and is entering dispatch.
+pub const DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED: u32 = 2;
 /// Runtime is entering the role-specific engine-init path.
 pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN: u32 = 3;
 /// Runtime completed the role-specific engine-init path.
 pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE: u32 = 4;
 /// Runtime rejected the role-specific engine-init path.
 pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED: u32 = 5;
+/// Runtime descriptor state matches the command hot path.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY: u32 = 6;
+/// Runtime descriptor state does not match the command hot path.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH: u32 = 7;
+/// Runtime loaded the retained init descriptor for engine init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED: u32 = 8;
+/// Runtime validated descriptor identity for engine init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY: u32 = 9;
+/// Runtime started validating mapped resources for engine init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN: u32 = 14;
+/// Runtime rejected mapped resources for engine init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED: u32 = 15;
+/// Runtime validated the init-descriptor header during resource checks.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_VALID: u32 = 50;
+/// Runtime found an invalid init descriptor during resource checks.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DESCRIPTOR_INVALID: u32 = 51;
+/// Runtime verified the command hot path matches the retained descriptor.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_READY: u32 = 52;
+/// Runtime found a hot-path mismatch during resource checks.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH: u32 = 53;
+/// Runtime computed bounded MMIO/DMA/shared resource totals.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY: u32 = 54;
+/// Runtime found a missing or undersized MMIO resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_MISSING: u32 = 55;
+/// Runtime verified required MMIO resources.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_MMIO_READY: u32 = 56;
+/// Runtime found a missing or undersized DMA resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_MISSING: u32 = 57;
+/// Runtime verified required DMA resources.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_DMA_READY: u32 = 58;
+/// Runtime found a missing or undersized shared resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING: u32 = 59;
+/// Runtime verified required shared resources.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY: u32 = 60;
+/// Runtime found a missing framebuffer resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FRAMEBUFFER_MISSING: u32 = 61;
+/// Runtime verified the framebuffer resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FRAMEBUFFER_READY: u32 = 62;
+/// Runtime found a missing pointer-free bus-owner link.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING: u32 = 63;
+/// Runtime verified required pointer-free bus-owner links.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY: u32 = 64;
+/// Runtime found an authority window that must not be present for the role.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT: u32 = 65;
+/// Runtime completed role-specific resource validation.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY: u32 = 66;
+/// Runtime validated mapped resources for engine init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY: u32 = 10;
+/// Runtime entered role-specific hardware init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN: u32 = 11;
+/// Runtime completed role-specific hardware init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE: u32 = 12;
+/// Runtime rejected role-specific hardware init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED: u32 = 13;
+/// USB runtime read xHCI capability registers.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ: u32 = 20;
+/// USB runtime halted the xHCI controller before reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED: u32 = 21;
+/// USB runtime completed xHCI controller reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE: u32 = 22;
+/// USB runtime prepared DMA structures.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY: u32 = 23;
+/// USB runtime published xHCI command/event rings.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY: u32 = 24;
+/// USB runtime requested xHCI run state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED: u32 = 25;
+/// SDIO runtime started host reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN: u32 = 30;
+/// SDIO runtime powered the SDIO card slot.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY: u32 = 31;
+/// SDIO runtime enabled the startup clock.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY: u32 = 32;
+/// SDIO runtime cleared command/data inhibit after clock enable.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY: u32 = 33;
+/// Runtime recognized an engine-init aux word before entering the handler.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH: u32 = 34;
+/// Runtime entered the engine-init handler.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER: u32 = 35;
+/// Runtime accepted the engine-init aux word.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH: u32 = 36;
+/// Runtime accepted the zero-frame engine-init shape.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY: u32 = 37;
+/// HDMI runtime started rendering a text frame.
+pub const DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_BEGIN: u32 = 40;
+/// HDMI runtime completed rendering a non-empty text frame.
+pub const DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE: u32 = 41;
+/// HDMI runtime rejected or produced no visible text frame.
+pub const DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED: u32 = 42;
 /// Offset namespace base for runtime shared-buffer payloads referenced by an
 /// owner-ring descriptor.
 pub const DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE: u16 = DRIVER_RUNTIME_RING_PAGE_BYTES;

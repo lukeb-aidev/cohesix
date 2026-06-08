@@ -40,7 +40,6 @@ members = [
     "crates/sel4-panicking",
     "crates/sel4-runtime",
     "crates/sel4-sys",
-    "crates/cohesix-usb",
     "crates/net-constants",
     "tools/coh-rtc",
     "tools/security-nist",

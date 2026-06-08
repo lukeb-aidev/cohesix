@@ -13,22 +13,11 @@ use core::sync::atomic::{fence, AtomicU32, Ordering};
 
 use super::{
     DeviceHal, HalError, Irq, IrqServiceOutcome, IrqTrigger, KernelIrqBinding, SdioBusWidth,
-    SdioFunction, WifiBoundedPhaseRecord, WifiControlPlaneTrace, WifiDebugSnapshot,
-    WifiFirmwareBundle, WifiFirmwareContractTrace, WifiFirmwareProofTrace, WifiHtPhaseRecord,
-    WifiPowerState, WifiResetState, WifiSdhciContractTrace, WIFI_BOUNDED_PHASE_RECORD_CAPACITY,
-    WIFI_HT_PHASE_RECORD_CAPACITY,
+    SdioFunction, WifiBoundedPhaseRecord, WifiDebugSnapshot, WifiFirmwareBundle,
+    WifiFirmwareContractTrace, WifiFirmwareProofTrace, WifiHtPhaseRecord, WifiPowerState,
+    WifiResetState, WIFI_BOUNDED_PHASE_RECORD_CAPACITY, WIFI_HT_PHASE_RECORD_CAPACITY,
 };
 use crate::bootstrap::log as boot_log;
-#[cfg(all(
-    feature = "kernel",
-    feature = "usb",
-    target_arch = "aarch64",
-    target_os = "none"
-))]
-use crate::local_seat_pi4::{
-    usb_boot_activity_active, usb_runtime_first_byte_seen, usb_runtime_keyboard_ready_seen,
-    wifi_progress_advance_loops, wifi_progress_tick,
-};
 use crate::rust_alloc::vec::Vec;
 use crate::sel4::{page_get_address, DeviceFrame, PAGE_BITS};
 use pi4_driver_abi::{
@@ -38,6 +27,58 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_FLAG_WRITE,
 };
 use spin::Mutex;
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+#[inline]
+fn wifi_progress_advance_loops(_loops: usize) {}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+#[inline]
+fn wifi_progress_tick() {}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+#[inline]
+fn usb_boot_activity_active() -> bool {
+    crate::local_seat::linked_local_seat_usb_controller_ready()
+        && !crate::local_seat::linked_local_seat_usb_keyboard_ready()
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+#[inline]
+fn usb_runtime_first_byte_seen() -> bool {
+    crate::local_seat::linked_local_seat_usb_first_report_ready()
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+#[inline]
+fn usb_runtime_keyboard_ready_seen() -> bool {
+    crate::local_seat::linked_local_seat_usb_keyboard_ready()
+}
 
 #[cfg(not(all(
     feature = "kernel",
@@ -151,7 +192,6 @@ static PINNED_MAILBOX_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_GPIO_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_SDHCI_REGS: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static PINNED_MAILBOX_REQUEST: Mutex<Option<MappedRegs>> = Mutex::new(None);
-static PINNED_MAILBOX_POSTED_REQUEST: Mutex<Option<MappedRegs>> = Mutex::new(None);
 static MAILBOX_CALL_LOCK: Mutex<()> = Mutex::new(());
 static SDIO_IRQ_BINDING: Mutex<Option<KernelIrqBinding>> = Mutex::new(None);
 static MAILBOX_TRANSPORT_READY: core::sync::atomic::AtomicBool =
@@ -5166,14 +5206,6 @@ const fn mailbox_request_page_actions() -> (&'static str, &'static str) {
 }
 
 #[inline]
-const fn mailbox_posted_alias(tag: u32) -> Option<u32> {
-    match tag {
-        TAG_NOTIFY_XHCI_RESET => Some(VC_BUS_ALIAS_BASES[0]),
-        _ => None,
-    }
-}
-
-#[inline]
 const fn mailbox_recv_wait_spins(tag: u32) -> usize {
     match tag {
         TAG_NOTIFY_XHCI_RESET => MAILBOX_WAIT_SPINS_NOTIFY_XHCI_RESET,
@@ -5234,8 +5266,6 @@ const fn mailbox_reply_matches_request_page(expected: u32, actual: u32) -> bool 
 pub enum Vl805ResetNotifyResult {
     /// VideoCore acknowledged the property call synchronously.
     Acked,
-    /// VideoCore never replied, so root-task used the dedicated posted fallback.
-    PostedFallback,
 }
 
 fn sdhci_status_reason(status: u32) -> &'static str {
@@ -5409,40 +5439,11 @@ pub fn prepare_driver_task_sdio_resources<H>(hal: &mut H) -> Result<(), HalError
 where
     H: DeviceHal<Error = HalError>,
 {
+    let _ = hal;
     emit_breadcrumb(format_args!(
-        "[pi4-wifi] driver-task sdio resource prep begin"
+        "[pi4-wifi] driver-task sdio resource prep disabled reason=linked-runtime-owns-sdio action=fail-closed"
     ));
-    preseed_mmio(hal);
-    let mut state = Pi4WifiState::new(hal)?;
-    emit_breadcrumb(format_args!(
-        "[pi4-wifi] driver-task sdio handoff stage=power-on"
-    ));
-    state.set_power(WifiPowerState::On)?;
-    emit_breadcrumb(format_args!(
-        "[pi4-wifi] driver-task sdio handoff stage=reset-asserted"
-    ));
-    state.set_reset(WifiResetState::Asserted)?;
-    emit_breadcrumb(format_args!(
-        "[pi4-wifi] driver-task sdio handoff stage=host-reset"
-    ));
-    state.reset_host()?;
-    let effective_clock_hz = state.set_clock_hz(CYW43_STARTUP_CLOCK_HZ)?;
-    emit_breadcrumb(format_args!(
-        "[pi4-wifi] driver-task sdio handoff stage=startup-clock clock={}Hz",
-        effective_clock_hz
-    ));
-    state.set_bus_width(SdioBusWidth::OneBit)?;
-    emit_breadcrumb(format_args!(
-        "[pi4-wifi] driver-task sdio handoff stage=bus-width width=1"
-    ));
-    state.set_reset(WifiResetState::Deasserted)?;
-    emit_breadcrumb(format_args!(
-        "[pi4-wifi] driver-task sdio handoff stage=reset-deasserted"
-    ));
-    emit_breadcrumb(format_args!(
-        "[pi4-wifi] driver-task sdio resource prep ready"
-    ));
-    Ok(())
+    Err(HalError::Unsupported("sdio-host-linked-runtime-required"))
 }
 
 const SDHCI_BLOCK_SIZE: usize = 0x04;
@@ -7862,964 +7863,6 @@ const fn runtime_rx_invalid_firstread_should_clear_latch(
     int_status_readable && int_status == 0 && (sdhci_status & SDHCI_INT_CARD_INT) != 0
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Cyw43HostEapolRxSource {
-    pub rframe_len: Option<u16>,
-    pub int_status: Option<u32>,
-    pub tohost_mailbox: Option<u32>,
-    pub hostintmask: Option<u32>,
-    pub function_int_mask: Option<u32>,
-    pub watermark: Option<u8>,
-    pub devctl: Option<u8>,
-    pub mesbusy: Option<u8>,
-    pub sdhci_int_status: u32,
-    pub io_enable: Option<u8>,
-    pub io_ready: Option<u8>,
-    pub io_interrupt_enable: Option<u8>,
-    pub frame_indication: bool,
-    pub host_interrupt: bool,
-    pub card_interrupt: bool,
-    pub function2_ready: bool,
-}
-
-pub struct Pi4WifiState {
-    mailbox: Mailbox,
-    host: SdioHost,
-    power_state: WifiPowerState,
-    reset_state: WifiResetState,
-    wifi_line_programmed: bool,
-}
-
-impl Pi4WifiState {
-    pub fn new<H>(hal: &mut H) -> Result<Self, HalError>
-    where
-        H: DeviceHal<Error = HalError>,
-    {
-        log::info!("[pi4-wifi] hal init: begin");
-        let mailbox = Mailbox::new(hal).map_err(|err| {
-            log::warn!("[pi4-wifi] hal init: mailbox failed: {err}");
-            err
-        })?;
-        let gpio = GpioBank::new(hal).map_err(|err| {
-            log::warn!("[pi4-wifi] hal init: gpio failed: {err}");
-            err
-        })?;
-        let host = SdioHost::new(hal, &mailbox).map_err(|err| {
-            log::warn!("[pi4-wifi] hal init: sdhci failed: {err}");
-            err
-        })?;
-        gpio.configure_wifi_sdio_pins();
-        log::info!(
-            "[pi4-wifi] hal init: mailbox=0x{:08x} sdhci=0x{:08x} base_clock={}Hz irq_bound={}",
-            mailbox.regs.paddr(),
-            host.regs_paddr,
-            host.base_clock_hz,
-            host.sdio_irq_binding.is_some(),
-        );
-        Ok(Self {
-            mailbox,
-            host,
-            power_state: WifiPowerState::Off,
-            reset_state: WifiResetState::Asserted,
-            wifi_line_programmed: false,
-        })
-    }
-
-    #[must_use]
-    pub fn firmware_bundle(&self) -> WifiFirmwareBundle<'static> {
-        WifiFirmwareBundle::new(
-            PI4_WIFI_FIRMWARE,
-            PI4_WIFI_NVRAM,
-            Some(PI4_WIFI_CLM_BLOB),
-            PI4_WIFI_BOARD_TYPE,
-        )
-    }
-
-    pub fn set_power(&mut self, state: WifiPowerState) -> Result<(), HalError> {
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] power state={}",
-            wifi_power_state_name(state)
-        ));
-        let was_enabled = wifi_gpio_line_enabled(self.power_state, self.reset_state);
-        self.power_state = state;
-        self.host.power_state = state;
-        self.apply_wifi_line(was_enabled)
-    }
-
-    pub fn set_reset(&mut self, state: WifiResetState) -> Result<(), HalError> {
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] reset state={}",
-            wifi_reset_state_name(state)
-        ));
-        let was_enabled = wifi_gpio_line_enabled(self.power_state, self.reset_state);
-        self.reset_state = state;
-        self.host.reset_state = state;
-        self.apply_wifi_line(was_enabled)?;
-        if matches!(state, WifiResetState::Deasserted) {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] reset state=deasserted action=wl-on-released"
-            ));
-        }
-        Ok(())
-    }
-
-    pub fn reset_host(&mut self) -> Result<(), HalError> {
-        emit_breadcrumb(format_args!("[pi4-wifi] host reset begin"));
-        self.host.reset_controller()
-    }
-
-    pub fn set_clock_hz(&mut self, target_hz: u32) -> Result<u32, HalError> {
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] host clock request={}Hz",
-            target_hz
-        ));
-        self.host.set_clock_hz(target_hz)
-    }
-
-    #[must_use]
-    pub const fn recommended_data_clock_hz(&self) -> u32 {
-        self.host.preferred_data_clock_hz
-    }
-
-    pub fn debug_dump_state(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
-        self.host.log_transport_shadow(stage);
-        let snapshot = self.debug_snapshot(stage)?;
-        let cached = cached_wifi_debug_snapshot();
-        let snapshot = if let Some(cached) = cached.as_ref() {
-            preserve_cached_first_reply_blocker_in_snapshot(snapshot, cached)
-        } else {
-            snapshot
-        };
-        if let Some(cached) = cached {
-            if should_use_cached_wifi_debug_snapshot(&snapshot, &cached) {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] debug snapshot stage={stage} source=cached exact_error={} sdhci_read_diag={} f2_state={}",
-                    cached.control_plane_exact_error,
-                    cached.control_plane_sdhci_read_diag,
-                    cached.control_plane_f2_state,
-                ));
-                return Ok(cached);
-            }
-        }
-        cache_wifi_debug_snapshot_if_informative(snapshot);
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] debug snapshot stage={stage} source={} exact_error={} sdhci_read_diag={} f2_state={}",
-            snapshot.debug_snapshot_source,
-            snapshot.control_plane_exact_error,
-            snapshot.control_plane_sdhci_read_diag,
-            snapshot.control_plane_f2_state,
-        ));
-        Ok(snapshot)
-    }
-
-    pub fn debug_firmware_contract_trace(&mut self) -> WifiFirmwareContractTrace {
-        let bundle = self.firmware_bundle();
-        let reset_vector = firmware_reset_vector(bundle.firmware).ok();
-        let cached_snapshot = cached_wifi_debug_snapshot();
-        let cached_evidence = cached_wifi_firmware_contract_evidence();
-        let live_card_ready = self.host.card.is_some();
-        if let Some(snapshot) = cached_snapshot.as_ref() {
-            if let Some(evidence) = cached_evidence {
-                if firmware_contract_should_use_cached_snapshot(
-                    live_card_ready,
-                    self.host.armcr4_release_attempts,
-                    snapshot,
-                    evidence,
-                ) {
-                    return firmware_contract_trace_from_evidence(
-                        bundle,
-                        reset_vector,
-                        evidence.firmware_download_verified,
-                        evidence.armcr4_release_attempts,
-                        evidence.sr_kso_clock_ready,
-                        snapshot.chipclkcsr,
-                        snapshot.wakeupctrl,
-                        snapshot.sleepcsr,
-                        snapshot.cardcap,
-                        snapshot.io_enable,
-                        snapshot.io_ready,
-                        snapshot.current_clock_hz,
-                        snapshot.preferred_data_clock_hz,
-                        snapshot.card_ready,
-                    );
-                }
-            } else if firmware_contract_should_use_cached_failure_snapshot(
-                live_card_ready,
-                snapshot,
-            ) {
-                return firmware_contract_trace_from_cached_snapshot(
-                    bundle,
-                    reset_vector,
-                    self.host.firmware_download_verified,
-                    self.host.sr_kso_clock_ready,
-                    self.host.armcr4_release_attempts,
-                    snapshot,
-                );
-            }
-        }
-
-        let (io_enable, io_ready) = if live_card_ready {
-            (
-                self.host
-                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
-                    .ok(),
-            )
-        } else {
-            (None, None)
-        };
-        let live_function1_allowed = live_function1_diagnostics_allowed(live_card_ready, io_ready);
-        let chipclkcsr = if live_function1_allowed {
-            match self
-                .host
-                .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_CHIPCLKCSR)
-            {
-                Ok(value) => {
-                    self.host.remember_chipclkcsr(value);
-                    Some(value)
-                }
-                Err(_) => self.host.last_chipclkcsr,
-            }
-        } else {
-            if pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(live_card_ready, io_ready) {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware contract action=skip-live-chipclkcsr reason=pre-f2-diagnostic-cache-only cached=0x{chipclk:02x}/{} io_ready=0x{iorx:02x}/{}",
-                    yn(self.host.last_chipclkcsr.is_some()),
-                    yn(io_ready.is_some()),
-                    chipclk = self.host.last_chipclkcsr.unwrap_or(0),
-                    iorx = io_ready.unwrap_or(0),
-                ));
-            }
-            self.host.last_chipclkcsr
-        };
-        firmware_contract_trace_from_evidence(
-            bundle,
-            reset_vector,
-            self.host.firmware_download_verified,
-            self.host.armcr4_release_attempts,
-            self.host.sr_kso_clock_ready,
-            chipclkcsr,
-            self.host.last_wakeupctrl,
-            self.host.last_sleepcsr,
-            self.host.last_cardcap,
-            io_enable,
-            io_ready,
-            self.host.current_clock_hz,
-            self.host.preferred_data_clock_hz,
-            live_card_ready,
-        )
-    }
-
-    pub fn debug_sdhci_contract_trace(&self) -> WifiSdhciContractTrace {
-        let current_diag = control_plane_snapshot_sdhci_read_diag_label(
-            self.host.last_data_wait_cmd,
-            self.host.last_data_wait_arg,
-            self.host.last_data_wait_present,
-            self.host.last_data_wait_int_status,
-        );
-        let preserved_diag = control_plane_snapshot_sdhci_read_diag_label(
-            self.host.preserved_control_plane_data_wait_cmd,
-            self.host.preserved_control_plane_data_wait_arg,
-            self.host.preserved_control_plane_data_wait_present,
-            self.host.preserved_control_plane_data_wait_int_status,
-        );
-        let resolved_diag = resolved_control_plane_sdhci_read_diag(
-            self.host.last_data_wait_cmd,
-            self.host.last_data_wait_arg,
-            self.host.last_data_wait_present,
-            self.host.last_data_wait_int_status,
-            self.host.preserved_control_plane_data_wait_cmd,
-            self.host.preserved_control_plane_data_wait_arg,
-            self.host.preserved_control_plane_data_wait_present,
-            self.host.preserved_control_plane_data_wait_int_status,
-        );
-        WifiSdhciContractTrace {
-            current_diag,
-            preserved_diag,
-            resolved_diag,
-            current_cmd: self.host.last_data_wait_cmd,
-            current_arg: self.host.last_data_wait_arg,
-            current_present: self.host.last_data_wait_present,
-            current_int_status: self.host.last_data_wait_int_status,
-            preserved_cmd: self.host.preserved_control_plane_data_wait_cmd,
-            preserved_arg: self.host.preserved_control_plane_data_wait_arg,
-            preserved_present: self.host.preserved_control_plane_data_wait_present,
-            preserved_int_status: self.host.preserved_control_plane_data_wait_int_status,
-        }
-    }
-
-    pub fn debug_control_plane_trace(&mut self) -> WifiControlPlaneTrace {
-        let card_ready = self.host.card.is_some();
-        let (cccr_io_enable, cccr_io_ready, cccr_int_enable) = if card_ready {
-            (
-                self.host
-                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
-                    .ok(),
-            )
-        } else {
-            (None, None, None)
-        };
-        let (f1_rframe_lo, f1_rframe_hi, f1_watermark, f1_device_ctl, f1_mesbusyctl) =
-            if live_function1_diagnostics_allowed(card_ready, cccr_io_ready) {
-                (
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
-                        .ok(),
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
-                        .ok(),
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-                        .ok(),
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-                        .ok(),
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-                        .ok(),
-                )
-            } else {
-                if pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
-                    card_ready,
-                    cccr_io_ready,
-                ) {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] control-plane trace action=skip-live-f1-sideband reason=pre-f2-diagnostic-cache-only io_ready=0x{iorx:02x}/{}",
-                        yn(cccr_io_ready.is_some()),
-                        iorx = cccr_io_ready.unwrap_or(0),
-                    ));
-                }
-                (None, None, None, None, None)
-            };
-        let cached = cached_wifi_debug_snapshot();
-        let (
-            cached_source,
-            cached_stage,
-            cached_exact_error,
-            cached_sdhci_read_diag,
-            cached_f2_state,
-        ) = cached.map_or(("none", "none", "none", "none", "none"), |snapshot| {
-            (
-                snapshot.debug_snapshot_source,
-                snapshot.debug_snapshot_stage,
-                snapshot.control_plane_exact_error,
-                snapshot.control_plane_sdhci_read_diag,
-                snapshot.control_plane_f2_state,
-            )
-        });
-        let (bounded_phase_records, bounded_phase_count) = cached_wifi_bounded_phase_records();
-
-        WifiControlPlaneTrace {
-            cccr_io_enable,
-            cccr_io_ready,
-            cccr_int_enable,
-            f1_rframe_lo,
-            f1_rframe_hi,
-            f1_watermark,
-            f1_device_ctl,
-            f1_mesbusyctl,
-            block_size_shadow: self.host.block_size_count_shadow,
-            transfer_mode_shadow: self.host.transfer_mode_shadow,
-            backplane_window_low: self.host.last_backplane_window_low,
-            backplane_window_mid: self.host.last_backplane_window_mid,
-            backplane_window_high: self.host.last_backplane_window_high,
-            cached_source,
-            cached_stage,
-            cached_exact_error,
-            cached_sdhci_read_diag,
-            cached_f2_state,
-            cached_cccr_io_enable: self.host.last_cccr_io_enable,
-            cached_cccr_io_ready: self.host.last_cccr_io_ready,
-            cached_cccr_int_enable: self.host.last_cccr_int_enable,
-            cached_cccr_bus_interface: self.host.last_cccr_bus_interface,
-            cached_cccr_speed: self.host.last_cccr_speed,
-            cached_cccr_cardcap: self.host.last_cardcap,
-            cached_fbr1_block_size: SdioHost::cached_fbr_block_size(
-                self.host.last_fbr1_block_size_low,
-                self.host.last_fbr1_block_size_high,
-            ),
-            cached_fbr2_block_size: SdioHost::cached_fbr_block_size(
-                self.host.last_fbr2_block_size_low,
-                self.host.last_fbr2_block_size_high,
-            ),
-            bounded_phase_count,
-            bounded_phase_records,
-        }
-    }
-
-    pub fn debug_probe_ht_clock(&mut self) -> Result<bool, HalError> {
-        if let Some(snapshot) = cached_wifi_debug_snapshot() {
-            self.host.hydrate_debug_snapshot_shadow(&snapshot);
-            if control_plane_exact_error_is_first_reply_blocker(snapshot.control_plane_exact_error)
-                || control_plane_exact_error_is_direct_sdio_transport_blocker(
-                    snapshot.control_plane_exact_error,
-                )
-                || control_plane_exact_error_is_pre_function2_clock_blocker(
-                    snapshot.control_plane_exact_error,
-                )
-            {
-                let ready = snapshot
-                    .chipclkcsr
-                    .is_some_and(function2_has_required_ht_clock);
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=debug-probe-ht action=skip-live-chipclkcsr reason=cached-terminal-blocker exact_error={} chipclk=0x{chipclk:02x}/{} ready={} production_continue=no",
-                    snapshot.control_plane_exact_error,
-                    yn(snapshot.chipclkcsr.is_some()),
-                    yn(ready),
-                    chipclk = snapshot.chipclkcsr.unwrap_or(0),
-                ));
-                return Ok(ready);
-            }
-        }
-        let card_ready = self.host.card.is_some();
-        if pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(
-            card_ready,
-            self.host.last_cccr_io_ready,
-        ) {
-            if self
-                .host
-                .last_chipclkcsr
-                .is_some_and(function2_has_required_ht_clock)
-            {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=debug-probe-ht action=cached-ready csr=0x{:02x} reason=pre-f2-diagnostic-cache-only production_continue=no",
-                    self.host.last_chipclkcsr.unwrap_or(0),
-                ));
-                return Ok(true);
-            }
-            if ht_clock_timeout_can_enter_bounded_no_ht_transport(
-                self.host.last_chipclkcsr,
-                self.host.last_wakeupctrl,
-                self.host.last_sleepcsr,
-                self.host.last_cardcap,
-            ) {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] firmware stage=debug-probe-ht action=continue mode={} reason=pre-f2-diagnostic-cache-only csr=0x{chipclk:02x} wake=0x{wake:02x}/{wake_set} sleep=0x{sleep:02x}/{sleep_set} cardcap=0x{cardcap:02x}/{cardcap_set} production_continue=no",
-                    cyw43_transport_mode_name(true),
-                    chipclk = self.host.last_chipclkcsr.unwrap_or(0),
-                    wake = self.host.last_wakeupctrl.unwrap_or(0),
-                    wake_set = yn(self.host.last_wakeupctrl.is_some()),
-                    sleep = self.host.last_sleepcsr.unwrap_or(0),
-                    sleep_set = yn(self.host.last_sleepcsr.is_some()),
-                    cardcap = self.host.last_cardcap.unwrap_or(0),
-                    cardcap_set = yn(self.host.last_cardcap.is_some()),
-                ));
-                return Ok(false);
-            }
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] firmware stage=debug-probe-ht action=skip-live-chipclkcsr reason=pre-f2-diagnostic-cache-only csr=0x{chipclk:02x}/{chipclk_set} io_ready=0x{iorx:02x}/{iorx_set} production_continue=no",
-                chipclk = self.host.last_chipclkcsr.unwrap_or(0),
-                chipclk_set = yn(self.host.last_chipclkcsr.is_some()),
-                iorx = self.host.last_cccr_io_ready.unwrap_or(0),
-                iorx_set = yn(self.host.last_cccr_io_ready.is_some()),
-            ));
-            return Ok(false);
-        }
-
-        match self
-            .host
-            .require_ht_clock_ready("debug-probe-ht", "debug-probe-ht assist")
-        {
-            Ok(ready) => Ok(ready),
-            Err(err) if is_ht_clock_timeout_error(&err) => {
-                let forced_ready = self
-                    .host
-                    .debug_probe_forced_ht_after_timeout("debug-probe-ht")?;
-                if forced_ready {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=debug-probe-ht action=diagnostic-ready err={err} reason=forced-ht-probe production_continue=no"
-                    ));
-                    Ok(true)
-                } else {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] firmware stage=debug-probe-ht action=not-ready err={err} reason=production-ht-path-timeout forced_probe=miss"
-                    ));
-                    Ok(false)
-                }
-            }
-            Err(err) => Err(err),
-        }
-    }
-
-    pub fn set_bus_width(&mut self, width: SdioBusWidth) -> Result<(), HalError> {
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] host bus-width={}",
-            sdio_bus_width_name(width)
-        ));
-        self.host.set_bus_width(width)
-    }
-
-    pub fn io_direct_read(&mut self, function: SdioFunction, addr: u32) -> Result<u8, HalError> {
-        self.host.ensure_card_ready()?;
-        self.host.io_direct_read(function, addr)
-    }
-
-    pub fn io_direct_write(
-        &mut self,
-        function: SdioFunction,
-        addr: u32,
-        value: u8,
-    ) -> Result<(), HalError> {
-        self.host.ensure_card_ready()?;
-        self.host.io_direct_write(function, addr, value)
-    }
-
-    pub fn io_extended(
-        &mut self,
-        function: SdioFunction,
-        addr: u32,
-        increment_addr: bool,
-        write: bool,
-        buffer: &mut [u8],
-    ) -> Result<(), HalError> {
-        self.host.ensure_card_ready()?;
-        self.host
-            .io_extended(function, addr, increment_addr, write, buffer)
-    }
-
-    pub fn init_cyw43_transport(&mut self) -> Result<(), HalError> {
-        self.host.init_cyw43_transport()
-    }
-
-    pub fn load_cyw43_firmware(&mut self) -> Result<(), HalError> {
-        self.host.load_firmware(self.firmware_bundle())
-    }
-
-    pub fn prepare_cyw43_firmware_upload_transport(&mut self) -> Result<u32, HalError> {
-        self.host
-            .prepare_firmware_upload_transport("pre-firmware-upload-transport")
-    }
-
-    pub fn read_cyw43_frame(&mut self, out: &mut [u8]) -> Result<usize, HalError> {
-        self.host.read_frame(out)
-    }
-
-    pub fn write_cyw43_frame(&mut self, frame: &mut [u8]) -> Result<(), HalError> {
-        self.host.write_frame(frame)
-    }
-
-    #[must_use]
-    pub fn cyw43_control_plane_chunk_limit(&self) -> usize {
-        self.host.control_plane_chunk_limit()
-    }
-
-    #[must_use]
-    pub fn cyw43_control_plane_write_chunk_limit(&self) -> usize {
-        self.host.control_plane_write_chunk_limit()
-    }
-
-    #[must_use]
-    pub fn cyw43_control_plane_reply_chunk_limit(&self) -> usize {
-        self.host.control_plane_reply_chunk_limit()
-    }
-
-    #[must_use]
-    pub fn cyw43_control_plane_reply_rearm_diag(&self) -> (&'static str, u8, u8, bool) {
-        (
-            if self.host.experimental_control_plane_startup_link_stabilized {
-                "startup-link-passive"
-            } else {
-                control_plane_reply_rearm_mode_name(
-                    self.host.experimental_control_plane_reply_rearm_mode,
-                )
-            },
-            self.host.experimental_control_plane_reply_rearm_attempts,
-            self.host.experimental_control_plane_reply_rearm_empty_polls,
-            self.host.experimental_control_plane_promoted_probe_pending,
-        )
-    }
-
-    #[must_use]
-    pub fn cyw43_cached_control_plane_exact_error(&self) -> Option<&'static str> {
-        cached_wifi_debug_snapshot().and_then(|snapshot| {
-            if snapshot.control_plane_exact_error.is_empty() {
-                None
-            } else {
-                Some(snapshot.control_plane_exact_error)
-            }
-        })
-    }
-
-    pub fn promote_cached_control_plane_exact_error(&mut self, exact_error: &'static str) {
-        promote_cached_wifi_debug_snapshot_exact_error(exact_error);
-    }
-
-    pub fn promote_cached_control_plane_failure(
-        &mut self,
-        stage: &'static str,
-        exact_error: &'static str,
-    ) {
-        if !promote_cached_wifi_debug_snapshot_exact_error(exact_error) {
-            return;
-        }
-        let mut last_snapshot = LAST_WIFI_DEBUG_SNAPSHOT.lock();
-        if let Some(snapshot) = last_snapshot.as_mut() {
-            snapshot.debug_snapshot_source = "cached-driver-failure";
-            snapshot.debug_snapshot_stage = stage;
-        }
-    }
-
-    pub fn finish_cyw43_control_plane_reply_wait(&mut self) {
-        self.host.finish_control_plane_reply_wait();
-    }
-
-    #[must_use]
-    pub const fn cyw43_control_plane_probe_pending(&self) -> bool {
-        self.host.experimental_control_plane_write_probe_pending
-    }
-
-    #[must_use]
-    pub const fn cyw43_experimental_no_ht_transport(&self) -> bool {
-        self.host.experimental_no_ht_transport
-    }
-
-    #[must_use]
-    pub const fn cyw43_control_plane_startup_link_stabilized(&self) -> bool {
-        self.host.experimental_control_plane_startup_link_stabilized
-    }
-
-    #[must_use]
-    pub const fn cyw43_control_plane_startup_link_rescue_cycles(&self) -> u8 {
-        self.host
-            .experimental_control_plane_startup_link_rescue_cycles
-    }
-
-    pub fn finish_cyw43_experimental_transport_probe(&mut self) {
-        self.host.finish_experimental_transport_probe();
-    }
-
-    pub fn rearm_cyw43_control_plane_promoted_link(
-        &mut self,
-        speculative_ready_probe: bool,
-    ) -> Result<(), HalError> {
-        self.host
-            .rearm_firmware_channel_after_transport_promotion(speculative_ready_probe)
-    }
-
-    pub fn rearm_cyw43_control_plane_slow_link(&mut self) -> Result<(), HalError> {
-        self.host.rearm_firmware_channel_on_startup_link()
-    }
-
-    pub fn resume_cyw43_control_plane_reply_probe_on_startup_link(&mut self, stage: &'static str) {
-        self.host
-            .resume_control_plane_reply_probe_on_startup_link(stage);
-    }
-
-    pub fn log_cyw43_control_plane_snapshot(&mut self, stage: &'static str) {
-        self.host.log_control_plane_finish_snapshot(stage);
-    }
-
-    pub fn cyw43_host_eapol_rx_source(&mut self) -> Cyw43HostEapolRxSource {
-        let io_enable = self
-            .host
-            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
-            .ok();
-        let io_ready = self
-            .host
-            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
-            .ok();
-        let io_interrupt_enable = self
-            .host
-            .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
-            .ok();
-        let rframe_lo = self
-            .host
-            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
-            .ok();
-        let rframe_hi = self
-            .host
-            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
-            .ok();
-        let rframe_len = match (rframe_lo, rframe_hi) {
-            (Some(lo), Some(hi)) => Some(u16::from(lo) | (u16::from(hi) << 8)),
-            _ => None,
-        };
-        let int_status = self
-            .host
-            .read_sdio_core_u32_with_f1_fallback(
-                "host-eapol-rx-source",
-                "int-status",
-                SDIO_INT_STATUS,
-            )
-            .ok();
-        let tohost_mailbox = self
-            .host
-            .read_sdio_core_u32_with_f1_fallback(
-                "host-eapol-rx-source",
-                "tohost-mailbox",
-                SDPCMD_REG_TOHOSTMAILBOXDATA,
-            )
-            .ok();
-        let hostintmask = self
-            .host
-            .read_sdio_core_u32_with_f1_fallback(
-                "host-eapol-rx-source",
-                "hostintmask",
-                SDPCMD_REG_HOSTINTMASK,
-            )
-            .ok();
-        let function_int_mask = self
-            .host
-            .read_sdio_core_u32_with_f1_fallback(
-                "host-eapol-rx-source",
-                "functionintmask",
-                SDPCMD_REG_FUNCTIONINTMASK,
-            )
-            .ok();
-        let watermark = self
-            .host
-            .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-            .ok();
-        let devctl = self
-            .host
-            .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-            .ok();
-        let mesbusy = self
-            .host
-            .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-            .ok();
-        let sdhci_int_status = self.host.read32(SDHCI_INT_STATUS);
-        Cyw43HostEapolRxSource {
-            rframe_len,
-            int_status,
-            tohost_mailbox,
-            hostintmask,
-            function_int_mask,
-            watermark,
-            devctl,
-            mesbusy,
-            sdhci_int_status,
-            io_enable,
-            io_ready,
-            io_interrupt_enable,
-            frame_indication: int_status.is_some_and(|value| (value & I_HMB_FRAME_IND) != 0),
-            host_interrupt: int_status.is_some_and(|value| (value & I_HMB_HOST_INT) != 0),
-            card_interrupt: (sdhci_int_status & SDHCI_INT_CARD_INT) != 0,
-            function2_ready: cccr_function2_ready(io_ready),
-        }
-    }
-
-    fn debug_snapshot(&mut self, stage: &'static str) -> Result<WifiDebugSnapshot, HalError> {
-        let (card_ready, card_rca, card_ocr) = match self.host.card {
-            Some(card) => (true, card.rca, card.ocr),
-            None => (false, 0, 0),
-        };
-        let (io_enable, io_ready, io_interrupt_enable) = if card_ready {
-            (
-                self.host
-                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IOEX)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IORX)
-                    .ok(),
-                self.host
-                    .io_direct_read(SdioFunction::Function0, SDIO_CCCR_IENX)
-                    .ok(),
-            )
-        } else {
-            (None, None, None)
-        };
-        let (rframe_lo, rframe_hi, watermark, devctl, mesbusy) =
-            if live_function1_diagnostics_allowed(card_ready, io_ready) {
-                (
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCLO)
-                        .ok(),
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_RFRAMEBCHI)
-                        .ok(),
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_WATERMARK)
-                        .ok(),
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_DEVICE_CTL)
-                        .ok(),
-                    self.host
-                        .io_direct_read(SdioFunction::Function1, SBSDIO_FUNC1_MESBUSYCTRL)
-                        .ok(),
-                )
-            } else {
-                if pre_function2_ht_diagnostic_uses_cached_chipclkcsr_only(card_ready, io_ready) {
-                    emit_breadcrumb(format_args!(
-                        "[pi4-wifi] debug snapshot stage={stage} action=skip-live-f1-sideband reason=pre-f2-diagnostic-cache-only io_ready=0x{iorx:02x}/{}",
-                        yn(io_ready.is_some()),
-                        iorx = io_ready.unwrap_or(0),
-                    ));
-                }
-                (None, None, None, None, None)
-            };
-        let (
-            control_plane_reply_mode,
-            control_plane_reply_attempts,
-            control_plane_reply_empty_polls,
-            control_plane_promoted_probe_pending,
-        ) = self.cyw43_control_plane_reply_rearm_diag();
-        let control_plane_startup_link_rescue_cycles = self
-            .host
-            .experimental_control_plane_startup_link_rescue_cycles;
-        let control_plane_startup_link_rescue_limit =
-            super::control_plane_startup_link_rescue_limit();
-        let control_plane_passive_startup_link_empty_poll_limit =
-            passive_startup_link_wait_empty_poll_limit_for(
-                control_plane_startup_link_rescue_cycles,
-            );
-        let control_plane_sdhci_read_diag = resolved_control_plane_sdhci_read_diag(
-            self.host.last_data_wait_cmd,
-            self.host.last_data_wait_arg,
-            self.host.last_data_wait_present,
-            self.host.last_data_wait_int_status,
-            self.host.preserved_control_plane_data_wait_cmd,
-            self.host.preserved_control_plane_data_wait_arg,
-            self.host.preserved_control_plane_data_wait_present,
-            self.host.preserved_control_plane_data_wait_int_status,
-        );
-        let control_plane_f2_state = control_plane_function2_linux_state_label(
-            io_enable,
-            io_ready,
-            io_interrupt_enable,
-            watermark,
-            devctl,
-            mesbusy,
-        );
-        let control_plane_blocker = control_plane_snapshot_exact_blocker_label(
-            io_enable,
-            io_ready,
-            io_interrupt_enable,
-            None,
-            0,
-            None,
-            None,
-            None,
-            rframe_lo,
-            rframe_hi,
-            watermark,
-            devctl,
-            mesbusy,
-        );
-        let control_plane_exact_error = control_plane_snapshot_exact_error_label_with_sdhci_diag(
-            control_plane_blocker,
-            control_plane_sdhci_read_diag,
-        );
-        let control_plane_exact_error = control_plane_exact_error_preserving_pre_function2_clock(
-            self.host.last_chipclkcsr,
-            io_enable,
-            io_ready,
-            control_plane_exact_error,
-        );
-        let control_plane_exact_error = control_plane_exact_error_preserving_driver_failure(
-            control_plane_exact_error,
-            cached_wifi_driver_failure_exact_error(),
-        );
-        Ok(WifiDebugSnapshot {
-            power_state: self.power_state,
-            reset_state: self.reset_state,
-            current_clock_hz: self.host.current_clock_hz,
-            preferred_data_clock_hz: self.host.preferred_data_clock_hz,
-            bus_width: self.host.desired_bus_width,
-            card_ready,
-            card_rca,
-            card_ocr,
-            io_enable,
-            io_ready,
-            chipclkcsr: self.host.last_chipclkcsr,
-            wakeupctrl: self.host.last_wakeupctrl,
-            sleepcsr: self.host.last_sleepcsr,
-            cardcap: self.host.last_cardcap,
-            programmed_backplane_window: self.host.programmed_backplane_window,
-            shadow_backplane_window: self.host.last_backplane_window,
-            shadow_backplane_fn_addr: self.host.last_backplane_function_addr,
-            control_plane_frame_recovery_stage: self.host.last_function2_frame_recovery_stage,
-            control_plane_frame_recovery_policy: self.host.last_function2_frame_recovery_policy,
-            control_plane_frame_recovery_write: self.host.last_function2_frame_recovery_write,
-            control_plane_frame_recovery_drained: self.host.last_function2_frame_recovery_drained,
-            control_plane_frame_recovery_count: self.host.last_function2_frame_recovery_count,
-            control_plane_bootstrap_phase: control_plane_snapshot_bootstrap_phase_label(
-                self.host.experimental_no_ht_transport,
-                self.host.experimental_control_plane_write_probe_pending,
-                self.host.experimental_control_plane_startup_link_stabilized,
-                self.host.current_clock_hz,
-            ),
-            control_plane_reply_mode,
-            control_plane_reply_attempts,
-            control_plane_reply_empty_polls,
-            control_plane_no_ht_transport: self.host.experimental_no_ht_transport,
-            control_plane_probe_pending: self.host.experimental_control_plane_write_probe_pending,
-            control_plane_startup_link_stable: self
-                .host
-                .experimental_control_plane_startup_link_stabilized,
-            control_plane_startup_profile_locked: self
-                .host
-                .experimental_control_plane_startup_profile_locked,
-            control_plane_startup_profile_reason: self
-                .host
-                .experimental_control_plane_startup_profile_reason,
-            control_plane_promoted_probe_pending,
-            debug_snapshot_source: "live",
-            debug_snapshot_stage: stage,
-            control_plane_startup_link_rescue_cycles,
-            control_plane_startup_link_rescue_limit,
-            control_plane_passive_startup_link_empty_poll_limit,
-            control_plane_f2_state,
-            control_plane_sdhci_read_diag,
-            control_plane_exact_error,
-        })
-    }
-
-    fn apply_wifi_line(&mut self, was_enabled: bool) -> Result<(), HalError> {
-        let enabled = wifi_gpio_line_enabled(self.power_state, self.reset_state);
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] gpio wl-on={} power={} reset={}",
-            enabled as u8,
-            wifi_power_state_name(self.power_state),
-            wifi_reset_state_name(self.reset_state),
-        ));
-        let target = wifi_gpio_transition_target(was_enabled, self.power_state, self.reset_state);
-        let Some(target_enabled) = target else {
-            if !self.wifi_line_programmed {
-                emit_breadcrumb(format_args!(
-                    "[pi4-wifi] gpio wl-on unchanged={} action=program-initial-level",
-                    enabled as u8
-                ));
-                self.mailbox
-                    .configure_gpio_output(PI4_WIFI_GPIO, enabled as u32)?;
-                self.wifi_line_programmed = true;
-                if !enabled {
-                    bounded_spin_settle("wifi-power-off", WIFI_POWER_DROP_SETTLE_LOOPS);
-                    self.host.mark_power_cycled();
-                }
-                return Ok(());
-            }
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] gpio wl-on unchanged={} action=skip-mailbox",
-                enabled as u8
-            ));
-            return Ok(());
-        };
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] gpio wl-on transition {}->{}",
-            was_enabled as u8, target_enabled as u8
-        ));
-        self.mailbox
-            .configure_gpio_output(PI4_WIFI_GPIO, target_enabled as u32)?;
-        self.wifi_line_programmed = true;
-        if !was_enabled && target_enabled {
-            bounded_spin_settle("wifi-power-on", WIFI_POWER_SETTLE_LOOPS);
-        } else if was_enabled && !target_enabled {
-            bounded_spin_settle("wifi-power-off", WIFI_POWER_DROP_SETTLE_LOOPS);
-            self.host.mark_power_cycled();
-        }
-        Ok(())
-    }
-}
-
 struct Mailbox {
     regs: MappedRegs,
     request: MappedRegs,
@@ -8861,10 +7904,9 @@ impl Mailbox {
     where
         H: DeviceHal<Error = HalError>,
     {
-        // Reset-notify is serialized through the global mailbox lock and already
-        // has a dedicated posted fallback path, so reuse the long-lived
-        // acknowledged request page instead of allocating another uncached page
-        // late in boot.
+        // Reset-notify is serialized through the global mailbox lock, so reuse
+        // the long-lived acknowledged request page instead of allocating
+        // another uncached page late in boot.
         Self::new_with_request_slot(
             hal,
             &PINNED_MAILBOX_REQUEST,
@@ -9110,45 +8152,6 @@ impl Mailbox {
         Ok(())
     }
 
-    fn post_tag(&self, tag: u32, request_len_bytes: u32, payload: &[u32]) -> Result<(), HalError> {
-        with_mailbox_call_lock(|| self.post_tag_locked(tag, request_len_bytes, payload))
-    }
-
-    fn post_tag_locked(
-        &self,
-        tag: u32,
-        request_len_bytes: u32,
-        payload: &[u32],
-    ) -> Result<(), HalError> {
-        // SAFETY: `request` is a permanently pinned uncached DMA page dedicated
-        // to fire-and-forget property traffic and is not reused for acknowledged
-        // mailbox requests.
-        let request = unsafe {
-            core::slice::from_raw_parts_mut(
-                self.request.vaddr() as *mut u32,
-                PAGE_SIZE / core::mem::size_of::<u32>(),
-            )
-        };
-        self.encode_request(request, tag, request_len_bytes, payload)?;
-        let alias_base =
-            mailbox_posted_alias(tag).ok_or(HalError::Unsupported("mailbox-posted-tag"))?;
-        let request_bus = phys_to_bus(self.request.paddr(), alias_base)
-            .ok_or(HalError::Unsupported("mailbox-bus-alias"))?;
-        self.send_posted(request_bus)?;
-        MAILBOX_TRANSPORT_READY.store(true, Ordering::Release);
-        if !MAILBOX_TRANSPORT_READY_LOGGED.swap(true, Ordering::AcqRel) {
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] mailbox transport ready tag={}",
-                mailbox_tag_name(tag)
-            ));
-        }
-        emit_breadcrumb(format_args!(
-            "[pi4-wifi] mailbox posted tag={} alias=0x{alias_base:08x}",
-            mailbox_tag_name(tag)
-        ));
-        Ok(())
-    }
-
     fn prepare_send(&self) -> Result<(), HalError> {
         for _ in 0..MAILBOX_DRAIN_LIMIT {
             if self.read_reg(MAILBOX_STATUS0_OFFSET) & MAILBOX_EMPTY != 0 {
@@ -9294,30 +8297,15 @@ where
             err @ (HalError::Unsupported("mailbox-timeout")
             | HalError::Unsupported("mailbox-protocol")),
         ) => {
-            let fallback_reason = match err {
+            let no_ack_reason = match err {
                 HalError::Unsupported("mailbox-timeout") => "timeout",
                 HalError::Unsupported("mailbox-protocol") => "protocol",
                 _ => unreachable!(),
             };
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] mailbox xhci-reset-notify {fallback_reason} action=posted-fallback"
+                "[pi4-wifi] mailbox xhci-reset-notify {no_ack_reason} action=fail-closed"
             ));
-            let request = pinned_mailbox_request_page(
-                hal,
-                &PINNED_MAILBOX_POSTED_REQUEST,
-                "reuse-posted",
-                "alloc-posted",
-            )?;
-            let posted_mailbox = Mailbox {
-                regs: mailbox.regs,
-                request,
-            };
-            let fallback_payload = [VL805_MAILBOX_RESET_DEV_ADDR];
-            posted_mailbox.post_tag(TAG_NOTIFY_XHCI_RESET, 4, &fallback_payload)?;
-            emit_breadcrumb(format_args!(
-                "[pi4-wifi] mailbox xhci-reset-notify posted-fallback"
-            ));
-            Ok(Vl805ResetNotifyResult::PostedFallback)
+            Err(err)
         }
         Err(err) => Err(err),
     }
@@ -30390,17 +29378,7 @@ mod tests {
     }
 
     #[test]
-    fn xhci_reset_notify_is_the_only_posted_mailbox_fallback() {
-        assert_eq!(
-            mailbox_posted_alias(TAG_NOTIFY_XHCI_RESET),
-            Some(VC_BUS_ALIAS_BASES[0])
-        );
-        assert_eq!(mailbox_posted_alias(TAG_SET_POWER_STATE), None);
-        assert_eq!(mailbox_posted_alias(TAG_GET_CLOCK_RATE), None);
-    }
-
-    #[test]
-    fn xhci_reset_notify_tries_acked_aliases_before_posted_fallback() {
+    fn xhci_reset_notify_tries_all_acked_aliases() {
         assert_eq!(
             mailbox_ack_alias_count(TAG_NOTIFY_XHCI_RESET),
             VC_BUS_ALIAS_BASES.len()

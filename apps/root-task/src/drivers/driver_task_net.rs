@@ -27,7 +27,7 @@ use crate::hal::driver_task::{
     DriverTaskHotPath, CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT,
     MAX_DRIVER_TASK_FRAME_BYTES, SDIO_HOST_DRIVER_TASK_CONTRACT,
 };
-use crate::hal::{pi4_wifi, HalError, Hardware};
+use crate::hal::{HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetInterfacePolicy, NetStage,
     MAX_FRAME_LEN,
@@ -118,12 +118,13 @@ static CYW43_HOST_EAPOL_RX: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_START: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_SECURE: AtomicU32 = AtomicU32::new(0);
 static SDIO_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
-static SDIO_HAL_RESOURCE_READY: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static CYW43_LAST_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultStatus>> =
     Mutex::new(None);
 #[cfg(feature = "kernel")]
 static CYW43_LAST_SDIO_OWNER_FAULT: Mutex<Option<Cyw43SdioOwnerFaultStatus>> = Mutex::new(None);
+#[cfg(feature = "kernel")]
+static SDIO_LAST_RUNTIME_REPLAY_STATUS: Mutex<Option<SdioRuntimeReplayStatus>> = Mutex::new(None);
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -138,6 +139,13 @@ pub(crate) struct Cyw43RuntimeCommandFaultStatus {
     pub detail: u16,
     pub reason: &'static str,
     pub result: u32,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SdioRuntimeReplayStatus {
+    pub stage: &'static str,
+    pub status: &'static str,
 }
 
 #[cfg(feature = "kernel")]
@@ -199,6 +207,11 @@ pub(crate) fn latest_cyw43_runtime_command_fault_status() -> Option<Cyw43Runtime
 #[cfg(feature = "kernel")]
 pub(crate) fn latest_cyw43_sdio_owner_fault_status() -> Option<Cyw43SdioOwnerFaultStatus> {
     *CYW43_LAST_SDIO_OWNER_FAULT.lock()
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn latest_sdio_runtime_replay_status() -> Option<SdioRuntimeReplayStatus> {
+    *SDIO_LAST_RUNTIME_REPLAY_STATUS.lock()
 }
 
 #[cfg(feature = "kernel")]
@@ -400,6 +413,7 @@ fn emit_net_driver_task_replay_status(
 fn emit_sdio_driver_task_replay_status(stage: &'static str, status: &'static str) {
     use core::fmt::Write;
 
+    *SDIO_LAST_RUNTIME_REPLAY_STATUS.lock() = Some(SdioRuntimeReplayStatus { stage, status });
     let mut line = heapless::String::<160>::new();
     let _ = write!(
         line,
@@ -966,32 +980,7 @@ const fn cyw43_firmware_resume_forces_byte_mode(fault: Cyw43RuntimeCommandFaultS
 }
 
 #[cfg(feature = "kernel")]
-fn prepare_sdio_hal_resources<H>(hal: &mut H) -> Result<(), DriverTaskNetError>
-where
-    H: Hardware<Error = HalError>,
-{
-    if SDIO_HAL_RESOURCE_READY.load(Ordering::Acquire) != 0 {
-        emit_sdio_driver_task_replay_status("hal-resource-prep", "cached-ready");
-        return Ok(());
-    }
-    emit_sdio_driver_task_replay_status("hal-resource-prep", "begin");
-    match pi4_wifi::prepare_driver_task_sdio_resources(hal) {
-        Ok(()) => {
-            SDIO_HAL_RESOURCE_READY.store(1, Ordering::Release);
-            emit_sdio_driver_task_replay_status("hal-resource-prep", "ready");
-            Ok(())
-        }
-        Err(_) => {
-            emit_sdio_driver_task_replay_status("hal-resource-prep", "failed");
-            Err(DriverTaskNetError::RuntimeInit(
-                "sdio-host-hal-resource-prep",
-            ))
-        }
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn init_sdio_host_linked_runtime<H>(hal: &mut H) -> Result<(), DriverTaskNetError>
+fn init_sdio_host_linked_runtime<H>(_hal: &mut H) -> Result<(), DriverTaskNetError>
 where
     H: Hardware<Error = HalError>,
 {
@@ -1000,7 +989,6 @@ where
     }
     let contract = SDIO_HOST_DRIVER_TASK_CONTRACT;
     let _ = crate::hal::driver_task::register_pi4_bus_ring_service(contract);
-    prepare_sdio_hal_resources(hal)?;
     emit_sdio_driver_task_replay_status("descriptor-replay", "begin");
     if !crate::hal::driver_task::ensure_deferred_runtime_init_descriptor(
         contract,
@@ -1075,8 +1063,6 @@ where
         None,
     );
     if sdio_owner_recovery_can_preserve_ready_state() {
-        emit_sdio_driver_task_replay_status("hal-resource-prep", "preserved-ready");
-        prepare_sdio_hal_resources(hal)?;
         emit_sdio_driver_task_replay_status("owner-state", "preserved-ready");
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -1088,7 +1074,6 @@ where
         return Ok(());
     }
     SDIO_LINKED_RUNTIME_READY.store(0, Ordering::Release);
-    emit_sdio_driver_task_replay_status("hal-resource-prep", "preserved-ready");
     match init_sdio_host_linked_runtime(hal) {
         Ok(()) => {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
