@@ -239,6 +239,26 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED: u32 = 21;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE: u32 = 22;
 /// USB runtime prepared DMA structures.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY: u32 = 23;
+/// USB runtime is programming the xHCI Device Context Base Address Array.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN: u32 = 70;
+/// USB runtime is programming the xHCI command ring control register.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN: u32 = 71;
+/// USB runtime is quiescing device notification delivery.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN: u32 = 72;
+/// USB runtime is programming the enabled-slot count.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN: u32 = 73;
+/// USB runtime is programming the primary interrupter control register.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN: u32 = 74;
+/// USB runtime is programming the interrupter moderation register.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN: u32 = 75;
+/// USB runtime is programming the event-ring segment-table size.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN: u32 = 76;
+/// USB runtime is programming the event-ring segment-table address.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN: u32 = 77;
+/// USB runtime is programming the event-ring dequeue pointer.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN: u32 = 78;
+/// USB runtime is requesting xHCI controller run state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN: u32 = 79;
 /// USB runtime published xHCI command/event rings.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY: u32 = 24;
 /// USB runtime requested xHCI run state.
@@ -251,6 +271,14 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY: u32 = 31;
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY: u32 = 32;
 /// SDIO runtime cleared command/data inhibit after clock enable.
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY: u32 = 33;
+/// SDIO runtime is adopting a HAL-prepared host before destructive reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN: u32 = 80;
+/// SDIO runtime could not prove powered/card-present HAL state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING: u32 = 81;
+/// SDIO runtime could not enable a stable startup clock while adopting.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED: u32 = 82;
+/// SDIO runtime could not clear command/data inhibit while adopting.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED: u32 = 83;
 /// Runtime recognized an engine-init aux word before entering the handler.
 pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH: u32 = 34;
 /// Runtime entered the engine-init handler.
@@ -265,6 +293,18 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_BEGIN: u32 = 40;
 pub const DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE: u32 = 41;
 /// HDMI runtime rejected or produced no visible text frame.
 pub const DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED: u32 = 42;
+/// Runtime selected the role-specific service handler.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH: u32 = 43;
+/// Runtime selected the HDMI text service handler.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI: u32 = 44;
+/// Runtime selected the USB keyboard service handler.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB: u32 = 45;
+/// Runtime selected the SDIO host service handler.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO: u32 = 46;
+/// Runtime selected the CYW43 Wi-Fi service handler.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43: u32 = 47;
+/// Runtime is publishing the command completion record.
+pub const DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH: u32 = 48;
 /// Offset namespace base for runtime shared-buffer payloads referenced by an
 /// owner-ring descriptor.
 pub const DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE: u16 = DRIVER_RUNTIME_RING_PAGE_BYTES;

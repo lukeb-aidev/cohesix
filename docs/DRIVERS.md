@@ -347,13 +347,13 @@ VSpace state for driver IPC/stack mappings; fresh Pi proof is still required.
 | --- | --- | --- | --- | --- |
 | `serial` | serial console | `serial` | isolated child VSpace using the linked `pi4-driver-serial` image; emergency early UART remains root-owned | linked image services the fixed-ring smoke path plus bounded mini-UART init/RX/TX; generated spec is acceptance-eligible, but fresh Pi proof is still required |
 | `usb-local-seat` | USB keyboard/local seat | `usb-local-seat` | isolated child VSpace using the linked `pi4-driver-usb` image | linked image requires a semantic xHCI MMIO range, DMA/shared pages, the VL805 PCIe DMA bus alias, and a pointer-free USB-to-PCIe bus link before engine init; root maps the PCIe owner ring at `0x70e01000` and mints the owner endpoint at child slot `9` so USB can flush VL805 posted writes without owning PCIe MMIO; the DMA arena is described by page descriptors and may be physically non-contiguous; the runtime now owns a direct-root-port xHCI keyboard path with command/event/EP0/interrupt-IN rings, root-port reset, slot/address/configure-endpoint commands, HID boot-protocol setup, duplicate-key suppression, arrow-key ANSI escape publication, and DMA report polling; hub keyboards and VL805 timing still need Pi hardware proof |
-| `hdmi-text` | HDMI text mirror | `hdmi-text` | isolated child VSpace using the linked `pi4-driver-hdmi` image | linked image requires framebuffer metadata plus declared resources and renders bounded text frames directly into the mapped framebuffer; engine init only validates/resources the text sink and does not clear the full framebuffer, while clear/redraw is driven by submitted text frames |
+| `hdmi-text` | HDMI text mirror | `hdmi-text` | isolated child VSpace using the linked `pi4-driver-hdmi` image | linked image requires framebuffer metadata plus declared resources and renders bounded text frames directly into the mapped framebuffer; engine init validates/resources the text sink, descriptor replay clears the stale firmware/U-Boot screen once, normal overflow scrolls the visible text area one row at a time, and explicit clear/redraw is driven by submitted form-feed text frames |
 | `bcmgenet-v5` | GENET wired NIC | `bcmgenet-v5` | isolated child VSpace using the linked `pi4-driver-genet` image | linked image requires declared GENET MMIO/DMA/shared pages before engine init; the descriptor ring now uses a 32-RX/32-TX page-described DMA arena so non-contiguous physical pages remain safe; it programs UMAC/RGMII, MDIO PHY speed, MAC address, RX/TX descriptor rings, bounded TX submission, RX drain, and TX completion reclaim inside the runtime; useful link/DHCP progress still needs Pi hardware proof |
 | `cyw43455` | CYW43 Wi-Fi NIC | `cyw43455` | isolated child VSpace using the linked `pi4-driver-cyw43` image | linked image requires shared control buffers plus the pointer-free CYW43-to-SDIO bus-link descriptor before engine init; root maps the SDIO owner ring at `0x70e00000` and the owner two-page data window at `0x70e01000` so the descriptor advertises `shared_offset=4096` and `shared_len=8192`; CYW43 no longer receives direct SDHCI MMIO or a DMA arena, so SDIO register authority belongs to `sdio-host`; Wi-Fi association/DHCP and WPA/EAPOL still need Pi hardware proof of the SDIO owner-link service path |
 | `rtl8139` | QEMU RTL8139 NIC | `rtl8139` | shared root VSpace | dedicated TCB service dispatch for active QEMU RTL8139 network polling |
 | `virtio-net` | QEMU virtio-net NIC | `virtio-net` | shared root VSpace | dedicated TCB service dispatch for active QEMU virtio network polling |
 | `sdio-host` | SDIO host for CYW43 | `sdio-host` | isolated child VSpace using the linked `pi4-driver-sdio` image | linked image receives the HAL-declared SDHCI MMIO page plus shared pages, services fixed-layout CMD52/CMD53/POLL_IRQ turns, and must report dedicated-role plus owner-state descriptor proof before 26b SDIO acceptance is credited |
-| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | isolated child VSpace using the linked `pi4-driver-pcie` image | linked image requires declared PCIe MMIO/shared pages, adopts the HAL-prepared aperture at engine init, and services bounded 32-bit read/write/posted-write-flush turns inside that aperture; service ordering remains network-control, but the seL4 TCB priority is raised to the USB local-seat priority because USB posted-write flushes synchronously depend on this owner runtime; broader root-complex/VL805 handoff still needs Pi proof and completion |
+| `pcie-root` | Pi 4 PCIe root/VL805 support | `pcie-root` | isolated child VSpace using the linked `pi4-driver-pcie` image | linked image requires declared PCIe MMIO/shared pages, adopts the HAL-prepared aperture during descriptor replay, and services bounded 32-bit read/write/posted-write-flush turns inside that aperture; service ordering remains network-control, but the seL4 TCB priority is raised to the USB local-seat priority because USB posted-write flushes synchronously depend on this owner runtime; broader root-complex/VL805 handoff still needs Pi proof and completion |
 
 The final isolated-image contract is now generated rather than hand-authored in
 HAL. `configs/root_task.toml` and `configs/root_task_pi4_uboot_aarch64.toml`
@@ -471,7 +471,10 @@ only by the linked `hdmi-text` runtime, while UART remains the complete log
 stream.
 The linked HDMI runtime treats form-feed as a clear-and-home text command so
 root can redraw bounded high-impact scrollback by submitting frames; root still
-does not map or write the framebuffer on physical Pi 4.
+does not map or write the framebuffer on physical Pi 4. Normal newline
+overflow remains terminal-like: the linked runtime copies the visible text area
+up by one character row, clears only the bottom row, and keeps the cursor on the
+last row instead of jumping to a fresh page.
 Root-console startup publishes its raw UART start/end markers and the serial
 prompt before any NineDoor log-stream attachment. On Pi 4 local-seat boots,
 post-prompt driver diagnostics remain on the serial UART and the logger reprints
@@ -495,32 +498,51 @@ after completion, and `DRIVER_TASK_RING_CALL_TIMEOUT` if a bounded diagnostic
 bootstrap handshake cannot prove receive/completion progress; timeout breadcrumbs
 include the command mode, opcode, hot-path argument, aux word, and frame length
 so a stalled boot log identifies the exact resource-init or service turn that
-failed to complete. Isolated runtimes also update a primitive progress marker
-in the fixed ring metadata window before command dispatch and around
-zero-frame engine init. On timeout, root emits `DRIVER_TASK_RING_PROGRESS` so
+failed to complete. Isolated runtimes also update and cache-clean a primitive
+progress marker in the fixed ring metadata window before command dispatch, at
+role-specific service selection, around zero-frame engine init, and before
+completion publication. On timeout, root emits `DRIVER_TASK_RING_PROGRESS` so
 the next boot distinguishes an IPC delivery miss from a runtime that observed
-the command and then stalled inside role-specific initialization. The current
+the command, entered a specific handler, completed but failed to publish the
+shared completion, or stalled inside role-specific initialization. The current
 marker ladder includes `command-validated`, `runtime-ready`,
-`engine-init-dispatch`, `engine-init-enter`, `engine-init-aux-match`,
-`engine-init-frame-ready`, `engine-init-descriptor-loaded`,
-`engine-init-descriptor-ready`, `engine-init-resource-check-begin`,
-`engine-init-resource-check-failed`, `engine-init-resources-ready`,
-`engine-init-hw-begin`, `engine-init-hw-done`, and
-`engine-init-hw-failed`; USB then reports `usb-caps-read`,
+`service-dispatch`, `service-dispatch-hdmi`, `service-dispatch-usb`,
+`service-dispatch-sdio`, `service-dispatch-cyw43`, `engine-init-dispatch`,
+`engine-init-enter`, `engine-init-aux-match`, `engine-init-frame-ready`,
+`engine-init-descriptor-loaded`, `engine-init-descriptor-ready`,
+`engine-init-resource-check-begin`, `engine-init-resource-check-failed`,
+`engine-init-resources-ready`, `engine-init-hw-begin`, `engine-init-hw-done`,
+`engine-init-hw-failed`, and success-only `completion-publish`; faulting
+turns preserve the last meaningful subphase so diagnostics do not collapse a
+hardware blocker into generic completion publication. USB then reports `usb-caps-read`,
 `usb-controller-halted`, `usb-reset-done`, `usb-dma-ready`,
-`usb-rings-ready`, and `usb-run-requested`, while SDIO reports
+`usb-dcbaap-begin`, `usb-crcr-begin`, `usb-dnctrl-begin`,
+`usb-config-begin`, `usb-iman-begin`, `usb-imod-begin`,
+`usb-erstsz-begin`, `usb-erstba-begin`, `usb-erdp-begin`,
+`usb-run-begin`, `usb-rings-ready`, and `usb-run-requested`, while SDIO reports
+`sdio-adopt-begin`, `sdio-adopt-power-missing`,
+`sdio-adopt-clock-failed`, `sdio-adopt-inhibit-failed`,
 `sdio-reset-begin`, `sdio-power-ready`, `sdio-clock-ready`, and `sdio-ready`.
 HDMI frame submission reports `hdmi-frame-begin`, `hdmi-frame-done`, or
 `hdmi-frame-failed` so first-draw stalls do not collapse into generic runtime
 readiness.
-No-reply timeouts for linked SDIO engine init and USB local-seat
-init/enumeration keep the active ring slot for bounded resumes instead of
-immediately zeroing the command. This preserves a late child completion or a
-stable progress marker and prevents repeated no-detail replays from hiding the
-true frontier. HDMI engine init is intentionally different: descriptor replay
-arms the text sink when the framebuffer resources validate, and a no-reply
-empty engine-init must not be used as a precondition for the first bounded text
-frame through the linked `hdmi-text` runtime.
+Engine init borrows the stored runtime descriptor by reference through the
+USB/SDIO/CYW43/HDMI hardware-init path after descriptor replay. The runtime must
+not copy the full `DriverRuntimeInitDescriptor` through nested helper calls before
+publishing descriptor/resource/HW progress markers, because the isolated driver
+TCB stack is intentionally small and descriptor-copy stack pressure can collapse
+USB and SDIO into indistinguishable `engine-init-begin` no-reply timeouts.
+Generic engine-init no-reply timeouts clear the active ring slot after emitting
+the cached progress marker; otherwise a single missed reply can poison later
+diagnostics with `runtime-ring-submit busy`. USB local-seat init/enumeration
+keeps bounded resume semantics only on the explicit keyboard paths that have a
+prompt-side retry contract. HDMI descriptor replay and routine `SubmitFrame`
+mirroring are intentionally different:
+it arms the text sink, clears the mapped framebuffer, and paints linked-runtime
+diagnostics when the framebuffer resources validate. A no-reply empty
+engine-init must not be used as a precondition for the first bounded text frame
+through the linked `hdmi-text` runtime; a successful linked `SubmitFrame` is
+sufficient HDMI owner-state proof.
 Non-acceptance resource initialization breadcrumbs use
 `DRIVER_TASK_RESOURCE_INIT ... stage=... status=... acceptance=no` for descriptor
 record, descriptor bootstrap, deferred descriptor replay, engine-init,
@@ -645,8 +667,9 @@ strict Pi owner-ring path, SDIO command and
 single-frame data calls consume the linked-runtime completion and return before
 the root SDHCI body. PCIe runtime descriptor replay is adopt-only: after HAL has
 proved the live root-complex/VL805 tuple, refreshed bounded windows and masks,
-and assigned the VL805 BAR/COMMAND, the linked PCIe runtime marks the descriptor
-as ready to serve bounded port read/write/flush turns. It must not assert BCM2711
+and assigned the VL805 BAR/COMMAND, descriptor replay lets the linked PCIe
+runtime mark the descriptor as ready to serve bounded port read/write/flush
+turns without a separate pre-USB PCIe engine-init command. It must not assert BCM2711
 `SW_INIT_1` or PERST from the prompt-side linked-runtime service turn. Full PCIe
 reset/power sequencing stays in the HAL-owned platform proof path, and PCIe
 physical port read/write/flush helpers return from linked-runtime completions
@@ -2257,10 +2280,12 @@ Required Cohesix shape:
   no-keyboard-input turn. A later UART command still clears an unfinished
   local-seat line before dispatch, so serial and USB input cannot concatenate
   stale partial commands.
-  Accepted local-seat command output is emitted on UART; HDMI is not a general
-  command-output mirror on physical Pi 4. The linked HDMI path is reserved for
-  high-impact progress lines and real-time local-seat input feedback, so slow or
-  verbose console output cannot starve xHCI polling through display rendering.
+  Accepted local-seat and serial command output is emitted on UART and through
+  the bounded linked HDMI mirror once `hdmi-text` proves a `SubmitFrame`.
+  High-impact progress lines and real-time local-seat input feedback may submit
+  first-frame owner proof before HDMI engine-init owner state is attached, but
+  root still never writes the framebuffer directly. Slow or verbose console
+  output remains chunked so display rendering cannot starve xHCI polling.
   Up/down keyboard scrollback redraws only the bounded high-impact HDMI history
   through linked `SubmitFrame` commands. `usb status` reports local-seat
   keyboard-drop counters without deferred HDMI queue/drop counters.

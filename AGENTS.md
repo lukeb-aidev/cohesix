@@ -66,6 +66,16 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
    - No libc-style abstractions.
    - No in-VM GPU stacks.
    - All heavy ecosystems (CUDA, NVML, networking sidecars) remain host-side.
+   - Physical-hardware drivers are linked-runtime only. On Pi 4 and any future
+     physical target, USB, HDMI/display, Ethernet, Wi-Fi, SDIO, PCIe, MMIO-backed
+     devices, and other steady hardware drivers must run as linked driver-runtime
+     child images over the fixed driver-task ABI after HAL admission. Root-task
+     may construct seL4/HAL resources, validate manifests, publish descriptors,
+     submit bounded service turns, record diagnostics, and keep the emergency
+     serial escape hatch; it must not contain root-owned steady-state physical
+     device drivers. QEMU/host compatibility harnesses may retain virtual-device
+     or root-context test drivers only when profile-gated and never as physical
+     hardware acceptance proof.
 
 6. **Capability Discipline**
    - All interactions occur via Secure9P namespaces and role-scoped capability tickets.

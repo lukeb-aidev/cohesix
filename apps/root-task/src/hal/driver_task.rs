@@ -26,6 +26,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
     DRIVER_RUNTIME_RING_PROGRESS_BYTES, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
     DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+    DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED,
@@ -60,12 +61,26 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
+    DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
+    DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO,
+    DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB, DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_USB_ENUMERATE_AUX,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -1763,13 +1778,14 @@ pub const EXPECTED_DRIVER_TASK_BOOTSTRAP_COUNT: usize = 9;
 /// Bounded send/yield attempts for the first linked-runtime ring handshake.
 pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
-const DRIVER_TASK_HDMI_FRAME_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
+const DRIVER_TASK_HDMI_FRAME_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 16;
 const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
 const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS;
 const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS * 4;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
+const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 0;
 const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
 
 #[cfg(feature = "kernel")]
@@ -2108,6 +2124,17 @@ pub(crate) fn latest_driver_task_ring_progress(
         phase_name: driver_task_ring_progress_phase_label(phase),
         aux0,
     })
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_ring_command_active(contract: DriverTaskContract) -> bool {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.active.load(Ordering::Acquire) != 0
 }
 
 #[cfg(feature = "kernel")]
@@ -3256,15 +3283,35 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED => "usb-controller-halted",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE => "usb-reset-done",
         DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY => "usb-dma-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN => "usb-dcbaap-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN => "usb-crcr-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN => "usb-dnctrl-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN => "usb-config-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN => "usb-iman-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN => "usb-imod-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN => "usb-erstsz-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN => "usb-erstba-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN => "usb-erdp-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN => "usb-run-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => "usb-rings-ready",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => "usb-run-requested",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN => "sdio-reset-begin",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY => "sdio-power-ready",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY => "sdio-clock-ready",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => "sdio-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN => "sdio-adopt-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING => "sdio-adopt-power-missing",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED => "sdio-adopt-clock-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED => "sdio-adopt-inhibit-failed",
         DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_BEGIN => "hdmi-frame-begin",
         DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE => "hdmi-frame-done",
         DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED => "hdmi-frame-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH => "service-dispatch",
+        DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI => "service-dispatch-hdmi",
+        DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB => "service-dispatch-usb",
+        DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO => "service-dispatch-sdio",
+        DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43 => "service-dispatch-cyw43",
+        DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH => "completion-publish",
         _ => "unknown",
     }
 }
@@ -3361,10 +3408,20 @@ impl DriverTaskRingCommandMode {
 fn driver_task_ring_call_trace_enabled(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
-    _mode: DriverTaskRingCommandMode,
+    mode: DriverTaskRingCommandMode,
 ) -> bool {
     if matches!(contract.kind, DriverTaskKind::WifiNic)
         && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+    {
+        return false;
+    }
+    if matches!(contract.kind, DriverTaskKind::HdmiText)
+        && command.opcode == DriverTaskOpcode::SubmitFrame.as_u16()
+        && command.aux0 == 0
+        && matches!(
+            mode,
+            DriverTaskRingCommandMode::Steady | DriverTaskRingCommandMode::NonBlocking
+        )
     {
         return false;
     }
@@ -3503,14 +3560,13 @@ fn driver_task_ring_timeout_keep_active_limit(
         && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
     {
         DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
-    } else if mode == DriverTaskRingCommandMode::NonBlocking
-        && command.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX
-        && matches!(
-            contract.kind,
-            DriverTaskKind::LocalSeatUsb | DriverTaskKind::SdioHost
-        )
+    } else if matches!(
+        mode,
+        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
+    ) && matches!(contract.kind, DriverTaskKind::HdmiText)
+        && command.aux0 == 0
     {
-        DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+        DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT
     } else {
         0
     }
@@ -3650,13 +3706,22 @@ fn run_driver_task_ring_command_with_mode(
     let prompt_slice_resume =
         mode == DriverTaskRingCommandMode::PromptSlice && slot.active.load(Ordering::Acquire) != 0;
     if slot.active.swap(1, Ordering::AcqRel) != 0 && !prompt_slice_resume {
-        emit_driver_task_ring_resource_submit_status(
-            contract,
-            command,
-            "runtime-ring-submit",
-            "busy",
-        );
-        return None;
+        let active_request = slot.request_seq.load(Ordering::Acquire);
+        driver_task_ring_invalidate_completion_record(ring_root_ptr);
+        // SAFETY: The completion pointer addresses the validated shared ring
+        // page. This read drains a late completion before declaring the ring
+        // busy so one delayed driver turn cannot permanently block a hot path.
+        let active_completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+        if active_request == 0 || active_completion.sequence != active_request as u32 {
+            emit_driver_task_ring_resource_submit_status(
+                contract,
+                command,
+                "runtime-ring-submit",
+                "busy",
+            );
+            return None;
+        }
+        slot.timeout_resumes.store(0, Ordering::Release);
     }
 
     let request = if prompt_slice_resume {
@@ -3839,6 +3904,11 @@ fn run_driver_task_ring_command_with_mode(
         }
     }
     if completion.sequence == request as u32 {
+        if completion.code == DriverTaskCompletionCode::Fault.as_u16() && trace_call {
+            let progress = driver_task_ring_read_progress_record(ring_root_ptr);
+            record_driver_task_ring_progress(slot, progress);
+            emit_driver_task_ring_call_progress(contract, request, command, progress);
+        }
         if let (Some(start_ticks), Some(end_ticks), Some(counter_frequency)) = (
             start_ticks,
             driver_task_counter_ticks(),
@@ -6834,12 +6904,12 @@ mod tests {
             usb,
             DriverTaskRingCommandMode::Steady
         ));
-        assert!(driver_task_ring_call_trace_enabled(
+        assert!(!driver_task_ring_call_trace_enabled(
             HDMI_TEXT_DRIVER_TASK_CONTRACT,
             hdmi,
             DriverTaskRingCommandMode::Steady
         ));
-        assert!(driver_task_ring_call_trace_enabled(
+        assert!(!driver_task_ring_call_trace_enabled(
             HDMI_TEXT_DRIVER_TASK_CONTRACT,
             hdmi,
             DriverTaskRingCommandMode::NonBlocking
@@ -6972,10 +7042,7 @@ mod tests {
                     command,
                     DriverTaskRingCommandMode::NonBlocking
                 ),
-                matches!(
-                    contract.kind,
-                    DriverTaskKind::LocalSeatUsb | DriverTaskKind::SdioHost
-                )
+                false
             );
         }
     }

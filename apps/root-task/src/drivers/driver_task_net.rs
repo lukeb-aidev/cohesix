@@ -65,6 +65,19 @@ const CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT: usize = 24;
 const CYW43_BACKPLANE_ADDRESS_MASK: u32 = 0x7fff;
 const CYW43_BACKPLANE_WINDOW_MASK: u32 = 0xffff_8000;
 const CYW43_BACKPLANE_32BIT_FLAG: u32 = 0x8000;
+const CYW43_CONTROL_PLANE_POLL_ATTEMPTS: usize = 256;
+const CYW43_BCDC_HEADER_BYTES: usize = 16;
+const CYW43_BCDC_FLAG_SET: u32 = 0x0000_0002;
+const CYW43_WLC_UP: u32 = 2;
+const CYW43_WLC_SET_INFRA: u32 = 20;
+const CYW43_WLC_SET_AUTH: u32 = 22;
+const CYW43_WLC_SET_SSID: u32 = 26;
+const CYW43_WLC_SET_WSEC: u32 = 134;
+const CYW43_WLC_SET_WPA_AUTH: u32 = 165;
+const CYW43_WSEC_NONE: u32 = 0;
+const CYW43_WSEC_AES: u32 = 4;
+const CYW43_WPA_AUTH_DISABLED: u32 = 0;
+const CYW43_WPA2_AUTH_PSK: u32 = 0x0080;
 const SDIO_CMD53_BYTE_MODE_MAX: u16 = 512;
 const CYW43_RUNTIME_FIRMWARE_TAIL_PAD_ALIGNMENT: usize = SDIO_CMD53_BYTE_MODE_MAX as usize;
 const CYW43_RUNTIME_FIRMWARE_TAIL_PAD_MAX_BYTES: usize = 4096;
@@ -801,11 +814,162 @@ fn complete_cyw43_linked_runtime_control_plane<H>(
 where
     H: Hardware<Error = HalError>,
 {
-    let _ = (hal, config);
+    let _ = hal;
+    let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
     reset_cyw43_control_plane_state();
-    Err(DriverTaskNetError::RuntimeInit(
-        "cyw43-control-plane-linked-runtime-required",
-    ))
+    let Some(credentials) = config.wifi_credentials else {
+        return Err(DriverTaskNetError::RuntimeInit("wifi-credentials-missing"));
+    };
+    if !credentials.has_ssid() {
+        return Err(DriverTaskNetError::RuntimeInit("wifi-ssid-missing"));
+    }
+    let security = if credentials.has_psk() {
+        (
+            CYW43_WSEC_AES,
+            CYW43_WPA2_AUTH_PSK,
+            "cyw43-control-security-wpa2-psk",
+        )
+    } else {
+        (
+            CYW43_WSEC_NONE,
+            CYW43_WPA_AUTH_DISABLED,
+            "cyw43-control-security-open",
+        )
+    };
+    cyw43_submit_bcdc_empty(contract, CYW43_WLC_UP, "cyw43-control-up")?;
+    cyw43_submit_bcdc_u32(contract, CYW43_WLC_SET_INFRA, 1, "cyw43-control-infra")?;
+    cyw43_submit_bcdc_u32(contract, CYW43_WLC_SET_AUTH, 0, "cyw43-control-auth")?;
+    cyw43_submit_bcdc_u32(contract, CYW43_WLC_SET_WSEC, security.0, security.2)?;
+    cyw43_submit_bcdc_u32(
+        contract,
+        CYW43_WLC_SET_WPA_AUTH,
+        security.1,
+        "cyw43-control-wpa-auth",
+    )?;
+    cyw43_submit_bcdc_ssid(contract, credentials, "cyw43-control-ssid")?;
+    let _observed = cyw43_poll_control_plane_frames("cyw43-control-poll");
+    if credentials.has_psk() {
+        return Err(DriverTaskNetError::RuntimeInit("host-eapol-required"));
+    }
+    CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
+    CYW43_ASSOCIATED.store(1, Ordering::Release);
+    CYW43_LINK_UP.store(1, Ordering::Release);
+    CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+    Ok(())
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_empty(
+    contract: DriverTaskContract,
+    cmd: u32,
+    stage: &'static str,
+) -> Result<(), DriverTaskNetError> {
+    let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    let len = cyw43_write_bcdc_frame(&mut frame, cmd, &[])?;
+    cyw43_submit_control_frame_checked(contract, &frame[..len], stage)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_u32(
+    contract: DriverTaskContract,
+    cmd: u32,
+    value: u32,
+    stage: &'static str,
+) -> Result<(), DriverTaskNetError> {
+    let mut payload = [0u8; 4];
+    payload.copy_from_slice(&value.to_le_bytes());
+    let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    let len = cyw43_write_bcdc_frame(&mut frame, cmd, &payload)?;
+    cyw43_submit_control_frame_checked(contract, &frame[..len], stage)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_ssid(
+    contract: DriverTaskContract,
+    credentials: crate::net::WifiCredentials,
+    stage: &'static str,
+) -> Result<(), DriverTaskNetError> {
+    let ssid_len = usize::from(credentials.ssid_len);
+    let mut ssid_payload = [0u8; 36];
+    ssid_payload[..4].copy_from_slice(&(ssid_len as u32).to_le_bytes());
+    ssid_payload[4..4 + ssid_len].copy_from_slice(&credentials.ssid[..ssid_len]);
+    let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    let len = cyw43_write_bcdc_frame(&mut frame, CYW43_WLC_SET_SSID, &ssid_payload)?;
+    cyw43_submit_control_frame_checked(contract, &frame[..len], stage)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_write_bcdc_frame(
+    frame: &mut [u8; MAX_DRIVER_TASK_FRAME_BYTES],
+    cmd: u32,
+    payload: &[u8],
+) -> Result<usize, DriverTaskNetError> {
+    let len = CYW43_BCDC_HEADER_BYTES
+        .checked_add(payload.len())
+        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-control-frame-len"))?;
+    if len > frame.len() {
+        return Err(DriverTaskNetError::RuntimeInit("cyw43-control-frame-len"));
+    }
+    frame[0..4].copy_from_slice(&cmd.to_le_bytes());
+    frame[4..8].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+    frame[8..12].copy_from_slice(&CYW43_BCDC_FLAG_SET.to_le_bytes());
+    frame[12..16].copy_from_slice(&0u32.to_le_bytes());
+    frame[CYW43_BCDC_HEADER_BYTES..len].copy_from_slice(payload);
+    Ok(len)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_control_frame_checked(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    stage: &'static str,
+) -> Result<(), DriverTaskNetError> {
+    let completion = submit_cyw43_runtime_command_checked(
+        contract,
+        DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
+            payload_len: payload.len() as u16,
+            total_len: payload.len() as u32,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        },
+        payload,
+    )
+    .map_err(|err| err.into_net_error())?;
+    if completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result != 0 {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "ready",
+            Some(completion),
+        );
+        Ok(())
+    } else {
+        Err(DriverTaskNetError::RuntimeInit(stage))
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_poll_control_plane_frames(stage: &'static str) -> u32 {
+    let mut observed = 0u32;
+    for _ in 0..CYW43_CONTROL_PLANE_POLL_ATTEMPTS {
+        let Some((_flags, token)) = poll_cyw43_driver_task_control_frame() else {
+            continue;
+        };
+        observed = observed.saturating_add(1);
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "frame",
+            None,
+        );
+        if token.len != 0 {
+            break;
+        }
+    }
+    observed
 }
 
 #[cfg(feature = "kernel")]

@@ -4496,6 +4496,7 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH
@@ -4527,6 +4528,16 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => 3,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => 4,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE => 4,
@@ -4537,6 +4548,9 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_blocker_for_progress_phase(phase: u32) -> &'static str {
         match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
+                "usb-engine-init-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "usb-engine-init-descriptor-ready-no-reply"
             }
@@ -4588,8 +4602,38 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY => {
                 "usb-xhci-ring-setup-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN => {
+                "usb-xhci-dcbaap-programming-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN => {
+                "usb-xhci-crcr-programming-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN => {
+                "usb-xhci-dnctrl-programming-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN => {
+                "usb-xhci-config-programming-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN => {
+                "usb-xhci-iman-programming-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN => {
+                "usb-xhci-imod-programming-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN => {
+                "usb-xhci-erstsz-programming-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN => {
+                "usb-xhci-erstba-programming-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN => {
+                "usb-xhci-erdp-programming-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => {
                 "usb-xhci-run-transition-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN => {
+                "usb-xhci-run-request-no-reply"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => {
                 "usb-xhci-command-ring-proof-no-reply"
@@ -4605,6 +4649,9 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_next_action_for_progress_phase(phase: u32) -> &'static str {
         match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
+                "inspect-linked-usb-runtime-engine-init-dispatch"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "inspect-linked-usb-runtime-resource-check"
             }
@@ -4658,8 +4705,38 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY => {
                 "inspect-xhci-command-event-ring-programming"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN => {
+                "inspect-xhci-dcbaap-register-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN => {
+                "inspect-xhci-command-ring-control-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN => {
+                "inspect-xhci-device-notification-control-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN => {
+                "inspect-xhci-enabled-slot-config-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN => {
+                "inspect-xhci-interrupter-control-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN => {
+                "inspect-xhci-interrupter-moderation-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN => {
+                "inspect-xhci-event-ring-segment-table-size"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN => {
+                "inspect-xhci-event-ring-segment-table-address"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN => {
+                "inspect-xhci-event-ring-dequeue-pointer"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => {
                 "inspect-xhci-run-transition-and-posted-write-flush"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN => {
+                "inspect-xhci-run-command-posted-write-flush"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => {
                 "poll-enable-slot-completion"
@@ -4934,16 +5011,36 @@ where
                 ));
                 self.emit_console_line(progress_line.as_str());
             }
+            let gate1_evidence = if failing_gate == 1 && linked_detail == 0 {
+                if let Some(progress) = linked_progress {
+                    format_message(format_args!(
+                        "linked_runtime_phase={} phase_name={} blocker={} linked_controller={} detail=0x{:04x}",
+                        progress.phase,
+                        progress.phase_name,
+                        Self::usb_runtime_blocker_for_progress_phase(progress.phase),
+                        Self::yes_no(linked_controller_ready),
+                        linked_detail,
+                    ))
+                } else {
+                    format_message(format_args!(
+                        "owner=driver-task linked_controller={} detail=0x{:04x}",
+                        Self::yes_no(linked_controller_ready),
+                        linked_detail,
+                    ))
+                }
+            } else {
+                format_message(format_args!(
+                    "owner=driver-task linked_controller={} detail=0x{:04x}",
+                    Self::yes_no(linked_controller_ready),
+                    linked_detail,
+                ))
+            };
 
             self.emit_usb_gate_line(
                 1,
                 "hal-resources",
                 Self::usb_startup_gate_status(1, proof_gate, failing_gate),
-                format_args!(
-                    "owner=driver-task linked_controller={} detail=0x{:04x}",
-                    Self::yes_no(linked_controller_ready),
-                    linked_detail,
-                ),
+                format_args!("{}", gate1_evidence.as_str()),
                 "pcie-vl805",
             );
             self.emit_usb_gate_line(
@@ -5206,6 +5303,14 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn wifi_command_accepts_driver_task_snapshot_success(command: WifiDebugCommand) -> bool {
+        matches!(
+            command,
+            WifiDebugCommand::DumpState | WifiDebugCommand::Diag
+        )
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_driver_task_runtime_snapshot_if_present(
         &mut self,
         command: WifiDebugCommand,
@@ -5262,17 +5367,37 @@ where
             ));
             self.emit_console_line(next_line.as_str());
         }
-        self.emit_wifi_debug_status(
-            subcommand,
-            "complete",
-            profile,
-            Some("result=ok source=driver-task-replay-failure"),
-        );
-        self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
-        let detail = format_message(format_args!(
-            "detail=subcommand={subcommand} scope=serial-local source=driver-task-replay-failure"
-        ));
-        self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
+        if Self::wifi_command_accepts_driver_task_snapshot_success(command) {
+            self.emit_wifi_debug_status(
+                subcommand,
+                "complete",
+                profile,
+                Some("result=ok source=driver-task-replay-failure"),
+            );
+            self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
+            let detail = format_message(format_args!(
+                "detail=subcommand={subcommand} scope=serial-local source=driver-task-replay-failure"
+            ));
+            self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
+        } else {
+            self.emit_wifi_debug_status(
+                subcommand,
+                "complete",
+                profile,
+                Some(
+                    "result=err source=driver-task-replay-failure error=pi4-wifi-driver-task-runtime-required",
+                ),
+            );
+            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+            let detail = format_message(format_args!(
+                "detail=subcommand={subcommand} error=pi4-wifi-driver-task-runtime-required source=driver-task-replay-failure"
+            ));
+            self.emit_refusal(
+                WIFI_DEBUG_ACK_LABEL,
+                RefusalReason::Policy,
+                Some(detail.as_str()),
+            );
+        }
         true
     }
 
@@ -6412,6 +6537,7 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH
@@ -6449,6 +6575,9 @@ where
     #[cfg(feature = "kernel")]
     const fn wifi_sdio_runtime_progress_blocker(phase: u32) -> &'static str {
         match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
+                "sdio-engine-init-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "sdio-engine-init-descriptor-ready-no-reply"
             }
@@ -6508,6 +6637,9 @@ where
     #[cfg(feature = "kernel")]
     const fn wifi_sdio_runtime_progress_next_action(phase: u32) -> &'static str {
         match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
+                "inspect-linked-sdio-runtime-engine-init-dispatch"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "inspect-linked-sdio-runtime-resource-check"
             }
@@ -13506,7 +13638,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn serial_wifi_probe_ht_reports_runtime_required_driver_task_snapshot() {
+    fn serial_wifi_probe_ht_reports_runtime_required_driver_task_snapshot_error() {
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -13541,11 +13673,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=ok source=driver-task-replay-failure"),
+            rendered.contains("wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=err source=driver-task-replay-failure error=pi4-wifi-driver-task-runtime-required"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=probe-ht scope=serial-local source=driver-task-replay-failure"),
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required source=driver-task-replay-failure"),
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["probe-ht"]);
@@ -13553,7 +13685,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn serial_wifi_load_fw_reports_runtime_required_driver_task_snapshot() {
+    fn serial_wifi_load_fw_reports_runtime_required_driver_task_snapshot_error() {
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -13588,11 +13720,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=load-fw action=complete profile=stateful mode=one-shot result=ok source=driver-task-replay-failure"),
+            rendered.contains("wifi: debug subcommand=load-fw action=complete profile=stateful mode=one-shot result=err source=driver-task-replay-failure error=pi4-wifi-driver-task-runtime-required"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=load-fw scope=serial-local source=driver-task-replay-failure"),
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=load-fw error=pi4-wifi-driver-task-runtime-required source=driver-task-replay-failure"),
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["load-fw"]);
@@ -13600,7 +13732,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn serial_wifi_retry_reports_runtime_required_driver_task_snapshot() {
+    fn serial_wifi_retry_reports_runtime_required_driver_task_snapshot_error() {
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -13635,11 +13767,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=retry action=complete profile=stateful mode=one-shot result=ok source=driver-task-replay-failure"),
+            rendered.contains("wifi: debug subcommand=retry action=complete profile=stateful mode=one-shot result=err source=driver-task-replay-failure error=pi4-wifi-driver-task-runtime-required"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=retry scope=serial-local source=driver-task-replay-failure"),
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=retry error=pi4-wifi-driver-task-runtime-required source=driver-task-replay-failure"),
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["retry"]);

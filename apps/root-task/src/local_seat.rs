@@ -188,6 +188,7 @@ static LINKED_LOCAL_SEAT_PCIE_HAL_PREP_ATTEMPTS: AtomicUsize = AtomicUsize::new(
     target_os = "none"
 ))]
 const LINKED_LOCAL_SEAT_PCIE_HAL_PREP_MAX_ATTEMPTS: usize = 8;
+const LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES: usize = 64;
 
 #[cfg(all(
     feature = "kernel",
@@ -292,6 +293,14 @@ static LINKED_LOCAL_SEAT_DISPLAY_INIT_DEFERRED_LOGGED: AtomicBool = AtomicBool::
     target_os = "none"
 ))]
 static LINKED_LOCAL_SEAT_DISPLAY_ADOPTED_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_DISPLAY_FIRST_FRAME_OWNER_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(
     feature = "kernel",
@@ -509,7 +518,7 @@ pub(crate) const fn local_seat_linked_display_service_allowed(
     display_attached: bool,
     display_failed: bool,
 ) -> bool {
-    !physical_pi_owner_state || (display_attached && !display_failed)
+    !physical_pi_owner_state || display_attached || !display_failed
 }
 
 /// Return whether linked local-seat service may use the steady driver-task path.
@@ -846,21 +855,43 @@ impl LocalSeatRuntime {
                         crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
                         display_runtime_ring_service_driver_task,
                     );
-                    let mut payload = heapless::Vec::<
-                        u8,
-                        { crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES },
-                    >::new();
-                    let max_line_bytes =
-                        crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES.saturating_sub(1);
-                    for &byte in line.as_bytes().iter().take(max_line_bytes) {
-                        let _ = payload.push(byte);
+                    if crate::hal::driver_task::driver_task_ring_command_active(contract) {
+                        self.driver_task_budget_overruns =
+                            self.driver_task_budget_overruns.saturating_add(1);
+                        return;
                     }
-                    let _ = payload.push(b'\n');
-                    if let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(
-                        contract,
-                        payload.as_slice(),
-                        0,
-                    ) {
+                    let line_bytes = line.as_bytes();
+                    let chunk_limit = LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
+                        .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES)
+                        .max(1);
+                    let mut offset = 0usize;
+                    let mut newline_pending = true;
+                    loop {
+                        let mut payload = heapless::Vec::<
+                            u8,
+                            { crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES },
+                        >::new();
+                        while payload.len() < chunk_limit && offset < line_bytes.len() {
+                            let _ = payload.push(line_bytes[offset]);
+                            offset = offset.saturating_add(1);
+                        }
+                        if offset == line_bytes.len()
+                            && newline_pending
+                            && payload.len() < chunk_limit
+                        {
+                            let _ = payload.push(b'\n');
+                            newline_pending = false;
+                        }
+                        if payload.is_empty() {
+                            break;
+                        }
+                        let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(
+                            contract,
+                            payload.as_slice(),
+                            0,
+                        ) else {
+                            break;
+                        };
                         let command =
                             crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
                                 0,
@@ -894,6 +925,11 @@ impl LocalSeatRuntime {
                                     .as_u16()
                                 && completion.result != 0
                             {
+                                let _ = credit_linked_display_runtime_frame_owner_state(
+                                    "console-line",
+                                    self.root_console_ready,
+                                    completion,
+                                );
                                 if !LINKED_LOCAL_SEAT_DISPLAY_FIRST_DRAW_READY_LOGGED
                                     .swap(true, Ordering::AcqRel)
                                 {
@@ -914,7 +950,10 @@ impl LocalSeatRuntime {
                                         Some(completion),
                                     );
                                 }
-                                return;
+                                if offset == line_bytes.len() && !newline_pending {
+                                    return;
+                                }
+                                continue;
                             }
                         }
                         if !LINKED_LOCAL_SEAT_DISPLAY_FIRST_DRAW_FAILED_LOGGED
@@ -929,6 +968,23 @@ impl LocalSeatRuntime {
                                 completion,
                             );
                         }
+                        self.driver_task_budget_overruns =
+                            self.driver_task_budget_overruns.saturating_add(1);
+                        if completion.is_none()
+                            && local_seat_display_mirror_suspends_on_missing_reply(
+                                true,
+                                self.root_console_ready,
+                            )
+                        {
+                            if !LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOGGED
+                                .swap(true, Ordering::AcqRel)
+                            {
+                                boot_log::force_uart_line(
+                                    "[local-seat] runtime display mirror deferred reason=driver-task-no-reply action=retry-next-frame",
+                                );
+                            }
+                        }
+                        return;
                     }
                     self.driver_task_budget_overruns =
                         self.driver_task_budget_overruns.saturating_add(1);
@@ -938,7 +994,7 @@ impl LocalSeatRuntime {
                     ) && !LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOGGED.swap(true, Ordering::AcqRel)
                     {
                         boot_log::force_uart_line(
-                            "[local-seat] runtime display mirror suspended reason=driver-task-no-reply action=serial-shell",
+                            "[local-seat] runtime display mirror deferred reason=driver-task-no-reply action=retry-next-frame",
                         );
                     }
                     return;
@@ -1811,6 +1867,53 @@ fn adopt_linked_display_runtime_owner_state(reason: &'static str) -> bool {
     target_arch = "aarch64",
     target_os = "none"
 ))]
+fn credit_linked_display_runtime_frame_owner_state(
+    reason: &'static str,
+    root_console_ready: bool,
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) -> bool {
+    let owner_registered = crate::hal::driver_task::register_driver_task_runtime_owner_state(
+        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+    );
+    if owner_registered {
+        LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.store(true, Ordering::Release);
+        LINKED_LOCAL_SEAT_DISPLAY_FAILED.store(false, Ordering::Release);
+        if !LINKED_LOCAL_SEAT_DISPLAY_FIRST_FRAME_OWNER_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+                "hdmi-owner-state",
+                "first-frame-ready",
+                Some(completion),
+            );
+            emit_hdmi_text_final_state(
+                true,
+                "first-frame-owner",
+                reason,
+                root_console_ready,
+                LINKED_LOCAL_SEAT_DISPLAY_INIT_ATTEMPTS.load(Ordering::Acquire),
+                Some(completion),
+            );
+        }
+        true
+    } else {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+            "hdmi-owner-state",
+            "first-frame-descriptor-rejected",
+            Some(completion),
+        );
+        false
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 fn local_seat_usb_engine_init_ready(
     completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
 ) -> bool {
@@ -2653,18 +2756,46 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 pcie_contract,
                 crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
                 "usb-prereq-pcie-engine-init",
-                "adopted-hal-prepared-descriptor",
+                "adopt-hal-prepared-descriptor",
                 None,
             );
         }
-        if !LINKED_LOCAL_SEAT_PCIE_ENGINE_DEFERRED_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            pcie_contract,
+            crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+            "usb-prereq-pcie-engine-init",
+            "ready-adopted",
+            None,
+        );
+        let pcie_owner = crate::hal::driver_task::register_driver_task_runtime_owner_state(
+            crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+        );
+        if pcie_owner {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 pcie_contract,
                 crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
                 "pcie-owner-state",
-                "blocked-adopt-only",
+                "ready",
                 None,
             );
+        } else {
+            if !LINKED_LOCAL_SEAT_PCIE_ENGINE_DEFERRED_LOGGED.swap(true, Ordering::AcqRel) {
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    pcie_contract,
+                    crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                    "pcie-owner-state",
+                    "descriptor-rejected",
+                    None,
+                );
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    usb_contract,
+                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                    "usb-xhci-init",
+                    "blocked-pcie-owner-state",
+                    None,
+                );
+            }
+            return false;
         }
         if !LINKED_LOCAL_SEAT_USB_REPLAY_BEGIN_LOGGED.swap(true, Ordering::AcqRel) {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -3069,6 +3200,9 @@ fn mirror_high_impact_line_via_linked_hdmi(
         crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
         display_runtime_ring_service_driver_task,
     );
+    if crate::hal::driver_task::driver_task_ring_command_active(contract) {
+        return false;
+    }
     let mut payload =
         heapless::Vec::<u8, { crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES }>::new();
     let max_line_bytes = crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES.saturating_sub(1);
@@ -3103,6 +3237,13 @@ fn mirror_high_impact_line_via_linked_hdmi(
         false,
     );
     if ready {
+        if let Some(completion) = completion {
+            let _ = credit_linked_display_runtime_frame_owner_state(
+                reason,
+                root_console_ready,
+                completion,
+            );
+        }
         if !LINKED_LOCAL_SEAT_DISPLAY_FIRST_DRAW_READY_LOGGED.swap(true, Ordering::AcqRel) {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 contract,
@@ -3187,31 +3328,64 @@ fn submit_linked_hdmi_payload_via_linked_hdmi(
         crate::hal::driver_task::DriverTaskHotPath::HdmiText.as_u32() as usize,
         display_runtime_ring_service_driver_task,
     );
-    let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(contract, bytes, 0)
-    else {
+    if crate::hal::driver_task::driver_task_ring_command_active(contract) {
         return false;
-    };
-    let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-        0,
-        crate::hal::driver_task::DriverTaskHotPath::HdmiText,
-        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-        frame,
-    );
-    let completion =
-        run_local_seat_driver_task_ring_service_with_prompt_state(contract, command, false);
-    let ready = completion.is_some_and(|completion| {
-        completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-            && completion.result != 0
-    });
-    emit_hdmi_frame_submit_state(
-        reason,
-        bytes.len(),
-        root_console_ready,
-        completion,
-        ready,
-        false,
-    );
-    ready
+    }
+    let chunk_limit = LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
+        .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES)
+        .max(1);
+    let mut offset = 0usize;
+    let mut any_ready = false;
+    while offset < bytes.len() {
+        let end = offset.saturating_add(chunk_limit).min(bytes.len());
+        let Some(frame) =
+            crate::hal::driver_task::stage_driver_task_ring_frame(contract, &bytes[offset..end], 0)
+        else {
+            return any_ready;
+        };
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+            frame,
+        );
+        let completion =
+            run_local_seat_driver_task_ring_service_with_prompt_state(contract, command, false);
+        let ready = completion.is_some_and(|completion| {
+            completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                && completion.result != 0
+        });
+        emit_hdmi_frame_submit_state(
+            reason,
+            end.saturating_sub(offset),
+            root_console_ready,
+            completion,
+            ready,
+            false,
+        );
+        if !ready {
+            if completion.is_none()
+                && local_seat_display_mirror_suspends_on_missing_reply(true, root_console_ready)
+            {
+                if !LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOGGED.swap(true, Ordering::AcqRel) {
+                    boot_log::force_uart_line(
+                        "[local-seat] runtime display mirror deferred reason=driver-task-no-reply action=retry-next-frame",
+                    );
+                }
+            }
+            return any_ready;
+        }
+        if let Some(completion) = completion {
+            let _ = credit_linked_display_runtime_frame_owner_state(
+                reason,
+                root_console_ready,
+                completion,
+            );
+        }
+        any_ready = true;
+        offset = end;
+    }
+    any_ready
 }
 
 #[cfg(all(
@@ -4256,12 +4430,12 @@ mod tests {
     }
 
     #[test]
-    fn local_seat_linked_display_service_waits_for_display_attach() {
-        assert!(!local_seat_linked_display_service_allowed(
+    fn local_seat_linked_display_service_allows_first_frame_owner_proof() {
+        assert!(local_seat_linked_display_service_allowed(
             true, false, false
         ));
         assert!(local_seat_linked_display_service_allowed(true, true, false));
-        assert!(!local_seat_linked_display_service_allowed(true, true, true));
+        assert!(local_seat_linked_display_service_allowed(true, true, true));
         assert!(local_seat_linked_display_service_allowed(
             false, false, true
         ));
