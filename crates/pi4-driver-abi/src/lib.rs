@@ -315,6 +315,38 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_CLEANED: u32 = 106;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_FILLED: u32 = 107;
 /// USB runtime cleaned the xHCI scratchpad pointer array.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_CLEANED: u32 = 108;
+/// USB runtime is submitting the gate-4 xHCI command proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN: u32 = 131;
+/// USB runtime wrote and cleaned the gate-4 command TRB.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN: u32 = 132;
+/// USB runtime is ringing xHCI doorbell 0 for the gate-4 proof command.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN: u32 = 133;
+/// USB runtime completed the xHCI doorbell 0 publish edge.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE: u32 = 134;
+/// USB runtime is polling the event ring for the gate-4 command completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_BEGIN: u32 = 135;
+/// USB runtime found no matching command completion in this bounded poll slice.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING: u32 = 136;
+/// USB runtime saw the gate-4 command-completion event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY: u32 = 137;
+/// USB runtime rejected the gate-4 command proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED: u32 = 138;
+/// USB runtime saw a port-status event while polling the command proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS: u32 = 145;
+/// USB runtime saw a command-completion event while polling the command proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND: u32 = 146;
+/// USB runtime saw a non-command event while polling the command proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER: u32 = 147;
+/// USB runtime is acknowledging a consumed command-proof event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN: u32 = 148;
+/// USB runtime completed prompt-safe ERDP acknowledgement for a command-proof event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE: u32 = 149;
+/// USB runtime is returning a pending command-proof completion to root.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING: u32 = 150;
+/// Linked runtime entered its no_std entry path and installed its IPC buffer.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
+/// Linked runtime is blocked on the root-owned command endpoint.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY: u32 = 201;
 /// USB runtime is requesting xHCI controller run state.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN: u32 = 79;
 /// USB runtime published xHCI command/event rings.
@@ -381,6 +413,16 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD5_READY_BEGIN: u32 = 128;
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD3_RCA_BEGIN: u32 = 129;
 /// CYW43 runtime is asking the SDIO owner to issue CMD7 for card selection.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD7_SELECT_BEGIN: u32 = 130;
+/// CYW43 runtime is publishing a nested command to the linked SDIO owner.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN: u32 = 140;
+/// CYW43 runtime sent the nested SDIO-owner notification.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE: u32 = 141;
+/// CYW43 runtime is waiting for the linked SDIO owner completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN: u32 = 142;
+/// CYW43 runtime timed out waiting for the linked SDIO owner.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT: u32 = 143;
+/// CYW43 runtime received the linked SDIO owner completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY: u32 = 144;
 /// CYW43 runtime proved card selection/adoption.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY: u32 = 112;
 /// CYW43 runtime is programming Function 1 block size.

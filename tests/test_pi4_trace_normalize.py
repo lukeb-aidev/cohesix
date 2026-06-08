@@ -942,6 +942,37 @@ def test_gate_summary_tracks_wifi_startup_blackbox_gates() -> None:
     assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
 
 
+def test_gate_summary_keeps_early_wifi_startup_failure_over_later_no_reply() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: cyw43 linked_runtime_progress marker_valid=yes sequence=1 "
+            "phase=142 phase_name=cyw43-sdio-owner-wait-begin "
+            "aux0=0x43595734 gate=2 "
+            "blocker=cyw43-sdio-owner-completion-pending "
+            "next_action=inspect-linked-sdio-owner-command-service",
+            "wifi: gate 1 name=hal-power-reset status=pass evidence=power=on "
+            "reset=deasserted source=hal-runtime-required next=sdio-card-select",
+            "wifi: gate 2 name=sdio-card-select status=inferred "
+            "evidence=stage=cyw43-transport-init detail=0x0000 "
+            "result=0x00000000 next=cccr-fbr-ready",
+            "wifi: gate 3 name=cccr-fbr-ready status=fail "
+            "evidence=ioex=n/a iordy=n/a fbr1_blk=n/a fbr2_blk=n/a "
+            "next=ht-clock",
+            "wifi: gate 4 name=ht-clock status=blocked "
+            "evidence=chipclk=n/a clock=0Hz width=unknown next=backplane-window",
+            "wifi: evidence cyw43 stage=cyw43-transport-init op=1 flags=0x0000 "
+            "target=0x00000000 payload_off=0 payload_len=0 total_len=0 "
+            "detail=0x0000 reason=cyw43-runtime-command-no-reply "
+            "result=0x00000000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 2
+    assert gates.wifi_blocker == "cccr-fbr-ready"
+
+
 def test_gate_summary_names_cyw43_firmware_retry_exhaustion() -> None:
     events = normalizer.parse_events(
         [

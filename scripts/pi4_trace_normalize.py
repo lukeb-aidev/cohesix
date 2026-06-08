@@ -1093,7 +1093,7 @@ def normalize_usb_blocker(value: str) -> str:
 
     lower = value.lower()
     stripped = lower.strip()
-    if stripped in {"none", "ok", "online", "ready", "success"}:
+    if stripped in {"", "none", "ok", "online", "ready", "success"}:
         return "none"
     if "no-device-coverage" in lower and (
         "xhci" in lower
@@ -1943,6 +1943,8 @@ def normalize_wifi_exact(value: str) -> str:
     """Preserve exact CYW43 terminal reasons while keeping stable blockers."""
 
     lower = value.lower()
+    if lower.strip() in {"", "none", "n/a"}:
+        return "none"
     cyw43_transport_details = {
         "1": "cyw43-runtime-command-rejected",
         "0x1": "cyw43-runtime-command-rejected",
@@ -3077,6 +3079,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     legacy_gmode_stall_seen = False
     startup_blackbox_blocker: str | None = None
     startup_blackbox_gate = 0
+    early_startup_blackbox_blocker: str | None = None
+    early_startup_blackbox_gate = 0
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -3160,7 +3164,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 )
             ):
                 status = "blocked"
-            if status == "pass":
+            if status in {"pass", "inferred"}:
                 gate = max(gate, diag_gate)
                 if diag_gate >= 7:
                     post_f2_progress_seen = True
@@ -3176,6 +3180,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 )
                 if blocker == "none":
                     blocker = name
+                if diag_gate < 5:
+                    early_startup_blackbox_blocker = blocker
+                    early_startup_blackbox_gate = max(0, diag_gate - 1)
             if diag_gate >= 5 and blocker not in {"none", "unknown"}:
                 startup_blackbox_blocker = blocker
                 startup_blackbox_gate = max(0, diag_gate - 1)
@@ -4181,6 +4188,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         and gate <= startup_blackbox_gate
     ):
         blocker = startup_blackbox_blocker
+    if early_startup_blackbox_blocker is not None and not post_f2_progress_seen:
+        gate = early_startup_blackbox_gate
+        blocker = early_startup_blackbox_blocker
     return gate, blocker
 
 

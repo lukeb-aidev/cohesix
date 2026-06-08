@@ -1319,6 +1319,32 @@ fn runtime_image_transport_pointer_free_ipc_ready(
 }
 
 #[cfg(feature = "kernel")]
+const fn remote_tcb_ipc_buffer_frame_cap(
+    _root_mapped_frame: seL4_CPtr,
+    child_mapped_frame: seL4_CPtr,
+) -> seL4_CPtr {
+    child_mapped_frame
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_ipc_bind_caps(
+    contract: driver_task::DriverTaskContract,
+    root_mapped_frame: seL4_CPtr,
+    child_mapped_frame: seL4_CPtr,
+    ipc_vaddr: usize,
+) {
+    let mut line = heapless::String::<192>::new();
+    let _ = fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "DRIVER_TASK_IPC_BIND contract={} root_frame=0x{:04x} child_frame=0x{:04x} ipc_vaddr=0x{:08x} source=child-vspace-mapped-cap",
+            contract.name, root_mapped_frame, child_mapped_frame, ipc_vaddr,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
 fn runtime_image_stack_pages(spec: Option<driver_task::DriverTaskRuntimeImageSpec>) -> usize {
     spec.map(|spec| {
         usize::from(spec.region_pages(driver_task::DriverTaskRuntimeRegionKind::Stack)).max(1)
@@ -1780,6 +1806,13 @@ struct RuntimeElfLoadPlan {
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct RuntimeElfPageFill {
+    writable: bool,
+    executable: bool,
+}
+
+#[cfg(feature = "kernel")]
 const MAX_RUNTIME_ELF_LOAD_SEGMENTS: usize = 8;
 
 #[cfg(feature = "kernel")]
@@ -1942,7 +1975,8 @@ fn fill_runtime_elf_page(
     plan: RuntimeElfLoadPlan,
     page_index: usize,
     page: &mut [u8],
-) -> Result<bool, HalError> {
+) -> Result<RuntimeElfPageFill, HalError> {
+    const PF_X: u32 = 1;
     const PF_W: u32 = 2;
 
     let page_bytes = 1usize << sel4::PAGE_BITS;
@@ -1954,7 +1988,7 @@ fn fill_runtime_elf_page(
         .checked_add(page_bytes)
         .ok_or(HalError::Unsupported("driver-runtime-elf-page"))?;
     page.fill(0);
-    let mut writable = false;
+    let mut fill = RuntimeElfPageFill::default();
     let mut index = 0usize;
     while index < plan.segment_count {
         let segment = plan.segments[index];
@@ -1963,7 +1997,8 @@ fn fill_runtime_elf_page(
             .checked_add(segment.memsz)
             .ok_or(HalError::Unsupported("driver-runtime-elf-memsz"))?;
         if segment.vaddr < page_end && segment_mem_end > page_vaddr {
-            writable |= segment.flags & PF_W != 0;
+            fill.writable |= segment.flags & PF_W != 0;
+            fill.executable |= segment.flags & PF_X != 0;
             let copy_start = core::cmp::max(page_vaddr, segment.vaddr);
             let segment_file_end = segment
                 .vaddr
@@ -2002,7 +2037,7 @@ fn fill_runtime_elf_page(
         }
         index += 1;
     }
-    Ok(writable)
+    Ok(fill)
 }
 
 #[cfg(feature = "kernel")]
@@ -2771,26 +2806,41 @@ impl<'a> KernelHal<'a> {
     ) -> Result<RuntimeElfLoad, HalError> {
         let code_rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
         let data_rights = sel4_sys::seL4_CapRights_ReadWrite;
+        let page_bytes = 1usize << sel4::PAGE_BITS;
         for page_index in 0..plan.page_count {
             let mut frame = self
                 .env
                 .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
                 .map_err(HalError::Sel4)?;
-            let writable = fill_runtime_elf_page(image, plan, page_index, frame.as_mut_slice())?;
+            let fill = fill_runtime_elf_page(image, plan, page_index, frame.as_mut_slice())?;
+            crate::hal::cache::cache_clean(
+                sel4_sys::seL4_CapInitThreadVSpace,
+                frame.ptr().as_ptr() as usize,
+                page_bytes,
+            )
+            .map_err(|err| HalError::Sel4(err.code()))?;
             let vaddr = plan
                 .base_vaddr
-                .checked_add(page_index.saturating_mul(1usize << sel4::PAGE_BITS))
+                .checked_add(page_index.saturating_mul(page_bytes))
                 .ok_or(HalError::Unsupported("driver-runtime-elf-map-vaddr"))?;
             self.env
                 .map_page_copy_into_vspace(
                     frame.cap(),
                     vspace,
                     vaddr,
-                    if writable { data_rights } else { code_rights },
+                    if fill.writable {
+                        data_rights
+                    } else {
+                        code_rights
+                    },
                     sel4_sys::seL4_ARM_Page_Default,
                     tracker,
                 )
                 .map_err(HalError::Sel4)?;
+            if fill.executable {
+                crate::hal::cache::cache_unify_instruction(vspace, vaddr, page_bytes)
+                    .map_err(|err| HalError::Sel4(err.code()))?;
+            }
             self.env
                 .unmap_page_cap(frame.cap())
                 .map_err(HalError::Sel4)?;
@@ -3313,38 +3363,47 @@ impl<'a> KernelHal<'a> {
         let code_rights = sel4_sys::seL4_CapRights::new(0, 0, 1, 0);
         let data_rights = sel4_sys::seL4_CapRights_ReadWrite;
         let mut mapped_code_frame = None;
-        let runtime_load =
-            if let (Some(image), Some(plan)) = (linked_runtime_image, linked_runtime_plan) {
-                self.map_runtime_elf_image(image, plan, vspace, &mut tracker)?
-            } else {
-                let mut code_frame = self
-                    .env
-                    .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
-                    .map_err(HalError::Sel4)?;
-                code_frame.as_mut_slice().fill(0);
-                // SAFETY: The linker script page-aligns `.driver_task_text`, the
-                // range check above bounds it to one mapped user-image page, and
-                // this copy reads only that page into a HAL-owned frame.
-                let source = unsafe {
-                    core::slice::from_raw_parts(trampoline_range.start as *const u8, page_bytes)
-                };
-                code_frame.as_mut_slice().copy_from_slice(source);
-                self.env
-                    .map_page_copy_into_vspace(
-                        code_frame.cap(),
-                        vspace,
-                        trampoline_range.start,
-                        code_rights,
-                        sel4_sys::seL4_ARM_Page_Default,
-                        &mut tracker,
-                    )
-                    .map_err(HalError::Sel4)?;
-                mapped_code_frame = Some(code_frame.cap());
-                RuntimeElfLoad {
-                    entry: driver_task::isolated_trampoline_entry(),
-                    code_vaddr: trampoline_range.start,
-                }
+        let runtime_load = if let (Some(image), Some(plan)) =
+            (linked_runtime_image, linked_runtime_plan)
+        {
+            self.map_runtime_elf_image(image, plan, vspace, &mut tracker)?
+        } else {
+            let mut code_frame = self
+                .env
+                .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
+                .map_err(HalError::Sel4)?;
+            code_frame.as_mut_slice().fill(0);
+            // SAFETY: The linker script page-aligns `.driver_task_text`, the
+            // range check above bounds it to one mapped user-image page, and
+            // this copy reads only that page into a HAL-owned frame.
+            let source = unsafe {
+                core::slice::from_raw_parts(trampoline_range.start as *const u8, page_bytes)
             };
+            code_frame.as_mut_slice().copy_from_slice(source);
+            crate::hal::cache::cache_clean(
+                sel4_sys::seL4_CapInitThreadVSpace,
+                code_frame.ptr().as_ptr() as usize,
+                page_bytes,
+            )
+            .map_err(|err| HalError::Sel4(err.code()))?;
+            self.env
+                .map_page_copy_into_vspace(
+                    code_frame.cap(),
+                    vspace,
+                    trampoline_range.start,
+                    code_rights,
+                    sel4_sys::seL4_ARM_Page_Default,
+                    &mut tracker,
+                )
+                .map_err(HalError::Sel4)?;
+            crate::hal::cache::cache_unify_instruction(vspace, trampoline_range.start, page_bytes)
+                .map_err(|err| HalError::Sel4(err.code()))?;
+            mapped_code_frame = Some(code_frame.cap());
+            RuntimeElfLoad {
+                entry: driver_task::isolated_trampoline_entry(),
+                code_vaddr: trampoline_range.start,
+            }
+        };
         self.env
             .map_page_copy_into_vspace(
                 ring_frame.cap(),
@@ -3355,7 +3414,8 @@ impl<'a> KernelHal<'a> {
                 &mut tracker,
             )
             .map_err(HalError::Sel4)?;
-        self.env
+        let child_ipc_frame = self
+            .env
             .map_page_copy_into_vspace(
                 ipc_frame.cap(),
                 vspace,
@@ -3365,6 +3425,12 @@ impl<'a> KernelHal<'a> {
                 &mut tracker,
             )
             .map_err(HalError::Sel4)?;
+        emit_driver_task_ipc_bind_caps(
+            contract,
+            ipc_frame.cap(),
+            child_ipc_frame,
+            driver_task::DRIVER_TASK_IPC_VADDR,
+        );
         for (page, stack_frame) in stack_frames.iter().enumerate() {
             let vaddr = driver_task::DRIVER_TASK_STACK_BOTTOM_VADDR
                 .checked_add(page.saturating_mul(1usize << sel4::PAGE_BITS))
@@ -3411,7 +3477,11 @@ impl<'a> KernelHal<'a> {
         .map_err(HalError::Sel4)?;
 
         self.env
-            .bind_remote_ipc_buffer(tcb, ipc_frame.cap(), driver_task::DRIVER_TASK_IPC_VADDR)
+            .bind_remote_ipc_buffer(
+                tcb,
+                remote_tcb_ipc_buffer_frame_cap(ipc_frame.cap(), child_ipc_frame),
+                driver_task::DRIVER_TASK_IPC_VADDR,
+            )
             .map_err(HalError::Sel4)?;
 
         let (bootstrap_priority, steady_priority) =
@@ -3432,9 +3502,32 @@ impl<'a> KernelHal<'a> {
         .map_err(HalError::Sel4)?;
         emit_driver_tcb_resume_return(contract, tcb, "write-registers");
 
+        let runtime_recv_ready = if linked_runtime_image.is_some() {
+            driver_task::wait_for_driver_task_runtime_recv_ready(contract, task_key, 4096)
+        } else {
+            true
+        };
         let runtime_init_deferred = runtime_init_descriptor.is_some()
             && driver_task::pre_root_runtime_init_deferred_for_shell(contract);
-        let runtime_init_ok = if runtime_init_deferred {
+        let runtime_init_ok = if !runtime_recv_ready {
+            if let Some(spec) = runtime_image_spec {
+                driver_task::emit_driver_task_resource_init_status(
+                    contract,
+                    spec.hot_path,
+                    "runtime-entry",
+                    "no-recv-ready",
+                    None,
+                );
+            }
+            if runtime_init_deferred {
+                let runtime_descriptor_recorded =
+                    runtime_init_descriptor.as_ref().is_some_and(|descriptor| {
+                        driver_task::record_deferred_runtime_init_descriptor(contract, *descriptor)
+                    });
+                emit_driver_task_bootstrap_deferred(contract, tcb, runtime_descriptor_recorded);
+            }
+            false
+        } else if runtime_init_deferred {
             let runtime_descriptor_recorded =
                 runtime_init_descriptor.as_ref().is_some_and(|descriptor| {
                     driver_task::record_deferred_runtime_init_descriptor(contract, *descriptor)
@@ -3504,10 +3597,11 @@ impl<'a> KernelHal<'a> {
                     runtime_init_descriptor.is_some(),
                 );
             }
-            runtime_image_transport_pointer_free_ipc_ready(
-                runtime_image_mapped_region_mask,
-                driver_task::CURRENT_DRIVER_TASK_IPC_ABI,
-            )
+            runtime_recv_ready
+                && runtime_image_transport_pointer_free_ipc_ready(
+                    runtime_image_mapped_region_mask,
+                    driver_task::CURRENT_DRIVER_TASK_IPC_ABI,
+                )
         } else {
             let completion = if runtime_init_ok {
                 let command = driver_task::DriverTaskCommandRecord::service(
@@ -3602,7 +3696,7 @@ impl<'a> KernelHal<'a> {
             affinity_core,
             vspace_isolated: true,
             pointer_free_ipc,
-            started: pointer_free_ipc || runtime_init_deferred,
+            started: pointer_free_ipc || (runtime_recv_ready && runtime_init_deferred),
         })
     }
 
@@ -4418,14 +4512,16 @@ mod tests {
 
         let mut page = [0u8; 4096];
         let rx_page = (0x210000 - plan.base_vaddr) / 4096;
-        let writable = super::fill_runtime_elf_page(&image, plan, rx_page, &mut page).unwrap();
-        assert!(!writable);
+        let fill = super::fill_runtime_elf_page(&image, plan, rx_page, &mut page).unwrap();
+        assert!(!fill.writable);
+        assert!(fill.executable);
         assert_eq!(page[0], 0xaa);
         assert_eq!(page[0x0fff], 0xaa);
 
         let data_page = (0x226000 - plan.base_vaddr) / 4096;
-        let writable = super::fill_runtime_elf_page(&image, plan, data_page, &mut page).unwrap();
-        assert!(writable);
+        let fill = super::fill_runtime_elf_page(&image, plan, data_page, &mut page).unwrap();
+        assert!(fill.writable);
+        assert!(!fill.executable);
         assert_eq!(page[0], 0xbb);
         assert_eq!(page[0x1f], 0xbb);
         assert_eq!(page[0x20], 0);
@@ -4699,6 +4795,12 @@ mod tests {
             super::driver_task::DRIVER_TASK_RUNTIME_TRANSPORT_REGION_MASK,
             super::driver_task::DriverTaskIpcAbi::CallbackPointer,
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn isolated_runtime_ipc_buffer_uses_child_mapped_frame_cap() {
+        assert_eq!(super::remote_tcb_ipc_buffer_frame_cap(0x104, 0x204), 0x204);
     }
 
     #[cfg(feature = "kernel")]

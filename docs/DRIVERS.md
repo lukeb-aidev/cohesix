@@ -243,10 +243,14 @@ page, but a physical boot creates the selected-only active set for the requested
 network role. A Wi-Fi boot uses the common local-seat/serial/display/PCIe set
 plus `sdio-host` and `cyw43455`; a wired boot uses the common set plus `genet`.
 Fresh Pi evidence must still prove the active hardware state machines make real
-progress from driver-local state. The transport boundary is no longer a one-page smoke loader:
-root now maps bounded multi-page `PT_LOAD` runtime images and semantic
-MMIO/DMA/shared resource ranges before submitting the pointer-free init
-descriptor.
+progress from driver-local state. The transport boundary is no longer a
+one-page smoke loader: root now maps bounded multi-page `PT_LOAD` runtime images
+and semantic MMIO/DMA/shared resource ranges before submitting the pointer-free
+init descriptor. The linked runtime must publish generic lifecycle progress
+before root credits the task as live: `runtime-entry-ready` means the no-std
+entry path installed the mapped IPC buffer, and `runtime-recv-ready` means the
+runtime is actually blocked on the root-owned command endpoint and can accept a
+descriptor-replay turn.
 
 ### Historical Pi 4 Baseline Mapping
 
@@ -268,6 +272,12 @@ proof from the linked-runtime model.
   HDMI frame submission, USB xHCI/HID polling, GENET RX/TX, CYW43 SDPCM/control,
   SDIO CMD52/CMD53/POLL_IRQ, and PCIe read/write/flush turns must return through
   the runtime ring or fail closed.
+- May 18-19 Wi-Fi proof also included station control and WPA2 behavior: ordered
+  SDPCM/CDC ioctl response matching, event-mask/setup drains, association,
+  EAPOL M1/M2/M3/M4, PTK/GTK key install, and only then DHCP/data release. Under
+  the new model that behavior must live behind the linked `cyw43455` runtime and
+  pointer-free command ABI. A PSK network is not DHCP-ready while host EAPOL is a
+  root-side stub or while control replies are not matched by the runtime.
 - The first root prompt and serial input are the safety boundary. No USB, HDMI,
   PCIe, SDIO, GENET, CYW43, DHCP, or log-stream proof may hold them hostage;
   unproved work must leave deferred/no-reply breadcrumbs and retry only through
@@ -416,7 +426,13 @@ admission. Current runtime images use sixteen stack pages, `code-pages=80`, and
 the driver-local windows `0x70001000` for IPC, `0x70200000` for MMIO,
 `0x70800000` for DMA, and `0x70c00000` for shared buffers. The physical Pi
 runtime `_start` dispatches only fixed command/completion records; callback
-pointer dispatch is compiled out.
+pointer dispatch is compiled out. Isolated runtime admission binds
+`TCB_SetIPCBuffer` with the child-VSpace-mapped IPC frame cap, not the
+root-mapped frame cap, and emits
+`DRIVER_TASK_IPC_BIND ... source=child-vspace-mapped-cap` before resume. A
+current boot that lacks `runtime-entry-ready` and `runtime-recv-ready` progress
+after that breadcrumb is blocked at linked-runtime transport, before PCIe/VL805
+descriptor replay or USB xHCI gates.
 
 Runtime init is non-acceptance. Root stages a pointer-free
 `DriverRuntimeInitDescriptor`, submits bounded init/service turns, and restores
@@ -643,9 +659,12 @@ leave the line stuck.
   discipline inside the isolated runtime: after DMA structures are written, a
   full xHCI DMA publication barrier precedes controller register publication,
   and init-time xHCI operational-register writes are drained by a same-runtime
-  xHCI MMIO readback inside the USB runtime's declared aperture. PCIe owner
-  replay remains the prerequisite for BAR/COMMAND/VL805 admission, but xHCI
-  posted-write drains do not issue nested USB-to-PCIe child commands. The
+  xHCI MMIO readback inside the USB runtime's declared aperture. Doorbells are
+  the exception: command and endpoint doorbell writes publish the U-Boot value
+  with DMA/store barriers and do not perform the toxic same-window xHCI
+  readback observed in old traces. PCIe owner replay remains the prerequisite
+  for BAR/COMMAND/VL805 admission, but xHCI posted-write drains do not issue
+  nested USB-to-PCIe child commands. The
   runtime publishes low-written, high-written, and high-flushed progress
   markers for 64-bit base registers, plus `usb-config-written` and
   `usb-config-flushed` markers for `CONFIG.MaxSlots`, so
@@ -679,6 +698,21 @@ and prove owner-state; it must not run a root-owned SDIO card-init ladder.
   `0x5400..0x5408` transport detail and publishes a `cyw43-*` progress marker
   so `wifi diag` can identify the exact linked-runtime phase. A backplane fault
   in this stage is a transport blocker, not a firmware/DHCP blocker.
+  The transport command advances one prompt-safe phase per linked-runtime turn
+  and root retries the same CYW43 transport descriptor until the detail changes
+  or a terminal owner fault is published. This preserves the May 18-19 command
+  order without making card select, FBR setup, IOEX/IORDY, host-clock, and
+  backplane proof depend on one monolithic child turn. The CYW43-to-SDIO
+  pointer-free bus-link descriptor is sequence-stamped, re-notified at a bounded
+  interval while CYW43 polls the SDIO owner completion slot, and records the
+  nested SDIO descriptor class on timeout so `wifi diag` can distinguish a
+  missing owner reply from a card-command or CMD52/CMD53 fault. Every linked
+  runtime invalidates the shared command record before dispatch, and SDIO/CYW43
+  descriptor readers invalidate their descriptor frame before decoding it; this
+  keeps CYW43-produced SDIO-owner commands coherent without replacing the
+  bounded one-way ring turn with an unbounded driver-to-driver call. Root-side
+  resource status labels report partial transport details as `progress`; only
+  `DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY` is reported as `ready`.
 - Production Function 2 traffic requires firmware upload/release evidence, real
   `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness (`IOR2`/ready proof).
   `CHIPCLKCSR=0x50` (`ALP_AVAIL|HT_REQ`) with `IOR2` still clear is diagnostic
@@ -1062,49 +1096,50 @@ active path is Cohesix-owned cold start:
   status bit. The U-Boot `DNCTRL=0` write is also drained before
   `USBCMD.RUN`. It must write the submitted command TRB in U-Boot
   `queue_trb()` order: parameter low, parameter high, status, then the control
-  dword with the cycle bit last. Cohesix then DMA-publishes the whole
-  command-ring allocation with HAL clean+invalidate before issuing the
-  completion-grade command-ring publish barrier. This is stricter than U-Boot's
-  16-byte cache flush while preserving the same ownership handoff. Cohesix then
-  writes U-Boot's `DB_VALUE_HOST` to doorbell `0` and drains that posted write
-  with the same-runtime xHCI readback before polling the event ring with the
-  same 5 s command-event budget.
+  dword with the cycle bit last. Cohesix then DMA-publishes the submitted
+  16-byte command TRB, issues the completion-grade command-ring publish
+  barrier, writes U-Boot's `DB_VALUE_HOST` to doorbell `0`, and treats that
+  doorbell edge as barrier-only before polling the event ring with the same
+  5 s command-event budget.
   The command proof is Enable Slot, matching U-Boot's first non-root-hub xHCI
   allocation gate. Already-posted current-boot Port Status Change events remain
   on the event ring and are skipped/acknowledged while the Enable Slot command
-  is outstanding. The U-Boot-shaped Enable Slot lane rings DB0 exactly when it
-  submits the command; later prompt-safe poll turns must not re-ring an already
-  outstanding Enable Slot command. Only the matching Command Completion Event
-  can advance the gate. The proof turn reports
+  is outstanding. The U-Boot-shaped Enable Slot lane rings DB0 when it submits
+  the command and may re-ring DB0 on later pending turns only while no command
+  events have been consumed; that is liveness recovery, not proof. Only the
+  matching Command Completion Event can advance the gate. The proof turn reports
   `command-ring-pending` while completion is outstanding, records command-ring
   readiness only after the matching Command Completion Event, and returns before
   any Disable Slot cleanup, so a cleanup stall cannot masquerade as missing
   gate-4 proof. No Op is only a diagnostic helper and must not unlock root-port
-  sampling. There is no pre-command `ERDP.EHB` acknowledgement, no pre-command
-  PSC drain, and no same-command re-doorbell.
-  `ERDP.EHB` acknowledgement publishes the low/control dword before the high
-  DMA-alias dword and drains both writes through HAL only after an event has
-  been consumed; if the event-ring dequeue pointer cannot be translated to the
-  device-visible DMA address, the path fails closed instead of publishing
-  `ERDP.EHB` against address zero. Init-time 64-bit ownership-register
-  publications use low/high writes followed by high-dword posted-write flush.
-  Runtime `ERDP.EHB` ack logs must identify
-  the low/control flush separately from the high DMA-alias flush so Gate 3 proof
-  does not collapse both halves into one ambiguous stage. Command doorbell `0`
+  sampling. There is no pre-command `ERDP.EHB` acknowledgement and no
+  pre-command PSC drain.
+  The Enable Slot command-proof lane acknowledges each consumed event with a
+  prompt-safe `ERDP.EHB` write, then publishes only DMA/store barriers; it does
+  not issue same-window xHCI readback while the proof command is outstanding.
+  If the event-ring dequeue pointer cannot be translated to the device-visible
+  DMA address, the path fails closed instead of publishing `ERDP.EHB` against
+  address zero. Generic command/control waits keep the normal runtime ERDP ack
+  path. Init-time 64-bit ownership-register publications use low/high writes
+  followed by high-dword posted-write flush. Runtime `ERDP.EHB` ack logs must
+  identify the low/control flush separately from the high DMA-alias flush so
+  Gate 3 proof does not collapse both halves into one ambiguous stage. Command doorbell `0`
   itself still uses the U-Boot command value, but the linked USB runtime now
-  drains the doorbell write by reading back through its own xHCI MMIO aperture
-  instead of issuing a nested PCIe-owner flush. A missing xHCI aperture or a
-  readback no-reply is a hard failure for the Pi 4 high-BAR VL805
-  ownership-register, command-doorbell, and endpoint-doorbell paths.
+  publishes the doorbell with barriers only instead of issuing either a nested
+  PCIe-owner flush or a same-window xHCI readback. A missing xHCI aperture or a
+  readback no-reply remains a hard failure for non-doorbell Pi 4 high-BAR VL805
+  ownership-register paths.
 - If the first U-Boot-shaped Enable Slot proof does not complete within the
   bounded poll slices, the linked runtime reports `enable-slot-failed` and
   returns to root instead of running a second same-turn command recovery lane.
   A poll turn may consume only a small bounded number of event-ring entries
   before returning `command-ring-pending`; this keeps root prompt slices
   responsive while preserving PSC and keyboard-transfer events for later
-  enumeration. In the Enable Slot command-proof lane only, the runtime may
-  defer ERDP acknowledgement until a later full command/control wait so a toxic
-  ERDP write cannot turn a proof slice into a shell-blocking no-reply. The
+  enumeration. In the Enable Slot command-proof lane only, the runtime uses the
+  prompt-safe ERDP barrier path and emits `usb-command-proof-event-*`,
+  `usb-command-proof-erdp-ack-*`, and `usb-command-proof-return-pending`
+  progress markers so a toxic acknowledgement edge is isolated from later
+  command/control waits. The
   command-proof snapshot does not read `PORTSC`; the low result bits carry
   consumed event count until the matching completion unlocks root-port sampling.
   The `USB_RUNTIME_ENUM_SNAPSHOT` command-proof fields are diagnostic only and
@@ -1164,16 +1199,15 @@ active path is Cohesix-owned cold start:
   `xhci_wait_for_event()` behavior: unexpected Port Status Change events are
   skipped, acknowledged with `ERDP.EHB`, and only the matching command
   completion is accepted. Direct `PORTSC` reads remain blocked during this
-  drain. Each skipped event republishes `ERDP.EHB` and drains the low/high dword
-  writes through the same-runtime xHCI readback before polling the next
-  event-ring slot; skipped PSC events also take one bounded prompt-safe settle before the
-  next sync so command completions racing behind preserved PSCs are not hidden
-  by a tight ERDP update loop. On success it immediately submits bounded
-  poll-only Disable Slot
-  cleanup for that slot; a cleanup failure is logged and tolerated only as
-  command-ring proof, and later enumeration must not assume a pristine slot
-  table. Linux-shaped cleanup or event-generation writes cannot advance gate 4.
-  Only a completed command may reopen live root-port sampling.
+  drain. Each skipped event republishes `ERDP.EHB` through the prompt-safe
+  barrier path before polling the next event-ring slot; skipped PSC events also
+  take one bounded prompt-safe settle before the next sync so command
+  completions racing behind preserved PSCs are not hidden by a tight ERDP
+  update loop. On success the proof returns after the matching Enable Slot
+  completion and does not issue same-turn Disable Slot cleanup, so cleanup
+  latency cannot masquerade as missing gate-4 proof. Linux-shaped cleanup or
+  event-generation writes cannot advance gate 4. Only a completed command may
+  reopen live root-port sampling.
 - After an exact `cmd-event-ring-timeout` on the U-Boot-shaped lane, the bounded
   recovery lane remains U-Boot poll-only unless a later milestone implements the
   full Linux MSI ownership contract. Proof still requires a fresh matching
@@ -1578,9 +1612,10 @@ Required Cohesix shape:
   gates and fresh command-completion proof.
 - The linked USB runtime must keep the xHCI interrupter poll-only (`IMAN=0`,
   `IMOD=0`), publish DCBAAP/CRCR/ERST/ERDP through low/high writes plus
-  high-dword posted-write flush, flush CONFIG/DNCTRL/RUN and every doorbell by
-  same-runtime xHCI MMIO readback, and use neutral PORTSC writes that do not
-  mirror `PED`, `PR`, or change bits except as explicit RW1C acknowledgements.
+  high-dword posted-write flush, flush CONFIG/DNCTRL/RUN by same-runtime xHCI
+  MMIO readback, publish doorbells with barriers only, and use neutral PORTSC
+  writes that do not mirror `PED`, `PR`, or change bits except as explicit RW1C
+  acknowledgements.
   Physical Pi USB still requires linked PCIe owner replay before xHCI entry, but
   posted-write drains no longer depend on a nested USB-to-PCIe child command.
 - USB keyboard feeds only the existing root-console parser after decoding USB

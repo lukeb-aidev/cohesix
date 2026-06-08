@@ -46,6 +46,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F2_BLOCK_READY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_CONFIG_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH,
@@ -81,8 +86,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_MISSING,
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
@@ -93,6 +99,20 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB, DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_WRITTEN, DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_FLUSHED,
@@ -1826,6 +1846,7 @@ const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 const DRIVER_TASK_CYW43_TRANSPORT_RING_ATTEMPTS: usize = 1_048_576;
 const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
+const DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 64;
 const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 0;
 const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
 
@@ -2165,6 +2186,97 @@ pub(crate) fn latest_driver_task_ring_progress(
         phase_name: driver_task_ring_progress_phase_label(phase),
         aux0,
     })
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_runtime_entry_status(
+    contract: DriverTaskContract,
+    task_key: usize,
+    tcb: usize,
+    status: &'static str,
+    progress: DriverTaskRingProgressRecord,
+) {
+    let mut line = heapless::String::<320>::new();
+    let _ = core::fmt::write(
+        &mut line,
+        format_args!(
+            "DRIVER_TASK_RUNTIME_ENTRY contract={} task_key={} tcb=0x{:04x} status={} marker_valid={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x}",
+            contract.name,
+            task_key,
+            tcb,
+            status,
+            if progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC {
+                "yes"
+            } else {
+                "no"
+            },
+            progress.sequence,
+            progress.phase,
+            driver_task_ring_progress_phase_label(progress.phase),
+            progress.aux0,
+        ),
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+/// Wait for a linked runtime to enter its receive loop before descriptor replay.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn wait_for_driver_task_runtime_recv_ready(
+    contract: DriverTaskContract,
+    task_key: usize,
+    spins: usize,
+) -> bool {
+    let Some(slot) = slot_for_task_key(task_key) else {
+        emit_driver_task_runtime_entry_status(
+            contract,
+            task_key,
+            0,
+            "invalid-task-key",
+            DriverTaskRingProgressRecord {
+                magic: 0,
+                sequence: 0,
+                phase: 0,
+                aux0: 0,
+            },
+        );
+        return false;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let tcb = slot.tcb.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        emit_driver_task_runtime_entry_status(
+            contract,
+            task_key,
+            tcb,
+            "ring-missing",
+            DriverTaskRingProgressRecord {
+                magic: 0,
+                sequence: 0,
+                phase: 0,
+                aux0: 0,
+            },
+        );
+        return false;
+    }
+    let expected_aux0 = (task_key & u32::MAX as usize) as u32;
+    for _ in 0..spins {
+        let progress = driver_task_ring_read_progress_record(ring_root_ptr);
+        record_driver_task_ring_progress(slot, progress);
+        if progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+            && progress.sequence == 0
+            && progress.phase == DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY
+            && progress.aux0 == expected_aux0
+        {
+            emit_driver_task_runtime_entry_status(contract, task_key, tcb, "ready", progress);
+            return true;
+        }
+        crate::sel4::yield_now();
+    }
+    let progress = driver_task_ring_read_progress_record(ring_root_ptr);
+    record_driver_task_ring_progress(slot, progress);
+    emit_driver_task_runtime_entry_status(contract, task_key, tcb, "timeout", progress);
+    false
 }
 
 #[cfg(feature = "kernel")]
@@ -3283,6 +3395,8 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => "engine-init-begin",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE => "engine-init-done",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED => "engine-init-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY => "runtime-entry-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY => "runtime-recv-ready",
         DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY => "runtime-ready",
         DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH => "runtime-mismatch",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH => "engine-init-dispatch",
@@ -3352,6 +3466,44 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_CLEANED => "usb-scratchpad-slot0-cleaned",
         DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_FILLED => "usb-scratchpad-array-filled",
         DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_CLEANED => "usb-scratchpad-array-cleaned",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN => {
+            "usb-command-proof-submit-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN => {
+            "usb-command-proof-trb-written"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN => {
+            "usb-command-proof-doorbell-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE => {
+            "usb-command-proof-doorbell-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_BEGIN => "usb-command-proof-poll-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING => {
+            "usb-command-proof-poll-pending"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY => "usb-command-proof-poll-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED => {
+            "usb-command-proof-poll-failed"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS => {
+            "usb-command-proof-event-port-status"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND => {
+            "usb-command-proof-event-command"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER => {
+            "usb-command-proof-event-other"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN => {
+            "usb-command-proof-erdp-ack-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE => {
+            "usb-command-proof-erdp-ack-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING => {
+            "usb-command-proof-return-pending"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN => "usb-run-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => "usb-rings-ready",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => "usb-run-requested",
@@ -3372,6 +3524,13 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD5_READY_BEGIN => "cyw43-card-cmd5-ready-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD3_RCA_BEGIN => "cyw43-card-cmd3-rca-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD7_SELECT_BEGIN => "cyw43-card-cmd7-select-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN => "cyw43-sdio-owner-send-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE => "cyw43-sdio-owner-send-done",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN => "cyw43-sdio-owner-wait-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT => {
+            "cyw43-sdio-owner-wait-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY => "cyw43-sdio-owner-reply",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => "cyw43-card-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN => "cyw43-f1-block-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY => "cyw43-f1-block-ready",
@@ -3648,6 +3807,13 @@ fn driver_task_ring_timeout_keep_active_limit(
     } else if matches!(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
+    ) && matches!(contract.kind, DriverTaskKind::WifiNic)
+        && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+    {
+        DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if matches!(
+        mode,
+        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
     ) && matches!(contract.kind, DriverTaskKind::HdmiText)
         && command.aux0 == 0
     {
@@ -3788,9 +3954,11 @@ fn run_driver_task_ring_command_with_mode(
     let completion_ptr =
         (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
 
-    let prompt_slice_resume =
-        mode == DriverTaskRingCommandMode::PromptSlice && slot.active.load(Ordering::Acquire) != 0;
-    if slot.active.swap(1, Ordering::AcqRel) != 0 && !prompt_slice_resume {
+    let active_before_submit = slot.active.load(Ordering::Acquire) != 0;
+    let same_request_resume = active_before_submit
+        && driver_task_ring_mode_uses_bounded_send(mode)
+        && driver_task_ring_timeout_keeps_active(contract, command, mode);
+    if slot.active.swap(1, Ordering::AcqRel) != 0 && !same_request_resume {
         let active_request = slot.request_seq.load(Ordering::Acquire);
         driver_task_ring_invalidate_completion_record(ring_root_ptr);
         // SAFETY: The completion pointer addresses the validated shared ring
@@ -3809,7 +3977,7 @@ fn run_driver_task_ring_command_with_mode(
         slot.timeout_resumes.store(0, Ordering::Release);
     }
 
-    let request = if prompt_slice_resume {
+    let request = if same_request_resume {
         slot.request_seq.load(Ordering::Acquire)
     } else {
         let request = slot
@@ -3864,10 +4032,10 @@ fn run_driver_task_ring_command_with_mode(
     };
 
     if driver_task_ring_mode_uses_bounded_send(mode) {
-        if trace_call && !prompt_slice_resume {
+        if trace_call && !same_request_resume {
             emit_driver_task_ring_call_begin(contract, endpoint, request, command);
         }
-        if mode.records_latency() && !prompt_slice_resume {
+        if mode.records_latency() && !same_request_resume {
             start_ticks = driver_task_counter_ticks();
         }
         let attempts = driver_task_ring_attempt_limit(contract, command, mode);
@@ -7087,6 +7255,19 @@ mod tests {
             ),
             DRIVER_TASK_CYW43_TRANSPORT_RING_ATTEMPTS
         );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        assert!(driver_task_ring_timeout_keeps_active(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
         assert!(DRIVER_TASK_CYW43_TRANSPORT_RING_ATTEMPTS > DRIVER_TASK_LONG_INIT_RING_ATTEMPTS);
         assert_eq!(
             driver_task_ring_attempt_limit(
@@ -7495,6 +7676,18 @@ mod tests {
         );
         assert!(!DriverTaskRingCommandMode::Bootstrap.records_latency());
         assert!(DriverTaskRingCommandMode::PromptSlice.records_latency());
+    }
+
+    #[test]
+    fn runtime_entry_progress_phases_are_labeled() {
+        assert_eq!(
+            driver_task_ring_progress_phase_label(DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY),
+            "runtime-entry-ready"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY),
+            "runtime-recv-ready"
+        );
     }
 
     #[test]

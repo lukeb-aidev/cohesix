@@ -112,6 +112,20 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB, DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_WRITTEN, DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_FLUSHED,
@@ -654,10 +668,11 @@ const USB_ENDPOINT_DIR_IN: u8 = 0x80;
 const USB_XHCI_SPINS: usize = 10_000_000;
 const USB_CONTROL_TRANSFER_SPINS: usize = USB_XHCI_SPINS;
 const USB_COMMAND_COMPLETION_SPINS: usize = 20_000_000;
-const USB_COMMAND_COMPLETION_SLICE_SPINS: usize = 65_536;
+const USB_COMMAND_COMPLETION_SLICE_SPINS: usize = 128;
 const USB_COMMAND_COMPLETION_EVENTS_PER_SLICE: usize = 4;
-const USB_COMMAND_PROOF_MAX_POLL_SLICES: u8 = 64;
-const USB_COMMAND_PROOF_RERINGS_PENDING_DOORBELL: bool = false;
+const USB_COMMAND_PROOF_MAX_POLL_SLICES: u8 = 192;
+const USB_COMMAND_PROOF_RERINGS_PENDING_DOORBELL: bool = true;
+const USB_COMMAND_PROOF_RERING_INTERVAL_SLICES: u8 = 8;
 const USB_ROOT_PORT_POWER_SETTLE_SPINS: usize = USB_XHCI_SPINS / 16;
 const USB_ROOT_PORT_SCAN_PASSES: usize = 4;
 const USB_ENUMERATION_RETRY_COOLDOWN_TURNS: u8 = 1;
@@ -3425,6 +3440,10 @@ fn read_sdio_command_descriptor(
         return None;
     }
     let offset = frame.offset as usize;
+    driver_task_shared_invalidate_range(
+        DRIVER_TASK_RING_VADDR + offset,
+        core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>(),
+    );
     driver_task_shared_load_barrier();
     Some(DriverRuntimeSdioCommandDescriptor {
         op: read_ring_u16(offset),
@@ -3450,6 +3469,10 @@ fn read_cyw43_command_descriptor(
         return None;
     }
     let offset = frame.offset as usize;
+    driver_task_shared_invalidate_range(
+        DRIVER_TASK_RING_VADDR + offset,
+        core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>(),
+    );
     driver_task_shared_load_barrier();
     Some(DriverRuntimeCyw43CommandDescriptor {
         op: read_ring_u16(offset),
@@ -3602,7 +3625,7 @@ fn service_cyw43_descriptor_command(
     let mut progress_detail = None;
     let result = CYW43_RUNTIME_STATE.with_mut(|state| match desc.op {
         DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT => {
-            cyw43_transport_init_step(command.sequence, command.aux0, state).map_or_else(
+            cyw43_transport_init_command(command.sequence, command.aux0, state).map_or_else(
                 |detail| {
                     exact_fault = Some(detail);
                     0
@@ -4337,6 +4360,7 @@ const CYW43_SDIO_BUS_LINK_DATA_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD
 const CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS: usize = 16_384;
 const CYW43_SDIO_BUS_LINK_ATTEMPTS_PER_BYTE: usize = 128;
 const CYW43_SDIO_BUS_LINK_MAX_ATTEMPTS: usize = 524_288;
+const CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL: usize = 512;
 
 fn cyw43_sdio_bus_link_attempt_limit(command: DriverTaskCommandRecord) -> usize {
     let payload_scaled =
@@ -4347,6 +4371,29 @@ fn cyw43_sdio_bus_link_attempt_limit(command: DriverTaskCommandRecord) -> usize 
             CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS,
             CYW43_SDIO_BUS_LINK_MAX_ATTEMPTS,
         )
+}
+
+#[cfg(target_os = "none")]
+fn cyw43_sdio_bus_link_command_result(command: DriverTaskCommandRecord) -> u32 {
+    if command.frame.offset as usize != CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET
+        || command.frame.len as usize != core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>()
+    {
+        return (u32::from(command.opcode) << 24)
+            | (u32::from(command.arg0 & 0xff) << 16)
+            | u32::from(command.frame.len);
+    }
+    // SAFETY: CYW43 writes this fixed SDIO-owner descriptor immediately before
+    // publishing the nested bus-link command; the command frame is checked above.
+    let desc = unsafe {
+        core::ptr::read_volatile(
+            (DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+                as *const DriverRuntimeSdioCommandDescriptor,
+        )
+    };
+    (u32::from(desc.op) << 24)
+        | (u32::from(desc.function) << 20)
+        | (u32::from(desc.flags & 0x0f) << 16)
+        | u32::from(desc.len)
 }
 
 #[cfg(target_os = "none")]
@@ -4512,12 +4559,17 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
     command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
     let completion_reset = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
     let attempts = cyw43_sdio_bus_link_attempt_limit(command);
+    publish_runtime_progress(
+        command.sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
     // SAFETY: Root maps the SDIO owner command ring into CYW43 at this fixed
     // address and mints the SDIO endpoint cap into the fixed child slot before
-    // the CYW43 runtime can be resumed. The bus-link turn is a single
-    // send-only notification followed by bounded shared-ring polling, so a
-    // missing SDIO owner returns a fault without duplicating an in-flight
-    // block transfer.
+    // the CYW43 runtime can be resumed. The bus-link turn publishes one
+    // sequence-stamped descriptor, then uses bounded one-way notifications and
+    // shared-ring polling so a missed endpoint rendezvous can be retried
+    // without moving SDIO ownership back into root.
     unsafe {
         core::ptr::write_volatile(
             (DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
@@ -4540,7 +4592,21 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
         sel4_sys::seL4_SetMR(0, command.sequence as sel4_sys::seL4_Word);
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
         sel4_sys::seL4_NBSend(DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT, info);
-        for _ in 0..attempts {
+        publish_runtime_progress(
+            command.sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        publish_runtime_progress(
+            command.sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        for attempt in 0..attempts {
+            if attempt != 0 && attempt % CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL == 0 {
+                sel4_sys::seL4_SetMR(0, command.sequence as sel4_sys::seL4_Word);
+                sel4_sys::seL4_NBSend(DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT, info);
+            }
             sel4_sys::seL4_Yield();
             driver_task_shared_invalidate_range(
                 DRIVER_TASK_SDIO_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
@@ -4559,6 +4625,11 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
                 if completion.sequence != command.sequence {
                     continue;
                 }
+                publish_runtime_progress(
+                    command.sequence,
+                    pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+                    DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+                );
                 if completion.code == COMPLETION_FAULT {
                     if let Some(frame) = cyw43_copy_sdio_fault_telemetry(completion.frame) {
                         completion.frame = frame;
@@ -4569,7 +4640,15 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
                 return Some(completion);
             }
         }
-        cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
+        publish_runtime_progress(
+            command.sequence,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        cyw43_record_last_fault_with_result(
+            FAULT_CYW43_TRANSPORT_BUS_LINK,
+            cyw43_sdio_bus_link_command_result(command),
+        );
         None
     }
 }
@@ -4940,9 +5019,10 @@ fn pcie_frame_write_value(frame: DriverFrameDescriptor) -> Result<u32, u16> {
 }
 
 const CYW43_TRANSPORT_PHASE_LIMIT: usize = 8;
+const CYW43_TRANSPORT_COMMAND_BURST_STEPS: usize = 1;
 const CYW43_SDIO_CARD_INIT_ATTEMPTS: usize = 2;
 const CYW43_SDIO_CARD_INIT_POLL_ATTEMPTS: u16 = 64;
-const CYW43_SDIO_CARD_INIT_RETRY_SETTLE_SPINS: usize = 10_000;
+const CYW43_SDIO_CARD_INIT_RETRY_SETTLE_SPINS: usize = 512;
 const CYW43_CARD_INIT_PHASE_HOST_CONFIG: u8 = 0;
 const CYW43_CARD_INIT_PHASE_CMD0: u8 = 1;
 const CYW43_CARD_INIT_PHASE_CMD5_OCR: u8 = 2;
@@ -4962,6 +5042,21 @@ fn cyw43_transport_init(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
         count = count.saturating_add(1);
     }
     Err(FAULT_CYW43_TRANSPORT_INIT)
+}
+
+fn cyw43_transport_init_command(
+    sequence: u32,
+    aux0: u32,
+    state: &mut Cyw43RuntimeState,
+) -> Result<u16, u16> {
+    let mut last_detail = state.transport_detail;
+    for _ in 0..CYW43_TRANSPORT_COMMAND_BURST_STEPS {
+        last_detail = cyw43_transport_init_step(sequence, aux0, state)?;
+        if last_detail == DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY {
+            return Ok(last_detail);
+        }
+    }
+    Ok(last_detail)
 }
 
 fn cyw43_transport_init_step(
@@ -8301,7 +8396,7 @@ fn usb_runtime_retry_keyboard_enumeration(
             usb_reset_enumeration_cursor(state);
             before = state.init_detail;
         }
-        if usb_keyboard_enumerate(state, descriptor, dma_range) {
+        if usb_keyboard_enumerate(sequence, aux0, state, descriptor, dma_range) {
             state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
             state.enumeration_retry_cooldown = 0;
             state.enumeration_cold_reinit_attempts = 0;
@@ -9534,17 +9629,15 @@ fn usb_write64(offset: usize, value: u64) {
 
 fn xhci_flush_posted_write(
     _state: &UsbRuntimeState,
-    _stage: u16,
+    stage: u16,
     offset: usize,
     _value: u32,
 ) -> bool {
-    #[cfg(target_os = "none")]
-    {
-        let _ = usb_read32(offset & !0x3);
+    if stage == XHCI_FLUSH_STAGE_DOORBELL {
+        dma_store_barrier();
+        xhci_dma_publish_barrier();
         true
-    }
-    #[cfg(not(target_os = "none"))]
-    {
+    } else {
         let _ = usb_read32(offset & !0x3);
         true
     }
@@ -9725,6 +9818,16 @@ fn xhci_ring_doorbell(state: &UsbRuntimeState, slot: u8, endpoint_id: u8) -> boo
     xhci_flush_posted_write(state, XHCI_FLUSH_STAGE_DOORBELL, offset, value)
 }
 
+fn xhci_next_event_dequeue_state(state: &UsbRuntimeState) -> (u16, bool) {
+    let mut next_dequeue = state.event_dequeue.wrapping_add(1);
+    let mut next_cycle = state.event_cycle;
+    if usize::from(next_dequeue) >= XHCI_EVENT_RING_TRBS {
+        next_dequeue = 0;
+        next_cycle = !next_cycle;
+    }
+    (next_dequeue, next_cycle)
+}
+
 fn xhci_advance_ring(enqueue: &mut u16, cycle: &mut bool, trbs: usize) {
     *enqueue = enqueue.wrapping_add(1);
     if usize::from(*enqueue) >= trbs - 1 {
@@ -9744,12 +9847,7 @@ fn xhci_ack_event_dequeue(
     ) else {
         return false;
     };
-    let mut next_dequeue = state.event_dequeue.wrapping_add(1);
-    let mut next_cycle = state.event_cycle;
-    if usize::from(next_dequeue) >= XHCI_EVENT_RING_TRBS {
-        next_dequeue = 0;
-        next_cycle = !next_cycle;
-    }
+    let (next_dequeue, next_cycle) = xhci_next_event_dequeue_state(state);
     let Some(event) = xhci_dma_bus_addr(
         descriptor,
         dma_range,
@@ -9782,6 +9880,48 @@ fn xhci_ack_event_dequeue(
     }
 }
 
+fn xhci_ack_event_dequeue_prompt_safe(
+    sequence: u32,
+    aux0: u32,
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> bool {
+    let Some(dma_range) = runtime_resource_range(
+        descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    ) else {
+        return false;
+    };
+    let (next_dequeue, next_cycle) = xhci_next_event_dequeue_state(state);
+    let Some(event) = xhci_dma_bus_addr(
+        descriptor,
+        dma_range,
+        XHCI_DMA_EVENT_RING_OFFSET + usize::from(next_dequeue).saturating_mul(XHCI_TRB_BYTES),
+    ) else {
+        return false;
+    };
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN,
+        aux0,
+    );
+    usb_write64(
+        state.rt_offset as usize + 0x20 + XHCI_ERDP,
+        event | (1 << 3),
+    );
+    dma_store_barrier();
+    xhci_dma_publish_barrier();
+    state.event_dequeue = next_dequeue;
+    state.event_cycle = next_cycle;
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE,
+        aux0,
+    );
+    true
+}
+
 fn xhci_next_event(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
@@ -9800,11 +9940,19 @@ fn xhci_next_event(
     Some(trb)
 }
 
-fn xhci_submit_command(
+fn xhci_submit_command_internal(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     mut trb: XhciTrb,
+    proof_progress: Option<(u32, u32)>,
 ) -> bool {
+    if let Some((sequence, aux0)) = proof_progress {
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN,
+            aux0,
+        );
+    }
     let dma_range = runtime_resource_range(
         descriptor,
         DRIVER_RUNTIME_RESOURCE_KIND_DMA,
@@ -9820,13 +9968,55 @@ fn xhci_submit_command(
     }
     trb.control |= xhci_cycle_bit(state.cmd_cycle);
     write_xhci_trb(base, index, trb);
+    if let Some((sequence, aux0)) = proof_progress {
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN,
+            aux0,
+        );
+    }
     state.cmd_enqueue = state.cmd_enqueue.wrapping_add(1);
     if usize::from(state.cmd_enqueue) >= XHCI_COMMAND_RING_TRBS - 1 {
         state.cmd_enqueue = 0;
         state.cmd_cycle = !state.cmd_cycle;
     }
     dma_store_barrier();
-    xhci_ring_doorbell(state, 0, 0)
+    if let Some((sequence, aux0)) = proof_progress {
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN,
+            aux0,
+        );
+    }
+    let doorbell_ready = xhci_ring_doorbell(state, 0, 0);
+    if doorbell_ready {
+        if let Some((sequence, aux0)) = proof_progress {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE,
+                aux0,
+            );
+        }
+    }
+    doorbell_ready
+}
+
+fn xhci_submit_command(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    trb: XhciTrb,
+) -> bool {
+    xhci_submit_command_internal(state, descriptor, trb, None)
+}
+
+fn xhci_submit_command_for_proof(
+    sequence: u32,
+    aux0: u32,
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    trb: XhciTrb,
+) -> bool {
+    xhci_submit_command_internal(state, descriptor, trb, Some((sequence, aux0)))
 }
 
 fn xhci_enqueue_command(
@@ -9847,31 +10037,62 @@ enum XhciCommandCompletionPoll {
     Pending,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XhciEventAckMode {
+    Readback,
+    PromptSafe { sequence: u32, aux0: u32 },
+}
+
 fn xhci_record_command_proof_event(state: &mut UsbRuntimeState, event: XhciTrb) {
     state.command_proof_events_seen = state.command_proof_events_seen.saturating_add(1);
     state.command_proof_last_event_type = xhci_trb_type(event.control) as u8;
+}
+
+fn xhci_publish_command_proof_event_progress(ack_mode: XhciEventAckMode, event: XhciTrb) {
+    let XhciEventAckMode::PromptSafe { sequence, aux0 } = ack_mode else {
+        return;
+    };
+    let phase = match xhci_trb_type(event.control) {
+        XHCI_TRB_TYPE_COMMAND_COMPLETION => {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND
+        }
+        XHCI_TRB_TYPE_PORT_STATUS_CHANGE_EVENT => {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS
+        }
+        _ => DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER,
+    };
+    publish_runtime_progress(sequence, phase, aux0);
+}
+
+fn xhci_ack_command_poll_event(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    ack_mode: XhciEventAckMode,
+) -> bool {
+    match ack_mode {
+        XhciEventAckMode::Readback => xhci_ack_event_dequeue(state, descriptor),
+        XhciEventAckMode::PromptSafe { sequence, aux0 } => {
+            xhci_ack_event_dequeue_prompt_safe(sequence, aux0, state, descriptor)
+        }
+    }
 }
 
 fn xhci_poll_command_completion(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     spins: usize,
-    ack_events: bool,
+    ack_mode: XhciEventAckMode,
 ) -> XhciCommandCompletionPoll {
     let mut events = 0usize;
     for _ in 0..spins {
         while let Some(event) = xhci_next_event(state, descriptor) {
             events = events.saturating_add(1);
             xhci_record_command_proof_event(state, event);
-            if ack_events {
-                if !xhci_ack_event_dequeue(state, descriptor) {
-                    state.command_proof_ack_failures =
-                        state.command_proof_ack_failures.saturating_add(1);
-                    return XhciCommandCompletionPoll::Failed;
-                }
-            } else {
+            xhci_publish_command_proof_event_progress(ack_mode, event);
+            if !xhci_ack_command_poll_event(state, descriptor, ack_mode) {
                 state.command_proof_ack_failures =
                     state.command_proof_ack_failures.saturating_add(1);
+                return XhciCommandCompletionPoll::Failed;
             }
             if xhci_trb_type(event.control) == XHCI_TRB_TYPE_COMMAND_COMPLETION {
                 let code = xhci_completion_code(event.status);
@@ -9900,7 +10121,12 @@ fn xhci_wait_command_completion(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Option<XhciTrb> {
-    match xhci_poll_command_completion(state, descriptor, USB_COMMAND_COMPLETION_SPINS, true) {
+    match xhci_poll_command_completion(
+        state,
+        descriptor,
+        USB_COMMAND_COMPLETION_SPINS,
+        XhciEventAckMode::Readback,
+    ) {
         XhciCommandCompletionPoll::Complete(event) => Some(event),
         XhciCommandCompletionPoll::Failed | XhciCommandCompletionPoll::Pending => None,
     }
@@ -12021,14 +12247,18 @@ fn usb_hid_attach_control_ready(
 }
 
 fn usb_keyboard_enumerate(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
 ) -> bool {
-    usb_scan_root_ports_for_keyboard(state, descriptor, dma_range)
+    usb_scan_root_ports_for_keyboard(sequence, aux0, state, descriptor, dma_range)
 }
 
 fn xhci_probe_command_path(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> bool {
@@ -12036,41 +12266,83 @@ fn xhci_probe_command_path(
         return true;
     }
     if state.command_proof_pending {
-        if USB_COMMAND_PROOF_RERINGS_PENDING_DOORBELL
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_BEGIN,
+            aux0,
+        );
+        let rerings_pending_doorbell = USB_COMMAND_PROOF_RERINGS_PENDING_DOORBELL
             && state.command_proof_events_seen == 0
-            && !xhci_ring_doorbell(state, 0, 0)
-        {
-            state.command_proof_pending = false;
-            state.command_proof_poll_slices = 0;
-            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED;
-            return false;
+            && state.command_proof_poll_slices % USB_COMMAND_PROOF_RERING_INTERVAL_SLICES == 0;
+        if rerings_pending_doorbell {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN,
+                aux0,
+            );
+            if !xhci_ring_doorbell(state, 0, 0) {
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED,
+                    aux0,
+                );
+                state.command_proof_pending = false;
+                state.command_proof_poll_slices = 0;
+                state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED;
+                return false;
+            }
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE,
+                aux0,
+            );
         }
         match xhci_poll_command_completion(
             state,
             descriptor,
             USB_COMMAND_COMPLETION_SLICE_SPINS,
-            true,
+            XhciEventAckMode::PromptSafe { sequence, aux0 },
         ) {
             XhciCommandCompletionPoll::Complete(event) => {
                 state.command_proof_pending = false;
                 state.command_proof_poll_slices = 0;
                 state.command_proof_slot = xhci_slot_id(event.control);
                 if state.command_proof_slot != 0 {
+                    publish_runtime_progress(
+                        sequence,
+                        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY,
+                        aux0,
+                    );
                     state.command_path_proven = true;
                     state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY;
                     true
                 } else {
+                    publish_runtime_progress(
+                        sequence,
+                        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED,
+                        aux0,
+                    );
                     state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED;
                     false
                 }
             }
             XhciCommandCompletionPoll::Failed => {
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED,
+                    aux0,
+                );
                 state.command_proof_pending = false;
                 state.command_proof_poll_slices = 0;
                 state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED;
                 false
             }
             XhciCommandCompletionPoll::Pending => {
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING,
+                    aux0,
+                );
                 state.command_proof_poll_slices = state.command_proof_poll_slices.saturating_add(1);
                 if state.command_proof_poll_slices >= USB_COMMAND_PROOF_MAX_POLL_SLICES {
                     state.command_proof_pending = false;
@@ -12088,7 +12360,7 @@ fn xhci_probe_command_path(
             status: 0,
             control: XHCI_TRB_TYPE_ENABLE_SLOT << 10,
         };
-        if !xhci_submit_command(state, descriptor, command) {
+        if !xhci_submit_command_for_proof(sequence, aux0, state, descriptor, command) {
             state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED;
             return false;
         }
@@ -12099,6 +12371,11 @@ fn xhci_probe_command_path(
         state.command_proof_last_event_type = 0;
         state.command_proof_ack_failures = 0;
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING;
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING,
+            aux0,
+        );
         false
     }
 }
@@ -12108,6 +12385,8 @@ const fn usb_root_port_frontier_publish_required(current_detail: u16, candidate_
 }
 
 fn usb_scan_root_ports_for_keyboard(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
@@ -12127,7 +12406,7 @@ fn usb_scan_root_ports_for_keyboard(
     }
 
     if !state.command_path_proven {
-        let _ = xhci_probe_command_path(state, descriptor);
+        let _ = xhci_probe_command_path(sequence, aux0, state, descriptor);
         usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
         state.enumeration_best_detail = best_detail;
         state.init_detail = best_detail;
@@ -13337,8 +13616,19 @@ pub fn runtime_main(task_key: usize) -> ! {
     unsafe {
         sel4_sys::seL4_SetIPCBuffer(DRIVER_TASK_IPC_VADDR as *mut sel4_sys::seL4_IPCBuffer);
     }
+    let task_key_marker = (task_key & u32::MAX as usize) as u32;
+    publish_runtime_progress(
+        0,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY,
+        task_key_marker,
+    );
 
     loop {
+        publish_runtime_progress(
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+            task_key_marker,
+        );
         let mut badge: sel4_sys::seL4_Word = 0;
         // SAFETY: The root task minted `DRIVER_TASK_CHILD_COMMAND_SLOT` into
         // the child CSpace before resuming this TCB. The runtime only waits on
@@ -13348,6 +13638,10 @@ pub fn runtime_main(task_key: usize) -> ! {
             let _ = sel4_sys::seL4_Recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge);
         }
         let _ = badge;
+        driver_task_shared_invalidate_range(
+            DRIVER_TASK_RING_VADDR,
+            core::mem::size_of::<DriverTaskCommandRecord>(),
+        );
         driver_task_shared_load_barrier();
         // SAFETY: Root maps one command/completion ring page at the fixed
         // driver-local address before starting the runtime.
@@ -13596,6 +13890,23 @@ mod tests {
             cyw43_sdio_bus_link_attempt_limit(command),
             CYW43_SDIO_BUS_LINK_MAX_ATTEMPTS
         );
+    }
+
+    #[test]
+    fn cyw43_sdio_bus_link_renotifies_before_timeout() {
+        assert!(CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL > 0);
+        assert!(CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL < CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS);
+        assert_eq!(
+            CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS % CYW43_SDIO_BUS_LINK_NOTIFY_INTERVAL,
+            0
+        );
+    }
+
+    #[test]
+    fn cyw43_transport_command_is_one_prompt_safe_phase() {
+        assert_eq!(CYW43_TRANSPORT_COMMAND_BURST_STEPS, 1);
+        assert!(CYW43_TRANSPORT_COMMAND_BURST_STEPS < CYW43_TRANSPORT_PHASE_LIMIT);
+        assert!(CYW43_SDIO_CARD_INIT_RETRY_SETTLE_SPINS < CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS * 2);
     }
 
     #[test]
@@ -16607,10 +16918,11 @@ mod tests {
         assert_eq!(USB_STALE_UBOOT_ROOT_PORT_RESET_SETTLE_SPINS, 200_000);
         assert_eq!(USB_CONTROL_TRANSFER_SPINS, USB_XHCI_SPINS);
         assert_eq!(USB_COMMAND_COMPLETION_SPINS, 20_000_000);
-        assert_eq!(USB_COMMAND_COMPLETION_SLICE_SPINS, 65_536);
+        assert_eq!(USB_COMMAND_COMPLETION_SLICE_SPINS, 128);
         assert_eq!(USB_COMMAND_COMPLETION_EVENTS_PER_SLICE, 4);
-        assert_eq!(USB_COMMAND_PROOF_MAX_POLL_SLICES, 64);
-        assert!(!USB_COMMAND_PROOF_RERINGS_PENDING_DOORBELL);
+        assert_eq!(USB_COMMAND_PROOF_MAX_POLL_SLICES, 192);
+        assert!(USB_COMMAND_PROOF_RERINGS_PENDING_DOORBELL);
+        assert_eq!(USB_COMMAND_PROOF_RERING_INTERVAL_SLICES, 8);
         assert!(USB_COMMAND_COMPLETION_SPINS >= USB_CONTROL_TRANSFER_SPINS);
         assert!(USB_COMMAND_COMPLETION_SLICE_SPINS < USB_COMMAND_COMPLETION_SPINS);
         assert_eq!(USB_CONTROL_TRANSFER_SPINS, USB_XHCI_SPINS);
@@ -16630,6 +16942,81 @@ mod tests {
     }
 
     #[test]
+    fn usb_command_doorbell_flush_is_barrier_only() {
+        let state = UsbRuntimeState::new();
+        assert!(xhci_flush_posted_write(
+            &state,
+            XHCI_FLUSH_STAGE_DOORBELL,
+            0x100,
+            0
+        ));
+        assert!(xhci_flush_posted_write(
+            &state,
+            XHCI_FLUSH_STAGE_PORTSC,
+            0x400,
+            0
+        ));
+    }
+
+    #[test]
+    fn usb_command_proof_first_turn_returns_pending_marker() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let mut state = UsbRuntimeState::new();
+        state.initialized = true;
+        state.db_offset = 0x1000;
+
+        assert!(!xhci_probe_command_path(
+            77,
+            DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            &mut state,
+            &descriptor
+        ));
+        assert!(state.command_proof_pending);
+        assert_eq!(
+            state.init_detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
+        );
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 77);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+    }
+
+    #[test]
+    fn usb_prompt_safe_erdp_ack_advances_event_dequeue_without_readback() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let mut state = UsbRuntimeState::new();
+        state.rt_offset = 0x2000;
+        state.event_dequeue = 0;
+        state.event_cycle = true;
+
+        assert!(xhci_ack_event_dequeue_prompt_safe(
+            78,
+            DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            &mut state,
+            &descriptor
+        ));
+        assert_eq!(state.event_dequeue, 1);
+        assert!(state.event_cycle);
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 78);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+    }
+
+    #[test]
     fn usb_enumeration_advances_from_command_ring_to_root_port_power() {
         let mut state = UsbRuntimeState::new();
         state.initialized = true;
@@ -16642,6 +17029,8 @@ mod tests {
         state.max_ports = 2;
 
         assert!(!usb_keyboard_enumerate(
+            1,
+            DRIVER_RUNTIME_USB_ENUMERATE_AUX,
             &mut state,
             &DriverRuntimeInitDescriptor::empty(),
             DriverRuntimeResourceRangeDescriptor::empty()
@@ -16681,6 +17070,8 @@ mod tests {
         state.enumeration_best_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY;
 
         assert!(!usb_scan_root_ports_for_keyboard(
+            1,
+            DRIVER_RUNTIME_USB_ENUMERATE_AUX,
             &mut state,
             &DriverRuntimeInitDescriptor::empty(),
             DriverRuntimeResourceRangeDescriptor::empty()

@@ -4498,7 +4498,9 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_gate_for_progress_phase(phase: u32) -> u8 {
         match phase {
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN
@@ -4557,6 +4559,20 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_CLEANED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_FILLED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_CLEANED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN
@@ -4572,6 +4588,12 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_blocker_for_progress_phase(phase: u32) -> &'static str {
         match phase {
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY => {
+                "linked-runtime-recv-not-ready"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY => {
+                "linked-runtime-command-not-observed"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "usb-engine-init-no-reply"
             }
@@ -4719,6 +4741,48 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => {
                 "usb-xhci-command-ring-proof-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN => {
+                "usb-xhci-command-proof-submit-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN => {
+                "usb-xhci-command-proof-doorbell-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN => {
+                "usb-xhci-command-doorbell-publish-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE => {
+                "enable-slot-completion-pending"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_BEGIN => {
+                "enable-slot-completion-poll-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING => {
+                "enable-slot-completion-pending"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY => {
+                "usb-xhci-command-ring-ready"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED => {
+                "enable-slot-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS => {
+                "enable-slot-poll-leading-port-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND => {
+                "enable-slot-command-event-seen"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER => {
+                "enable-slot-poll-non-command-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN => {
+                "enable-slot-event-ack-pending"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE => {
+                "enable-slot-event-ack-complete"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING => {
+                "enable-slot-completion-pending"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FAILED => {
                 "usb-engine-init-failed"
@@ -4857,6 +4921,48 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_CLEANED => {
                 "inspect-xhci-device-notification-control-programming"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN => {
+                "verify-enable-slot-trb-publish"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN => {
+                "verify-command-doorbell-publish"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN => {
+                "verify-command-doorbell-posted-write-barrier"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE => {
+                "poll-enable-slot-completion"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_BEGIN => {
+                "inspect-event-ring-command-completion-poll"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING => {
+                "poll-enable-slot-completion"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY => {
+                "continue-root-port-sampling"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED => {
+                "inspect-enable-slot-command-completion-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS => {
+                "ack-leading-port-status-and-continue-command-poll"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND => {
+                "decode-enable-slot-command-completion"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER => {
+                "skip-non-command-event-and-continue-command-poll"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN => {
+                "complete-prompt-safe-erdp-ack"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE => {
+                "continue-enable-slot-command-poll"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING => {
+                "poll-enable-slot-completion"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN => {
                 "inspect-xhci-event-ring-dequeue-pointer"
@@ -6912,6 +7018,11 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD5_READY_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD3_RCA_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD7_SELECT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => Some(2),
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY
@@ -6984,6 +7095,21 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD7_SELECT_BEGIN => {
                 "cyw43-sdio-card-cmd7-select-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN => {
+                "cyw43-sdio-owner-send-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE => {
+                "cyw43-sdio-owner-wait-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN => {
+                "cyw43-sdio-owner-completion-pending"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT => {
+                "cyw43-sdio-owner-completion-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY => {
+                "cyw43-sdio-owner-replied"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => {
                 "cyw43-f1-block-size-start-no-reply"
@@ -7081,6 +7207,21 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD7_SELECT_BEGIN => {
                 "verify-linked-sdio-cmd7-select"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN => {
+                "verify-linked-sdio-owner-endpoint-notification"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE => {
+                "wait-linked-sdio-owner-completion"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN => {
+                "inspect-linked-sdio-owner-command-service"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT => {
+                "inspect-sdio-owner-runtime-fault-or-scheduling"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY => {
+                "continue-cyw43-card-adoption"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY => {
                 "start-cyw43-f1-block-size-write-and-readback"
@@ -10560,6 +10701,46 @@ mod tests {
             "data-wait"
         );
         assert_eq!(TestPump::wifi_sdio_transfer_failure_r5(data_wait), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_runtime_entry_progress_reports_gate_one_transport_blockers() {
+        type TestPump<'a> = EventPump<
+            'a,
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >;
+
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY,
+            ),
+            1
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY,
+            ),
+            "linked-runtime-recv-not-ready"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+            ),
+            1
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+            ),
+            "linked-runtime-command-not-observed"
+        );
     }
 
     #[cfg(feature = "net-console")]
