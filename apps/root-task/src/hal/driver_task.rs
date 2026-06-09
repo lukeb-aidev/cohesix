@@ -1961,6 +1961,7 @@ struct DriverTaskCommandSlot {
     shared_frame_root_ptrs: [AtomicUsize; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
     request_seq: AtomicUsize,
     active: AtomicUsize,
+    active_command_fingerprint: AtomicU32,
     timeout_resumes: AtomicUsize,
     last_progress_magic: AtomicU32,
     last_progress_sequence: AtomicU32,
@@ -2010,6 +2011,7 @@ impl DriverTaskCommandSlot {
             shared_frame_root_ptrs: [AtomicUsize::new(0), AtomicUsize::new(0)],
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
+            active_command_fingerprint: AtomicU32::new(0),
             timeout_resumes: AtomicUsize::new(0),
             last_progress_magic: AtomicU32::new(0),
             last_progress_sequence: AtomicU32::new(0),
@@ -2601,6 +2603,7 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     slot.steady_priority.store(0, Ordering::Release);
     slot.steady_priority_active.store(0, Ordering::Release);
     slot.active.store(0, Ordering::Release);
+    slot.active_command_fingerprint.store(0, Ordering::Release);
     slot.request_seq.store(0, Ordering::Release);
 }
 
@@ -3883,6 +3886,31 @@ const fn driver_task_ring_flags_for_mode(mode: DriverTaskRingCommandMode, flags:
     }
 }
 
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_command_fingerprint_mix(mut hash: u32, value: u32) -> u32 {
+    hash ^= value;
+    hash = hash.wrapping_mul(16_777_619);
+    hash
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_command_fingerprint(command: DriverTaskCommandRecord) -> u32 {
+    let mut hash = 2_166_136_261u32;
+    hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.opcode));
+    hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.flags));
+    hash = driver_task_ring_command_fingerprint_mix(hash, command.arg0);
+    hash = driver_task_ring_command_fingerprint_mix(hash, command.arg1);
+    hash = driver_task_ring_command_fingerprint_mix(hash, command.aux0);
+    hash = driver_task_ring_command_fingerprint_mix(hash, command.aux1);
+    hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.budget.max_ops));
+    hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.budget.max_frames));
+    hash = driver_task_ring_command_fingerprint_mix(hash, command.budget.max_bytes);
+    hash = driver_task_ring_command_fingerprint_mix(hash, command.frame.offset);
+    hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.frame.len));
+    hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.frame.flags));
+    hash | 1
+}
+
 /// Execute a fixed-layout command over the pointer-free shared-ring ABI.
 ///
 /// This transport is intentionally narrower than the transitional callback
@@ -3983,6 +4011,7 @@ fn run_driver_task_ring_command_with_mode(
     }
 
     command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
+    let command_fingerprint = driver_task_ring_command_fingerprint(command);
     let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
     let completion_ptr =
         (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
@@ -3990,7 +4019,8 @@ fn run_driver_task_ring_command_with_mode(
     let active_before_submit = slot.active.load(Ordering::Acquire) != 0;
     let same_request_resume = active_before_submit
         && driver_task_ring_mode_uses_bounded_send(mode)
-        && driver_task_ring_timeout_keeps_active(contract, command, mode);
+        && driver_task_ring_timeout_keeps_active(contract, command, mode)
+        && slot.active_command_fingerprint.load(Ordering::Acquire) == command_fingerprint;
     if slot.active.swap(1, Ordering::AcqRel) != 0 && !same_request_resume {
         let active_request = slot.request_seq.load(Ordering::Acquire);
         driver_task_ring_invalidate_completion_record(ring_root_ptr);
@@ -4019,6 +4049,8 @@ fn run_driver_task_ring_command_with_mode(
             .wrapping_add(1)
             .max(1);
         slot.request_seq.store(request, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(command_fingerprint, Ordering::Release);
         slot.timeout_resumes.store(0, Ordering::Release);
         command.sequence = request as u32;
         let completion_reset =
@@ -4034,6 +4066,7 @@ fn run_driver_task_ring_command_with_mode(
     };
     if request == 0 {
         slot.active.store(0, Ordering::Release);
+        slot.active_command_fingerprint.store(0, Ordering::Release);
         slot.timeout_resumes.store(0, Ordering::Release);
         return None;
     }
@@ -4178,6 +4211,7 @@ fn run_driver_task_ring_command_with_mode(
     };
     if completion.sequence == request as u32 || !keep_active_on_timeout {
         slot.active.store(0, Ordering::Release);
+        slot.active_command_fingerprint.store(0, Ordering::Release);
         slot.timeout_resumes.store(0, Ordering::Release);
         if completion.sequence != request as u32 && timeout_count != 0 {
             emit_driver_task_ring_call_abort(
@@ -7822,6 +7856,48 @@ mod tests {
         );
         assert!(!DriverTaskRingCommandMode::Bootstrap.records_latency());
         assert!(DriverTaskRingCommandMode::PromptSlice.records_latency());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn keep_active_resume_identity_ignores_sequence_but_rejects_different_turns() {
+        let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
+        let mut first = DriverTaskCommandRecord::pi4_hot_path(
+            41,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(contract),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        first.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
+        first.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::NonBlocking, first.flags);
+
+        let mut same = first;
+        same.sequence = 42;
+        same.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::PromptSlice, same.flags);
+
+        let mut different_aux = same;
+        different_aux.aux0 = DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+        let mut different_frame = same;
+        different_frame.frame.len = 8;
+
+        assert_eq!(
+            driver_task_ring_command_fingerprint(first),
+            driver_task_ring_command_fingerprint(same)
+        );
+        assert_ne!(
+            driver_task_ring_command_fingerprint(first),
+            driver_task_ring_command_fingerprint(different_aux)
+        );
+        assert_ne!(
+            driver_task_ring_command_fingerprint(first),
+            driver_task_ring_command_fingerprint(different_frame)
+        );
     }
 
     #[cfg(feature = "kernel")]

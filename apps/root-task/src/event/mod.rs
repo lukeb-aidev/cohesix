@@ -5142,8 +5142,10 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING => {
                 "same-controller-command-proof"
             }
-            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => "cold-reinit",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY => {
+                "same-controller-enumeration"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => "cold-reinit",
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
@@ -13766,6 +13768,12 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
             ),
             "same-controller-command-proof"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_recovery_policy_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+            ),
+            "same-controller-enumeration"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(

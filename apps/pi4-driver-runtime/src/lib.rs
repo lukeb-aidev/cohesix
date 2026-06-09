@@ -683,6 +683,7 @@ const USB_ROOT_PORT_POWER_SETTLE_SPINS: usize = USB_XHCI_SPINS / 16;
 const USB_ROOT_PORT_SCAN_PASSES: usize = 4;
 const USB_ENUMERATION_RETRY_COOLDOWN_TURNS: u8 = 1;
 const USB_ENUMERATION_COLD_REINIT_LIMIT: u8 = 4;
+const USB_ENUMERATION_DEEP_COLD_REINIT_LIMIT: u8 = 2;
 const USB_ROOT_PORT_RESET_MAX_TRIES: usize = 5;
 const USB_ROOT_PORT_RESET_SHORT_RETRY_SPINS: usize = 20_000;
 const USB_ROOT_PORT_RESET_LONG_RETRY_SPINS: usize = 200_000;
@@ -1110,6 +1111,9 @@ struct UsbRuntimeState {
     port_event_count: u16,
     enumeration_retry_cooldown: u8,
     enumeration_cold_reinit_attempts: u8,
+    enumeration_deep_cold_reinit_attempts: u8,
+    enumeration_deep_cold_reinit_detail: u16,
+    enumeration_retry_window_exhausted: bool,
     enumeration_root_powered: bool,
     enumeration_root_scan_pass: u8,
     enumeration_root_next_port: u8,
@@ -1174,6 +1178,9 @@ impl UsbRuntimeState {
             port_event_count: 0,
             enumeration_retry_cooldown: 0,
             enumeration_cold_reinit_attempts: 0,
+            enumeration_deep_cold_reinit_attempts: 0,
+            enumeration_deep_cold_reinit_detail: DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+            enumeration_retry_window_exhausted: false,
             enumeration_root_powered: false,
             enumeration_root_scan_pass: 0,
             enumeration_root_next_port: 1,
@@ -8605,10 +8612,71 @@ fn usb_reset_enumeration_cursor(state: &mut UsbRuntimeState) {
     state.enumeration_root_scan_pass = 0;
     state.enumeration_root_next_port = 1;
     state.enumeration_best_detail = state.init_detail;
+    state.enumeration_retry_window_exhausted = false;
 }
 
 const fn usb_detail_warrants_cold_reinit(detail: u16) -> bool {
     matches!(detail, DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED)
+}
+
+const fn usb_detail_warrants_deep_cold_reinit(detail: u16) -> bool {
+    matches!(
+        detail,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+    )
+}
+
+fn usb_runtime_reinitialize_controller(
+    sequence: u32,
+    aux0: u32,
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    fallback_detail: u16,
+    command_cold_attempts: u8,
+    deep_cold_attempts: u8,
+    deep_cold_detail: u16,
+) -> u16 {
+    state.reset();
+    state.enumeration_cold_reinit_attempts = command_cold_attempts;
+    state.enumeration_deep_cold_reinit_attempts = deep_cold_attempts;
+    state.enumeration_deep_cold_reinit_detail = deep_cold_detail;
+    if let Some(detail) = usb_runtime_init_hw(sequence, aux0, descriptor, state) {
+        state.initialized = true;
+        state.init_detail = detail;
+        usb_reset_enumeration_cursor(state);
+        detail
+    } else {
+        state.initialized = true;
+        state.init_detail = fallback_detail;
+        fallback_detail
+    }
+}
+
+fn usb_reset_deep_cold_reinit_frontier(state: &mut UsbRuntimeState, detail: u16) {
+    state.enumeration_deep_cold_reinit_attempts = 0;
+    state.enumeration_deep_cold_reinit_detail = detail;
+}
+
+fn usb_prepare_deep_cold_reinit_attempt(state: &mut UsbRuntimeState, detail: u16) -> Option<u8> {
+    if !usb_detail_warrants_deep_cold_reinit(detail) {
+        usb_reset_deep_cold_reinit_frontier(state, detail);
+        return None;
+    }
+    if state.enumeration_deep_cold_reinit_detail != detail {
+        usb_reset_deep_cold_reinit_frontier(state, detail);
+    }
+    if state.enumeration_deep_cold_reinit_attempts >= USB_ENUMERATION_DEEP_COLD_REINIT_LIMIT {
+        return None;
+    }
+    let next_attempt = state
+        .enumeration_deep_cold_reinit_attempts
+        .saturating_add(1);
+    state.enumeration_deep_cold_reinit_attempts = next_attempt;
+    Some(next_attempt)
 }
 
 fn usb_runtime_retry_keyboard_enumeration(
@@ -8639,25 +8707,49 @@ fn usb_runtime_retry_keyboard_enumeration(
             && state.enumeration_cold_reinit_attempts < USB_ENUMERATION_COLD_REINIT_LIMIT
         {
             let next_attempt = state.enumeration_cold_reinit_attempts.saturating_add(1);
-            state.reset();
-            state.enumeration_cold_reinit_attempts = next_attempt;
-            if let Some(detail) = usb_runtime_init_hw(sequence, aux0, descriptor, state) {
-                state.initialized = true;
-                state.init_detail = detail;
-            } else {
-                state.initialized = true;
-                state.init_detail = before;
-                return Some(before);
-            }
-            usb_reset_enumeration_cursor(state);
+            let deep_attempts = state.enumeration_deep_cold_reinit_attempts;
+            let deep_detail = state.enumeration_deep_cold_reinit_detail;
+            usb_runtime_reinitialize_controller(
+                sequence,
+                aux0,
+                state,
+                descriptor,
+                before,
+                next_attempt,
+                deep_attempts,
+                deep_detail,
+            );
+            usb_reset_deep_cold_reinit_frontier(state, state.init_detail);
             before = state.init_detail;
         }
+        state.enumeration_retry_window_exhausted = false;
         if usb_keyboard_enumerate(sequence, aux0, state, descriptor, dma_range) {
             state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
             state.enumeration_retry_cooldown = 0;
             state.enumeration_cold_reinit_attempts = 0;
+            usb_reset_deep_cold_reinit_frontier(
+                state,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
+            );
             Some(DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY)
         } else {
+            if state.enumeration_retry_window_exhausted {
+                let detail = state.init_detail;
+                if let Some(deep_attempt) = usb_prepare_deep_cold_reinit_attempt(state, detail) {
+                    let command_attempts = state.enumeration_cold_reinit_attempts;
+                    let reinit_detail = usb_runtime_reinitialize_controller(
+                        sequence,
+                        aux0,
+                        state,
+                        descriptor,
+                        detail,
+                        command_attempts,
+                        deep_attempt,
+                        detail,
+                    );
+                    return Some(reinit_detail);
+                }
+            }
             if state.init_detail != before || state.port_event_candidate_mask != 0 {
                 Some(state.init_detail)
             } else {
@@ -10785,6 +10877,7 @@ fn xhci_prepare_dma_structures(
     state.port_event_candidate_mask = 0;
     state.port_event_count = 0;
     state.enumeration_retry_cooldown = 0;
+    state.enumeration_retry_window_exhausted = false;
     usb_reset_enumeration_cursor(state);
     dma_clean_range(dma_base, XHCI_DMA_ZERO_BYTES);
     let _ = event_base;
@@ -12634,6 +12727,7 @@ fn usb_scan_root_ports_for_keyboard(
     if state.enumeration_root_scan_pass >= USB_ROOT_PORT_SCAN_PASSES as u8 {
         state.init_detail = best_detail;
         usb_reset_enumeration_cursor(state);
+        state.enumeration_retry_window_exhausted = true;
         return false;
     }
 
@@ -17384,6 +17478,7 @@ mod tests {
     fn usb_runtime_retries_keyboard_enumeration_without_long_cooldown() {
         assert_eq!(USB_ENUMERATION_RETRY_COOLDOWN_TURNS, 1);
         assert_eq!(USB_ENUMERATION_COLD_REINIT_LIMIT, 4);
+        assert_eq!(USB_ENUMERATION_DEEP_COLD_REINIT_LIMIT, 2);
         assert_eq!(USB_ROOT_PORT_SCAN_PASSES, 4);
         assert!(USB_LINKED_RUNTIME_SECOND_ROOT_PORT_RESET);
         assert_eq!(USB_STALE_UBOOT_ROOT_PORT_RESET_SETTLE_SPINS, 200_000);
@@ -17561,28 +17656,55 @@ mod tests {
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
         ));
+        assert!(usb_detail_warrants_deep_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+        ));
         assert!(usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
+        ));
+        assert!(!usb_detail_warrants_deep_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
         ));
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
         ));
+        assert!(usb_detail_warrants_deep_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+        ));
         assert!(!usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+        ));
+        assert!(usb_detail_warrants_deep_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
         ));
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
         ));
+        assert!(usb_detail_warrants_deep_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+        ));
         assert!(!usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
+        ));
+        assert!(usb_detail_warrants_deep_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
         ));
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
         ));
+        assert!(!usb_detail_warrants_deep_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
+        ));
         assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
         ));
+        assert!(!usb_detail_warrants_deep_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
+        ));
         assert!(!usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
+        ));
+        assert!(!usb_detail_warrants_deep_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
         ));
     }
@@ -17958,6 +18080,72 @@ mod tests {
                 state.enumeration_best_detail,
                 DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
             );
+        });
+    }
+
+    #[test]
+    fn usb_deep_enumeration_failure_escalates_after_full_retry_window() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let init = DriverTaskCommandRecord {
+            sequence: 97,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_command(0, init),
+            DriverTaskCompletionRecord::progress_with_detail(
+                97,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+                1
+            )
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.command_path_proven = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED;
+            state.enumeration_best_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED;
+            state.enumeration_root_powered = true;
+            state.enumeration_root_scan_pass = USB_ROOT_PORT_SCAN_PASSES as u8;
+            state.enumeration_root_next_port = 1;
+            state.max_ports = 0;
+        });
+        let enumerate = DriverTaskCommandRecord {
+            sequence: 98,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        assert_eq!(
+            service_command(0, enumerate),
+            DriverTaskCompletionRecord::progress_with_detail(
+                98,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+                USB_ENUM_RESULT_SNAPSHOT
+            )
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            assert_eq!(state.enumeration_cold_reinit_attempts, 0);
+            assert_eq!(state.enumeration_deep_cold_reinit_attempts, 1);
+            assert_eq!(
+                state.enumeration_deep_cold_reinit_detail,
+                DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+            );
+            assert!(!state.enumeration_retry_window_exhausted);
+            assert!(!state.enumeration_root_powered);
         });
     }
 

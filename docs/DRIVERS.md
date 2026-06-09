@@ -1208,8 +1208,12 @@ active path is Cohesix-owned cold start:
   cold-reinitialize the xHC on terminal Enable Slot proof failure, then
   immediately attempts the next keyboard enumeration turn instead of spending a
   long shell-blocking cooldown. Address, descriptor, config, HID attach, and hub
-  attach failures preserve same-controller state so retries do not erase slot,
-  port, or descriptor progress.
+  attach failures first preserve same-controller state so retries do not erase
+  slot, port, or descriptor progress. If a full same-controller retry window
+  repeatedly exhausts at the same deep failure frontier, the runtime may take up
+  to two cold reinitialization escalations and then resumes the normal linked
+  xHCI proof ladder. `command-ring-ready` is not itself a cold-reset trigger; it
+  is the handoff point to root-port sampling and enumeration.
   Plain `xhci-ready` is progress toward Enable Slot proof, not a reset-worthy
   stall; resetting there can loop forever at gate 3 and prevent gate 4 command
   proof. Prompt diagnostics therefore label the next action as
@@ -1224,7 +1228,11 @@ active path is Cohesix-owned cold start:
   bounded number of no-reply slices; after that it logs
   `DRIVER_TASK_RING_CALL_ABORT reason=timeout-resume-limit`, clears the active
   latch, and allows a fresh enumeration turn so a stale request cannot wedge
-  serial prompt responsiveness.
+  serial prompt responsiveness. Bounded keep-active resumes are admitted only
+  when the staged command identity still matches the active ring request; a
+  different aux word, frame descriptor, hot path, role, budget, or command flags
+  must publish a fresh sequence instead of inheriting the earlier request's
+  progress.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. `hw.local_seat.required=true` requires matching
   required `hw.devices[]` entries; missing manifest devices or HAL-owned
