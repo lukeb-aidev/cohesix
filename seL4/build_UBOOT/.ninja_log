@@ -419,3 +419,12 @@
 4138	4328	1779114718702714888	/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/elfloader/gen_headers/devices_gen.h	90ca44d133add57a
 236	301	1780966004921298460	/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/images/sel4test-driver-image-arm-bcm2711	69d61e83ba73ae8d
 4	49	1779114714328529219	clean	7eb198a2a14a776
+14	187	1780966469723757782	elfloader/archive.o	4a8895e86aad071
+14	187	1780966469723757782	elfloader/archive.archive.o.cpio	4a8895e86aad071
+14	187	1780966469723757782	elfloader/archive.o.S	4a8895e86aad071
+14	187	1780966469723757782	/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/elfloader/archive.o	4a8895e86aad071
+14	187	1780966469723757782	/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/elfloader/archive.archive.o.cpio	4a8895e86aad071
+14	187	1780966469723757782	/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/elfloader/archive.o.S	4a8895e86aad071
+188	225	1780966469725818130	elfloader/elfloader	12ac3f181a79d56e
+226	283	1780966469806843654	images/sel4test-driver-image-arm-bcm2711	69d61e83ba73ae8d
+226	283	1780966469806843654	/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/images/sel4test-driver-image-arm-bcm2711	69d61e83ba73ae8d

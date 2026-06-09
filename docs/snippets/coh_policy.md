@@ -3,8 +3,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `23ceedff3478d8efe6e52053ef58a1180ddec8ac58e1c81c5a615d8ec72fd90d`
-- `policy.sha256`: `4574d8d48bc7cf6040b7d5ddcc68b7a52bf6b4e869150c92007239f670b28a82`
+- `manifest.sha256`: `3a8690c01e1c9c165b91d3c366fbe7dcb9667602461f82e51df6ca5e2ba45d77`
+- `policy.sha256`: `fbc44b00aae0aa9d9b3716618b8023bc7a66977d287bc2da3ad379e0a7f10758`
 - `coh.mount.root`: `/`
 - `coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`
