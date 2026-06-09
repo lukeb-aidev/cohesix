@@ -28,7 +28,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "29c87ff29199ac7c9e9df9a97b736af177707230bf5b6a0af53bb2e671b51ecb";
+    "83a6bee707fdfc72b80fee2db47767804da35899786e247ed6e939ba02bbb8d8";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -148,7 +148,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "serial-console",
         artifact: "cohesix/bin/pi4-driver-serial",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 80,
+        code_pages: 128,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -164,7 +164,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "usb-keyboard",
         artifact: "cohesix/bin/pi4-driver-usb",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 80,
+        code_pages: 128,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -180,7 +180,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "hdmi-text",
         artifact: "cohesix/bin/pi4-driver-hdmi",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 80,
+        code_pages: 128,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -196,7 +196,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "genet-nic",
         artifact: "cohesix/bin/pi4-driver-genet",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 80,
+        code_pages: 128,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -212,7 +212,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "cyw43-wifi",
         artifact: "cohesix/bin/pi4-driver-cyw43",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 80,
+        code_pages: 128,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -228,7 +228,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "sdio-host",
         artifact: "cohesix/bin/pi4-driver-sdio",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 80,
+        code_pages: 128,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -244,7 +244,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         hot_path: "pcie-root",
         artifact: "cohesix/bin/pi4-driver-pcie",
         entry_symbol: "cohesix_pi4_driver_runtime_entry",
-        code_pages: 80,
+        code_pages: 128,
         stack_pages: 16,
         ipc_pages: 1,
         ring_pages: 1,
@@ -339,20 +339,56 @@ pub const CAS_CONFIG: CasConfig = CasConfig {
     models_enabled: false,
 };
 
-pub const HARDWARE_DEVICES: [HardwareDevice; 0] = [];
+pub const HARDWARE_DEVICES: [HardwareDevice; 7] = [
+    HardwareDevice {
+        kind: HardwareDeviceKind::Uart,
+        id: "uart0",
+        required: true,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Rtc,
+        id: "rtc0",
+        required: true,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Net,
+        id: "bcmgenet0",
+        required: true,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Wifi,
+        id: "cyw43xx0",
+        required: false,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Tpm,
+        id: "tpm0",
+        required: false,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Keyboard,
+        id: "usb-kbd0",
+        required: true,
+    },
+    HardwareDevice {
+        kind: HardwareDeviceKind::Display,
+        id: "hdmi0",
+        required: true,
+    },
+];
 
 pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {
     secure_boot: false,
     no_nic: false,
     network: HardwareNetworkConfig {
-        enabled: false,
-        backend: NetworkBackendKind::Auto,
-        mode: NetworkMode::Off,
-        interface: NetworkInterfacePolicy::Wired,
+        enabled: true,
+        backend: NetworkBackendKind::BcmGenetV5,
+        mode: NetworkMode::Dhcp,
+        interface: NetworkInterfacePolicy::Auto,
         static_ipv4: StaticIpv4Config {
-            ip: [0, 0, 0, 0],
-            prefix_len: 0,
-            gateway: None,
+            ip: [192, 168, 10, 42],
+            prefix_len: 24,
+            gateway: Some([192, 168, 10, 1]),
         },
         dhcp: DhcpPolicyConfig {
             discover_timeout_ms: 1000,
@@ -361,13 +397,13 @@ pub const HARDWARE_CONFIG: HardwareConfig = HardwareConfig {
         },
     },
     attestation: AttestationConfig {
-        enabled: false,
+        enabled: true,
         policy: AttestationPolicy::TpmOrDice,
         evidence_max_bytes: 256,
     },
     local_seat: LocalSeatConfig {
-        enabled: false,
-        required: false,
+        enabled: true,
+        required: true,
         keyboard_device: "usb-kbd0",
         display_device: "hdmi0",
         line_bytes: 160,
@@ -648,10 +684,10 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
-pub const INITIAL_AUDIT_LINES: [&str; 36] = [
+pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.5",
-    "manifest.profile=virt-aarch64",
-    "manifest.sha256=bd480c4eefc9f97c1c4a5755dec8911d23e24a19a2a56199f04d6e8cb25dc3e7",
+    "manifest.profile=pi4-uboot-aarch64",
+    "manifest.sha256=23ceedff3478d8efe6e52053ef58a1180ddec8ac58e1c81c5a615d8ec72fd90d",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -673,16 +709,22 @@ pub const INITIAL_AUDIT_LINES: [&str; 36] = [
     "manifest.features.net_console=true",
     "manifest.hw.secure_boot=false",
     "manifest.hw.no_nic=false",
-    "manifest.hw.network.enabled=false",
-    "manifest.hw.network.backend=auto",
-    "manifest.hw.network.mode=off",
-    "manifest.hw.network.interface=wired",
+    "manifest.hw.network.enabled=true",
+    "manifest.hw.network.backend=bcmgenet-v5",
+    "manifest.hw.network.mode=dhcp",
+    "manifest.hw.network.interface=auto",
     "manifest.hw.network.dhcp.discover_timeout_ms=1000",
     "manifest.hw.network.dhcp.request_timeout_ms=1000",
     "manifest.hw.network.dhcp.max_retries=4",
-    "manifest.hw.attestation.enabled=false",
+    "manifest.hw.attestation.enabled=true",
     "manifest.hw.attestation.policy=tpm-or-dice",
-    "manifest.hw.local_seat.enabled=false",
-    "manifest.hw.local_seat.required=false",
+    "manifest.hw.local_seat.enabled=true",
+    "manifest.hw.local_seat.required=true",
+    "manifest.hw.network.static_ipv4.ip=192.168.10.42",
+    "manifest.hw.network.static_ipv4.prefix_len=24",
+    "manifest.hw.network.static_ipv4.gateway=192.168.10.1",
+    "attestation.bound_manifest_sha256=23ceedff3478d8efe6e52053ef58a1180ddec8ac58e1c81c5a615d8ec72fd90d",
+    "attestation.evidence_sha256=56ff957877bae4a7ec173846cd9356504b40a2785dc3d81552fdf77be215c859",
+    "manifest.hw.networking=enabled-dhcp-ipv4",
     "event_pump.fds=serial,timer,ipc,net-console,ninedoor",
 ];

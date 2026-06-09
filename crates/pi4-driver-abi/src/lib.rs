@@ -77,6 +77,8 @@ pub const DRIVER_RUNTIME_CYW43_OP_RX_POLL: u16 = 8;
 pub const DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP: u16 = 9;
 /// CYW43 operation: poll only SDPCM control and event frames.
 pub const DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL: u16 = 10;
+/// CYW43 operation: submit one control payload and wait for its matching CDC reply.
+pub const DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE: u16 = 11;
 /// CYW43 transport detail: no transport substage has run.
 pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START: u16 = 0x5400;
 /// CYW43 transport detail: SDIO bus-owner link was validated.
@@ -345,8 +347,12 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE: u32 = 14
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING: u32 = 150;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
-/// Linked runtime is blocked on the root-owned command endpoint.
+/// Linked runtime reached the root-owned command endpoint/shared-ring intake loop.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY: u32 = 201;
+/// Linked runtime completed an intake poll without consuming a new command.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY: u32 = 202;
+/// Linked runtime saw a non-one-way command before receiving a reply cap.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING: u32 = 203;
 /// USB runtime is requesting xHCI controller run state.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN: u32 = 79;
 /// USB runtime published xHCI command/event rings.
@@ -786,11 +792,13 @@ impl DriverRuntimeCyw43CommandDescriptor {
             || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
             || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX
             || self.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
-            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL;
+            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
+            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE;
         let bulk_stream_payload = self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK
             || self.op == DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK;
         let carries_payload = bulk_stream_payload
             || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
+            || self.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
             || self.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX;
         let zero_payload = self.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
             || self.op == DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP
@@ -803,6 +811,9 @@ impl DriverRuntimeCyw43CommandDescriptor {
                 self.flags & !DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE == 0
             }
             DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME => {
+                self.flags & !DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER == 0
+            }
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => {
                 self.flags & !DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER == 0
             }
             _ => self.flags == 0,
@@ -1858,6 +1869,23 @@ mod tests {
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         assert!(!descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
+        assert!(!descriptor.valid());
+
+        descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
+            payload_offset: DRIVER_RUNTIME_RING_FRAME_OFFSET,
+            payload_len: 16,
+            total_len: 16,
+            arg0: 2,
+            arg1: 1,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert!(descriptor.valid());
+        descriptor.payload_len = 0;
+        assert!(!descriptor.valid());
+        descriptor.payload_len = 16;
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
         assert!(!descriptor.valid());
     }

@@ -172,6 +172,7 @@ USB_OUTCOME_BLOCKERS = {
     "usb-xhci-ready-keyboard-not-enumerated",
     "pcie-xhci-device-coverage-missing",
     "pcie-owner-ring-unavailable",
+    "pcie-vl805",
     "pcie-vl805-config-contract-missing",
     "root-port-read-begin",
     "root-port-read-timer-preempted",
@@ -1106,6 +1107,8 @@ def normalize_usb_blocker(value: str) -> str:
         return "pcie-vl805-config-contract-missing"
     if "pcie-owner-ring-unavailable" in lower:
         return "pcie-owner-ring-unavailable"
+    if stripped == "pcie-vl805":
+        return "pcie-vl805"
     if (
         "deferred-until-root-console" in lower
         or "driver-task-runtime-unproved" in lower
@@ -1259,6 +1262,8 @@ def normalize_usb_blocker(value: str) -> str:
         return "hid-init-failed"
     if "hid-endpoint-not-ready" in lower:
         return "hid-endpoint-not-ready"
+    if stripped == "first-hid-report":
+        return "hid-first-report"
     if "hid-attach-failed" in lower:
         return "hid-attach-failed"
     if "hub-attach-failed" in lower:
@@ -2140,6 +2145,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     command_timeout_crcr_plan: int | None = None
     reset_init_blocker: str | None = None
     pcie_owner_blocker: str | None = None
+    startup_fail_gate: int | None = None
+    startup_fail_blocker: str | None = None
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
     precise_command_timeout_details = {
@@ -2337,11 +2344,17 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, diag_gate)
                 if diag_gate >= 10:
                     blocker = "none"
+                if startup_fail_gate is not None and diag_gate >= startup_fail_gate:
+                    startup_fail_gate = None
+                    startup_fail_blocker = None
             elif status == "fail":
                 gate = max(gate, max(0, diag_gate - 1))
                 blocker = normalize_usb_blocker(name)
                 if blocker == "none":
                     blocker = name
+                if startup_fail_gate is None or diag_gate < startup_fail_gate:
+                    startup_fail_gate = diag_gate
+                    startup_fail_blocker = blocker
             continue
         if raw.startswith("usb: runtime_gate"):
             proof_gate = parse_hex_int(fields.get("proof_gate"))
@@ -2891,6 +2904,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     }:
         blocker = pcie_owner_blocker
         gate = max(gate, 3)
+    if (
+        startup_fail_gate is not None
+        and startup_fail_blocker is not None
+    ):
+        gate = min(gate, max(0, startup_fail_gate - 1))
+        blocker = startup_fail_blocker
     if (
         gate == 1
         and blocker == "unknown"
@@ -5342,7 +5361,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     )
     usb_driver_task_blocker = summarize_usb_driver_task_stall(event_list)
     if usb_driver_task_blocker is not None:
-        if usb_gate <= 1:
+        if usb_gate <= 1 and usb_blocker in {"unknown", "missing", "none"}:
             usb_gate = max(usb_gate, 1)
             usb_blocker = usb_driver_task_blocker
         elif usb_blocker in {"unknown", "missing", "none"}:

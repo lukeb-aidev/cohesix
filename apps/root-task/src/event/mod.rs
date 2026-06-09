@@ -233,7 +233,7 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS: u16 = 1024;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS: u16 = 1;
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
-const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 8;
+const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalSeatConsumePhase {
@@ -4500,6 +4500,8 @@ where
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
@@ -4593,6 +4595,12 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY => {
                 "linked-runtime-command-not-observed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY => {
+                "linked-runtime-command-not-visible"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING => {
+                "linked-runtime-reply-cap-missing"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "usb-engine-init-no-reply"
@@ -6321,7 +6329,6 @@ where
             exact_error.is_empty() || Self::wifi_exact_error_is_join_security_blocker(exact_error);
 
         let dhcp_pass = self.wifi_diag_dhcp_bound();
-        let network_ready = self.wifi_diag_network_ready();
         let proof_gate: u8 = Self::wifi_startup_proof_gate(
             power_ready,
             card_selected,
@@ -6332,7 +6339,7 @@ where
             f2_enabled && f2_ready,
             channel_ready && cyw43_fault_gate.is_none(),
             dhcp_pass,
-            network_ready,
+            false,
         );
         let failing_gate: u8 = if let Some(gate) = driver_task_gate {
             gate
@@ -7576,23 +7583,6 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn wifi_diag_network_ready(&self) -> bool {
-        #[cfg(feature = "net-console")]
-        {
-            self.net.as_ref().is_some_and(|net| {
-                let status = net.status_report();
-                status.active_interface == "wifi"
-                    && status.address_source == "dhcp-lease"
-                    && status.dhcp_phase == "bound"
-            })
-        }
-        #[cfg(not(feature = "net-console"))]
-        {
-            false
-        }
-    }
-
-    #[cfg(feature = "kernel")]
     fn wifi_diag_network_evidence(&self) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         #[cfg(feature = "net-console")]
         {
@@ -7616,12 +7606,7 @@ where
             if let Some(net) = self.net.as_ref() {
                 let status = net.status_report();
                 return format_message(format_args!(
-                    "nettest=requires-command netstats=requires-command cohsh={} backend={}",
-                    if status.address_source == "dhcp-lease" {
-                        "candidate"
-                    } else {
-                        "blocked"
-                    },
+                    "nettest=requires-command netstats=requires-command cohsh=requires-nettest backend={}",
                     status.backend,
                 ));
             }
@@ -10741,6 +10726,30 @@ mod tests {
             ),
             "linked-runtime-command-not-observed"
         );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+            ),
+            1
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+            ),
+            "linked-runtime-command-not-visible"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
+            ),
+            1
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
+            ),
+            "linked-runtime-reply-cap-missing"
+        );
     }
 
     #[cfg(feature = "net-console")]
@@ -13553,7 +13562,7 @@ mod tests {
         assert!(output_polls >= 1);
         assert!(output_polls <= empty_polls);
         assert_eq!(serial_lines, 1);
-        assert!(serial_chunk_bytes >= 8);
+        assert_eq!(serial_chunk_bytes, 32);
         assert!(serial_chunk_bytes <= crate::serial::DEFAULT_TX_CAPACITY / 2);
     }
 
@@ -15321,6 +15330,23 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_join_security_status(&fake.snapshot),
             "host-required"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_startup_gate_requires_explicit_acceptance_after_dhcp() {
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_proof_gate(
+                true, true, true, true, true, true, true, true, true, false,
+            ),
+            9
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_proof_gate(
+                true, true, true, true, true, true, true, true, true, true,
+            ),
+            10
         );
     }
 

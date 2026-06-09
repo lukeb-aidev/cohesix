@@ -248,9 +248,10 @@ one-page smoke loader: root now maps bounded multi-page `PT_LOAD` runtime images
 and semantic MMIO/DMA/shared resource ranges before submitting the pointer-free
 init descriptor. The linked runtime must publish generic lifecycle progress
 before root credits the task as live: `runtime-entry-ready` means the no-std
-entry path installed the mapped IPC buffer, and `runtime-recv-ready` means the
-runtime is actually blocked on the root-owned command endpoint and can accept a
-descriptor-replay turn.
+entry path installed the mapped IPC buffer, and `runtime-recv-ready` or
+`runtime-poll-ready` means the runtime has entered the command-intake loop and
+can accept a descriptor-replay turn through the command endpoint or the
+sequence-last shared-ring path.
 
 ### Historical Pi 4 Baseline Mapping
 
@@ -422,7 +423,7 @@ endpoint, notification, IPC/stack/ring frames, and fault endpoint; installs a
 restricted child CSpace; applies manifest affinity or emits the deferral marker;
 maps all declared `PT_LOAD` pages and runtime regions; and resumes the TCB. The
 generated specs control code pages, stack pages, resources, and hot-path
-admission. Current runtime images use sixteen stack pages, `code-pages=80`, and
+admission. Current runtime images use sixteen stack pages, `code-pages=128`, and
 the driver-local windows `0x70001000` for IPC, `0x70200000` for MMIO,
 `0x70800000` for DMA, and `0x70c00000` for shared buffers. The physical Pi
 runtime `_start` dispatches only fixed command/completion records; callback
@@ -430,16 +431,25 @@ pointer dispatch is compiled out. Isolated runtime admission binds
 `TCB_SetIPCBuffer` with the child-VSpace-mapped IPC frame cap, not the
 root-mapped frame cap, and emits
 `DRIVER_TASK_IPC_BIND ... source=child-vspace-mapped-cap` before resume. A
-current boot that lacks `runtime-entry-ready` and `runtime-recv-ready` progress
-after that breadcrumb is blocked at linked-runtime transport, before PCIe/VL805
-descriptor replay or USB xHCI gates.
+current boot that lacks `runtime-entry-ready` followed by either
+`runtime-recv-ready` or `runtime-poll-ready` progress after that breadcrumb is
+blocked at linked-runtime transport, before PCIe/VL805 descriptor replay or USB
+xHCI gates. The linked runtime intake loop polls the command endpoint and then
+reads the fixed command ring, so bounded one-way turns can complete from the
+shared ring even if an endpoint wake is missed.
+`runtime-poll-ready` means the child loop is alive but did not observe a fresh
+ring sequence; `runtime-reply-pending` means a non-one-way command was visible
+without a reply cap and must be treated as a transport contract error.
 
 Runtime init is non-acceptance. Root stages a pointer-free
 `DriverRuntimeInitDescriptor`, submits bounded init/service turns, and restores
 contract MCP/priority after each turn. Send-only pre-root turns carry
 `DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY`; a missing shared completion is red
 evidence, not a reason to trap boot in `seL4_Call`. Owner-state stays red until
-the linked runtime returns hardware progress from driver-local state.
+the linked runtime returns hardware progress from driver-local state. PCIe-root
+descriptor replay and engine-init are retained for three bounded turns on timeout
+so the USB Gate 2 owner command is not overwritten while the linked child polls
+the sequence-last command ring.
 
 Root-task remains the client for console grammar, tickets, namespaces, policy,
 replay, and revocation. Physical hardware service must fail closed through
@@ -763,34 +773,43 @@ and prove owner-state; it must not run a root-owned SDIO card-init ladder.
   512-byte byte-mode CMD53. A transfer fault such as `0x5103` retries through the
   retained SDIO owner state and byte-mode fallback without replaying CMD0/CMD5 or
   CYW43 power/reset state. Exhausted retained-stage recovery reports `0x5329`.
-- Station attach follows captured Linux ordering. Before join, prove small
-  control iovars, `cur_etheraddr`, `BRCMF_C_GET_REVINFO`, firmware `ver`,
-  `clmver`, `mpc`, `join_pref`, scan timing, event-mask setup, and `WLC_UP`.
-  Do not send AP/P2P-only or local legacy station writes such as `apsta=1`,
-  early `country`, `WLC_SET_GMODE`, `WLC_SET_BAND`, `WLC_SET_ANTDIV`, early
-  AMPDU-limit writes, or `WLC_SET_PM` unless a later Linux-equivalent gate proves
-  they belong. `BCME_UNSUPPORTED` on non-captured compatibility knobs is
-  nonfatal; transport errors are fatal. Function 1 host-latch/no-dongle-source
-  stalls during join programming report `join-programming-host-latch-loop`.
-- WPA2 setup is fail-closed and Linux-shaped: `join_pref`, `wpaie`, initial
+- Station attach follows the captured Linux shape while staying bounded to the
+  current linked-runtime proof surface. The as-built control path first reads
+  `cur_etheraddr`, then issues matched CDC exchanges for `WLC_UP`,
+  `WLC_SET_INFRA`, WPA2 setup, PAE multicast admission, and `WLC_SET_SSID`.
+  Additional Linux probe telemetry such as `BRCMF_C_GET_REVINFO`, firmware
+  `ver`, `clmver`, `mpc`, `join_pref`, scan timing, and event-mask setup remains
+  useful comparison evidence, but it is not accepted as proof unless the linked
+  runtime observes the corresponding CDC reply. Do not send AP/P2P-only or local
+  legacy station writes such as `apsta=1`, early `country`, `WLC_SET_GMODE`,
+  `WLC_SET_BAND`, `WLC_SET_ANTDIV`, early AMPDU-limit writes, or `WLC_SET_PM`
+  unless a later Linux-equivalent gate proves they belong. `BCME_UNSUPPORTED` on
+  non-captured compatibility knobs is nonfatal; transport errors are fatal.
+  Function 1 host-latch/no-dongle-source stalls during join programming report
+  `join-programming-host-latch-loop`.
+- WPA2 setup is fail-closed and Linux-shaped: `wpaie`, initial
   `wpa_auth=0x00c0`, `auth=0`, `wsec=0x0004`, RSN side effects, final
-  `wpa_auth=0x0080`, then either firmware supplicant proof or the host-EAPOL
-  path before primary `join`. Primary-BSS commands use plain iovar names; do not
-  invent BSSCFG wrappers or `infra=1` on this path.
+  `wpa_auth=0x0080`, then host-EAPOL proof before data release. Station setup uses
+  `DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE`, not fire-and-forget control
+  frames: the runtime must match CDC command plus ioctl id, reject nonzero CDC
+  status, and return the CDC response body for reads such as `cur_etheraddr`.
+  Primary-BSS commands use plain iovar names; do not invent BSSCFG wrappers on
+  this path.
 - Firmware supplicant offload must prove `sup_wpa`, valid PMK programming, and
   `PSK_SUP` plus carrier confirmation before DHCP/data. If firmware rejects that
   path, Cohesix derives the host PMK locally and reports
   `wifi-host-eapol-pending`; DHCP and normal data stay blocked until M1/M2/M3/M4
   plus PTK/GTK `wsec_key` install complete. `SET_SSID` alone never releases a
   secure network.
-- Host-EAPOL waits passively for AP M1, sends diagnostic EAPOL-Start to the PAE
-  group only after the bounded passive window, validates AP/BSSID candidates
-  before storing `host_wpa.ap_mac`, sends M2/M4 in hostap order, handles group
-  key frames with advancing replay counters, and logs
-  `join complete mode=host-eapol secure=yes` only after keys are installed.
-  EAPOL TX uses the extended SDPCM data shape with BDC priority `6`; control
-  writes may wait for CDC replies, but data/event writes must not inherit a
-  control-plane reply wait.
+- Host-EAPOL admits the PAE group multicast, sends bounded EAPOL-Start frames
+  through the linked CYW43 `ETH_TX` descriptor while waiting for AP M1, derives
+  PMK/PTK locally, writes M2/M4 in WPA2-PSK order, verifies M3 MIC/replay state,
+  unwraps GTK with AES-128 key unwrap, installs pairwise and group `wsec_key`
+  iovars, and only then reports secure completion. EAPOL TX uses the extended
+  SDPCM data shape with BDC priority `6`; control writes may wait for CDC
+  replies, but data/event writes must not inherit a control-plane reply wait.
+  `eapol_start` counts only the bounded linked-runtime 802.1X start frames; it
+  is not DHCP/data success by itself.
 - `WIFI_GATE=7`, `wifi-host-eapol-pending`, and
   `wifi-host-eapol-required` are not Wi-Fi connection success. They preserve the
   secure boundary while event-pump turns yield back to serial, USB keyboard,
@@ -980,10 +999,13 @@ and prove owner-state; it must not run a root-owned SDIO card-init ladder.
   virtual-device tests.
 - Once host-EAPOL secure completion is proven during the join-submit proof
   window, the CYW43 path releases DHCP immediately and must not emit stale
-  `wifi-host-eapol-pending` / `data=blocked` diagnostics. Optional
-  peer-assisted `nettest` echo/smoke probes are reported separately from
-  driver-level TX/RX/DHCP/remote-`cohsh` proof, so a missing router-side echo
-  listener is not a Wi-Fi blocker and cannot spam the console.
+  `wifi-host-eapol-pending` / `data=blocked` diagnostics. Wi-Fi Gate 10 remains
+  fail-closed after DHCP: `wifi diag` can report only Gate 9 until the capture
+  includes explicit `nettest` plus final `netstats` proof with DHCP-bound Wi-Fi,
+  secure EAPOL, and non-zero TX/RX counters. Optional peer-assisted `nettest`
+  echo/smoke probes are reported separately from driver-level TX/RX/DHCP/remote-
+  `cohsh` proof, so a missing router-side echo listener is not a Wi-Fi blocker
+  and cannot spam the console.
 - Post-attach SDPCM glom RX is bounded: descriptor lists are capped, normal-sized
   subframes are deaggregated into the data/event/EAPOL path, and malformed or
   oversized glom evidence remains explicit but UART-capped instead of silent or
@@ -1576,8 +1598,14 @@ Required Cohesix shape:
   runtime must not perform KSO/WAKEUPCTRL/watermark/Function 2 sideband work as
   part of `transport-init`; that sideband belongs after firmware release. CM3-only
   SOCSRAM remap writes are not part of this path.
+- Station control uses matched CDC `CONTROL_EXCHANGE` descriptors for writes and
+  read iovars. A control-plane command is not accepted merely because the SDPCM
+  frame was transmitted; the runtime must return the expected CDC command/ioctl
+  id or a precise control-exchange fault.
 - Wi-Fi credentials remain bounded: SSID 1-32 printable ASCII bytes; PSK empty,
-  8-63 printable ASCII bytes, or 64 ASCII hex digits.
+  8-63 printable ASCII bytes, or 64 ASCII hex digits. A 64-hex PSK is decoded as
+  the direct 32-byte PMK before host-EAPOL; shorter passphrases use WPA2
+  PBKDF2-HMAC-SHA1 with the SSID.
 
 Do not debug DHCP over Wi-Fi until association and the first CYW43 Ethernet
 frame path are proven independently.

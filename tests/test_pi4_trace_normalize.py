@@ -4689,6 +4689,61 @@ def test_gate_summary_tracks_usb_startup_blackbox_gates() -> None:
     assert gates.usb_blocker == "hid-first-report"
 
 
+def test_gate_summary_preserves_usb_startup_gate_failure_over_driver_noise() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-engine-init status=begin "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=usb-local-seat "
+            "endpoint=0x07a4 request=2 mode=nonblocking attempts=4096 "
+            "opcode=1 arg0=2 aux0=0x4c53494e frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-xhci-init "
+            "status=blocked-pcie-runtime acceptance=no code=1 detail=0 "
+            "result=0 frame_len=0",
+            "usb: gate 1 name=hal-resources status=pass "
+            "evidence=ownership_gate=1 next=pcie-vl805",
+            "usb: gate 2 name=pcie-vl805 status=fail "
+            "evidence=backend_attached=no linked_controller=no "
+            "runtime_result=0x00000000 next=xhci-operational",
+            "usb: gate 3 name=xhci-operational status=blocked "
+            "evidence=waiting-on-gate-2 next=command-event-rings",
+            "usb: evidence boundary root=event-pump hal=driver-task "
+            "runtime=usb-local-seat "
+            "failure_domain=linked-runtime-command-not-observed "
+            "proof_gate=1 target_gate=10",
+            "usb: next_action=inspect-linked-usb-runtime-progress "
+            "blocker=linked-runtime-command-not-observed proof_gate=1 "
+            "target_gate=10 detail=0x0000 result=0x00000000",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 1
+    assert record["USB_BLOCKER"] == "pcie-vl805"
+    assert record["USB_DRIVER_TASK_FRONTIER"] == "usb-xhci-init-blocked-pcie-runtime"
+
+
+def test_gate_summary_caps_later_usb_progress_after_startup_gate_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: gate 1 name=hal-resources status=pass "
+            "evidence=ownership_gate=1 next=pcie-vl805",
+            "usb: gate 2 name=pcie-vl805 status=fail "
+            "evidence=backend_attached=no linked_controller=no "
+            "runtime_result=0x00000000 next=xhci-operational",
+            "USB: stage=controller-ready",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 1
+    assert record["USB_BLOCKER"] == "pcie-vl805"
+
+
 def test_gate_summary_tracks_usb_hid_queue_and_report_blockers() -> None:
     events = normalizer.parse_events(
         [
