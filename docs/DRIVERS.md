@@ -251,7 +251,18 @@ before root credits the task as live: `runtime-entry-ready` means the no-std
 entry path installed the mapped IPC buffer, and `runtime-recv-ready` or
 `runtime-poll-ready` means the runtime has entered the command-intake loop and
 can accept a descriptor-replay turn through the command endpoint or the
-sequence-last shared-ring path.
+sequence-last shared-ring path. Root publishes shared-ring commands by staging a
+zero-sequence record plus reset completion, issuing the shared-memory store
+barrier, writing the real sequence last, and issuing the barrier again so the
+runtime never consumes a partial or stale record. Root does not clear the
+child-owned progress marker on submit; timeout telemetry must preserve the last
+runtime marker and use the request sequence to identify the active turn.
+Runtime shared-control, shared-payload, bus-owner, and command-ring pages are
+HAL-mapped uncached in every participant VSpace, so root and linked runtimes use
+load/store barriers plus volatile reads and writes for command intake,
+descriptors, payload windows, progress records, and bus-owner completions.
+Data-cache clean/invalidate stays limited to descriptor-declared device DMA
+buffers.
 
 ### Historical Pi 4 Baseline Mapping
 
@@ -434,12 +445,19 @@ root-mapped frame cap, and emits
 current boot that lacks `runtime-entry-ready` followed by either
 `runtime-recv-ready` or `runtime-poll-ready` progress after that breadcrumb is
 blocked at linked-runtime transport, before PCIe/VL805 descriptor replay or USB
-xHCI gates. The linked runtime intake loop polls the command endpoint and then
-reads the fixed command ring, so bounded one-way turns can complete from the
-shared ring even if an endpoint wake is missed.
+xHCI gates. The linked runtime intake loop reads the fixed command ring before
+polling the command endpoint, so bounded one-way turns can complete from the
+shared ring without requiring an endpoint wake or reply cap.
 `runtime-poll-ready` means the child loop is alive but did not observe a fresh
-ring sequence; `runtime-reply-pending` means a non-one-way command was visible
-without a reply cap and must be treated as a transport contract error.
+ring sequence; it is emitted on the first idle poll and then sparsely.
+`runtime-ring-read-begin` means the runtime is about to perform its first
+uncached shared command-ring read in the intake loop. It is a first-edge marker,
+not a per-poll heartbeat; later idle liveness is carried by sparse
+`runtime-poll-ready` markers.
+`runtime-poll-begin` means the runtime observed a command that requires a reply
+cap and is about to poll the command endpoint.
+`runtime-reply-pending` means a non-one-way command was visible without a reply
+cap and must be treated as a transport contract error.
 
 Runtime init is non-acceptance. Root stages a pointer-free
 `DriverRuntimeInitDescriptor`, submits bounded init/service turns, and restores
@@ -450,6 +468,12 @@ the linked runtime returns hardware progress from driver-local state. PCIe-root
 descriptor replay and engine-init are retained for three bounded turns on timeout
 so the USB Gate 2 owner command is not overwritten while the linked child polls
 the sequence-last command ring.
+Driver-task command rings, bus-owner rings, shared-control pages, and
+root-shared payload pages are HAL-mapped uncached into linked runtimes; runtime
+coherency on those pages is volatile load/store plus barriers only. Runtime-side
+cache clean/invalidate instructions are reserved for descriptor-declared device
+DMA buffers and must not be used to publish or consume shared-ring progress,
+commands, completions, or CYW43-to-SDIO owner payloads.
 
 Root-task remains the client for console grammar, tickets, namespaces, policy,
 replay, and revocation. Physical hardware service must fail closed through
@@ -693,6 +717,10 @@ CARD_COMMAND and HOST_CONFIG turns for the proven card select and card/host
 4-bit/high-speed transition, but it must not write SDHCI host-control registers
 directly. Root may replay the SDIO owner descriptor, initialize the owner engine,
 and prove owner-state; it must not run a root-owned SDIO card-init ladder.
+SDIO descriptor replay and engine-init remain bounded prompt-safe turns, but
+root keeps the active ring request across a finite no-reply resume window so a
+still-running linked SDIO adoption/reset turn is not overwritten before it
+returns ready or reaches the terminal timeout limit.
 
 - Function 0 is CCCR/FBR control.
 - Function 1 is the Broadcom backplane/control path.
@@ -717,12 +745,14 @@ and prove owner-state; it must not run a root-owned SDIO card-init ladder.
   interval while CYW43 polls the SDIO owner completion slot, and records the
   nested SDIO descriptor class on timeout so `wifi diag` can distinguish a
   missing owner reply from a card-command or CMD52/CMD53 fault. Every linked
-  runtime invalidates the shared command record before dispatch, and SDIO/CYW43
-  descriptor readers invalidate their descriptor frame before decoding it; this
-  keeps CYW43-produced SDIO-owner commands coherent without replacing the
-  bounded one-way ring turn with an unbounded driver-to-driver call. Root-side
-  resource status labels report partial transport details as `progress`; only
-  `DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY` is reported as `ready`.
+  runtime uses volatile shared-ring loads plus barriers before dispatch, and
+  SDIO/CYW43 descriptor readers consume their descriptor frame through the same
+  uncached shared mapping; this keeps CYW43-produced SDIO-owner commands
+  coherent without replacing the bounded one-way ring turn with an unbounded
+  driver-to-driver call. Root-side resource status labels report partial
+  transport details as `progress`; partial transport completions return
+  `result=0`, and only `DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY` returns
+  `result=1` and is reported as `ready`.
 - Production Function 2 traffic requires firmware upload/release evidence, real
   `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness (`IOR2`/ready proof).
   `CHIPCLKCSR=0x50` (`ALP_AVAIL|HT_REQ`) with `IOR2` still clear is diagnostic

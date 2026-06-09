@@ -1365,7 +1365,7 @@ def test_gate_summary_labels_usb_engine_init_blocking_stall() -> None:
     )
 
     record = normalizer.summarize_gates(events).to_record()
-    assert record["USB_GATE"] == 1
+    assert record["USB_GATE"] == 2
     assert record["USB_BLOCKER"] == "usb-engine-init-blocking-call-stalled"
 
 
@@ -1386,8 +1386,43 @@ def test_gate_summary_labels_usb_engine_init_no_reply() -> None:
     )
 
     record = normalizer.summarize_gates(events).to_record()
-    assert record["USB_GATE"] == 1
+    assert record["USB_GATE"] == 2
     assert record["USB_BLOCKER"] == "usb-engine-init-no-reply"
+
+
+def test_gate_summary_refines_stale_pcie_gate_after_usb_engine_init_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=pcie-root "
+            "hot_path=pcie-root stage=usb-prereq-pcie-engine-init "
+            "status=ready acceptance=no code=1 detail=0 result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=runtime-descriptor-bootstrap "
+            "status=ready acceptance=no code=1 detail=0 result=2 frame_len=1472",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-engine-init status=begin "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=usb-local-seat "
+            "endpoint=0x07a4 request=2 mode=nonblocking attempts=262144 "
+            "opcode=1 arg0=2 aux0=0x4c53494e frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-engine-init status=no-reply "
+            "acceptance=no code=none detail=none result=none frame_len=0",
+            "usb: gate 1 name=hal-resources status=pass "
+            "evidence=ownership_gate=1 next=pcie-vl805",
+            "usb: gate 2 name=pcie-vl805 status=fail "
+            "evidence=backend_attached=no linked_controller=no "
+            "runtime_result=0x00000000 next=xhci-operational",
+            "usb: next_action=inspect-linked-usb-runtime-progress "
+            "blocker=linked-runtime-command-not-observed proof_gate=1 "
+            "target_gate=10 detail=0x0000 result=0x00000000",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["USB_GATE"] == 2
+    assert record["USB_BLOCKER"] == "usb-engine-init-no-reply"
+    assert record["USB_DRIVER_TASK_FRONTIER"] == "usb-engine-init-no-reply"
 
 
 def test_gate_summary_preserves_usb_keyboard_frontier_after_root_port() -> None:
@@ -1580,6 +1615,8 @@ def test_gate_summary_keeps_boot_sdio_replay_over_later_wifi_prompt_error() -> N
             "detail=none result=none frame_len=0",
             "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
             "policy=wifi attempted=yes stage=cyw43-sdio-prereq blocker=failed",
+            "[pi4-wifi] firmware stage=debug-probe-ht subcommand=probe-ht "
+            "arg=0x12001c00 value=0x00000000 result=error",
             "wifi: debug subcommand=load-fw action=complete profile=stateful "
             "mode=one-shot result=error error=unsupported operation: "
             "pi4-wifi-driver-task-runtime-required",
@@ -1587,10 +1624,37 @@ def test_gate_summary_keeps_boot_sdio_replay_over_later_wifi_prompt_error() -> N
     )
 
     record = normalizer.summarize_gates(events).to_record()
-    assert record["WIFI_BLOCKER"] == "sdio-card-select"
-    assert record["WIFI_EXACT"] == "engine-init-no-reply"
+    assert record["WIFI_BLOCKER"] == "sdio-engine-init-no-reply"
+    assert record["WIFI_EXACT"] == "sdio-engine-init-no-reply"
     assert record["WIFI_PHASE"] == "engine-init"
     assert record["WIFI_BLOCKER_LINE"] == 5
+
+
+def test_gate_summary_preserves_sdio_adopt_progress_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: sdio linked_runtime_progress marker_valid=yes sequence=2 "
+            "phase=85 phase_name=sdio-adopt-present-read-begin "
+            "aux0=0x454e474e gate=2 blocker=sdio-adopt-present-read-no-reply "
+            "next_action=inspect-sdhci-present-state-read",
+            "wifi: gate 1 name=hal-power-reset status=inferred "
+            "evidence=power=unknown reset=unknown source=hal-runtime-required "
+            "next=sdio-card-select",
+            "wifi: gate 2 name=sdio-card-select status=fail "
+            "evidence=stage=engine-init status=no-reply phase=85 "
+            "phase_name=sdio-adopt-present-read-begin marker_valid=yes "
+            "source=linked-runtime next=cccr-fbr-ready",
+            "wifi: next_action=inspect-sdhci-present-state-read "
+            "blocker=sdio-adopt-present-read-no-reply proof_gate=1 "
+            "target_gate=10 source=hal-runtime-required",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "sdio-adopt-present-read-no-reply"
+    assert record["WIFI_EXACT"] == "sdio-adopt-present-read-no-reply"
+    assert record["WIFI_PHASE"] == "sdio-adopt-present-read-no-reply"
 
 
 def test_gate_summary_tracks_split_sdio_command_probe_blockers() -> None:
@@ -4627,6 +4691,21 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
 
     assert gates.usb_gate == 10
     assert gates.usb_blocker == "none"
+
+
+def test_gate_summary_normalizes_legacy_hid_first_byte_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "proof_gate=9 target_gate=10 next=keyboard-first-byte "
+            "blocker=hid-first-byte",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 9
+    assert gates.usb_blocker == "keyboard-first-byte"
 
 
 def test_gate_summary_tracks_usb_runtime_enum_snapshot_detail() -> None:

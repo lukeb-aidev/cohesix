@@ -211,7 +211,7 @@ const NET_DIAG_STUCK_MS: u64 = 3_000;
 #[cfg(feature = "net-console")]
 const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 #[cfg(feature = "net-console")]
-const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 0;
+const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
 const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
@@ -4479,7 +4479,7 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED => 5,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED => 5,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED => 6,
-            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED => 5,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED => 6,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR => 7,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED => 6,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
@@ -4502,10 +4502,12 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY => 1,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH
@@ -4528,7 +4530,7 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY => 1,
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY => 2,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED
@@ -4601,6 +4603,12 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING => {
                 "linked-runtime-reply-cap-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN => {
+                "linked-runtime-endpoint-poll-blocked"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN => {
+                "linked-runtime-ring-read-blocked"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "usb-engine-init-no-reply"
@@ -5081,7 +5089,7 @@ where
                 "hid-first-report"
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => {
-                "hid-first-byte"
+                "keyboard-first-byte"
             }
             _ => "keyboard-not-ready",
         }
@@ -6850,7 +6858,15 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => Some(2),
@@ -6908,7 +6924,29 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
                 "sdio-engine-init-hardware-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN => "sdio-adopt-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN => {
+                "sdio-adopt-int-clear-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN => {
+                "sdio-adopt-present-read-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING => {
+                "sdio-adopt-power-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED => {
+                "sdio-adopt-clock-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED => {
+                "sdio-adopt-inhibit-failed"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN => "sdio-reset-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN => {
+                "sdio-reset-clock-disable-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN => {
+                "sdio-reset-power-disable-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY => "sdio-power-no-reply",
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY => "sdio-clock-no-reply",
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => "sdio-card-select-no-reply",
@@ -6970,8 +7008,32 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
                 "inspect-sdhci-reset-first-mmio-access"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN => {
+                "inspect-sdhci-adopt-first-mmio-access"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN => {
+                "inspect-sdhci-interrupt-status-clear"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN => {
+                "inspect-sdhci-present-state-read"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING => {
+                "inspect-sdhci-power-and-card-present-state"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED => {
+                "inspect-sdhci-startup-clock-enable"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED => {
+                "inspect-sdhci-command-data-inhibit-clear"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN => {
                 "inspect-sdhci-reset-completion-loop"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN => {
+                "inspect-sdhci-clock-disable-write"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN => {
+                "inspect-sdhci-power-disable-write"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY => {
                 "inspect-sdhci-clock-enable-loop"
@@ -10750,6 +10812,30 @@ mod tests {
             ),
             "linked-runtime-reply-cap-missing"
         );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN,
+            ),
+            1
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN,
+            ),
+            "linked-runtime-endpoint-poll-blocked"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN,
+            ),
+            1
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN,
+            ),
+            "linked-runtime-ring-read-blocked"
+        );
     }
 
     #[cfg(feature = "net-console")]
@@ -12151,7 +12237,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn host_eapol_pending_yields_after_single_runtime_poll() {
+    fn host_eapol_pending_uses_small_runtime_burst_without_input_pressure() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -12166,8 +12252,8 @@ mod tests {
         pump.poll();
         drop(pump);
 
-        assert_eq!(WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS, 0);
-        assert_eq!(net.polls, 1);
+        assert_eq!(WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS, 8);
+        assert_eq!(net.polls, WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS + 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -13745,7 +13831,7 @@ mod tests {
             KernelConsoleTestPump::usb_runtime_blocker_for_linked_detail(
                 pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
             ),
-            "hid-first-byte"
+            "keyboard-first-byte"
         );
     }
 
@@ -13789,6 +13875,41 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_sdio_runtime_replay_next_action(status),
             "inspect-linked-sdio-runtime-engine-init-dispatch"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_sdio_adopt_progress_reports_gate_two_blockers() {
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_gate(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
+            ),
+            Some(2)
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_blocker(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
+            ),
+            "sdio-adopt-present-read-no-reply"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_next_action(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
+            ),
+            "inspect-sdhci-present-state-read"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_blocker(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
+            ),
+            "sdio-adopt-clock-failed"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_next_action(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
+            ),
+            "inspect-sdhci-clock-disable-write"
         );
     }
 

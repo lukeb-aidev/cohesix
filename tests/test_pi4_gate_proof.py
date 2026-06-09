@@ -158,9 +158,15 @@ def test_gate_proof_rejects_generic_usb_unavailable_summary() -> None:
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert '"USB_BLOCKER=cmd-event-ring-timeout"' in source
+    assert '"USB_BLOCKER=command-event-rings"' in source
+    assert '"USB_BLOCKER=command-ring-ready"' in source
+    assert '"USB_BLOCKER=root-port-connected"' in source
+    assert '"USB_BLOCKER=address-device-failed"' in source
+    assert '"USB_BLOCKER=device-addressed"' in source
     assert '"USB_BLOCKER=pcie-xhci-device-coverage-missing"' in source
     assert '"USB_BLOCKER=pcie-owner-ring-unavailable"' in source
     assert '"USB_BLOCKER=pcie-vl805-config-contract-missing"' in source
+    assert '"USB_BLOCKER=hid-first-byte"' in source
     assert '"USB_BLOCKER=keyboard-not-ready"' in source
     assert '"USB_BLOCKER=unavailable"' in source
 

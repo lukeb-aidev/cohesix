@@ -353,6 +353,10 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY: u32 = 201;
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY: u32 = 202;
 /// Linked runtime saw a non-one-way command before receiving a reply cap.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING: u32 = 203;
+/// Linked runtime is about to poll the command endpoint for a reply-cap command.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN: u32 = 204;
+/// Linked runtime is about to read the uncached shared command ring.
+pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN: u32 = 205;
 /// USB runtime is requesting xHCI controller run state.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN: u32 = 79;
 /// USB runtime published xHCI command/event rings.
@@ -375,6 +379,14 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING: u32 = 81;
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED: u32 = 82;
 /// SDIO runtime could not clear command/data inhibit while adopting.
 pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED: u32 = 83;
+/// SDIO runtime is about to clear stale SDHCI interrupt state while adopting.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN: u32 = 84;
+/// SDIO runtime is about to read SDHCI power/present state while adopting.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN: u32 = 85;
+/// SDIO runtime is about to disable the SDHCI clock before reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN: u32 = 86;
+/// SDIO runtime is about to drop SDHCI slot power before reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN: u32 = 87;
 /// Runtime recognized an engine-init aux word before entering the handler.
 pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH: u32 = 34;
 /// Runtime entered the engine-init handler.

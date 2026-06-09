@@ -2985,6 +2985,10 @@ impl<'a> KernelHal<'a> {
         Err(HalError::Unsupported("driver-runtime-mmio-not-covered"))
     }
 
+    fn runtime_ram_region_attr(_dma_owned: bool) -> sel4_sys::seL4_ARM_VMAttributes {
+        sel4_sys::seL4_ARM_Page_Uncached
+    }
+
     fn map_isolated_runtime_ram_region(
         &mut self,
         hot_path: driver_task::DriverTaskHotPath,
@@ -2999,11 +3003,9 @@ impl<'a> KernelHal<'a> {
             return Ok(false);
         }
         let rights = sel4_sys::seL4_CapRights_ReadWrite;
-        let attr = if dma_owned {
-            sel4_sys::seL4_ARM_Page_Uncached
-        } else {
-            sel4_sys::seL4_ARM_Page_Default
-        };
+        // Runtime DMA buffers and root-shared payload/control pages cross TCBs
+        // without runtime-side EL0 cache maintenance.
+        let attr = Self::runtime_ram_region_attr(dma_owned);
         let page_bytes = 1usize << sel4::PAGE_BITS;
         let first_page_index = init_descriptor
             .as_deref()
@@ -4080,6 +4082,19 @@ mod tests {
             0x1000,
             0x4000_4000
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn runtime_ram_region_attr_keeps_shared_payload_pages_uncached() {
+        assert_eq!(
+            super::KernelHal::runtime_ram_region_attr(true),
+            sel4_sys::seL4_ARM_Page_Uncached
+        );
+        assert_eq!(
+            super::KernelHal::runtime_ram_region_attr(false),
+            sel4_sys::seL4_ARM_Page_Uncached
+        );
     }
 
     #[cfg(feature = "kernel")]

@@ -1912,6 +1912,32 @@ const fn cyw43_runtime_command_progress_status(op: u16, detail: u16) -> &'static
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_transport_detail_is_progress(detail: u16) -> bool {
+    matches!(
+        detail,
+        DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY
+            | DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY
+            | DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_BLOCK_READY
+            | DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F2_BLOCK_READY
+            | DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_ENABLED
+            | DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY
+            | DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BACKPLANE_READY
+            | DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_runtime_command_completion_is_progress(
+    op: u16,
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    completion.code == DriverTaskCompletionCode::Progress.as_u16()
+        && (completion.result != 0
+            || (op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+                && cyw43_transport_detail_is_progress(completion.detail)))
+}
+
+#[cfg(feature = "kernel")]
 const fn cyw43_runtime_command_uses_shared_payload(op: u16) -> bool {
     matches!(
         op,
@@ -2092,7 +2118,7 @@ fn submit_staged_cyw43_runtime_descriptor(
             DriverTaskNetError::RuntimeInit("cyw43-command-completion"),
         ));
     };
-    if completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result != 0 {
+    if cyw43_runtime_command_completion_is_progress(descriptor.op, completion) {
         if cyw43_command_stage_always_logs_success(descriptor.op) {
             let status = cyw43_runtime_command_progress_status(descriptor.op, completion.detail);
             crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -3608,6 +3634,34 @@ mod tests {
             cyw43_runtime_command_progress_status(DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP, 0),
             "ready"
         );
+        assert!(cyw43_runtime_command_completion_is_progress(
+            DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            DriverTaskCompletionRecord {
+                sequence: 1,
+                code: DriverTaskCompletionCode::Progress.as_u16(),
+                detail: DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY,
+                result: 0,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            }
+        ));
+        assert!(!cyw43_runtime_command_completion_is_progress(
+            DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
+            DriverTaskCompletionRecord {
+                sequence: 1,
+                code: DriverTaskCompletionCode::Progress.as_u16(),
+                detail: 0,
+                result: 0,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            }
+        ));
     }
 
     #[cfg(feature = "kernel")]

@@ -24,8 +24,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_ENGINE_INIT_AUX,
     DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
     DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
-    DRIVER_RUNTIME_RING_PROGRESS_BYTES, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
-    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY,
@@ -87,15 +86,21 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_SHARED_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_TOTALS_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY, DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
     DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING,
+    DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
@@ -1849,6 +1854,7 @@ const DRIVER_TASK_CYW43_TRANSPORT_RING_ATTEMPTS: usize = 1_048_576;
 const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_PCIE_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
+const DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 8;
 const DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 64;
 const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 0;
 const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
@@ -1878,17 +1884,11 @@ fn driver_task_shared_load_barrier() {
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_clean_command_records(ring_root_ptr: usize) {
-    let _ = crate::hal::cache::cache_clean(
-        sel4_sys::seL4_CapInitThreadVSpace,
-        ring_root_ptr,
-        core::mem::size_of::<DriverTaskCommandRecord>(),
-    );
-    let _ = crate::hal::cache::cache_clean(
-        sel4_sys::seL4_CapInitThreadVSpace,
-        ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET,
-        core::mem::size_of::<DriverTaskCompletionRecord>(),
-    );
+fn driver_task_ring_publish_barrier(_ring_root_ptr: usize) {
+    // Driver-task command rings are allocated and mapped as uncached HAL pages.
+    // Volatile record writes plus the shared-memory barrier are the publication
+    // contract; device DMA buffers remain the only driver-task memory that uses
+    // cache-clean/invalidate operations.
     driver_task_shared_store_barrier();
 }
 
@@ -1909,18 +1909,13 @@ fn driver_task_ring_publish_command_record(
         core::ptr::write_volatile(completion_ptr, completion_reset);
         core::ptr::write_volatile(command_ptr, staged_command);
     }
-    driver_task_ring_clean_command_records(ring_root_ptr);
+    driver_task_ring_publish_barrier(ring_root_ptr);
     // SAFETY: `sequence` is the first field of the fixed `repr(C)` command
     // record and is published last so runtimes never consume a partial command.
     unsafe {
         core::ptr::write_volatile(command_ptr as *mut u32, command.sequence);
     }
-    let _ = crate::hal::cache::cache_clean(
-        sel4_sys::seL4_CapInitThreadVSpace,
-        ring_root_ptr,
-        core::mem::size_of::<u32>(),
-    );
-    driver_task_shared_store_barrier();
+    driver_task_ring_publish_barrier(ring_root_ptr);
 }
 
 #[cfg(feature = "kernel")]
@@ -1933,31 +1928,7 @@ struct DriverTaskRingProgressRecord {
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_reset_progress_record(ring_root_ptr: usize) {
-    let progress_ptr = (ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize) as *mut u32;
-    // SAFETY: The progress record uses the first four primitive words in the
-    // HAL-owned owner-state metadata window of the mapped ring page.
-    unsafe {
-        core::ptr::write_volatile(progress_ptr, 0);
-        core::ptr::write_volatile(progress_ptr.add(1), 0);
-        core::ptr::write_volatile(progress_ptr.add(2), 0);
-        core::ptr::write_volatile(progress_ptr.add(3), 0);
-    }
-    let _ = crate::hal::cache::cache_clean(
-        sel4_sys::seL4_CapInitThreadVSpace,
-        ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize,
-        DRIVER_RUNTIME_RING_PROGRESS_BYTES as usize,
-    );
-    driver_task_shared_store_barrier();
-}
-
-#[cfg(feature = "kernel")]
 fn driver_task_ring_read_progress_record(ring_root_ptr: usize) -> DriverTaskRingProgressRecord {
-    let _ = crate::hal::cache::cache_invalidate(
-        sel4_sys::seL4_CapInitThreadVSpace,
-        ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize,
-        DRIVER_RUNTIME_RING_PROGRESS_BYTES as usize,
-    );
     driver_task_shared_load_barrier();
     let progress_ptr = (ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize) as *const u32;
     // SAFETY: The progress record is a fixed primitive-only record in the
@@ -1973,12 +1944,7 @@ fn driver_task_ring_read_progress_record(ring_root_ptr: usize) -> DriverTaskRing
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_invalidate_completion_record(ring_root_ptr: usize) {
-    let _ = crate::hal::cache::cache_invalidate(
-        sel4_sys::seL4_CapInitThreadVSpace,
-        ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET,
-        core::mem::size_of::<DriverTaskCompletionRecord>(),
-    );
+fn driver_task_ring_invalidate_completion_record(_ring_root_ptr: usize) {
     driver_task_shared_load_barrier();
 }
 
@@ -3016,11 +2982,6 @@ pub fn stage_driver_task_ring_payload_at(
     unsafe {
         core::ptr::copy_nonoverlapping(payload.as_ptr(), dst, payload.len());
     }
-    let _ = crate::hal::cache::cache_clean(
-        sel4_sys::seL4_CapInitThreadVSpace,
-        ring_root_ptr + offset,
-        payload.len(),
-    );
     driver_task_shared_store_barrier();
     DriverFrameDescriptor::new(offset as u32, payload.len() as u16, flags).ok()
 }
@@ -3074,11 +3035,7 @@ pub fn stage_driver_task_shared_payload(
         unsafe {
             core::ptr::copy_nonoverlapping(payload.as_ptr().add(copied), dst, chunk);
         }
-        let _ = crate::hal::cache::cache_clean(
-            sel4_sys::seL4_CapInitThreadVSpace,
-            root_ptr + page_offset,
-            chunk,
-        );
+        driver_task_shared_store_barrier();
         copied = copied.saturating_add(chunk);
     }
     driver_task_shared_store_barrier();
@@ -3445,6 +3402,8 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY => "runtime-recv-ready",
         DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY => "runtime-poll-ready",
         DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING => "runtime-reply-pending",
+        DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN => "runtime-poll-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN => "runtime-ring-read-begin",
         DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_READY => "runtime-ready",
         DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_MISMATCH => "runtime-mismatch",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DISPATCH => "engine-init-dispatch",
@@ -3563,6 +3522,16 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING => "sdio-adopt-power-missing",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED => "sdio-adopt-clock-failed",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED => "sdio-adopt-inhibit-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN => "sdio-adopt-int-clear-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN => {
+            "sdio-adopt-present-read-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN => {
+            "sdio-reset-clock-disable-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN => {
+            "sdio-reset-power-disable-begin"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_BEGIN => "cyw43-transport-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_READY => "cyw43-bus-link-ready",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_ADOPT_BEGIN => "cyw43-card-adopt-begin",
@@ -3863,6 +3832,14 @@ fn driver_task_ring_timeout_keep_active_limit(
     } else if matches!(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
+    ) && matches!(contract.kind, DriverTaskKind::SdioHost)
+        && (command.aux0 == DRIVER_RUNTIME_INIT_AUX
+            || command.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX)
+    {
+        DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if matches!(
+        mode,
+        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
     ) && matches!(contract.kind, DriverTaskKind::WifiNic)
         && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
     {
@@ -4046,7 +4023,6 @@ fn run_driver_task_ring_command_with_mode(
         command.sequence = request as u32;
         let completion_reset =
             DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand);
-        driver_task_ring_reset_progress_record(ring_root_ptr);
         driver_task_ring_publish_command_record(
             ring_root_ptr,
             command_ptr,
@@ -7031,6 +7007,8 @@ mod tests {
         assert_eq!(core::mem::align_of::<DriverTaskBudgetGrant>(), 4);
         assert_eq!(core::mem::size_of::<DriverTaskCommandRecord>(), 40);
         assert_eq!(core::mem::align_of::<DriverTaskCommandRecord>(), 4);
+        assert_eq!(core::mem::offset_of!(DriverTaskCommandRecord, sequence), 0);
+        assert!(core::mem::size_of::<DriverTaskCommandRecord>() > core::mem::size_of::<u32>());
         assert_eq!(core::mem::size_of::<DriverTaskCompletionRecord>(), 20);
         assert_eq!(core::mem::align_of::<DriverTaskCompletionRecord>(), 4);
         assert!(
@@ -7337,39 +7315,65 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn pre_root_engine_init_commands_get_long_bounded_window() {
-        for (contract, hot_path) in [
-            (HDMI_TEXT_DRIVER_TASK_CONTRACT, DriverTaskHotPath::HdmiText),
-            (SDIO_HOST_DRIVER_TASK_CONTRACT, DriverTaskHotPath::SdioHost),
-        ] {
-            let command = runtime_engine_init_command(
-                hot_path,
-                DriverTaskBudgetGrant::from_contract(contract),
-            );
-            assert_eq!(
-                driver_task_ring_attempt_limit(
-                    contract,
-                    command,
-                    DriverTaskRingCommandMode::NonBlocking
-                ),
-                DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
-            );
-            assert_eq!(
-                driver_task_ring_attempt_limit(
-                    contract,
-                    command,
-                    DriverTaskRingCommandMode::PromptSlice
-                ),
-                DRIVER_TASK_PROMPT_RING_ATTEMPTS
-            );
-            assert_eq!(
-                driver_task_ring_timeout_keeps_active(
-                    contract,
-                    command,
-                    DriverTaskRingCommandMode::NonBlocking
-                ),
-                false
-            );
-        }
+        let hdmi_command = runtime_engine_init_command(
+            DriverTaskHotPath::HdmiText,
+            DriverTaskBudgetGrant::from_contract(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+        );
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                hdmi_command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
+        );
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                HDMI_TEXT_DRIVER_TASK_CONTRACT,
+                hdmi_command,
+                DriverTaskRingCommandMode::PromptSlice
+            ),
+            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+        );
+        assert!(!driver_task_ring_timeout_keeps_active(
+            HDMI_TEXT_DRIVER_TASK_CONTRACT,
+            hdmi_command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+
+        let sdio_command = runtime_engine_init_command(
+            DriverTaskHotPath::SdioHost,
+            DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
+        );
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                sdio_command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
+        );
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                sdio_command,
+                DriverTaskRingCommandMode::PromptSlice
+            ),
+            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                sdio_command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        assert!(driver_task_ring_timeout_keeps_active(
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            sdio_command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
 
         let pcie_command = runtime_engine_init_command(
             DriverTaskHotPath::PcieRoot,
@@ -7424,6 +7428,37 @@ mod tests {
         );
         assert!(driver_task_ring_timeout_keeps_active(
             PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_runtime_descriptor_replay_keeps_gate_two_command_active() {
+        let frame = DriverFrameDescriptor::new(
+            DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            core::mem::size_of::<DriverRuntimeInitDescriptor>() as u16,
+            DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE,
+        )
+        .unwrap();
+        let command = runtime_init_command(
+            DriverTaskHotPath::SdioHost,
+            DriverTaskBudgetGrant::from_contract(SDIO_HOST_DRIVER_TASK_CONTRACT),
+            frame,
+        );
+
+        assert_eq!(command.aux0, DRIVER_RUNTIME_INIT_AUX);
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        assert!(driver_task_ring_timeout_keeps_active(
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
             command,
             DriverTaskRingCommandMode::NonBlocking
         ));
@@ -7809,6 +7844,16 @@ mod tests {
                 DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_REPLY_PENDING
             ),
             "runtime-reply-pending"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN),
+            "runtime-poll-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN
+            ),
+            "runtime-ring-read-begin"
         );
         assert!(driver_task_runtime_progress_is_admission_ready(
             DriverTaskRingProgressRecord {

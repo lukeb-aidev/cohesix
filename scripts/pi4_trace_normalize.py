@@ -165,6 +165,7 @@ USB_OUTCOME_BLOCKERS = {
     "hid-init-failed",
     "hid-interrupt-in",
     "hid-queue-read-failed",
+    "hid-first-byte",
     "invalid-config-value",
     "keyboard-first-byte",
     "no-connected-ports",
@@ -1285,6 +1286,8 @@ def normalize_usb_blocker(value: str) -> str:
     if "first-byte" in lower and any(
         token in lower for token in ("fail", "missing", "timeout")
     ):
+        return "keyboard-first-byte"
+    if "hid-first-byte" in lower:
         return "keyboard-first-byte"
     if "no-keyboard" in lower or "keyboard-missing" in lower:
         return "no-keyboard-found"
@@ -4495,6 +4498,13 @@ def summarize_wifi_failure_detail(
         ):
             candidate = "sdio-card-select"
         if (
+            wifi_blocker.startswith("sdio-engine-init-")
+            and "sdio_driver_task_replay_status" in raw
+            and fields.get("stage", "").lower() == "engine-init"
+            and replay_status not in {"", "none", "begin", "ready", "success"}
+        ):
+            candidate = wifi_blocker
+        if (
             wifi_blocker == "sdio-driver-task-replay"
             and "sdio_driver_task_replay_status" in raw
             and replay_status not in {"", "none", "begin", "ready", "success"}
@@ -4622,6 +4632,8 @@ def summarize_wifi_failure_detail(
             ):
                 replay_stage = fields.get("stage") or event.stage or "driver-task-replay"
                 exact = f"{replay_stage}-{replay_status or 'unknown'}"
+            if candidate.startswith("sdio-engine-init-"):
+                exact = candidate
             if candidate == "join-programming-host-latch-loop":
                 exact = "cyw43-join-programming-host-latch-loop"
             if candidate == "runtime-rx-host-latch-spam":
@@ -5149,6 +5161,7 @@ WIFI_REPLAY_REFINABLE_BLOCKERS = frozenset(
         "boot-deferred-local-seat-usb",
         "boot-deferred-root-console",
         "boot-waiting-for-wifi",
+        "chipclkcsr-cmd52-pre-f2",
     )
 )
 
@@ -5157,6 +5170,44 @@ def wifi_replay_should_refine(blocker: str) -> bool:
     """Return true when replay telemetry should replace a generic WiFi blocker."""
 
     return blocker in WIFI_REPLAY_REFINABLE_BLOCKERS
+
+
+def usb_driver_task_blocker_gate(blocker: str) -> int:
+    """Return the last USB gate proven by direct linked-runtime stall evidence."""
+
+    if blocker.startswith(("usb-engine-init-", "usb-resource-")):
+        return 2
+    if blocker == "command-event-ring-not-proven":
+        return 3
+    if blocker.startswith("usb-keyboard-enumeration-"):
+        return 4
+    return 1
+
+
+def usb_frontier_advances_pcie(frontier: str) -> bool:
+    """Return true when direct USB runtime proof supersedes a stale PCIe blocker."""
+
+    return frontier.startswith(
+        (
+            "usb-engine-init-",
+            "usb-owner-state-",
+            "usb-keyboard-",
+        )
+    )
+
+
+def wifi_blocker_is_exact_sdio_progress(blocker: str) -> bool:
+    """Return true when the WiFi blocker already names a precise SDIO phase."""
+
+    return blocker.startswith(
+        (
+            "sdio-adopt-",
+            "sdio-reset-",
+            "sdio-engine-init-",
+            "sdio-power-",
+            "sdio-clock-",
+        )
+    )
 
 
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
@@ -5360,12 +5411,6 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         summarize_driver_task_resource_init(event_list)
     )
     usb_driver_task_blocker = summarize_usb_driver_task_stall(event_list)
-    if usb_driver_task_blocker is not None:
-        if usb_gate <= 1 and usb_blocker in {"unknown", "missing", "none"}:
-            usb_gate = max(usb_gate, 1)
-            usb_blocker = usb_driver_task_blocker
-        elif usb_blocker in {"unknown", "missing", "none"}:
-            usb_blocker = usb_driver_task_blocker
     net_driver_task_replay_events, net_driver_task_replay_blocker = (
         summarize_driver_task_replay_status(event_list, "net_driver_task_replay_status")
     )
@@ -5377,6 +5422,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         net_driver_task_replay_blocker,
         sdio_driver_task_replay_blocker,
     )
+    if usb_driver_task_blocker is not None:
+        driver_gate = usb_driver_task_blocker_gate(usb_driver_task_blocker)
+        if usb_blocker in {"unknown", "missing", "none"}:
+            usb_gate = max(usb_gate, driver_gate)
+            usb_blocker = usb_driver_task_blocker
+        elif usb_blocker == "pcie-vl805" and usb_frontier_advances_pcie(
+            driver_task_frontiers.usb_driver_task_frontier
+        ):
+            usb_gate = max(usb_gate, driver_gate)
+            usb_blocker = usb_driver_task_blocker
     if sdio_driver_task_replay_blocker != "none":
         replay_gate, replay_blocker, replay_exact_default, replay_phase_default = (
             classify_sdio_replay_gate(sdio_driver_task_replay_blocker)
@@ -5416,6 +5471,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_blocker = "wifi-started-no-replay"
         wifi_exact = "wifi-started-no-replay"
         wifi_blocker_line = wifi_deferred_resume_start.line
+    if wifi_exact == "none" and wifi_blocker_is_exact_sdio_progress(wifi_blocker):
+        wifi_exact = wifi_blocker
+        wifi_phase = wifi_blocker
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -5936,7 +5994,8 @@ def classify_sdio_replay_gate(replay_blocker: str) -> tuple[int, str, str, str]:
     ):
         return 2, "sdio-card-select", f"{stage}-{status}", stage
     if stage == "engine-init":
-        return 2, "sdio-card-select", f"{stage}-{status}", stage
+        blocker = f"sdio-engine-init-{status}"
+        return 2, blocker, blocker, stage
     if stage in {"hal-resource-prep", "descriptor-replay"}:
         return 1, "sdio-driver-task-replay", f"{stage}-{status}", stage
     return 1, "sdio-driver-task-replay", f"{stage}-{status}", stage

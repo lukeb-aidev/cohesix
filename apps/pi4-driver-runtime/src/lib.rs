@@ -105,9 +105,13 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
@@ -1852,7 +1856,28 @@ const RUNTIME_IDLE_POLL_PROGRESS_INTERVAL: u32 = 256;
 
 #[must_use]
 const fn runtime_idle_poll_progress_due(idle_polls: u32) -> bool {
-    idle_polls != 0 && idle_polls % RUNTIME_IDLE_POLL_PROGRESS_INTERVAL == 0
+    idle_polls == 1 || (idle_polls != 0 && idle_polls % RUNTIME_IDLE_POLL_PROGRESS_INTERVAL == 0)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeCommandAdmission {
+    None,
+    OneWay,
+    NeedsReplyCap,
+}
+
+#[must_use]
+const fn runtime_command_admission(
+    command: DriverTaskCommandRecord,
+    last_sequence: u32,
+) -> RuntimeCommandAdmission {
+    if command.sequence == 0 || command.sequence == last_sequence {
+        RuntimeCommandAdmission::None
+    } else if command_expects_reply(command) {
+        RuntimeCommandAdmission::NeedsReplyCap
+    } else {
+        RuntimeCommandAdmission::OneWay
+    }
 }
 
 #[cfg(target_os = "none")]
@@ -1875,12 +1900,42 @@ fn read_runtime_command_record() -> DriverTaskCommandRecord {
 }
 
 #[cfg(target_os = "none")]
-fn poll_runtime_command(last_sequence: u32) -> Option<RuntimeCommandIntake> {
+fn poll_runtime_command(
+    last_sequence: u32,
+    task_key_marker: u32,
+    publish_ring_read_begin: bool,
+) -> Option<RuntimeCommandIntake> {
+    if publish_ring_read_begin {
+        publish_runtime_progress(
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN,
+            task_key_marker,
+        );
+    }
+    let mut command = read_runtime_command_record();
+    match runtime_command_admission(command, last_sequence) {
+        RuntimeCommandAdmission::None => return None,
+        RuntimeCommandAdmission::OneWay => {
+            return Some(RuntimeCommandIntake {
+                command,
+                reply_cap_available: false,
+            });
+        }
+        RuntimeCommandAdmission::NeedsReplyCap => {}
+    }
+
+    publish_runtime_progress(
+        command.sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_BEGIN,
+        command.aux0,
+    );
+
     let mut badge: sel4_sys::seL4_Word = 0;
     // SAFETY: The root task minted `DRIVER_TASK_CHILD_COMMAND_SLOT` into the
-    // child CSpace before resuming this TCB. Polling the endpoint keeps reply
-    // caps available for blocking calls while allowing one-way shared-ring
-    // commands to make progress when endpoint wakeup telemetry is inconclusive.
+    // child CSpace before resuming this TCB. The runtime reads the shared ring
+    // before this endpoint poll so one-way bounded turns can make progress even
+    // if endpoint wakeup telemetry is inconclusive. Endpoint polling is still
+    // required for commands that need a reply cap.
     let tag = unsafe { sel4_sys::seL4_Poll(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge) };
     let ipc_delivered = tag.length() != 0;
     let ipc_sequence = if ipc_delivered {
@@ -1890,7 +1945,6 @@ fn poll_runtime_command(last_sequence: u32) -> Option<RuntimeCommandIntake> {
     } else {
         0
     };
-    let mut command = read_runtime_command_record();
     if ipc_delivered && (command.sequence == 0 || command.sequence != ipc_sequence) {
         for _ in 0..8 {
             command = read_runtime_command_record();
@@ -3688,6 +3742,14 @@ fn cyw43_runtime_payload_tail_zero(
     true
 }
 
+const fn cyw43_transport_progress_result(detail: u16) -> u32 {
+    if detail == DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY {
+        1
+    } else {
+        0
+    }
+}
+
 fn service_cyw43_descriptor_command(
     command: DriverTaskCommandRecord,
 ) -> DriverTaskCompletionRecord {
@@ -3717,11 +3779,7 @@ fn service_cyw43_descriptor_command(
                 },
                 |detail| {
                     progress_detail = Some(detail);
-                    if detail == DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY {
-                        1
-                    } else {
-                        1
-                    }
+                    cyw43_transport_progress_result(detail)
                 },
             )
         }
@@ -9655,62 +9713,24 @@ fn dma_invalidate_range(addr: usize, len: usize) {
     core::sync::atomic::compiler_fence(Ordering::Acquire);
 }
 
-fn driver_task_shared_clean_range(addr: usize, len: usize) {
-    let Some((line, end)) = dma_cache_range(addr, len) else {
-        return;
-    };
+fn driver_task_shared_clean_range(_addr: usize, _len: usize) {
+    // Driver-task command rings, bus-owner rings, and shared control windows are
+    // HAL-mapped into linked runtimes with `seL4_ARM_Page_Uncached`. Runtime-side
+    // data-cache clean is unnecessary for those pages and can trap on physical
+    // Pi 4 before root sees the next progress or completion record. Device DMA
+    // buffers still use `dma_clean_range`.
     core::sync::atomic::compiler_fence(Ordering::Release);
-    #[cfg(all(target_arch = "aarch64", target_os = "none"))]
-    {
-        let mut line = line;
-        while line < end {
-            // SAFETY: The address is inside a HAL-mapped driver-task shared
-            // ring or payload window. Cleaning publishes runtime-owned command,
-            // progress, and completion records to the peer TCB.
-            unsafe {
-                core::arch::asm!("dc cvac, {}", in(reg) line, options(nostack, preserves_flags));
-            }
-            line = line.saturating_add(DMA_CACHE_LINE_BYTES);
-        }
-        // SAFETY: Complete cache maintenance before IPC notification or before
-        // root/owner polling can consume the shared record.
-        unsafe {
-            core::arch::asm!("dsb ishst", options(nostack, preserves_flags));
-        }
-    }
-    #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
-    {
-        let _ = (line, end);
-    }
+    driver_task_shared_store_barrier();
     core::sync::atomic::compiler_fence(Ordering::Release);
 }
 
-fn driver_task_shared_invalidate_range(addr: usize, len: usize) {
-    let Some((line, end)) = dma_cache_range(addr, len) else {
-        return;
-    };
+fn driver_task_shared_invalidate_range(_addr: usize, _len: usize) {
+    // Driver-task command rings, bus-owner rings, and shared control windows are
+    // HAL-mapped into linked runtimes with `seL4_ARM_Page_Uncached`. Runtime-side
+    // data-cache invalidation is unnecessary for those pages and can trap before
+    // the first command-intake poll on physical Pi 4. Device DMA buffers still
+    // use `dma_invalidate_range`.
     driver_task_shared_load_barrier();
-    #[cfg(all(target_arch = "aarch64", target_os = "none"))]
-    {
-        let mut line = line;
-        while line < end {
-            // SAFETY: The address is inside a HAL-mapped driver-task shared
-            // ring or payload window. The peer TCB publishes with a clean to
-            // PoC before this runtime consumes the record.
-            unsafe {
-                core::arch::asm!("dc ivac, {}", in(reg) line, options(nostack, preserves_flags));
-            }
-            line = line.saturating_add(DMA_CACHE_LINE_BYTES);
-        }
-        // SAFETY: Ensure invalidation completes before reading shared records.
-        unsafe {
-            core::arch::asm!("dsb ishld", options(nostack, preserves_flags));
-        }
-    }
-    #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
-    {
-        let _ = (line, end);
-    }
     core::sync::atomic::compiler_fence(Ordering::Acquire);
 }
 
@@ -13501,7 +13521,17 @@ fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> bool {
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
         aux0,
     );
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
+        aux0,
+    );
     sdio_write16(SDHCI_CLOCK_CONTROL, 0);
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN,
+        aux0,
+    );
     sdio_write8(SDHCI_POWER_CONTROL, 0);
     for _ in 0..SDHCI_POWER_READY_SPINS {
         core::hint::spin_loop();
@@ -13550,7 +13580,17 @@ fn sdio_adopt_hal_prepared_host(sequence: u32, aux0: u32) -> bool {
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
         aux0,
     );
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN,
+        aux0,
+    );
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
+        aux0,
+    );
     let mut power = sdio_read8(SDHCI_POWER_CONTROL);
     let mut present = sdio_read32(SDHCI_PRESENT_STATE);
     if !sdio_power_card_ready(power, present) {
@@ -13823,13 +13863,19 @@ pub fn runtime_main(task_key: usize) -> ! {
 
     let mut last_sequence = 0u32;
     let mut idle_polls = 0u32;
+    let mut ring_read_progress_published = false;
     publish_runtime_progress(
         0,
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
         task_key_marker,
     );
     loop {
-        let Some(intake) = poll_runtime_command(last_sequence) else {
+        let publish_ring_read_begin = !ring_read_progress_published;
+        let intake = poll_runtime_command(last_sequence, task_key_marker, publish_ring_read_begin);
+        if publish_ring_read_begin {
+            ring_read_progress_published = true;
+        }
+        let Some(intake) = intake else {
             idle_polls = idle_polls.wrapping_add(1);
             if runtime_idle_poll_progress_due(idle_polls) {
                 publish_runtime_progress(
@@ -13961,7 +14007,8 @@ mod tests {
     #[test]
     fn runtime_idle_poll_progress_is_sparse_and_periodic() {
         assert!(!runtime_idle_poll_progress_due(0));
-        assert!(!runtime_idle_poll_progress_due(1));
+        assert!(runtime_idle_poll_progress_due(1));
+        assert!(!runtime_idle_poll_progress_due(2));
         assert!(!runtime_idle_poll_progress_due(
             RUNTIME_IDLE_POLL_PROGRESS_INTERVAL - 1
         ));
@@ -13974,6 +14021,72 @@ mod tests {
         assert!(runtime_idle_poll_progress_due(
             RUNTIME_IDLE_POLL_PROGRESS_INTERVAL * 2
         ));
+    }
+
+    #[test]
+    fn runtime_command_admission_accepts_fresh_one_way_ring_turns() {
+        let command = DriverTaskCommandRecord {
+            sequence: 42,
+            opcode: OPCODE_SERVICE,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            arg0: HOT_PATH_HDMI_TEXT,
+            arg1: ROLE_DISPLAY,
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 1,
+                max_frames: 1,
+                max_bytes: 64,
+            },
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        assert_eq!(
+            runtime_command_admission(command, 41),
+            RuntimeCommandAdmission::OneWay
+        );
+        assert_eq!(
+            runtime_command_admission(command, 42),
+            RuntimeCommandAdmission::None
+        );
+        assert_eq!(
+            runtime_command_admission(
+                DriverTaskCommandRecord {
+                    sequence: 0,
+                    ..command
+                },
+                41,
+            ),
+            RuntimeCommandAdmission::None
+        );
+    }
+
+    #[test]
+    fn runtime_command_admission_requires_reply_cap_for_call_turns() {
+        let command = DriverTaskCommandRecord {
+            sequence: 7,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_HDMI_TEXT,
+            arg1: ROLE_DISPLAY,
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            aux1: 0,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 1,
+                max_frames: 1,
+                max_bytes: 64,
+            },
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        assert_eq!(
+            runtime_command_admission(command, 6),
+            RuntimeCommandAdmission::NeedsReplyCap
+        );
+        assert_eq!(
+            runtime_command_admission(command, 7),
+            RuntimeCommandAdmission::None
+        );
     }
 
     fn budget() -> DriverTaskBudgetGrant {
@@ -14131,6 +14244,18 @@ mod tests {
         assert_eq!(CYW43_TRANSPORT_COMMAND_BURST_STEPS, 1);
         assert!(CYW43_TRANSPORT_COMMAND_BURST_STEPS < CYW43_TRANSPORT_PHASE_LIMIT);
         assert!(CYW43_SDIO_CARD_INIT_RETRY_SETTLE_SPINS < CYW43_SDIO_BUS_LINK_BASE_ATTEMPTS * 2);
+    }
+
+    #[test]
+    fn cyw43_transport_partial_details_are_not_ready_results() {
+        assert_eq!(
+            cyw43_transport_progress_result(DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY),
+            0
+        );
+        assert_eq!(
+            cyw43_transport_progress_result(DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY),
+            1
+        );
     }
 
     #[test]
@@ -15700,6 +15825,26 @@ mod tests {
                 / u32::from(sdio_clock_divider(SDHCI_STARTUP_CLOCK_HZ)),
             399_361
         );
+    }
+
+    #[test]
+    fn sdio_adopt_without_present_state_reports_power_missing_marker() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+
+        assert!(!sdio_adopt_hal_prepared_host(
+            73,
+            DRIVER_RUNTIME_ENGINE_INIT_AUX
+        ));
+
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 73);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_ENGINE_INIT_AUX);
     }
 
     #[test]
