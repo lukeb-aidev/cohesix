@@ -28,6 +28,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_CHECK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_READY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_ADOPT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD0_BEGIN,
@@ -37,12 +38,14 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD7_SELECT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_HOST_CONFIG_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_ENGINE_INIT_BRANCH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_ENABLED,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_ENABLE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F2_BLOCK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F2_BLOCK_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_FORBIDDEN_SDIO_MMIO,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_CONFIG_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_READY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
@@ -50,6 +53,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_CHECK_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_STATE_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_STATE_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_TRANSPORT_READY,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH,
@@ -67,6 +75,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RUNTIME_ENTRY,
     DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED, DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
     DRIVER_RUNTIME_RING_PROGRESS_OFFSET, DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING,
@@ -98,11 +107,14 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
@@ -3771,6 +3783,7 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => "engine-init-hw-begin",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE => "engine-init-hw-done",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED => "engine-init-hw-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RUNTIME_ENTRY => "engine-init-runtime-entry",
         DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY => "usb-init-entry",
         DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN => "usb-state-access-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ => "usb-caps-read",
@@ -3865,6 +3878,19 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY => "sdio-power-ready",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY => "sdio-clock-ready",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => "sdio-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH => "sdio-engine-init-branch",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_BEGIN => "sdio-shadow-reset-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE => "sdio-shadow-reset-done",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_ENGINE_INIT_BRANCH => "cyw43-engine-init-branch",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_STATE_RESET_BEGIN => "cyw43-state-reset-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_STATE_RESET_DONE => "cyw43-state-reset-done",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_FORBIDDEN_SDIO_MMIO => "cyw43-forbidden-sdio-mmio",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_CHECK_BEGIN => "cyw43-bus-link-check-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_CHECK_BEGIN => {
+            "cyw43-shared-control-check-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_MISSING => "cyw43-shared-control-missing",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_READY => "cyw43-shared-control-ready",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN => "sdio-state-reset-begin",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE => "sdio-state-reset-done",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY => "sdio-hw-entry",
@@ -4714,19 +4740,10 @@ fn run_driver_task_ring_command_with_mode_and_staging(
         }
     }
 
-    let payload_bearing_turn = staging_fingerprint != 0 || command.frame.len != 0;
     let mut timeout_count = 0usize;
     let keep_active_on_timeout = if completion.sequence != request as u32 {
         let (keep_active, count) =
-            if payload_bearing_turn && driver_task_ring_mode_uses_bounded_send(mode) {
-                let count = slot
-                    .timeout_resumes
-                    .fetch_add(1, Ordering::AcqRel)
-                    .saturating_add(1);
-                (true, count)
-            } else {
-                driver_task_ring_timeout_keep_decision(slot, contract, command, mode)
-            };
+            driver_task_ring_timeout_keep_decision(slot, contract, command, mode);
         timeout_count = count;
         keep_active
     } else {
@@ -8188,6 +8205,53 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn hdmi_payload_timeouts_clear_active_slot() {
+        let contract = HDMI_TEXT_DRIVER_TASK_CONTRACT;
+        clear_driver_task_transport(contract);
+        let command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::HdmiText,
+            DriverTaskBudgetGrant::from_contract(contract),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 80,
+                flags: 0,
+            },
+        );
+        let task_key = driver_task_contract_key(contract).expect("task key");
+        let slot = slot_for_task_key(task_key).expect("slot");
+        slot.timeout_resumes.store(0, Ordering::Release);
+
+        assert_eq!(command.opcode, DriverTaskOpcode::SubmitFrame.as_u16());
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                contract,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        assert!(!driver_task_ring_timeout_keeps_active(
+            contract,
+            command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            (false, 0)
+        );
+        assert_eq!(slot.timeout_resumes.load(Ordering::Acquire), 0);
+
+        clear_driver_task_transport(contract);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn usb_keyboard_poll_uses_prompt_window_without_timeout_spam() {
         let command = DriverTaskCommandRecord::pi4_hot_path(
             0,
@@ -8641,6 +8705,30 @@ mod tests {
                 DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RING_READ_BEGIN
             ),
             "runtime-ring-read-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RUNTIME_ENTRY
+            ),
+            "engine-init-runtime-entry"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH
+            ),
+            "sdio-engine-init-branch"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_BEGIN
+            ),
+            "sdio-shadow-reset-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE
+            ),
+            "sdio-shadow-reset-done"
         );
         assert!(driver_task_runtime_progress_is_admission_ready(
             DriverTaskRingProgressRecord {

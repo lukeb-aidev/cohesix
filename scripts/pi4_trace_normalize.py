@@ -1481,6 +1481,18 @@ def normalize_wifi_blocker(value: str) -> str:
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
     if (
+        "net_driver_task_replay_status" in lower
+        and "role=cyw43-wifi" in lower
+        and "stage=engine-init" in lower
+        and "blocker=no-reply" in lower
+    ) or (
+        "driver_task_resource_init" in lower
+        and "contract=cyw43455" in lower
+        and "stage=net-engine-init" in lower
+        and "status=no-reply" in lower
+    ):
+        return "cyw43-engine-init-no-reply"
+    if (
         stripped == "cyw43-wifi"
         or "pi4-wifi-driver-task-runtime-required" in lower
         or "driver-task-net-runtime-unproved" in lower
@@ -2393,11 +2405,13 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if raw.startswith("usb: next_action"):
             next_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
-            if next_blocker.startswith(
-                ("usb-engine-init-", "usb-resource-", "usb-xhci-")
-            ):
+            next_gate = usb_driver_task_blocker_gate(next_blocker)
+            if next_gate > 1:
                 startup_diag_blocker = next_blocker
-                gate = max(gate, usb_driver_task_blocker_gate(next_blocker))
+                if usb_driver_task_blocker_caps_gate(next_blocker):
+                    gate = next_gate if gate <= 0 else min(gate, next_gate)
+                else:
+                    gate = max(gate, next_gate)
                 blocker = next_blocker
             continue
         if raw.startswith("usb_runtime_enum_snapshot"):
@@ -2946,7 +2960,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         and startup_fail_blocker is not None
     ):
         if startup_diag_blocker is not None:
-            gate = max(gate, usb_driver_task_blocker_gate(startup_diag_blocker))
+            startup_gate = usb_driver_task_blocker_gate(startup_diag_blocker)
+            if usb_driver_task_blocker_caps_gate(startup_diag_blocker):
+                gate = startup_gate if gate <= 0 else min(gate, startup_gate)
+            else:
+                gate = max(gate, startup_gate)
             blocker = startup_diag_blocker
         else:
             gate = min(gate, max(0, startup_fail_gate - 1))
@@ -5194,6 +5212,7 @@ WIFI_REPLAY_REFINABLE_BLOCKERS = frozenset(
         "none",
         "wifi-driver-task-runtime-unproved",
         "wifi-started-no-replay",
+        "hal-power-reset",
         "root-prompt-printed",
         "root-prompt-delayed",
         "boot-deferred-local-seat-usb",
@@ -5213,6 +5232,20 @@ def wifi_replay_should_refine(blocker: str) -> bool:
 def usb_driver_task_blocker_gate(blocker: str) -> int:
     """Return the last USB gate proven by direct linked-runtime stall evidence."""
 
+    if blocker in {
+        "enable-slot-completion-pending",
+        "enable-slot-completion-poll-no-reply",
+        "enable-slot-failed",
+        "enable-slot-poll-leading-port-status",
+        "enable-slot-command-event-seen",
+        "enable-slot-poll-non-command-event",
+        "enable-slot-event-ack-pending",
+        "enable-slot-event-ack-complete",
+        "cmd-event-ring-timeout",
+        "cmd-timeout",
+        "cmd-poll-pending",
+    }:
+        return 4
     if blocker in {
         "usb-engine-init-hardware-no-reply",
         "usb-runtime-init-entry-no-reply",
@@ -5246,6 +5279,21 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
     return 1
 
 
+def usb_driver_task_blocker_caps_gate(blocker: str) -> bool:
+    """Return true when precise stall evidence must cap stale projected gates."""
+
+    return blocker in {
+        "usb-engine-init-hardware-no-reply",
+        "usb-runtime-init-entry-no-reply",
+        "usb-runtime-state-access-no-reply",
+        "usb-engine-init-state-reset-no-reply",
+        "usb-engine-init-hardware-entry-no-reply",
+        "usb-xhci-mmio-entry-no-reply",
+        "usb-xhci-capability-read-no-reply",
+        "usb-xhci-capability-invalid",
+    }
+
+
 def usb_frontier_advances_pcie(frontier: str) -> bool:
     """Return true when direct USB runtime proof supersedes a stale PCIe blocker."""
 
@@ -5266,11 +5314,24 @@ def wifi_blocker_is_exact_sdio_progress(blocker: str) -> bool:
             "sdio-adopt-",
             "sdio-reset-",
             "sdio-engine-init-",
+            "sdio-shadow-reset-",
             "sdio-state-reset-",
             "sdio-hardware-entry-",
             "sdio-sdhci-",
             "sdio-power-",
             "sdio-clock-",
+        )
+    )
+
+
+def wifi_blocker_is_exact_cyw43_progress(blocker: str) -> bool:
+    """Return true when the WiFi blocker already names a precise CYW43 phase."""
+
+    return blocker.startswith(
+        (
+            "cyw43-engine-init-",
+            "cyw43-state-reset-",
+            "cyw43-resource-",
         )
     )
 
@@ -5515,9 +5576,12 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 wifi_exact = replay_exact_default
                 wifi_phase = replay_phase_default
     elif net_driver_task_replay_blocker != "none":
-        if wifi_replay_should_refine(wifi_blocker):
-            wifi_gate = max(wifi_gate, 1)
-            wifi_blocker = "cyw43-driver-task-replay"
+        replay_gate, replay_blocker, replay_exact_default, replay_phase_default = (
+            classify_net_replay_gate(net_driver_task_replay_blocker)
+        )
+        if wifi_replay_should_refine(wifi_blocker) or replay_gate > wifi_gate:
+            wifi_gate = max(wifi_gate, replay_gate)
+            wifi_blocker = replay_blocker
             replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
                 event_list, wifi_blocker
             )
@@ -5526,7 +5590,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 wifi_phase = replay_phase
                 wifi_blocker_line = replay_line
             else:
-                wifi_exact = net_driver_task_replay_blocker
+                wifi_exact = replay_exact_default
+                wifi_phase = replay_phase_default
     if (
         wifi_deferred_resume_start is not None
         and net_driver_task_replay_events == 0
@@ -5537,6 +5602,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_exact = "wifi-started-no-replay"
         wifi_blocker_line = wifi_deferred_resume_start.line
     if wifi_exact == "none" and wifi_blocker_is_exact_sdio_progress(wifi_blocker):
+        wifi_exact = wifi_blocker
+        wifi_phase = wifi_blocker
+    if wifi_exact == "none" and wifi_blocker_is_exact_cyw43_progress(wifi_blocker):
         wifi_exact = wifi_blocker
         wifi_phase = wifi_blocker
     return GateSummary(
@@ -6064,6 +6132,25 @@ def classify_sdio_replay_gate(replay_blocker: str) -> tuple[int, str, str, str]:
     if stage in {"hal-resource-prep", "descriptor-replay"}:
         return 1, "sdio-driver-task-replay", f"{stage}-{status}", stage
     return 1, "sdio-driver-task-replay", f"{stage}-{status}", stage
+
+
+def classify_net_replay_gate(replay_blocker: str) -> tuple[int, str, str, str]:
+    """Map CYW43 replay stages onto user-facing WiFi gates."""
+
+    parts = replay_blocker.split(":", 2)
+    if len(parts) != 3:
+        return 1, "cyw43-driver-task-replay", replay_blocker, "cyw43-driver-task-replay"
+    role, stage, status = parts
+    if role == "cyw43-wifi" and stage == "engine-init":
+        blocker = f"cyw43-engine-init-{status}"
+        return 1, blocker, blocker, stage
+    if role == "cyw43-wifi" and stage == "cyw43-sdio-prereq":
+        return 1, "cyw43-sdio-prereq", f"{stage}-{status}", stage
+    if role == "cyw43-wifi" and stage == "cyw43-firmware":
+        return 5, "cyw43-firmware-runtime-replay", f"{stage}-{status}", stage
+    if role == "cyw43-wifi" and stage == "cyw43-control-plane":
+        return 7, "control-plane-reply-idle-loop", f"{stage}-{status}", stage
+    return 1, "cyw43-driver-task-replay", f"{stage}-{status}", stage
 
 
 def parse_expectations(expectations: Iterable[str]) -> dict[str, str]:

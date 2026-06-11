@@ -1078,7 +1078,7 @@ impl LocalSeatRuntime {
     /// On physical Pi 4 this is the only path that may submit HDMI text, and
     /// it uses the linked `hdmi-text` driver runtime. Routine console/log lines
     /// remain on UART so serial captures stay complete.
-    pub fn mirror_high_impact_line(&mut self, line: &str) {
+    pub fn mirror_high_impact_line(&mut self, line: &str) -> bool {
         #[cfg(all(
             feature = "kernel",
             feature = "usb",
@@ -1088,15 +1088,15 @@ impl LocalSeatRuntime {
         {
             if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
                 self.mirror_line_current_tcb(line);
-                let _ = mirror_high_impact_line_via_linked_hdmi(
+                return mirror_high_impact_line_via_linked_hdmi(
                     line,
                     self.root_console_ready,
                     "local-seat-high-impact",
                 );
-                return;
             }
         }
         self.mirror_line(line);
+        true
     }
 
     fn mirror_line_current_tcb(&mut self, line: &str) {

@@ -327,9 +327,12 @@ proof from the linked-runtime model.
 - USB runtime MMIO admission is high-BAR-only on Pi 4. The only accepted xHCI
   MMIO base is the HAL-proven VL805 BAR0 at `0x0000000600000000`; low aliases
   such as `0xfe980000` and `0x7e980000` are stale diagnostic references, not
-  linked-runtime authority. xHCI operational writes are flushed through the
-  linked PCIe owner `POSTED_WRITE_FLUSH` bus-link turn, matching the May 18-19
-  bridge/config-status drain discipline without draining through the xHCI BAR.
+  linked-runtime authority. PCIe owner replay remains the required
+  BAR/COMMAND/VL805 admission proof before xHCI entry, but xHCI operational
+  writes now drain inside the linked USB runtime through bounded same-runtime
+  xHCI MMIO readback. Command and endpoint doorbells are barrier-only publish
+  edges and never issue either same-window xHCI readback or a nested USB-to-PCIe
+  child command.
 - If xHCI engine-init reaches controller-ready before HID readiness, the linked
   USB runtime must keep enumeration alive through bounded prompt-side service:
   preserve current-boot Port Status Change events, submit the gate-4 Enable Slot
@@ -507,12 +510,14 @@ Runtime-side cache clean/invalidate instructions are reserved for
 descriptor-declared device DMA buffers and must not be used to publish or
 consume shared-ring progress, commands, completions, or CYW43-to-SDIO owner
 payloads.
-USB engine-init additionally publishes pre-MMIO and posted-write submarkers:
+USB engine-init additionally publishes pre-MMIO and xHCI register submarkers:
 `usb-init-entry`, `usb-state-access-begin`, `usb-state-reset-*`,
 `usb-dma-range-ready`, `usb-caps-read-begin`, `usb-caps-invalid`,
-`usb-halt-*`, `usb-reset-*`, `usb-cnr-wait-begin`, `usb-pcie-flush-*`, and
-`usb-run-wait-begin`. A timeout before `usb-caps-read` proves only the PCIe/VL805
-owner prerequisite gate, not xHCI operational status.
+`usb-halt-*`, `usb-reset-*`, `usb-cnr-wait-begin`, `usb-*-written`,
+`usb-*-flushed`, and `usb-run-wait-begin`. Historical `usb-pcie-flush-*`
+markers remain parser context for old traces only. A timeout before
+`usb-caps-read` proves only the PCIe/VL805 owner prerequisite gate, not xHCI
+operational status.
 
 Root-task remains the client for console grammar, tickets, namespaces, policy,
 replay, and revocation. Physical hardware service must fail closed through
@@ -744,7 +749,8 @@ leave the line stuck.
   markers for 64-bit base registers, plus `usb-config-written` and
   `usb-config-flushed` markers for `CONFIG.MaxSlots`, so
   `usb status` / `usb diag` can map a no-reply to the exact half-register or
-  posted-write-flush frontier without reintroducing root-owned xHCI access.
+  same-runtime readback-drain frontier without reintroducing root-owned xHCI
+  access.
 
 ### SDIO/CYW43455
 
@@ -780,14 +786,21 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 11 22:08 reflashed boot moved the active SDIO evidence back from a
-returned generic fault to `sdio-engine-init-no-reply` with the progress marker at
-`engine-init-hw-begin`. The linked runtime therefore publishes SDIO-local
-`sdio-state-reset-begin`, `sdio-state-reset-done`, and `sdio-hw-entry` markers
-before the first SDHCI MMIO access, and runs SDIO hardware init outside the
-`SdioRuntimeState` mutable borrow. The next boot must either advance into the
-adopt/reset/clock markers above or stop at one of those pre-MMIO edges; it must
-not collapse this frontier back to a generic Gate 2 label.
+The June 12 06:49 reflashed boot supersedes the June 11 `sdio-engine-init`
+frontier. The selected Wi-Fi path completes descriptor replay for both
+`cyw43455` and `sdio-host`, SDIO engine init returns ready with detail `0x5500`,
+and `cyw43-sdio-prereq` reports ready; the active blocker is now CYW43 engine
+init no-reply, with the CYW43 progress marker still at
+`engine-init-runtime-entry` before any transport/card-select, firmware, DHCP,
+`nettest`, `netstats`, or remote-`cohsh` proof can be credited. The linked
+runtime therefore publishes CYW43-specific early markers:
+`cyw43-engine-init-branch`, `cyw43-state-reset-begin`,
+`cyw43-state-reset-done`, `cyw43-forbidden-sdio-mmio`,
+`cyw43-bus-link-check-begin`, `cyw43-shared-control-check-begin`,
+`cyw43-shared-control-missing`, and `cyw43-shared-control-ready`. Prompt-side
+`wifi diag` and `scripts/pi4_trace_normalize.py --gate-summary` must preserve
+this as a CYW43 engine-init / Gate 2 frontier instead of collapsing back to a
+stale HAL power/reset failure.
 
 - Function 0 is CCCR/FBR control.
 - Function 1 is the Broadcom backplane/control path.
@@ -835,9 +848,12 @@ not collapse this frontier back to a generic Gate 2 label.
   still fit CMD53 byte mode are four-byte aligned, while larger frames are
   padded to the 512-byte Function 2 block size so the HAL emits block-mode
   CMD53 rather than an unencodable byte-mode count.
-- CLM upload follows the captured Linux `clmload` cadence: 1400-byte payload
-  chunks (`len=1412` after `download_hdr`), 20-byte SDPCM control headers,
-  padded CMD53 request lengths, and `ver` / `clmver` queries after upload.
+- CLM upload is not yet credited as a linked-runtime proof gate in the current
+  physical-Pi Wi-Fi path. When the linked runtime enables CLM, it must follow the
+  captured Linux `clmload` cadence: 1400-byte payload chunks (`len=1412` after
+  `download_hdr`), 20-byte SDPCM control headers, padded CMD53 request lengths,
+  and `ver` / `clmver` queries after upload. Until then, `clmver` is comparison
+  evidence only and cannot close DHCP or remote-`cohsh` readiness.
 - CLM must not be the first meaningful BCDC/iovar exchange. Linux proves the
   initial control-plane path with small iovars first: set
   `bus:txglomalign=8`, query `ulp_sdioctrl` while accepting the captured
@@ -871,14 +887,17 @@ not collapse this frontier back to a generic Gate 2 label.
   retained SDIO owner state and byte-mode fallback without replaying CMD0/CMD5 or
   CYW43 power/reset state. Exhausted retained-stage recovery reports `0x5329`.
 - Station attach follows the captured Linux shape while staying bounded to the
-  current linked-runtime proof surface. The as-built control path first reads
-  `cur_etheraddr`, then issues matched CDC exchanges for `WLC_UP`,
-  `WLC_SET_INFRA`, WPA2 setup, PAE multicast admission, and `WLC_SET_SSID`.
-  Additional Linux probe telemetry such as `BRCMF_C_GET_REVINFO`, firmware
-  `ver`, `clmver`, `mpc`, `join_pref`, scan timing, and event-mask setup remains
-  useful comparison evidence, but it is not accepted as proof unless the linked
-  runtime observes the corresponding CDC reply. Do not send AP/P2P-only or local
-  legacy station writes such as `apsta=1`, early `country`, `WLC_SET_GMODE`,
+  current linked-runtime proof surface. The as-built control path first sends
+  `bus:txglomalign=8`, tolerates only a matched `BCME_UNSUPPORTED` reply for the
+  optional `ulp_sdioctrl` query, sends `bus:rxglom=1`, reads `cur_etheraddr`,
+  issues `BRCMF_C_GET_REVINFO` (`cmd=98`), then keeps `mpc=0` established before
+  matched CDC exchanges for `WLC_UP`, `WLC_SET_INFRA`, WPA2 setup, PAE multicast
+  admission, and `WLC_SET_SSID`. Additional Linux probe telemetry such as
+  firmware `ver`, `clmver`, `join_pref`, scan timing, and event-mask setup
+  remains useful comparison evidence, but it is not accepted as proof unless the
+  linked runtime observes the corresponding CDC reply. Do not send AP/P2P-only
+  or local legacy station writes such as `apsta=1`, early `country`,
+  `WLC_SET_GMODE`,
   `WLC_SET_BAND`, `WLC_SET_ANTDIV`, early AMPDU-limit writes, or `WLC_SET_PM`
   unless a later Linux-equivalent gate proves they belong. `BCME_UNSUPPORTED` on
   non-captured compatibility knobs is nonfatal; transport errors are fatal.
@@ -942,13 +961,15 @@ not collapse this frontier back to a generic Gate 2 label.
   `wifi retry` fail closed with `pi4-wifi-driver-task-runtime-required` when no
   linked runtime can satisfy the request. Post-join `EVENT_LINK` without the link
   flag is `wifi-link-down`, not DHCP progress.
-- Join-completion event delivery is a hard gate. Cohesix first programs the
-  Linux `event_msgs_ext` shape (`ver=1`, `command=SET_MASK`, `len=27`) using
-  the Pi 4 capture mask plus the Cohesix-required `AUTH`, association, and
-  `PSK_SUP` bits. If and only if the firmware explicitly returns
-  `BCME_UNSUPPORTED`, Cohesix falls back to a global `event_msgs` mask that
-  preserves existing firmware bits and ORs the same required join events. If
-  neither subscription path is proven before `SET_SSID`, join setup must fail.
+- Join-completion event delivery remains a later-gate hardening target, not an
+  as-built linked-runtime proof gate. The current secure-completion gate is
+  host-EAPOL: M1/M2/M3/M4, PTK/GTK `wsec_key` installation, and secure data
+  release must complete before DHCP. A future event-mask implementation must use
+  the Linux `event_msgs_ext` shape (`ver=1`, `command=SET_MASK`, `len=27`) with
+  the Pi 4 capture mask plus Cohesix-required `AUTH`, association, and `PSK_SUP`
+  bits, and may fall back to global `event_msgs` only on matched
+  `BCME_UNSUPPORTED`. Until that implementation lands, event lines are
+  diagnostics only and cannot close Wi-Fi Gate 10.
 - Linux clears `SBSDIO_FUNC1_SDIOPULLUP` during SDIO buscore preparation, but
   Cohesix does not issue that optional CMD52 on Pi 4 until the SDHCI path proves
   Linux-equivalent recovery across the immediately following sideband access.
@@ -1059,9 +1080,11 @@ not collapse this frontier back to a generic Gate 2 label.
   command is recorded as `CYW43_DRIVER_TASK_COMMAND_NO_REPLY` with stage, op,
   target, payload offset/length, and total length, and root caches the latest
   quiet CYW43 runtime progress marker even when the command trace itself is
-  suppressed. Transport-init now publishes begin/ready markers for card adopt,
-  Function 1/2 block-size programming, Function 1 enable, startup host config,
-  and backplane prep, so transport-init no-reply is classified as the exact
+  suppressed. CYW43 engine-init now publishes early branch, state-reset,
+  forbidden-MMIO, bus-link, and shared-control markers before transport starts.
+  Transport-init publishes begin/ready markers for card adopt, Function 1/2
+  block-size programming, Function 1 enable, startup host config, and backplane
+  prep, so engine-init or transport-init no-reply is classified as the exact
   linked CYW43 transport/CCCR/FBR/backplane frontier rather
   than a stale HAL power/reset failure. A CYW43 firmware-upload
   `0x5101` failure on an `sdio-cmd*` or `sdio-card-init*` stage is reported
@@ -1168,12 +1191,13 @@ active path is Cohesix-owned cold start:
   function with `USBSTS.CNR` observed before HCRST is a reset-order clue;
   `USBSTS.CNR` stuck after the Cohesix-owned HCRST is the
   firmware-load/reset-order blocker, not command-ring or DMA evidence.
-- xHCI ownership-register, `USBCMD.RUN`, and endpoint-doorbell posted-write
-  flushes now use bounded same-runtime xHCI MMIO readback from the linked USB
-  runtime's declared aperture. The PCIe owner still proves BCM2711 EXT_CFG
-  selector/COMMAND, endpoint BAR, and root bridge readiness before xHCI entry,
-  but the xHCI flush edge no longer performs a nested USB-to-PCIe child command.
-  `PORTSC` is not used as a generic posted-write drain on this prompt-safe path.
+- xHCI ownership-register and `USBCMD.RUN` posted-write drains now use bounded
+  same-runtime xHCI MMIO readback from the linked USB runtime's declared
+  aperture. Command and endpoint doorbells are barrier-only publish edges. The
+  PCIe owner still proves BCM2711 EXT_CFG selector/COMMAND, endpoint BAR, and
+  root bridge readiness before xHCI entry, but the xHCI flush edge no longer
+  performs a nested USB-to-PCIe child command. `PORTSC` is not used as a generic
+  posted-write drain on this prompt-safe path.
   The live xHCI BAR reads permitted on the Pi 4
   `platform-reset-complete` command gate are U-Boot's pre-HCRST
   `USBSTS.HCH==1` halt revalidation, a diagnostic-only pre-HCRST
@@ -1199,33 +1223,38 @@ active path is Cohesix-owned cold start:
   command-ring recovery, command-doorbell, and endpoint-doorbell posted-write
   drains fail closed when the HAL cannot first prove the EXT_CFG selector,
   link/root readiness, PCIe IRQ-source masking, and poll-only VL805 COMMAND
-  ownership, or when the linked PCIe owner cannot prove the posted-write flush. PCIe
-  IRQ-source masking proof must reject all-ones sentinel readbacks and log that
-  edge as untrusted instead of setting the posted-write proof latch.
+  ownership. Non-doorbell xHCI write drains are bounded same-runtime readbacks
+  inside the linked USB runtime's declared aperture; if the trace stops after a
+  `usb-*-written` marker and before the corresponding `usb-*-flushed` marker,
+  that xHCI readback drain is the frontier. PCIe IRQ-source masking proof must
+  reject all-ones sentinel readbacks and log that edge as untrusted instead of
+  setting the ownership proof latch.
 - U-Boot-compatible command/event proof must publish fresh ring registers on
   the Pi 4 platform-reset lane in the linked-runtime order
   (`CONFIG.MaxSlots`, `DCBAAP`, `CRCR`, initial `ERDP` without `EHB`,
-  `ERSTSZ`, `ERSTBA`, scratchpad, `DNCTRL=0`), drain xHCI operational-register
-  posted writes through the linked PCIe owner `POSTED_WRITE_FLUSH` turn, start the controller with
-  `USBCMD.RUN` and require `USBSTS.HCH==0`, then apply U-Boot's poll-only
-  post-start interrupter state (`IMOD=0`, `IMAN=0`) through the same PCIe-owner
-  flush. `CRCR`
+  `ERSTSZ`, `ERSTBA`, scratchpad, `DNCTRL=0`), drain non-doorbell xHCI
+  operational-register posted writes with same-runtime xHCI MMIO readback,
+  start the controller with `USBCMD.RUN` and require `USBSTS.HCH==0`, then
+  apply U-Boot's poll-only post-start interrupter state (`IMOD=0`, `IMAN=0`)
+  through the same-runtime xHCI readback drain. `CRCR`
   composition uses the command-ring pointer and producer cycle; on prompt-safe
   lanes the linked runtime does not synthesize Linux's later observed running
   status bit. The U-Boot `DNCTRL=0` write is also drained before
   `USBCMD.RUN`. It must write the submitted command TRB in U-Boot
   `queue_trb()` order: parameter low, parameter high, status, then the control
-  dword with the cycle bit last. Cohesix then DMA-publishes the submitted
-  16-byte command TRB, issues the completion-grade command-ring publish
-  barrier, writes U-Boot's `DB_VALUE_HOST` to doorbell `0`, and treats that
+  dword with the cycle bit last. Cohesix then DMA-publishes the full bounded
+  command ring containing the submitted TRB, issues the completion-grade
+  command-ring publish barrier, writes U-Boot's `DB_VALUE_HOST` to doorbell
+  `0`, and treats that
   doorbell edge as barrier-only before polling the event ring with the same
   5 s command-event budget.
   The command proof is Enable Slot, matching U-Boot's first non-root-hub xHCI
   allocation gate. Already-posted current-boot Port Status Change events remain
   on the event ring and are skipped/acknowledged while the Enable Slot command
   is outstanding. The U-Boot-shaped Enable Slot lane rings DB0 when it submits
-  the command and may re-ring DB0 on later pending turns only while no command
-  events have been consumed; that is liveness recovery, not proof. Only the
+  the command. The first pending prompt slice polls the event ring before any
+  recovery re-doorbell; later pending turns may re-ring DB0 only while no
+  command events have been consumed. That is liveness recovery, not proof. Only the
   matching Command Completion Event can advance the gate. The proof turn reports
   `command-ring-pending` while completion is outstanding, records command-ring
   readiness only after the matching Command Completion Event, and returns before
@@ -1246,13 +1275,15 @@ active path is Cohesix-owned cold start:
   itself still uses the U-Boot command value, but the linked USB runtime now
   publishes the doorbell with barriers only instead of issuing either a nested
   PCIe-owner flush or a same-window xHCI readback. A missing xHCI aperture or a
-  PCIe-owner flush no-reply remains a hard failure for non-doorbell Pi 4 high-BAR VL805
-  ownership-register paths.
+  same-runtime readback no-reply remains a hard failure for non-doorbell Pi 4
+  high-BAR VL805 ownership-register paths.
 - If the first U-Boot-shaped Enable Slot proof does not complete within the
   bounded poll slices, the linked runtime reports `enable-slot-failed` and
   returns to root instead of running a second same-turn command recovery lane.
   A poll turn may consume only a small bounded number of event-ring entries
-  before returning `command-ring-pending`; this keeps root prompt slices
+  before returning `command-ring-pending`; Gate 4 remains the failed gate while
+  the blocker is `enable-slot-completion-pending`, even if the derived ten-gate
+  table has not reached root-port sampling. This keeps root prompt slices
   responsive while preserving PSC and keyboard-transfer events for later
   enumeration. In the Enable Slot command-proof lane only, the runtime uses the
   prompt-safe ERDP barrier path and emits `usb-command-proof-event-*`,
@@ -1750,10 +1781,10 @@ Required Cohesix shape:
   gates and fresh command-completion proof.
 - The linked USB runtime must keep the xHCI interrupter poll-only (`IMAN=0`,
   `IMOD=0`), publish DCBAAP/CRCR/ERST/ERDP through low/high writes plus
-  high-dword posted-write flush, flush CONFIG/DNCTRL/RUN by same-runtime xHCI
-  MMIO readback, publish doorbells with barriers only, and use neutral PORTSC
-  writes that do not mirror `PED`, `PR`, or change bits except as explicit RW1C
-  acknowledgements.
+  high-dword same-runtime readback drains, flush CONFIG/DNCTRL/RUN by
+  same-runtime xHCI MMIO readback, publish doorbells with barriers only, and use
+  neutral PORTSC writes that do not mirror `PED`, `PR`, or change bits except as
+  explicit RW1C acknowledgements.
   Physical Pi USB still requires linked PCIe owner replay before xHCI entry, but
   posted-write drains no longer depend on a nested USB-to-PCIe child command.
 - USB keyboard feeds only the existing root-console parser after decoding USB

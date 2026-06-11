@@ -1646,7 +1646,7 @@ def test_gate_summary_keeps_boot_sdio_replay_over_later_wifi_prompt_error() -> N
     record = normalizer.summarize_gates(events).to_record()
     assert record["WIFI_BLOCKER"] == "sdio-engine-init-no-reply"
     assert record["WIFI_EXACT"] == "sdio-engine-init-no-reply"
-    assert record["WIFI_PHASE"] == "engine-init"
+    assert record["WIFI_PHASE"] == "net-engine-init"
     assert record["WIFI_BLOCKER_LINE"] == 5
 
 
@@ -1669,7 +1669,7 @@ def test_gate_summary_reports_exact_sdio_engine_init_subfault() -> None:
     assert record["WIFI_GATE"] == 2
     assert record["WIFI_BLOCKER"] == "sdio-engine-init-clock-failed"
     assert record["WIFI_EXACT"] == "sdio-engine-init-clock-failed"
-    assert record["WIFI_PHASE"] == "engine-init"
+    assert record["WIFI_PHASE"] == "net-engine-init"
 
 
 def test_gate_summary_preserves_sdio_adopt_progress_blocker() -> None:
@@ -1724,6 +1724,95 @@ def test_gate_summary_preserves_sdio_hardware_entry_progress_blocker() -> None:
     assert record["WIFI_BLOCKER"] == "sdio-sdhci-mmio-entry-no-reply"
     assert record["WIFI_EXACT"] == "sdio-sdhci-mmio-entry-no-reply"
     assert record["WIFI_PHASE"] == "sdio-sdhci-mmio-entry-no-reply"
+
+
+def test_gate_summary_preserves_sdio_shadow_reset_progress_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: sdio linked_runtime_progress marker_valid=yes sequence=2 "
+            "phase=174 phase_name=sdio-shadow-reset-begin aux0=0x454e474e "
+            "gate=2 blocker=sdio-shadow-reset-no-reply "
+            "next_action=inspect-sdio-register-shadow-reset",
+            "wifi: gate 1 name=hal-power-reset status=inferred "
+            "evidence=power=unknown reset=unknown source=hal-runtime-required "
+            "next=sdio-card-select",
+            "wifi: gate 2 name=sdio-card-select status=fail "
+            "evidence=stage=engine-init status=no-reply phase=174 "
+            "phase_name=sdio-shadow-reset-begin marker_valid=yes "
+            "source=linked-runtime next=cccr-fbr-ready",
+            "wifi: next_action=inspect-sdio-register-shadow-reset "
+            "blocker=sdio-shadow-reset-no-reply proof_gate=1 "
+            "target_gate=10 source=hal-runtime-required",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "sdio-shadow-reset-no-reply"
+    assert record["WIFI_EXACT"] == "sdio-shadow-reset-no-reply"
+    assert record["WIFI_PHASE"] == "sdio-shadow-reset-no-reply"
+
+
+def test_gate_summary_promotes_cyw43_engine_init_replay_over_hal_power_noise() -> None:
+    events = normalizer.parse_events(
+        [
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host selected=wifi-owner-link "
+            "attempted=yes stage=engine-init blocker=ready",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes policy=wifi "
+            "attempted=yes stage=engine-init blocker=begin",
+            "DRIVER_TASK_RING_CALL_BEGIN contract=cyw43455 endpoint=0x1975 "
+            "request=2 opcode=1 flags=0x2000 arg0=5 arg1=8 aux0=0x494e4954",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=cyw43455 endpoint=0x1975 "
+            "request=2 mode=nonblocking attempts=262144 opcode=1 arg0=5 "
+            "aux0=0x494e4954 frame_len=0",
+            "DRIVER_TASK_RING_PROGRESS contract=cyw43455 request=2 "
+            "expected_aux0=0x494e4954 marker_valid=yes marker_sequence=2 "
+            "marker_phase=172 marker_phase_name=engine-init-runtime-entry "
+            "marker_aux0=0x494e4954",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes policy=wifi "
+            "attempted=yes stage=engine-init blocker=no-reply",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=net-engine-init status=no-reply acceptance=no",
+            "wifi: gate 1 name=hal-power-reset status=fail evidence=power=unknown "
+            "reset=unknown source=hal-runtime-required next=sdio-card-select",
+            "wifi: next_action=verify-hal-power-reset-resources blocker=wifi-power-reset "
+            "proof_gate=0 target_gate=10 source=hal-runtime-required",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "cyw43-engine-init-no-reply"
+    assert record["WIFI_EXACT"] == "cyw43-engine-init-no-reply"
+    assert record["WIFI_PHASE"] == "net-engine-init"
+    assert record["NET_DRIVER_TASK_REPLAY_BLOCKER"] == "cyw43-wifi:engine-init:no-reply"
+
+
+def test_gate_summary_preserves_cyw43_engine_init_branch_progress_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: cyw43 linked_runtime_progress marker_valid=yes sequence=2 "
+            "phase=176 phase_name=cyw43-engine-init-branch aux0=0x494e4954 "
+            "gate=2 blocker=cyw43-engine-init-state-slot-no-reply "
+            "next_action=inspect-cyw43-runtime-state-slot-entry",
+            "wifi: gate 1 name=hal-power-reset status=inferred "
+            "evidence=power=unknown reset=unknown source=hal-runtime-required "
+            "next=sdio-card-select",
+            "wifi: gate 2 name=sdio-card-select status=fail "
+            "evidence=stage=cyw43-transport status=progress-only phase=176 "
+            "phase_name=cyw43-engine-init-branch marker_valid=yes "
+            "source=linked-runtime next=cccr-fbr-ready",
+            "wifi: next_action=inspect-cyw43-runtime-state-slot-entry "
+            "blocker=cyw43-engine-init-state-slot-no-reply proof_gate=1 "
+            "target_gate=10 source=hal-runtime-required",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "cyw43-engine-init-state-slot-no-reply"
+    assert record["WIFI_EXACT"] == "cyw43-engine-init-state-slot-no-reply"
+    assert record["WIFI_PHASE"] == "cyw43-engine-init-state-slot-no-reply"
 
 
 def test_gate_summary_tracks_split_sdio_command_probe_blockers() -> None:
@@ -4499,6 +4588,8 @@ def test_usb_driver_task_blocker_gate_splits_engine_init_from_xhci_entry() -> No
     assert normalizer.usb_driver_task_blocker_gate("usb-xhci-capability-read-no-reply") == 2
     assert normalizer.usb_driver_task_blocker_gate("usb-xhci-halt-wait-no-reply") == 3
     assert normalizer.usb_driver_task_blocker_gate("usb-pcie-posted-write-flush-no-reply") == 3
+    assert normalizer.usb_driver_task_blocker_gate("enable-slot-completion-pending") == 4
+    assert normalizer.usb_driver_task_blocker_gate("enable-slot-completion-poll-no-reply") == 4
 
 
 def test_gate_summary_keeps_xhci_device_coverage_miss_over_unavailable() -> None:
@@ -4827,6 +4918,46 @@ def test_gate_summary_tracks_usb_command_ring_pending_detail() -> None:
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=1 cmd_slot_or_polls=1 cmd_event_type=0 "
             "cmd_ack_failures=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "enable-slot-completion-pending"
+
+
+def test_gate_summary_preserves_command_pending_over_stale_startup_projection() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
+            "cmd_ack_failures=0",
+            "usb: diag linked_runtime_progress marker_valid=yes sequence=5 phase=134 "
+            "phase_name=usb-command-proof-doorbell-done aux0=0x55534245 gate=4 "
+            "blocker=enable-slot-completion-pending "
+            "next_action=poll-enable-slot-completion",
+            "usb: gate 1 name=hal-resources status=pass "
+            "evidence=owner=driver-task linked_controller=yes detail=0x0203 "
+            "next=pcie-vl805",
+            "usb: gate 2 name=pcie-vl805 status=pass "
+            "evidence=backend_attached=yes linked_controller=yes "
+            "runtime_result=0x03000000 next=xhci-operational",
+            "usb: gate 3 name=xhci-operational status=pass "
+            "evidence=linked_detail=0x0203 linked_gate=4 "
+            "next=command-event-rings",
+            "usb: gate 4 name=command-event-rings status=pass "
+            "evidence=queue_result=no queued_reports=0 doorbell=no "
+            "preserved_events=0 transfer_events=0 next=root-port-connected",
+            "usb: gate 5 name=root-port-connected status=fail "
+            "evidence=linked_detail=0x0203 result=0x03000000 "
+            "next=device-addressed",
+            "usb: next_action=poll-enable-slot-completion "
+            "blocker=enable-slot-completion-pending proof_gate=4 target_gate=10 "
+            "detail=0x0203 result=0x03000000",
         ]
     )
 

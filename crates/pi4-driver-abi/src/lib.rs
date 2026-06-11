@@ -385,11 +385,11 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY: u32 = 160;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN: u32 = 161;
 /// USB runtime rejected the xHCI capability register snapshot.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID: u32 = 162;
-/// USB runtime is asking the PCIe owner to flush a posted xHCI write.
+/// Historical USB runtime request for a PCIe-owner xHCI posted-write flush.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN: u32 = 163;
-/// USB runtime received PCIe-owner proof for a posted-write flush.
+/// Historical USB runtime PCIe-owner posted-write flush completion.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_DONE: u32 = 164;
-/// USB runtime did not receive PCIe-owner proof for a posted-write flush.
+/// Historical USB runtime PCIe-owner posted-write flush failure.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_FAILED: u32 = 165;
 /// USB runtime is about to clear the xHCI RUN bit.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN: u32 = 166;
@@ -403,6 +403,30 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN: u32 = 169;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN: u32 = 170;
 /// USB runtime is polling for xHCI run-state transition after RUN.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN: u32 = 171;
+/// Runtime entered the role-specific engine-init dispatcher.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RUNTIME_ENTRY: u32 = 172;
+/// Runtime selected the SDIO host engine-init branch.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_ENGINE_INIT_BRANCH: u32 = 173;
+/// SDIO runtime is about to reset cached SDHCI register shadows.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_BEGIN: u32 = 174;
+/// SDIO runtime reset cached SDHCI register shadows.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_SHADOW_RESET_DONE: u32 = 175;
+/// Runtime selected the CYW43 Wi-Fi engine-init branch.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_ENGINE_INIT_BRANCH: u32 = 176;
+/// CYW43 runtime is about to reset its local Wi-Fi state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_STATE_RESET_BEGIN: u32 = 177;
+/// CYW43 runtime reset its local Wi-Fi state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_STATE_RESET_DONE: u32 = 178;
+/// CYW43 runtime rejected a forbidden direct SDIO MMIO window.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_FORBIDDEN_SDIO_MMIO: u32 = 179;
+/// CYW43 runtime is checking the pointer-free SDIO owner bus link.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_CHECK_BEGIN: u32 = 180;
+/// CYW43 runtime is checking the shared firmware/control resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_CHECK_BEGIN: u32 = 181;
+/// CYW43 runtime could not find the shared firmware/control resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_MISSING: u32 = 182;
+/// CYW43 runtime verified the shared firmware/control resource.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_READY: u32 = 183;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-owned command endpoint/shared-ring intake loop.
