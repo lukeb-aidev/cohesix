@@ -1784,8 +1784,9 @@ applies. Use the focused aliases:
 - `cargo test -p pi4-driver-runtime --lib -- --test-threads=1`
   covers the linked Pi 4 runtime implementation for USB, SDIO/CYW43, HDMI,
   serial, and GENET. USB-specific coverage includes the driver-task xHCI
-  command/event/EP0/interrupt-IN path, posted-write owner-link flushes, HID
-  report buffering/decoding, and keyboard publication.
+  command/event/EP0/interrupt-IN path, barrier-only doorbell flushes,
+  same-runtime xHCI MMIO readback flushes, the fixed PCIe owner-link
+  prerequisite, HID report buffering/decoding, and keyboard publication.
 - `cargo test -p root-task --no-default-features --features driver-tests-qemu --lib`
   is not the staged command because it runs unrelated root-task tests too; use
   the focused filters below instead.

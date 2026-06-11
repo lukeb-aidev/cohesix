@@ -310,7 +310,9 @@ def main() -> int:
             "usb_keyboard_interrupt_trbs_request_bounded_endpoint_packet_len",
             "usb_command_wait_can_preserve_keyboard_transfer_event",
             "usb_hub_topology_helpers_encode_route_tt_and_speed",
-            "usb_runtime_uses_pcie_owner_ring_for_posted_write_flushes",
+            "usb_command_doorbell_flush_is_barrier_only",
+            "usb_runtime_declares_fixed_pcie_owner_link",
+            "usb_xhci_64bit_register_publication_keeps_distinct_flush_stages",
         ],
         "apps/root-task/src/serial/mod.rs": [
             "poll_io_obeys_driver_task_budget",
