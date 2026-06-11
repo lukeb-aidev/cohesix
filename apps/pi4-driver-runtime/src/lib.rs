@@ -13,6 +13,8 @@ use core::{
 };
 
 use font8x8::legacy::BASIC_LEGACY;
+#[cfg(target_os = "none")]
+use pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID;
 use pi4_driver_abi::{
     DriverRuntimeCyw43CommandDescriptor, DriverRuntimeInitDescriptor,
     DriverRuntimeResourceRangeDescriptor, DriverRuntimeSdioCommandDescriptor,
@@ -80,8 +82,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_FAILED, DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
     DRIVER_RUNTIME_RING_PROGRESS_OFFSET, DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING,
@@ -108,15 +113,20 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB, DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN,
@@ -140,8 +150,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_LOW_WRITTEN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN,
@@ -150,25 +160,41 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_LOW_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE, DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_CLEANED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_FILLED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_CLEANED,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_WRITTEN, DRIVER_RUNTIME_SDIO_FLAG_DATA,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_FLAG_DATA,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR, DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_FLAG_WRITE,
-    DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND, DRIVER_RUNTIME_SDIO_OP_CMD52_READ,
-    DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE, DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
-    DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE, DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
-    DRIVER_RUNTIME_SDIO_OP_POLL_IRQ, DRIVER_RUNTIME_SDIO_RESP_LONG, DRIVER_RUNTIME_SDIO_RESP_NONE,
-    DRIVER_RUNTIME_SDIO_RESP_OCR, DRIVER_RUNTIME_SDIO_RESP_SHORT,
-    DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
-    DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED, DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY, DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED, DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND,
+    DRIVER_RUNTIME_SDIO_OP_CMD52_READ, DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,
+    DRIVER_RUNTIME_SDIO_OP_CMD53_READ, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+    DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG, DRIVER_RUNTIME_SDIO_OP_POLL_IRQ,
+    DRIVER_RUNTIME_SDIO_RESP_LONG, DRIVER_RUNTIME_SDIO_RESP_NONE, DRIVER_RUNTIME_SDIO_RESP_OCR,
+    DRIVER_RUNTIME_SDIO_RESP_SHORT, DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY,
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED,
     DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING,
     DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR,
@@ -777,6 +803,7 @@ const SDHCI_CLOCK_RECOVERY_SETTLE_SPINS: usize = 10_000;
 const SDHCI_STARTUP_CLOCK_HZ: u32 = 400_000;
 const BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ: u32 = 250_000_000;
 const CYW43_BACKPLANE_FORCE_ALP_SETTLE_SPINS: usize = 4_000;
+const CYW43_SDIO_WAIT_F2_READY_POLLS: usize = 3_000;
 
 const CYW43_SDPCM_HEADER_BYTES: usize = 12;
 const CYW43_SDPCM_HWHDR_BYTES: usize = 4;
@@ -1468,6 +1495,7 @@ static GENET_RX_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_SDIO_BUS_LINK_SEQ: AtomicU32 = AtomicU32::new(0);
+static USB_PCIE_BUS_LINK_SEQ: AtomicU32 = AtomicU32::new(0);
 static CYW43_LAST_FAULT_DETAIL: AtomicU32 = AtomicU32::new(FAULT_NONE as u32);
 static CYW43_LAST_FAULT_RESULT: AtomicU32 = AtomicU32::new(0);
 static CYW43_LAST_FAULT_FRAME_OFFSET: AtomicU32 = AtomicU32::new(0);
@@ -1477,6 +1505,8 @@ static SDIO_CMD_COUNT: AtomicU32 = AtomicU32::new(0);
 static SDIO_TRANSFER_MODE_SHADOW: AtomicU32 = AtomicU32::new(0);
 static SDIO_BLOCK_SIZE_COUNT_SHADOW: AtomicU32 = AtomicU32::new(0);
 static SDIO_LAST_TRANSFER_FAILURE: AtomicU32 = AtomicU32::new(0);
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_RESET_FAIL_ONCE_MASK: AtomicU32 = AtomicU32::new(0);
 static PCIE_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static PCIE_OP_COUNT: AtomicU32 = AtomicU32::new(0);
 static GENET_RUNTIME_STATE: RuntimeStateSlot<GenetRuntimeState> =
@@ -1853,15 +1883,28 @@ pub fn service_command(
             DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN,
             command.aux0,
         );
-        if let Some(detail) = mark_engine_initialized(command) {
-            publish_runtime_progress(
-                command.sequence,
-                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE,
-                command.aux0,
-            );
-            return DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, 1);
+        publish_runtime_progress(
+            command.sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER,
+            command.aux0,
+        );
+        match mark_engine_initialized(command) {
+            Ok(detail) => {
+                publish_runtime_progress(
+                    command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE,
+                    command.aux0,
+                );
+                return DriverTaskCompletionRecord::progress_with_detail(
+                    command.sequence,
+                    detail,
+                    1,
+                );
+            }
+            Err(detail) => {
+                return DriverTaskCompletionRecord::fault(command.sequence, detail);
+            }
         }
-        return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
     if !opcode_matches_hot_path(command.opcode, command.arg0) {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
@@ -2167,7 +2210,8 @@ fn adopt_hal_prepared_pcie_runtime_descriptor(descriptor: DriverRuntimeInitDescr
     true
 }
 
-fn mark_engine_initialized(command: DriverTaskCommandRecord) -> Option<u16> {
+#[inline(never)]
+fn mark_engine_initialized(command: DriverTaskCommandRecord) -> Result<u16, u16> {
     let hot_path = command.arg0;
     publish_runtime_progress(
         command.sequence,
@@ -2183,7 +2227,7 @@ fn mark_engine_initialized(command: DriverTaskCommandRecord) -> Option<u16> {
                 DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH,
                 command.aux0,
             );
-            return None;
+            return Err(DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH as u16);
         }
         publish_runtime_progress(
             command.sequence,
@@ -2191,7 +2235,12 @@ fn mark_engine_initialized(command: DriverTaskCommandRecord) -> Option<u16> {
             command.aux0,
         );
         let Some(flags) = runtime_flags_for_hot_path(hot_path) else {
-            return None;
+            publish_runtime_progress(
+                command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
+                command.aux0,
+            );
+            return Err(DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED as u16);
         };
         publish_runtime_progress(
             command.sequence,
@@ -2204,7 +2253,12 @@ fn mark_engine_initialized(command: DriverTaskCommandRecord) -> Option<u16> {
             command.sequence,
             command.aux0,
         ) {
-            return None;
+            publish_runtime_progress(
+                command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
+                command.aux0,
+            );
+            return Err(DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED as u16);
         }
         publish_runtime_progress(
             command.sequence,
@@ -2217,18 +2271,23 @@ fn mark_engine_initialized(command: DriverTaskCommandRecord) -> Option<u16> {
             command.aux0,
         );
         let detail = runtime_engine_init(command.sequence, command.aux0, hot_path, descriptor);
-        if detail.is_some() {
-            publish_runtime_progress(
+        match detail {
+            Ok(_) => publish_runtime_progress(
                 command.sequence,
                 DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE,
                 command.aux0,
-            );
+            ),
+            Err(_) => publish_runtime_progress(
+                command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
+                command.aux0,
+            ),
         }
         let detail = detail?;
         let mut bits = ENGINE_STATE_INITIALIZED | ENGINE_STATE_DESCRIPTOR_READY;
         bits |= ENGINE_STATE_RESOURCE_READY | ENGINE_STATE_HW_READY;
         flags.fetch_or(bits, Ordering::AcqRel);
-        Some(detail)
+        Ok(detail)
     })
 }
 
@@ -2237,32 +2296,41 @@ fn reset_sdio_register_shadows() {
     SDIO_BLOCK_SIZE_COUNT_SHADOW.store(0, Ordering::Release);
 }
 
+#[inline(never)]
 fn runtime_engine_init(
     sequence: u32,
     aux0: u32,
     hot_path: u32,
     descriptor: &DriverRuntimeInitDescriptor,
-) -> Option<u16> {
+) -> Result<u16, u16> {
     match hot_path {
-        HOT_PATH_USB_KEYBOARD => usb_runtime_init(sequence, aux0, descriptor),
+        HOT_PATH_USB_KEYBOARD => {
+            usb_runtime_init(sequence, aux0, descriptor).ok_or(FAULT_DEVICE_UNAVAILABLE)
+        }
         HOT_PATH_HDMI_TEXT => {
             hdmi_render_boot_diagnostics(descriptor);
-            Some(FAULT_NONE)
+            Ok(FAULT_NONE)
         }
-        HOT_PATH_GENET_NIC => {
-            GENET_RUNTIME_STATE.with_mut(|state| genet_runtime_init(state).then_some(FAULT_NONE))
-        }
-        HOT_PATH_CYW43_WIFI => CYW43_RUNTIME_STATE
-            .with_mut(|state| cyw43_runtime_init(state, descriptor).then_some(FAULT_NONE)),
+        HOT_PATH_GENET_NIC => GENET_RUNTIME_STATE.with_mut(|state| {
+            genet_runtime_init(state)
+                .then_some(FAULT_NONE)
+                .ok_or(FAULT_DEVICE_UNAVAILABLE)
+        }),
+        HOT_PATH_CYW43_WIFI => CYW43_RUNTIME_STATE.with_mut(|state| {
+            cyw43_runtime_init(state, descriptor)
+                .then_some(FAULT_NONE)
+                .ok_or(FAULT_DEVICE_UNAVAILABLE)
+        }),
         HOT_PATH_SDIO_HOST => {
             reset_sdio_register_shadows();
-            SDIO_RUNTIME_STATE
-                .with_mut(|state| sdio_runtime_init(sequence, aux0, state).then_some(FAULT_NONE))
+            sdio_runtime_init(sequence, aux0)
         }
-        HOT_PATH_PCIE_ROOT => {
-            PCIE_RUNTIME_STATE.with_mut(|state| pcie_runtime_init(state).then_some(FAULT_NONE))
-        }
-        _ => Some(FAULT_NONE),
+        HOT_PATH_PCIE_ROOT => PCIE_RUNTIME_STATE.with_mut(|state| {
+            pcie_runtime_init(state)
+                .then_some(FAULT_NONE)
+                .ok_or(FAULT_DEVICE_UNAVAILABLE)
+        }),
+        _ => Ok(FAULT_NONE),
     }
 }
 
@@ -2979,6 +3047,7 @@ const fn genet_tx_desc_offset(slot: usize) -> Option<usize> {
     }
 }
 
+#[inline(never)]
 fn service_engine_init(command: DriverTaskCommandRecord) -> Option<DriverTaskCompletionRecord> {
     let init_aux = command_is_engine_init_aux(command.aux0);
     if !init_aux {
@@ -3016,22 +3085,25 @@ fn service_engine_init(command: DriverTaskCommandRecord) -> Option<DriverTaskCom
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN,
         command.aux0,
     );
-    if let Some(detail) = mark_engine_initialized(command) {
-        publish_runtime_progress(
-            command.sequence,
-            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE,
-            command.aux0,
-        );
-        Some(DriverTaskCompletionRecord::progress_with_detail(
-            command.sequence,
-            detail,
-            1,
-        ))
-    } else {
-        Some(DriverTaskCompletionRecord::fault(
-            command.sequence,
-            FAULT_DEVICE_UNAVAILABLE,
-        ))
+    publish_runtime_progress(
+        command.sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER,
+        command.aux0,
+    );
+    match mark_engine_initialized(command) {
+        Ok(detail) => {
+            publish_runtime_progress(
+                command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE,
+                command.aux0,
+            );
+            Some(DriverTaskCompletionRecord::progress_with_detail(
+                command.sequence,
+                detail,
+                1,
+            ))
+        }
+        Err(detail) => Some(DriverTaskCompletionRecord::fault(command.sequence, detail)),
     }
 }
 
@@ -3078,11 +3150,18 @@ fn serial_frame_budget_limit(budget: DriverTaskBudgetGrant, frame_len: u16) -> u
         .min(MAX_DRIVER_TASK_FRAME_BYTES)
 }
 
+#[inline(never)]
 fn usb_runtime_init(
     sequence: u32,
     aux0: u32,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Option<u16> {
+    publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY, aux0);
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
+        aux0,
+    );
     let detail = USB_RUNTIME_STATE.with_mut(|state| {
         if state.initialized {
             if state.keyboard_slot != 0 && state.keyboard_endpoint_id != 0 {
@@ -3091,7 +3170,18 @@ fn usb_runtime_init(
             }
             return usb_runtime_enumeration_detail(state).or(Some(state.init_detail));
         }
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
+            aux0,
+        );
         state.reset();
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE,
+            aux0,
+        );
+        publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, aux0);
         let detail = usb_runtime_init_hw(sequence, aux0, descriptor, state)?;
         state.initialized = true;
         Some(detail)
@@ -5287,7 +5377,7 @@ fn cyw43_transport_init_step(
             state.transport_ready = false;
             state.backplane_window_valid = false;
             if !cyw43_uses_sdio_bus_link()
-                && !sdio_runtime_init_hw(sequence, DRIVER_RUNTIME_NET_INIT_AUX)
+                && sdio_runtime_init_hw(sequence, DRIVER_RUNTIME_NET_INIT_AUX).is_err()
             {
                 return Err(FAULT_CYW43_TRANSPORT_DIRECT_SDIO);
             }
@@ -5830,7 +5920,7 @@ fn cyw43_enable_sdio_function(enable_bit: u8, ready_bit: u8) -> bool {
         if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, desired) {
             return false;
         }
-        for _ in 0..SDHCI_INIT_SPINS {
+        for _ in 0..CYW43_SDIO_WAIT_F2_READY_POLLS {
             if cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX).unwrap_or(0) & ready_bit != 0 {
                 return true;
             }
@@ -8575,11 +8665,24 @@ fn genet_read_rx_desc(slot: usize) -> (u32, u32, u32) {
     }
 }
 
-fn sdio_runtime_init(sequence: u32, aux0: u32, state: &mut SdioRuntimeState) -> bool {
-    state.reset();
-    let ok = sdio_runtime_init_hw(sequence, aux0);
-    state.initialized = ok;
-    ok
+fn sdio_runtime_init(sequence: u32, aux0: u32) -> Result<u16, u16> {
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
+        aux0,
+    );
+    SDIO_RUNTIME_STATE.with_mut(SdioRuntimeState::reset);
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE,
+        aux0,
+    );
+    publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY, aux0);
+    let result = sdio_runtime_init_hw(sequence, aux0);
+    SDIO_RUNTIME_STATE.with_mut(|state| {
+        state.initialized = result.is_ok();
+    });
+    result.map(|()| DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY)
 }
 
 fn pcie_runtime_init(state: &mut PcieRuntimeState) -> bool {
@@ -10152,6 +10255,107 @@ fn usb_write64(offset: usize, value: u64) {
     usb_write32(offset + 4, (value >> 32) as u32);
 }
 
+const USB_PCIE_BUS_LINK_FLUSH_ATTEMPTS: usize = 16_384;
+const USB_PCIE_BUS_LINK_NOTIFY_INTERVAL: usize = 256;
+
+#[cfg(target_os = "none")]
+fn usb_uses_pcie_bus_link() -> bool {
+    RUNTIME_DESCRIPTOR
+        .load()
+        .has_pointer_free_bus_link(HOT_PATH_PCIE_ROOT, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE)
+}
+
+#[cfg(not(target_os = "none"))]
+fn usb_uses_pcie_bus_link() -> bool {
+    true
+}
+
+#[cfg(target_os = "none")]
+fn usb_pcie_bus_link_sequence() -> u32 {
+    USB_PCIE_BUS_LINK_SEQ
+        .fetch_add(1, Ordering::AcqRel)
+        .wrapping_add(1)
+}
+
+#[cfg(target_os = "none")]
+fn pcie_bus_link_flush_vl805_posted_write(sequence: u32, offset: usize) -> bool {
+    if !usb_uses_pcie_bus_link() {
+        return false;
+    }
+    let command = DriverTaskCommandRecord {
+        sequence,
+        opcode: OPCODE_SERVICE,
+        flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+        arg0: HOT_PATH_PCIE_ROOT,
+        arg1: ROLE_PCIE,
+        aux0: (DRIVER_RUNTIME_PCIE_OP_POSTED_WRITE_FLUSH as u32) << 16,
+        aux1: (offset & !0x3) as u32,
+        budget: DriverTaskBudgetGrant {
+            max_ops: 1,
+            max_frames: 0,
+            max_bytes: 0,
+        },
+        frame: DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    };
+    let completion_reset = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
+    // SAFETY: Root maps the PCIe-owner command ring into the USB runtime at the
+    // fixed bus-link address and mints the PCIe owner endpoint cap into the fixed
+    // child slot before USB can be resumed. This turn uses only pointer-free ring
+    // records and a bounded completion poll.
+    unsafe {
+        core::ptr::write_volatile(
+            (DRIVER_TASK_PCIE_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                as *mut DriverTaskCompletionRecord,
+            completion_reset,
+        );
+        core::ptr::write_volatile(
+            DRIVER_TASK_PCIE_BUS_RING_VADDR as *mut DriverTaskCommandRecord,
+            command,
+        );
+        driver_task_shared_store_barrier();
+        driver_task_shared_clean_range(
+            DRIVER_TASK_PCIE_BUS_RING_VADDR,
+            core::mem::size_of::<DriverTaskCommandRecord>(),
+        );
+        driver_task_shared_clean_range(
+            DRIVER_TASK_PCIE_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
+            core::mem::size_of::<DriverTaskCompletionRecord>(),
+        );
+        sel4_sys::seL4_SetMR(0, command.sequence as sel4_sys::seL4_Word);
+        let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
+        sel4_sys::seL4_NBSend(DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT, info);
+        for attempt in 0..USB_PCIE_BUS_LINK_FLUSH_ATTEMPTS {
+            if attempt != 0 && attempt % USB_PCIE_BUS_LINK_NOTIFY_INTERVAL == 0 {
+                sel4_sys::seL4_SetMR(0, command.sequence as sel4_sys::seL4_Word);
+                sel4_sys::seL4_NBSend(DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT, info);
+            }
+            sel4_sys::seL4_Yield();
+            driver_task_shared_invalidate_range(
+                DRIVER_TASK_PCIE_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
+                core::mem::size_of::<DriverTaskCompletionRecord>(),
+            );
+            let completion = core::ptr::read_volatile(
+                (DRIVER_TASK_PCIE_BUS_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET)
+                    as *const DriverTaskCompletionRecord,
+            );
+            if completion.sequence == command.sequence {
+                driver_task_shared_load_barrier();
+                return completion.code == COMPLETION_PROGRESS && completion.result != 0;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(not(target_os = "none"))]
+fn pcie_bus_link_flush_vl805_posted_write(_sequence: u32, _offset: usize) -> bool {
+    true
+}
+
 fn xhci_flush_posted_write(
     _state: &UsbRuntimeState,
     stage: u16,
@@ -10161,11 +10365,44 @@ fn xhci_flush_posted_write(
     if stage == XHCI_FLUSH_STAGE_DOORBELL {
         dma_store_barrier();
         xhci_dma_publish_barrier();
-        true
-    } else {
-        let _ = usb_read32(offset & !0x3);
+    }
+    #[cfg(target_os = "none")]
+    {
+        pcie_bus_link_flush_vl805_posted_write(usb_pcie_bus_link_sequence(), offset)
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        if stage != XHCI_FLUSH_STAGE_DOORBELL {
+            let _ = usb_read32(offset & !0x3);
+        }
         true
     }
+}
+
+fn xhci_flush_posted_write_progress(
+    sequence: u32,
+    aux0: u32,
+    state: &UsbRuntimeState,
+    stage: u16,
+    offset: usize,
+    value: u32,
+) -> bool {
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN,
+        aux0,
+    );
+    let ok = xhci_flush_posted_write(state, stage, offset, value);
+    publish_runtime_progress(
+        sequence,
+        if ok {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_DONE
+        } else {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_FAILED
+        },
+        aux0,
+    );
+    ok
 }
 
 fn xhci_write64_flush_posted(
@@ -10182,12 +10419,19 @@ fn xhci_write64_flush_posted(
 ) -> bool {
     usb_write32(offset, value as u32);
     publish_runtime_progress(sequence, low_written_phase, aux0);
-    if !xhci_flush_posted_write(state, low_stage, offset, value as u32) {
+    if !xhci_flush_posted_write_progress(sequence, aux0, state, low_stage, offset, value as u32) {
         return false;
     }
     usb_write32(offset + 4, (value >> 32) as u32);
     publish_runtime_progress(sequence, high_written_phase, aux0);
-    if !xhci_flush_posted_write(state, high_stage, offset + 4, (value >> 32) as u32) {
+    if !xhci_flush_posted_write_progress(
+        sequence,
+        aux0,
+        state,
+        high_stage,
+        offset + 4,
+        (value >> 32) as u32,
+    ) {
         return false;
     }
     publish_runtime_progress(sequence, high_flushed_phase, aux0);
@@ -13276,6 +13520,7 @@ fn usb_wait_command_clear(op_base: usize, mask: u32) -> bool {
     false
 }
 
+#[inline(never)]
 fn usb_runtime_init_hw(
     sequence: u32,
     aux0: u32,
@@ -13292,6 +13537,16 @@ fn usb_runtime_init_hw(
     if dma_range.page_count < USB_REQUIRED_DMA_PAGES {
         return None;
     }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY,
+        aux0,
+    );
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN,
+        aux0,
+    );
     let cap_length = usb_read8(XHCI_CAPLENGTH);
     let hcs1 = usb_read32(XHCI_HCSPARAMS1);
     let hcs2 = usb_read32(XHCI_HCSPARAMS2);
@@ -13314,7 +13569,14 @@ fn usb_runtime_init_hw(
             return Some(DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY);
         }
         #[cfg(target_os = "none")]
-        return None;
+        {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID,
+                aux0,
+            );
+            return None;
+        }
     }
     let op_base = cap_length as usize;
     state.context_bytes = if hcc & (1 << 2) != 0 { 64 } else { 32 };
@@ -13324,18 +13586,53 @@ fn usb_runtime_init_hw(
     state.max_ports = max_ports;
     state.db_offset = db_offset;
     state.rt_offset = rt_offset;
-    usb_write32(
+    publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN, aux0);
+    let halt_command = usb_read32(op_base + XHCI_USBCMD) & !XHCI_USBCMD_RUN;
+    usb_write32(op_base + XHCI_USBCMD, halt_command);
+    if !xhci_flush_posted_write_progress(
+        sequence,
+        aux0,
+        state,
+        XHCI_FLUSH_STAGE_INIT,
         op_base + XHCI_USBCMD,
-        usb_read32(op_base + XHCI_USBCMD) & !XHCI_USBCMD_RUN,
+        halt_command,
+    ) {
+        return None;
+    }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN,
+        aux0,
     );
     if !usb_wait_status(op_base, XHCI_USBSTS_HCH, XHCI_USBSTS_HCH) {
         return None;
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED, aux0);
+    publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN, aux0);
     usb_write32(op_base + XHCI_USBCMD, XHCI_USBCMD_HCRST);
+    if !xhci_flush_posted_write_progress(
+        sequence,
+        aux0,
+        state,
+        XHCI_FLUSH_STAGE_INIT,
+        op_base + XHCI_USBCMD,
+        XHCI_USBCMD_HCRST,
+    ) {
+        return None;
+    }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
+        aux0,
+    );
     if !usb_wait_command_clear(op_base, XHCI_USBCMD_HCRST) {
         return None;
     }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN,
+        aux0,
+    );
     if !usb_wait_status(op_base, XHCI_USBSTS_CNR, 0) {
         return None;
     }
@@ -13370,7 +13667,9 @@ fn usb_runtime_init_hw(
         DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_WRITTEN,
         aux0,
     );
-    if !xhci_flush_posted_write(
+    if !xhci_flush_posted_write_progress(
+        sequence,
+        aux0,
         state,
         XHCI_FLUSH_STAGE_INIT,
         op_base + XHCI_CONFIG,
@@ -13439,7 +13738,14 @@ fn usb_runtime_init_hw(
         aux0,
     );
     usb_write32(int_base + XHCI_ERSTSZ, 1);
-    if !xhci_flush_posted_write(state, XHCI_FLUSH_STAGE_INIT, int_base + XHCI_ERSTSZ, 1) {
+    if !xhci_flush_posted_write_progress(
+        sequence,
+        aux0,
+        state,
+        XHCI_FLUSH_STAGE_INIT,
+        int_base + XHCI_ERSTSZ,
+        1,
+    ) {
         return None;
     }
     publish_runtime_progress(
@@ -13475,14 +13781,23 @@ fn usb_runtime_init_hw(
         aux0,
     );
     usb_write32(op_base + XHCI_DNCTRL, 0);
-    if !xhci_flush_posted_write(state, XHCI_FLUSH_STAGE_INIT, op_base + XHCI_DNCTRL, 0) {
+    if !xhci_flush_posted_write_progress(
+        sequence,
+        aux0,
+        state,
+        XHCI_FLUSH_STAGE_INIT,
+        op_base + XHCI_DNCTRL,
+        0,
+    ) {
         return None;
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY, aux0);
     dma_store_barrier();
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN, aux0);
     usb_write32(op_base + XHCI_USBCMD, XHCI_USBCMD_RUN);
-    if !xhci_flush_posted_write(
+    if !xhci_flush_posted_write_progress(
+        sequence,
+        aux0,
         state,
         XHCI_FLUSH_STAGE_INIT,
         op_base + XHCI_USBCMD,
@@ -13490,6 +13805,11 @@ fn usb_runtime_init_hw(
     ) {
         return None;
     }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN,
+        aux0,
+    );
     if !usb_wait_status(op_base, XHCI_USBSTS_HCH, 0) {
         return None;
     }
@@ -13500,7 +13820,9 @@ fn usb_runtime_init_hw(
     );
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, aux0);
     usb_write32(int_base + XHCI_IMOD, xhci_poll_only_interrupter_imod());
-    if !xhci_flush_posted_write(
+    if !xhci_flush_posted_write_progress(
+        sequence,
+        aux0,
         state,
         XHCI_FLUSH_STAGE_INIT,
         int_base + XHCI_IMOD,
@@ -13510,7 +13832,9 @@ fn usb_runtime_init_hw(
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN, aux0);
     usb_write32(int_base + XHCI_IMAN, xhci_poll_only_interrupter_iman());
-    if !xhci_flush_posted_write(
+    if !xhci_flush_posted_write_progress(
+        sequence,
+        aux0,
         state,
         XHCI_FLUSH_STAGE_INIT,
         int_base + XHCI_IMAN,
@@ -13703,6 +14027,13 @@ fn sdio_write8(_offset: usize, _value: u8) {}
 
 fn sdio_software_reset(mask: u8) -> bool {
     sdio_write8(SDHCI_SOFTWARE_RESET, mask);
+    #[cfg(all(not(target_os = "none"), test))]
+    {
+        let fail_mask = TEST_SDIO_RESET_FAIL_ONCE_MASK.swap(0, Ordering::AcqRel);
+        if fail_mask & u32::from(mask) != 0 {
+            return false;
+        }
+    }
     for _ in 0..SDHCI_INIT_SPINS {
         if sdio_read8(SDHCI_SOFTWARE_RESET) & mask == 0 {
             return true;
@@ -13821,9 +14152,9 @@ fn sdio_recover_command_path() -> bool {
     reset_ok && post_clock_reset_ok && sdio_wait_inhibit_clear(true)
 }
 
-fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> bool {
-    if sdio_adopt_hal_prepared_host(sequence, aux0) {
-        return true;
+fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> Result<(), u16> {
+    if sdio_adopt_hal_prepared_host(sequence, aux0).is_ok() {
+        return Ok(());
     }
     publish_runtime_progress(
         sequence,
@@ -13846,7 +14177,10 @@ fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> bool {
         core::hint::spin_loop();
     }
     if !sdio_software_reset(SDHCI_RESET_ALL) {
-        return sdio_adopt_hal_prepared_host(sequence, aux0);
+        if sdio_adopt_hal_prepared_host(sequence, aux0).is_ok() {
+            return Ok(());
+        }
+        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED);
     }
     sdio_write8(SDHCI_POWER_CONTROL, SDHCI_POWER_330 | SDHCI_POWER_ON);
     sdio_settle_power_on_ready();
@@ -13859,14 +14193,15 @@ fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> bool {
     sdio_write32(SDHCI_INT_ENABLE, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     sdio_write32(SDHCI_SIGNAL_ENABLE, 0);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
-    if !sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
-        return false;
-    }
+    let _ = sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+    sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
-        sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA);
+        if !sdio_software_reset(SDHCI_RESET_CMD | SDHCI_RESET_DATA) {
+            return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED);
+        }
         sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
         if !sdio_set_clock_hz(SDHCI_STARTUP_CLOCK_HZ) {
-            return false;
+            return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED);
         }
     }
     publish_runtime_progress(
@@ -13875,15 +14210,15 @@ fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> bool {
         aux0,
     );
     if !sdio_clear_post_clock_inhibit() {
-        return false;
+        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED);
     }
     sdio_write8(SDHCI_HOST_CONTROL, sdio_read8(SDHCI_HOST_CONTROL) & !0x06);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, aux0);
-    true
+    Ok(())
 }
 
-fn sdio_adopt_hal_prepared_host(sequence: u32, aux0: u32) -> bool {
+fn sdio_adopt_hal_prepared_host(sequence: u32, aux0: u32) -> Result<(), u16> {
     publish_runtime_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN,
@@ -13913,7 +14248,7 @@ fn sdio_adopt_hal_prepared_host(sequence: u32, aux0: u32) -> bool {
                 DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
                 aux0,
             );
-            return false;
+            return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING);
         }
     }
     publish_runtime_progress(
@@ -13931,7 +14266,7 @@ fn sdio_adopt_hal_prepared_host(sequence: u32, aux0: u32) -> bool {
             DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
             aux0,
         );
-        return false;
+        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED);
     }
     publish_runtime_progress(
         sequence,
@@ -13944,12 +14279,12 @@ fn sdio_adopt_hal_prepared_host(sequence: u32, aux0: u32) -> bool {
             DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INHIBIT_FAILED,
             aux0,
         );
-        return false;
+        return Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED);
     }
     sdio_write8(SDHCI_HOST_CONTROL, sdio_read8(SDHCI_HOST_CONTROL) & !0x06);
     sdio_write32(SDHCI_INT_STATUS, SDHCI_INT_COMMAND_DATA_CLEAR_MASK);
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, aux0);
-    true
+    Ok(())
 }
 
 fn sdio_apply_host_config(target_hz: u32, flags: u16) -> bool {
@@ -14296,12 +14631,14 @@ mod tests {
         CYW43_RUNTIME_FLAGS.store(0, Ordering::Release);
         CYW43_TX_COUNT.store(0, Ordering::Release);
         CYW43_SDIO_BUS_LINK_SEQ.store(0, Ordering::Release);
+        USB_PCIE_BUS_LINK_SEQ.store(0, Ordering::Release);
         CYW43_LAST_FAULT_DETAIL.store(FAULT_NONE as u32, Ordering::Release);
         CYW43_LAST_FAULT_RESULT.store(0, Ordering::Release);
         CYW43_LAST_FAULT_FRAME_OFFSET.store(0, Ordering::Release);
         CYW43_LAST_FAULT_FRAME_META.store(0, Ordering::Release);
         SDIO_RUNTIME_FLAGS.store(0, Ordering::Release);
         SDIO_CMD_COUNT.store(0, Ordering::Release);
+        TEST_SDIO_RESET_FAIL_ONCE_MASK.store(0, Ordering::Release);
         reset_sdio_register_shadows();
         PCIE_RUNTIME_FLAGS.store(0, Ordering::Release);
         PCIE_OP_COUNT.store(0, Ordering::Release);
@@ -15368,7 +15705,11 @@ mod tests {
         init.aux0 = DRIVER_RUNTIME_ENGINE_INIT_AUX;
         assert_eq!(
             service_command(0, init),
-            DriverTaskCompletionRecord::progress(20, 1)
+            DriverTaskCompletionRecord::progress_with_detail(
+                20,
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+                1
+            )
         );
         let mut sdio = idle;
         sdio.sequence = 23;
@@ -16166,7 +16507,10 @@ mod tests {
         };
         assert_eq!(
             service_command(0, engine_init),
-            DriverTaskCompletionRecord::fault(41, FAULT_DEVICE_UNAVAILABLE)
+            DriverTaskCompletionRecord::fault(
+                41,
+                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED as u16
+            )
         );
     }
 
@@ -16216,7 +16560,11 @@ mod tests {
         };
         assert_eq!(
             service_command(0, init),
-            DriverTaskCompletionRecord::progress(50, 1)
+            DriverTaskCompletionRecord::progress_with_detail(
+                50,
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+                1
+            )
         );
 
         let mut command = DriverTaskCommandRecord {
@@ -16323,10 +16671,10 @@ mod tests {
         let _guard = test_guard();
         reset_runtime_for_test();
 
-        assert!(!sdio_adopt_hal_prepared_host(
-            73,
-            DRIVER_RUNTIME_ENGINE_INIT_AUX
-        ));
+        assert_eq!(
+            sdio_adopt_hal_prepared_host(73, DRIVER_RUNTIME_ENGINE_INIT_AUX),
+            Err(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING)
+        );
 
         let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
         assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
@@ -16334,6 +16682,52 @@ mod tests {
         assert_eq!(
             read_ring_u32(offset + 8),
             DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_ENGINE_INIT_AUX);
+    }
+
+    #[test]
+    fn sdio_engine_init_publishes_state_and_hardware_entry_before_mmio_path() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+
+        assert_eq!(
+            sdio_runtime_init(75, DRIVER_RUNTIME_ENGINE_INIT_AUX),
+            Ok(DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY)
+        );
+
+        SDIO_RUNTIME_STATE.with_mut(|state| assert!(state.initialized));
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 75);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_ENGINE_INIT_AUX);
+    }
+
+    #[test]
+    fn sdio_engine_init_programs_startup_clock_after_pre_clock_reset_miss() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+
+        TEST_SDIO_RESET_FAIL_ONCE_MASK.store(
+            u32::from(SDHCI_RESET_CMD | SDHCI_RESET_DATA),
+            Ordering::Release,
+        );
+
+        assert_eq!(
+            sdio_runtime_init_hw(74, DRIVER_RUNTIME_ENGINE_INIT_AUX),
+            Ok(())
+        );
+
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 74);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY
         );
         assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_ENGINE_INIT_AUX);
     }
@@ -16464,7 +16858,10 @@ mod tests {
         };
         assert_eq!(
             service_command(0, engine_init),
-            DriverTaskCompletionRecord::fault(71, FAULT_DEVICE_UNAVAILABLE)
+            DriverTaskCompletionRecord::fault(
+                71,
+                DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED as u16
+            )
         );
     }
 
@@ -17589,6 +17986,12 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_function2_ready_poll_matches_linux_window() {
+        assert_eq!(CYW43_SDIO_WAIT_F2_READY_POLLS, 3_000);
+        assert!(CYW43_SDIO_WAIT_F2_READY_POLLS < SDHCI_INIT_SPINS);
+    }
+
+    #[test]
     fn cyw43_backplane_window_bytes_match_old_good_hal_encoding() {
         assert_eq!(
             cyw43_backplane_window_register_bytes(CYW43_RAM_BASE_4345),
@@ -17622,7 +18025,11 @@ mod tests {
         };
         assert_eq!(
             service_command(0, init),
-            DriverTaskCompletionRecord::progress(72, 1)
+            DriverTaskCompletionRecord::progress_with_detail(
+                72,
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+                1
+            )
         );
         let desc_offset = DRIVER_TASK_RING_FRAME_OFFSET;
         let data_offset = DRIVER_TASK_RING_FRAME_OFFSET + 64;
@@ -17677,7 +18084,11 @@ mod tests {
         };
         assert_eq!(
             service_command(0, init),
-            DriverTaskCompletionRecord::progress(75, 1)
+            DriverTaskCompletionRecord::progress_with_detail(
+                75,
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+                1
+            )
         );
         let desc_offset = DRIVER_TASK_RING_FRAME_OFFSET;
         write_sdio_descriptor_for_test(
@@ -17741,7 +18152,11 @@ mod tests {
         };
         assert_eq!(
             service_command(0, init),
-            DriverTaskCompletionRecord::progress(74, 1)
+            DriverTaskCompletionRecord::progress_with_detail(
+                74,
+                DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+                1
+            )
         );
         let desc_offset = DRIVER_TASK_RING_FRAME_OFFSET;
         write_sdio_descriptor_for_test(

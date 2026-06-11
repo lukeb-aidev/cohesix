@@ -1121,6 +1121,30 @@ def normalize_usb_blocker(value: str) -> str:
         return "driver-task-runtime-deferred"
     if "enumeration-disabled-bootloader-owned" in lower:
         return "enumeration-disabled-bootloader-owned"
+    if "usb-engine-init-mark-no-reply" in lower:
+        return "usb-engine-init-mark-no-reply"
+    if "usb-runtime-init-entry-no-reply" in lower:
+        return "usb-runtime-init-entry-no-reply"
+    if "usb-runtime-state-access-no-reply" in lower:
+        return "usb-runtime-state-access-no-reply"
+    if "usb-engine-init-state-reset-no-reply" in lower:
+        return "usb-engine-init-state-reset-no-reply"
+    if "usb-engine-init-hardware-entry-no-reply" in lower:
+        return "usb-engine-init-hardware-entry-no-reply"
+    if "usb-xhci-capability-read-no-reply" in lower:
+        return "usb-xhci-capability-read-no-reply"
+    if "usb-xhci-capability-invalid" in lower:
+        return "usb-xhci-capability-invalid"
+    if "usb-pcie-posted-write-flush-no-reply" in lower:
+        return "usb-pcie-posted-write-flush-no-reply"
+    if "usb-pcie-posted-write-flush-failed" in lower:
+        return "usb-pcie-posted-write-flush-failed"
+    if "usb-pcie-posted-write-flush-next-edge-no-reply" in lower:
+        return "usb-pcie-posted-write-flush-next-edge-no-reply"
+    if "usb-xhci-mmio-entry-no-reply" in lower:
+        return "usb-xhci-mmio-entry-no-reply"
+    if "usb-engine-init-hardware-no-reply" in lower:
+        return "usb-engine-init-hardware-no-reply"
     if "cmd-controller-not-running" in lower:
         return "cmd-controller-not-running"
     if "cmd-controller-not-ready" in lower:
@@ -2150,6 +2174,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     pcie_owner_blocker: str | None = None
     startup_fail_gate: int | None = None
     startup_fail_blocker: str | None = None
+    startup_diag_blocker: str | None = None
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
     precise_command_timeout_details = {
@@ -2365,6 +2390,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, proof_gate)
                 runtime_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
                 blocker = "none" if runtime_blocker == "none" else runtime_blocker
+            continue
+        if raw.startswith("usb: next_action"):
+            next_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
+            if next_blocker.startswith(
+                ("usb-engine-init-", "usb-resource-", "usb-xhci-")
+            ):
+                startup_diag_blocker = next_blocker
+                gate = max(gate, usb_driver_task_blocker_gate(next_blocker))
+                blocker = next_blocker
             continue
         if raw.startswith("usb_runtime_enum_snapshot"):
             detail_gate = usb_runtime_detail_gate_blocker(
@@ -2911,8 +2945,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         startup_fail_gate is not None
         and startup_fail_blocker is not None
     ):
-        gate = min(gate, max(0, startup_fail_gate - 1))
-        blocker = startup_fail_blocker
+        if startup_diag_blocker is not None:
+            gate = max(gate, usb_driver_task_blocker_gate(startup_diag_blocker))
+            blocker = startup_diag_blocker
+        else:
+            gate = min(gate, max(0, startup_fail_gate - 1))
+            blocker = startup_fail_blocker
     if (
         gate == 1
         and blocker == "unknown"
@@ -5175,6 +5213,30 @@ def wifi_replay_should_refine(blocker: str) -> bool:
 def usb_driver_task_blocker_gate(blocker: str) -> int:
     """Return the last USB gate proven by direct linked-runtime stall evidence."""
 
+    if blocker in {
+        "usb-engine-init-hardware-no-reply",
+        "usb-runtime-init-entry-no-reply",
+        "usb-runtime-state-access-no-reply",
+        "usb-engine-init-state-reset-no-reply",
+        "usb-engine-init-hardware-entry-no-reply",
+        "usb-xhci-mmio-entry-no-reply",
+        "usb-xhci-capability-read-no-reply",
+        "usb-xhci-capability-invalid",
+    } or blocker.startswith("usb-xhci-"):
+        if blocker in {
+            "usb-engine-init-hardware-no-reply",
+            "usb-runtime-init-entry-no-reply",
+            "usb-runtime-state-access-no-reply",
+            "usb-engine-init-state-reset-no-reply",
+            "usb-engine-init-hardware-entry-no-reply",
+            "usb-xhci-mmio-entry-no-reply",
+            "usb-xhci-capability-read-no-reply",
+            "usb-xhci-capability-invalid",
+        }:
+            return 2
+        return 3
+    if blocker.startswith("usb-pcie-posted-write-flush-"):
+        return 3
     if blocker.startswith(("usb-engine-init-", "usb-resource-")):
         return 2
     if blocker == "command-event-ring-not-proven":
@@ -5204,6 +5266,9 @@ def wifi_blocker_is_exact_sdio_progress(blocker: str) -> bool:
             "sdio-adopt-",
             "sdio-reset-",
             "sdio-engine-init-",
+            "sdio-state-reset-",
+            "sdio-hardware-entry-",
+            "sdio-sdhci-",
             "sdio-power-",
             "sdio-clock-",
         )

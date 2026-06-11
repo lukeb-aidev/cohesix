@@ -149,6 +149,22 @@ pub const DRIVER_RUNTIME_SDIO_OP_POLL_IRQ: u16 = 5;
 pub const DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG: u16 = 6;
 /// SDIO bus-owner operation: issue a bounded raw card command with no data phase.
 pub const DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND: u16 = 7;
+/// SDIO engine-init detail: SDIO host reached ready state.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY: u16 = 0x5500;
+/// SDIO engine-init detail: HAL-prepared host did not show powered/card-present state.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING: u16 = 0x5501;
+/// SDIO engine-init detail: HAL-prepared host could not enable startup clock.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED: u16 = 0x5502;
+/// SDIO engine-init detail: HAL-prepared host could not clear command/data inhibit.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED: u16 = 0x5503;
+/// SDIO engine-init detail: cold all-path reset failed after adoption failed.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED: u16 = 0x5510;
+/// SDIO engine-init detail: command/data reset failed after cold power-on.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED: u16 = 0x5511;
+/// SDIO engine-init detail: startup clock could not be enabled after cold reset.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED: u16 = 0x5512;
+/// SDIO engine-init detail: command/data inhibit stayed asserted after clock enable.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED: u16 = 0x5513;
 /// SDIO response kind: no response.
 pub const DRIVER_RUNTIME_SDIO_RESP_NONE: u8 = 0;
 /// SDIO response kind: OCR/R4 response.
@@ -345,6 +361,48 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN: u32 = 1
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE: u32 = 149;
 /// USB runtime is returning a pending command-proof completion to root.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING: u32 = 150;
+/// Runtime is about to enter the bounded engine-init marker handoff.
+pub const DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER: u32 = 151;
+/// USB runtime is about to reset its local controller state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN: u32 = 152;
+/// USB runtime finished resetting local controller state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE: u32 = 153;
+/// USB runtime is about to touch xHCI registers for hardware init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY: u32 = 154;
+/// SDIO runtime is about to reset its local host state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN: u32 = 155;
+/// SDIO runtime finished resetting local host state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE: u32 = 156;
+/// SDIO runtime is about to touch SDHCI registers for hardware init.
+pub const DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY: u32 = 157;
+/// USB runtime entered its local init routine before touching state storage.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY: u32 = 158;
+/// USB runtime is about to borrow/reset its local controller state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN: u32 = 159;
+/// USB runtime found the descriptor-published DMA arena.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY: u32 = 160;
+/// USB runtime is about to read xHCI capability registers.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN: u32 = 161;
+/// USB runtime rejected the xHCI capability register snapshot.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID: u32 = 162;
+/// USB runtime is asking the PCIe owner to flush a posted xHCI write.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN: u32 = 163;
+/// USB runtime received PCIe-owner proof for a posted-write flush.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_DONE: u32 = 164;
+/// USB runtime did not receive PCIe-owner proof for a posted-write flush.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_FAILED: u32 = 165;
+/// USB runtime is about to clear the xHCI RUN bit.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN: u32 = 166;
+/// USB runtime is polling for xHCI halted status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN: u32 = 167;
+/// USB runtime is about to assert xHCI host-controller reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN: u32 = 168;
+/// USB runtime is polling for xHCI reset completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN: u32 = 169;
+/// USB runtime is polling for xHCI controller-not-ready clear.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN: u32 = 170;
+/// USB runtime is polling for xHCI run-state transition after RUN.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN: u32 = 171;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-owned command endpoint/shared-ring intake loop.

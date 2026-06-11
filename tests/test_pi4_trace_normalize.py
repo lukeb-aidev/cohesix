@@ -1425,6 +1425,26 @@ def test_gate_summary_refines_stale_pcie_gate_after_usb_engine_init_progress() -
     assert record["USB_DRIVER_TASK_FRONTIER"] == "usb-engine-init-no-reply"
 
 
+def test_gate_summary_prefers_precise_usb_next_action_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: gate 1 name=hal-resources status=pass "
+            "evidence=ownership_gate=1 next=pcie-vl805",
+            "usb: gate 2 name=pcie-vl805 status=pass "
+            "evidence=pcie-owner-state-ready next=xhci-operational",
+            "usb: gate 3 name=xhci-operational status=fail "
+            "evidence=engine-init-no-reply next=command-event-rings",
+            "usb: next_action=inspect-usb-xhci-mmio-entry "
+            "blocker=usb-xhci-mmio-entry-no-reply proof_gate=2 "
+            "target_gate=10 detail=0x0000 result=0x00000000",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["USB_GATE"] == 2
+    assert record["USB_BLOCKER"] == "usb-xhci-mmio-entry-no-reply"
+
+
 def test_gate_summary_preserves_usb_keyboard_frontier_after_root_port() -> None:
     events = normalizer.parse_events(
         [
@@ -1630,6 +1650,28 @@ def test_gate_summary_keeps_boot_sdio_replay_over_later_wifi_prompt_error() -> N
     assert record["WIFI_BLOCKER_LINE"] == 5
 
 
+def test_gate_summary_reports_exact_sdio_engine_init_subfault() -> None:
+    events = normalizer.parse_events(
+        [
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=descriptor-replay "
+            "blocker=ready",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host "
+            "selected=wifi-owner-link attempted=yes stage=engine-init "
+            "blocker=clock-failed",
+            "DRIVER_TASK_RESOURCE_INIT contract=sdio-host hot_path=sdio-host "
+            "stage=sdio-engine-init status=clock-failed acceptance=no code=5 "
+            "detail=0x5512 result=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 2
+    assert record["WIFI_BLOCKER"] == "sdio-engine-init-clock-failed"
+    assert record["WIFI_EXACT"] == "sdio-engine-init-clock-failed"
+    assert record["WIFI_PHASE"] == "engine-init"
+
+
 def test_gate_summary_preserves_sdio_adopt_progress_blocker() -> None:
     events = normalizer.parse_events(
         [
@@ -1655,6 +1697,33 @@ def test_gate_summary_preserves_sdio_adopt_progress_blocker() -> None:
     assert record["WIFI_BLOCKER"] == "sdio-adopt-present-read-no-reply"
     assert record["WIFI_EXACT"] == "sdio-adopt-present-read-no-reply"
     assert record["WIFI_PHASE"] == "sdio-adopt-present-read-no-reply"
+
+
+def test_gate_summary_preserves_sdio_hardware_entry_progress_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: sdio linked_runtime_progress marker_valid=yes sequence=2 "
+            "phase=157 phase_name=sdio-hw-entry aux0=0x454e474e "
+            "gate=2 blocker=sdio-sdhci-mmio-entry-no-reply "
+            "next_action=inspect-sdhci-first-mmio-access",
+            "wifi: gate 1 name=hal-power-reset status=inferred "
+            "evidence=power=unknown reset=unknown source=hal-runtime-required "
+            "next=sdio-card-select",
+            "wifi: gate 2 name=sdio-card-select status=fail "
+            "evidence=stage=engine-init status=no-reply phase=157 "
+            "phase_name=sdio-hw-entry marker_valid=yes source=linked-runtime "
+            "next=cccr-fbr-ready",
+            "wifi: next_action=inspect-sdhci-first-mmio-access "
+            "blocker=sdio-sdhci-mmio-entry-no-reply proof_gate=1 "
+            "target_gate=10 source=hal-runtime-required",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "sdio-sdhci-mmio-entry-no-reply"
+    assert record["WIFI_EXACT"] == "sdio-sdhci-mmio-entry-no-reply"
+    assert record["WIFI_PHASE"] == "sdio-sdhci-mmio-entry-no-reply"
 
 
 def test_gate_summary_tracks_split_sdio_command_probe_blockers() -> None:
@@ -4404,11 +4473,32 @@ def test_normalize_usb_blocker_alias_table_covers_remaining_gates() -> None:
         "keyboard-missing": "no-keyboard-found",
         "first-report timeout": "hid-first-report",
         "first-byte missing": "keyboard-first-byte",
+        "usb-engine-init-mark-no-reply": "usb-engine-init-mark-no-reply",
+        "usb-runtime-init-entry-no-reply": "usb-runtime-init-entry-no-reply",
+        "usb-runtime-state-access-no-reply": "usb-runtime-state-access-no-reply",
+        "usb-engine-init-state-reset-no-reply": "usb-engine-init-state-reset-no-reply",
+        "usb-engine-init-hardware-entry-no-reply": "usb-engine-init-hardware-entry-no-reply",
+        "usb-xhci-mmio-entry-no-reply": "usb-xhci-mmio-entry-no-reply",
+        "usb-xhci-capability-read-no-reply": "usb-xhci-capability-read-no-reply",
+        "usb-xhci-capability-invalid": "usb-xhci-capability-invalid",
+        "usb-pcie-posted-write-flush-no-reply": "usb-pcie-posted-write-flush-no-reply",
+        "usb-pcie-posted-write-flush-failed": "usb-pcie-posted-write-flush-failed",
+        "usb-pcie-posted-write-flush-next-edge-no-reply": "usb-pcie-posted-write-flush-next-edge-no-reply",
         "unknown-usb-edge": "unknown-usb-edge",
     }
 
     for raw, expected in cases.items():
         assert normalizer.normalize_usb_blocker(raw) == expected
+
+
+def test_usb_driver_task_blocker_gate_splits_engine_init_from_xhci_entry() -> None:
+    assert normalizer.usb_driver_task_blocker_gate("usb-engine-init-no-reply") == 2
+    assert normalizer.usb_driver_task_blocker_gate("usb-engine-init-mark-no-reply") == 2
+    assert normalizer.usb_driver_task_blocker_gate("usb-engine-init-state-reset-no-reply") == 2
+    assert normalizer.usb_driver_task_blocker_gate("usb-xhci-mmio-entry-no-reply") == 2
+    assert normalizer.usb_driver_task_blocker_gate("usb-xhci-capability-read-no-reply") == 2
+    assert normalizer.usb_driver_task_blocker_gate("usb-xhci-halt-wait-no-reply") == 3
+    assert normalizer.usb_driver_task_blocker_gate("usb-pcie-posted-write-flush-no-reply") == 3
 
 
 def test_gate_summary_keeps_xhci_device_coverage_miss_over_unavailable() -> None:

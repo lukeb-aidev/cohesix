@@ -1368,8 +1368,7 @@ fn runtime_image_stack_top(
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_SERIAL_MMIO_BASES: &[usize] = &[uart::PI4_MINI_UART_PADDR];
 #[cfg(feature = "kernel")]
-const PI4_DRIVER_RUNTIME_USB_XHCI_MMIO_BASES: &[usize] =
-    &[0x0000_0006_0000_0000, 0xFE98_0000, 0x7E98_0000];
+const PI4_DRIVER_RUNTIME_USB_XHCI_MMIO_BASES: &[usize] = &[0x0000_0006_0000_0000];
 #[cfg(feature = "kernel")]
 const PI4_DRIVER_RUNTIME_HDMI_MMIO_BASES: &[usize] = &[];
 #[cfg(feature = "kernel")]
@@ -4081,12 +4080,10 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn pi4_runtime_mmio_candidates_cover_usb_high_bar_and_legacy_aliases() {
+    fn pi4_runtime_mmio_candidates_require_usb_high_bar() {
         let bases =
             super::runtime_mmio_candidate_bases(super::driver_task::DriverTaskHotPath::UsbKeyboard);
-        assert!(bases.contains(&0x0000_0006_0000_0000));
-        assert!(bases.contains(&0xFE98_0000));
-        assert!(bases.contains(&0x7E98_0000));
+        assert_eq!(bases, &[0x0000_0006_0000_0000]);
     }
 
     #[cfg(feature = "kernel")]

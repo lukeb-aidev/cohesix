@@ -1468,6 +1468,7 @@ where
     console_input_turn_output_budget: usize,
     local_seat_chunk_input_pending: bool,
     console_output_flush_active: bool,
+    local_seat_mirror_suppressed: bool,
     local_seat_escape_state: LocalSeatEscapeState,
     pending_console_output: HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
     #[cfg(feature = "kernel")]
@@ -1574,6 +1575,7 @@ where
             console_input_turn_output_budget: 0,
             local_seat_chunk_input_pending: false,
             console_output_flush_active: false,
+            local_seat_mirror_suppressed: false,
             local_seat_escape_state: LocalSeatEscapeState::Idle,
             pending_console_output: HeaplessVec::new(),
             #[cfg(feature = "kernel")]
@@ -2453,6 +2455,9 @@ where
     fn maybe_emit_serial_input_idle_trace(&mut self, _physical_input_active: bool) {}
 
     fn mirror_local_seat_line_if_ready(&mut self, line: &str) {
+        if self.local_seat_mirror_suppressed {
+            return;
+        }
         if self.serial.interactive_input_active() {
             return;
         }
@@ -2461,6 +2466,13 @@ where
                 runtime.mirror_line(line);
             }
         }
+    }
+
+    fn with_local_seat_mirror_suppressed(&mut self, f: impl FnOnce(&mut Self)) {
+        let previous = self.local_seat_mirror_suppressed;
+        self.local_seat_mirror_suppressed = true;
+        f(self);
+        self.local_seat_mirror_suppressed = previous;
     }
 
     fn schedule_post_prompt_local_seat_attach(&mut self) {
@@ -4049,62 +4061,77 @@ where
         match command {
             UsbDebugCommand::Help => {}
             UsbDebugCommand::Status => {
-                let (backend_attached, polling_enabled) = {
-                    let local_seat = match self.local_seat.as_mut() {
-                        Some(local_seat) => local_seat,
-                        None => {
-                            self.emit_usb_debug_unavailable(subcommand, "local-seat-unavailable");
-                            return;
-                        }
+                self.with_local_seat_mirror_suppressed(|this| {
+                    let (backend_attached, polling_enabled) = {
+                        let local_seat = match this.local_seat.as_mut() {
+                            Some(local_seat) => local_seat,
+                            None => {
+                                this.emit_usb_debug_unavailable(
+                                    subcommand,
+                                    "local-seat-unavailable",
+                                );
+                                return;
+                            }
+                        };
+                        (
+                            local_seat.backend_attached(),
+                            local_seat.backend_keyboard_polling_enabled(),
+                        )
                     };
-                    (
-                        local_seat.backend_attached(),
-                        local_seat.backend_keyboard_polling_enabled(),
-                    )
-                };
-                self.emit_usb_status(backend_attached, polling_enabled, None);
+                    this.emit_usb_status(backend_attached, polling_enabled, None);
+                });
+                self.mirror_usb_debug_hdmi_frontier("status");
             }
             UsbDebugCommand::Diag => {
-                let (backend_attached, polling_enabled) = {
-                    let local_seat = match self.local_seat.as_mut() {
-                        Some(local_seat) => local_seat,
-                        None => {
-                            self.emit_usb_debug_unavailable(subcommand, "local-seat-unavailable");
-                            return;
-                        }
+                self.with_local_seat_mirror_suppressed(|this| {
+                    let (backend_attached, polling_enabled) = {
+                        let local_seat = match this.local_seat.as_mut() {
+                            Some(local_seat) => local_seat,
+                            None => {
+                                this.emit_usb_debug_unavailable(
+                                    subcommand,
+                                    "local-seat-unavailable",
+                                );
+                                return;
+                            }
+                        };
+                        (
+                            local_seat.backend_attached(),
+                            local_seat.backend_keyboard_polling_enabled(),
+                        )
                     };
-                    (
-                        local_seat.backend_attached(),
-                        local_seat.backend_keyboard_polling_enabled(),
-                    )
-                };
-                self.emit_usb_status(
-                    backend_attached,
-                    polling_enabled,
-                    Some("action=diag-before-probe"),
-                );
-                self.emit_console_line(
-                    "usb: diag action=probe-skipped reason=linked-runtime-only use=usb-status",
-                );
-                let (backend_attached, polling_enabled) = {
-                    let local_seat = match self.local_seat.as_mut() {
-                        Some(local_seat) => local_seat,
-                        None => {
-                            self.emit_usb_debug_unavailable(subcommand, "local-seat-unavailable");
-                            return;
-                        }
+                    this.emit_usb_status(
+                        backend_attached,
+                        polling_enabled,
+                        Some("action=diag-before-probe"),
+                    );
+                    this.emit_console_line(
+                        "usb: diag action=probe-skipped reason=linked-runtime-only use=usb-status",
+                    );
+                    let (backend_attached, polling_enabled) = {
+                        let local_seat = match this.local_seat.as_mut() {
+                            Some(local_seat) => local_seat,
+                            None => {
+                                this.emit_usb_debug_unavailable(
+                                    subcommand,
+                                    "local-seat-unavailable",
+                                );
+                                return;
+                            }
+                        };
+                        (
+                            local_seat.backend_attached(),
+                            local_seat.backend_keyboard_polling_enabled(),
+                        )
                     };
-                    (
-                        local_seat.backend_attached(),
-                        local_seat.backend_keyboard_polling_enabled(),
-                    )
-                };
-                self.emit_usb_status(
-                    backend_attached,
-                    polling_enabled,
-                    Some("action=diag-after-probe"),
-                );
-                self.emit_usb_startup_blackbox(backend_attached, polling_enabled);
+                    this.emit_usb_status(
+                        backend_attached,
+                        polling_enabled,
+                        Some("action=diag-after-probe"),
+                    );
+                    this.emit_usb_startup_blackbox(backend_attached, polling_enabled);
+                });
+                self.mirror_usb_debug_hdmi_frontier("diag");
             }
             UsbDebugCommand::EnableKeyboard => {
                 let (backend_attached, polling_enabled) = {
@@ -4156,6 +4183,18 @@ where
             "detail=subcommand={subcommand} scope=serial-local"
         ));
         self.emit_ack_ok(USB_DEBUG_ACK_LABEL, Some(detail.as_str()));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn mirror_usb_debug_hdmi_frontier(&mut self, subcommand: &str) {
+        let Some(local_seat) = self.local_seat.as_mut() else {
+            return;
+        };
+        let line = format_message(format_args!(
+            "[drivers] USB {} complete: full diagnostics on serial; HDMI preserved",
+            subcommand
+        ));
+        local_seat.mirror_high_impact_line(line.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -4512,6 +4551,7 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN
@@ -4530,13 +4570,28 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_MISSING
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_BUS_LINK_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_FORBIDDEN_PRESENT
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY => 2,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_ROLE_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID => 2,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => 3,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN
@@ -4581,7 +4636,6 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => 4,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE => 4,
@@ -4612,6 +4666,9 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "usb-engine-init-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER => {
+                "usb-engine-init-mark-no-reply"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "usb-engine-init-descriptor-ready-no-reply"
@@ -4654,10 +4711,56 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
                 "usb-engine-init-hardware-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY => {
+                "usb-runtime-init-entry-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN => {
+                "usb-runtime-state-access-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN => {
+                "usb-engine-init-state-reset-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE => {
+                "usb-engine-init-hardware-entry-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY => {
+                "usb-xhci-mmio-entry-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN => {
+                "usb-xhci-capability-read-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID => {
+                "usb-xhci-capability-invalid"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN => {
+                "usb-pcie-posted-write-flush-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_FAILED => {
+                "usb-pcie-posted-write-flush-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_DONE => {
+                "usb-pcie-posted-write-flush-next-edge-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ => {
                 "usb-xhci-controller-halt-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN => {
+                "usb-xhci-halt-write-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN => {
+                "usb-xhci-halt-wait-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED => "usb-xhci-reset-no-reply",
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN => {
+                "usb-xhci-reset-write-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN => {
+                "usb-xhci-reset-wait-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN => {
+                "usb-xhci-controller-not-ready-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE => {
                 "usb-xhci-dma-setup-no-reply"
             }
@@ -4754,6 +4857,9 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN => {
                 "usb-xhci-run-request-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN => {
+                "usb-xhci-run-transition-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => {
                 "usb-xhci-command-ring-proof-no-reply"
             }
@@ -4813,6 +4919,9 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "inspect-linked-usb-runtime-engine-init-dispatch"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER => {
+                "inspect-linked-usb-runtime-descriptor-load"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "inspect-linked-usb-runtime-resource-check"
             }
@@ -4852,16 +4961,60 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
-                "inspect-xhci-capability-read-and-halt-loop"
+                "inspect-usb-runtime-init-entry"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY => {
+                "inspect-usb-runtime-state-storage"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN => {
+                "inspect-usb-runtime-state-borrow"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN => {
+                "inspect-usb-runtime-state-reset"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY => {
+                "inspect-usb-xhci-mmio-entry"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN => {
+                "inspect-usb-xhci-capability-register-read"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID => {
+                "inspect-usb-xhci-capability-snapshot"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ => {
                 "inspect-xhci-halt-status-loop"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN => {
+                "inspect-xhci-run-clear-posted-write-flush"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN => {
+                "inspect-xhci-halted-status-loop"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED => {
                 "inspect-xhci-reset-completion-loop"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN => {
+                "inspect-xhci-reset-posted-write-flush"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN => {
+                "inspect-xhci-reset-clear-loop"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN => {
+                "inspect-xhci-controller-not-ready-loop"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE => {
                 "inspect-xhci-dma-and-scratchpad-layout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN => {
+                "inspect-linked-pcie-owner-posted-write-flush"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_DONE => {
+                "inspect-next-usb-register-programming-edge"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_FAILED => {
+                "inspect-pcie-owner-posted-write-flush-fault"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY => {
                 "inspect-xhci-command-event-ring-programming"
@@ -4997,6 +5150,9 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN => {
                 "inspect-xhci-run-command-posted-write-flush"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN => {
+                "inspect-xhci-run-state-transition"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => {
                 "poll-enable-slot-completion"
@@ -6838,6 +6994,7 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN
@@ -6871,6 +7028,9 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => Some(2),
             _ => None,
         }
@@ -6881,6 +7041,9 @@ where
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "sdio-engine-init-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER => {
+                "sdio-engine-init-mark-no-reply"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "sdio-engine-init-descriptor-ready-no-reply"
@@ -6926,6 +7089,15 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
                 "sdio-engine-init-hardware-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN => {
+                "sdio-state-reset-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE => {
+                "sdio-hardware-entry-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY => {
+                "sdio-sdhci-mmio-entry-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN => "sdio-adopt-no-reply",
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN => {
                 "sdio-adopt-int-clear-no-reply"
@@ -6965,6 +7137,9 @@ where
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "inspect-linked-sdio-runtime-engine-init-dispatch"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER => {
+                "inspect-linked-sdio-runtime-descriptor-load"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "inspect-linked-sdio-runtime-resource-check"
@@ -7009,6 +7184,15 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => {
                 "inspect-sdhci-reset-first-mmio-access"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN => {
+                "inspect-sdio-runtime-state-reset"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE => {
+                "inspect-sdio-hardware-entry"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY => {
+                "inspect-sdhci-first-mmio-access"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN => {
                 "inspect-sdhci-adopt-first-mmio-access"
@@ -7061,6 +7245,7 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN
@@ -7115,6 +7300,9 @@ where
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "cyw43-engine-init-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER => {
+                "cyw43-engine-init-mark-no-reply"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "cyw43-engine-init-descriptor-ready-no-reply"
@@ -7227,6 +7415,9 @@ where
         match phase {
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_BEGIN => {
                 "inspect-linked-cyw43-runtime-engine-init-dispatch"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER => {
+                "inspect-linked-cyw43-runtime-descriptor-load"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_READY => {
                 "inspect-linked-cyw43-runtime-resource-check"
@@ -13909,6 +14100,18 @@ mod tests {
         );
         assert_eq!(
             KernelConsoleTestPump::wifi_sdio_runtime_progress_blocker(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY,
+            ),
+            "sdio-sdhci-mmio-entry-no-reply"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_next_action(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY,
+            ),
+            "inspect-sdhci-first-mmio-access"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_sdio_runtime_progress_blocker(
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED,
             ),
             "sdio-adopt-clock-failed"
@@ -14813,6 +15016,10 @@ mod tests {
             "{rendered}"
         );
         assert!(!local_seat.backend_keyboard_polling_enabled());
+        let mirrored = local_seat.mirrored_lines_snapshot();
+        assert_eq!(mirrored.len(), 1, "{mirrored:?}");
+        assert!(mirrored[0].contains("USB diag complete"), "{mirrored:?}");
+        assert_eq!(local_seat.dropped_mirrored_lines(), 0);
         assert!(rendered.contains("cohesix> "), "{rendered}");
     }
 

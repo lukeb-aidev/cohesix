@@ -831,7 +831,6 @@ impl LocalSeatRuntime {
             #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
             {
                 if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-                    self.mirror_line_current_tcb(line);
                     let _ = adopt_linked_display_runtime_owner_state("mirror-line");
                     if !LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire)
                         && !LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire)
@@ -860,6 +859,7 @@ impl LocalSeatRuntime {
                             self.driver_task_budget_overruns.saturating_add(1);
                         return;
                     }
+                    self.mirror_line_current_tcb(line);
                     let line_bytes = line.as_bytes();
                     let chunk_limit = LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
                         .min(crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES)

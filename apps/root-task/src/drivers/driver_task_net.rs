@@ -51,6 +51,14 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F2_BLOCK_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY, DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START, DRIVER_RUNTIME_NET_INIT_AUX,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED, DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED,
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
 };
 
@@ -89,10 +97,13 @@ const CYW43_WLC_SET_PROMISC: u32 = 10;
 const CYW43_WLC_SET_INFRA: u32 = 20;
 const CYW43_WLC_SET_AUTH: u32 = 22;
 const CYW43_WLC_SET_SSID: u32 = 26;
+const CYW43_WLC_GET_REVINFO: u32 = 98;
 const CYW43_WLC_SET_WSEC: u32 = 134;
 const CYW43_WLC_SET_WPA_AUTH: u32 = 165;
 const CYW43_WLC_GET_VAR: u32 = 262;
 const CYW43_WLC_SET_VAR: u32 = 263;
+const CYW43_CONTROL_EXCHANGE_FAULT_DETAIL: u16 = 0x530b;
+const CYW43_BCME_UNSUPPORTED_STATUS: u32 = 0xffff_ffe9;
 const CYW43_WSEC_NONE: u32 = 0;
 const CYW43_WSEC_AES: u32 = 4;
 const CYW43_WPA_AUTH_DISABLED: u32 = 0;
@@ -373,6 +384,44 @@ fn driver_task_resource_completion_status(
             Some(_) => "unexpected-completion",
             None => "no-reply",
         }
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn sdio_engine_init_detail_status(detail: u16) -> Option<&'static str> {
+    match detail {
+        detail if detail == DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH as u16 => {
+            Some("resource-hot-path-mismatch")
+        }
+        detail
+            if detail == DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED as u16 =>
+        {
+            Some("resource-check-failed")
+        }
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING => Some("adopt-power-missing"),
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_CLOCK_FAILED => Some("adopt-clock-failed"),
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_INHIBIT_FAILED => Some("adopt-inhibit-failed"),
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED => Some("reset-all-failed"),
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED => Some("reset-cmd-data-failed"),
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED => Some("clock-failed"),
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED => Some("inhibit-failed"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn sdio_engine_init_completion_status(
+    completion: Option<DriverTaskCompletionRecord>,
+    ready: bool,
+) -> &'static str {
+    if ready {
+        return "ready";
+    }
+    match completion {
+        Some(completion) if completion.code == DriverTaskCompletionCode::Fault.as_u16() => {
+            sdio_engine_init_detail_status(completion.detail).unwrap_or("fault")
+        }
+        _ => driver_task_resource_completion_status(completion, ready),
     }
 }
 
@@ -806,7 +855,7 @@ where
     if !credentials.has_ssid() {
         return Err(DriverTaskNetError::RuntimeInit("wifi-ssid-missing"));
     }
-    let mac = cyw43_query_runtime_mac(contract)?;
+    let mac = cyw43_prepare_runtime_control_plane(contract)?;
     *CYW43_RUNTIME_MAC.lock() = mac;
     cyw43_submit_bcdc_empty(contract, CYW43_WLC_UP, "cyw43-control-up")?;
     cyw43_submit_bcdc_u32(contract, CYW43_WLC_SET_INFRA, 1, "cyw43-control-infra")?;
@@ -1014,6 +1063,113 @@ fn cyw43_query_runtime_mac(
         return Err(DriverTaskNetError::RuntimeInit("cyw43-control-mac"));
     }
     Ok(EthernetAddress(mac))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_prepare_runtime_control_plane(
+    contract: DriverTaskContract,
+) -> Result<EthernetAddress, DriverTaskNetError> {
+    cyw43_submit_bcdc_iovar_u32(contract, "bus:txglomalign", 8, "cyw43-control-txglomalign")?;
+    cyw43_get_bcdc_iovar_optional_unsupported(
+        contract,
+        "ulp_sdioctrl",
+        "cyw43-control-ulp-sdioctrl",
+    )?;
+    cyw43_submit_bcdc_iovar_u32(contract, "bus:rxglom", 1, "cyw43-control-rxglom")?;
+    let mac = cyw43_query_runtime_mac(contract)?;
+    cyw43_get_bcdc_revinfo(contract)?;
+    cyw43_submit_bcdc_iovar_u32(contract, "mpc", 0, "cyw43-control-mpc")?;
+    Ok(mac)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_get_bcdc_iovar_optional_unsupported(
+    contract: DriverTaskContract,
+    name: &str,
+    stage: &'static str,
+) -> Result<(), DriverTaskNetError> {
+    let name_len = name.len();
+    let payload_len = name_len
+        .checked_add(1)
+        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-iovar-len"))?;
+    if payload_len > MAX_DRIVER_TASK_FRAME_BYTES.saturating_sub(CYW43_BCDC_HEADER_BYTES) {
+        return Err(DriverTaskNetError::RuntimeInit("cyw43-iovar-len"));
+    }
+    let mut payload = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    payload[..name_len].copy_from_slice(name.as_bytes());
+    payload[name_len] = 0;
+    let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    let id = cyw43_next_bcdc_ioctl_id();
+    let len = cyw43_write_bcdc_frame(
+        &mut frame,
+        CYW43_WLC_GET_VAR,
+        CYW43_BCDC_FLAG_GET,
+        id,
+        &payload[..payload_len],
+    )?;
+    match cyw43_submit_control_exchange_unmapped(
+        contract,
+        &frame[..len],
+        CYW43_WLC_GET_VAR,
+        id,
+        stage,
+    ) {
+        Ok(completion) if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() => {
+            Ok(())
+        }
+        Ok(completion) => {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "fail",
+                Some(completion),
+            );
+            Err(DriverTaskNetError::RuntimeInit(stage))
+        }
+        Err(Cyw43CommandSubmitError::Completion(completion))
+            if cyw43_control_exchange_completion_is_unsupported(completion) =>
+        {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "unsupported",
+                Some(completion),
+            );
+            Ok(())
+        }
+        Err(err) => Err(err.into_net_error()),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_get_bcdc_revinfo(contract: DriverTaskContract) -> Result<(), DriverTaskNetError> {
+    let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    let id = cyw43_next_bcdc_ioctl_id();
+    let len = cyw43_write_bcdc_frame(
+        &mut frame,
+        CYW43_WLC_GET_REVINFO,
+        CYW43_BCDC_FLAG_GET,
+        id,
+        &[],
+    )?;
+    cyw43_submit_control_exchange_checked(
+        contract,
+        &frame[..len],
+        CYW43_WLC_GET_REVINFO,
+        id,
+        "cyw43-control-revinfo",
+    )
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_control_exchange_completion_is_unsupported(
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    completion.code == DriverTaskCompletionCode::Fault.as_u16()
+        && completion.detail == CYW43_CONTROL_EXCHANGE_FAULT_DETAIL
+        && completion.result == CYW43_BCME_UNSUPPORTED_STATUS
 }
 
 #[cfg(feature = "kernel")]
@@ -1270,27 +1426,8 @@ fn cyw43_submit_control_exchange_completion(
     id: u16,
     stage: &'static str,
 ) -> Result<DriverTaskCompletionRecord, DriverTaskNetError> {
-    crate::hal::driver_task::emit_driver_task_resource_init_status(
-        contract,
-        DriverTaskHotPath::Cyw43Wifi,
-        stage,
-        "begin",
-        None,
-    );
-    let completion = submit_cyw43_runtime_command_checked(
-        contract,
-        DriverRuntimeCyw43CommandDescriptor {
-            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
-            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
-            payload_len: payload.len() as u16,
-            total_len: payload.len() as u32,
-            arg0: cmd,
-            arg1: u32::from(id),
-            ..DriverRuntimeCyw43CommandDescriptor::empty()
-        },
-        payload,
-    )
-    .map_err(|err| err.into_net_error())?;
+    let completion = cyw43_submit_control_exchange_unmapped(contract, payload, cmd, id, stage)
+        .map_err(|err| err.into_net_error())?;
     if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
         Ok(completion)
     } else {
@@ -1303,6 +1440,36 @@ fn cyw43_submit_control_exchange_completion(
         );
         Err(DriverTaskNetError::RuntimeInit(stage))
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_control_exchange_unmapped(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    cmd: u32,
+    id: u16,
+    stage: &'static str,
+) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        DriverTaskHotPath::Cyw43Wifi,
+        stage,
+        "begin",
+        None,
+    );
+    submit_cyw43_runtime_command_checked(
+        contract,
+        DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
+            payload_len: payload.len() as u16,
+            total_len: payload.len() as u32,
+            arg0: cmd,
+            arg1: u32::from(id),
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        },
+        payload,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -1547,7 +1714,7 @@ where
     let initialized = completion.is_some_and(|completion| {
         completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
     });
-    let status = driver_task_resource_completion_status(completion, initialized);
+    let status = sdio_engine_init_completion_status(completion, initialized);
     emit_sdio_driver_task_replay_status("engine-init", status);
     crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
@@ -2796,6 +2963,7 @@ pub(crate) const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
         0x5308 => "cyw43-firmware-prep",
         0x5309 => "cyw43-descriptor-unavailable",
         0x530a => "cyw43-descriptor-invalid",
+        CYW43_CONTROL_EXCHANGE_FAULT_DETAIL => "cyw43-control-exchange",
         0x5310 => "cyw43-transport-bus-link-missing",
         0x5311 => "cyw43-transport-direct-sdio-init",
         0x5312 => "cyw43-transport-card-init",
@@ -3584,6 +3752,34 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_control_preflight_matches_linux_ordered_primitives() {
+        assert_eq!(CYW43_WLC_GET_REVINFO, 98);
+        assert_eq!(CYW43_CONTROL_EXCHANGE_FAULT_DETAIL, 0x530b);
+        assert_eq!(CYW43_BCME_UNSUPPORTED_STATUS, 0xffff_ffe9);
+        let unsupported = DriverTaskCompletionRecord {
+            sequence: 0,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
+            result: CYW43_BCME_UNSUPPORTED_STATUS,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+        let other_fault = DriverTaskCompletionRecord {
+            result: 0xffff_ffff,
+            ..unsupported
+        };
+        assert!(cyw43_control_exchange_completion_is_unsupported(
+            unsupported
+        ));
+        assert!(!cyw43_control_exchange_completion_is_unsupported(
+            other_fault
+        ));
+    }
+
+    #[test]
     fn driver_task_nic_tx_token_stages_or_counts_drop_without_mmio() {
         let before = GENET_TX_DROPPED.load(Ordering::Acquire);
         let mut dev = GenetDriverTaskDevice::default();
@@ -3752,6 +3948,38 @@ mod tests {
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x53ff));
         assert!(cyw43_fault_detail_allows_same_command_retry(0x5103));
         assert!(!cyw43_fault_detail_allows_same_command_retry(0x5102));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_engine_init_status_preserves_exact_fault_detail() {
+        assert_eq!(
+            sdio_engine_init_detail_status(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING),
+            Some("adopt-power-missing")
+        );
+        assert_eq!(
+            sdio_engine_init_detail_status(
+                DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH as u16,
+            ),
+            Some("resource-hot-path-mismatch")
+        );
+        assert_eq!(
+            sdio_engine_init_completion_status(
+                Some(DriverTaskCompletionRecord {
+                    sequence: 2,
+                    code: DriverTaskCompletionCode::Fault.as_u16(),
+                    detail: DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED,
+                    result: 0,
+                    frame: DriverFrameDescriptor {
+                        offset: 0,
+                        len: 0,
+                        flags: 0,
+                    },
+                }),
+                false,
+            ),
+            "clock-failed"
+        );
     }
 
     #[cfg(feature = "kernel")]

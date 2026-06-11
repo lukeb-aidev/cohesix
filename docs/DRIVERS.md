@@ -256,17 +256,19 @@ entry path installed the mapped IPC buffer, and `runtime-recv-ready` or
 `runtime-poll-ready` means the runtime has entered the command-intake loop and
 can accept a descriptor-replay turn through the command endpoint or the
 sequence-last shared-ring path. Root publishes shared-ring commands by staging a
-zero-sequence record plus reset completion, issuing the shared-memory store
-barrier, writing the real sequence last, and issuing the barrier again so the
-runtime never consumes a partial or stale record. Root does not clear the
-child-owned progress marker on submit; timeout telemetry must preserve the last
-runtime marker and use the request sequence to identify the active turn.
-Runtime shared-control, shared-payload, bus-owner, and command-ring pages are
-HAL-mapped uncached in every participant VSpace, so root and linked runtimes use
-load/store barriers plus volatile reads and writes for command intake,
-descriptors, payload windows, progress records, and bus-owner completions.
-Data-cache clean/invalidate stays limited to descriptor-declared device DMA
-buffers.
+zero-sequence record plus reset completion, cleaning staged payload bytes and
+the command/completion records from the root VSpace, issuing the shared-memory
+store barrier, writing the real sequence last, cleaning the command record
+again, and issuing the barrier again so the runtime never consumes a partial or
+stale record. Root invalidates completion and progress records before consuming
+linked-runtime replies. Root does not clear the child-owned progress marker on
+submit; timeout telemetry must preserve the last runtime marker and use the
+request sequence to identify the active turn. Runtime shared-control,
+shared-payload, bus-owner, and command-ring pages are HAL-mapped into every
+participant VSpace, so linked runtimes use load/store barriers plus volatile
+reads and writes for command intake, descriptors, payload windows, progress
+records, and bus-owner completions. Descriptor-declared device DMA buffers keep
+their explicit clean/invalidate path.
 
 Driver-task submit concurrency is per generated driver-task contract. Any
 root-to-runtime turn that carries ring bytes, shared-payload bytes, or a runtime
@@ -322,6 +324,12 @@ proof from the linked-runtime model.
   engine-init reply is diagnostic evidence, not a pre-USB hard gate. Missing
   EXT_CFG, BAR/COMMAND, DMA-window, or poll-only ownership proof is still a
   PCIe/VL805 blocker, not a reason to spin or trust old handoff state.
+- USB runtime MMIO admission is high-BAR-only on Pi 4. The only accepted xHCI
+  MMIO base is the HAL-proven VL805 BAR0 at `0x0000000600000000`; low aliases
+  such as `0xfe980000` and `0x7e980000` are stale diagnostic references, not
+  linked-runtime authority. xHCI operational writes are flushed through the
+  linked PCIe owner `POSTED_WRITE_FLUSH` bus-link turn, matching the May 18-19
+  bridge/config-status drain discipline without draining through the xHCI BAR.
 - If xHCI engine-init reaches controller-ready before HID readiness, the linked
   USB runtime must keep enumeration alive through bounded prompt-side service:
   preserve current-boot Port Status Change events, submit the gate-4 Enable Slot
@@ -490,11 +498,21 @@ turn use the same staged-submit active-slot rule: a timeout may preserve the
 active request for a matching resume, but it must not authorize another caller to
 copy different bytes over the in-flight descriptor or payload.
 Driver-task command rings, bus-owner rings, shared-control pages, and
-root-shared payload pages are HAL-mapped uncached into linked runtimes; runtime
-coherency on those pages is volatile load/store plus barriers only. Runtime-side
-cache clean/invalidate instructions are reserved for descriptor-declared device
-DMA buffers and must not be used to publish or consume shared-ring progress,
-commands, completions, or CYW43-to-SDIO owner payloads.
+root-shared payload pages are HAL-mapped into linked runtimes; runtime-side
+coherency on those pages is volatile load/store plus barriers only. Root-side
+publication additionally cleans staged descriptor/payload bytes and
+command/completion records before sequence publication, and root invalidates
+completion/progress records before consuming linked-runtime evidence.
+Runtime-side cache clean/invalidate instructions are reserved for
+descriptor-declared device DMA buffers and must not be used to publish or
+consume shared-ring progress, commands, completions, or CYW43-to-SDIO owner
+payloads.
+USB engine-init additionally publishes pre-MMIO and posted-write submarkers:
+`usb-init-entry`, `usb-state-access-begin`, `usb-state-reset-*`,
+`usb-dma-range-ready`, `usb-caps-read-begin`, `usb-caps-invalid`,
+`usb-halt-*`, `usb-reset-*`, `usb-cnr-wait-begin`, `usb-pcie-flush-*`, and
+`usb-run-wait-begin`. A timeout before `usb-caps-read` proves only the PCIe/VL805
+owner prerequisite gate, not xHCI operational status.
 
 Root-task remains the client for console grammar, tickets, namespaces, policy,
 replay, and revocation. Physical hardware service must fail closed through
@@ -573,6 +591,8 @@ only through HAL-returned mapped pages or device-specific HAL transport methods.
   belong to linked runtime descriptors.
 - Pi 4 BCM2711 PCIe root-complex/VL805 config access belongs behind
   `pi4_pcie`; drivers must not derive config space from the xHCI BAR.
+- Pi 4 USB xHCI MMIO is mapped only from the HAL-proven VL805 high BAR
+  `0x0000000600000000`; low xHCI aliases are not runtime candidates.
 
 ### MMIO Mapping
 
@@ -745,6 +765,29 @@ returns ready or is explicitly reset. For payload-bearing SDIO/CYW43 turns, the
 active identity includes the staged descriptor and payload bytes; a changed
 descriptor, firmware/NVRAM chunk, SDIO owner payload, or shared-buffer segment is
 not a resume and must fail busy instead of replacing the in-flight bytes.
+SDIO engine-init completion details are part of the linked runtime ABI: success
+returns `0x5500` (`ready`), and faults preserve the exact subgate as
+`0x5501` (`adopt-power-missing`), `0x5502` (`adopt-clock-failed`), `0x5503`
+(`adopt-inhibit-failed`), `0x5510` (`reset-all-failed`), `0x5511`
+(`reset-cmd-data-failed`), `0x5512` (`clock-failed`), or `0x5513`
+(`inhibit-failed`). Root projects those details through
+`SDIO_DRIVER_TASK_REPLAY_STATUS ... stage=engine-init blocker=<status>` and
+`DRIVER_TASK_RESOURCE_INIT ... stage=sdio-engine-init status=<status>`; a generic
+`DeviceUnavailable` detail is no longer acceptable for this gate because it
+erases the next required hardware action.
+The cold reset path mirrors the May 18-19 working root-owned order inside the
+linked runtime: after all-reset and power-on, a stale command/data inhibit does
+not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
+startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
+then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
+The June 11 22:08 reflashed boot moved the active SDIO evidence back from a
+returned generic fault to `sdio-engine-init-no-reply` with the progress marker at
+`engine-init-hw-begin`. The linked runtime therefore publishes SDIO-local
+`sdio-state-reset-begin`, `sdio-state-reset-done`, and `sdio-hw-entry` markers
+before the first SDHCI MMIO access, and runs SDIO hardware init outside the
+`SdioRuntimeState` mutable borrow. The next boot must either advance into the
+adopt/reset/clock markers above or stop at one of those pre-MMIO edges; it must
+not collapse this frontier back to a generic Gate 2 label.
 
 - Function 0 is CCCR/FBR control.
 - Function 1 is the Broadcom backplane/control path.
@@ -1156,17 +1199,17 @@ active path is Cohesix-owned cold start:
   command-ring recovery, command-doorbell, and endpoint-doorbell posted-write
   drains fail closed when the HAL cannot first prove the EXT_CFG selector,
   link/root readiness, PCIe IRQ-source masking, and poll-only VL805 COMMAND
-  ownership, or when the same-runtime xHCI readback cannot complete. PCIe
+  ownership, or when the linked PCIe owner cannot prove the posted-write flush. PCIe
   IRQ-source masking proof must reject all-ones sentinel readbacks and log that
   edge as untrusted instead of setting the posted-write proof latch.
 - U-Boot-compatible command/event proof must publish fresh ring registers on
   the Pi 4 platform-reset lane in the linked-runtime order
   (`CONFIG.MaxSlots`, `DCBAAP`, `CRCR`, initial `ERDP` without `EHB`,
   `ERSTSZ`, `ERSTBA`, scratchpad, `DNCTRL=0`), drain xHCI operational-register
-  posted writes with same-runtime xHCI MMIO readback, start the controller with
+  posted writes through the linked PCIe owner `POSTED_WRITE_FLUSH` turn, start the controller with
   `USBCMD.RUN` and require `USBSTS.HCH==0`, then apply U-Boot's poll-only
-  post-start interrupter state (`IMOD=0`, `IMAN=0`) through the same xHCI
-  readback drain. `CRCR`
+  post-start interrupter state (`IMOD=0`, `IMAN=0`) through the same PCIe-owner
+  flush. `CRCR`
   composition uses the command-ring pointer and producer cycle; on prompt-safe
   lanes the linked runtime does not synthesize Linux's later observed running
   status bit. The U-Boot `DNCTRL=0` write is also drained before
@@ -1203,7 +1246,7 @@ active path is Cohesix-owned cold start:
   itself still uses the U-Boot command value, but the linked USB runtime now
   publishes the doorbell with barriers only instead of issuing either a nested
   PCIe-owner flush or a same-window xHCI readback. A missing xHCI aperture or a
-  readback no-reply remains a hard failure for non-doorbell Pi 4 high-BAR VL805
+  PCIe-owner flush no-reply remains a hard failure for non-doorbell Pi 4 high-BAR VL805
   ownership-register paths.
 - If the first U-Boot-shaped Enable Slot proof does not complete within the
   bounded poll slices, the linked runtime reports `enable-slot-failed` and

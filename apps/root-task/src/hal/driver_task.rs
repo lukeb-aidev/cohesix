@@ -63,6 +63,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCES_READY,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RESOURCE_CHECK_FAILED,
@@ -97,15 +98,21 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_INT_CLEAR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_PRESENT_READ_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY, DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_CLOCK_DISABLE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_POWER_DISABLE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO,
-    DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB, DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ,
+    DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID, DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN,
@@ -129,8 +136,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_LOW_WRITTEN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN,
@@ -139,15 +146,26 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_LOW_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE, DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_CLEANED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_FILLED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_CLEANED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_WRITTEN,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_USB_ENUMERATE_AUX,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -1885,11 +1903,20 @@ fn driver_task_shared_load_barrier() {
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_publish_barrier(_ring_root_ptr: usize) {
-    // Driver-task command rings are allocated and mapped as uncached HAL pages.
-    // Volatile record writes plus the shared-memory barrier are the publication
-    // contract; device DMA buffers remain the only driver-task memory that uses
-    // cache-clean/invalidate operations.
     driver_task_shared_store_barrier();
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_clean_root_range(vaddr: usize, len: usize) {
+    driver_task_shared_store_barrier();
+    let _ = crate::hal::cache::cache_clean(sel4_sys::seL4_CapInitThreadVSpace, vaddr, len);
+    driver_task_shared_store_barrier();
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_invalidate_root_range(vaddr: usize, len: usize) {
+    let _ = crate::hal::cache::cache_invalidate(sel4_sys::seL4_CapInitThreadVSpace, vaddr, len);
+    driver_task_shared_load_barrier();
 }
 
 #[cfg(feature = "kernel")]
@@ -1909,12 +1936,24 @@ fn driver_task_ring_publish_command_record(
         core::ptr::write_volatile(completion_ptr, completion_reset);
         core::ptr::write_volatile(command_ptr, staged_command);
     }
+    driver_task_ring_clean_root_range(
+        completion_ptr as usize,
+        core::mem::size_of::<DriverTaskCompletionRecord>(),
+    );
+    driver_task_ring_clean_root_range(
+        command_ptr as usize,
+        core::mem::size_of::<DriverTaskCommandRecord>(),
+    );
     driver_task_ring_publish_barrier(ring_root_ptr);
     // SAFETY: `sequence` is the first field of the fixed `repr(C)` command
     // record and is published last so runtimes never consume a partial command.
     unsafe {
         core::ptr::write_volatile(command_ptr as *mut u32, command.sequence);
     }
+    driver_task_ring_clean_root_range(
+        command_ptr as usize,
+        core::mem::size_of::<DriverTaskCommandRecord>(),
+    );
     driver_task_ring_publish_barrier(ring_root_ptr);
 }
 
@@ -1929,8 +1968,11 @@ struct DriverTaskRingProgressRecord {
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_read_progress_record(ring_root_ptr: usize) -> DriverTaskRingProgressRecord {
-    driver_task_shared_load_barrier();
     let progress_ptr = (ring_root_ptr + DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize) as *const u32;
+    driver_task_ring_invalidate_root_range(
+        progress_ptr as usize,
+        core::mem::size_of::<DriverTaskRingProgressRecord>(),
+    );
     // SAFETY: The progress record is a fixed primitive-only record in the
     // HAL-owned ring page and is bounded by the owner-state metadata region.
     unsafe {
@@ -1944,8 +1986,11 @@ fn driver_task_ring_read_progress_record(ring_root_ptr: usize) -> DriverTaskRing
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_invalidate_completion_record(_ring_root_ptr: usize) {
-    driver_task_shared_load_barrier();
+fn driver_task_ring_invalidate_completion_record(ring_root_ptr: usize) {
+    driver_task_ring_invalidate_root_range(
+        ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET,
+        core::mem::size_of::<DriverTaskCompletionRecord>(),
+    );
 }
 
 #[cfg(feature = "kernel")]
@@ -3052,6 +3097,7 @@ fn driver_task_copy_ring_payload(ring_root_ptr: usize, offset: usize, payload: &
     unsafe {
         core::ptr::copy_nonoverlapping(payload.as_ptr(), dst, payload.len());
     }
+    driver_task_ring_clean_root_range(dst as usize, payload.len());
     driver_task_shared_store_barrier();
 }
 
@@ -3693,6 +3739,7 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_ENTER => "engine-init-enter",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_AUX_MATCH => "engine-init-aux-match",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_FRAME_READY => "engine-init-frame-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_MARK_ENTER => "engine-init-mark-enter",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DESCRIPTOR_LOADED => {
             "engine-init-descriptor-loaded"
         }
@@ -3724,8 +3771,21 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_BEGIN => "engine-init-hw-begin",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE => "engine-init-hw-done",
         DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_FAILED => "engine-init-hw-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY => "usb-init-entry",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN => "usb-state-access-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ => "usb-caps-read",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY => "usb-dma-range-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN => "usb-caps-read-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID => "usb-caps-invalid",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN => "usb-pcie-flush-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_DONE => "usb-pcie-flush-done",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_FAILED => "usb-pcie-flush-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN => "usb-halt-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN => "usb-halt-wait-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED => "usb-controller-halted",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN => "usb-reset-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN => "usb-reset-wait-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN => "usb-cnr-wait-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE => "usb-reset-done",
         DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY => "usb-dma-ready",
         DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_BEGIN => "usb-dcbaap-begin",
@@ -3794,13 +3854,20 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING => {
             "usb-command-proof-return-pending"
         }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN => "usb-state-reset-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE => "usb-state-reset-done",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY => "usb-hw-entry",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN => "usb-run-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN => "usb-run-wait-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY => "usb-rings-ready",
         DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED => "usb-run-requested",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_RESET_BEGIN => "sdio-reset-begin",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_POWER_READY => "sdio-power-ready",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_CLOCK_READY => "sdio-clock-ready",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_READY => "sdio-ready",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_BEGIN => "sdio-state-reset-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_STATE_RESET_DONE => "sdio-state-reset-done",
+        DRIVER_RUNTIME_RING_PROGRESS_SDIO_HW_ENTRY => "sdio-hw-entry",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_BEGIN => "sdio-adopt-begin",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_POWER_MISSING => "sdio-adopt-power-missing",
         DRIVER_RUNTIME_RING_PROGRESS_SDIO_ADOPT_CLOCK_FAILED => "sdio-adopt-clock-failed",
