@@ -1592,6 +1592,10 @@ Required Cohesix shape:
 - The compatibility path reclaims at most 32 TX completions and drains at most
   eight RX descriptors in one service turn before yielding; raising those caps
   requires fresh USB/serial responsiveness proof under wired load.
+- Routine successful wired-NIC dataplane ring begin/return lines may be
+  suppressed during steady service so benchmark runs do not measure UART
+  logging. Init descriptors, nonzero-aux diagnostics, budget exhaustion,
+  timeouts, faults, and resource blockers must remain visible.
 - DMA address policy is explicit (`physical` vs VC/bus alias) and logged.
 - No DHCP logic is inside the GENET driver; DHCP belongs above `NetDevice`.
 

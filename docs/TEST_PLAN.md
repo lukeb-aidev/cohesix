@@ -569,10 +569,15 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
   - `cargo test -p root-task --no-default-features --features net-console --lib net:: -- --nocapture`
   - Confirms the bounded DHCP core plus runtime policy override plumbing without changing QEMU grammar.
 - Driver hot-path budget gate:
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib runtime_tx_token_requires_link_policy_and_firmware_credit`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib rx_drain_budget_caps_one_service_turn`
-  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib tx_completion_reclaim_budget_caps_one_service_turn`
-  - Confirms runtime CYW43 data TX is credit-admitted instead of spin-wait admitted, and GENET compatibility service turns stay capped while dedicated task proof is pending.
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib wired_nic_steady_dataplane_trace_is_suppressed_for_benchmarks`
+  - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_driver_task_firmware_ready_is_not_dhcp_ready`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_data_tx_is_credit_gated_and_preserves_sequence_on_no_credit -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_control_tx_is_credit_gated_and_preserves_sequence_on_no_credit -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib cyw43_rx_queue_removes_matching_channel_without_reordering_data -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib genet_rx_drain_budget_caps_one_service_turn -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib genet_tx_completion_reclaim_budget_caps_one_service_turn -- --test-threads=1`
+  - `cargo test -p pi4-driver-runtime --lib genet_service_reports_budget_exhaustion_before_dataplane_work -- --test-threads=1`
+  - Confirms routine wired NIC ring traces are suppressed during benchmark-mode dataplane turns, runtime CYW43 data TX is credit-admitted instead of spin-wait admitted, Wi-Fi DHCP/data release still requires secure carrier, and GENET service turns stay budget-capped while dedicated task proof is pending.
 - Pi 4 image / U-Boot gate:
   - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
   - `scripts/uboot/qemu-uboot-smoke.sh --net user`

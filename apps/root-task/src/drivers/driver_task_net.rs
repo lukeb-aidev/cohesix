@@ -80,6 +80,7 @@ const CYW43_HOST_EAPOL_JOIN_POLLS: usize = 24_576;
 const CYW43_HOST_EAPOL_START_FIRST_POLL: usize = 1024;
 const CYW43_HOST_EAPOL_START_INTERVAL_POLLS: usize = 4096;
 const CYW43_HOST_EAPOL_START_MAX: u32 = 12;
+const CYW43_HOST_EAPOL_TX_ATTEMPTS: usize = 8;
 const CYW43_BCDC_HEADER_BYTES: usize = 16;
 const CYW43_BCDC_FLAG_GET: u16 = 0x0000;
 const CYW43_BCDC_FLAG_SET: u16 = 0x0002;
@@ -138,6 +139,7 @@ static CYW43_LINK_UP: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_RX: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_START: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_SECURE: AtomicU32 = AtomicU32::new(0);
+static CYW43_HOST_EAPOL_TX_RETRIES: AtomicU32 = AtomicU32::new(0);
 static CYW43_BCDC_IOCTL_ID: AtomicU32 = AtomicU32::new(0);
 static CYW43_RUNTIME_MAC: Mutex<EthernetAddress> = Mutex::new(CYW43_DRIVER_TASK_MAC);
 static SDIO_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
@@ -1054,12 +1056,20 @@ fn cyw43_wait_for_host_eapol(
                 match action {
                     HostEapolAction::None => {}
                     HostEapolAction::SendM2 { len } => {
-                        if !submit_cyw43_driver_task_eth_payload(&tx_frame[..len]) {
+                        if !submit_cyw43_host_eapol_payload_bounded(
+                            contract,
+                            &tx_frame[..len],
+                            "cyw43-host-eapol-m2",
+                        ) {
                             return Err(DriverTaskNetError::RuntimeInit("host-eapol-m2-tx"));
                         }
                     }
                     HostEapolAction::SendM4InstallKeys { len, keys } => {
-                        if !submit_cyw43_driver_task_eth_payload(&tx_frame[..len]) {
+                        if !submit_cyw43_host_eapol_payload_bounded(
+                            contract,
+                            &tx_frame[..len],
+                            "cyw43-host-eapol-m4",
+                        ) {
                             return Err(DriverTaskNetError::RuntimeInit("host-eapol-m4-tx"));
                         }
                         let pairwise_rsc = [0u8; 6];
@@ -1141,7 +1151,7 @@ fn cyw43_try_send_host_eapol_start(
             return;
         }
     };
-    if submit_cyw43_driver_task_eth_payload(&frame[..len]) {
+    if submit_cyw43_host_eapol_payload_bounded(contract, &frame[..len], "cyw43-host-eapol-start") {
         CYW43_HOST_EAPOL_START.fetch_add(1, Ordering::AcqRel);
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             contract,
@@ -1304,6 +1314,7 @@ fn reset_cyw43_control_plane_state() {
     CYW43_HOST_EAPOL_RX.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_START.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+    CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
     CYW43_BCDC_IOCTL_ID.store(0, Ordering::Release);
     *CYW43_RUNTIME_MAC.lock() = CYW43_DRIVER_TASK_MAC;
 }
@@ -2907,12 +2918,21 @@ fn runtime_ready(hot_path: DriverTaskHotPath) -> bool {
     }
 }
 
+fn cyw43_data_plane_ready() -> bool {
+    CYW43_ASSOCIATED.load(Ordering::Acquire) != 0
+        && CYW43_LINK_UP.load(Ordering::Acquire) != 0
+        && CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
+}
+
 fn cyw43_driver_task_bringup_status_label() -> Option<&'static str> {
     if !runtime_ready(DriverTaskHotPath::Cyw43Wifi) {
         return Some(DRIVER_TASK_NET_STATUS);
     }
-    if CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0 {
+    if cyw43_data_plane_ready() {
         return None;
+    }
+    if CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0 {
+        return Some("wifi-link-down");
     }
     if CYW43_LINK_UP.load(Ordering::Acquire) != 0 || CYW43_ASSOCIATED.load(Ordering::Acquire) != 0 {
         return Some("wifi-host-eapol-pending");
@@ -3014,6 +3034,41 @@ fn submit_cyw43_driver_task_eth_frame(contract: DriverTaskContract, frame: &[u8]
         frame,
     );
     completion.is_some_and(driver_task_tx_completion_submitted)
+}
+
+#[cfg(feature = "kernel")]
+fn submit_cyw43_host_eapol_payload_bounded(
+    contract: DriverTaskContract,
+    frame: &[u8],
+    stage: &'static str,
+) -> bool {
+    for attempt in 0..CYW43_HOST_EAPOL_TX_ATTEMPTS {
+        if submit_cyw43_driver_task_eth_frame(contract, frame) {
+            CYW43_TX_SUBMITTED.fetch_add(1, Ordering::AcqRel);
+            if attempt != 0 {
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    contract,
+                    DriverTaskHotPath::Cyw43Wifi,
+                    stage,
+                    "tx-retried",
+                    None,
+                );
+            }
+            return true;
+        }
+        CYW43_HOST_EAPOL_TX_RETRIES.fetch_add(1, Ordering::AcqRel);
+        let _ = poll_cyw43_driver_task_control_frame();
+        core::hint::spin_loop();
+    }
+    CYW43_TX_DROPPED.fetch_add(1, Ordering::AcqRel);
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        DriverTaskHotPath::Cyw43Wifi,
+        stage,
+        "tx-retry-exhausted",
+        None,
+    );
+    false
 }
 
 #[cfg(feature = "kernel")]
@@ -3243,7 +3298,7 @@ macro_rules! driver_task_nic {
                 _timestamp: Instant,
             ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
                 if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi)
-                    && CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) == 0
+                    && !cyw43_data_plane_ready()
                 {
                     return None;
                 }
@@ -3262,7 +3317,7 @@ macro_rules! driver_task_nic {
 
             fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
                 if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi)
-                    && CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) == 0
+                    && !cyw43_data_plane_ready()
                 {
                     return None;
                 }
@@ -3448,6 +3503,7 @@ mod tests {
         CYW43_HOST_EAPOL_RX.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_START.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
     }
 
     #[test]
@@ -3496,6 +3552,14 @@ mod tests {
             dev.transmit(Instant::from_millis(0)).is_none(),
             "DHCP/data TX must stay blocked until host-EAPOL is complete"
         );
+
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        assert_eq!(dev.bringup_status_label(), Some("wifi-link-down"));
+        assert!(
+            dev.transmit(Instant::from_millis(0)).is_none(),
+            "host-EAPOL alone is not secure carrier readiness"
+        );
+        CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
 
         CYW43_ASSOCIATED.store(1, Ordering::Release);
         CYW43_LINK_UP.store(1, Ordering::Release);

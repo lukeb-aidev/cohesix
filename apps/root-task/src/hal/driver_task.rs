@@ -3685,6 +3685,17 @@ fn driver_task_ring_call_trace_enabled(
     {
         return false;
     }
+    if matches!(contract.kind, DriverTaskKind::WiredNic)
+        && command.aux0 == 0
+        && command.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE == 0
+        && command.frame.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE == 0
+        && matches!(
+            mode,
+            DriverTaskRingCommandMode::Steady | DriverTaskRingCommandMode::NonBlocking
+        )
+    {
+        return false;
+    }
     if command.aux0 != 0
         || command.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE != 0
         || command.frame.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE != 0
@@ -3698,6 +3709,21 @@ fn driver_task_ring_call_trace_enabled(
         return false;
     }
     true
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_completion_trace_enabled(
+    trace_call: bool,
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    trace_call
+        || completion.code == DriverTaskCompletionCode::Fault.as_u16()
+        || completion.code == DriverTaskCompletionCode::BudgetExhausted.as_u16()
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_timeout_trace_enabled(trace_call: bool, contract: DriverTaskContract) -> bool {
+    trace_call || matches!(contract.kind, DriverTaskKind::WiredNic)
 }
 
 #[cfg(feature = "kernel")]
@@ -4123,24 +4149,25 @@ fn run_driver_task_ring_command_with_mode(
                     if completion.sequence != request as u32 {
                         continue;
                     }
-                    if trace_call {
+                    if driver_task_ring_completion_trace_enabled(trace_call, completion) {
                         emit_driver_task_ring_call_return(contract, endpoint, request, completion);
                     }
                     break;
                 }
             }
-        } else if trace_call {
+        } else if driver_task_ring_completion_trace_enabled(trace_call, completion) {
             emit_driver_task_ring_call_return(contract, endpoint, request, completion);
         }
         if completion.sequence != request as u32 {
-            if trace_call {
+            let trace_timeout = driver_task_ring_timeout_trace_enabled(trace_call, contract);
+            if trace_timeout {
                 emit_driver_task_ring_call_timeout(
                     contract, endpoint, request, command, mode, attempts,
                 );
             }
             let progress = driver_task_ring_read_progress_record(ring_root_ptr);
             record_driver_task_ring_progress(slot, progress);
-            if trace_call {
+            if trace_timeout {
                 emit_driver_task_ring_call_progress(contract, request, command, progress);
             }
         }
@@ -4171,7 +4198,7 @@ fn run_driver_task_ring_command_with_mode(
         // page; the reply boundary guarantees the isolated runtime had a chance
         // to publish the shared-frame result.
         completion = unsafe { core::ptr::read_volatile(completion_ptr) };
-        if trace_call {
+        if driver_task_ring_completion_trace_enabled(trace_call, completion) {
             emit_driver_task_ring_call_return(contract, endpoint, request, completion);
         }
     } else {
@@ -4226,7 +4253,9 @@ fn run_driver_task_ring_command_with_mode(
         }
     }
     if completion.sequence == request as u32 {
-        if completion.code == DriverTaskCompletionCode::Fault.as_u16() && trace_call {
+        if completion.code == DriverTaskCompletionCode::Fault.as_u16()
+            && driver_task_ring_completion_trace_enabled(trace_call, completion)
+        {
             let progress = driver_task_ring_read_progress_record(ring_root_ptr);
             record_driver_task_ring_progress(slot, progress);
             emit_driver_task_ring_call_progress(contract, request, command, progress);
@@ -8736,6 +8765,87 @@ mod tests {
         assert_eq!(network_rx, ROUNDS * NET_RX_PER_ROUND);
         assert!(max_input_service_index < max_network_service_index);
         assert!(max_input_service_index < SERIAL_INPUT_PER_ROUND + USB_INPUT_PER_ROUND);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wired_nic_steady_dataplane_trace_is_suppressed_for_benchmarks() {
+        let budget = DriverTaskBudgetGrant::from_contract(GENET_DRIVER_TASK_CONTRACT);
+        let rx_command = DriverTaskCommandRecord::pi4_hot_path(
+            90,
+            DriverTaskHotPath::GenetNic,
+            budget,
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        assert!(!driver_task_ring_call_trace_enabled(
+            GENET_DRIVER_TASK_CONTRACT,
+            rx_command,
+            DriverTaskRingCommandMode::Steady
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            GENET_DRIVER_TASK_CONTRACT,
+            rx_command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+
+        let tx_command = DriverTaskCommandRecord::pi4_hot_path(
+            91,
+            DriverTaskHotPath::GenetNic,
+            budget,
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 128,
+                flags: 0,
+            },
+        );
+        assert!(!driver_task_ring_call_trace_enabled(
+            GENET_DRIVER_TASK_CONTRACT,
+            tx_command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+        assert!(!driver_task_ring_completion_trace_enabled(
+            false,
+            DriverTaskCompletionRecord::progress(91, 1)
+        ));
+        assert!(driver_task_ring_completion_trace_enabled(
+            false,
+            DriverTaskCompletionRecord::budget_exhausted(
+                91,
+                DriverServiceBudgetError::BytesExhausted
+            )
+        ));
+        assert!(driver_task_ring_completion_trace_enabled(
+            false,
+            DriverTaskCompletionRecord::fault(91, DriverTaskFaultCode::RejectedCommand)
+        ));
+        assert!(driver_task_ring_timeout_trace_enabled(
+            false,
+            GENET_DRIVER_TASK_CONTRACT
+        ));
+
+        let init_command = DriverTaskCommandRecord {
+            aux0: DRIVER_RUNTIME_ENGINE_INIT_AUX,
+            ..rx_command
+        };
+        assert!(driver_task_ring_call_trace_enabled(
+            GENET_DRIVER_TASK_CONTRACT,
+            init_command,
+            DriverTaskRingCommandMode::Bootstrap
+        ));
+
+        let non_acceptance_command = DriverTaskCommandRecord {
+            flags: DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE,
+            ..rx_command
+        };
+        assert!(driver_task_ring_call_trace_enabled(
+            GENET_DRIVER_TASK_CONTRACT,
+            non_acceptance_command,
+            DriverTaskRingCommandMode::Steady
+        ));
     }
 
     #[cfg(feature = "kernel")]

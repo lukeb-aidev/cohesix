@@ -227,7 +227,11 @@ const OPCODE_SHUTDOWN: u16 = 5;
 const COMPLETION_PROGRESS: u16 = 1;
 const COMPLETION_FRAME_READY: u16 = 2;
 const COMPLETION_IDLE: u16 = 3;
+const COMPLETION_BUDGET_EXHAUSTED: u16 = 4;
 const COMPLETION_FAULT: u16 = 5;
+const BUDGET_EXHAUSTED_OPS: u16 = 2;
+const BUDGET_EXHAUSTED_BYTES: u16 = 3;
+const BUDGET_EXHAUSTED_FRAMES: u16 = 4;
 
 const FAULT_NONE: u16 = 0;
 const FAULT_REJECTED_COMMAND: u16 = 1;
@@ -512,6 +516,7 @@ const GENET_RX_BUF_LENGTH: usize = 2048;
 const GENET_RX_BUF_OFFSET: usize = 2;
 const GENET_MAX_FRAME_LEN: usize = 1536;
 const GENET_RX_DRAIN_BUDGET: usize = 8;
+const GENET_RX_QUEUE_CAP: usize = GENET_RX_DRAIN_BUDGET;
 const GENET_TX_COMPLETION_RECLAIM_BUDGET: usize = 32;
 const GENET_DRIVER_TASK_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x31];
 
@@ -1007,6 +1012,10 @@ struct GenetRuntimeState {
     phy_addr: u8,
     link_ready: bool,
     link_speed: u32,
+    rx_queue_head: u8,
+    rx_queue_count: u8,
+    rx_queue_lens: [u16; GENET_RX_QUEUE_CAP],
+    rx_queue_frames: [[u8; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
     tx_packets: u32,
     rx_packets: u32,
     tx_drops: u32,
@@ -1022,6 +1031,10 @@ impl GenetRuntimeState {
             phy_addr: 0xff,
             link_ready: false,
             link_speed: 0,
+            rx_queue_head: 0,
+            rx_queue_count: 0,
+            rx_queue_lens: [0; GENET_RX_QUEUE_CAP],
+            rx_queue_frames: [[0; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
             tx_packets: 0,
             rx_packets: 0,
             tx_drops: 0,
@@ -1322,6 +1335,7 @@ struct Cyw43RuntimeState {
     glom_subframe_count: u8,
     rx_queue_head: u8,
     rx_queue_count: u8,
+    rx_queue_slots: [u8; CYW43_RX_QUEUE_CAP],
     rx_queue_lens: [u16; CYW43_RX_QUEUE_CAP],
     rx_queue_flags: [u16; CYW43_RX_QUEUE_CAP],
     rx_queue_frames: [[u8; MAX_DRIVER_TASK_FRAME_BYTES]; CYW43_RX_QUEUE_CAP],
@@ -1367,6 +1381,7 @@ impl Cyw43RuntimeState {
             glom_subframe_count: 0,
             rx_queue_head: 0,
             rx_queue_count: 0,
+            rx_queue_slots: cyw43_rx_queue_initial_slots(),
             rx_queue_lens: [0; CYW43_RX_QUEUE_CAP],
             rx_queue_flags: [0; CYW43_RX_QUEUE_CAP],
             rx_queue_frames: [[0; MAX_DRIVER_TASK_FRAME_BYTES]; CYW43_RX_QUEUE_CAP],
@@ -1413,6 +1428,7 @@ impl Cyw43RuntimeState {
         self.glom_subframe_count = 0;
         self.rx_queue_head = 0;
         self.rx_queue_count = 0;
+        self.rx_queue_slots = cyw43_rx_queue_initial_slots();
         self.rx_queue_lens = [0; CYW43_RX_QUEUE_CAP];
         self.rx_queue_flags = [0; CYW43_RX_QUEUE_CAP];
         self.rx_queue_frames = [[0; MAX_DRIVER_TASK_FRAME_BYTES]; CYW43_RX_QUEUE_CAP];
@@ -1714,6 +1730,16 @@ impl DriverTaskCompletionRecord {
             sequence,
             code: COMPLETION_IDLE,
             detail: FAULT_NONE,
+            result: 0,
+            frame: DriverFrameDescriptor::empty(),
+        }
+    }
+
+    const fn budget_exhausted(sequence: u32, detail: u16) -> Self {
+        Self {
+            sequence,
+            code: COMPLETION_BUDGET_EXHAUSTED,
+            detail,
             result: 0,
             frame: DriverFrameDescriptor::empty(),
         }
@@ -3106,17 +3132,25 @@ fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
     if command.frame.len == 0 {
-        let read = GENET_RUNTIME_STATE.with_mut(genet_runtime_poll_rx);
-        return if read == 0 {
-            DriverTaskCompletionRecord::idle(command.sequence)
-        } else {
-            GENET_RX_COUNT.fetch_add(1, Ordering::AcqRel);
-            GENET_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_RX_PROGRESS, Ordering::AcqRel);
-            DriverTaskCompletionRecord::frame_ready(command.sequence, read as u16)
+        return match GENET_RUNTIME_STATE
+            .with_mut(|state| genet_runtime_poll_rx(state, command.budget))
+        {
+            GenetRxPoll::Idle => DriverTaskCompletionRecord::idle(command.sequence),
+            GenetRxPoll::Frame(read) => {
+                GENET_RX_COUNT.fetch_add(1, Ordering::AcqRel);
+                GENET_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_RX_PROGRESS, Ordering::AcqRel);
+                DriverTaskCompletionRecord::frame_ready(command.sequence, read as u16)
+            }
+            GenetRxPoll::BudgetExhausted(detail) => {
+                DriverTaskCompletionRecord::budget_exhausted(command.sequence, detail)
+            }
         };
     }
     if !command.frame.in_ring_payload() {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
+    }
+    if let Err(detail) = genet_tx_budget_allows_frame(command.budget, command.frame.len) {
+        return DriverTaskCompletionRecord::budget_exhausted(command.sequence, detail);
     }
     let written =
         GENET_RUNTIME_STATE.with_mut(|state| genet_runtime_submit_tx(state, command.frame));
@@ -7667,8 +7701,7 @@ fn cyw43_rx_queue_push_from_runtime(
     {
         return false;
     }
-    let slot =
-        (usize::from(state.rx_queue_head) + usize::from(state.rx_queue_count)) % CYW43_RX_QUEUE_CAP;
+    let slot = cyw43_rx_queue_slot_at(state, usize::from(state.rx_queue_count));
     for index in 0..packet_len {
         state.rx_queue_frames[slot][index] = read_runtime_payload_byte(packet_offset + index);
     }
@@ -7685,16 +7718,17 @@ fn cyw43_rx_queue_pop_matching(
     if state.rx_queue_count == 0 {
         return None;
     }
-    let Some(slot) = cyw43_rx_queue_find_matching_slot(state, wanted_mask) else {
+    let Some(logical_index) = cyw43_rx_queue_find_matching_index(state, wanted_mask) else {
         return None;
     };
+    let slot = cyw43_rx_queue_slot_at(state, logical_index);
     let payload_len = usize::from(state.rx_queue_lens[slot]);
     let flags = state.rx_queue_flags[slot];
     if payload_len == 0
         || payload_len > MAX_DRIVER_TASK_FRAME_BYTES
         || !cyw43_rx_queue_flags_valid(flags)
     {
-        cyw43_rx_queue_remove_slot(state, slot);
+        cyw43_rx_queue_remove_index(state, logical_index);
         return None;
     }
     for index in 0..payload_len {
@@ -7703,7 +7737,7 @@ fn cyw43_rx_queue_pop_matching(
             state.rx_queue_frames[slot][index],
         );
     }
-    cyw43_rx_queue_remove_slot(state, slot);
+    cyw43_rx_queue_remove_index(state, logical_index);
     Some(DriverFrameDescriptor {
         offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
         len: payload_len as u16,
@@ -7711,32 +7745,57 @@ fn cyw43_rx_queue_pop_matching(
     })
 }
 
-fn cyw43_rx_queue_find_matching_slot(state: &Cyw43RuntimeState, wanted_mask: u16) -> Option<usize> {
+const fn cyw43_rx_queue_initial_slots() -> [u8; CYW43_RX_QUEUE_CAP] {
+    let mut slots = [0u8; CYW43_RX_QUEUE_CAP];
+    let mut index = 0usize;
+    while index < CYW43_RX_QUEUE_CAP {
+        slots[index] = index as u8;
+        index += 1;
+    }
+    slots
+}
+
+fn cyw43_rx_queue_slot_at(state: &Cyw43RuntimeState, logical_index: usize) -> usize {
+    let slot_index = (usize::from(state.rx_queue_head) + logical_index) % CYW43_RX_QUEUE_CAP;
+    usize::from(state.rx_queue_slots[slot_index])
+}
+
+fn cyw43_rx_queue_find_matching_index(
+    state: &Cyw43RuntimeState,
+    wanted_mask: u16,
+) -> Option<usize> {
     let mut index = 0u8;
     while index < state.rx_queue_count {
-        let slot = (usize::from(state.rx_queue_head) + usize::from(index)) % CYW43_RX_QUEUE_CAP;
+        let slot = cyw43_rx_queue_slot_at(state, usize::from(index));
         if cyw43_wanted_mask_allows_flags(wanted_mask, state.rx_queue_flags[slot]) {
-            return Some(slot);
+            return Some(usize::from(index));
         }
         index = index.saturating_add(1);
     }
     None
 }
 
-fn cyw43_rx_queue_remove_slot(state: &mut Cyw43RuntimeState, slot: usize) {
-    let mut cursor = slot;
-    let tail = (usize::from(state.rx_queue_head) + usize::from(state.rx_queue_count) - 1)
-        % CYW43_RX_QUEUE_CAP;
-    while cursor != tail {
-        let next = (cursor + 1) % CYW43_RX_QUEUE_CAP;
-        state.rx_queue_lens[cursor] = state.rx_queue_lens[next];
-        state.rx_queue_flags[cursor] = state.rx_queue_flags[next];
-        state.rx_queue_frames[cursor] = state.rx_queue_frames[next];
-        cursor = next;
+fn cyw43_rx_queue_remove_index(state: &mut Cyw43RuntimeState, logical_index: usize) {
+    if state.rx_queue_count == 0 || logical_index >= usize::from(state.rx_queue_count) {
+        return;
     }
-    state.rx_queue_lens[tail] = 0;
-    state.rx_queue_flags[tail] = 0;
+    let remove_pos = (usize::from(state.rx_queue_head) + logical_index) % CYW43_RX_QUEUE_CAP;
+    let freed_slot = usize::from(state.rx_queue_slots[remove_pos]);
+    let last_logical_index = usize::from(state.rx_queue_count) - 1;
+    for index in logical_index..last_logical_index {
+        let current = (usize::from(state.rx_queue_head) + index) % CYW43_RX_QUEUE_CAP;
+        let next = (current + 1) % CYW43_RX_QUEUE_CAP;
+        state.rx_queue_slots[current] = state.rx_queue_slots[next];
+    }
+    let tail = (usize::from(state.rx_queue_head) + last_logical_index) % CYW43_RX_QUEUE_CAP;
+    state.rx_queue_slots[tail] = freed_slot as u8;
+    state.rx_queue_lens[freed_slot] = 0;
+    state.rx_queue_flags[freed_slot] = 0;
     state.rx_queue_count = state.rx_queue_count.saturating_sub(1);
+    if state.rx_queue_count == 0 {
+        state.rx_queue_head = 0;
+        state.rx_queue_slots = cyw43_rx_queue_initial_slots();
+    }
 }
 
 const fn cyw43_rx_queue_flags_valid(flags: u16) -> bool {
@@ -7960,9 +8019,64 @@ fn genet_runtime_submit_tx(state: &mut GenetRuntimeState, frame: DriverFrameDesc
     frame.len as usize
 }
 
-fn genet_runtime_poll_rx(state: &mut GenetRuntimeState) -> usize {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenetRxPoll {
+    Idle,
+    Frame(usize),
+    BudgetExhausted(u16),
+}
+
+fn genet_rx_budget_limit(budget: DriverTaskBudgetGrant) -> Result<usize, u16> {
+    if budget.max_ops == 0 {
+        return Err(BUDGET_EXHAUSTED_OPS);
+    }
+    if budget.max_frames == 0 {
+        return Err(BUDGET_EXHAUSTED_FRAMES);
+    }
+    if budget.max_bytes == 0 {
+        return Err(BUDGET_EXHAUSTED_BYTES);
+    }
+    Ok(GENET_RX_DRAIN_BUDGET
+        .min(budget.max_ops as usize)
+        .min(budget.max_frames as usize))
+}
+
+fn genet_tx_budget_allows_frame(budget: DriverTaskBudgetGrant, frame_len: u16) -> Result<(), u16> {
+    if budget.max_ops == 0 {
+        return Err(BUDGET_EXHAUSTED_OPS);
+    }
+    if budget.max_frames == 0 {
+        return Err(BUDGET_EXHAUSTED_FRAMES);
+    }
+    if u32::from(frame_len) > budget.max_bytes {
+        return Err(BUDGET_EXHAUSTED_BYTES);
+    }
+    Ok(())
+}
+
+fn genet_runtime_poll_rx(
+    state: &mut GenetRuntimeState,
+    budget: DriverTaskBudgetGrant,
+) -> GenetRxPoll {
     if !state.initialized {
-        return 0;
+        return GenetRxPoll::Idle;
+    }
+    let drain_budget = match genet_rx_budget_limit(budget) {
+        Ok(limit) => limit,
+        Err(detail) => return GenetRxPoll::BudgetExhausted(detail),
+    };
+    if drain_budget == 0 {
+        return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_FRAMES);
+    }
+    if let Some(payload_len) = genet_rx_queue_peek_len(state) {
+        if payload_len > budget.max_bytes as usize {
+            return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_BYTES);
+        }
+        let Some(payload_len) = genet_rx_queue_pop_to_ring(state) else {
+            return GenetRxPoll::Idle;
+        };
+        state.rx_packets = state.rx_packets.saturating_add(1);
+        return GenetRxPoll::Frame(payload_len);
     }
     genet_runtime_poll_tx_completions(state);
     let descriptor = RUNTIME_DESCRIPTOR.load();
@@ -7971,17 +8085,18 @@ fn genet_runtime_poll_rx(state: &mut GenetRuntimeState) -> usize {
         DRIVER_RUNTIME_RESOURCE_KIND_DMA,
         DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
     ) else {
-        return 0;
+        return GenetRxPoll::Idle;
     };
-    for _ in 0..GENET_RX_DRAIN_BUDGET {
+    let mut first_payload_len = 0usize;
+    for _ in 0..drain_budget {
         let prod = genet_read32(GENET_RDMA_PROD_INDEX) as u16;
         if prod == state.rx_cons_index {
-            return 0;
+            break;
         }
         let slot = ring_slot(state.rx_cons_index, GENET_HW_TOTAL_DESCS);
         let desc = genet_read_rx_desc(slot);
         if desc.0 & GENET_DMA_OWN != 0 {
-            return 0;
+            break;
         }
         let length = genet_decode_rx_len(desc.0);
         let payload_len = length
@@ -7989,19 +8104,119 @@ fn genet_runtime_poll_rx(state: &mut GenetRuntimeState) -> usize {
             .min(MAX_DRIVER_TASK_FRAME_BYTES);
         let dma_vaddr = dma_range.vaddr as usize + slot * DRIVER_TASK_RING_PAGE_BYTES;
         dma_load_barrier();
-        for index in 0..payload_len {
-            let byte = read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index);
-            write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, byte);
+        if payload_len != 0 {
+            if payload_len > budget.max_bytes as usize {
+                if first_payload_len == 0 {
+                    return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_BYTES);
+                }
+                break;
+            }
+            if first_payload_len == 0 {
+                genet_copy_dma_frame_to_ring(dma_vaddr, payload_len);
+                first_payload_len = payload_len;
+            } else if !genet_rx_queue_push_from_dma(state, dma_vaddr, payload_len) {
+                break;
+            }
         }
         genet_rearm_rx_slot(&descriptor, dma_range, slot);
         state.rx_cons_index = state.rx_cons_index.wrapping_add(1);
         genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
-        if payload_len != 0 {
-            state.rx_packets = state.rx_packets.saturating_add(1);
-            return payload_len;
-        }
     }
-    0
+    if first_payload_len != 0 {
+        state.rx_packets = state.rx_packets.saturating_add(1);
+        GenetRxPoll::Frame(first_payload_len)
+    } else {
+        GenetRxPoll::Idle
+    }
+}
+
+fn genet_copy_dma_frame_to_ring(dma_vaddr: usize, payload_len: usize) {
+    for index in 0..payload_len {
+        let byte = read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index);
+        write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, byte);
+    }
+}
+
+fn genet_rx_queue_push_from_dma(
+    state: &mut GenetRuntimeState,
+    dma_vaddr: usize,
+    payload_len: usize,
+) -> bool {
+    if payload_len == 0
+        || payload_len > GENET_MAX_FRAME_LEN
+        || usize::from(state.rx_queue_count) >= GENET_RX_QUEUE_CAP
+    {
+        return false;
+    }
+    let slot =
+        (usize::from(state.rx_queue_head) + usize::from(state.rx_queue_count)) % GENET_RX_QUEUE_CAP;
+    for index in 0..payload_len {
+        state.rx_queue_frames[slot][index] = read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index);
+    }
+    state.rx_queue_lens[slot] = payload_len as u16;
+    state.rx_queue_count = state.rx_queue_count.saturating_add(1);
+    true
+}
+
+#[cfg(test)]
+fn genet_rx_queue_push_for_test(state: &mut GenetRuntimeState, payload: &[u8]) -> bool {
+    if payload.is_empty()
+        || payload.len() > GENET_MAX_FRAME_LEN
+        || usize::from(state.rx_queue_count) >= GENET_RX_QUEUE_CAP
+    {
+        return false;
+    }
+    let slot =
+        (usize::from(state.rx_queue_head) + usize::from(state.rx_queue_count)) % GENET_RX_QUEUE_CAP;
+    state.rx_queue_frames[slot][..payload.len()].copy_from_slice(payload);
+    state.rx_queue_lens[slot] = payload.len() as u16;
+    state.rx_queue_count = state.rx_queue_count.saturating_add(1);
+    true
+}
+
+fn genet_rx_queue_pop_to_ring(state: &mut GenetRuntimeState) -> Option<usize> {
+    if state.rx_queue_count == 0 {
+        return None;
+    }
+    let slot = usize::from(state.rx_queue_head);
+    let payload_len = usize::from(state.rx_queue_lens[slot]);
+    if payload_len == 0 || payload_len > GENET_MAX_FRAME_LEN {
+        genet_rx_queue_drop_head(state);
+        return None;
+    }
+    for index in 0..payload_len {
+        write_ring_byte(
+            DRIVER_TASK_RING_FRAME_OFFSET + index,
+            state.rx_queue_frames[slot][index],
+        );
+    }
+    genet_rx_queue_drop_head(state);
+    Some(payload_len)
+}
+
+fn genet_rx_queue_peek_len(state: &GenetRuntimeState) -> Option<usize> {
+    if state.rx_queue_count == 0 {
+        return None;
+    }
+    let slot = usize::from(state.rx_queue_head);
+    let payload_len = usize::from(state.rx_queue_lens[slot]);
+    if payload_len == 0 || payload_len > GENET_MAX_FRAME_LEN {
+        return None;
+    }
+    Some(payload_len)
+}
+
+fn genet_rx_queue_drop_head(state: &mut GenetRuntimeState) {
+    if state.rx_queue_count == 0 {
+        return;
+    }
+    let slot = usize::from(state.rx_queue_head);
+    state.rx_queue_lens[slot] = 0;
+    state.rx_queue_head = ((slot + 1) % GENET_RX_QUEUE_CAP) as u8;
+    state.rx_queue_count = state.rx_queue_count.saturating_sub(1);
+    if state.rx_queue_count == 0 {
+        state.rx_queue_head = 0;
+    }
 }
 
 fn genet_runtime_poll_tx_completions(state: &mut GenetRuntimeState) {
@@ -14294,6 +14509,100 @@ mod tests {
     }
 
     #[test]
+    fn genet_rx_queue_preserves_burst_order_between_service_turns() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+        let packet_a = *b"genet-rx-a";
+        let packet_b = *b"genet-rx-burst-b";
+
+        assert!(genet_rx_queue_push_for_test(&mut state, &packet_a));
+        assert!(genet_rx_queue_push_for_test(&mut state, &packet_b));
+
+        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some(packet_a.len()));
+        assert_eq!(
+            read_frame_prefix::<10>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: packet_a.len() as u16,
+                flags: 0,
+            }),
+            packet_a
+        );
+        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some(packet_b.len()));
+        assert_eq!(
+            read_frame_prefix::<16>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: packet_b.len() as u16,
+                flags: 0,
+            }),
+            packet_b
+        );
+        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), None);
+    }
+
+    #[test]
+    fn genet_rx_queue_full_rejects_without_overwriting_preserved_frames() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = GenetRuntimeState::new();
+
+        for slot in 0..GENET_RX_QUEUE_CAP {
+            let payload = [slot as u8; 4];
+            assert!(genet_rx_queue_push_for_test(&mut state, &payload));
+        }
+        let overflow_payload = [0xff; 4];
+        assert!(!genet_rx_queue_push_for_test(&mut state, &overflow_payload));
+        assert_eq!(usize::from(state.rx_queue_count), GENET_RX_QUEUE_CAP);
+
+        for slot in 0..GENET_RX_QUEUE_CAP {
+            assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some(4));
+            assert_eq!(
+                read_frame_prefix::<4>(DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: 4,
+                    flags: 0,
+                }),
+                [slot as u8; 4]
+            );
+        }
+        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), None);
+    }
+
+    #[test]
+    fn genet_rx_drain_budget_caps_one_service_turn() {
+        assert_eq!(GENET_RX_DRAIN_BUDGET, 8);
+        assert_eq!(GENET_RX_QUEUE_CAP, GENET_RX_DRAIN_BUDGET);
+        assert!(GENET_RX_DRAIN_BUDGET < GENET_HW_TOTAL_DESCS);
+        assert!(GENET_MAX_FRAME_LEN <= MAX_DRIVER_TASK_FRAME_BYTES);
+    }
+
+    #[test]
+    fn genet_tx_completion_reclaim_budget_caps_one_service_turn() {
+        assert_eq!(GENET_TX_COMPLETION_RECLAIM_BUDGET, GENET_HW_TOTAL_DESCS);
+        assert!(GENET_TX_COMPLETION_RECLAIM_BUDGET <= GENET_HW_TOTAL_DESCS);
+    }
+
+    #[test]
+    fn genet_service_reports_budget_exhaustion_before_dataplane_work() {
+        let mut budget = DriverTaskBudgetGrant {
+            max_ops: 0,
+            max_frames: 1,
+            max_bytes: MAX_DRIVER_TASK_FRAME_BYTES as u32,
+        };
+        assert_eq!(genet_rx_budget_limit(budget), Err(BUDGET_EXHAUSTED_OPS));
+        budget.max_ops = 1;
+        budget.max_frames = 0;
+        assert_eq!(genet_rx_budget_limit(budget), Err(BUDGET_EXHAUSTED_FRAMES));
+        budget.max_frames = 1;
+        budget.max_bytes = 0;
+        assert_eq!(genet_rx_budget_limit(budget), Err(BUDGET_EXHAUSTED_BYTES));
+        assert_eq!(
+            genet_tx_budget_allows_frame(budget, 64),
+            Err(BUDGET_EXHAUSTED_BYTES)
+        );
+    }
+
+    #[test]
     fn cyw43_sdio_bus_link_wait_scales_with_payload_size() {
         let mut command = DriverTaskCommandRecord {
             sequence: 1,
@@ -15634,6 +15943,94 @@ mod tests {
             }),
             payload
         );
+    }
+
+    #[test]
+    fn cyw43_rx_queue_removes_matching_channel_without_reordering_data() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        let data_a = *b"data-a";
+        let control = *b"ctrl";
+        let data_b = *b"data-b";
+        let data_a_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x100;
+        let control_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x200;
+        let data_b_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x300;
+        stage_bytes(data_a_offset, &data_a);
+        stage_bytes(control_offset, &control);
+        stage_bytes(data_b_offset, &data_b);
+
+        assert!(cyw43_rx_queue_push_from_runtime(
+            &mut state,
+            data_a_offset,
+            data_a.len(),
+            cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 1)
+        ));
+        assert!(cyw43_rx_queue_push_from_runtime(
+            &mut state,
+            control_offset,
+            control.len(),
+            cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 2)
+        ));
+        assert!(cyw43_rx_queue_push_from_runtime(
+            &mut state,
+            data_b_offset,
+            data_b.len(),
+            cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 3)
+        ));
+        let control_slot = cyw43_rx_queue_slot_at(&state, 1);
+
+        assert_eq!(
+            cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT),
+            Some(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: control.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 2),
+            })
+        );
+        assert_eq!(
+            read_frame_prefix::<4>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: control.len() as u16,
+                flags: 0,
+            }),
+            control
+        );
+        assert_eq!(state.rx_queue_lens[control_slot], 0);
+
+        assert_eq!(
+            cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_DATA),
+            Some(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: data_a.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 1),
+            })
+        );
+        assert_eq!(
+            read_frame_prefix::<6>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: data_a.len() as u16,
+                flags: 0,
+            }),
+            data_a
+        );
+        assert_eq!(
+            cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_DATA),
+            Some(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: data_b.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 3),
+            })
+        );
+        assert_eq!(
+            read_frame_prefix::<6>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: data_b.len() as u16,
+                flags: 0,
+            }),
+            data_b
+        );
+        assert_eq!(state.rx_queue_count, 0);
     }
 
     #[test]
