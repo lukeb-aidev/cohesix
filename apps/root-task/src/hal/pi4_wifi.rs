@@ -8482,8 +8482,7 @@ fn sdio_owner_queue_ring_service_completion(
         if payload.len() != len {
             return None;
         }
-        let Some(frame) =
-            super::driver_task::stage_driver_task_ring_frame(contract, payload, flags)
+        let Some(frame) = super::driver_task::describe_driver_task_ring_frame(payload, flags)
         else {
             return None;
         };
@@ -8494,7 +8493,7 @@ fn sdio_owner_queue_ring_service_completion(
         }
         let scratch = [0u8; super::driver_task::MAX_DRIVER_TASK_FRAME_BYTES];
         let Some(frame) =
-            super::driver_task::stage_driver_task_ring_frame(contract, &scratch[..len], flags)
+            super::driver_task::describe_driver_task_ring_frame(&scratch[..len], flags)
         else {
             return None;
         };
@@ -8512,7 +8511,29 @@ fn sdio_owner_queue_ring_service_completion(
     command.aux1 = arg;
     // SDIO owner turns run after shell-first descriptor replay; use the reply
     // path so the lower-priority owner runtime is actually scheduled.
-    let completion = super::driver_task::run_driver_task_ring_service(contract, command)?;
+    let completion = if len == 0 {
+        super::driver_task::run_driver_task_ring_service(contract, command)?
+    } else if let Some(payload) = payload {
+        let staging_segments = [super::driver_task::DriverTaskStagingSegment::ring_frame(
+            payload, flags,
+        )];
+        super::driver_task::run_driver_task_ring_service_staged(
+            contract,
+            command,
+            &staging_segments,
+        )?
+    } else {
+        let scratch = [0u8; super::driver_task::MAX_DRIVER_TASK_FRAME_BYTES];
+        let staging_segments = [super::driver_task::DriverTaskStagingSegment::ring_frame(
+            &scratch[..len],
+            flags,
+        )];
+        super::driver_task::run_driver_task_ring_service_staged(
+            contract,
+            command,
+            &staging_segments,
+        )?
+    };
     if sdio_owner_completion_has_hardware_progress(completion) {
         let _ = register_sdio_owner_state_descriptor();
     }

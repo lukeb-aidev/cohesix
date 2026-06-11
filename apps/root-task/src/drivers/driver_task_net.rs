@@ -27,8 +27,8 @@ use crate::drivers::cyw43_host_eapol::{
 use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
     DriverTaskCompletionCode, DriverTaskCompletionRecord, DriverTaskContract, DriverTaskFaultCode,
-    DriverTaskHotPath, CYW43_WIFI_DRIVER_TASK_CONTRACT, GENET_DRIVER_TASK_CONTRACT,
-    MAX_DRIVER_TASK_FRAME_BYTES, SDIO_HOST_DRIVER_TASK_CONTRACT,
+    DriverTaskHotPath, DriverTaskStagingSegment, CYW43_WIFI_DRIVER_TASK_CONTRACT,
+    GENET_DRIVER_TASK_CONTRACT, MAX_DRIVER_TASK_FRAME_BYTES, SDIO_HOST_DRIVER_TASK_CONTRACT,
 };
 use crate::hal::{HalError, Hardware};
 use crate::net::{
@@ -326,6 +326,27 @@ fn run_driver_task_net_service(
         crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
     } else {
         crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_net_service_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        crate::hal::driver_task::run_driver_task_ring_service_nonblocking_staged(
+            contract,
+            command,
+            staging_segments,
+        )
+    } else {
+        crate::hal::driver_task::run_driver_task_ring_service_staged(
+            contract,
+            command,
+            staging_segments,
+        )
     }
 }
 
@@ -1985,7 +2006,7 @@ fn submit_cyw43_runtime_command_checked(
         descriptor.payload_offset = 0;
     } else if use_shared_payload {
         let Some(staged_payload) =
-            crate::hal::driver_task::stage_driver_task_shared_payload(contract, payload, 0)
+            crate::hal::driver_task::describe_driver_task_shared_payload(payload, 0)
         else {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 contract,
@@ -2018,11 +2039,10 @@ fn submit_cyw43_runtime_command_checked(
         let mut ring_payload = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
         ring_payload[..desc_size].copy_from_slice(&scratch);
         ring_payload[desc_size..desc_size + payload.len()].copy_from_slice(payload);
-        let Some(staged) = crate::hal::driver_task::stage_driver_task_ring_frame(
-            contract,
-            &ring_payload[..desc_size + payload.len()],
-            0,
-        ) else {
+        let staged_payload = &ring_payload[..desc_size + payload.len()];
+        let Some(staged) =
+            crate::hal::driver_task::describe_driver_task_ring_frame(staged_payload, 0)
+        else {
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 contract,
                 DriverTaskHotPath::Cyw43Wifi,
@@ -2034,12 +2054,18 @@ fn submit_cyw43_runtime_command_checked(
                 DriverTaskNetError::RuntimeInit("cyw43-stage-command"),
             ));
         };
+        let staging_segments = [DriverTaskStagingSegment::ring_frame(staged_payload, 0)];
         return submit_staged_cyw43_runtime_descriptor(
-            contract, descriptor, stage, desc_size, staged, None,
+            contract,
+            descriptor,
+            stage,
+            desc_size,
+            staged,
+            &staging_segments,
+            None,
         );
     }
-    let Some(staged) = crate::hal::driver_task::stage_driver_task_ring_payload_at(
-        contract,
+    let Some(staged) = crate::hal::driver_task::describe_driver_task_ring_payload_at(
         crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET,
         &scratch,
         0,
@@ -2055,14 +2081,40 @@ fn submit_cyw43_runtime_command_checked(
             DriverTaskNetError::RuntimeInit("cyw43-stage-command"),
         ));
     };
-    submit_staged_cyw43_runtime_descriptor(
-        contract,
-        descriptor,
-        stage,
-        desc_size,
-        staged,
-        use_shared_payload.then_some(payload),
-    )
+    if use_shared_payload {
+        let staging_segments = [
+            DriverTaskStagingSegment::shared(payload, 0),
+            DriverTaskStagingSegment::ring_payload_at(
+                crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET,
+                &scratch,
+                0,
+            ),
+        ];
+        submit_staged_cyw43_runtime_descriptor(
+            contract,
+            descriptor,
+            stage,
+            desc_size,
+            staged,
+            &staging_segments,
+            Some(payload),
+        )
+    } else {
+        let staging_segments = [DriverTaskStagingSegment::ring_payload_at(
+            crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET,
+            &scratch,
+            0,
+        )];
+        submit_staged_cyw43_runtime_descriptor(
+            contract,
+            descriptor,
+            stage,
+            desc_size,
+            staged,
+            &staging_segments,
+            None,
+        )
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -2093,6 +2145,7 @@ fn submit_staged_cyw43_runtime_descriptor(
     stage: &'static str,
     desc_size: usize,
     staged: DriverFrameDescriptor,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
     producer_payload: Option<&[u8]>,
 ) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
     let mut command = DriverTaskCommandRecord::pi4_hot_path(
@@ -2108,7 +2161,9 @@ fn submit_staged_cyw43_runtime_descriptor(
     command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
     let mut no_reply_resumes = 0usize;
     let completion = loop {
-        if let Some(completion) = run_driver_task_net_service(contract, command) {
+        if let Some(completion) =
+            run_driver_task_net_service_staged(contract, command, staging_segments)
+        {
             break completion;
         }
         if descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
@@ -3000,8 +3055,7 @@ fn submit_driver_task_frame(
     if hot_path == DriverTaskHotPath::Cyw43Wifi {
         return submit_cyw43_driver_task_eth_frame(contract, frame);
     }
-    let Some(descriptor) =
-        crate::hal::driver_task::stage_driver_task_ring_frame(contract, frame, 0)
+    let Some(descriptor) = crate::hal::driver_task::describe_driver_task_ring_frame(frame, 0)
     else {
         return false;
     };
@@ -3011,7 +3065,9 @@ fn submit_driver_task_frame(
         DriverTaskBudgetGrant::from_contract(contract),
         descriptor,
     );
-    run_driver_task_net_service(contract, command).is_some_and(driver_task_tx_completion_submitted)
+    let staging_segments = [DriverTaskStagingSegment::ring_frame(frame, 0)];
+    run_driver_task_net_service_staged(contract, command, &staging_segments)
+        .is_some_and(driver_task_tx_completion_submitted)
 }
 
 #[cfg(feature = "kernel")]
@@ -3115,10 +3171,10 @@ fn run_cyw43_runtime_descriptor_command(
     if desc_size > MAX_DRIVER_TASK_FRAME_BYTES || payload.len() > MAX_DRIVER_TASK_FRAME_BYTES {
         return None;
     }
+    let mut payload_descriptor = None;
     if !payload.is_empty() {
         let payload_offset = crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET + 512;
-        let staged_payload = crate::hal::driver_task::stage_driver_task_ring_payload_at(
-            contract,
+        let staged_payload = crate::hal::driver_task::describe_driver_task_ring_payload_at(
             payload_offset,
             payload,
             0,
@@ -3128,6 +3184,7 @@ fn run_cyw43_runtime_descriptor_command(
         if descriptor.total_len == 0 {
             descriptor.total_len = u32::from(staged_payload.len);
         }
+        payload_descriptor = Some(staged_payload);
     } else {
         descriptor.payload_offset = 0;
         descriptor.payload_len = 0;
@@ -3135,8 +3192,7 @@ fn run_cyw43_runtime_descriptor_command(
     }
     let mut scratch = [0u8; core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>()];
     encode_cyw43_descriptor(&mut scratch, descriptor);
-    let staged_descriptor = crate::hal::driver_task::stage_driver_task_ring_payload_at(
-        contract,
+    let staged_descriptor = crate::hal::driver_task::describe_driver_task_ring_payload_at(
         crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET,
         &scratch,
         0,
@@ -3148,7 +3204,28 @@ fn run_cyw43_runtime_descriptor_command(
         staged_descriptor,
     );
     command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
-    run_driver_task_net_service(contract, command)
+    if payload_descriptor.is_some() {
+        let staging_segments = [
+            DriverTaskStagingSegment::ring_payload_at(
+                crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET + 512,
+                payload,
+                0,
+            ),
+            DriverTaskStagingSegment::ring_payload_at(
+                crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET,
+                &scratch,
+                0,
+            ),
+        ];
+        run_driver_task_net_service_staged(contract, command, &staging_segments)
+    } else {
+        let staging_segments = [DriverTaskStagingSegment::ring_payload_at(
+            crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET,
+            &scratch,
+            0,
+        )];
+        run_driver_task_net_service_staged(contract, command, &staging_segments)
+    }
 }
 
 #[cfg(not(feature = "kernel"))]

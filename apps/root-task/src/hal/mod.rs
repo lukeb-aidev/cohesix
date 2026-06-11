@@ -1672,18 +1672,25 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         None,
     );
     let mut banner = false;
-    let frame = driver_task::stage_driver_task_ring_frame(contract, b"\x0cStarting HDMI\n", 0)
-        .ok_or(HalError::Unsupported(
-            "driver-runtime-hdmi-early-banner-stage",
-        ))?;
+    let banner_payload = b"\x0cStarting HDMI\n";
+    let frame = driver_task::describe_driver_task_ring_frame(banner_payload, 0).ok_or(
+        HalError::Unsupported("driver-runtime-hdmi-early-banner-stage"),
+    )?;
     let draw_command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
         0,
         spec.hot_path,
         driver_task::DriverTaskBudgetGrant::from_contract(contract),
         frame,
     );
-    let draw_completion =
-        driver_task::run_driver_task_ring_command_nonblocking(contract, draw_command);
+    let banner_segments = [driver_task::DriverTaskStagingSegment::ring_frame(
+        banner_payload,
+        0,
+    )];
+    let draw_completion = driver_task::run_driver_task_ring_command_nonblocking_staged(
+        contract,
+        draw_command,
+        &banner_segments,
+    );
     let draw_ready = matches!(
         draw_completion,
         Some(done)
@@ -1720,18 +1727,25 @@ fn bootstrap_linked_runtime_engine_for_early_console(
         driver_task::DriverTaskHotPath::HdmiText,
     );
     if owner_state && !banner {
-        let frame = driver_task::stage_driver_task_ring_frame(contract, b"\x0cStarting HDMI\n", 0)
-            .ok_or(HalError::Unsupported(
-                "driver-runtime-hdmi-early-banner-stage",
-            ))?;
+        let frame = driver_task::describe_driver_task_ring_frame(banner_payload, 0).ok_or(
+            HalError::Unsupported("driver-runtime-hdmi-early-banner-stage"),
+        )?;
         let command = driver_task::DriverTaskCommandRecord::pi4_hot_path(
             0,
             spec.hot_path,
             driver_task::DriverTaskBudgetGrant::from_contract(contract),
             frame,
         );
+        let banner_segments = [driver_task::DriverTaskStagingSegment::ring_frame(
+            banner_payload,
+            0,
+        )];
         banner = matches!(
-            driver_task::run_driver_task_ring_command_nonblocking(contract, command),
+            driver_task::run_driver_task_ring_command_nonblocking_staged(
+                contract,
+                command,
+                &banner_segments,
+            ),
             Some(done)
                 if done.code == driver_task::DriverTaskCompletionCode::Progress.as_u16()
                     && done.result != 0
@@ -3539,8 +3553,7 @@ impl<'a> KernelHal<'a> {
         } else if let Some(descriptor) = runtime_init_descriptor.as_ref() {
             let spec =
                 runtime_image_spec.ok_or(HalError::Unsupported("driver-runtime-init-spec"))?;
-            let Some(frame) =
-                driver_task::stage_driver_runtime_init_descriptor(contract, descriptor)
+            let Some(frame) = driver_task::describe_driver_runtime_init_descriptor(descriptor)
             else {
                 driver_task::emit_driver_task_resource_init_status(
                     contract,
@@ -3551,12 +3564,32 @@ impl<'a> KernelHal<'a> {
                 );
                 return Err(HalError::Unsupported("driver-runtime-init-stage"));
             };
+            let Some(descriptor_bytes) =
+                driver_task::driver_runtime_init_descriptor_bytes(descriptor)
+            else {
+                driver_task::emit_driver_task_resource_init_status(
+                    contract,
+                    spec.hot_path,
+                    "runtime-descriptor-bootstrap",
+                    "stage-failed",
+                    None,
+                );
+                return Err(HalError::Unsupported("driver-runtime-init-stage"));
+            };
+            let staging_segments = [driver_task::DriverTaskStagingSegment::ring_frame(
+                descriptor_bytes,
+                0,
+            )];
             let command = driver_task::runtime_init_command(
                 spec.hot_path,
                 driver_task::DriverTaskBudgetGrant::from_contract(contract),
                 frame,
             );
-            let completion = driver_task::run_driver_task_ring_command_bootstrap(contract, command);
+            let completion = driver_task::run_driver_task_ring_command_bootstrap_staged(
+                contract,
+                command,
+                &staging_segments,
+            );
             let runtime_init_ok = matches!(
                 completion,
                 Some(done)

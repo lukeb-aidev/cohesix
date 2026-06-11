@@ -885,8 +885,7 @@ impl LocalSeatRuntime {
                         if payload.is_empty() {
                             break;
                         }
-                        let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(
-                            contract,
+                        let Some(frame) = crate::hal::driver_task::describe_driver_task_ring_frame(
                             payload.as_slice(),
                             0,
                         ) else {
@@ -901,7 +900,17 @@ impl LocalSeatRuntime {
                                 ),
                                 frame,
                             );
-                        let completion = run_local_seat_driver_task_ring_service(contract, command);
+                        let staging_segments = [
+                            crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(
+                                payload.as_slice(),
+                                0,
+                            ),
+                        ];
+                        let completion = run_local_seat_driver_task_ring_service_staged(
+                            contract,
+                            command,
+                            &staging_segments,
+                        );
                         let ready = completion.is_some_and(|completion| {
                             completion.code
                                 == crate::hal::driver_task::DriverTaskCompletionCode::Progress
@@ -1010,8 +1019,7 @@ impl LocalSeatRuntime {
                 self as *mut Self as usize,
                 display_ring_service_driver_task,
             );
-            if let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(
-                contract,
+            if let Some(frame) = crate::hal::driver_task::describe_driver_task_ring_frame(
                 line.as_bytes(),
                 crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
             ) {
@@ -1021,7 +1029,19 @@ impl LocalSeatRuntime {
                     crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
                     frame,
                 );
-                if run_local_seat_driver_task_ring_service(contract, command).is_some() {
+                let staging_segments = [
+                    crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(
+                        line.as_bytes(),
+                        crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
+                    ),
+                ];
+                if run_local_seat_driver_task_ring_service_staged(
+                    contract,
+                    command,
+                    &staging_segments,
+                )
+                .is_some()
+                {
                     return;
                 }
             }
@@ -3211,7 +3231,7 @@ fn mirror_high_impact_line_via_linked_hdmi(
     }
     let _ = payload.push(b'\n');
     let Some(frame) =
-        crate::hal::driver_task::stage_driver_task_ring_frame(contract, payload.as_slice(), 0)
+        crate::hal::driver_task::describe_driver_task_ring_frame(payload.as_slice(), 0)
     else {
         return false;
     };
@@ -3221,8 +3241,14 @@ fn mirror_high_impact_line_via_linked_hdmi(
         crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
         frame,
     );
-    let completion =
-        run_local_seat_driver_task_ring_service_with_prompt_state(contract, command, false);
+    let staging_segments =
+        [crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(payload.as_slice(), 0)];
+    let completion = run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
+        contract,
+        command,
+        false,
+        &staging_segments,
+    );
     let ready = completion.is_some_and(|completion| {
         completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
             && completion.result != 0
@@ -3338,9 +3364,8 @@ fn submit_linked_hdmi_payload_via_linked_hdmi(
     let mut any_ready = false;
     while offset < bytes.len() {
         let end = offset.saturating_add(chunk_limit).min(bytes.len());
-        let Some(frame) =
-            crate::hal::driver_task::stage_driver_task_ring_frame(contract, &bytes[offset..end], 0)
-        else {
+        let chunk = &bytes[offset..end];
+        let Some(frame) = crate::hal::driver_task::describe_driver_task_ring_frame(chunk, 0) else {
             return any_ready;
         };
         let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
@@ -3349,8 +3374,14 @@ fn submit_linked_hdmi_payload_via_linked_hdmi(
             crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
             frame,
         );
-        let completion =
-            run_local_seat_driver_task_ring_service_with_prompt_state(contract, command, false);
+        let staging_segments =
+            [crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(chunk, 0)];
+        let completion = run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
+            contract,
+            command,
+            false,
+            &staging_segments,
+        );
         let ready = completion.is_some_and(|completion| {
             completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                 && completion.result != 0
@@ -3495,19 +3526,60 @@ fn run_local_seat_driver_task_ring_service(
 }
 
 #[cfg(feature = "kernel")]
+fn run_local_seat_driver_task_ring_service_staged(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+    staging_segments: &[crate::hal::driver_task::DriverTaskStagingSegment<'_>],
+) -> Option<crate::hal::driver_task::DriverTaskCompletionRecord> {
+    run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
+        contract,
+        command,
+        true,
+        staging_segments,
+    )
+}
+
+#[cfg(feature = "kernel")]
 fn run_local_seat_driver_task_ring_service_with_prompt_state(
     contract: crate::hal::driver_task::DriverTaskContract,
     command: crate::hal::driver_task::DriverTaskCommandRecord,
     root_console_ready: bool,
 ) -> Option<crate::hal::driver_task::DriverTaskCompletionRecord> {
+    run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
+        contract,
+        command,
+        root_console_ready,
+        &[],
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_local_seat_driver_task_ring_service_with_prompt_state_and_staging(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    command: crate::hal::driver_task::DriverTaskCommandRecord,
+    root_console_ready: bool,
+    staging_segments: &[crate::hal::driver_task::DriverTaskStagingSegment<'_>],
+) -> Option<crate::hal::driver_task::DriverTaskCompletionRecord> {
     if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
         if local_seat_driver_task_prompt_slice_required(command.aux0, root_console_ready) {
-            crate::hal::driver_task::run_driver_task_ring_service_prompt_slice(contract, command)
+            crate::hal::driver_task::run_driver_task_ring_service_prompt_slice_staged(
+                contract,
+                command,
+                staging_segments,
+            )
         } else {
-            crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
+            crate::hal::driver_task::run_driver_task_ring_service_nonblocking_staged(
+                contract,
+                command,
+                staging_segments,
+            )
         }
     } else {
-        crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+        crate::hal::driver_task::run_driver_task_ring_service_staged(
+            contract,
+            command,
+            staging_segments,
+        )
     }
 }
 

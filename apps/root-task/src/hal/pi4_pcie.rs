@@ -295,8 +295,9 @@ fn pcie_owner_queue_ring_service_completion(
     if !pcie_owner_queue_ensure_engine_ready(contract) {
         return None;
     }
+    let value_bytes = value.to_le_bytes();
     let frame = if op == PCIE_OWNER_OP_PORT_WRITE {
-        match super::driver_task::stage_driver_task_ring_frame(contract, &value.to_le_bytes(), 0) {
+        match super::driver_task::describe_driver_task_ring_frame(&value_bytes, 0) {
             Some(frame) => frame,
             None => {
                 super::driver_task::emit_driver_task_resource_init_status(
@@ -328,7 +329,19 @@ fn pcie_owner_queue_ring_service_completion(
         command.flags = PCIE_OWNER_QUEUE_FLAGS;
         command.frame.flags = PCIE_OWNER_QUEUE_FLAGS;
     }
-    let completion = super::driver_task::run_driver_task_ring_service(contract, command);
+    let completion = if op == PCIE_OWNER_OP_PORT_WRITE {
+        let staging_segments = [super::driver_task::DriverTaskStagingSegment::ring_frame(
+            &value_bytes,
+            0,
+        )];
+        super::driver_task::run_driver_task_ring_service_staged(
+            contract,
+            command,
+            &staging_segments,
+        )
+    } else {
+        super::driver_task::run_driver_task_ring_service(contract, command)
+    };
     if PCIE_OWNER_QUEUE_FIRST_TURN_LOGGED.swap(1, Ordering::AcqRel) == 0
         || (completion.is_none() && PCIE_OWNER_QUEUE_NO_REPLY_LOGGED.swap(1, Ordering::AcqRel) == 0)
     {

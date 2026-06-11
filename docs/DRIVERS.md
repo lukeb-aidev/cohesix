@@ -242,6 +242,10 @@ acceptance-eligible, including `sdio-host` with its HAL-declared SDHCI MMIO
 page, but a physical boot creates the selected-only active set for the requested
 network role. A Wi-Fi boot uses the common local-seat/serial/display/PCIe set
 plus `sdio-host` and `cyw43455`; a wired boot uses the common set plus `genet`.
+GENET and CYW43 are acceptance-eligible concurrently in the generated manifest,
+but physical Pi driver performance and liveness claims assume one active network
+dataplane owner at a time unless a later milestone explicitly changes the boot
+policy and adds multi-network arbitration proof.
 Fresh Pi evidence must still prove the active hardware state machines make real
 progress from driver-local state. The transport boundary is no longer a
 one-page smoke loader: root now maps bounded multi-page `PT_LOAD` runtime images
@@ -263,6 +267,20 @@ load/store barriers plus volatile reads and writes for command intake,
 descriptors, payload windows, progress records, and bus-owner completions.
 Data-cache clean/invalidate stays limited to descriptor-declared device DMA
 buffers.
+
+Driver-task submit concurrency is per generated driver-task contract. Any
+root-to-runtime turn that carries ring bytes, shared-payload bytes, or a runtime
+init descriptor must describe those bytes as staged segments and submit through
+the staged command/service API; the submit path validates the ranges, computes a
+byte-sensitive staging fingerprint, acquires the per-contract active slot, then
+copies the staged bytes and publishes the command record. The unstaged ring
+helpers are for zero-frame control/poll/init/probe turns, HAL helper definitions,
+tests, and runtime-to-root completion publication only. While a contract is
+active, bounded resend/poll slices may resume only the same request identity:
+role, hot path, opcode, aux words, budget, command flags, frame descriptor, and
+the fingerprint of every staged byte must match. A different payload or
+descriptor while the active slot is owned is a busy condition; it must not
+rewrite the ring page, shared-payload window, or completion slot.
 
 ### Historical Pi 4 Baseline Mapping
 
@@ -467,7 +485,10 @@ evidence, not a reason to trap boot in `seL4_Call`. Owner-state stays red until
 the linked runtime returns hardware progress from driver-local state. PCIe-root
 descriptor replay and engine-init are retained for three bounded turns on timeout
 so the USB Gate 2 owner command is not overwritten while the linked child polls
-the sequence-last command ring.
+the sequence-last command ring. Descriptor replay and any other payload-bearing
+turn use the same staged-submit active-slot rule: a timeout may preserve the
+active request for a matching resume, but it must not authorize another caller to
+copy different bytes over the in-flight descriptor or payload.
 Driver-task command rings, bus-owner rings, shared-control pages, and
 root-shared payload pages are HAL-mapped uncached into linked runtimes; runtime
 coherency on those pages is volatile load/store plus barriers only. Runtime-side
@@ -718,9 +739,12 @@ CARD_COMMAND and HOST_CONFIG turns for the proven card select and card/host
 directly. Root may replay the SDIO owner descriptor, initialize the owner engine,
 and prove owner-state; it must not run a root-owned SDIO card-init ladder.
 SDIO descriptor replay and engine-init remain bounded prompt-safe turns, but
-root keeps the active ring request across a finite no-reply resume window so a
+root keeps the active ring request across no-reply resume slices so a
 still-running linked SDIO adoption/reset turn is not overwritten before it
-returns ready or reaches the terminal timeout limit.
+returns ready or is explicitly reset. For payload-bearing SDIO/CYW43 turns, the
+active identity includes the staged descriptor and payload bytes; a changed
+descriptor, firmware/NVRAM chunk, SDIO owner payload, or shared-buffer segment is
+not a resume and must fail busy instead of replacing the in-flight bytes.
 
 - Function 0 is CCCR/FBR control.
 - Function 1 is the Broadcom backplane/control path.
@@ -1224,14 +1248,15 @@ active path is Cohesix-owned cold start:
   child runtime exposes `command-event-ring-not-proven`,
   `enable-slot-completion-pending`, or `enable-slot-failed` quickly, and only
   `keyboard-ready` plus first HID report/byte proof can clear USB acceptance.
-  Root preserves an in-flight linked-runtime USB enumeration request only for a
-  bounded number of no-reply slices; after that it logs
-  `DRIVER_TASK_RING_CALL_ABORT reason=timeout-resume-limit`, clears the active
-  latch, and allows a fresh enumeration turn so a stale request cannot wedge
-  serial prompt responsiveness. Bounded keep-active resumes are admitted only
-  when the staged command identity still matches the active ring request; a
-  different aux word, frame descriptor, hot path, role, budget, or command flags
-  must publish a fresh sequence instead of inheriting the earlier request's
+  Root preserves an in-flight linked-runtime USB enumeration request across
+  bounded no-reply slices only when the active identity still matches. Zero-frame
+  enumeration polls may reach the timeout-resume limit and clear the active latch
+  for a fresh poll, but payload-bearing turns do not get overwritten at that
+  limit; they remain active until a matching completion or explicit reset proof
+  releases the slot. Bounded keep-active resumes are admitted only when the
+  staged command identity still matches the active ring request; a different aux
+  word, frame descriptor, staged byte fingerprint, hot path, role, budget, or
+  command flags is a different request and must not inherit the earlier request's
   progress.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. `hw.local_seat.required=true` requires matching

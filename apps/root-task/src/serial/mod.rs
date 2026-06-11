@@ -806,8 +806,8 @@ pub(crate) fn driver_task_client_write_byte(byte: u8) -> nb::Result<(), SerialEr
         crate::hal::driver_task::DriverTaskHotPath::SerialConsole.as_u32() as usize,
         serial_runtime_ring_service_driver_task,
     );
-    let Some(frame) = crate::hal::driver_task::stage_driver_task_ring_frame(contract, &[byte], 0)
-    else {
+    let payload = [byte];
+    let Some(frame) = crate::hal::driver_task::describe_driver_task_ring_frame(&payload, 0) else {
         return Err(NbError::WouldBlock);
     };
     let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
@@ -816,7 +816,13 @@ pub(crate) fn driver_task_client_write_byte(byte: u8) -> nb::Result<(), SerialEr
         crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
         frame,
     );
-    match crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command) {
+    let staging_segments =
+        [crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(&payload, 0)];
+    match crate::hal::driver_task::run_driver_task_ring_service_nonblocking_staged(
+        contract,
+        command,
+        &staging_segments,
+    ) {
         Some(completion)
             if completion.code
                 == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
@@ -1330,11 +1336,7 @@ where
                 flags: 0,
             }
         } else {
-            match crate::hal::driver_task::stage_driver_task_ring_frame(
-                contract,
-                staged.as_slice(),
-                0,
-            ) {
+            match crate::hal::driver_task::describe_driver_task_ring_frame(staged.as_slice(), 0) {
                 Some(frame) => frame,
                 None => {
                     self.restore_staged_tx(staged.as_slice());
@@ -1348,8 +1350,17 @@ where
             crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
             frame,
         );
-        let completion =
-            crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command);
+        let staging_segments =
+            [crate::hal::driver_task::DriverTaskStagingSegment::ring_frame(staged.as_slice(), 0)];
+        let completion = if staged.is_empty() {
+            crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
+        } else {
+            crate::hal::driver_task::run_driver_task_ring_service_nonblocking_staged(
+                contract,
+                command,
+                &staging_segments,
+            )
+        };
         let written = match completion {
             Some(completion)
                 if completion.code

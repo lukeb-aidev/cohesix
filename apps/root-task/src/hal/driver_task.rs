@@ -2954,6 +2954,107 @@ pub fn stage_driver_task_ring_frame(
     stage_driver_task_ring_payload_at(contract, DRIVER_TASK_RING_FRAME_OFFSET, payload, flags)
 }
 
+/// A caller-provided payload segment copied only after the HAL owns the ring slot.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+pub enum DriverTaskStagingSegment<'a> {
+    /// Bytes copied into the command ring page.
+    Ring {
+        /// Runtime-visible offset in the ring page.
+        offset: usize,
+        /// Bytes to stage.
+        payload: &'a [u8],
+        /// Descriptor flags for the staged bytes.
+        flags: u16,
+    },
+    /// Bytes copied into the bus-link shared payload window.
+    Shared {
+        /// Bytes to stage.
+        payload: &'a [u8],
+        /// Descriptor flags for the staged bytes.
+        flags: u16,
+    },
+}
+
+#[cfg(feature = "kernel")]
+impl<'a> DriverTaskStagingSegment<'a> {
+    /// Construct a ring-frame segment at the canonical frame offset.
+    pub const fn ring_frame(payload: &'a [u8], flags: u16) -> Self {
+        Self::Ring {
+            offset: DRIVER_TASK_RING_FRAME_OFFSET,
+            payload,
+            flags,
+        }
+    }
+
+    /// Construct a ring segment at a caller-selected frame offset.
+    pub const fn ring_payload_at(offset: usize, payload: &'a [u8], flags: u16) -> Self {
+        Self::Ring {
+            offset,
+            payload,
+            flags,
+        }
+    }
+
+    /// Construct a bus-link shared-payload segment.
+    pub const fn shared(payload: &'a [u8], flags: u16) -> Self {
+        Self::Shared { payload, flags }
+    }
+}
+
+/// Describe a canonical ring-frame segment without copying bytes.
+#[cfg(feature = "kernel")]
+pub fn describe_driver_task_ring_frame(
+    payload: &[u8],
+    flags: u16,
+) -> Option<DriverFrameDescriptor> {
+    describe_driver_task_ring_payload_at(DRIVER_TASK_RING_FRAME_OFFSET, payload, flags)
+}
+
+/// Describe a ring-page segment without copying bytes.
+#[cfg(feature = "kernel")]
+pub fn describe_driver_task_ring_payload_at(
+    offset: usize,
+    payload: &[u8],
+    flags: u16,
+) -> Option<DriverFrameDescriptor> {
+    if payload.len() > MAX_DRIVER_TASK_FRAME_BYTES {
+        return None;
+    }
+    let end = offset.checked_add(payload.len())?;
+    if offset < DRIVER_TASK_RING_FRAME_OFFSET || end > DRIVER_TASK_RING_PAGE_BYTES {
+        return None;
+    }
+    DriverFrameDescriptor::new(offset as u32, payload.len() as u16, flags).ok()
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_payload_matches(ring_root_ptr: usize, offset: usize, payload: &[u8]) -> bool {
+    driver_task_shared_load_barrier();
+    let src = (ring_root_ptr + offset) as *const u8;
+    for (index, expected) in payload.iter().copied().enumerate() {
+        // SAFETY: Callers validate that the payload range lies inside the shared
+        // ring page before comparing an active in-flight frame.
+        let actual = unsafe { core::ptr::read_volatile(src.add(index)) };
+        if actual != expected {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_copy_ring_payload(ring_root_ptr: usize, offset: usize, payload: &[u8]) {
+    let dst = (ring_root_ptr + offset) as *mut u8;
+    // SAFETY: Callers validate that the destination lies in the HAL-owned ring
+    // page after the fixed records. The submit path calls this only while it
+    // owns the per-contract active slot.
+    unsafe {
+        core::ptr::copy_nonoverlapping(payload.as_ptr(), dst, payload.len());
+    }
+    driver_task_shared_store_barrier();
+}
+
 /// Stage a pointer-free payload at a specific offset in the shared ring page.
 #[cfg(feature = "kernel")]
 pub fn stage_driver_task_ring_payload_at(
@@ -2971,22 +3072,15 @@ pub fn stage_driver_task_ring_payload_at(
     if ring_root_ptr == 0 {
         return None;
     }
-    let end = offset.checked_add(payload.len())?;
-    if offset < DRIVER_TASK_RING_FRAME_OFFSET {
-        return None;
+    let descriptor = describe_driver_task_ring_payload_at(offset, payload, flags)?;
+    if slot.active.load(Ordering::Acquire) != 0 {
+        if !driver_task_ring_payload_matches(ring_root_ptr, offset, payload) {
+            return None;
+        }
+        return Some(descriptor);
     }
-    if end > DRIVER_TASK_RING_PAGE_BYTES {
-        return None;
-    }
-    let dst = (ring_root_ptr + offset) as *mut u8;
-    // SAFETY: The destination lies in the HAL-owned ring page after the fixed
-    // command/completion records. Bounds above keep the copy page-local, and the
-    // root TCB owns writes before it submits the command sequence.
-    unsafe {
-        core::ptr::copy_nonoverlapping(payload.as_ptr(), dst, payload.len());
-    }
-    driver_task_shared_store_barrier();
-    DriverFrameDescriptor::new(offset as u32, payload.len() as u16, flags).ok()
+    driver_task_copy_ring_payload(ring_root_ptr, offset, payload);
+    Some(descriptor)
 }
 
 /// Payload staged into the fixed driver shared-buffer window.
@@ -3001,26 +3095,94 @@ pub struct DriverTaskStagedSharedPayload {
     pub flags: u16,
 }
 
-/// Stage a bounded payload into the driver-task shared-buffer pages.
+/// Describe a shared-payload segment without copying bytes.
 #[cfg(feature = "kernel")]
-pub fn stage_driver_task_shared_payload(
-    contract: DriverTaskContract,
+pub fn describe_driver_task_shared_payload(
     payload: &[u8],
     flags: u16,
 ) -> Option<DriverTaskStagedSharedPayload> {
     if payload.is_empty() || payload.len() > DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES {
         return None;
     }
-    let task_key = driver_task_contract_key(contract)?;
-    let slot = slot_for_task_key(task_key)?;
+    Some(DriverTaskStagedSharedPayload {
+        offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+        len: payload.len() as u16,
+        flags,
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_required_shared_pages(payload_len: usize) -> Option<usize> {
+    if payload_len == 0 || payload_len > DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES {
+        return None;
+    }
     let page_bytes = DRIVER_TASK_RING_PAGE_BYTES;
-    let required_pages = payload.len().saturating_add(page_bytes - 1) / page_bytes;
+    let required_pages = payload_len.saturating_add(page_bytes - 1) / page_bytes;
     if required_pages == 0 || required_pages > DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
         return None;
     }
+    Some(required_pages)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_shared_payload_pages_ready(
+    slot: &DriverTaskCommandSlot,
+    payload_len: usize,
+) -> bool {
+    let Some(required_pages) = driver_task_required_shared_pages(payload_len) else {
+        return false;
+    };
+    if slot.shared_frame_count.load(Ordering::Acquire) < required_pages {
+        return false;
+    }
+    for page in 0..required_pages {
+        if slot.shared_frame_root_ptrs[page].load(Ordering::Acquire) == 0 {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_shared_payload_matches(slot: &DriverTaskCommandSlot, payload: &[u8]) -> bool {
+    let Some(required_pages) = driver_task_required_shared_pages(payload.len()) else {
+        return false;
+    };
+    if slot.shared_frame_count.load(Ordering::Acquire) < required_pages {
+        return false;
+    }
+    let page_bytes = DRIVER_TASK_RING_PAGE_BYTES;
+    let mut checked = 0usize;
+    driver_task_shared_load_barrier();
+    while checked < payload.len() {
+        let page = checked / page_bytes;
+        let page_offset = checked % page_bytes;
+        let root_ptr = slot.shared_frame_root_ptrs[page].load(Ordering::Acquire);
+        if root_ptr == 0 {
+            return false;
+        }
+        let chunk = (page_bytes - page_offset).min(payload.len() - checked);
+        let src = (root_ptr + page_offset) as *const u8;
+        for index in 0..chunk {
+            // SAFETY: The root pointer is a HAL-published shared page mapping,
+            // and bounds above keep the comparison inside the declared window.
+            let actual = unsafe { core::ptr::read_volatile(src.add(index)) };
+            if actual != payload[checked + index] {
+                return false;
+            }
+        }
+        checked = checked.saturating_add(chunk);
+    }
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_copy_shared_payload(slot: &DriverTaskCommandSlot, payload: &[u8]) -> Option<()> {
+    let required_pages = driver_task_required_shared_pages(payload.len())?;
     if slot.shared_frame_count.load(Ordering::Acquire) < required_pages {
         return None;
     }
+    let page_bytes = DRIVER_TASK_RING_PAGE_BYTES;
     let mut copied = 0usize;
     while copied < payload.len() {
         let page = copied / page_bytes;
@@ -3032,9 +3194,8 @@ pub fn stage_driver_task_shared_payload(
         let chunk = (page_bytes - page_offset).min(payload.len() - copied);
         let dst = root_ptr.checked_add(page_offset)? as *mut u8;
         // SAFETY: The destination is a HAL-published root mapping for one of
-        // the fixed shared-buffer pages. Bounds above keep the copy inside the
-        // declared shared window, and release ordering publishes bytes before
-        // the command descriptor can be consumed by the child runtime.
+        // the fixed shared-buffer pages. The submit path calls this only while
+        // it owns the per-contract active slot.
         unsafe {
             core::ptr::copy_nonoverlapping(payload.as_ptr().add(copied), dst, chunk);
         }
@@ -3042,11 +3203,102 @@ pub fn stage_driver_task_shared_payload(
         copied = copied.saturating_add(chunk);
     }
     driver_task_shared_store_barrier();
-    Some(DriverTaskStagedSharedPayload {
-        offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
-        len: payload.len() as u16,
-        flags,
-    })
+    Some(())
+}
+
+/// Stage a bounded payload into the driver-task shared-buffer pages.
+#[cfg(feature = "kernel")]
+pub fn stage_driver_task_shared_payload(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    flags: u16,
+) -> Option<DriverTaskStagedSharedPayload> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    let descriptor = describe_driver_task_shared_payload(payload, flags)?;
+    if !driver_task_shared_payload_pages_ready(slot, payload.len()) {
+        return None;
+    }
+    if slot.active.load(Ordering::Acquire) != 0 {
+        if !driver_task_shared_payload_matches(slot, payload) {
+            return None;
+        }
+        return Some(descriptor);
+    }
+    driver_task_copy_shared_payload(slot, payload)?;
+    Some(descriptor)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_staging_segment_valid(
+    slot: &DriverTaskCommandSlot,
+    ring_root_ptr: usize,
+    segment: DriverTaskStagingSegment<'_>,
+) -> bool {
+    match segment {
+        DriverTaskStagingSegment::Ring {
+            offset,
+            payload,
+            flags,
+        } => {
+            ring_root_ptr != 0
+                && describe_driver_task_ring_payload_at(offset, payload, flags).is_some()
+        }
+        DriverTaskStagingSegment::Shared { payload, flags } => {
+            describe_driver_task_shared_payload(payload, flags).is_some()
+                && driver_task_shared_payload_pages_ready(slot, payload.len())
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_staging_segments_valid(
+    slot: &DriverTaskCommandSlot,
+    ring_root_ptr: usize,
+    segments: &[DriverTaskStagingSegment<'_>],
+) -> bool {
+    segments
+        .iter()
+        .copied()
+        .all(|segment| driver_task_staging_segment_valid(slot, ring_root_ptr, segment))
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_stage_segment(
+    slot: &DriverTaskCommandSlot,
+    ring_root_ptr: usize,
+    segment: DriverTaskStagingSegment<'_>,
+) -> Option<()> {
+    match segment {
+        DriverTaskStagingSegment::Ring {
+            offset,
+            payload,
+            flags,
+        } => {
+            let _ = describe_driver_task_ring_payload_at(offset, payload, flags)?;
+            driver_task_copy_ring_payload(ring_root_ptr, offset, payload);
+            Some(())
+        }
+        DriverTaskStagingSegment::Shared { payload, flags } => {
+            let _ = describe_driver_task_shared_payload(payload, flags)?;
+            driver_task_copy_shared_payload(slot, payload)
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_stage_segments(
+    slot: &DriverTaskCommandSlot,
+    ring_root_ptr: usize,
+    segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<()> {
+    if !driver_task_staging_segments_valid(slot, ring_root_ptr, segments) {
+        return None;
+    }
+    for segment in segments.iter().copied() {
+        driver_task_stage_segment(slot, ring_root_ptr, segment)?;
+    }
+    Some(())
 }
 
 /// Stage a pointer-free runtime initialization descriptor into the shared ring.
@@ -3055,20 +3307,36 @@ pub fn stage_driver_runtime_init_descriptor(
     contract: DriverTaskContract,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Option<DriverFrameDescriptor> {
+    let bytes = driver_runtime_init_descriptor_bytes(descriptor)?;
+    stage_driver_task_ring_frame(contract, bytes, 0)
+}
+
+/// Describe a pointer-free runtime initialization descriptor without copying.
+#[cfg(feature = "kernel")]
+pub fn describe_driver_runtime_init_descriptor(
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<DriverFrameDescriptor> {
+    let bytes = driver_runtime_init_descriptor_bytes(descriptor)?;
+    describe_driver_task_ring_frame(bytes, 0)
+}
+
+#[cfg(feature = "kernel")]
+pub fn driver_runtime_init_descriptor_bytes(
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<&[u8]> {
     if !descriptor.valid() {
         return None;
     }
     // SAFETY: `DriverRuntimeInitDescriptor` is `repr(C)`, primitive-only, and
-    // bounded by the shared ABI crate. The resulting byte view is copied
-    // immediately into the HAL-owned ring page and does not outlive
-    // `descriptor`.
+    // bounded by the shared ABI crate. The resulting byte view is used only for
+    // immediate staged publication while `descriptor` is still borrowed.
     let bytes = unsafe {
         core::slice::from_raw_parts(
             core::ptr::from_ref(descriptor).cast::<u8>(),
             core::mem::size_of::<DriverRuntimeInitDescriptor>(),
         )
     };
-    stage_driver_task_ring_frame(contract, bytes, 0)
+    Some(bytes)
 }
 
 /// Build a runtime init command for a Pi 4 hot path.
@@ -3190,7 +3458,7 @@ pub fn ensure_deferred_runtime_init_descriptor(
         emit_deferred_runtime_init_status(contract, hot_path, "invalid-descriptor");
         return false;
     }
-    let Some(frame) = stage_driver_runtime_init_descriptor(contract, &descriptor) else {
+    let Some(frame) = describe_driver_runtime_init_descriptor(&descriptor) else {
         emit_driver_task_resource_init_status(
             contract,
             hot_path,
@@ -3201,15 +3469,27 @@ pub fn ensure_deferred_runtime_init_descriptor(
         emit_deferred_runtime_init_status(contract, hot_path, "stage-failed");
         return false;
     };
+    let Some(descriptor_bytes) = driver_runtime_init_descriptor_bytes(&descriptor) else {
+        emit_driver_task_resource_init_status(
+            contract,
+            hot_path,
+            "runtime-descriptor-replay",
+            "stage-failed",
+            None,
+        );
+        emit_deferred_runtime_init_status(contract, hot_path, "stage-failed");
+        return false;
+    };
+    let staging_segments = [DriverTaskStagingSegment::ring_frame(descriptor_bytes, 0)];
     let command = runtime_init_command(
         hot_path,
         DriverTaskBudgetGrant::from_contract(contract),
         frame,
     );
     let completion = if deferred_runtime_init_replay_must_be_bounded(hot_path) {
-        run_driver_task_ring_command_nonblocking(contract, command)
+        run_driver_task_ring_command_nonblocking_staged(contract, command, &staging_segments)
     } else {
-        run_driver_task_ring_command(contract, command)
+        run_driver_task_ring_command_staged(contract, command, &staging_segments)
     };
     let complete = completion.is_some_and(|completion| {
         completion.code == DriverTaskCompletionCode::Progress.as_u16()
@@ -3920,7 +4200,52 @@ const fn driver_task_ring_command_fingerprint_mix(mut hash: u32, value: u32) -> 
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_command_fingerprint(command: DriverTaskCommandRecord) -> u32 {
+fn driver_task_staging_bytes_fingerprint(mut hash: u32, payload: &[u8]) -> u32 {
+    for byte in payload.iter().copied() {
+        hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(byte));
+    }
+    hash
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_staging_segments_fingerprint(segments: &[DriverTaskStagingSegment<'_>]) -> u32 {
+    if segments.is_empty() {
+        return 0;
+    }
+    let mut hash = 2_166_136_261u32;
+    for segment in segments.iter().copied() {
+        match segment {
+            DriverTaskStagingSegment::Ring {
+                offset,
+                payload,
+                flags,
+            } => {
+                hash = driver_task_ring_command_fingerprint_mix(hash, 0x5249_4e47);
+                hash = driver_task_ring_command_fingerprint_mix(hash, offset as u32);
+                hash = driver_task_ring_command_fingerprint_mix(hash, payload.len() as u32);
+                hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(flags));
+                hash = driver_task_staging_bytes_fingerprint(hash, payload);
+            }
+            DriverTaskStagingSegment::Shared { payload, flags } => {
+                hash = driver_task_ring_command_fingerprint_mix(hash, 0x5348_5244);
+                hash = driver_task_ring_command_fingerprint_mix(
+                    hash,
+                    u32::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE),
+                );
+                hash = driver_task_ring_command_fingerprint_mix(hash, payload.len() as u32);
+                hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(flags));
+                hash = driver_task_staging_bytes_fingerprint(hash, payload);
+            }
+        }
+    }
+    hash | 1
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_command_fingerprint(
+    command: DriverTaskCommandRecord,
+    staging_fingerprint: u32,
+) -> u32 {
     let mut hash = 2_166_136_261u32;
     hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.opcode));
     hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.flags));
@@ -3934,6 +4259,7 @@ fn driver_task_ring_command_fingerprint(command: DriverTaskCommandRecord) -> u32
     hash = driver_task_ring_command_fingerprint_mix(hash, command.frame.offset);
     hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.frame.len));
     hash = driver_task_ring_command_fingerprint_mix(hash, u32::from(command.frame.flags));
+    hash = driver_task_ring_command_fingerprint_mix(hash, staging_fingerprint);
     hash | 1
 }
 
@@ -3951,6 +4277,21 @@ pub fn run_driver_task_ring_command(
     run_driver_task_ring_command_with_mode(contract, command, DriverTaskRingCommandMode::Steady)
 }
 
+/// Execute a command and copy staged bytes only after owning the ring slot.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_command_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode_and_staging(
+        contract,
+        command,
+        DriverTaskRingCommandMode::Steady,
+        staging_segments,
+    )
+}
+
 /// Execute the first linked-runtime command without letting root block forever.
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_command_bootstrap(
@@ -3958,6 +4299,21 @@ pub fn run_driver_task_ring_command_bootstrap(
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
     run_driver_task_ring_command_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
+}
+
+/// Execute a bootstrap command with atomic staged-byte publication.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_command_bootstrap_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode_and_staging(
+        contract,
+        command,
+        DriverTaskRingCommandMode::Bootstrap,
+        staging_segments,
+    )
 }
 
 /// Execute a linked-runtime command with bounded nonblocking sends.
@@ -3970,6 +4326,21 @@ pub fn run_driver_task_ring_command_nonblocking(
         contract,
         command,
         DriverTaskRingCommandMode::NonBlocking,
+    )
+}
+
+/// Execute a nonblocking command with atomic staged-byte publication.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_command_nonblocking_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode_and_staging(
+        contract,
+        command,
+        DriverTaskRingCommandMode::NonBlocking,
+        staging_segments,
     )
 }
 
@@ -3991,11 +4362,36 @@ pub fn run_driver_task_ring_command_prompt_slice(
     )
 }
 
+/// Execute one prompt-side slice with atomic staged-byte publication.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_command_prompt_slice_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode_and_staging(
+        contract,
+        command,
+        DriverTaskRingCommandMode::PromptSlice,
+        staging_segments,
+    )
+}
+
 #[cfg(feature = "kernel")]
 fn run_driver_task_ring_command_with_mode(
     contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_command_with_mode_and_staging(contract, command, mode, &[])
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_ring_command_with_mode_and_staging(
+    contract: DriverTaskContract,
     mut command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> Option<DriverTaskCompletionRecord> {
     let Some(task_key) = driver_task_contract_key(contract) else {
         emit_driver_task_ring_resource_submit_status(
@@ -4035,9 +4431,19 @@ fn run_driver_task_ring_command_with_mode(
         );
         return None;
     }
+    if !driver_task_staging_segments_valid(slot, ring_root_ptr, staging_segments) {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "stage-invalid",
+        );
+        return None;
+    }
 
     command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
-    let command_fingerprint = driver_task_ring_command_fingerprint(command);
+    let staging_fingerprint = driver_task_staging_segments_fingerprint(staging_segments);
+    let command_fingerprint = driver_task_ring_command_fingerprint(command, staging_fingerprint);
     let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
     let completion_ptr =
         (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
@@ -4069,6 +4475,20 @@ fn run_driver_task_ring_command_with_mode(
     let request = if same_request_resume {
         slot.request_seq.load(Ordering::Acquire)
     } else {
+        if !staging_segments.is_empty()
+            && driver_task_stage_segments(slot, ring_root_ptr, staging_segments).is_none()
+        {
+            slot.active.store(0, Ordering::Release);
+            slot.active_command_fingerprint.store(0, Ordering::Release);
+            slot.timeout_resumes.store(0, Ordering::Release);
+            emit_driver_task_ring_resource_submit_status(
+                contract,
+                command,
+                "runtime-ring-submit",
+                "stage-failed",
+            );
+            return None;
+        }
         let request = slot
             .request_seq
             .load(Ordering::Relaxed)
@@ -4227,10 +4647,19 @@ fn run_driver_task_ring_command_with_mode(
         }
     }
 
+    let payload_bearing_turn = staging_fingerprint != 0 || command.frame.len != 0;
     let mut timeout_count = 0usize;
     let keep_active_on_timeout = if completion.sequence != request as u32 {
         let (keep_active, count) =
-            driver_task_ring_timeout_keep_decision(slot, contract, command, mode);
+            if payload_bearing_turn && driver_task_ring_mode_uses_bounded_send(mode) {
+                let count = slot
+                    .timeout_resumes
+                    .fetch_add(1, Ordering::AcqRel)
+                    .saturating_add(1);
+                (true, count)
+            } else {
+                driver_task_ring_timeout_keep_decision(slot, contract, command, mode)
+            };
         timeout_count = count;
         keep_active
     } else {
@@ -4283,6 +4712,21 @@ pub fn run_driver_task_ring_service(
     run_driver_task_ring_service_with_mode(contract, command, DriverTaskRingCommandMode::Steady)
 }
 
+/// Execute one service turn and publish staged bytes under the ring-slot lease.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode_and_staging(
+        contract,
+        command,
+        DriverTaskRingCommandMode::Steady,
+        staging_segments,
+    )
+}
+
 /// Execute a pre-root service turn without sampling hardware timing registers.
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_service_bootstrap(
@@ -4290,6 +4734,21 @@ pub fn run_driver_task_ring_service_bootstrap(
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
     run_driver_task_ring_service_with_mode(contract, command, DriverTaskRingCommandMode::Bootstrap)
+}
+
+/// Execute a bootstrap service turn with atomic staged-byte publication.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_bootstrap_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode_and_staging(
+        contract,
+        command,
+        DriverTaskRingCommandMode::Bootstrap,
+        staging_segments,
+    )
 }
 
 /// Execute one registered driver service turn through bounded nonblocking IPC.
@@ -4305,6 +4764,21 @@ pub fn run_driver_task_ring_service_nonblocking(
     )
 }
 
+/// Execute one nonblocking service turn with atomic staged-byte publication.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_nonblocking_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode_and_staging(
+        contract,
+        command,
+        DriverTaskRingCommandMode::NonBlocking,
+        staging_segments,
+    )
+}
+
 /// Execute one prompt-side service slice without monopolising the root shell.
 #[cfg(feature = "kernel")]
 pub fn run_driver_task_ring_service_prompt_slice(
@@ -4315,6 +4789,21 @@ pub fn run_driver_task_ring_service_prompt_slice(
         contract,
         command,
         DriverTaskRingCommandMode::PromptSlice,
+    )
+}
+
+/// Execute one prompt-side service slice with atomic staged-byte publication.
+#[cfg(feature = "kernel")]
+pub fn run_driver_task_ring_service_prompt_slice_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode_and_staging(
+        contract,
+        command,
+        DriverTaskRingCommandMode::PromptSlice,
+        staging_segments,
     )
 }
 
@@ -4471,8 +4960,18 @@ pub fn emit_driver_task_resource_init_status(
 #[cfg(feature = "kernel")]
 fn run_driver_task_ring_service_with_mode(
     contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+) -> Option<DriverTaskCompletionRecord> {
+    run_driver_task_ring_service_with_mode_and_staging(contract, command, mode, &[])
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_ring_service_with_mode_and_staging(
+    contract: DriverTaskContract,
     mut command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> Option<DriverTaskCompletionRecord> {
     let service_kind = driver_task_ring_service_kind(contract);
     if service_kind == DriverTaskRingServiceKind::RootContextDiagnostic {
@@ -4481,7 +4980,12 @@ fn run_driver_task_ring_service_with_mode(
     }
     let owner_state_credit_eligible =
         driver_task_ring_service_owner_state_credit_eligible(service_kind, command);
-    let completion = run_driver_task_ring_command_with_mode(contract, command, mode)?;
+    let completion = run_driver_task_ring_command_with_mode_and_staging(
+        contract,
+        command,
+        mode,
+        staging_segments,
+    )?;
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
         record_driver_task_ring_service(
             contract,
@@ -6831,6 +7335,69 @@ mod tests {
         clear_driver_task_transport(contract);
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn active_ring_staging_preserves_in_flight_bytes() {
+        let contract = RTL8139_DRIVER_TASK_CONTRACT;
+        clear_driver_task_transport(contract);
+        let mut ring_page = [0u8; DRIVER_TASK_RING_PAGE_BYTES];
+        publish_driver_task_ring(contract, ring_page.as_mut_ptr() as usize);
+
+        let first = [0x11u8, 0x22, 0x33, 0x44];
+        let second = [0xaa_u8, 0xbb, 0xcc, 0xdd];
+        let frame = stage_driver_task_ring_frame(contract, &first, 0).expect("initial frame");
+        assert_eq!(frame.len, first.len() as u16);
+        let task_key = driver_task_contract_key(contract).expect("task key");
+        let slot = slot_for_task_key(task_key).expect("slot");
+        slot.active.store(1, Ordering::Release);
+
+        assert!(stage_driver_task_ring_frame(contract, &second, 0).is_none());
+        let staged =
+            &ring_page[DRIVER_TASK_RING_FRAME_OFFSET..DRIVER_TASK_RING_FRAME_OFFSET + first.len()];
+        assert_eq!(staged, first);
+        assert_eq!(
+            stage_driver_task_ring_frame(contract, &first, 0).expect("same active frame"),
+            frame
+        );
+
+        clear_driver_task_transport(contract);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn active_shared_staging_preserves_in_flight_bytes() {
+        let contract = VIRTIO_NET_DRIVER_TASK_CONTRACT;
+        clear_driver_task_transport(contract);
+        let mut shared = [0u8; DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES];
+        publish_driver_task_shared_frame(contract, 0, 0x3000, shared.as_mut_ptr() as usize);
+        publish_driver_task_shared_frame(
+            contract,
+            1,
+            0x4000,
+            // SAFETY: The offset is inside the local test buffer and points to
+            // the second simulated shared page.
+            unsafe { shared.as_mut_ptr().add(DRIVER_TASK_RING_PAGE_BYTES) as usize },
+        );
+
+        let first = [0x5au8; 96];
+        let second = [0xa5u8; 96];
+        let descriptor =
+            stage_driver_task_shared_payload(contract, &first, 0).expect("initial shared payload");
+        let task_key = driver_task_contract_key(contract).expect("task key");
+        let slot = slot_for_task_key(task_key).expect("slot");
+        slot.active.store(1, Ordering::Release);
+
+        assert!(stage_driver_task_shared_payload(contract, &second, 0).is_none());
+        assert_eq!(&shared[..first.len()], first);
+        assert_eq!(
+            stage_driver_task_shared_payload(contract, &first, 0)
+                .expect("same active shared payload"),
+            descriptor
+        );
+
+        clear_driver_task_transport(contract);
+    }
+
     #[test]
     fn builtin_isolation_summary_requires_runtime_proof_for_acceptance() {
         let summary = builtin_isolation_summary();
@@ -7916,16 +8483,64 @@ mod tests {
         different_frame.frame.len = 8;
 
         assert_eq!(
-            driver_task_ring_command_fingerprint(first),
-            driver_task_ring_command_fingerprint(same)
+            driver_task_ring_command_fingerprint(first, 0),
+            driver_task_ring_command_fingerprint(same, 0)
         );
         assert_ne!(
-            driver_task_ring_command_fingerprint(first),
-            driver_task_ring_command_fingerprint(different_aux)
+            driver_task_ring_command_fingerprint(first, 0),
+            driver_task_ring_command_fingerprint(different_aux, 0)
         );
         assert_ne!(
-            driver_task_ring_command_fingerprint(first),
-            driver_task_ring_command_fingerprint(different_frame)
+            driver_task_ring_command_fingerprint(first, 0),
+            driver_task_ring_command_fingerprint(different_frame, 0)
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn keep_active_resume_identity_includes_staged_cyw43_bytes() {
+        let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let desc_size = 28u16;
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            7,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(contract),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: desc_size,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        command.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::NonBlocking, command.flags);
+
+        let descriptor_a = [0x10u8; 28];
+        let mut descriptor_b = descriptor_a;
+        descriptor_b[4] = 0x20;
+        let segments_a = [DriverTaskStagingSegment::ring_payload_at(
+            DRIVER_TASK_RING_FRAME_OFFSET,
+            &descriptor_a,
+            0,
+        )];
+        let segments_b = [DriverTaskStagingSegment::ring_payload_at(
+            DRIVER_TASK_RING_FRAME_OFFSET,
+            &descriptor_b,
+            0,
+        )];
+        let fingerprint_a = driver_task_staging_segments_fingerprint(&segments_a);
+        let fingerprint_b = driver_task_staging_segments_fingerprint(&segments_b);
+
+        let mut same_sequence_changed = command;
+        same_sequence_changed.sequence = command.sequence.wrapping_add(1);
+        assert_eq!(
+            driver_task_ring_command_fingerprint(command, fingerprint_a),
+            driver_task_ring_command_fingerprint(same_sequence_changed, fingerprint_a)
+        );
+        assert_ne!(fingerprint_a, fingerprint_b);
+        assert_ne!(
+            driver_task_ring_command_fingerprint(command, fingerprint_a),
+            driver_task_ring_command_fingerprint(command, fingerprint_b)
         );
     }
 
