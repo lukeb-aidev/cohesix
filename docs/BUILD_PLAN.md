@@ -108,6 +108,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26d](#26d) | seL4 15 Baseline Refresh + Reference Manual Realignment | Pending |
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [27b](#27b) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
+| [27c](#27c) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
 | [28c](#28c) | Host-Side AI Run Control: Delegated Agents, Durable Context, Attention Budgets | Pending |
@@ -7948,11 +7949,186 @@ Deliverables:
 ```
 
 
+## Milestone 27c — Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) <a id="27c"></a>
+[Milestones](#Milestones)
+
+**Why now (performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Milestones 26c and 27b add the missing enforcement substrate: generated worker/driver scheduling evidence, profile-qualified MCS/non-MCS budget fields, proof witnesses, HAL authority checks, and target-qualified test gates. Milestone 27c is the right point to turn affinity placement into measurable throughput improvement without weakening authority, replay, or hardware-proof boundaries.
+
+**As-built alignment note:** Cohesix already has manifest affinity, `smp activity`, linked driver-runtime active-slot rules, bounded service-turn language, and host-safe pressure evidence. It does **not** yet have compiler-owned core-local service buckets, generated per-core service-turn budgets, per-core telemetry/spool drain policy, IRQ-locality witnesses, or Pi/QEMU evidence proving that hot paths stay local to their assigned core under load. Older prose must not claim core-local hot-path scheduling or multicore throughput closure until this milestone has passing evidence.
+
+**Non-negotiable constraints**
+- No POSIX threads, general SMP runtime, async executor, shared work-stealing queue, or bulky SMP library inside the VM.
+- No new in-VM protocols, console grammar, Secure9P verbs, namespace authority, or root-owned physical-driver hot paths.
+- Authoritative state remains serialized through the authority path; parallelism is only at bounded, manifest-declared service edges.
+- Driver runtimes remain linked-runtime only on physical hardware. Root-task may admit HAL resources, publish descriptors, and observe counters; it must not regain steady-state device ownership.
+- Backpressure is explicit and deterministic: saturated service buckets return bounded busy/overrun evidence, not unbounded queue growth.
+- Physical Pi 4 throughput claims require fresh target evidence and must stay separate from shell transport, USB keyboard, Wi-Fi, HDMI, and flash proof lanes.
+
+### Prerequisite
+- Milestone **26c** completed for the selected profile, including worker/driver scheduling evidence, notification lifecycle evidence, and the MCS/non-MCS budget distinction.
+- Milestone **27b** completed for the selected profile, including proof witnesses, HAL/driver-task authority checks, and verification-gate evidence.
+- Reopened Milestones **26a** and **26b**, plus Milestone **26d**, completed or explicitly scoped where their artifacts are inputs to Pi 4 driver-runtime, affinity, seL4 baseline, and target-qualified proof.
+
+### Goal
+Convert existing manifest affinity into **core-local, bounded service-turn execution** for workers, linked driver runtimes, NineDoor/provider paths, telemetry drains, and persistent-spool drains while preserving Cohesix's file-shaped control plane, deterministic ordering, and tiny TCB.
+
+This milestone optimizes the runtime shape; it does not add user-visible capabilities. Its success criteria are lower contention, bounded hot-path latency, deterministic busy/yield evidence, and proof that multicore work stays inside generated authority and scheduling contracts.
+
+### Deliverables
+
+#### A) Compiler-owned core-local service IR
+- Extend `coh-rtc` with profile-qualified scheduling fields for:
+  - per-core service buckets,
+  - per-role and per-driver service-turn budgets,
+  - bounded burst size,
+  - queue depth,
+  - IRQ/locality hints,
+  - backpressure policy,
+  - telemetry/spool drain assignment.
+- Generated manifests identify which core owns each bucket, which roles/drivers feed it, and which counters prove bounded execution.
+- Validation rejects:
+  - roles assigned to unavailable cores,
+  - physical-driver hot paths without linked runtime ownership,
+  - unbounded queues or bursts,
+  - overlapping authority that would let a worker or driver bypass its cap bundle or HAL-declared resources.
+
+#### B) Core-local event pumps
+- Root-task, NineDoor/provider adapters, workers, and linked driver runtimes drain only their assigned bucket unless an explicit manifest rule declares a bounded handoff.
+- Each service turn has fixed max work, max bytes, and max completions.
+- Authority decisions remain serialized; local buckets may prepare, parse, drain, publish counters, and return deterministic busy/yield status.
+- Non-MCS profiles expose priority/domain plus service-turn fallback evidence; MCS profiles expose scheduling-context binding, consumed-budget, and timeout evidence.
+
+#### C) Linked-driver hot-path batching
+- GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe service loops may use bounded local batching for descriptor drain, cache maintenance, completion publication, and telemetry counters.
+- Payload-bearing submits continue to use the staged active-slot path: range validation, staged-byte fingerprint, busy-on-conflict, and no overwrite of an in-flight turn.
+- Routine successful dataplane turns must not spam UART or corrupt foreground console output; hot counters are exposed through bounded observability instead.
+- IRQ notification, DMA/cache maintenance, service turn, and completion publication stay local to the assigned runtime core wherever the platform profile supports it.
+
+#### D) Sharded telemetry and spool drains
+- Per-core telemetry buffers keep producer hot paths local and publish deterministic summaries into the existing namespace.
+- Persistent-spool drain policy from Milestone 27 remains authoritative: no general filesystem, no `/proc` mutation, and append/ack semantics remain role-scoped.
+- Merge order is deterministic by generated bucket id, sequence, and timestamp fields; lost, dropped, or overwritten records carry explicit bounded evidence.
+
+#### E) Observability, evidence, and verification
+- `smp activity` extends from assignment-bucket diagnostics to service-bucket evidence:
+  - per-core service turns,
+  - budget exhaustions/yields,
+  - busy returns,
+  - max observed turn latency,
+  - queue depth high-water marks,
+  - driver/worker bucket membership,
+  - IRQ/locality proof where available.
+- `/proc/schedule/*`, evidence packs, and generated proof witnesses include the same bounded service-bucket records.
+- Verification checks prove the generated bucket layout matches resolved manifests, generated Rust tables, HAL grants, driver-task resources, and cap-bundle authority where enabled.
+
+#### F) Pressure and target-qualified proof lanes
+- Host-safe pressure tests validate mixed Secure9P, worker telemetry, driver-task, and spool-drain load without claiming Pi hardware throughput.
+- QEMU SMP tests prove semantic stability and contention reduction against the generated schedule evidence.
+- Pi 4 tests prove hardware throughput only with fresh logs that also separate flash proof, shell transport, USB/local-seat, Wi-Fi/GENET, HDMI, and SMP service-bucket evidence.
+
+### Commands
+- `cargo test -p coh-rtc`
+- `cargo test -p root-task --tests schedule`
+- `cargo test -p pi4-driver-abi`
+- `cargo test -p pi4-driver-runtime`
+- `scripts/check-generated.sh`
+- `scripts/ci/verification_gate.sh`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27c-qemu-smp`
+- `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27c-pi4-smp`
+
+### Checks (DoD)
+- Generated manifests and proof witnesses identify every service bucket, owner core, role/driver membership, budget, burst limit, queue bound, and backpressure rule.
+- MCS profiles prove scheduling-context binding and consumed-budget evidence; non-MCS profiles prove priority/domain plus bounded service-turn fallback evidence without claiming MCS enforcement.
+- Linked driver runtimes keep payload-bearing work on staged active-slot APIs, return busy on conflicting payloads, and never overwrite in-flight turns.
+- Hot-path batching reduces contention without changing ACK/ERR/END, Secure9P, console, worker namespace, or persistent-spool semantics.
+- `smp activity` and `/proc/schedule/*` report bounded service-bucket counters with `cpu_pct=unavailable` unless a real kernel-backed utilization source exists.
+- Host-safe pressure tests pass and remain classified as semantic/regression evidence, not Pi hardware throughput proof.
+- QEMU and Pi 4 target-qualified Test Plan runs pass with no undocumented output drift; Pi 4 throughput claims cite fresh target evidence and keep USB/Wi-Fi/HDMI/shell proof lanes separate.
+
+### Compiler touchpoints
+- `coh-rtc` emits service-bucket tables beside existing affinity, worker/driver scheduling, driver-image, persistence, and proof-witness outputs.
+- Manifest validation fails closed when service-bucket topology conflicts with authority, HAL resource grants, driver-runtime ownership, cap-bundle records, or persistence bounds.
+- Generated docs snippets summarize the service-bucket layout; hand-maintained docs may describe those snippets but must not become the scheduling source of truth.
+
+### Task Breakdown
+```
+Title/ID: m27c-smp-service-ir
+Goal: Add compiler-owned core-local service bucket IR and validation.
+Inputs: tools/coh-rtc, configs/root_task*.toml, docs/ROLES_AND_SCHEDULING.md, docs/INTERFACES.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — service-bucket schema for core, role/driver membership, budget, burst, queue, IRQ-locality, and backpressure fields.
+  - tools/coh-rtc/src/validate.rs — reject unavailable cores, unbounded queues/bursts, physical-driver ownership drift, and authority conflicts.
+  - tools/coh-rtc/src/codegen/* — emit generated Rust/docs/proof-witness service-bucket tables.
+Commands: cargo test -p coh-rtc && scripts/check-generated.sh
+Checks: Service-bucket manifests are generated from IR, invalid topology fails closed, and generated docs match resolved manifests.
+Deliverables: Compiler-owned service-bucket topology for QEMU and Pi 4 profiles.
+
+Title/ID: m27c-core-local-event-pumps
+Goal: Drain worker, provider, NineDoor, and root-task work through bounded core-local service turns.
+Inputs: apps/root-task/src/event, apps/root-task/src/ninedoor.rs, apps/worker-*, apps/root-task/src/generated.
+Changes:
+  - apps/root-task/src/event/** — service-turn dispatcher keyed by generated bucket id.
+  - apps/root-task/src/ninedoor.rs — bounded provider/session drains using generated bucket membership.
+  - apps/worker-heart + apps/worker-gpu + apps/worker-lora — keep worker loops within generated service-turn budgets where enabled.
+Commands: cargo test -p root-task --tests schedule && cargo test -p worker-heart && cargo test -p worker-gpu && cargo test -p worker-lora
+Checks: Each loop respects max work, bytes, completions, and deterministic busy/yield behavior; authority decisions remain serialized.
+Deliverables: Core-local event-pump execution without a VM thread pool or work-stealing runtime.
+
+Title/ID: m27c-linked-driver-hotpath-batching
+Goal: Add bounded local batching for linked driver-runtime hot paths while preserving staged active-slot semantics.
+Inputs: apps/pi4-driver-runtime, crates/pi4-driver-abi, apps/root-task/src/hal/driver_task.rs, docs/DRIVERS.md.
+Changes:
+  - apps/pi4-driver-runtime/src/** — bounded descriptor/completion/cache-maintenance bursts for GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe service turns.
+  - crates/pi4-driver-abi/src/** — expose fixed-layout service-bucket counters and max-turn evidence.
+  - apps/root-task/src/hal/driver_task.rs — preserve staged active-slot submit, busy-on-conflict, and completion publication invariants under batching.
+Commands: cargo test -p pi4-driver-abi && cargo test -p pi4-driver-runtime && cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib
+Checks: Batching stays bounded, does not add root-owned physical-driver paths, and cannot overwrite active payload-bearing turns.
+Deliverables: Lower-contention linked-runtime hot paths with contract-local backpressure.
+
+Title/ID: m27c-telemetry-spool-sharded-drain
+Goal: Keep telemetry and persistent-spool drains core-local while preserving existing namespace and persistence semantics.
+Inputs: apps/root-task/src/storage, apps/root-task/src/ninedoor.rs, docs/ARCHITECTURE.md, docs/INTERFACES.md.
+Changes:
+  - apps/root-task/src/storage/spool.rs — generated bucket assignment for drain/flush work without changing append/ack semantics.
+  - apps/root-task/src/ninedoor.rs — deterministic merge order for per-core telemetry summaries and spool status reads.
+  - docs/ARCHITECTURE.md + docs/INTERFACES.md — document per-core drain evidence as observability, not new authority.
+Commands: cargo test -p root-task --test spool && cargo test -p nine-door --test spool
+Checks: Spool append/read/ack fixtures stay byte-stable; per-core telemetry merge order is deterministic and bounded.
+Deliverables: Core-local telemetry/spool drain path that does not become a general filesystem or new protocol.
+
+Title/ID: m27c-smp-observability-and-proof
+Goal: Expose service-bucket proof through `smp activity`, `/proc/schedule/*`, evidence packs, and verification witnesses.
+Inputs: apps/root-task/src/event/mod.rs, apps/root-task/src/ninedoor.rs, apps/coh/src/evidence.rs, tools/coh-rtc, docs/USERLAND_AND_CLI.md, docs/TEST_PLAN.md.
+Changes:
+  - apps/root-task/src/event/mod.rs — extend `smp activity` with service-bucket counters, busy/yield counts, max-turn latency, and IRQ-locality proof rows.
+  - apps/root-task/src/ninedoor.rs — bounded `/proc/schedule/*` service-bucket summaries.
+  - apps/coh/src/evidence.rs — include service-bucket snapshots in evidence packs.
+  - tools/coh-rtc/src/verify.rs — verify service-bucket witnesses against resolved manifests and generated Rust tables.
+Commands: cargo test -p root-task --tests schedule && cargo test -p coh --test evidence && scripts/ci/verification_gate.sh
+Checks: Observability is bounded, read-only, generated-manifest aligned, and keeps `cpu_pct=unavailable` unless real utilization evidence exists.
+Deliverables: Auditable service-bucket proof surface for operators and verification gates.
+
+Title/ID: m27c-pressure-and-target-proof
+Goal: Add host-safe pressure coverage and target-qualified QEMU/Pi proof lanes for core-local service scheduling.
+Inputs: scripts/ci/test_plan_run.sh, docs/TEST_PLAN.md, docs/BENCHMARKS.md, scripts/pi4_trace_normalize.py.
+Changes:
+  - scripts/ci/test_plan_run.sh — add m27c QEMU and Pi target stages for service-bucket evidence.
+  - docs/TEST_PLAN.md — classify host pressure, QEMU semantic proof, and Pi hardware throughput proof separately.
+  - docs/BENCHMARKS.md — document required fresh-evidence fields before making throughput claims.
+  - scripts/pi4_trace_normalize.py — parse service-bucket counters only as SMP evidence, not USB/Wi-Fi/HDMI acceptance by itself.
+Commands:
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27c-qemu-smp
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27c-pi4-smp
+Checks: Host pressure stays semantic-only; QEMU proves regression stability; Pi throughput claims require fresh target logs and separated acceptance lanes.
+Deliverables: Repeatable validation lanes for core-local SMP optimization.
+```
+
+
 ## Milestone 28 — Operator Utilities: Inspect, Trace, Bundle, Diff, Attest <a id="28"></a>
 [Milestones](#Milestones)
 
 **Why now (operator & adoption):**  
-After Milestones 26c, 26d, 27, and 27b close, Cohesix should have the Pi 4/seL4 baseline, persistence evidence, and formal-verification claim register needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
+After Milestones 26c, 26d, 27, 27b, and 27c close, Cohesix should have the Pi 4/seL4 baseline, persistence evidence, formal-verification claim register, and core-local SMP service-bucket evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
 
 **As-built alignment note:** `coh evidence pack` and `coh evidence timeline` already exist and are reused here. `coh inspect`, a first-class trace diagnostics command, `coh diff`, `coh attest`, and any `coh bundle` alias are not implemented as of the 26c planning audit and must be added as thin, read-only projections over existing file-shaped state and evidence packs.
 

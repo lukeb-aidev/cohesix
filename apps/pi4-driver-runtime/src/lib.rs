@@ -231,6 +231,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED,
     DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN,
     DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED,
     DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN,
     DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED, DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
@@ -855,6 +858,31 @@ const CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES: usize =
 const CYW43_CDC_HEADER_BYTES: usize = 16;
 const CYW43_CDC_STATUS_SUCCESS: u32 = 0;
 const CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS: usize = 8_000;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC: u32 = 0x4300_0000;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NOT_READY: u32 = 1;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_RFRAME_READ_FAILED: u32 = 2;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NO_RFRAME: u32 = 3;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_INVALID_RFRAME_LEN: u32 = 4;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_RX_REQUEST_TOO_LARGE: u32 = 5;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_F2_READ_FAILED: u32 = 6;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_SDPCM_DECODE_MISS: u32 = 7;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NONMATCHING_REPLY: u32 = 8;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NOT_READY: u32 =
+    cyw43_control_exchange_timeout_result(CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NOT_READY, 0);
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_RFRAME_READ_FAILED: u32 =
+    cyw43_control_exchange_timeout_result(
+        CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_RFRAME_READ_FAILED,
+        0,
+    );
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NO_RFRAME: u32 =
+    cyw43_control_exchange_timeout_result(CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NO_RFRAME, 0);
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_F2_READ_FAILED: u32 =
+    cyw43_control_exchange_timeout_result(CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_F2_READ_FAILED, 0);
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_SDPCM_DECODE_MISS: u32 =
+    cyw43_control_exchange_timeout_result(
+        CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_SDPCM_DECODE_MISS,
+        0,
+    );
 const CYW43_SDPCM_LAST_FRAME: u32 = 1 << 24;
 const CYW43_SDPCM_CHANNEL_CONTROL: u8 = 0;
 const CYW43_SDPCM_CHANNEL_EVENT: u8 = 1;
@@ -7532,22 +7560,39 @@ fn cyw43_runtime_poll_rx(
     state: &mut Cyw43RuntimeState,
     wanted_mask: u16,
 ) -> Option<DriverFrameDescriptor> {
+    match cyw43_runtime_poll_rx_detailed(state, wanted_mask) {
+        Cyw43RxPollResult::Frame(frame) => Some(frame),
+        Cyw43RxPollResult::Idle(_) => None,
+    }
+}
+
+fn cyw43_runtime_poll_rx_detailed(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+) -> Cyw43RxPollResult {
     if !state.initialized || !state.transport_ready || !state.firmware_released {
-        return None;
+        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::NotReady);
     }
     if let Some(frame) = cyw43_rx_queue_pop_matching(state, wanted_mask) {
         state.rx_frames = state.rx_frames.saturating_add(1);
-        return Some(frame);
+        return Cyw43RxPollResult::Frame(frame);
     }
-    let lo = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_RFRAMEBCLO).unwrap_or(0);
-    let hi = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_RFRAMEBCHI).unwrap_or(0);
+    let Some(lo) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_RFRAMEBCLO) else {
+        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::RframeCountReadFailed);
+    };
+    let Some(hi) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_RFRAMEBCHI) else {
+        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::RframeCountReadFailed);
+    };
     let frame_len = usize::from(lo) | (usize::from(hi) << 8);
+    if frame_len == 0 {
+        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::NoRframe);
+    }
     if !(CYW43_SDPCM_HEADER_BYTES..=CYW43_RUNTIME_RX_BUFFER_BYTES).contains(&frame_len) {
-        return None;
+        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::InvalidRframeLength(frame_len));
     }
     let request_len = align_to(frame_len, CYW43_FUNCTION2_BLOCK_BYTES);
     if request_len > CYW43_RUNTIME_RX_BUFFER_BYTES {
-        return None;
+        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::RxRequestTooLarge(request_len));
     }
     let rx_frame = DriverFrameDescriptor {
         offset: CYW43_RUNTIME_RX_BUFFER_OFFSET as u32,
@@ -7572,7 +7617,7 @@ fn cyw43_runtime_poll_rx(
     )
     .is_none()
     {
-        return None;
+        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::Function2ReadFailed);
     }
     let frame = cyw43_runtime_decode_rx_frame_for(
         state,
@@ -7583,7 +7628,10 @@ fn cyw43_runtime_poll_rx(
     if frame.is_some() {
         state.rx_frames = state.rx_frames.saturating_add(1);
     }
-    frame
+    frame.map_or(
+        Cyw43RxPollResult::Idle(Cyw43RxIdleReason::SdpcmDecodeMiss),
+        Cyw43RxPollResult::Frame,
+    )
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -7593,6 +7641,23 @@ struct Cyw43ControlReply {
     status: u32,
     response_len: u32,
     payload_available: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43RxPollResult {
+    Frame(DriverFrameDescriptor),
+    Idle(Cyw43RxIdleReason),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43RxIdleReason {
+    NotReady,
+    RframeCountReadFailed,
+    NoRframe,
+    InvalidRframeLength(usize),
+    RxRequestTooLarge(usize),
+    Function2ReadFailed,
+    SdpcmDecodeMiss,
 }
 
 fn cyw43_control_exchange(
@@ -7606,12 +7671,19 @@ fn cyw43_control_exchange(
         return None;
     }
     let mut nonmatching_frames = 0u32;
+    let mut last_idle_reason = Cyw43RxIdleReason::NoRframe;
     for _ in 0..CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS {
-        let Some(reply_frame) =
-            cyw43_runtime_poll_rx(state, CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT)
-        else {
-            core::hint::spin_loop();
-            continue;
+        let reply_frame =
+            match cyw43_runtime_poll_rx_detailed(state, CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT) {
+                Cyw43RxPollResult::Frame(frame) => frame,
+                Cyw43RxPollResult::Idle(reason) => {
+                    last_idle_reason = reason;
+                    core::hint::spin_loop();
+                    continue;
+                }
+            };
+        if nonmatching_frames == 0 {
+            last_idle_reason = Cyw43RxIdleReason::SdpcmDecodeMiss;
         };
         let Some(reply) = cyw43_control_reply_from_frame(reply_frame) else {
             nonmatching_frames = nonmatching_frames.saturating_add(1);
@@ -7659,8 +7731,56 @@ fn cyw43_control_exchange(
             flags: reply_frame.flags,
         });
     }
-    cyw43_record_last_fault_with_result(FAULT_CYW43_CONTROL_EXCHANGE, nonmatching_frames);
+    cyw43_record_last_fault_with_result(
+        FAULT_CYW43_CONTROL_EXCHANGE,
+        cyw43_control_exchange_timeout_fault_result(last_idle_reason, nonmatching_frames),
+    );
     None
+}
+
+const fn cyw43_control_exchange_timeout_result(reason: u32, value: u32) -> u32 {
+    let bounded_value = if value > 0xffff { 0xffff } else { value };
+    CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC | ((reason & 0xff) << 16) | bounded_value
+}
+
+fn cyw43_control_exchange_timeout_fault_result(
+    last_idle_reason: Cyw43RxIdleReason,
+    nonmatching_frames: u32,
+) -> u32 {
+    if nonmatching_frames != 0 {
+        return cyw43_control_exchange_timeout_result(
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NONMATCHING_REPLY,
+            nonmatching_frames,
+        );
+    }
+    match last_idle_reason {
+        Cyw43RxIdleReason::NotReady => CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NOT_READY,
+        Cyw43RxIdleReason::RframeCountReadFailed => {
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_RFRAME_READ_FAILED
+        }
+        Cyw43RxIdleReason::NoRframe => CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NO_RFRAME,
+        Cyw43RxIdleReason::InvalidRframeLength(frame_len) => cyw43_control_exchange_timeout_result(
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_INVALID_RFRAME_LEN,
+            bounded_u32(frame_len),
+        ),
+        Cyw43RxIdleReason::RxRequestTooLarge(request_len) => cyw43_control_exchange_timeout_result(
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_RX_REQUEST_TOO_LARGE,
+            bounded_u32(request_len),
+        ),
+        Cyw43RxIdleReason::Function2ReadFailed => {
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_F2_READ_FAILED
+        }
+        Cyw43RxIdleReason::SdpcmDecodeMiss => {
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_SDPCM_DECODE_MISS
+        }
+    }
+}
+
+fn bounded_u32(value: usize) -> u32 {
+    match u32::try_from(value) {
+        Ok(value) => value,
+        Err(_) => u32::MAX,
+    }
 }
 
 fn cyw43_control_reply_from_frame(frame: DriverFrameDescriptor) -> Option<Cyw43ControlReply> {
@@ -9118,6 +9238,9 @@ fn usb_runtime_enumeration_detail(state: &mut UsbRuntimeState) -> Option<u16> {
         | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
         | DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => Some(state.init_detail),
         _ => None,
     }
@@ -9139,7 +9262,10 @@ const fn usb_enumeration_detail_rank(detail: u16) -> u8 {
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
-        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => 7,
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED => 7,
         DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 8,
         _ => 0,
     }
@@ -9171,6 +9297,9 @@ const fn usb_detail_warrants_deep_cold_reinit(detail: u16) -> bool {
             | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
             | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
     )
 }
 
@@ -13164,12 +13293,12 @@ fn usb_scan_hub_children(
     depth_remaining: u8,
 ) -> bool {
     if !usb_set_configuration(state, descriptor, &mut hub, config_value) {
-        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED;
         return false;
     }
     usb_spin_wait(USB_HUB_SET_CONFIGURATION_SETTLE_SPINS);
     let Some(hub_info) = usb_read_hub_descriptor(state, descriptor, &mut hub, hub_info) else {
-        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED;
         return false;
     };
     let hub_multi_tt = if hub_info.multi_tt {
@@ -13189,7 +13318,7 @@ fn usb_scan_hub_children(
         hub_info.ports,
         hub_multi_tt,
     ) {
-        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED;
         return false;
     }
     state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN;
@@ -16584,6 +16713,67 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_control_exchange_timeout_result_encodes_rx_idle_reason() {
+        assert_eq!(
+            cyw43_control_exchange_timeout_fault_result(Cyw43RxIdleReason::NoRframe, 0),
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NO_RFRAME
+        );
+        assert_eq!(
+            cyw43_control_exchange_timeout_fault_result(
+                Cyw43RxIdleReason::InvalidRframeLength(4),
+                0
+            ),
+            cyw43_control_exchange_timeout_result(
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_INVALID_RFRAME_LEN,
+                4
+            )
+        );
+        assert_eq!(
+            cyw43_control_exchange_timeout_fault_result(Cyw43RxIdleReason::NoRframe, 3),
+            cyw43_control_exchange_timeout_result(
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NONMATCHING_REPLY,
+                3
+            )
+        );
+    }
+
+    #[test]
+    fn cyw43_control_exchange_timeout_reports_no_rframe_count() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        let cmd = 0x107u32;
+        let id = 1u16;
+        let request = [0u8; CYW43_CDC_HEADER_BYTES];
+        stage_bytes(usize::from(payload_offset), &request);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(1);
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
+            target_addr: 0,
+            payload_offset,
+            payload_len: request.len() as u16,
+            total_len: request.len() as u32,
+            arg0: cmd,
+            arg1: u32::from(id),
+            reserved: 0,
+        });
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(80)),
+            DriverTaskCompletionRecord::fault_with_result(
+                80,
+                FAULT_CYW43_CONTROL_EXCHANGE,
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NO_RFRAME
+            )
+        );
+    }
+
+    #[test]
     fn cyw43_runtime_rx_decodes_data_frame_from_8192_byte_shared_buffer() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -19324,6 +19514,24 @@ mod tests {
             DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
         ));
         assert!(!usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+        ));
+        assert!(usb_detail_warrants_deep_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+        ));
+        assert!(!usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+        ));
+        assert!(usb_detail_warrants_deep_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+        ));
+        assert!(!usb_detail_warrants_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
+        ));
+        assert!(usb_detail_warrants_deep_cold_reinit(
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
+        ));
+        assert!(!usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
         ));
         assert!(usb_detail_warrants_deep_cold_reinit(
@@ -19635,6 +19843,11 @@ mod tests {
             DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN,
         );
         assert_eq!(best, DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN);
+        usb_remember_best_enumeration_detail(
+            &mut best,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED,
+        );
+        assert_eq!(best, DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED);
     }
 
     #[test]

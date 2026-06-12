@@ -115,6 +115,9 @@ USB_RUNTIME_DETAIL_GATES = {
     0x0215: (7, "config-descriptor-failed"),
     0x0216: (7, "hid-attach-failed"),
     0x0217: (7, "hub-attach-failed"),
+    0x0218: (7, "hub-set-configuration-failed"),
+    0x0219: (7, "hub-descriptor-failed"),
+    0x021A: (7, "hub-context-failed"),
     0x0500: (9, "hid-first-report"),
     0x0501: (9, "keyboard-first-byte"),
 }
@@ -161,6 +164,9 @@ USB_OUTCOME_BLOCKERS = {
     "hid-first-report",
     "hid-endpoint-not-ready",
     "hub-attach-failed",
+    "hub-context-failed",
+    "hub-descriptor-failed",
+    "hub-set-configuration-failed",
     "hub-topology-no-keyboard",
     "hid-init-failed",
     "hid-interrupt-in",
@@ -1435,6 +1441,57 @@ def parse_hex_int(value: str | None) -> int | None:
         return None
 
 
+CYW43_CONTROL_EXCHANGE_FAULT_DETAIL = 0x530B
+CYW43_CONTROL_EXCHANGE_OP = 11
+CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC = 0x4300_0000
+CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MASK = 0xFF00_0000
+CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_SHIFT = 16
+CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_MASK = 0xFF
+CYW43_CONTROL_EXCHANGE_TIMEOUT_REASONS = {
+    1: "cyw43-control-rx-not-ready",
+    2: "cyw43-control-rframe-count-read-failed",
+    3: "cyw43-control-rx-no-rframe",
+    4: "cyw43-control-rx-invalid-rframe-len",
+    5: "cyw43-control-rx-request-too-large",
+    6: "cyw43-control-rx-f2-read-failed",
+    7: "cyw43-control-rx-sdpcm-decode-miss",
+    8: "cyw43-control-reply-nonmatching",
+}
+
+
+def cyw43_control_exchange_timeout_exact(result: int | None) -> str | None:
+    """Return the precise CYW43 control timeout reason encoded by the runtime."""
+
+    if result is None:
+        return None
+    if (
+        result & CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MASK
+    ) != CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC:
+        return None
+    reason = (
+        result >> CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_SHIFT
+    ) & CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_MASK
+    return CYW43_CONTROL_EXCHANGE_TIMEOUT_REASONS.get(reason)
+
+
+def cyw43_control_exchange_timeout_event_exact(event: TraceEvent) -> str | None:
+    """Return the exact linked-runtime CYW43 control-exchange timeout reason."""
+
+    fields = event.fields
+    if "cyw43_driver_task_command_fault" not in event.raw.lower():
+        return None
+    if fields.get("contract", "").lower() != "cyw43455":
+        return None
+    if parse_hex_int(fields.get("op")) != CYW43_CONTROL_EXCHANGE_OP:
+        return None
+    if (
+        parse_hex_int(fields.get("detail"))
+        != CYW43_CONTROL_EXCHANGE_FAULT_DETAIL
+    ):
+        return None
+    return cyw43_control_exchange_timeout_exact(parse_hex_int(fields.get("result")))
+
+
 def wifi_join_complete_proven(fields: dict[str, str]) -> bool:
     """Return true when a join-complete log carries the required proof fields."""
 
@@ -2174,6 +2231,14 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-plane-legacy-gmode-stall",
         "cyw43-control-plane-no-frame-indication-after-write",
         "cyw43-control-plane-partial-hint-visibility",
+        "cyw43-control-rframe-count-read-failed",
+        "cyw43-control-reply-nonmatching",
+        "cyw43-control-rx-f2-read-failed",
+        "cyw43-control-rx-invalid-rframe-len",
+        "cyw43-control-rx-no-rframe",
+        "cyw43-control-rx-not-ready",
+        "cyw43-control-rx-request-too-large",
+        "cyw43-control-rx-sdpcm-decode-miss",
         "cyw43-protocol-error-cur-etheraddr-len",
         "wsec-pmk-bad-argument",
         "firmware-supplicant-unsupported",
@@ -4453,6 +4518,10 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     raw_cyw43_progress = cyw43_raw_command_progress_blocker(event)
     if raw_cyw43_progress is not None:
         return raw_cyw43_progress, raw_cyw43_progress
+    control_timeout_exact = cyw43_control_exchange_timeout_event_exact(event)
+    if control_timeout_exact is not None:
+        phase = event.fields.get("stage") or event.stage or "cyw43-control-exchange"
+        return control_timeout_exact, phase
     firmware_stream_blocker = wifi_firmware_stream_fault_blocker(event)
     if firmware_stream_blocker is not None:
         phase = (
@@ -4597,6 +4666,8 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
     if "hintless-firstread-no-frame-source-terminal" in raw:
         return 0
     if "post-write-no-irq-terminal" in raw:
+        return 0
+    if cyw43_control_exchange_timeout_event_exact(event) is not None:
         return 0
     if wifi_firmware_stream_fault_blocker(event) == candidate:
         return 0
@@ -4766,6 +4837,11 @@ def summarize_wifi_failure_detail(
             and "fn=1" in raw
             and "op=read" in raw
             and ("base=0x0c020" in raw or "chunk=0x0c020" in raw)
+        ):
+            candidate = "control-plane-reply-idle-loop"
+        if (
+            wifi_blocker == "control-plane-reply-idle-loop"
+            and cyw43_control_exchange_timeout_event_exact(event) is not None
         ):
             candidate = "control-plane-reply-idle-loop"
         if (
@@ -6231,6 +6307,9 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
                 0x0208,
                 0x0210,
                 0x0211,
+                0x0218,
+                0x0219,
+                0x021A,
                 0x0202,
                 0x0500,
                 0x0501,
@@ -6277,6 +6356,9 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
                     0x0215,
                     0x0216,
                     0x0217,
+                    0x0218,
+                    0x0219,
+                    0x021A,
                     0x0500,
                     0x0501,
                 }:

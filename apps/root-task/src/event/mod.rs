@@ -4561,7 +4561,10 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => 7,
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED => 7,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 7,
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 8,
@@ -5279,7 +5282,10 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => "hid-keyboard",
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED => "hid-keyboard",
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => "keyboard-ready",
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => {
@@ -5329,6 +5335,15 @@ where
                 "hub-topology-no-keyboard"
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => "hub-attach-failed",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED => {
+                "hub-set-configuration-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED => {
+                "hub-descriptor-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED => {
+                "hub-context-failed"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN => {
                 "hid-endpoint-not-ready"
             }
@@ -5360,7 +5375,10 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => {
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED => {
                 "continue-enumeration-same-controller"
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => "wait-first-report",
@@ -5399,7 +5417,12 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
-            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED => "same-controller",
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED => {
+                "same-controller"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
             | pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
             | pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => {
@@ -14221,6 +14244,12 @@ mod tests {
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            ),
+            7
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_gate_for_linked_detail(
                 pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
             ),
             8
@@ -14283,6 +14312,24 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             ),
             "continue-enumeration-same-controller"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_blocker_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            ),
+            "hub-descriptor-failed"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            ),
+            "continue-enumeration-same-controller"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_recovery_policy_for_linked_detail(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            ),
+            "same-controller"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(

@@ -53,6 +53,12 @@ pub const DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED: u16 = 0x0215;
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED: u16 = 0x0216;
 /// USB runtime init detail: hub descriptor or hub context setup failed.
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED: u16 = 0x0217;
+/// USB runtime init detail: hub SET_CONFIGURATION failed before child probing.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED: u16 = 0x0218;
+/// USB runtime init detail: hub descriptor transfer failed before child probing.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED: u16 = 0x0219;
+/// USB runtime init detail: xHCI hub context evaluation failed before child probing.
+pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED: u16 = 0x021a;
 /// GENET/CYW43 network init command used by the root ring client.
 pub const DRIVER_RUNTIME_NET_INIT_AUX: u32 = 0x494e_4954;
 /// CYW43 command descriptor submission marker used in `aux0`.

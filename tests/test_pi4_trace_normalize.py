@@ -5063,6 +5063,22 @@ def test_gate_summary_tracks_usb_runtime_enum_snapshot_detail() -> None:
     assert gates.usb_blocker == "enable-slot-failed"
 
 
+def test_gate_summary_tracks_usb_hub_attach_substep_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0219 "
+            "result=0x0f000201 root_mask=0x00 slot=1 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 7
+    assert gates.usb_blocker == "hub-descriptor-failed"
+
+
 def test_gate_summary_tracks_usb_command_ring_pending_detail() -> None:
     events = normalizer.parse_events(
         [
@@ -5905,6 +5921,29 @@ def test_gate_summary_tracks_post_control_write_idle_loop_over_stale_readback() 
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "control-plane-reply-idle-loop"
     assert gates.wifi_exact == "control-plane-reply-idle-loop"
+
+
+def test_gate_summary_refines_cyw43_control_exchange_timeout_result() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign op=11 flags=0x0002 "
+            "target=0x00000000 payload_off=284 payload_len=36 total_len=36 "
+            "detail=21259 reason=cyw43-control-exchange result=0x43030000",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=fault acceptance=no "
+            "code=5 detail=21259 result=0x43030000 frame_len=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_exact == "cyw43-control-rx-no-rframe"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
 
 
 def test_gate_summary_tracks_hintless_firstread_no_irq_terminal() -> None:
