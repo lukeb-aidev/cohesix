@@ -720,7 +720,7 @@ leave the line stuck.
   re-enables the SDHCI `CARD_INT` signal path.
 - Current Pi 4 USB/VL805 is event-ring polled with PCI INTx/MSI/MSI-X delivery
   masked. The cold-boot command proof publishes `CONFIG.MaxSlots`, `DCBAAP`,
-  `CRCR`, the initial `ERDP` without `EHB`, `ERSTSZ`, `ERSTBA`, scratchpad
+  `CRCR`, `ERSTSZ`, `ERSTBA`, the initial `ERDP` without `EHB`, scratchpad
   DCBAA slot 0, and `DNCTRL=0`, waits for `USBCMD.RUN` to clear
   `USBSTS.HCH`, applies poll-only `IMOD=0` / `IMAN=0`, and acknowledges
   consumed events with `ERDP.EHB` only
@@ -786,21 +786,38 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 12 06:49 reflashed boot supersedes the June 11 `sdio-engine-init`
-frontier. The selected Wi-Fi path completes descriptor replay for both
-`cyw43455` and `sdio-host`, SDIO engine init returns ready with detail `0x5500`,
-and `cyw43-sdio-prereq` reports ready; the active blocker is now CYW43 engine
-init no-reply, with the CYW43 progress marker still at
-`engine-init-runtime-entry` before any transport/card-select, firmware, DHCP,
-`nettest`, `netstats`, or remote-`cohsh` proof can be credited. The linked
-runtime therefore publishes CYW43-specific early markers:
+The June 13 07:33 post-flash boot supersedes the June 13 07:06 release
+frontier.
+The selected Wi-Fi path completes descriptor replay for both `cyw43455` and
+`sdio-host`, SDIO engine init returns ready with detail `0x5500`,
+`cyw43-sdio-prereq` reports ready, CYW43 engine init returns ready, and the
+transport turn advances into firmware upload. The current frontier is the Gate 6
+post-firmware Function 2/HT clock gate: firmware recovery attempts advance
+through `CYW43_DRIVER_TASK_STREAM_PROGRESS stage=cyw43-firmware-chunk
+uploaded=609309 total_len=609309`, then `stage=cyw43-nvram-chunk
+uploaded=1744 total_len=1744`, publish `cyw43-nvram-tail` ready, and fail at
+`cyw43-firmware-release` with detail `0x532a`
+(`cyw43-post-release-ht-clock`). The normalizer reports
+`WIFI_BLOCKER=function2-ready` and `WIFI_EXACT=subcommand=probe-ht`.
+Association/security, DHCP, `nettest`, `netstats`, and remote-`cohsh` proof
+remain uncredited. Repeated `cyw43-firmware-recover` owner-replay cycles are
+progress when `resume_offset` or `STREAM_PROGRESS uploaded=` advances; root
+keeps the structured `CYW43_DRIVER_TASK_FIRMWARE_RECOVERY` and stream/fault
+records but suppresses redundant human-readable `begin` / `ready` wrappers for
+that recovery stage. The linked runtime now publishes CYW43-specific early and
+release markers:
 `cyw43-engine-init-branch`, `cyw43-state-reset-begin`,
 `cyw43-state-reset-done`, `cyw43-forbidden-sdio-mmio`,
 `cyw43-bus-link-check-begin`, `cyw43-shared-control-check-begin`,
-`cyw43-shared-control-missing`, and `cyw43-shared-control-ready`. Prompt-side
-`wifi diag` and `scripts/pi4_trace_normalize.py --gate-summary` must preserve
-this as a CYW43 engine-init / Gate 2 frontier instead of collapsing back to a
-stale HAL power/reset failure.
+`cyw43-shared-control-missing`, `cyw43-shared-control-ready`,
+`cyw43-release-begin`, `cyw43-release-reset-vector-begin`,
+`cyw43-release-armcr4-reset-begin`, `cyw43-release-upload-clock-begin`,
+`cyw43-release-post-config-begin`, `cyw43-release-ht-clock-begin`,
+`cyw43-release-f2-enable-begin`, `cyw43-release-int-mask-begin`, and
+`cyw43-release-corecontrol-begin`; after engine-init, transport details and
+command-fault records must preserve the exact CYW43/SDIO owner subedge instead
+of collapsing back to stale HAL power/reset, engine-init no-reply, NVRAM retry,
+or generic command-completion failures.
 
 - Function 0 is CCCR/FBR control.
 - Function 1 is the Broadcom backplane/control path.
@@ -830,9 +847,11 @@ stale HAL power/reset failure.
   uncached shared mapping; this keeps CYW43-produced SDIO-owner commands
   coherent without replacing the bounded one-way ring turn with an unbounded
   driver-to-driver call. Root-side resource status labels report partial
-  transport details as `progress`; partial transport completions return
-  `result=0`, and only `DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY` returns
-  `result=1` and is reported as `ready`.
+  transport details as `progress`; partial `0x5401..0x5407` transport
+  completions may return `result=0` and must still be preserved as progress so
+  root can retry the same descriptor. Only
+  `DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY` returns `result=1` and is
+  reported as `ready`.
 - Production Function 2 traffic requires firmware upload/release evidence, real
   `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness (`IOR2`/ready proof).
   `CHIPCLKCSR=0x50` (`ALP_AVAIL|HT_REQ`) with `IOR2` still clear is diagnostic
@@ -883,9 +902,18 @@ stale HAL power/reset failure.
   boundary, rejects malformed padding, reports `CYW43_DRIVER_TASK_STREAM_TAIL_PAD`
   when active, and advances accounting by logical byte count. Multi-block CMD53
   turns must set `SDHCI_TRNS_MULTI`; block-mode count zero is illegal except for
-  512-byte byte-mode CMD53. A transfer fault such as `0x5103` retries through the
+  512-byte byte-mode CMD53. The linked runtime decodes SDIO R5 out-of-range as
+  `0x0800` (`resp0=0x1800` in current Pi 4 traces) and tolerates that bit only
+  on Function 1 backplane writes; Function 2 and other CMD53 response faults
+  still fail closed. A transfer fault such as `0x5103` retries through the
   retained SDIO owner state and byte-mode fallback without replaying CMD0/CMD5 or
-  CYW43 power/reset state. Exhausted retained-stage recovery reports `0x5329`.
+  CYW43 power/reset state. Retained-stage replay keeps a runtime-local flush
+  offset inside the 8192-byte stage, so a later owner retry resumes at the first
+  unflushed subtransfer instead of rewriting the completed prefix. The same
+  cursor covers the normalized NVRAM chunk, and root may resume into the
+  post-firmware NVRAM/tail/release path only after an exact NVRAM chunk fault
+  matches the generated CYW43455 address and normalized length. Exhausted
+  retained-stage recovery reports `0x5329`.
 - Station attach follows the captured Linux shape while staying bounded to the
   current linked-runtime proof surface. The as-built control path first sends
   `bus:txglomalign=8`, tolerates only a matched `BCME_UNSUPPORTED` reply for the
@@ -1095,7 +1123,12 @@ stale HAL power/reset failure.
   exhausted retained-stage ladder reports `0x5329` as `firmware-retry-exhausted`
   while preserving the SDHCI transfer result plus the actual owner-lane label
   (`forced-byte-mode-conservative`, `byte-conservative`, or
-  `byte-narrow-conservative`). A `0x530a` `cyw43-descriptor-invalid` failure
+  `byte-narrow-conservative`). The R5 `0x0800` out-of-range bit is no longer
+  misclassified as a hard firmware-upload rejection for Function 1 backplane
+  writes; if it appears on Function 2 or non-backplane CMD53 turns it remains a
+  fault. The retained-stage flush cursor is internal to
+  the CYW43 runtime and is not DHCP, Function 2, or remote-`cohsh` proof. A
+  `0x530a` `cyw43-descriptor-invalid` failure
   is earlier than SDIO owner execution: serial evidence must include the
   producer `payload_off`, `payload_len`, total length, and runtime result-bit
   predicate so the next pass can distinguish stale ring visibility from a true
@@ -1219,7 +1252,7 @@ active path is Cohesix-owned cold start:
   Command timeout diagnostics on that lane emit one bounded final live state
   snapshot and avoid repeated live `PORTSC` or post-doorbell operational-register
   polling.
-- CONFIG, DCBAAP, CRCR, initial ERDP, ERSTSZ, ERSTBA, scratchpad, DNCTRL, RUN,
+- CONFIG, DCBAAP, CRCR, ERSTSZ, ERSTBA, initial ERDP, scratchpad, DNCTRL, RUN,
   command-ring recovery, command-doorbell, and endpoint-doorbell posted-write
   drains fail closed when the HAL cannot first prove the EXT_CFG selector,
   link/root readiness, PCIe IRQ-source masking, and poll-only VL805 COMMAND
@@ -1231,8 +1264,8 @@ active path is Cohesix-owned cold start:
   setting the ownership proof latch.
 - U-Boot-compatible command/event proof must publish fresh ring registers on
   the Pi 4 platform-reset lane in the linked-runtime order
-  (`CONFIG.MaxSlots`, `DCBAAP`, `CRCR`, initial `ERDP` without `EHB`,
-  `ERSTSZ`, `ERSTBA`, scratchpad, `DNCTRL=0`), drain non-doorbell xHCI
+  (`CONFIG.MaxSlots`, `DCBAAP`, `CRCR`, `ERSTSZ`, `ERSTBA`,
+  initial `ERDP` without `EHB`, scratchpad, `DNCTRL=0`), drain non-doorbell xHCI
   operational-register posted writes with same-runtime xHCI MMIO readback,
   start the controller with `USBCMD.RUN` and require `USBSTS.HCH==0`, then
   apply U-Boot's poll-only post-start interrupter state (`IMOD=0`, `IMAN=0`)
@@ -1289,7 +1322,18 @@ active path is Cohesix-owned cold start:
   prompt-safe ERDP barrier path and emits `usb-command-proof-event-*`,
   `usb-command-proof-erdp-ack-*`, and `usb-command-proof-return-pending`
   progress markers so a toxic acknowledgement edge is isolated from later
-  command/control waits. The
+  command/control waits. When a bounded prompt poll sees no consumable event, it
+  first publishes `usb-command-proof-event-peek-begin` before the event TRB
+  cache-invalidate/read edge, publishes
+  `usb-command-proof-event-read-begin` after resolving the event TRB address and
+  immediately before the DMA load/read edge, publishes
+  `usb-command-proof-event-dma-load-done` after the DMA load barrier returns,
+  publishes `usb-command-proof-event-invalidate-done` after the uncached
+  event-ring CPU-sync barrier returns, publishes
+  `usb-command-proof-event-read-done` after that TRB read returns, then
+  publishes either `usb-command-proof-event-slot-empty` for an all-zero event slot or
+  `usb-command-proof-event-cycle-mismatch` for a nonzero TRB with the wrong
+  cycle bit before spinning. The
   command-proof snapshot does not read `PORTSC`; the low result bits carry
   consumed event count until the matching completion unlocks root-port sampling.
   The `USB_RUNTIME_ENUM_SNAPSHOT` command-proof fields are diagnostic only and
@@ -1391,7 +1435,7 @@ active path is Cohesix-owned cold start:
   `usb diag` can distinguish a DMA descriptor truncation, a DCBAA publication
   fault, and a scratchpad-array clean fault before root-port sampling.
   Prompt-safe recovery keeps the same visible order: slot `0` stays withheld
-  through the fresh HCRST, DCBAAP, CRCR, ERDP, ERSTSZ, and ERSTBA writes, then
+  through the fresh HCRST, DCBAAP, CRCR, ERSTSZ, ERSTBA, and ERDP writes, then
   recovery publishes/fills the scratchpad array before DNCTRL and `RUN`.
 - Address Device follows U-Boot's EP0 max-packet ordering: low-speed uses 8,
   full-speed tries 64 first with 8 only as fallback, high-speed uses 64, and
@@ -1780,7 +1824,7 @@ Required Cohesix shape:
   VL805 BAR. Root-port reads known to be toxic still stay behind explicit HAL
   gates and fresh command-completion proof.
 - The linked USB runtime must keep the xHCI interrupter poll-only (`IMAN=0`,
-  `IMOD=0`), publish DCBAAP/CRCR/ERST/ERDP through low/high writes plus
+  `IMOD=0`), publish DCBAAP/CRCR/ERSTSZ/ERSTBA/ERDP through low/high writes plus
   high-dword same-runtime readback drains, flush CONFIG/DNCTRL/RUN by
   same-runtime xHCI MMIO readback, publish doorbells with barriers only, and use
   neutral PORTSC writes that do not mirror `PED`, `PR`, or change bits except as

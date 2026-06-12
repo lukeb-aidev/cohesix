@@ -4664,6 +4664,13 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_SLOT_EMPTY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_CYCLE_MISMATCH
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER
@@ -4928,6 +4935,27 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED => {
                 "enable-slot-failed"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE => {
+                "enable-slot-event-dma-load-done-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE => {
+                "enable-slot-event-invalidate-done-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN => {
+                "enable-slot-event-peek-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN => {
+                "enable-slot-event-read-begin-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE => {
+                "enable-slot-event-read-done-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_SLOT_EMPTY => {
+                "enable-slot-event-slot-empty"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_CYCLE_MISMATCH => {
+                "enable-slot-event-cycle-mismatch"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS => {
                 "enable-slot-poll-leading-port-status"
             }
@@ -5159,6 +5187,27 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED => {
                 "inspect-enable-slot-command-completion-status"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE => {
+                "inspect-event-ring-trb-memory-read"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE => {
+                "inspect-event-trb-word-read-after-invalidate"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN => {
+                "inspect-event-ring-trb-read-or-cache-invalidate"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN => {
+                "inspect-event-ring-dma-load-or-trb-read"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE => {
+                "inspect-event-trb-classification-after-read"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_SLOT_EMPTY => {
+                "inspect-event-ring-publication-or-controller-writeback"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_CYCLE_MISMATCH => {
+                "inspect-event-ring-cycle-state"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS => {
                 "ack-leading-port-status-and-continue-command-poll"
             }
@@ -5389,6 +5438,13 @@ where
                 | "usb-xhci-command-doorbell-publish-no-reply"
                 | "enable-slot-completion-pending"
                 | "enable-slot-completion-poll-no-reply"
+                | "enable-slot-event-dma-load-done-no-reply"
+                | "enable-slot-event-invalidate-done-no-reply"
+                | "enable-slot-event-peek-no-reply"
+                | "enable-slot-event-read-begin-no-reply"
+                | "enable-slot-event-read-done-no-reply"
+                | "enable-slot-event-slot-empty"
+                | "enable-slot-event-cycle-mismatch"
                 | "enable-slot-failed"
                 | "enable-slot-poll-leading-port-status"
                 | "enable-slot-command-event-seen"
@@ -11181,6 +11237,112 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_runtime_entry_progress_reports_command_event_peek_blocker() {
+        type TestPump<'a> = EventPump<
+            'a,
+            LoopbackSerial<16>,
+            TestTimer,
+            NullIpc,
+            TicketTable<4>,
+            4,
+            4,
+            DEFAULT_LINE_CAPACITY,
+        >;
+
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN,
+            ),
+            4
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN,
+            ),
+            "enable-slot-event-peek-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN,
+            ),
+            "inspect-event-ring-trb-read-or-cache-invalidate"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE,
+            ),
+            4
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE,
+            ),
+            "enable-slot-event-dma-load-done-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE,
+            ),
+            "inspect-event-ring-trb-memory-read"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE,
+            ),
+            4
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE,
+            ),
+            "enable-slot-event-invalidate-done-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE,
+            ),
+            "inspect-event-trb-word-read-after-invalidate"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN,
+            ),
+            4
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN,
+            ),
+            "enable-slot-event-read-begin-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN,
+            ),
+            "inspect-event-ring-dma-load-or-trb-read"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE,
+            ),
+            4
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE,
+            ),
+            "enable-slot-event-read-done-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE,
+            ),
+            "inspect-event-trb-classification-after-read"
+        );
+    }
+
     #[cfg(feature = "net-console")]
     #[test]
     fn net_diag_idle_requires_zero_tx_drops() {
@@ -14190,6 +14352,36 @@ mod tests {
         assert!(
             KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate(
                 "enable-slot-completion-poll-no-reply"
+            )
+        );
+        assert!(
+            KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate(
+                "enable-slot-event-peek-no-reply"
+            )
+        );
+        assert!(
+            KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate(
+                "enable-slot-event-dma-load-done-no-reply"
+            )
+        );
+        assert!(
+            KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate(
+                "enable-slot-event-read-begin-no-reply"
+            )
+        );
+        assert!(
+            KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate(
+                "enable-slot-event-read-done-no-reply"
+            )
+        );
+        assert!(
+            KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate(
+                "enable-slot-event-slot-empty"
+            )
+        );
+        assert!(
+            KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate(
+                "enable-slot-event-cycle-mismatch"
             )
         );
         assert!(

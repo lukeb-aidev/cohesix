@@ -1480,6 +1480,20 @@ def normalize_wifi_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
+    if "linked_runtime_progress" in lower:
+        marker_blocker = parse_fields(value).get("blocker", "").lower()
+        if marker_blocker.startswith(
+            (
+                "cyw43-engine-init-",
+                "cyw43-state-reset-",
+                "cyw43-bus-link-",
+                "cyw43-release-",
+                "cyw43-shared-control-",
+                "cyw43-sdio-owner-",
+                "cyw43-resource-",
+            )
+        ) or marker_blocker == "cyw43-forbidden-sdio-mmio":
+            return marker_blocker
     if (
         "net_driver_task_replay_status" in lower
         and "role=cyw43-wifi" in lower
@@ -1983,6 +1997,88 @@ def normalize_wifi_blocker(value: str) -> str:
     return value
 
 
+def cyw43_raw_engine_init_progress_blocker(event: TraceEvent) -> str | None:
+    """Return CYW43 engine-init subgate carried by raw ring-progress telemetry."""
+
+    raw = event.raw.lower()
+    fields = event.fields
+    if "driver_task_ring_progress" not in raw:
+        return None
+    if fields.get("contract", "").lower() != "cyw43455":
+        return None
+    if fields.get("marker_valid", "").lower() not in {"yes", "true", "1"}:
+        return None
+    aux0 = (
+        fields.get("marker_aux0")
+        or fields.get("expected_aux0")
+        or fields.get("aux0")
+        or ""
+    ).lower()
+    if aux0 != "0x494e4954":
+        return None
+    phase_name = fields.get("marker_phase_name", "").lower()
+    return {
+        "engine-init-runtime-entry": "cyw43-engine-init-runtime-entry-no-reply",
+        "cyw43-engine-init-branch": "cyw43-engine-init-state-slot-no-reply",
+        "cyw43-state-reset-begin": "cyw43-state-reset-no-reply",
+        "cyw43-state-reset-done": "cyw43-forbidden-sdio-mmio-check-no-reply",
+        "cyw43-forbidden-sdio-mmio": "cyw43-resource-forbidden-sdio-mmio",
+        "cyw43-bus-link-check-begin": (
+            "cyw43-resource-sdio-owner-bus-link-check-no-reply"
+        ),
+        "cyw43-shared-control-check-begin": (
+            "cyw43-resource-shared-control-check-no-reply"
+        ),
+        "cyw43-shared-control-missing": "cyw43-resource-shared-control-missing",
+        "cyw43-shared-control-ready": (
+            "cyw43-engine-init-completion-publish-no-reply"
+        ),
+    }.get(phase_name)
+
+
+def cyw43_raw_command_progress_blocker(event: TraceEvent) -> str | None:
+    """Return post-firmware CYW43 command subgate from raw progress telemetry."""
+
+    raw = event.raw.lower()
+    fields = event.fields
+    if "driver_task_ring_progress" not in raw:
+        return None
+    if fields.get("contract", "").lower() != "cyw43455":
+        return None
+    if fields.get("marker_valid", "").lower() not in {"yes", "true", "1"}:
+        return None
+    aux0 = (
+        fields.get("marker_aux0")
+        or fields.get("expected_aux0")
+        or fields.get("aux0")
+        or ""
+    ).lower()
+    if aux0 != "0x43595734":
+        return None
+    phase_name = fields.get("marker_phase_name", "").lower()
+    return {
+        "cyw43-release-begin": "cyw43-release-begin-no-reply",
+        "cyw43-release-reset-vector-begin": (
+            "cyw43-release-reset-vector-no-reply"
+        ),
+        "cyw43-release-armcr4-reset-begin": (
+            "cyw43-release-armcr4-reset-no-reply"
+        ),
+        "cyw43-release-upload-clock-begin": (
+            "cyw43-release-upload-clock-no-reply"
+        ),
+        "cyw43-release-post-config-begin": (
+            "cyw43-release-post-config-no-reply"
+        ),
+        "cyw43-release-ht-clock-begin": "cyw43-release-ht-clock-no-reply",
+        "cyw43-release-f2-enable-begin": "cyw43-release-f2-enable-no-reply",
+        "cyw43-release-int-mask-begin": "cyw43-release-int-mask-no-reply",
+        "cyw43-release-corecontrol-begin": (
+            "cyw43-release-corecontrol-no-reply"
+        ),
+    }.get(phase_name)
+
+
 def normalize_wifi_exact(value: str) -> str:
     """Preserve exact CYW43 terminal reasons while keeping stable blockers."""
 
@@ -1993,6 +2089,8 @@ def normalize_wifi_exact(value: str) -> str:
         "1": "cyw43-runtime-command-rejected",
         "0x1": "cyw43-runtime-command-rejected",
         "0x0001": "cyw43-runtime-command-rejected",
+        "21249": "cyw43-transport-init",
+        "0x5301": "cyw43-transport-init",
         "21264": "cyw43-transport-bus-link-missing",
         "0x5310": "cyw43-transport-bus-link-missing",
         "21265": "cyw43-transport-direct-sdio-init",
@@ -2054,6 +2152,8 @@ def normalize_wifi_exact(value: str) -> str:
     if control_plane_exact is not None:
         return control_plane_exact.group(0)
     for reason in (
+        "cyw43-engine-init-runtime-entry-no-reply",
+        "cyw43-engine-init-state-slot-no-reply",
         "cyw43-ht-clock-timeout-before-function2",
         "cyw43-device-on-timeout-before-ht",
         "cyw43-device-on-timeout-before-function2",
@@ -2187,6 +2287,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     startup_fail_gate: int | None = None
     startup_fail_blocker: str | None = None
     startup_diag_blocker: str | None = None
+    direct_usb_progress_blocker: str | None = None
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
     precise_command_timeout_details = {
@@ -2317,6 +2418,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = "cmd-submit-proof-timer-preempted"
                 continue
             continue
+        if raw.startswith("driver_task_ring_progress"):
+            progress_blocker = usb_raw_driver_task_progress_blocker(fields)
+            if progress_blocker is not None:
+                blocker_gate = usb_driver_task_blocker_gate(progress_blocker)
+                if blocker_gate > 1:
+                    gate = max(gate, blocker_gate)
+                    blocker = progress_blocker
+                    direct_usb_progress_blocker = progress_blocker
+                continue
         if event.domain != "usb":
             continue
         if "map exact miss" in raw and fields.get("reason") == "no-device-coverage":
@@ -2403,6 +2513,25 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 runtime_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
                 blocker = "none" if runtime_blocker == "none" else runtime_blocker
             continue
+        if "linked_runtime_progress" in raw:
+            progress_gate = parse_hex_int(fields.get("gate"))
+            if progress_gate is not None and progress_gate > 0:
+                gate = max(gate, progress_gate)
+            progress_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
+            blocker_gate = usb_driver_task_blocker_gate(progress_blocker)
+            if blocker_gate > 1:
+                gate = max(gate, blocker_gate)
+                blocker = progress_blocker
+            continue
+        if raw.startswith("driver_task_ring_progress"):
+            progress_blocker = usb_raw_driver_task_progress_blocker(fields)
+            if progress_blocker is not None:
+                blocker_gate = usb_driver_task_blocker_gate(progress_blocker)
+                if blocker_gate > 1:
+                    gate = max(gate, blocker_gate)
+                    blocker = progress_blocker
+                    direct_usb_progress_blocker = progress_blocker
+                continue
         if raw.startswith("usb: next_action"):
             next_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
             next_gate = usb_driver_task_blocker_gate(next_blocker)
@@ -2613,6 +2742,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if proof_result == "none":
                 blocker = "none"
             elif proof_result == "unavailable" and blocker not in {"unknown", "none"}:
+                pass
+            elif (
+                proof_result == "keyboard-unavailable"
+                and usb_driver_task_blocker_gate(blocker) >= 4
+            ):
                 pass
             else:
                 blocker = proof_result
@@ -2980,6 +3114,21 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if saw_net_init_before_keyboard
             else "keyboard-runtime-init-not-reached"
         )
+    if direct_usb_progress_blocker is not None:
+        direct_gate = usb_driver_task_blocker_gate(direct_usb_progress_blocker)
+        if direct_gate > 1 and (
+            gate <= direct_gate
+            or blocker
+            in {
+                "unknown",
+                "none",
+                "keyboard-unavailable",
+                "enable-slot-completion-pending",
+                "enable-slot-completion-poll-no-reply",
+            }
+        ):
+            gate = max(gate, direct_gate)
+            blocker = direct_usb_progress_blocker
 
     return gate, blocker
 
@@ -3003,6 +3152,13 @@ def summarize_usb_event_ring_state(events: Iterable[TraceEvent]) -> tuple[bool, 
             trb_type = parse_hex_int(fields.get("trb_type"))
             if trb_type == 0x22:
                 alive = True
+        elif "usb_runtime_enum_snapshot" in event.raw.lower():
+            cmd_events_seen = parse_hex_int(fields.get("cmd_events_seen")) or 0
+            cmd_event_type = parse_hex_int(fields.get("cmd_event_type")) or 0
+            if fields.get("cmd_proof", "").lower() == "yes" and cmd_events_seen > 0:
+                alive = True
+                if cmd_event_type == 2:
+                    psc_count = max(psc_count, cmd_events_seen)
     return alive, psc_count, psc_mask
 
 
@@ -4277,6 +4433,26 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
 
     exact = "none"
     raw = event.raw.lower()
+    if "linked_runtime_progress" in raw:
+        marker_exact = normalize_wifi_exact(event.fields.get("blocker", ""))
+        if marker_exact.startswith(
+            (
+                "cyw43-engine-init-",
+                "cyw43-state-reset-",
+                "cyw43-bus-link-",
+                "cyw43-release-",
+                "cyw43-shared-control-",
+                "cyw43-sdio-owner-",
+                "cyw43-resource-",
+            )
+        ) or marker_exact == "cyw43-forbidden-sdio-mmio":
+            return marker_exact, marker_exact
+    raw_cyw43_progress = cyw43_raw_engine_init_progress_blocker(event)
+    if raw_cyw43_progress is not None:
+        return raw_cyw43_progress, raw_cyw43_progress
+    raw_cyw43_progress = cyw43_raw_command_progress_blocker(event)
+    if raw_cyw43_progress is not None:
+        return raw_cyw43_progress, raw_cyw43_progress
     firmware_stream_blocker = wifi_firmware_stream_fault_blocker(event)
     if firmware_stream_blocker is not None:
         phase = (
@@ -4425,6 +4601,18 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
     if wifi_firmware_stream_fault_blocker(event) == candidate:
         return 0
     if candidate == "runtime-rx-host-latch-spam":
+        return 1
+    if "linked_runtime_progress" in raw and any(
+        marker in raw
+        for marker in (
+            "blocker=cyw43-engine-init-",
+            "blocker=cyw43-state-reset-",
+            "blocker=cyw43-bus-link-",
+            "blocker=cyw43-shared-control-",
+            "blocker=cyw43-sdio-owner-",
+            "blocker=cyw43-forbidden-sdio-mmio",
+        )
+    ):
         return 1
     if "[cyw43] control-plane" in raw and "action=fail" in raw:
         return 1
@@ -4650,6 +4838,18 @@ def summarize_wifi_failure_detail(
             elif armcr4_prereset_ioctrl_active:
                 candidate = "armcr4-prereset-fgc-cmd53-r5-rejected"
         event_exact, event_phase = wifi_failure_detail_from_fields(event)
+        if (
+            wifi_blocker == "cyw43-firmware-runtime-replay"
+            and event_exact.startswith("cyw43-release-")
+            and event_exact.endswith("-no-reply")
+        ):
+            candidate = wifi_blocker
+        if (
+            wifi_blocker == "cyw43-engine-init-no-reply"
+            and event_exact.startswith("cyw43-engine-init-")
+            and event_exact.endswith("-no-reply")
+        ):
+            candidate = wifi_blocker
         if event_exact != "none" and not blocker_matched:
             exact = event_exact
             phase = event_phase
@@ -5212,6 +5412,7 @@ WIFI_REPLAY_REFINABLE_BLOCKERS = frozenset(
         "none",
         "wifi-driver-task-runtime-unproved",
         "wifi-started-no-replay",
+        "sdio-linked-runtime-progress-no-reply",
         "hal-power-reset",
         "root-prompt-printed",
         "root-prompt-delayed",
@@ -5235,6 +5436,13 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
     if blocker in {
         "enable-slot-completion-pending",
         "enable-slot-completion-poll-no-reply",
+        "enable-slot-event-dma-load-done-no-reply",
+        "enable-slot-event-invalidate-done-no-reply",
+        "enable-slot-event-peek-no-reply",
+        "enable-slot-event-read-begin-no-reply",
+        "enable-slot-event-read-done-no-reply",
+        "enable-slot-event-slot-empty",
+        "enable-slot-event-cycle-mismatch",
         "enable-slot-failed",
         "enable-slot-poll-leading-port-status",
         "enable-slot-command-event-seen",
@@ -5277,6 +5485,42 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
     if blocker.startswith("usb-keyboard-enumeration-"):
         return 4
     return 1
+
+
+def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
+    """Return a USB blocker from raw driver-task progress telemetry."""
+
+    if fields.get("contract", "").lower() != "usb-local-seat":
+        return None
+    if fields.get("marker_valid", "").lower() not in {"yes", "true", "1"}:
+        return None
+    aux0 = (
+        fields.get("marker_aux0")
+        or fields.get("expected_aux0")
+        or fields.get("aux0")
+        or ""
+    ).lower()
+    if aux0 != "0x55534245":
+        return None
+    return {
+        "usb-command-proof-poll-begin": "enable-slot-completion-poll-no-reply",
+        "usb-command-proof-event-peek-begin": "enable-slot-event-peek-no-reply",
+        "usb-command-proof-event-read-begin": "enable-slot-event-read-begin-no-reply",
+        "usb-command-proof-event-dma-load-done": (
+            "enable-slot-event-dma-load-done-no-reply"
+        ),
+        "usb-command-proof-event-invalidate-done": (
+            "enable-slot-event-invalidate-done-no-reply"
+        ),
+        "usb-command-proof-event-read-done": "enable-slot-event-read-done-no-reply",
+        "usb-command-proof-event-slot-empty": "enable-slot-event-slot-empty",
+        "usb-command-proof-event-cycle-mismatch": "enable-slot-event-cycle-mismatch",
+        "usb-command-proof-event-port-status": "enable-slot-poll-leading-port-status",
+        "usb-command-proof-event-command": "enable-slot-command-event-seen",
+        "usb-command-proof-event-other": "enable-slot-poll-non-command-event",
+        "usb-command-proof-erdp-ack-begin": "enable-slot-event-ack-pending",
+        "usb-command-proof-erdp-ack-done": "enable-slot-event-ack-complete",
+    }.get(fields.get("marker_phase_name", "").lower())
 
 
 def usb_driver_task_blocker_caps_gate(blocker: str) -> bool:
@@ -5331,9 +5575,13 @@ def wifi_blocker_is_exact_cyw43_progress(blocker: str) -> bool:
         (
             "cyw43-engine-init-",
             "cyw43-state-reset-",
+            "cyw43-bus-link-",
+            "cyw43-release-",
+            "cyw43-shared-control-",
+            "cyw43-sdio-owner-",
             "cyw43-resource-",
         )
-    )
+    ) or blocker == "cyw43-forbidden-sdio-mmio"
 
 
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:

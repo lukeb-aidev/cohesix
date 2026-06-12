@@ -1034,6 +1034,87 @@ def test_gate_summary_names_june7_cyw43_firmware_owner_fault_shape() -> None:
     assert gates.wifi_phase == "cyw43-firmware-chunk"
 
 
+def test_gate_summary_preserves_june12_cyw43_firmware_recovery_frontier() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_STREAM_PROGRESS contract=cyw43455 "
+            "stage=cyw43-firmware-chunk uploaded=557056 total_len=609309 "
+            "target=0x0021e000 chunk_len=8192",
+            "CYW43_DRIVER_TASK_FIRMWARE_RECOVERY contract=cyw43455 "
+            "attempt=158 resume_offset=565248 force_byte=false "
+            "same_offset_attempts=4",
+            "DRIVER_TASK_RING_CALL_RETURN contract=cyw43455 endpoint=0x1975 "
+            "request=243 sequence=243 code=5 detail=21289 result=83888128",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-firmware-chunk op=2 flags=0x0000 "
+            "target=0x00222000 payload_off=4096 payload_len=8192 "
+            "total_len=609309 detail=21289 "
+            "reason=cyw43-firmware-retry-exhausted result=83888128",
+            "CYW43_SDIO_OWNER_FAULT contract=cyw43455 "
+            "stage=cyw43-firmware-chunk op=2 cmd=53 arg=0x95540040 "
+            "fn=1 win=0x0aa00 target=0x00222000 effective=0x00222a00 "
+            "chunk_off=2560 payload_off=6656 inc=yes write=yes mode=byte "
+            "len=64 blksz=64 blkcnt=1 tm=0x0002 host=0x00 power=0x0f "
+            "clock=0x5007 present=0x01ff0506 int=0x00000010 "
+            "resp0=0x00001800 blkreg=0x00010040 detail=0x5329 "
+            "reason=cyw43-firmware-retry-exhausted xfer_stage=response "
+            "xfer_status=0x000800 xfer_reason=sdio-r5-response r5=0x0800 "
+            "owner_window=sdio-shared-8192 "
+            "retry=byte-narrow-conservative-exhausted",
+            "CYW43_SDIO_PAYLOAD_CMP contract=cyw43455 "
+            "stage=cyw43-firmware-chunk op=2 target=0x00222000 "
+            "off=2560 len=64 status=match pf=0x58 pl=0x13 px=0xb0 "
+            "ps=0x00001038 of=0x58 ol=0x13 ox=0xb0 os=0x00001038",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-firmware-chunk status=fault "
+            "acceptance=no code=5 detail=21289 result=83888128 frame_len=56",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-firmware-chunk "
+            "status=stream-fault-owner-recovery-required acceptance=no "
+            "code=5 detail=21289 result=83888128 frame_len=56",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 5
+    assert gates.wifi_blocker == "cyw43-firmware-retry-exhausted"
+    assert gates.wifi_exact == "cyw43-firmware-retry-exhausted"
+    assert gates.wifi_phase == "cyw43-firmware-chunk"
+    assert gates.wifi_blocker != "cyw43-transport-init"
+
+
+def test_gate_summary_refines_cyw43_release_no_reply_with_last_release_marker() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-firmware blocker=failed",
+            "DRIVER_TASK_RING_PROGRESS contract=cyw43455 request=99 "
+            "expected_aux0=0x43595734 marker_valid=yes marker_sequence=99 "
+            "marker_phase=207 marker_phase_name=cyw43-release-reset-vector-begin "
+            "marker_aux0=0x43595734",
+            "DRIVER_TASK_RING_PROGRESS contract=cyw43455 request=99 "
+            "expected_aux0=0x43595734 marker_valid=yes marker_sequence=99 "
+            "marker_phase=142 marker_phase_name=cyw43-sdio-owner-wait-begin "
+            "marker_aux0=0x43595734",
+            "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract=cyw43455 "
+            "stage=cyw43-firmware-release op=5 flags=0x0000 "
+            "target=0x00000000 payload_off=0 payload_len=0 total_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-firmware-release status=no-reply acceptance=no "
+            "code=none detail=none result=none frame_len=0",
+            "wifi: driver-task replay failure detail=net-disabled "
+            "cause=cyw43-command-completion driver-task runtime init failed",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_blocker == "cyw43-firmware-runtime-replay"
+    assert gates.wifi_exact == "cyw43-release-reset-vector-no-reply"
+    assert gates.wifi_phase == "cyw43-release-reset-vector-no-reply"
+
+
 def test_gate_summary_keeps_wifi_blackbox_fault_over_later_prompt_replay() -> None:
     events = normalizer.parse_events(
         [
@@ -1646,7 +1727,7 @@ def test_gate_summary_keeps_boot_sdio_replay_over_later_wifi_prompt_error() -> N
     record = normalizer.summarize_gates(events).to_record()
     assert record["WIFI_BLOCKER"] == "sdio-engine-init-no-reply"
     assert record["WIFI_EXACT"] == "sdio-engine-init-no-reply"
-    assert record["WIFI_PHASE"] == "net-engine-init"
+    assert record["WIFI_PHASE"] == "engine-init"
     assert record["WIFI_BLOCKER_LINE"] == 5
 
 
@@ -1669,7 +1750,7 @@ def test_gate_summary_reports_exact_sdio_engine_init_subfault() -> None:
     assert record["WIFI_GATE"] == 2
     assert record["WIFI_BLOCKER"] == "sdio-engine-init-clock-failed"
     assert record["WIFI_EXACT"] == "sdio-engine-init-clock-failed"
-    assert record["WIFI_PHASE"] == "net-engine-init"
+    assert record["WIFI_PHASE"] == "engine-init"
 
 
 def test_gate_summary_preserves_sdio_adopt_progress_blocker() -> None:
@@ -1769,6 +1850,14 @@ def test_gate_summary_promotes_cyw43_engine_init_replay_over_hal_power_noise() -
             "expected_aux0=0x494e4954 marker_valid=yes marker_sequence=2 "
             "marker_phase=172 marker_phase_name=engine-init-runtime-entry "
             "marker_aux0=0x494e4954",
+            "wifi: cyw43 linked_runtime_progress marker_valid=yes sequence=2 "
+            "phase=172 phase_name=engine-init-runtime-entry aux0=0x494e4954 "
+            "gate=2 blocker=cyw43-engine-init-runtime-entry-no-reply "
+            "next_action=inspect-linked-cyw43-engine-init-branch-entry",
+            "wifi: sdio linked_runtime_progress marker_valid=yes sequence=0 "
+            "phase=202 phase_name=runtime-poll-ready aux0=0x00000007 "
+            "gate=0 blocker=sdio-linked-runtime-progress-no-reply "
+            "next_action=inspect-linked-sdio-runtime-progress",
             "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes policy=wifi "
             "attempted=yes stage=engine-init blocker=no-reply",
             "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
@@ -1783,8 +1872,8 @@ def test_gate_summary_promotes_cyw43_engine_init_replay_over_hal_power_noise() -
     record = normalizer.summarize_gates(events).to_record()
     assert record["WIFI_GATE"] == 1
     assert record["WIFI_BLOCKER"] == "cyw43-engine-init-no-reply"
-    assert record["WIFI_EXACT"] == "cyw43-engine-init-no-reply"
-    assert record["WIFI_PHASE"] == "net-engine-init"
+    assert record["WIFI_EXACT"] == "cyw43-engine-init-runtime-entry-no-reply"
+    assert record["WIFI_PHASE"] == "cyw43-engine-init-runtime-entry-no-reply"
     assert record["NET_DRIVER_TASK_REPLAY_BLOCKER"] == "cyw43-wifi:engine-init:no-reply"
 
 
@@ -1813,6 +1902,31 @@ def test_gate_summary_preserves_cyw43_engine_init_branch_progress_blocker() -> N
     assert record["WIFI_BLOCKER"] == "cyw43-engine-init-state-slot-no-reply"
     assert record["WIFI_EXACT"] == "cyw43-engine-init-state-slot-no-reply"
     assert record["WIFI_PHASE"] == "cyw43-engine-init-state-slot-no-reply"
+
+
+def test_gate_summary_derives_cyw43_state_slot_from_raw_ring_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes policy=wifi "
+            "attempted=yes stage=engine-init blocker=begin",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=cyw43455 endpoint=0x1975 "
+            "request=2 mode=nonblocking attempts=262144 opcode=1 arg0=5 "
+            "aux0=0x494e4954 frame_len=0",
+            "DRIVER_TASK_RING_PROGRESS contract=cyw43455 request=2 "
+            "expected_aux0=0x494e4954 marker_valid=yes marker_sequence=2 "
+            "marker_phase=176 marker_phase_name=cyw43-engine-init-branch "
+            "marker_aux0=0x494e4954",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes policy=wifi "
+            "attempted=yes stage=engine-init blocker=no-reply",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_GATE"] == 1
+    assert record["WIFI_BLOCKER"] == "cyw43-engine-init-no-reply"
+    assert record["WIFI_EXACT"] == "cyw43-engine-init-state-slot-no-reply"
+    assert record["WIFI_PHASE"] == "cyw43-engine-init-state-slot-no-reply"
+    assert record["NET_DRIVER_TASK_REPLAY_BLOCKER"] == "cyw43-wifi:engine-init:no-reply"
 
 
 def test_gate_summary_tracks_split_sdio_command_probe_blockers() -> None:
@@ -1882,6 +1996,20 @@ def test_gate_summary_labels_cyw43_transport_substage_fault_detail() -> None:
 
     record = normalizer.summarize_gates(events).to_record()
     assert record["WIFI_EXACT"] == "cyw43-transport-host-bus-width"
+    assert record["WIFI_PHASE"] == "cyw43-transport-init"
+
+
+def test_gate_summary_labels_generic_cyw43_transport_init_fault_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-transport-init status=fault "
+            "acceptance=no code=5 detail=21249 result=0 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["WIFI_EXACT"] == "cyw43-transport-init"
     assert record["WIFI_PHASE"] == "cyw43-transport-init"
 
 
@@ -1961,7 +2089,7 @@ def test_gate_summary_preserves_cyw43_transport_detail_for_replay_blocker() -> N
     )
 
     record = normalizer.summarize_gates(events).to_record()
-    assert record["WIFI_BLOCKER"] == "cyw43-driver-task-replay"
+    assert record["WIFI_BLOCKER"] == "cyw43-firmware-runtime-replay"
     assert record["WIFI_EXACT"] == "cyw43-backplane-armcr4-reset"
     assert record["WIFI_PHASE"] == "cyw43-transport-init"
 
@@ -2000,7 +2128,7 @@ def test_gate_summary_keeps_deferred_wifi_replay_blocker_after_start() -> None:
     )
 
     record = normalizer.summarize_gates(events).to_record()
-    assert record["WIFI_BLOCKER"] == "cyw43-driver-task-replay"
+    assert record["WIFI_BLOCKER"] == "cyw43-engine-init-no-reply"
     assert record["WIFI_REPLAY_FRONTIER"] == "cyw43-driver-task-replay"
     assert record["NET_DRIVER_TASK_REPLAY_EVENTS"] == 1
     assert record["NET_DRIVER_TASK_REPLAY_BLOCKER"] == "cyw43-wifi:engine-init:no-reply"
@@ -2612,6 +2740,25 @@ def test_gate_summary_reports_psc_events_as_event_ring_alive() -> None:
     assert record["USB_EVENT_RING_ALIVE"] == "yes"
     assert record["USB_PSC_DRAIN_COUNT"] == 5
     assert record["USB_PSC_DRAIN_MASK"] == "0x0000001f"
+
+
+def test_gate_summary_reports_linked_command_snapshot_events_as_event_ring_alive() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000503 root_mask=0x00 slot=5 ep_id=2 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=3 cmd_slot_or_polls=5 "
+            "cmd_event_type=2 cmd_ack_failures=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_EVENT_RING_ALIVE"] == "yes"
+    assert record["USB_PSC_DRAIN_COUNT"] == 3
+    assert record["USB_PSC_DRAIN_MASK"] == "0x00000000"
 
 
 def test_gate_summary_preserves_command_timeout_over_runtime_unavailable() -> None:
@@ -4590,6 +4737,13 @@ def test_usb_driver_task_blocker_gate_splits_engine_init_from_xhci_entry() -> No
     assert normalizer.usb_driver_task_blocker_gate("usb-pcie-posted-write-flush-no-reply") == 3
     assert normalizer.usb_driver_task_blocker_gate("enable-slot-completion-pending") == 4
     assert normalizer.usb_driver_task_blocker_gate("enable-slot-completion-poll-no-reply") == 4
+    assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-dma-load-done-no-reply") == 4
+    assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-invalidate-done-no-reply") == 4
+    assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-peek-no-reply") == 4
+    assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-read-begin-no-reply") == 4
+    assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-read-done-no-reply") == 4
+    assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-slot-empty") == 4
+    assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-cycle-mismatch") == 4
 
 
 def test_gate_summary_keeps_xhci_device_coverage_miss_over_unavailable() -> None:
@@ -4965,6 +5119,162 @@ def test_gate_summary_preserves_command_pending_over_stale_startup_projection() 
 
     assert gates.usb_gate == 4
     assert gates.usb_blocker == "enable-slot-completion-pending"
+
+
+def test_gate_summary_tracks_command_event_peek_begin_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
+            "cmd_ack_failures=0",
+            "usb: linked_runtime_progress marker_valid=yes sequence=5 phase=186 "
+            "phase_name=usb-command-proof-event-peek-begin aux0=0x55534245 "
+            "gate=4 blocker=enable-slot-event-peek-no-reply "
+            "next_action=inspect-event-ring-trb-read-or-cache-invalidate",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "enable-slot-event-peek-no-reply"
+
+
+def test_gate_summary_tracks_raw_command_event_peek_begin_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
+            "cmd_ack_failures=0",
+            "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=5 "
+            "expected_aux0=0x55534245 marker_valid=yes marker_sequence=5 "
+            "marker_phase=186 marker_phase_name=usb-command-proof-event-peek-begin "
+            "marker_aux0=0x55534245",
+            "[local-seat] cold-boot keyboard probe end stage=pre-net "
+            "result=keyboard-unavailable polling_enabled=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "enable-slot-event-peek-no-reply"
+
+
+def test_gate_summary_tracks_command_event_read_done_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
+            "cmd_ack_failures=0",
+            "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=5 "
+            "expected_aux0=0x55534245 marker_valid=yes marker_sequence=5 "
+            "marker_phase=187 marker_phase_name=usb-command-proof-event-read-done "
+            "marker_aux0=0x55534245",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "enable-slot-event-read-done-no-reply"
+
+
+def test_gate_summary_tracks_command_event_read_begin_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
+            "cmd_ack_failures=0",
+            "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=5 "
+            "expected_aux0=0x55534245 marker_valid=yes marker_sequence=5 "
+            "marker_phase=188 marker_phase_name=usb-command-proof-event-read-begin "
+            "marker_aux0=0x55534245",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "enable-slot-event-read-begin-no-reply"
+
+
+def test_gate_summary_tracks_command_event_dma_load_done_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
+            "cmd_ack_failures=0",
+            "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=5 "
+            "expected_aux0=0x55534245 marker_valid=yes marker_sequence=5 "
+            "marker_phase=189 marker_phase_name=usb-command-proof-event-dma-load-done "
+            "marker_aux0=0x55534245",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "enable-slot-event-dma-load-done-no-reply"
+
+
+def test_gate_summary_tracks_command_event_invalidate_done_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
+            "cmd_ack_failures=0",
+            "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=5 "
+            "expected_aux0=0x55534245 marker_valid=yes marker_sequence=5 "
+            "marker_phase=199 marker_phase_name=usb-command-proof-event-invalidate-done "
+            "marker_aux0=0x55534245",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "enable-slot-event-invalidate-done-no-reply"
+
+
+def test_gate_summary_tracks_command_event_slot_empty_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
+            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
+            "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
+            "cmd_ack_failures=0",
+            "usb: linked_runtime_progress marker_valid=yes sequence=5 phase=184 "
+            "phase_name=usb-command-proof-event-slot-empty aux0=0x55534245 "
+            "gate=4 blocker=enable-slot-event-slot-empty "
+            "next_action=inspect-event-ring-publication-or-controller-writeback",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 4
+    assert gates.usb_blocker == "enable-slot-event-slot-empty"
 
 
 def test_gate_summary_tracks_usb_startup_blackbox_gates() -> None:

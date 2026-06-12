@@ -757,6 +757,7 @@ where
         .map_err(|_| DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"))?;
     let reset_vector = firmware_reset_vector(bundle.firmware)
         .ok_or(DriverTaskNetError::RuntimeInit("cyw43-rstvec"))?;
+    let nvram_len = crate::hal::pi4_wifi::normalize_nvram(bundle.nvram).len();
     clear_cyw43_runtime_command_fault_status();
     let mut recovery_attempts = 0usize;
     let mut last_resume_offset = None;
@@ -788,8 +789,11 @@ where
                     return Err(err.into_net_error());
                 };
                 let resume_fault = latest_cyw43_runtime_command_fault_status();
-                let resume_offset = resume_fault
-                    .and_then(|fault| cyw43_firmware_resume_offset(fault, bundle.firmware.len()));
+                let resume_offset = resume_fault.and_then(|fault| {
+                    cyw43_firmware_resume_offset(fault, bundle.firmware.len()).or_else(|| {
+                        cyw43_nvram_tail_resume_offset(fault, bundle.firmware.len(), nvram_len)
+                    })
+                });
                 if resume_offset.is_none() && recovery_attempts != 0 {
                     return Err(err.into_net_error());
                 }
@@ -1675,6 +1679,30 @@ fn cyw43_firmware_resume_offset(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_nvram_tail_resume_offset(
+    fault: Cyw43RuntimeCommandFaultStatus,
+    firmware_len: usize,
+    nvram_len: usize,
+) -> Option<usize> {
+    if fault.op != DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK
+        || fault.payload_len == 0
+        || usize::try_from(fault.total_len).ok()? != nvram_len
+        || usize::from(fault.payload_len) != nvram_len
+    {
+        return None;
+    }
+    let nvram_base = CYW43_RAM_BASE_4345
+        .checked_add(CYW43_RAM_SIZE_4345_PI4)?
+        .checked_sub(4)?
+        .checked_sub(u32::try_from(nvram_len).ok()?)?;
+    if fault.target_addr == nvram_base {
+        Some(firmware_len)
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "kernel")]
 const fn cyw43_firmware_resume_forces_byte_mode(fault: Cyw43RuntimeCommandFaultStatus) -> bool {
     crate::cyw43_recovery::firmware_resume_forces_byte_mode(fault.op, fault.detail)
 }
@@ -1753,47 +1781,46 @@ fn replay_sdio_host_linked_runtime_preserving_hal<H>(
 where
     H: Hardware<Error = HalError>,
 {
-    crate::hal::driver_task::emit_driver_task_resource_init_status(
-        CYW43_WIFI_DRIVER_TASK_CONTRACT,
-        DriverTaskHotPath::Cyw43Wifi,
-        stage,
-        "begin",
-        None,
-    );
+    emit_cyw43_sdio_replay_resource_init_status(stage, "begin", None);
     if sdio_owner_recovery_can_preserve_ready_state() {
         emit_sdio_driver_task_replay_status("owner-state", "preserved-ready");
-        crate::hal::driver_task::emit_driver_task_resource_init_status(
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            DriverTaskHotPath::Cyw43Wifi,
-            stage,
-            "ready",
-            None,
-        );
+        emit_cyw43_sdio_replay_resource_init_status(stage, "ready", None);
         return Ok(());
     }
     SDIO_LINKED_RUNTIME_READY.store(0, Ordering::Release);
     match init_sdio_host_linked_runtime(hal) {
         Ok(()) => {
-            crate::hal::driver_task::emit_driver_task_resource_init_status(
-                CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                DriverTaskHotPath::Cyw43Wifi,
-                stage,
-                "ready",
-                None,
-            );
+            emit_cyw43_sdio_replay_resource_init_status(stage, "ready", None);
             Ok(())
         }
         Err(err) => {
-            crate::hal::driver_task::emit_driver_task_resource_init_status(
-                CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                DriverTaskHotPath::Cyw43Wifi,
-                stage,
-                "failed",
-                None,
-            );
+            emit_cyw43_sdio_replay_resource_init_status(stage, "failed", None);
             Err(err)
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_sdio_replay_resource_init_status(
+    stage: &'static str,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) {
+    if cyw43_sdio_replay_resource_status_is_redundant(stage, status) {
+        return;
+    }
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        DriverTaskHotPath::Cyw43Wifi,
+        stage,
+        status,
+        completion,
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_replay_resource_status_is_redundant(stage: &str, status: &str) -> bool {
+    stage == "cyw43-firmware-recover" && matches!(status, "begin" | "ready")
 }
 
 #[cfg(feature = "kernel")]
@@ -3952,6 +3979,27 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_firmware_recovery_suppresses_redundant_replay_brackets() {
+        assert!(cyw43_sdio_replay_resource_status_is_redundant(
+            "cyw43-firmware-recover",
+            "begin",
+        ));
+        assert!(cyw43_sdio_replay_resource_status_is_redundant(
+            "cyw43-firmware-recover",
+            "ready",
+        ));
+        assert!(!cyw43_sdio_replay_resource_status_is_redundant(
+            "cyw43-firmware-recover",
+            "failed",
+        ));
+        assert!(!cyw43_sdio_replay_resource_status_is_redundant(
+            "cyw43-firmware-chunk",
+            "fault",
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn sdio_engine_init_status_preserves_exact_fault_detail() {
         assert_eq!(
             sdio_engine_init_detail_status(DRIVER_RUNTIME_SDIO_INIT_DETAIL_ADOPT_POWER_MISSING),
@@ -4504,6 +4552,64 @@ mod tests {
             None
         );
         assert_eq!(cyw43_firmware_resume_offset(fault, 609_308), None);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_nvram_resume_reenters_tail_after_exact_nvram_fault() {
+        let firmware_len = 609_309usize;
+        let nvram_len = 1_744usize;
+        let nvram_base = CYW43_RAM_BASE_4345 + CYW43_RAM_SIZE_4345_PI4 - 4 - nvram_len as u32;
+        let fault = Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-nvram-chunk",
+            op: DRIVER_RUNTIME_CYW43_OP_NVRAM_CHUNK,
+            flags: 0,
+            target_addr: nvram_base,
+            payload_offset: 4096,
+            payload_len: nvram_len as u16,
+            total_len: nvram_len as u32,
+            detail: 0x5329,
+            reason: "cyw43-firmware-retry-exhausted",
+            result: 0x0500_0800,
+        };
+
+        assert_eq!(
+            cyw43_nvram_tail_resume_offset(fault, firmware_len, nvram_len),
+            Some(firmware_len)
+        );
+        assert_eq!(
+            cyw43_nvram_tail_resume_offset(
+                Cyw43RuntimeCommandFaultStatus {
+                    target_addr: nvram_base + 4,
+                    ..fault
+                },
+                firmware_len,
+                nvram_len
+            ),
+            None
+        );
+        assert_eq!(
+            cyw43_nvram_tail_resume_offset(
+                Cyw43RuntimeCommandFaultStatus {
+                    op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_CHUNK,
+                    ..fault
+                },
+                firmware_len,
+                nvram_len
+            ),
+            None
+        );
+        assert_eq!(
+            cyw43_nvram_tail_resume_offset(
+                Cyw43RuntimeCommandFaultStatus {
+                    payload_len: (nvram_len - 4) as u16,
+                    ..fault
+                },
+                firmware_len,
+                nvram_len
+            ),
+            None
+        );
     }
 
     #[cfg(feature = "kernel")]

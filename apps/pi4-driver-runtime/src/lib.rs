@@ -74,6 +74,15 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_FORBIDDEN_SDIO_MMIO,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_CONFIG_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_HOST_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_ARMCR4_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_POST_CONFIG_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_RESET_VECTOR_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_CHECK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_MISSING,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_READY,
@@ -144,8 +153,15 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_COMMAND,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_CYCLE_MISMATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_OTHER,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_SLOT_EMPTY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING,
@@ -590,6 +606,12 @@ const XHCI_IMOD: usize = 0x04;
 const XHCI_ERSTBA: usize = 0x10;
 const XHCI_ERDP: usize = 0x18;
 const XHCI_IMAN: usize = 0x00;
+#[cfg(test)]
+const XHCI_EVENT_RING_PUBLICATION_PROGRESS_ORDER: [u32; 3] = [
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
+];
 const XHCI_DMA_DCBBA_OFFSET: usize = 0x0000;
 const XHCI_DMA_COMMAND_RING_OFFSET: usize = 0x1000;
 const XHCI_DMA_EVENT_RING_OFFSET: usize = 0x2000;
@@ -884,7 +906,7 @@ const SDIO_CMD3: u16 = 3;
 const SDIO_CMD7: u16 = 7;
 const SDIO_CMD52: u16 = 52;
 const SDIO_CMD53: u16 = 53;
-const SDIO_R5_OUT_OF_RANGE: u32 = 0x0100;
+const SDIO_R5_OUT_OF_RANGE: u32 = 0x0800;
 const SDIO_R4_READY: u32 = 1 << 31;
 const SDIO_OCR_3V2_3V4: u32 = 0x00ff_8000;
 const SDIO_CCCR_IOEX: u32 = 0x02;
@@ -1385,6 +1407,7 @@ struct Cyw43RuntimeState {
     nvram_tail_magic: u32,
     firmware_stage_addr: u32,
     firmware_stage_len: u16,
+    firmware_stage_flush_offset: u16,
     firmware_stage: [u8; CYW43_FIRMWARE_STAGE_BYTES],
     firmware_stage_scratch: [u8; CYW43_FIRMWARE_STAGE_BYTES],
     backplane_window: u32,
@@ -1431,6 +1454,7 @@ impl Cyw43RuntimeState {
             nvram_tail_magic: 0,
             firmware_stage_addr: 0,
             firmware_stage_len: 0,
+            firmware_stage_flush_offset: 0,
             firmware_stage: [0; CYW43_FIRMWARE_STAGE_BYTES],
             firmware_stage_scratch: [0; CYW43_FIRMWARE_STAGE_BYTES],
             backplane_window: 0,
@@ -1446,7 +1470,11 @@ impl Cyw43RuntimeState {
     }
 
     fn reset(&mut self) {
-        *self = Self::new();
+        self.initialized = false;
+        self.transport_ready = false;
+        self.bus_link_ready = false;
+        self.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START;
+        self.reset_firmware_upload_state();
     }
 
     fn reset_firmware_upload_state(&mut self) {
@@ -1461,14 +1489,7 @@ impl Cyw43RuntimeState {
         self.sdpcm_seq = 0;
         self.sdpcm_seq_max = 1;
         self.sdpcm_credit_observations = 0;
-        self.glom_subframe_lens = [0; CYW43_RX_GLOM_SUBFRAME_CAP];
-        self.glom_subframe_count = 0;
-        self.rx_queue_head = 0;
-        self.rx_queue_count = 0;
-        self.rx_queue_slots = cyw43_rx_queue_initial_slots();
-        self.rx_queue_lens = [0; CYW43_RX_QUEUE_CAP];
-        self.rx_queue_flags = [0; CYW43_RX_QUEUE_CAP];
-        self.rx_queue_frames = [[0; MAX_DRIVER_TASK_FRAME_BYTES]; CYW43_RX_QUEUE_CAP];
+        self.reset_rx_queue_storage();
         self.tx_frames = 0;
         self.rx_frames = 0;
         self.firmware_bytes = 0;
@@ -1476,11 +1497,33 @@ impl Cyw43RuntimeState {
         self.firmware_total_len = 0;
         self.nvram_total_len = 0;
         self.nvram_tail_magic = 0;
-        self.firmware_stage_addr = 0;
-        self.firmware_stage_len = 0;
+        self.reset_firmware_stage_storage();
         self.backplane_window = 0;
         self.backplane_window_valid = false;
         self.reset_card_init_state();
+    }
+
+    fn reset_rx_queue_storage(&mut self) {
+        self.glom_subframe_lens.fill(0);
+        self.glom_subframe_count = 0;
+        self.rx_queue_head = 0;
+        self.rx_queue_count = 0;
+        for (slot_index, slot) in self.rx_queue_slots.iter_mut().enumerate() {
+            *slot = slot_index as u8;
+        }
+        self.rx_queue_lens.fill(0);
+        self.rx_queue_flags.fill(0);
+        for frame in &mut self.rx_queue_frames {
+            frame.fill(0);
+        }
+    }
+
+    fn reset_firmware_stage_storage(&mut self) {
+        self.firmware_stage_addr = 0;
+        self.firmware_stage_len = 0;
+        self.firmware_stage_flush_offset = 0;
+        self.firmware_stage.fill(0);
+        self.firmware_stage_scratch.fill(0);
     }
 
     fn reset_card_init_state(&mut self) {
@@ -2321,7 +2364,14 @@ fn runtime_engine_init(
         HOT_PATH_USB_KEYBOARD => runtime_engine_init_usb(sequence, aux0, descriptor),
         HOT_PATH_HDMI_TEXT => runtime_engine_init_hdmi(descriptor),
         HOT_PATH_GENET_NIC => runtime_engine_init_genet(),
-        HOT_PATH_CYW43_WIFI => runtime_engine_init_cyw43(sequence, aux0, descriptor),
+        HOT_PATH_CYW43_WIFI => {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_ENGINE_INIT_BRANCH,
+                aux0,
+            );
+            runtime_engine_init_cyw43(sequence, aux0, descriptor)
+        }
         HOT_PATH_SDIO_HOST => runtime_engine_init_sdio(sequence, aux0),
         HOT_PATH_PCIE_ROOT => runtime_engine_init_pcie(),
         _ => Ok(FAULT_NONE),
@@ -2358,11 +2408,6 @@ fn runtime_engine_init_cyw43(
     aux0: u32,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Result<u16, u16> {
-    publish_runtime_progress(
-        sequence,
-        DRIVER_RUNTIME_RING_PROGRESS_CYW43_ENGINE_INIT_BRANCH,
-        aux0,
-    );
     CYW43_RUNTIME_STATE.with_mut(|state| {
         cyw43_runtime_init(sequence, aux0, state, descriptor)
             .then_some(FAULT_NONE)
@@ -4097,11 +4142,13 @@ fn service_cyw43_descriptor_command(
                 } else if !state.firmware_upload_prepared {
                     cyw43_record_last_fault(FAULT_CYW43_FIRMWARE_PREP);
                     0
-                } else if cyw43_backplane_write_ring(
+                } else if cyw43_stage_firmware_chunk(
                     state,
                     desc.target_addr,
                     usize::from(desc.payload_offset),
                     usize::from(desc.payload_len),
+                    true,
+                    false,
                 ) {
                     if state.nvram_total_len == 0 {
                         state.nvram_total_len = expected_total;
@@ -4134,7 +4181,7 @@ fn service_cyw43_descriptor_command(
         DRIVER_RUNTIME_CYW43_OP_RELEASE => {
             if state.firmware_stage_len != 0 && !cyw43_flush_firmware_stage(state) {
                 0
-            } else if cyw43_release_firmware(state, desc.arg0) {
+            } else if cyw43_release_firmware(state, desc.arg0, command.sequence) {
                 state.firmware_released = true;
                 1
             } else {
@@ -4202,6 +4249,8 @@ fn service_cyw43_descriptor_command(
                 frame,
             )
         }
+    } else if let Some(detail) = progress_detail {
+        DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, result)
     } else if result == 0
         && (desc.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
             || desc.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
@@ -4228,8 +4277,6 @@ fn service_cyw43_descriptor_command(
         }
     } else if let Some(frame) = frame_ready {
         DriverTaskCompletionRecord::frame_ready_with_descriptor(command.sequence, frame)
-    } else if let Some(detail) = progress_detail {
-        DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, result)
     } else {
         DriverTaskCompletionRecord::progress(command.sequence, result)
     }
@@ -6490,7 +6537,12 @@ const fn cyw43_cardcap_command_decode_value() -> u8 {
     SDIO_CCCR_BRCM_CARDCAP_CMD14_SUPPORT | SDIO_CCCR_BRCM_CARDCAP_CMD14_EXT
 }
 
-fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32) -> bool {
+fn cyw43_publish_release_progress(sequence: u32, phase: u32) {
+    publish_runtime_progress(sequence, phase, DRIVER_RUNTIME_CYW43_COMMAND_AUX);
+}
+
+fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequence: u32) -> bool {
+    cyw43_publish_release_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN);
     if !state.transport_ready
         || !state.firmware_uploaded
         || !state.nvram_uploaded
@@ -6498,11 +6550,19 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32) -> b
     {
         return false;
     }
-    if reset_vector != 0
-        && !cyw43_backplane_write_u32(state, CYW43_FIRMWARE_RESET_VECTOR_ADDR, reset_vector)
-    {
-        return false;
+    if reset_vector != 0 {
+        cyw43_publish_release_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_RESET_VECTOR_BEGIN,
+        );
+        if !cyw43_backplane_write_u32(state, CYW43_FIRMWARE_RESET_VECTOR_ADDR, reset_vector) {
+            return false;
+        }
     }
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_ARMCR4_RESET_BEGIN,
+    );
     if !cyw43_core_reset(
         state,
         CYW43_ARMCR4_CORE_BASE,
@@ -6512,25 +6572,45 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32) -> b
     ) {
         return false;
     }
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN,
+    );
     if !cyw43_promote_firmware_upload_clock(state) {
         return false;
     }
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_POST_CONFIG_BEGIN,
+    );
     if let Err(detail) = cyw43_prepare_post_release_function2(state) {
         cyw43_record_last_fault(detail);
         return false;
     }
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN,
+    );
     if let Err(detail) = cyw43_require_post_release_ht_clock() {
         if cyw43_take_last_fault_detail().is_none() {
             cyw43_record_last_fault(detail);
         }
         return false;
     }
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN,
+    );
     if let Err(detail) = cyw43_enable_post_release_function2() {
         if cyw43_take_last_fault_detail().is_none() {
             cyw43_record_last_fault(detail);
         }
         return false;
     }
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN,
+    );
     if !cyw43_backplane_write_u32(
         state,
         CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK,
@@ -6542,6 +6622,10 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32) -> b
     ) {
         return false;
     }
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN,
+    );
     if let Err(detail) = cyw43_require_post_release_corecontrol_ready(state) {
         if cyw43_take_last_fault_detail().is_none() {
             cyw43_record_last_fault(detail);
@@ -6874,6 +6958,7 @@ fn cyw43_firmware_upload_retries_exhausted(state: &Cyw43RuntimeState) -> bool {
 fn cyw43_reset_firmware_stage(state: &mut Cyw43RuntimeState) {
     state.firmware_stage_addr = 0;
     state.firmware_stage_len = 0;
+    state.firmware_stage_flush_offset = 0;
 }
 
 fn cyw43_firmware_stage_covers(
@@ -6937,29 +7022,44 @@ fn cyw43_save_firmware_payload_scratch(
 
 fn cyw43_flush_firmware_stage(state: &mut Cyw43RuntimeState) -> bool {
     let len = usize::from(state.firmware_stage_len);
+    let flush_offset = usize::from(state.firmware_stage_flush_offset);
     if len == 0 {
         return true;
     }
-    if len > CYW43_FIRMWARE_STAGE_BYTES {
+    if len > CYW43_FIRMWARE_STAGE_BYTES || flush_offset > len {
+        cyw43_record_firmware_range_fault(CYW43_FIRMWARE_RANGE_STAGE_PAYLOAD);
         return false;
     }
-    for index in 0..len {
+    if flush_offset == len {
+        cyw43_reset_firmware_stage(state);
+        return true;
+    }
+    for index in flush_offset..len {
         write_runtime_payload_byte(
             CYW43_FIRMWARE_STAGE_OFFSET + index,
             state.firmware_stage[index],
         );
     }
-    if cyw43_backplane_write_ring_with_mode(
+    let Some(flush_addr) = state.firmware_stage_addr.checked_add(flush_offset as u32) else {
+        cyw43_record_firmware_range_fault(CYW43_FIRMWARE_RANGE_STAGE_ADDR);
+        return false;
+    };
+    match cyw43_backplane_write_ring_with_mode_result(
         state,
-        state.firmware_stage_addr,
-        CYW43_FIRMWARE_STAGE_OFFSET,
-        len,
+        flush_addr,
+        CYW43_FIRMWARE_STAGE_OFFSET + flush_offset,
+        len - flush_offset,
         false,
     ) {
-        cyw43_reset_firmware_stage(state);
-        true
-    } else {
-        false
+        Ok(()) => {
+            cyw43_reset_firmware_stage(state);
+            true
+        }
+        Err(bytes_written) => {
+            let next_offset = flush_offset.saturating_add(bytes_written).min(len);
+            state.firmware_stage_flush_offset = next_offset as u16;
+            false
+        }
     }
 }
 
@@ -6983,6 +7083,7 @@ fn cyw43_stage_firmware_chunk(
     let mut payload_saved = false;
     if stage_len == 0 {
         state.firmware_stage_addr = target_addr;
+        state.firmware_stage_flush_offset = 0;
     } else if stage_len == CYW43_FIRMWARE_STAGE_BYTES {
         if cyw43_firmware_stage_covers(state, target_addr, payload_len) {
             if force_byte_mode && !cyw43_force_conservative_firmware_byte_replay(state) {
@@ -7078,11 +7179,22 @@ fn cyw43_backplane_write_ring_with_mode(
     len: usize,
     force_byte_mode: bool,
 ) -> bool {
+    cyw43_backplane_write_ring_with_mode_result(state, addr, ring_offset, len, force_byte_mode)
+        .is_ok()
+}
+
+fn cyw43_backplane_write_ring_with_mode_result(
+    state: &mut Cyw43RuntimeState,
+    addr: u32,
+    ring_offset: usize,
+    len: usize,
+    force_byte_mode: bool,
+) -> Result<(), usize> {
     let mut done = 0usize;
     while done < len {
         loop {
             let Some(chunk_addr) = addr.checked_add(done as u32) else {
-                return false;
+                return Err(done);
             };
             if !cyw43_backplane_set_window(state, chunk_addr) {
                 if cyw43_prepare_firmware_upload_retry(state) {
@@ -7099,7 +7211,7 @@ fn cyw43_backplane_write_ring_with_mode(
                     cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
                 }
                 cyw43_prepare_retryable_firmware_command(state);
-                return false;
+                return Err(done);
             }
             let window_offset = (chunk_addr as usize) & BACKPLANE_ADDRESS_MASK as usize;
             let window_remaining =
@@ -7157,14 +7269,14 @@ fn cyw43_backplane_write_ring_with_mode(
                     cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
                 }
                 cyw43_prepare_retryable_firmware_command(state);
-                return false;
+                return Err(done);
             }
             done += chunk_len;
             cyw43_reset_firmware_retry_clock(state);
             break;
         }
     }
-    true
+    Ok(())
 }
 
 fn cyw43_backplane_write_u32(state: &mut Cyw43RuntimeState, addr: u32, value: u32) -> bool {
@@ -10208,32 +10320,14 @@ fn dma_clean_range(addr: usize, len: usize) {
     core::sync::atomic::compiler_fence(Ordering::Release);
 }
 
-fn dma_invalidate_range(addr: usize, len: usize) {
-    let Some((line, end)) = dma_cache_range(addr, len) else {
+fn dma_invalidate_range(_addr: usize, len: usize) {
+    if len == 0 {
         return;
-    };
+    }
+    // Runtime DMA RAM is HAL-mapped uncached in the child VSpace. A barrier is
+    // enough before consuming device-written bytes; data-cache invalidation on
+    // this mapping can trap on Pi 4 before the progress marker is published.
     dma_load_barrier();
-    #[cfg(all(target_arch = "aarch64", target_os = "none"))]
-    {
-        let mut line = line;
-        while line < end {
-            // SAFETY: The address range comes from descriptor-validated DMA
-            // buffers. The device has completed the transfer before callers
-            // invalidate, so CPU reads below observe device-written bytes.
-            unsafe {
-                core::arch::asm!("dc ivac, {}", in(reg) line, options(nostack, preserves_flags));
-            }
-            line = line.saturating_add(DMA_CACHE_LINE_BYTES);
-        }
-        // SAFETY: Ensure invalidation completes before reading DMA memory.
-        unsafe {
-            core::arch::asm!("dsb oshld", options(nostack, preserves_flags));
-        }
-    }
-    #[cfg(not(all(target_arch = "aarch64", target_os = "none")))]
-    {
-        let _ = (line, end);
-    }
     core::sync::atomic::compiler_fence(Ordering::Acquire);
 }
 
@@ -10504,6 +10598,21 @@ fn read_xhci_trb(base: usize, index: usize) -> XhciTrb {
     }
 }
 
+fn read_xhci_trb_for_command_proof(
+    base: usize,
+    index: usize,
+    ack_mode: XhciEventAckMode,
+) -> XhciTrb {
+    let addr = xhci_trb_addr(base, index);
+    dma_invalidate_range(addr, XHCI_TRB_BYTES);
+    xhci_publish_command_proof_event_invalidate_done(ack_mode);
+    XhciTrb {
+        parameter: read_dma_u64(addr),
+        status: read_dma_u32(addr + 8),
+        control: read_dma_u32(addr + 12),
+    }
+}
+
 const fn xhci_trb_type(control: u32) -> u32 {
     (control >> 10) & 0x3f
 }
@@ -10689,7 +10798,7 @@ fn xhci_ack_event_dequeue_prompt_safe(
     true
 }
 
-fn xhci_next_event(
+fn xhci_peek_event(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Option<XhciTrb> {
@@ -10700,7 +10809,45 @@ fn xhci_next_event(
     )?;
     let base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
     dma_load_barrier();
-    let trb = read_xhci_trb(base, usize::from(state.event_dequeue));
+    Some(read_xhci_trb(base, usize::from(state.event_dequeue)))
+}
+
+fn xhci_peek_command_proof_event(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    ack_mode: XhciEventAckMode,
+) -> Option<XhciTrb> {
+    let dma_range = runtime_resource_range(
+        descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    )?;
+    let base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+    xhci_publish_command_proof_event_read_begin(ack_mode);
+    dma_load_barrier();
+    xhci_publish_command_proof_event_dma_load_done(ack_mode);
+    let trb = read_xhci_trb_for_command_proof(base, usize::from(state.event_dequeue), ack_mode);
+    xhci_publish_command_proof_event_read_done(ack_mode);
+    Some(trb)
+}
+
+fn xhci_next_event(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<XhciTrb> {
+    let trb = xhci_peek_event(state, descriptor)?;
+    if (trb.control & XHCI_TRB_CYCLE != 0) != state.event_cycle {
+        return None;
+    }
+    Some(trb)
+}
+
+fn xhci_next_command_proof_event(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    ack_mode: XhciEventAckMode,
+) -> Option<XhciTrb> {
+    let trb = xhci_peek_command_proof_event(state, descriptor, ack_mode)?;
     if (trb.control & XHCI_TRB_CYCLE != 0) != state.event_cycle {
         return None;
     }
@@ -10809,7 +10956,14 @@ fn xhci_enqueue_command(
 enum XhciCommandCompletionPoll {
     Complete(XhciTrb),
     Failed,
-    Pending,
+    Pending(XhciCommandCompletionPending),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XhciCommandCompletionPending {
+    PollBudget,
+    EventSlotEmpty,
+    EventCycleMismatch,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -10839,6 +10993,113 @@ fn xhci_publish_command_proof_event_progress(ack_mode: XhciEventAckMode, event: 
     publish_runtime_progress(sequence, phase, aux0);
 }
 
+const fn xhci_command_proof_pending_progress_phase(pending: XhciCommandCompletionPending) -> u32 {
+    match pending {
+        XhciCommandCompletionPending::PollBudget => {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING
+        }
+        XhciCommandCompletionPending::EventSlotEmpty => {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_SLOT_EMPTY
+        }
+        XhciCommandCompletionPending::EventCycleMismatch => {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_CYCLE_MISMATCH
+        }
+    }
+}
+
+fn xhci_command_proof_pending_reason(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    ack_mode: XhciEventAckMode,
+) -> XhciCommandCompletionPending {
+    let Some(event) = xhci_peek_command_proof_event(state, descriptor, ack_mode) else {
+        return XhciCommandCompletionPending::EventSlotEmpty;
+    };
+    xhci_command_proof_pending_reason_for_event(event, state.event_cycle)
+}
+
+const fn xhci_command_proof_pending_reason_for_event(
+    event: XhciTrb,
+    expected_cycle: bool,
+) -> XhciCommandCompletionPending {
+    if event.parameter == 0 && event.status == 0 && event.control == 0 {
+        return XhciCommandCompletionPending::EventSlotEmpty;
+    }
+    if (event.control & XHCI_TRB_CYCLE != 0) != expected_cycle {
+        return XhciCommandCompletionPending::EventCycleMismatch;
+    }
+    XhciCommandCompletionPending::PollBudget
+}
+
+fn xhci_publish_command_proof_pending_progress(
+    ack_mode: XhciEventAckMode,
+    pending: XhciCommandCompletionPending,
+) {
+    let XhciEventAckMode::PromptSafe { sequence, aux0 } = ack_mode else {
+        return;
+    };
+    publish_runtime_progress(
+        sequence,
+        xhci_command_proof_pending_progress_phase(pending),
+        aux0,
+    );
+}
+
+fn xhci_publish_command_proof_event_peek_begin(ack_mode: XhciEventAckMode) {
+    let XhciEventAckMode::PromptSafe { sequence, aux0 } = ack_mode else {
+        return;
+    };
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN,
+        aux0,
+    );
+}
+
+fn xhci_publish_command_proof_event_read_done(ack_mode: XhciEventAckMode) {
+    let XhciEventAckMode::PromptSafe { sequence, aux0 } = ack_mode else {
+        return;
+    };
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE,
+        aux0,
+    );
+}
+
+fn xhci_publish_command_proof_event_dma_load_done(ack_mode: XhciEventAckMode) {
+    let XhciEventAckMode::PromptSafe { sequence, aux0 } = ack_mode else {
+        return;
+    };
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE,
+        aux0,
+    );
+}
+
+fn xhci_publish_command_proof_event_invalidate_done(ack_mode: XhciEventAckMode) {
+    let XhciEventAckMode::PromptSafe { sequence, aux0 } = ack_mode else {
+        return;
+    };
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE,
+        aux0,
+    );
+}
+
+fn xhci_publish_command_proof_event_read_begin(ack_mode: XhciEventAckMode) {
+    let XhciEventAckMode::PromptSafe { sequence, aux0 } = ack_mode else {
+        return;
+    };
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN,
+        aux0,
+    );
+}
+
 fn xhci_ack_command_poll_event(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
@@ -10859,8 +11120,15 @@ fn xhci_poll_command_completion(
     ack_mode: XhciEventAckMode,
 ) -> XhciCommandCompletionPoll {
     let mut events = 0usize;
+    let mut pending = XhciCommandCompletionPending::PollBudget;
+    let mut published_pending = None;
+    let mut peek_begin_published = false;
     for _ in 0..spins {
-        while let Some(event) = xhci_next_event(state, descriptor) {
+        if !peek_begin_published {
+            xhci_publish_command_proof_event_peek_begin(ack_mode);
+            peek_begin_published = true;
+        }
+        while let Some(event) = xhci_next_command_proof_event(state, descriptor, ack_mode) {
             events = events.saturating_add(1);
             xhci_record_command_proof_event(state, event);
             xhci_publish_command_proof_event_progress(ack_mode, event);
@@ -10884,12 +11152,19 @@ fn xhci_poll_command_completion(
                 return XhciCommandCompletionPoll::Failed;
             }
             if events >= USB_COMMAND_COMPLETION_EVENTS_PER_SLICE {
-                return XhciCommandCompletionPoll::Pending;
+                return XhciCommandCompletionPoll::Pending(
+                    XhciCommandCompletionPending::PollBudget,
+                );
             }
+        }
+        pending = xhci_command_proof_pending_reason(state, descriptor, ack_mode);
+        if published_pending != Some(pending) {
+            xhci_publish_command_proof_pending_progress(ack_mode, pending);
+            published_pending = Some(pending);
         }
         core::hint::spin_loop();
     }
-    XhciCommandCompletionPoll::Pending
+    XhciCommandCompletionPoll::Pending(pending)
 }
 
 fn xhci_wait_command_completion(
@@ -10903,7 +11178,7 @@ fn xhci_wait_command_completion(
         XhciEventAckMode::Readback,
     ) {
         XhciCommandCompletionPoll::Complete(event) => Some(event),
-        XhciCommandCompletionPoll::Failed | XhciCommandCompletionPoll::Pending => None,
+        XhciCommandCompletionPoll::Failed | XhciCommandCompletionPoll::Pending(_) => None,
     }
 }
 
@@ -13119,10 +13394,10 @@ fn xhci_probe_command_path(
                 state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED;
                 false
             }
-            XhciCommandCompletionPoll::Pending => {
+            XhciCommandCompletionPoll::Pending(pending) => {
                 publish_runtime_progress(
                     sequence,
-                    DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING,
+                    xhci_command_proof_pending_progress_phase(pending),
                     aux0,
                 );
                 state.command_proof_poll_slices = state.command_proof_poll_slices.saturating_add(1);
@@ -13729,21 +14004,6 @@ fn usb_runtime_init_hw(
         return None;
     }
     let int_base = rt_offset as usize + 0x20;
-    publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN, aux0);
-    if !xhci_write64_flush_posted(
-        sequence,
-        aux0,
-        state,
-        int_base + XHCI_ERDP,
-        event_ring,
-        XHCI_FLUSH_STAGE_ERDP_LOW,
-        XHCI_FLUSH_STAGE_ERDP_HIGH,
-        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN,
-        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN,
-        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED,
-    ) {
-        return None;
-    }
     publish_runtime_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN,
@@ -13776,6 +14036,21 @@ fn usb_runtime_init_hw(
         DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_LOW_WRITTEN,
         DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_WRITTEN,
         DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_HIGH_FLUSHED,
+    ) {
+        return None;
+    }
+    publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN, aux0);
+    if !xhci_write64_flush_posted(
+        sequence,
+        aux0,
+        state,
+        int_base + XHCI_ERDP,
+        event_ring,
+        XHCI_FLUSH_STAGE_ERDP_LOW,
+        XHCI_FLUSH_STAGE_ERDP_HIGH,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_LOW_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_WRITTEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED,
     ) {
         return None;
     }
@@ -15010,6 +15285,41 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_transport_partial_detail_service_completion_is_progress() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        let init = DriverTaskCommandRecord {
+            sequence: 77,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_CYW43_WIFI,
+            arg1: ROLE_NET,
+            aux0: DRIVER_RUNTIME_NET_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_command(0, init),
+            DriverTaskCompletionRecord::progress(77, 1)
+        );
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(78)),
+            DriverTaskCompletionRecord::progress_with_detail(
+                78,
+                DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY,
+                0,
+            )
+        );
+    }
+
+    #[test]
     fn cyw43_fault_frame_state_round_trips_and_clears() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -15370,18 +15680,58 @@ mod tests {
             arg1: 0,
             reserved: 0,
         });
-        assert_eq!(
-            service_command(0, cyw43_descriptor_command(170)),
-            DriverTaskCompletionRecord::progress_with_detail(
-                170,
-                DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
-                1,
-            )
-        );
+        let mut transport_ready = false;
+        for attempt in 0..CYW43_TRANSPORT_PHASE_LIMIT {
+            let sequence = 170 + attempt as u32;
+            let completion = service_command(0, cyw43_descriptor_command(sequence));
+            assert_eq!(completion.sequence, sequence);
+            assert_eq!(completion.code, COMPLETION_PROGRESS);
+            if completion.detail == DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY {
+                assert_eq!(completion.result, 1);
+                transport_ready = true;
+                break;
+            }
+            assert_eq!(completion.result, 0);
+        }
+        assert!(transport_ready);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             assert!(state.transport_ready);
             assert!(!state.firmware_upload_prepared);
         });
+    }
+
+    #[test]
+    fn cyw43_service_engine_init_advances_past_runtime_entry_marker() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_CYW43_WIFI, ROLE_NET);
+        let init = DriverTaskCommandRecord {
+            sequence: 71,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_CYW43_WIFI,
+            arg1: ROLE_NET,
+            aux0: DRIVER_RUNTIME_NET_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        assert_eq!(
+            service_command(0, init),
+            DriverTaskCompletionRecord::progress(71, 1)
+        );
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 71);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE
+        );
+        assert_ne!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_RUNTIME_ENTRY
+        );
     }
 
     #[test]
@@ -16008,6 +16358,109 @@ mod tests {
         assert_eq!(CYW43_RX_GLOM_SUBFRAME_CAP, 64);
         assert_eq!(CYW43_RX_QUEUE_CAP, 128);
         assert!(CYW43_RX_QUEUE_CAP <= u8::MAX as usize);
+    }
+
+    #[test]
+    fn cyw43_runtime_reset_clears_large_buffers_in_place() {
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_uploaded = true;
+        state.nvram_uploaded = true;
+        state.firmware_released = true;
+        state.firmware_upload_prepared = true;
+        state.firmware_byte_mode_fallback = true;
+        state.firmware_narrow_byte_mode_fallback = true;
+        state.firmware_retry_clock_index = 2;
+        state.nvram_tail_uploaded = true;
+        state.sdpcm_seq = 7;
+        state.sdpcm_seq_max = 9;
+        state.sdpcm_credit_observations = 3;
+        state.glom_subframe_lens[0] = 64;
+        state.glom_subframe_count = 1;
+        state.rx_queue_head = 3;
+        state.rx_queue_count = 2;
+        state.rx_queue_slots[3] = 99;
+        state.rx_queue_lens[0] = 12;
+        state.rx_queue_flags[0] = 0xbeef;
+        state.rx_queue_frames[0][0] = 0xaa;
+        state.rx_queue_frames[CYW43_RX_QUEUE_CAP - 1][MAX_DRIVER_TASK_FRAME_BYTES - 1] = 0xbb;
+        state.tx_frames = 11;
+        state.rx_frames = 12;
+        state.firmware_bytes = 4096;
+        state.nvram_bytes = 256;
+        state.firmware_total_len = 4096;
+        state.nvram_total_len = 256;
+        state.nvram_tail_magic = 0xfeed_beef;
+        state.firmware_stage_addr = CYW43_RAM_BASE_4345;
+        state.firmware_stage_len = CYW43_FIRMWARE_STAGE_BYTES as u16;
+        state.firmware_stage_flush_offset = CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES as u16;
+        state.firmware_stage[0] = 0xcc;
+        state.firmware_stage_scratch[CYW43_FIRMWARE_STAGE_BYTES - 1] = 0xdd;
+        state.backplane_window = 0x1800_0000;
+        state.backplane_window_valid = true;
+        state.bus_link_ready = true;
+        state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY;
+        state.card_init_phase = CYW43_CARD_INIT_PHASE_DONE;
+        state.card_init_attempt = 1;
+        state.card_init_poll_count = 2;
+        state.card_init_ocr = 0x80ff_8000;
+        state.card_init_rca = 1;
+
+        state.reset();
+
+        assert!(!state.initialized);
+        assert!(!state.transport_ready);
+        assert!(!state.firmware_uploaded);
+        assert!(!state.nvram_uploaded);
+        assert!(!state.firmware_released);
+        assert!(!state.firmware_upload_prepared);
+        assert!(!state.firmware_byte_mode_fallback);
+        assert!(!state.firmware_narrow_byte_mode_fallback);
+        assert_eq!(state.firmware_retry_clock_index, 0);
+        assert!(!state.nvram_tail_uploaded);
+        assert_eq!(state.sdpcm_seq, 0);
+        assert_eq!(state.sdpcm_seq_max, 1);
+        assert_eq!(state.sdpcm_credit_observations, 0);
+        assert_eq!(state.glom_subframe_lens[0], 0);
+        assert_eq!(state.glom_subframe_count, 0);
+        assert_eq!(state.rx_queue_head, 0);
+        assert_eq!(state.rx_queue_count, 0);
+        assert_eq!(state.rx_queue_slots[3], 3);
+        assert_eq!(state.rx_queue_lens[0], 0);
+        assert_eq!(state.rx_queue_flags[0], 0);
+        assert_eq!(state.rx_queue_frames[0][0], 0);
+        assert_eq!(
+            state.rx_queue_frames[CYW43_RX_QUEUE_CAP - 1][MAX_DRIVER_TASK_FRAME_BYTES - 1],
+            0
+        );
+        assert_eq!(state.tx_frames, 0);
+        assert_eq!(state.rx_frames, 0);
+        assert_eq!(state.firmware_bytes, 0);
+        assert_eq!(state.nvram_bytes, 0);
+        assert_eq!(state.firmware_total_len, 0);
+        assert_eq!(state.nvram_total_len, 0);
+        assert_eq!(state.nvram_tail_magic, 0);
+        assert_eq!(state.firmware_stage_addr, 0);
+        assert_eq!(state.firmware_stage_len, 0);
+        assert_eq!(state.firmware_stage_flush_offset, 0);
+        assert_eq!(state.firmware_stage[0], 0);
+        assert_eq!(
+            state.firmware_stage_scratch[CYW43_FIRMWARE_STAGE_BYTES - 1],
+            0
+        );
+        assert_eq!(state.backplane_window, 0);
+        assert!(!state.backplane_window_valid);
+        assert!(!state.bus_link_ready);
+        assert_eq!(
+            state.transport_detail,
+            DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START
+        );
+        assert_eq!(state.card_init_phase, CYW43_CARD_INIT_PHASE_HOST_CONFIG);
+        assert_eq!(state.card_init_attempt, 0);
+        assert_eq!(state.card_init_poll_count, 0);
+        assert_eq!(state.card_init_ocr, 0);
+        assert_eq!(state.card_init_rca, 0);
     }
 
     #[test]
@@ -17363,8 +17816,8 @@ mod tests {
             None
         );
         assert_eq!(
-            sdio_cmd53_r5_error(SDIO_CMD53, firmware_write, 0x0800),
-            Some(0x0800)
+            sdio_cmd53_r5_error(SDIO_CMD53, firmware_write, 0x0100),
+            Some(0x0100)
         );
         assert_eq!(
             sdio_cmd53_r5_error(SDIO_CMD53, function2_write, SDIO_R5_OUT_OF_RANGE),
@@ -17444,6 +17897,7 @@ mod tests {
         state.firmware_upload_prepared = true;
         state.firmware_stage_addr = CYW43_RAM_BASE_4345;
         state.firmware_stage_len = CYW43_FIRMWARE_STAGE_BYTES as u16;
+        state.firmware_stage_flush_offset = 0;
         state.firmware_stage[0] = 0x11;
         state.firmware_stage[CYW43_FIRMWARE_STAGE_BYTES - 1] = 0x77;
 
@@ -17466,11 +17920,100 @@ mod tests {
         ));
 
         assert_eq!(state.firmware_stage_len, 0);
+        assert_eq!(state.firmware_stage_flush_offset, 0);
         assert!(state.firmware_byte_mode_fallback);
         assert_eq!(read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET), 0x11);
         assert_eq!(
             read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + CYW43_FIRMWARE_STAGE_BYTES - 1),
             0x77
+        );
+    }
+
+    #[test]
+    fn cyw43_firmware_stage_retry_flush_resumes_after_completed_prefix() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_upload_prepared = true;
+        state.firmware_stage_addr = CYW43_RAM_BASE_4345;
+        state.firmware_stage_len = CYW43_FIRMWARE_STAGE_BYTES as u16;
+        state.firmware_stage_flush_offset = CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES as u16;
+
+        for index in 0..CYW43_FIRMWARE_STAGE_BYTES {
+            state.firmware_stage[index] = 0x11;
+            write_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + index, 0xcc);
+        }
+        state.firmware_stage[CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES] = 0x77;
+
+        assert!(cyw43_flush_firmware_stage(&mut state));
+
+        assert_eq!(state.firmware_stage_len, 0);
+        assert_eq!(state.firmware_stage_flush_offset, 0);
+        assert_eq!(read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET), 0xcc);
+        assert_eq!(
+            read_runtime_payload_byte(
+                CYW43_FIRMWARE_STAGE_OFFSET + CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES - 1
+            ),
+            0xcc
+        );
+        assert_eq!(
+            read_runtime_payload_byte(
+                CYW43_FIRMWARE_STAGE_OFFSET + CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES
+            ),
+            0x77
+        );
+        assert_eq!(
+            read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + CYW43_FIRMWARE_STAGE_BYTES - 1),
+            0x11
+        );
+    }
+
+    #[test]
+    fn cyw43_nvram_stage_retry_flush_resumes_after_completed_prefix() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_upload_prepared = true;
+        let nvram_len = 1_744usize;
+        let completed = 1_024usize;
+        let nvram_addr = CYW43_RAM_BASE_4345 + CYW43_RAM_SIZE_4345_PI4 - 4 - nvram_len as u32;
+        state.firmware_stage_addr = nvram_addr;
+        state.firmware_stage_len = nvram_len as u16;
+        state.firmware_stage_flush_offset = completed as u16;
+
+        for index in 0..nvram_len {
+            state.firmware_stage[index] = 0x31;
+            write_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + index, 0xcc);
+        }
+        state.firmware_stage[completed] = 0x42;
+
+        assert!(cyw43_stage_firmware_chunk(
+            &mut state,
+            nvram_addr,
+            CYW43_FIRMWARE_STAGE_OFFSET,
+            nvram_len,
+            true,
+            false
+        ));
+
+        assert_eq!(state.firmware_stage_len, 0);
+        assert_eq!(state.firmware_stage_flush_offset, 0);
+        assert_eq!(read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET), 0xcc);
+        assert_eq!(
+            read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + completed - 1),
+            0xcc
+        );
+        assert_eq!(
+            read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + completed),
+            0x42
+        );
+        assert_eq!(
+            read_runtime_payload_byte(CYW43_FIRMWARE_STAGE_OFFSET + nvram_len - 1),
+            0x31
         );
     }
 
@@ -17527,6 +18070,7 @@ mod tests {
         state.nvram_tail_magic = 0xffff_0001;
         state.firmware_stage_addr = CYW43_RAM_BASE_4345;
         state.firmware_stage_len = CYW43_FIRMWARE_STAGE_BYTES as u16;
+        state.firmware_stage_flush_offset = CYW43_FIRMWARE_BYTE_MODE_CHUNK_BYTES as u16;
 
         assert!(cyw43_prepare_firmware_upload_transport(&mut state).is_ok());
         assert!(!state.firmware_uploaded);
@@ -17540,6 +18084,7 @@ mod tests {
         assert_eq!(state.nvram_tail_magic, 0);
         assert_eq!(state.firmware_stage_addr, 0);
         assert_eq!(state.firmware_stage_len, 0);
+        assert_eq!(state.firmware_stage_flush_offset, 0);
     }
 
     #[test]
@@ -17852,10 +18397,10 @@ mod tests {
         state.transport_ready = true;
         state.firmware_uploaded = true;
         state.nvram_uploaded = true;
-        assert!(!cyw43_release_firmware(&mut state, 0));
+        assert!(!cyw43_release_firmware(&mut state, 0, 1));
 
         state.nvram_tail_uploaded = true;
-        assert!(cyw43_release_firmware(&mut state, 0));
+        assert!(cyw43_release_firmware(&mut state, 0, 1));
     }
 
     #[test]
@@ -18402,6 +18947,18 @@ mod tests {
     }
 
     #[test]
+    fn usb_event_ring_registers_publish_segment_table_before_dequeue() {
+        assert_eq!(
+            XHCI_EVENT_RING_PUBLICATION_PROGRESS_ORDER,
+            [
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_BEGIN,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
+            ]
+        );
+    }
+
+    #[test]
     fn usb_command_doorbell_flush_is_barrier_only() {
         let state = UsbRuntimeState::new();
         assert!(xhci_flush_posted_write(
@@ -18446,6 +19003,195 @@ mod tests {
             DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING
         );
         assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+    }
+
+    #[test]
+    fn usb_command_proof_prompt_poll_reports_empty_event_slot() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let mut state = UsbRuntimeState::new();
+        state.initialized = true;
+        state.command_proof_pending = true;
+
+        assert!(!xhci_probe_command_path(
+            78,
+            DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            &mut state,
+            &descriptor
+        ));
+        assert!(state.command_proof_pending);
+        assert_eq!(state.command_proof_poll_slices, 1);
+        assert_eq!(
+            state.init_detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
+        );
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 78);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_SLOT_EMPTY
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+    }
+
+    #[test]
+    fn usb_command_proof_prompt_poll_marks_event_peek_before_first_read() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+
+        xhci_publish_command_proof_event_peek_begin(XhciEventAckMode::PromptSafe {
+            sequence: 79,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+        });
+
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 79);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+    }
+
+    #[test]
+    fn usb_command_proof_prompt_poll_marks_event_read_done_after_peek() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let mut state = UsbRuntimeState::new();
+
+        let trb = xhci_peek_command_proof_event(
+            &mut state,
+            &descriptor,
+            XhciEventAckMode::PromptSafe {
+                sequence: 80,
+                aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            },
+        )
+        .expect("test DMA arena should expose an event TRB");
+
+        assert_eq!(
+            trb,
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: 0,
+            }
+        );
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 80);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+    }
+
+    #[test]
+    fn usb_command_proof_prompt_poll_marks_event_read_begin() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+
+        xhci_publish_command_proof_event_read_begin(XhciEventAckMode::PromptSafe {
+            sequence: 81,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+        });
+
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 81);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+    }
+
+    #[test]
+    fn usb_command_proof_prompt_poll_marks_event_dma_load_done() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+
+        xhci_publish_command_proof_event_dma_load_done(XhciEventAckMode::PromptSafe {
+            sequence: 82,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+        });
+
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 82);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+    }
+
+    #[test]
+    fn usb_command_proof_prompt_poll_marks_event_invalidate_done() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+
+        xhci_publish_command_proof_event_invalidate_done(XhciEventAckMode::PromptSafe {
+            sequence: 83,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+        });
+
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 83);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+    }
+
+    #[test]
+    fn usb_command_proof_classifies_event_cycle_mismatch() {
+        assert_eq!(
+            xhci_command_proof_pending_reason_for_event(
+                XhciTrb {
+                    parameter: 0,
+                    status: 0,
+                    control: 0,
+                },
+                true,
+            ),
+            XhciCommandCompletionPending::EventSlotEmpty
+        );
+        assert_eq!(
+            xhci_command_proof_pending_reason_for_event(
+                XhciTrb {
+                    parameter: 0x40,
+                    status: XHCI_COMPLETION_SUCCESS << 24,
+                    control: XHCI_TRB_TYPE_COMMAND_COMPLETION << 10,
+                },
+                true,
+            ),
+            XhciCommandCompletionPending::EventCycleMismatch
+        );
+        assert_eq!(
+            xhci_command_proof_pending_reason_for_event(
+                XhciTrb {
+                    parameter: 0x40,
+                    status: XHCI_COMPLETION_SUCCESS << 24,
+                    control: (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10) | XHCI_TRB_CYCLE,
+                },
+                true,
+            ),
+            XhciCommandCompletionPending::PollBudget
+        );
+        assert_eq!(
+            xhci_command_proof_pending_progress_phase(
+                XhciCommandCompletionPending::EventCycleMismatch
+            ),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_CYCLE_MISMATCH
+        );
     }
 
     #[test]

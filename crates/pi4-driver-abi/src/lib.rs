@@ -349,6 +349,20 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_PENDING: u32 = 136
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_READY: u32 = 137;
 /// USB runtime rejected the gate-4 command proof.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_POLL_FAILED: u32 = 138;
+/// USB runtime sees an empty event TRB while polling the gate-4 command proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_SLOT_EMPTY: u32 = 184;
+/// USB runtime sees a nonempty event TRB whose cycle bit is not yet consumable.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_CYCLE_MISMATCH: u32 = 185;
+/// USB runtime is about to read the next event TRB for the gate-4 command proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PEEK_BEGIN: u32 = 186;
+/// USB runtime resolved the event TRB address and is entering the DMA read edge.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_BEGIN: u32 = 188;
+/// USB runtime completed the event-ring DMA load barrier before reading the TRB.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE: u32 = 189;
+/// USB runtime completed event-ring cache invalidation before reading TRB words.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE: u32 = 199;
+/// USB runtime completed the next event TRB read for the gate-4 command proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE: u32 = 187;
 /// USB runtime saw a port-status event while polling the command proof.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS: u32 = 145;
 /// USB runtime saw a command-completion event while polling the command proof.
@@ -427,6 +441,24 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_CHECK_BEGIN: u32 = 1
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_MISSING: u32 = 182;
 /// CYW43 runtime verified the shared firmware/control resource.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_SHARED_CONTROL_READY: u32 = 183;
+/// CYW43 runtime entered the post-NVRAM firmware release sequence.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN: u32 = 206;
+/// CYW43 runtime is writing the firmware reset vector.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_RESET_VECTOR_BEGIN: u32 = 207;
+/// CYW43 runtime is releasing the ARMCR4 core from reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_ARMCR4_RESET_BEGIN: u32 = 208;
+/// CYW43 runtime is restoring the upload clock/bus-width lane before HT.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN: u32 = 209;
+/// CYW43 runtime is programming post-release Function 2 sideband state.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_POST_CONFIG_BEGIN: u32 = 210;
+/// CYW43 runtime is requesting/proving the post-release HT clock.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN: u32 = 211;
+/// CYW43 runtime is enabling SDIO Function 2 after firmware release.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN: u32 = 212;
+/// CYW43 runtime is programming SDPCM interrupt masks.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN: u32 = 213;
+/// CYW43 runtime is proving SDIO corecontrol Function 2 readiness.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN: u32 = 214;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-owned command endpoint/shared-ring intake loop.
