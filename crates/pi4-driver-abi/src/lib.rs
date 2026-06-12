@@ -369,6 +369,22 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_DMA_LOAD_DONE: u3
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_INVALIDATE_DONE: u32 = 199;
 /// USB runtime completed the next event TRB read for the gate-4 command proof.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE: u32 = 187;
+/// USB runtime is resetting a connected root port before Address Device.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN: u32 = 190;
+/// USB runtime completed root-port reset and is entering Address Device.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE: u32 = 191;
+/// USB runtime is submitting Enable Slot for the Address Device path.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_ENABLE_SLOT_BEGIN: u32 = 192;
+/// USB runtime completed Enable Slot and has a candidate slot id.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_ENABLE_SLOT_DONE: u32 = 193;
+/// USB runtime published input/device contexts through DCBAA for Address Device.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_CONTEXTS_PUBLISHED: u32 = 194;
+/// USB runtime is waiting for the Address Device command completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN: u32 = 195;
+/// USB runtime completed the Address Device command.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE: u32 = 196;
+/// USB runtime did not complete the Address Device command.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED: u32 = 197;
 /// USB runtime saw a port-status event while polling the command proof.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS: u32 = 145;
 /// USB runtime saw a command-completion event while polling the command proof.

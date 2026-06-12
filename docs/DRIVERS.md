@@ -1366,6 +1366,11 @@ active path is Cohesix-owned cold start:
   child runtime exposes `command-event-ring-not-proven`,
   `enable-slot-completion-pending`, or `enable-slot-failed` quickly, and only
   `keyboard-ready` plus first HID report/byte proof can clear USB acceptance.
+  After `root-port-connected`, linked USB publishes bounded Address Device
+  substages (`usb-root-port-reset-*`, `usb-address-enable-slot-*`,
+  `usb-address-contexts-published`, and `usb-address-command-*`) so prompt-side
+  diagnostics can keep the ten-gate frontier pinned to gate 5 or gate 6 without
+  reopening PCIe/VL805 ownership or introducing a root-owned xHCI fallback.
   Root preserves an in-flight linked-runtime USB enumeration request across
   bounded no-reply slices only when the active identity still matches. Zero-frame
   enumeration polls may reach the timeout-resume limit and clear the active latch

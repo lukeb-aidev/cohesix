@@ -179,6 +179,23 @@ pub(crate) struct Cyw43RuntimeCommandFaultStatus {
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43ControlHeaderMode {
+    Plain,
+    Extended,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43ControlHeaderMode {
+    const fn runtime_flags(self) -> u16 {
+        match self {
+            Self::Plain => 0,
+            Self::Extended => DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SdioRuntimeReplayStatus {
     pub stage: &'static str,
     pub status: &'static str,
@@ -979,6 +996,23 @@ fn cyw43_submit_bcdc_iovar_bytes(
     data: &[u8],
     stage: &'static str,
 ) -> Result<(), DriverTaskNetError> {
+    cyw43_submit_bcdc_iovar_bytes_with_header_mode(
+        contract,
+        name,
+        data,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_iovar_bytes_with_header_mode(
+    contract: DriverTaskContract,
+    name: &str,
+    data: &[u8],
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+) -> Result<(), DriverTaskNetError> {
     let name_len = name.len();
     let payload_len = name_len
         .checked_add(1)
@@ -1000,7 +1034,14 @@ fn cyw43_submit_bcdc_iovar_bytes(
         id,
         &payload[..payload_len],
     )?;
-    cyw43_submit_control_exchange_checked(contract, &frame[..len], CYW43_WLC_SET_VAR, id, stage)
+    cyw43_submit_control_exchange_checked_with_header_mode(
+        contract,
+        &frame[..len],
+        CYW43_WLC_SET_VAR,
+        id,
+        stage,
+        header_mode,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -1011,6 +1052,23 @@ fn cyw43_submit_bcdc_iovar_u32(
     stage: &'static str,
 ) -> Result<(), DriverTaskNetError> {
     cyw43_submit_bcdc_iovar_bytes(contract, name, &value.to_le_bytes(), stage)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_iovar_u32_with_header_mode(
+    contract: DriverTaskContract,
+    name: &str,
+    value: u32,
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+) -> Result<(), DriverTaskNetError> {
+    cyw43_submit_bcdc_iovar_bytes_with_header_mode(
+        contract,
+        name,
+        &value.to_le_bytes(),
+        stage,
+        header_mode,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -1073,13 +1131,26 @@ fn cyw43_query_runtime_mac(
 fn cyw43_prepare_runtime_control_plane(
     contract: DriverTaskContract,
 ) -> Result<EthernetAddress, DriverTaskNetError> {
-    cyw43_submit_bcdc_iovar_u32(contract, "bus:txglomalign", 8, "cyw43-control-txglomalign")?;
-    cyw43_get_bcdc_iovar_optional_unsupported(
+    cyw43_submit_bcdc_iovar_u32_with_header_mode(
+        contract,
+        "bus:txglomalign",
+        8,
+        "cyw43-control-txglomalign",
+        Cyw43ControlHeaderMode::Plain,
+    )?;
+    cyw43_get_bcdc_iovar_optional_unsupported_with_header_mode(
         contract,
         "ulp_sdioctrl",
         "cyw43-control-ulp-sdioctrl",
+        Cyw43ControlHeaderMode::Plain,
     )?;
-    cyw43_submit_bcdc_iovar_u32(contract, "bus:rxglom", 1, "cyw43-control-rxglom")?;
+    cyw43_submit_bcdc_iovar_u32_with_header_mode(
+        contract,
+        "bus:rxglom",
+        1,
+        "cyw43-control-rxglom",
+        Cyw43ControlHeaderMode::Plain,
+    )?;
     let mac = cyw43_query_runtime_mac(contract)?;
     cyw43_get_bcdc_revinfo(contract)?;
     cyw43_submit_bcdc_iovar_u32(contract, "mpc", 0, "cyw43-control-mpc")?;
@@ -1091,6 +1162,21 @@ fn cyw43_get_bcdc_iovar_optional_unsupported(
     contract: DriverTaskContract,
     name: &str,
     stage: &'static str,
+) -> Result<(), DriverTaskNetError> {
+    cyw43_get_bcdc_iovar_optional_unsupported_with_header_mode(
+        contract,
+        name,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_get_bcdc_iovar_optional_unsupported_with_header_mode(
+    contract: DriverTaskContract,
+    name: &str,
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
 ) -> Result<(), DriverTaskNetError> {
     let name_len = name.len();
     let payload_len = name_len
@@ -1111,12 +1197,13 @@ fn cyw43_get_bcdc_iovar_optional_unsupported(
         id,
         &payload[..payload_len],
     )?;
-    match cyw43_submit_control_exchange_unmapped(
+    match cyw43_submit_control_exchange_unmapped_with_header_mode(
         contract,
         &frame[..len],
         CYW43_WLC_GET_VAR,
         id,
         stage,
+        header_mode,
     ) {
         Ok(completion) if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() => {
             Ok(())
@@ -1411,7 +1498,33 @@ fn cyw43_submit_control_exchange_checked(
     id: u16,
     stage: &'static str,
 ) -> Result<(), DriverTaskNetError> {
-    let completion = cyw43_submit_control_exchange_completion(contract, payload, cmd, id, stage)?;
+    cyw43_submit_control_exchange_checked_with_header_mode(
+        contract,
+        payload,
+        cmd,
+        id,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_control_exchange_checked_with_header_mode(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    cmd: u32,
+    id: u16,
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+) -> Result<(), DriverTaskNetError> {
+    let completion = cyw43_submit_control_exchange_completion_with_header_mode(
+        contract,
+        payload,
+        cmd,
+        id,
+        stage,
+        header_mode,
+    )?;
     crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
         DriverTaskHotPath::Cyw43Wifi,
@@ -1430,8 +1543,34 @@ fn cyw43_submit_control_exchange_completion(
     id: u16,
     stage: &'static str,
 ) -> Result<DriverTaskCompletionRecord, DriverTaskNetError> {
-    let completion = cyw43_submit_control_exchange_unmapped(contract, payload, cmd, id, stage)
-        .map_err(|err| err.into_net_error())?;
+    cyw43_submit_control_exchange_completion_with_header_mode(
+        contract,
+        payload,
+        cmd,
+        id,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_control_exchange_completion_with_header_mode(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    cmd: u32,
+    id: u16,
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+) -> Result<DriverTaskCompletionRecord, DriverTaskNetError> {
+    let completion = cyw43_submit_control_exchange_unmapped_with_header_mode(
+        contract,
+        payload,
+        cmd,
+        id,
+        stage,
+        header_mode,
+    )
+    .map_err(|err| err.into_net_error())?;
     if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
         Ok(completion)
     } else {
@@ -1454,6 +1593,25 @@ fn cyw43_submit_control_exchange_unmapped(
     id: u16,
     stage: &'static str,
 ) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
+    cyw43_submit_control_exchange_unmapped_with_header_mode(
+        contract,
+        payload,
+        cmd,
+        id,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_control_exchange_unmapped_with_header_mode(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    cmd: u32,
+    id: u16,
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
     crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
         DriverTaskHotPath::Cyw43Wifi,
@@ -1463,17 +1621,27 @@ fn cyw43_submit_control_exchange_unmapped(
     );
     submit_cyw43_runtime_command_checked(
         contract,
-        DriverRuntimeCyw43CommandDescriptor {
-            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
-            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
-            payload_len: payload.len() as u16,
-            total_len: payload.len() as u32,
-            arg0: cmd,
-            arg1: u32::from(id),
-            ..DriverRuntimeCyw43CommandDescriptor::empty()
-        },
+        cyw43_control_exchange_descriptor(payload.len(), cmd, id, header_mode),
         payload,
     )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_exchange_descriptor(
+    payload_len: usize,
+    cmd: u32,
+    id: u16,
+    header_mode: Cyw43ControlHeaderMode,
+) -> DriverRuntimeCyw43CommandDescriptor {
+    DriverRuntimeCyw43CommandDescriptor {
+        op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+        flags: header_mode.runtime_flags(),
+        payload_len: payload_len as u16,
+        total_len: payload_len as u32,
+        arg0: cmd,
+        arg1: u32::from(id),
+        ..DriverRuntimeCyw43CommandDescriptor::empty()
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -3804,6 +3972,43 @@ mod tests {
         assert!(!cyw43_control_exchange_completion_is_unsupported(
             other_fault
         ));
+    }
+
+    #[test]
+    fn cyw43_control_exchange_descriptor_uses_plain_startup_header_mode() {
+        let descriptor = cyw43_control_exchange_descriptor(
+            36,
+            CYW43_WLC_SET_VAR,
+            1,
+            Cyw43ControlHeaderMode::Plain,
+        );
+
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+        assert_eq!(descriptor.flags, 0);
+        assert_eq!(descriptor.payload_len, 36);
+        assert_eq!(descriptor.total_len, 36);
+        assert_eq!(descriptor.arg0, CYW43_WLC_SET_VAR);
+        assert_eq!(descriptor.arg1, 1);
+    }
+
+    #[test]
+    fn cyw43_control_exchange_descriptor_keeps_extended_default_mode() {
+        let descriptor = cyw43_control_exchange_descriptor(
+            16,
+            CYW43_WLC_GET_REVINFO,
+            4,
+            Cyw43ControlHeaderMode::Extended,
+        );
+
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+        assert_eq!(
+            descriptor.flags,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+        );
+        assert_eq!(descriptor.payload_len, 16);
+        assert_eq!(descriptor.total_len, 16);
+        assert_eq!(descriptor.arg0, CYW43_WLC_GET_REVINFO);
+        assert_eq!(descriptor.arg1, 4);
     }
 
     #[test]

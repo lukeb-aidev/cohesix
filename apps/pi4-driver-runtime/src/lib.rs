@@ -145,8 +145,14 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_CYW43,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_HDMI,
     DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_SDIO,
-    DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB, DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_CONTEXTS_PUBLISHED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_ENABLE_SLOT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_ENABLE_SLOT_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ, DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_READ_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_DOORBELL_DONE,
@@ -193,8 +199,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_CLEANED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_FILLED,
@@ -11993,6 +12001,8 @@ fn xhci_disable_slot(
 }
 
 fn xhci_address_device(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
@@ -12036,7 +12046,17 @@ fn xhci_address_device(
     );
     dma_clean_range(dma_base + device.ep0_ring_offset, XHCI_DMA_EP0_RING_STRIDE);
     dma_clean_range(dma_base + usize::from(device.slot).saturating_mul(8), 8);
-    xhci_enqueue_command(
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_CONTEXTS_PUBLISHED,
+        aux0,
+    );
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN,
+        aux0,
+    );
+    let addressed = xhci_enqueue_command(
         state,
         descriptor,
         XhciTrb {
@@ -12045,7 +12065,17 @@ fn xhci_address_device(
             control: (XHCI_TRB_TYPE_ADDRESS_DEVICE << 10) | (u32::from(device.slot) << 24),
         },
     )
-    .is_some()
+    .is_some();
+    publish_runtime_progress(
+        sequence,
+        if addressed {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE
+        } else {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED
+        },
+        aux0,
+    );
+    addressed
 }
 
 fn xhci_control_transfer(
@@ -13051,6 +13081,8 @@ fn usb_activate_hub_multi_tt(
 }
 
 fn xhci_address_topology_device(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
@@ -13067,6 +13099,11 @@ fn xhci_address_topology_device(
     let (packet_candidates, packet_count) = xhci_control_packet_candidates(device.speed);
     let mut recycle_count = 0usize;
     while recycle_count <= USB_ADDRESS_DEVICE_SLOT_RECYCLES {
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_ENABLE_SLOT_BEGIN,
+            aux0,
+        );
         let Some(slot) = xhci_enable_slot(state, descriptor) else {
             state.init_detail = if recycle_count == 0 {
                 DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
@@ -13075,9 +13112,16 @@ fn xhci_address_topology_device(
             };
             return None;
         };
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_ENABLE_SLOT_DONE,
+            aux0,
+        );
         device.slot = slot;
         for packet in packet_candidates.iter().copied().take(packet_count) {
-            if xhci_address_device(state, descriptor, dma_range, &device, packet) {
+            if xhci_address_device(
+                sequence, aux0, state, descriptor, dma_range, &device, packet,
+            ) {
                 state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED;
                 usb_spin_wait(USB_ADDRESS_DEVICE_SETTLE_SPINS);
                 *next_device_index = (*next_device_index).saturating_add(1);
@@ -13179,6 +13223,8 @@ const fn usb_detail_warrants_hub_child_speed_fallback(detail: u16) -> bool {
 }
 
 fn usb_probe_hub_child_candidate(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
@@ -13187,13 +13233,21 @@ fn usb_probe_hub_child_candidate(
     depth_remaining: u8,
 ) -> bool {
     let index_before = *next_device_index;
-    let Some(child) =
-        xhci_address_topology_device(state, descriptor, dma_range, child, next_device_index)
-    else {
+    let Some(child) = xhci_address_topology_device(
+        sequence,
+        aux0,
+        state,
+        descriptor,
+        dma_range,
+        child,
+        next_device_index,
+    ) else {
         *next_device_index = index_before;
         return false;
     };
     if usb_probe_device_for_keyboard(
+        sequence,
+        aux0,
         state,
         descriptor,
         dma_range,
@@ -13209,6 +13263,8 @@ fn usb_probe_hub_child_candidate(
 }
 
 fn usb_probe_hub_child_with_speed_fallback(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
@@ -13221,6 +13277,8 @@ fn usb_probe_hub_child_with_speed_fallback(
 ) -> bool {
     let child = hub.child_with_hub_info(port, primary_speed, hub_info);
     if usb_probe_hub_child_candidate(
+        sequence,
+        aux0,
         state,
         descriptor,
         dma_range,
@@ -13245,6 +13303,8 @@ fn usb_probe_hub_child_with_speed_fallback(
     if rearmed_primary_speed != primary_speed {
         let child = hub.child_with_hub_info(port, rearmed_primary_speed, hub_info);
         if usb_probe_hub_child_candidate(
+            sequence,
+            aux0,
             state,
             descriptor,
             dma_range,
@@ -13269,6 +13329,8 @@ fn usb_probe_hub_child_with_speed_fallback(
         );
         let child = hub.child_with_hub_info(port, candidate, hub_info);
         if usb_probe_hub_child_candidate(
+            sequence,
+            aux0,
             state,
             descriptor,
             dma_range,
@@ -13283,6 +13345,8 @@ fn usb_probe_hub_child_with_speed_fallback(
 }
 
 fn usb_scan_hub_children(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
@@ -13335,6 +13399,8 @@ fn usb_scan_hub_children(
             continue;
         };
         if usb_probe_hub_child_with_speed_fallback(
+            sequence,
+            aux0,
             state,
             descriptor,
             dma_range,
@@ -13352,6 +13418,8 @@ fn usb_scan_hub_children(
 }
 
 fn usb_probe_device_for_keyboard(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     dma_range: DriverRuntimeResourceRangeDescriptor,
@@ -13401,6 +13469,8 @@ fn usb_probe_device_for_keyboard(
         return false;
     };
     usb_scan_hub_children(
+        sequence,
+        aux0,
         state,
         descriptor,
         dma_range,
@@ -13629,9 +13699,19 @@ fn usb_scan_root_ports_for_keyboard(
             continue;
         }
         state.enumeration_root_next_port = port.saturating_add(1);
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN,
+            aux0,
+        );
         if let Some(speed) =
             xhci_reset_root_port(state, port, state.port_event_candidate_mask & bit != 0)
         {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE,
+                aux0,
+            );
             state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED;
             usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
             state.port_event_candidate_mask &= !bit;
@@ -13643,6 +13723,8 @@ fn usb_scan_root_ports_for_keyboard(
                 ..UsbEnumerationDevice::empty()
             };
             let Some(root) = xhci_address_topology_device(
+                sequence,
+                aux0,
                 state,
                 descriptor,
                 dma_range,
@@ -13655,6 +13737,8 @@ fn usb_scan_root_ports_for_keyboard(
             };
             usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
             if usb_probe_device_for_keyboard(
+                sequence,
+                aux0,
                 state,
                 descriptor,
                 dma_range,
@@ -19111,6 +19195,10 @@ mod tests {
         assert_eq!(USB_COMMAND_PROOF_MAX_POLL_SLICES, 192);
         assert!(USB_COMMAND_PROOF_RERINGS_PENDING_DOORBELL);
         assert_eq!(USB_COMMAND_PROOF_RERING_INTERVAL_SLICES, 8);
+        assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN, 190);
+        assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE, 191);
+        assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN, 195);
+        assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED, 197);
         assert_eq!(
             XHCI_COMMAND_RING_BYTES,
             XHCI_COMMAND_RING_TRBS * XHCI_TRB_BYTES

@@ -4744,6 +4744,21 @@ def test_usb_driver_task_blocker_gate_splits_engine_init_from_xhci_entry() -> No
     assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-read-done-no-reply") == 4
     assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-slot-empty") == 4
     assert normalizer.usb_driver_task_blocker_gate("enable-slot-event-cycle-mismatch") == 4
+    assert normalizer.usb_driver_task_blocker_gate("root-port-reset-no-reply") == 5
+    assert normalizer.usb_driver_task_blocker_gate("address-enable-slot-no-reply") == 5
+    assert (
+        normalizer.usb_driver_task_blocker_gate("address-device-context-publish-no-reply")
+        == 5
+    )
+    assert (
+        normalizer.usb_driver_task_blocker_gate("address-device-command-submit-no-reply")
+        == 5
+    )
+    assert (
+        normalizer.usb_driver_task_blocker_gate("address-device-command-completion-no-reply")
+        == 5
+    )
+    assert normalizer.usb_driver_task_blocker_gate("address-device-publish-no-reply") == 6
 
 
 def test_gate_summary_keeps_xhci_device_coverage_miss_over_unavailable() -> None:
@@ -5063,6 +5078,22 @@ def test_gate_summary_tracks_usb_runtime_enum_snapshot_detail() -> None:
     assert gates.usb_blocker == "enable-slot-failed"
 
 
+def test_gate_summary_tracks_root_port_connected_detail() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0205 "
+            "result=0x0f000001 root_mask=0x01 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 5
+    assert gates.usb_blocker == "root-port-connected"
+
+
 def test_gate_summary_tracks_usb_hub_attach_substep_detail() -> None:
     events = normalizer.parse_events(
         [
@@ -5181,6 +5212,26 @@ def test_gate_summary_tracks_raw_command_event_peek_begin_progress() -> None:
 
     assert gates.usb_gate == 4
     assert gates.usb_blocker == "enable-slot-event-peek-no-reply"
+
+
+def test_gate_summary_tracks_raw_address_command_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0205 "
+            "result=0x0f000001 root_mask=0x01 slot=0 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
+            "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
+            "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
+            "marker_phase=195 marker_phase_name=usb-address-command-begin "
+            "marker_aux0=0x55534245",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 5
+    assert gates.usb_blocker == "address-device-command-completion-no-reply"
 
 
 def test_gate_summary_tracks_command_event_read_done_progress() -> None:

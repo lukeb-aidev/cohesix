@@ -163,6 +163,12 @@ USB_OUTCOME_BLOCKERS = {
     "hid-attach-failed",
     "hid-first-report",
     "hid-endpoint-not-ready",
+    "root-port-reset-no-reply",
+    "address-enable-slot-no-reply",
+    "address-device-context-publish-no-reply",
+    "address-device-command-submit-no-reply",
+    "address-device-command-completion-no-reply",
+    "address-device-publish-no-reply",
     "hub-attach-failed",
     "hub-context-failed",
     "hub-descriptor-failed",
@@ -5531,6 +5537,19 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
     }:
         return 4
     if blocker in {
+        "root-port-reset-no-reply",
+        "address-enable-slot-no-reply",
+        "address-device-context-publish-no-reply",
+        "address-device-command-submit-no-reply",
+        "address-device-command-completion-no-reply",
+    }:
+        return 5
+    if blocker in {
+        "address-device-publish-no-reply",
+        "address-device-failed",
+    }:
+        return 6
+    if blocker in {
         "usb-engine-init-hardware-no-reply",
         "usb-runtime-init-entry-no-reply",
         "usb-runtime-state-access-no-reply",
@@ -5596,6 +5615,14 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-command-proof-event-other": "enable-slot-poll-non-command-event",
         "usb-command-proof-erdp-ack-begin": "enable-slot-event-ack-pending",
         "usb-command-proof-erdp-ack-done": "enable-slot-event-ack-complete",
+        "usb-root-port-reset-begin": "root-port-reset-no-reply",
+        "usb-root-port-reset-done": "address-enable-slot-no-reply",
+        "usb-address-enable-slot-begin": "address-enable-slot-no-reply",
+        "usb-address-enable-slot-done": "address-device-context-publish-no-reply",
+        "usb-address-contexts-published": "address-device-command-submit-no-reply",
+        "usb-address-command-begin": "address-device-command-completion-no-reply",
+        "usb-address-command-done": "address-device-publish-no-reply",
+        "usb-address-command-failed": "address-device-failed",
     }.get(fields.get("marker_phase_name", "").lower())
 
 
