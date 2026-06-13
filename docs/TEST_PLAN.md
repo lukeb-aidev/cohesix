@@ -194,9 +194,16 @@ with `last_rx_idle_detail=0x570a`, `0x570b`, `0x5709`, `0x570c`, `0x570d`, or
 net-disabled cause. The same status records expose the association-gated linked
 receive window through `event_rx`, `control_rx`, `associated`, `link_up`,
 `assoc_event`, `assoc_poll`, `post_assoc_polls`, and
-`control_rx_firstread_*`; those fields diagnose missing association/control
-events but do not override a more precise nonzero `rx_firstread_*` data-RX
-blocker.
+`control_rx_firstread_*`; empty first-read records also expose `rxsrc_*` and
+`control_rxsrc_*` fields decoded from the packed runtime result so tests and
+captures can distinguish missing firmware RX source, masked CCCR/SDIO
+interrupts, absent SDHCI card-int, and Function 2 readiness. Those fields
+diagnose missing association/control events but do not override a more precise
+nonzero `rx_firstread_*` data-RX blocker.
+For linked CYW43 `CONTROL_EXCHANGE` failures, `CYW43_DRIVER_TASK_COMMAND_NO_REPLY`
+records with `reason=cyw43-runtime-command-no-reply` must normalize to Gate 7
+`control-plane-reply-idle-loop` while preserving the exact no-reply reason and
+the control stage as `WIFI_PHASE`.
 
 Reopened Milestones 26a/26b also require HAL driver-task contract coverage before hardware claims: `hal::driver_task` must validate the serial, USB/local-seat, HDMI, GENET, CYW43, SDIO host, PCIe root, RTL8139, and virtio-net contracts. Historical M26B completion evidence remains a compatibility baseline, not reopened acceptance proof. Reopened Pi 4 captures must include compact `DRIVER_TASK_*`, `SCHED_CONTRACT`, `BUDGET_OVERRUN`, observed per-driver latency, `SERIAL_ECHO`, `USB_BURST`, and `HDMI_RESPONSIVE` evidence; `scripts/pi4_trace_normalize.py --gate-summary` exposes those as machine-checkable hardware proof fields.
 

@@ -795,45 +795,48 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 13 20:38 post-flash boot supersedes the June 13 19:15, 17:40, 17:01,
-16:22, 13:07, 12:35, 10:11, 09:27, 08:50, 08:16, 07:55, and 07:33 Wi-Fi
-frontiers as current truth.
-The 12:35 transport-admission regression, 13:07 revinfo BADARG blocker, and
-earlier control-reply idle loop are no longer current: descriptor replay for
-`cyw43455` and `sdio-host`, SDIO engine init detail `0x5500`,
-`cyw43-sdio-prereq`, CYW43 engine init, firmware upload, NVRAM/tail, firmware
-release, and owner-state all recover to ready. The linked CYW43 control channel
-then proves multiple Linux-order replies: `bus:txglomalign=8`, optional
-`ulp_sdioctrl` as matched `BCME_UNSUPPORTED`, `bus:rxglom=1`, `cur_etheraddr`,
-`BRCMF_C_GET_REVINFO` with the 68-byte response window, `mpc=0`, `WLC_UP`,
-`WLC_SET_INFRA`, WPA2 setup, PAE multicast admission, and the legacy
-`WLC_SET_SSID` join request. The active frontier remains Gate 7 because
-association/link and host-EAPOL secure completion are not yet proven: the log
-proves `CYW43_DRIVER_TASK_EVENT_MASK ... ready` before and after `WLC_UP`,
-reaches `cyw43-host-eapol pending`, sends nine bounded
-`cyw43-host-eapol-start` frames with the expected 18-byte EAPOL-Start Ethernet
-shape and BDC priority 6, then fails closed with direct
-`cyw43-data-rx-firstread-empty` proof (`rx_firstread_attempts=24576`,
-`rx_firstread_empty=24576`, `last_rx_idle_detail=0x570a`,
-`last_rx_idle_result=512`) beneath the coarse `host-eapol-required` policy
-cause; DHCP, `nettest`, `netstats`, and remote-`cohsh` proof remain
-uncredited.
+The June 14 07:04 post-flash boot supersedes the June 13 22:44, 20:38, 19:15,
+17:40, 17:01, 16:22, 13:07, 12:35, 10:11, 09:27, 08:50, 08:16, 07:55, and 07:33
+Wi-Fi frontiers as current truth. The June 13 22:44 trace remains the best
+recent post-join proof, but it is not the active blocker for the newest boot.
+The newest trace, `/Users/lukasbower/pi4-serial-20260614-070447.log`, proves
+descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init detail
+`0x5500`, `cyw43-sdio-prereq`, CYW43 engine init, firmware/NVRAM upload,
+firmware release after owner-state recovery, and owner-state readiness. It then
+regresses before the June 13 post-join RX window: the first Linux-order matched
+control exchange, `bus:txglomalign=8` (`op=11`, 36-byte plain-header payload),
+does not publish a completion before root's bounded linked-runtime window
+expires. The active frontier is still Gate 7, but the exact current blocker is
+the linked-runtime `cyw43-runtime-command-no-reply` edge at
+`cyw43-control-txglomalign`, not host-EAPOL or DHCP. `JOIN_REQUEST`,
+`CYW43_DRIVER_TASK_HOST_EAPOL_STATUS`, `rxsrc_*`, association/link, DHCP,
+`nettest`, `netstats`, and remote-`cohsh` proof are uncredited for the June 14
+run. CYW43 `CONTROL_EXCHANGE` turns now receive the same bounded same-request
+resume treatment as long transport turns, and terminal no-reply records include
+the request sequence, resume count, and latest CYW43 progress marker so the next
+capture can distinguish command admission loss from an in-runtime SDPCM/CMD53
+control-RX stall.
 Linked-runtime RX polls now request
 `DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD` across the host-EAPOL proof
 window so the runtime can translate the May 18-19 zero-RFRAME/card-interrupt
 behavior into bounded Function 2 first-read evidence without moving physical
 CYW43 ownership back into root. Data-only hintless RX polls issue the 512-byte
 Function 2 block probe first, while control/event polls and control exchanges
-keep the 64-byte Linux-style first read before the fallback probe. If the block
-probe is empty the completion keeps `last_rx_idle_detail=0x570a` and records
-`last_rx_idle_result=512`. After post-release Function 2 readiness, the linked
-runtime now also mirrors the old HAL interrupt path by writing CCCR `IENx=0x07`
-before the SDIO core `HOSTINTMASK` / `FUNCTIONINTMASK` programming, so
-association events and AP M1 can reach the Function 2 receive lane.
+keep the 64-byte Linux-style first read before the fallback probe. If the probe
+is empty, the completion keeps `last_rx_idle_detail=0x570a` and packs an
+RX-source snapshot into `last_rx_idle_result`: high bit set, low 16 bits as the
+probe length, CCCR `IENx`, frame-indication, host-interrupt, SDHCI card-int,
+and Function 2 readiness. Root decodes those bits into `rxsrc_*` and
+`control_rxsrc_*` fields on `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS`. After
+post-release Function 2 readiness, the linked runtime also mirrors the old HAL
+interrupt path by writing CCCR `IENx=0x07` before the SDIO core `HOSTINTMASK` /
+`FUNCTIONINTMASK` programming, so association events and AP M1 can reach the
+Function 2 receive lane.
 Root parses Broadcom association/link events delivered by the runtime on
 control/event or data frames, records `event_rx`, `associated`, `link_up`,
 `assoc_event`, `assoc_poll`, `post_assoc_polls`,
-`control_rx_firstread_*`, and only sends diagnostic EAPOL-Start after the
+`control_rx_firstread_*`, `rxsrc_*`, `control_rxsrc_*`, and only sends
+diagnostic EAPOL-Start after the
 post-association window reaches poll `8192`. It refreshes PAE multicast
 admission after `1024` post-association polls and runs the allmulti/promisc M1
 rescue after `4096` post-association polls or two starts. Host-EAPOL status
@@ -859,10 +862,10 @@ suppresses redundant human-readable `begin` / `ready` wrappers for that recovery
 stage. The next boot must either show association/link event delivery followed
 by EAPOL data reaching the host handshake, prove the denser post-event-mask
 block-probe window is still empty/no-reply with `last_rx_idle_detail=0x570a` and
-`last_rx_idle_result=512`, prove malformed first-read SDPCM with
-`last_rx_idle_detail=0x570b`, prove a CMD53 first-read/remainder failure with
-`0x5709` or `0x570c`, expose a `cyw43-join-bsscfg` firmware status, or prove
-that a non-EAPOL data frame reached the RX path after the join edge.
+decoded `rxsrc_*` / `control_rxsrc_*` fields, prove malformed first-read SDPCM
+with `last_rx_idle_detail=0x570b`, prove a CMD53 first-read/remainder failure
+with `0x5709` or `0x570c`, expose a `cyw43-join-bsscfg` firmware status, or
+prove that a non-EAPOL data frame reached the RX path after the join edge.
 The linked runtime now publishes CYW43-specific early and release markers:
 `cyw43-engine-init-branch`, `cyw43-state-reset-begin`,
 `cyw43-state-reset-done`, `cyw43-forbidden-sdio-mmio`,
@@ -1435,9 +1438,17 @@ active path is Cohesix-owned cold start:
   `enable-slot-completion-pending`, or `enable-slot-failed` quickly, and only
   `keyboard-ready` plus first HID report/byte proof can clear USB acceptance.
   After `root-port-connected`, linked USB publishes bounded Address Device
-  substages (`usb-root-port-reset-*`, `usb-address-enable-slot-*`,
-  `usb-address-contexts-published`, `usb-address-command-*`, and
-  `usb-device-addressed`) plus EP0 device-descriptor prime/full-read and
+  substages. Root-port reset includes the U-Boot-shaped power/connect/reset
+  ladder (`usb-root-port-reset-power-write-done`,
+  `usb-root-port-connect-wait-begin`, `usb-root-port-connect-timeout`,
+  `usb-root-port-reset-pr-set`, `usb-root-port-reset-poll-begin`,
+  `usb-root-port-reset-prc-seen`, `usb-root-port-enable-timeout`,
+  `usb-root-port-reset-timeout`, `usb-root-port-reset-retry`,
+  `usb-root-port-reset-failed`, and `usb-root-port-stale-cleanup-*`) before
+  `usb-root-port-reset-done`. Address Device then publishes
+  (`usb-address-enable-slot-*`, `usb-address-contexts-published`,
+  `usb-address-command-*`, and `usb-device-addressed`) plus EP0
+  device-descriptor prime/full-read and
   configuration-descriptor header/full-read substages
   (`usb-device-descriptor-prime-*`, `usb-device-descriptor-*`,
   `usb-config-descriptor-header-*`, and `usb-config-descriptor-full-*`) plus HID
@@ -1452,16 +1463,22 @@ active path is Cohesix-owned cold start:
   diagnostics can keep the ten-gate frontier pinned to gate 5, gate 6, the
   first gate-7 descriptor edge, or the gate-8 interrupt-queue edge without
   reopening PCIe/VL805 ownership or introducing a root-owned xHCI fallback.
+  Root-task gives root-port reset progress a finite reset-specific keep-active
+  envelope so prompt-slice timeouts do not mask a live U-Boot-shaped reset
+  retry or stale-cleanup substage.
   Full-speed devices use the prime markers for the initial 64-byte descriptor
   request before the final 18-byte device descriptor read; device,
   configuration, HID endpoint, and interrupt-queue setup stay in the linked
-  runtime. EP0 descriptor waits also publish transfer/status event-ring
+  runtime. EP0 descriptor waits, including the hub class-descriptor read after
+  hub SET_CONFIGURATION, also publish transfer/status event-ring
   `*-event-slot-empty`, `*-event-cycle-mismatch`, and `*-event-ignored`
-  substages before timing out. Hub traversal waits publish set-configuration,
-  hub-descriptor, hub-context, downstream port power/reset, port-ready, child
-  probe, and fallback-speed markers and receive a separate finite same-request
-  resume budget so a hub power/reset settle does not erase the in-flight linked
-  enumeration turn.
+  substages before timing out. The hub descriptor read uses its own finite
+  class-control wait budget so old-good hub-control latency can be observed
+  without widening every device/config descriptor transfer. Hub traversal waits
+  publish set-configuration, hub-descriptor, hub-context, downstream port
+  power/reset, port-ready, child probe, and fallback-speed markers and receive a
+  separate finite same-request resume budget so a hub power/reset settle does
+  not erase the in-flight linked enumeration turn.
   Root preserves an in-flight linked-runtime USB enumeration request across
   bounded no-reply slices only when the active identity still matches. A valid
   same-request/same-aux progress marker whose phase advances resets the

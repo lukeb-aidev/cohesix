@@ -161,7 +161,13 @@ def test_gate_proof_rejects_generic_usb_unavailable_summary() -> None:
     assert '"USB_BLOCKER=command-event-rings"' in source
     assert '"USB_BLOCKER=command-ring-ready"' in source
     assert '"USB_BLOCKER=root-port-connected"' in source
+    assert '"USB_BLOCKER=root-port-reset-no-reply"' in source
+    assert '"USB_BLOCKER=root-port-reset-completion-no-reply"' in source
+    assert '"USB_BLOCKER=root-port-enable-timeout"' in source
+    assert '"USB_BLOCKER=address-device-command-completion-no-reply"' in source
+    assert '"USB_BLOCKER=address-device-publish-no-reply"' in source
     assert '"USB_BLOCKER=address-device-failed"' in source
+    assert '"USB_BLOCKER=device-descriptor-no-reply"' in source
     assert '"USB_BLOCKER=device-addressed"' in source
     assert '"USB_BLOCKER=pcie-xhci-device-coverage-missing"' in source
     assert '"USB_BLOCKER=pcie-owner-ring-unavailable"' in source

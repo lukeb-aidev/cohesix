@@ -180,6 +180,16 @@ USB_OUTCOME_BLOCKERS = {
     "hid-interrupt-queue-no-reply",
     "hid-interrupt-queue-failed",
     "root-port-reset-no-reply",
+    "root-port-connect-no-reply",
+    "root-port-connect-timeout",
+    "root-port-reset-completion-no-reply",
+    "root-port-enable-no-reply",
+    "root-port-enable-timeout",
+    "root-port-reset-timeout",
+    "root-port-reset-retry",
+    "root-port-reset-failed",
+    "root-port-stale-cleanup-no-reply",
+    "root-port-stale-cleanup-failed",
     "address-enable-slot-no-reply",
     "address-device-context-publish-no-reply",
     "address-device-command-submit-no-reply",
@@ -244,6 +254,17 @@ USB_OUTCOME_BLOCKERS = {
     "hub-set-configuration-no-reply",
     "hub-set-configuration-settle-no-reply",
     "hub-descriptor-no-reply",
+    "hub-descriptor-transfer-no-reply",
+    "hub-descriptor-status-no-reply",
+    "hub-descriptor-transfer-failed",
+    "hub-descriptor-transfer-timeout",
+    "hub-descriptor-status-timeout",
+    "hub-descriptor-transfer-event-slot-empty",
+    "hub-descriptor-transfer-event-cycle-mismatch",
+    "hub-descriptor-transfer-event-ignored",
+    "hub-descriptor-status-event-slot-empty",
+    "hub-descriptor-status-event-cycle-mismatch",
+    "hub-descriptor-status-event-ignored",
     "hub-context-no-reply",
     "hub-port-power-no-reply",
     "hub-port-reset-no-reply",
@@ -1488,6 +1509,17 @@ def normalize_usb_blocker(value: str) -> str:
         "hub-set-configuration-no-reply",
         "hub-set-configuration-settle-no-reply",
         "hub-descriptor-no-reply",
+        "hub-descriptor-transfer-no-reply",
+        "hub-descriptor-status-no-reply",
+        "hub-descriptor-transfer-failed",
+        "hub-descriptor-transfer-timeout",
+        "hub-descriptor-status-timeout",
+        "hub-descriptor-transfer-event-slot-empty",
+        "hub-descriptor-transfer-event-cycle-mismatch",
+        "hub-descriptor-transfer-event-ignored",
+        "hub-descriptor-status-event-slot-empty",
+        "hub-descriptor-status-event-cycle-mismatch",
+        "hub-descriptor-status-event-ignored",
         "hub-context-no-reply",
         "hub-port-power-no-reply",
         "hub-port-reset-no-reply",
@@ -1768,6 +1800,22 @@ def cyw43_control_exchange_timeout_event_exact(event: TraceEvent) -> str | None:
     ):
         return None
     return cyw43_control_exchange_timeout_exact(parse_hex_int(fields.get("result")))
+
+
+def cyw43_command_no_reply_event_exact(event: TraceEvent) -> str | None:
+    """Return the exact linked-runtime CYW43 command no-reply reason."""
+
+    fields = event.fields
+    if "cyw43_driver_task_command_no_reply" not in event.raw.lower():
+        return None
+    if fields.get("contract", "").lower() != "cyw43455":
+        return None
+    exact = normalize_wifi_exact(fields.get("reason", ""))
+    if exact != "none":
+        return exact
+    if parse_hex_int(fields.get("op")) == CYW43_CONTROL_EXCHANGE_OP:
+        return "cyw43-runtime-command-no-reply"
+    return None
 
 
 def wifi_join_complete_proven(fields: dict[str, str]) -> bool:
@@ -2563,6 +2611,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-rx-not-ready",
         "cyw43-control-rx-request-too-large",
         "cyw43-control-rx-sdpcm-decode-miss",
+        "cyw43-runtime-command-no-reply",
         "cyw43-data-rx-f2-read-failed",
         "cyw43-data-rx-firstread-empty",
         "cyw43-data-rx-firstread-failed",
@@ -2660,7 +2709,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
 
     event_list = list(events)
     usb_events = [event for event in event_list if event.domain == "usb"]
-    if not usb_events:
+    usb_driver_progress_seen = any(
+        "driver_task_ring_progress" in event.raw.lower()
+        and usb_raw_driver_task_progress_blocker(event.fields) is not None
+        for event in event_list
+    )
+    if not usb_events and not usb_driver_progress_seen:
         return 0, "missing"
 
     gate = 1
@@ -2826,9 +2880,10 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker_gate = usb_driver_task_blocker_gate(progress_blocker)
                 if blocker_gate > 1:
                     gate = max(gate, blocker_gate)
-                    blocker = progress_blocker
+                    if blocker_gate >= gate or blocker in {"unknown", "none"}:
+                        blocker = progress_blocker
                     direct_usb_progress_blocker = progress_blocker
-                continue
+                    continue
         if event.domain != "usb":
             continue
         if "map exact miss" in raw and fields.get("reason") == "no-device-coverage":
@@ -2931,7 +2986,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker_gate = usb_driver_task_blocker_gate(progress_blocker)
             if blocker_gate > 1:
                 gate = max(gate, blocker_gate)
-                blocker = progress_blocker
+                if blocker_gate >= gate or blocker in {"unknown", "none"}:
+                    blocker = progress_blocker
                 direct_usb_progress_blocker = progress_blocker
             continue
         if raw.startswith("driver_task_ring_progress"):
@@ -2940,7 +2996,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker_gate = usb_driver_task_blocker_gate(progress_blocker)
                 if blocker_gate > 1:
                     gate = max(gate, blocker_gate)
-                    blocker = progress_blocker
+                    if blocker_gate >= gate or blocker in {"unknown", "none"}:
+                        blocker = progress_blocker
                     direct_usb_progress_blocker = progress_blocker
                 continue
         if raw.startswith("usb: next_action"):
@@ -4922,6 +4979,10 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     raw_cyw43_progress = cyw43_raw_command_progress_blocker(event)
     if raw_cyw43_progress is not None:
         return raw_cyw43_progress, raw_cyw43_progress
+    command_no_reply_exact = cyw43_command_no_reply_event_exact(event)
+    if command_no_reply_exact is not None:
+        phase = event.fields.get("stage") or event.stage or "cyw43-command"
+        return command_no_reply_exact, phase
     control_timeout_exact = cyw43_control_exchange_timeout_event_exact(event)
     if control_timeout_exact is not None:
         phase = event.fields.get("stage") or event.stage or "cyw43-control-exchange"
@@ -5303,6 +5364,11 @@ def summarize_wifi_failure_detail(
         if (
             wifi_blocker == "control-plane-reply-idle-loop"
             and cyw43_control_exchange_timeout_event_exact(event) is not None
+        ):
+            candidate = "control-plane-reply-idle-loop"
+        if (
+            wifi_blocker == "control-plane-reply-idle-loop"
+            and cyw43_command_no_reply_event_exact(event) is not None
         ):
             candidate = "control-plane-reply-idle-loop"
         if (
@@ -6007,6 +6073,16 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         return 4
     if blocker in {
         "root-port-reset-no-reply",
+        "root-port-connect-no-reply",
+        "root-port-connect-timeout",
+        "root-port-reset-completion-no-reply",
+        "root-port-enable-no-reply",
+        "root-port-enable-timeout",
+        "root-port-reset-timeout",
+        "root-port-reset-retry",
+        "root-port-reset-failed",
+        "root-port-stale-cleanup-no-reply",
+        "root-port-stale-cleanup-failed",
         "address-enable-slot-no-reply",
         "address-device-context-publish-no-reply",
         "address-device-command-submit-no-reply",
@@ -6081,6 +6157,17 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "hub-set-configuration-no-reply",
         "hub-set-configuration-settle-no-reply",
         "hub-descriptor-no-reply",
+        "hub-descriptor-transfer-no-reply",
+        "hub-descriptor-status-no-reply",
+        "hub-descriptor-transfer-failed",
+        "hub-descriptor-transfer-timeout",
+        "hub-descriptor-status-timeout",
+        "hub-descriptor-transfer-event-slot-empty",
+        "hub-descriptor-transfer-event-cycle-mismatch",
+        "hub-descriptor-transfer-event-ignored",
+        "hub-descriptor-status-event-slot-empty",
+        "hub-descriptor-status-event-cycle-mismatch",
+        "hub-descriptor-status-event-ignored",
         "hub-context-no-reply",
         "hub-port-power-no-reply",
         "hub-port-reset-no-reply",
@@ -6172,6 +6259,19 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-command-proof-erdp-ack-done": "enable-slot-event-ack-complete",
         "usb-root-port-reset-begin": "root-port-reset-no-reply",
         "usb-root-port-reset-done": "address-enable-slot-no-reply",
+        "usb-root-port-reset-power-write-done": "root-port-connect-no-reply",
+        "usb-root-port-connect-wait-begin": "root-port-connect-no-reply",
+        "usb-root-port-connect-timeout": "root-port-connect-timeout",
+        "usb-root-port-reset-pr-set": "root-port-reset-completion-no-reply",
+        "usb-root-port-reset-poll-begin": "root-port-reset-completion-no-reply",
+        "usb-root-port-reset-prc-seen": "root-port-enable-no-reply",
+        "usb-root-port-enable-timeout": "root-port-enable-timeout",
+        "usb-root-port-reset-timeout": "root-port-reset-timeout",
+        "usb-root-port-reset-retry": "root-port-reset-retry",
+        "usb-root-port-reset-failed": "root-port-reset-failed",
+        "usb-root-port-stale-cleanup-begin": "root-port-stale-cleanup-no-reply",
+        "usb-root-port-stale-cleanup-done": "address-enable-slot-no-reply",
+        "usb-root-port-stale-cleanup-failed": "root-port-stale-cleanup-failed",
         "usb-address-enable-slot-begin": "address-enable-slot-no-reply",
         "usb-address-enable-slot-done": "address-device-context-publish-no-reply",
         "usb-address-contexts-published": "address-device-command-submit-no-reply",
@@ -6245,6 +6345,19 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-hub-set-configuration-begin": "hub-set-configuration-no-reply",
         "usb-hub-set-configuration-done": "hub-set-configuration-settle-no-reply",
         "usb-hub-descriptor-begin": "hub-descriptor-no-reply",
+        "usb-hub-descriptor-doorbell-done": "hub-descriptor-transfer-no-reply",
+        "usb-hub-descriptor-wait-begin": "hub-descriptor-transfer-no-reply",
+        "usb-hub-descriptor-data-event": "hub-descriptor-status-no-reply",
+        "usb-hub-descriptor-status-event": "hub-context-no-reply",
+        "usb-hub-descriptor-failed": "hub-descriptor-transfer-failed",
+        "usb-hub-descriptor-transfer-timeout": "hub-descriptor-transfer-timeout",
+        "usb-hub-descriptor-status-timeout": "hub-descriptor-status-timeout",
+        "usb-hub-descriptor-transfer-event-slot-empty": "hub-descriptor-transfer-event-slot-empty",
+        "usb-hub-descriptor-transfer-event-cycle-mismatch": "hub-descriptor-transfer-event-cycle-mismatch",
+        "usb-hub-descriptor-transfer-event-ignored": "hub-descriptor-transfer-event-ignored",
+        "usb-hub-descriptor-status-event-slot-empty": "hub-descriptor-status-event-slot-empty",
+        "usb-hub-descriptor-status-event-cycle-mismatch": "hub-descriptor-status-event-cycle-mismatch",
+        "usb-hub-descriptor-status-event-ignored": "hub-descriptor-status-event-ignored",
         "usb-hub-descriptor-done": "hub-context-no-reply",
         "usb-hub-context-begin": "hub-context-no-reply",
         "usb-hub-context-done": "hub-port-power-no-reply",

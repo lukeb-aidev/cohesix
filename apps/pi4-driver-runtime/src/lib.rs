@@ -43,6 +43,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RFRAME_READ_FAILED,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RX_REQUEST_TOO_LARGE,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_SDPCM_DECODE_MISS,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FRAME_INDICATED,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_HOST_INTERRUPT,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_SHIFT, DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BACKPLANE_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY,
@@ -295,7 +300,20 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CONTEXT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CONTEXT_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DATA_EVENT,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_SLOT_EMPTY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_CYCLE_MISMATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_IGNORED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
@@ -309,8 +327,21 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RINGS_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_CONNECT_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_CONNECT_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_ENABLE_TIMEOUT,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POLL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POWER_WRITE_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_PRC_SEEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_PR_SET,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_RETRY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_REQUESTED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_ARRAY_CLEANED,
@@ -858,6 +889,7 @@ const USB_ENDPOINT_ATTR_INTERRUPT: u8 = 3;
 const USB_ENDPOINT_DIR_IN: u8 = 0x80;
 const USB_XHCI_SPINS: usize = 10_000_000;
 const USB_CONTROL_TRANSFER_SPINS: usize = USB_XHCI_SPINS;
+const USB_HUB_DESCRIPTOR_CONTROL_TRANSFER_SPINS: usize = USB_CONTROL_TRANSFER_SPINS * 2;
 const USB_COMMAND_COMPLETION_SPINS: usize = 20_000_000;
 const USB_COMMAND_COMPLETION_SLICE_SPINS: usize = 128;
 const USB_COMMAND_COMPLETION_EVENTS_PER_SLICE: usize = 4;
@@ -1160,6 +1192,7 @@ const HMB_DATA_VERSION_MASK: u32 = 0x00ff_0000;
 const HMB_DATA_VERSION_SHIFT: u32 = 16;
 const SDPCM_PROT_VERSION: u32 = 4;
 const I_HMB_SW_MASK: u32 = 0x0000_00f0;
+const I_HMB_FRAME_IND: u32 = 1 << 6;
 const I_CHIPACTIVE: u32 = 1 << 29;
 const HOSTINTMASK: u32 = I_HMB_SW_MASK | I_CHIPACTIVE;
 const FUNCTIONINTMASK: u32 = SDIO_FUNC_ENABLE_2 as u32;
@@ -8077,9 +8110,10 @@ fn cyw43_runtime_poll_rx_hintless_block_probe(
                 sequence,
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY,
             );
-            return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadEmpty(
-                CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
-            ));
+            return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadEmpty {
+                probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+                source: cyw43_rx_source_snapshot(state, CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16),
+            });
         }
         cyw43_publish_control_rx_progress(
             sequence,
@@ -8177,6 +8211,56 @@ enum Cyw43RxPollResult {
     Idle(Cyw43RxIdleReason),
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cyw43RxSourceSnapshot {
+    probe_len: u16,
+    interrupt_enable: u8,
+    frame_indicated: bool,
+    host_interrupt: bool,
+    card_interrupt: bool,
+    function2_ready: bool,
+}
+
+impl Cyw43RxSourceSnapshot {
+    const fn encode(self) -> u32 {
+        let mut result = DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC
+            | self.probe_len as u32
+            | ((self.interrupt_enable as u32) << DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_SHIFT);
+        if self.frame_indicated {
+            result |= DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FRAME_INDICATED;
+        }
+        if self.host_interrupt {
+            result |= DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_HOST_INTERRUPT;
+        }
+        if self.card_interrupt {
+            result |= DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT;
+        }
+        if self.function2_ready {
+            result |= DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY;
+        }
+        result
+    }
+}
+
+fn cyw43_rx_source_snapshot(
+    state: &mut Cyw43RuntimeState,
+    probe_len: u16,
+) -> Cyw43RxSourceSnapshot {
+    let interrupt_enable = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IENX).unwrap_or(0);
+    let iordy = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX).unwrap_or(0);
+    let int_status =
+        cyw43_backplane_read_u32(state, CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS).unwrap_or(0);
+    let sdhci_status = sdio_read32(SDHCI_INT_STATUS);
+    Cyw43RxSourceSnapshot {
+        probe_len,
+        interrupt_enable,
+        frame_indicated: int_status & I_HMB_FRAME_IND != 0,
+        host_interrupt: int_status & HOSTINTMASK != 0,
+        card_interrupt: sdhci_status & SDHCI_INT_CARD_INT != 0,
+        function2_ready: iordy & SDIO_FUNC_READY_2 != 0,
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43RxIdleReason {
     NotReady,
@@ -8187,7 +8271,10 @@ enum Cyw43RxIdleReason {
     Function2ReadFailed,
     SdpcmDecodeMiss,
     FirstreadFailed,
-    FirstreadEmpty(usize),
+    FirstreadEmpty {
+        probe_len: usize,
+        source: Cyw43RxSourceSnapshot,
+    },
     FirstreadInvalidSdpcm(u32),
     FirstreadRemainderFailed,
     FirstreadRemainderTooLarge(usize),
@@ -8211,7 +8298,9 @@ const fn cyw43_rx_idle_detail(reason: Cyw43RxIdleReason) -> u16 {
         }
         Cyw43RxIdleReason::SdpcmDecodeMiss => DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_SDPCM_DECODE_MISS,
         Cyw43RxIdleReason::FirstreadFailed => DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_FAILED,
-        Cyw43RxIdleReason::FirstreadEmpty(_) => DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY,
+        Cyw43RxIdleReason::FirstreadEmpty { .. } => {
+            DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY
+        }
         Cyw43RxIdleReason::FirstreadInvalidSdpcm(_) => {
             DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_INVALID_SDPCM
         }
@@ -8229,7 +8318,7 @@ fn cyw43_rx_idle_result(reason: Cyw43RxIdleReason) -> u32 {
         Cyw43RxIdleReason::InvalidRframeLength(frame_len)
         | Cyw43RxIdleReason::RxRequestTooLarge(frame_len)
         | Cyw43RxIdleReason::FirstreadRemainderTooLarge(frame_len) => bounded_u32(frame_len),
-        Cyw43RxIdleReason::FirstreadEmpty(probe_len) => bounded_u32(probe_len),
+        Cyw43RxIdleReason::FirstreadEmpty { source, .. } => source.encode(),
         Cyw43RxIdleReason::FirstreadInvalidSdpcm(signature) => signature,
         _ => 0,
     }
@@ -8253,7 +8342,7 @@ const fn cyw43_rx_idle_reason_rank(reason: Cyw43RxIdleReason) -> u8 {
         | Cyw43RxIdleReason::Function2ReadFailed
         | Cyw43RxIdleReason::SdpcmDecodeMiss => 2,
         Cyw43RxIdleReason::FirstreadFailed
-        | Cyw43RxIdleReason::FirstreadEmpty(_)
+        | Cyw43RxIdleReason::FirstreadEmpty { .. }
         | Cyw43RxIdleReason::FirstreadInvalidSdpcm(_)
         | Cyw43RxIdleReason::FirstreadRemainderFailed
         | Cyw43RxIdleReason::FirstreadRemainderTooLarge(_) => 3,
@@ -8411,10 +8500,12 @@ fn cyw43_control_exchange_timeout_fault_result(
             CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_FAILED,
             0,
         ),
-        Cyw43RxIdleReason::FirstreadEmpty(probe_len) => cyw43_control_exchange_timeout_result(
-            CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_EMPTY,
-            bounded_u32(probe_len),
-        ),
+        Cyw43RxIdleReason::FirstreadEmpty { probe_len, .. } => {
+            cyw43_control_exchange_timeout_result(
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_EMPTY,
+                bounded_u32(probe_len),
+            )
+        }
         Cyw43RxIdleReason::FirstreadInvalidSdpcm(signature) => {
             cyw43_control_exchange_timeout_result(
                 CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_INVALID_SDPCM,
@@ -12167,6 +12258,26 @@ const fn xhci_control_transfer_event_diagnostic_phases(
                 }
             }
         }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_TIMEOUT => {
+            if status_stage {
+                XhciControlEventDiagnosticPhases {
+                    slot_empty:
+                        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_SLOT_EMPTY,
+                    cycle_mismatch:
+                        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH,
+                    ignored: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED,
+                }
+            } else {
+                XhciControlEventDiagnosticPhases {
+                    slot_empty:
+                        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY,
+                    cycle_mismatch:
+                        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_CYCLE_MISMATCH,
+                    ignored:
+                        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_IGNORED,
+                }
+            }
+        }
         _ => XhciControlEventDiagnosticPhases {
             slot_empty: 0,
             cycle_mismatch: 0,
@@ -12204,7 +12315,9 @@ fn xhci_control_pending_event_phase_rank(phase: u32) -> u8 {
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_EVENT_IGNORED
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT_IGNORED
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_EVENT_IGNORED
-        | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_IGNORED => 3,
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_IGNORED
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_IGNORED
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED => 3,
         DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_EVENT_CYCLE_MISMATCH
         | DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT_CYCLE_MISMATCH
         | DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_EVENT_CYCLE_MISMATCH
@@ -12212,7 +12325,9 @@ fn xhci_control_pending_event_phase_rank(phase: u32) -> u8 {
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_EVENT_CYCLE_MISMATCH
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT_CYCLE_MISMATCH
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_EVENT_CYCLE_MISMATCH
-        | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_CYCLE_MISMATCH => 2,
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_CYCLE_MISMATCH
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_CYCLE_MISMATCH
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH => 2,
         DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_EVENT_SLOT_EMPTY
         | DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT_SLOT_EMPTY
         | DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY
@@ -12220,7 +12335,9 @@ fn xhci_control_pending_event_phase_rank(phase: u32) -> u8 {
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_EVENT_SLOT_EMPTY
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT_SLOT_EMPTY
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_EVENT_SLOT_EMPTY
-        | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_SLOT_EMPTY => 1,
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_SLOT_EMPTY
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_SLOT_EMPTY => 1,
         _ => 0,
     }
 }
@@ -12332,11 +12449,12 @@ fn xhci_wait_control_transfer_completion(
     endpoint_id: u8,
     plan: XhciControlTransferPlan,
     progress: Option<XhciControlProgress>,
+    completion_spins: usize,
 ) -> Option<usize> {
     let mut transferred = if plan.data_len == 0 { Some(0) } else { None };
     let mut published_pending = None;
     xhci_publish_control_progress(progress, progress.map_or(0, |progress| progress.wait_begin));
-    for _ in 0..USB_CONTROL_TRANSFER_SPINS {
+    for _ in 0..completion_spins {
         while let Some(event) = xhci_next_event(state, descriptor) {
             published_pending = None;
             match xhci_classify_control_transfer_event(plan, slot, endpoint_id, event) {
@@ -12891,7 +13009,13 @@ fn xhci_root_port_candidate_mask(state: &UsbRuntimeState) -> u32 {
     xhci_live_connected_root_port_mask(state) & valid_mask
 }
 
-fn xhci_reset_root_port_once(state: &UsbRuntimeState, port: u8, force_probe: bool) -> Option<u32> {
+fn xhci_reset_root_port_once(
+    sequence: u32,
+    aux0: u32,
+    state: &UsbRuntimeState,
+    port: u8,
+    force_probe: bool,
+) -> Option<u32> {
     let portsc = xhci_root_portsc_offset(state, port)?;
     let mut status = usb_read32(portsc);
     if status & XHCI_PORTSC_CCS == 0 {
@@ -12902,9 +13026,19 @@ fn xhci_reset_root_port_once(state: &UsbRuntimeState, port: u8, force_probe: boo
         ) {
             return None;
         }
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POWER_WRITE_DONE,
+            aux0,
+        );
         if !force_probe {
             return None;
         }
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_CONNECT_WAIT_BEGIN,
+            aux0,
+        );
         for _ in 0..USB_ROOT_PORT_POWER_SETTLE_SPINS {
             status = usb_read32(portsc);
             if status & XHCI_PORTSC_CCS != 0 {
@@ -12914,6 +13048,11 @@ fn xhci_reset_root_port_once(state: &UsbRuntimeState, port: u8, force_probe: boo
         }
     }
     if status & XHCI_PORTSC_CCS == 0 {
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_CONNECT_TIMEOUT,
+            aux0,
+        );
         return None;
     }
     if !xhci_write_portsc(
@@ -12923,9 +13062,24 @@ fn xhci_reset_root_port_once(state: &UsbRuntimeState, port: u8, force_probe: boo
     ) {
         return None;
     }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_PR_SET,
+        aux0,
+    );
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POLL_BEGIN,
+        aux0,
+    );
     for _ in 0..USB_XHCI_SPINS {
         let next = usb_read32(portsc);
         if next & XHCI_PORTSC_PR == 0 && next & XHCI_PORTSC_PRC != 0 {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_PRC_SEEN,
+                aux0,
+            );
             if !xhci_write_portsc(
                 state,
                 portsc,
@@ -12937,9 +13091,19 @@ fn xhci_reset_root_port_once(state: &UsbRuntimeState, port: u8, force_probe: boo
                 usb_spin_wait(USB_ROOT_PORT_POWER_SETTLE_SPINS);
                 return Some((next >> XHCI_PORTSC_SPEED_SHIFT) & XHCI_PORTSC_SPEED_MASK);
             }
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_ENABLE_TIMEOUT,
+                aux0,
+            );
         }
         core::hint::spin_loop();
     }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_TIMEOUT,
+        aux0,
+    );
     None
 }
 
@@ -12952,26 +13116,69 @@ const fn usb_root_port_reset_retry_delay_spins(attempt: usize) -> usize {
 }
 
 fn xhci_reset_root_port_with_uboot_retries(
+    sequence: u32,
+    aux0: u32,
     state: &UsbRuntimeState,
     port: u8,
     force_probe: bool,
 ) -> Option<u32> {
     let mut attempt = 0usize;
     while attempt < USB_ROOT_PORT_RESET_MAX_TRIES {
-        if let Some(speed) = xhci_reset_root_port_once(state, port, force_probe) {
+        if let Some(speed) = xhci_reset_root_port_once(sequence, aux0, state, port, force_probe) {
             return Some(speed);
         }
+        let next_attempt = attempt.saturating_add(1);
+        if next_attempt < USB_ROOT_PORT_RESET_MAX_TRIES {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_RETRY,
+                aux0,
+            );
+        }
         usb_spin_wait(usb_root_port_reset_retry_delay_spins(attempt));
-        attempt = attempt.saturating_add(1);
+        attempt = next_attempt;
     }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_FAILED,
+        aux0,
+    );
     None
 }
 
-fn xhci_reset_root_port(state: &UsbRuntimeState, port: u8, force_probe: bool) -> Option<u32> {
-    let first_speed = xhci_reset_root_port_with_uboot_retries(state, port, force_probe)?;
+fn xhci_reset_root_port(
+    sequence: u32,
+    aux0: u32,
+    state: &UsbRuntimeState,
+    port: u8,
+    force_probe: bool,
+) -> Option<u32> {
+    let first_speed =
+        xhci_reset_root_port_with_uboot_retries(sequence, aux0, state, port, force_probe)?;
     usb_spin_wait(USB_STALE_UBOOT_ROOT_PORT_RESET_SETTLE_SPINS);
     if USB_LINKED_RUNTIME_SECOND_ROOT_PORT_RESET {
-        xhci_reset_root_port_with_uboot_retries(state, port, true).or(Some(first_speed))
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_BEGIN,
+            aux0,
+        );
+        if let Some(speed) =
+            xhci_reset_root_port_with_uboot_retries(sequence, aux0, state, port, true)
+        {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_DONE,
+                aux0,
+            );
+            Some(speed)
+        } else {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_FAILED,
+                aux0,
+            );
+            Some(first_speed)
+        }
     } else {
         Some(first_speed)
     }
@@ -13122,6 +13329,30 @@ fn xhci_control_transfer_with_progress(
     data_in: bool,
     progress: Option<XhciControlProgress>,
 ) -> Option<usize> {
+    xhci_control_transfer_with_progress_and_spins(
+        state,
+        descriptor,
+        device,
+        setup,
+        data_offset,
+        data_len,
+        data_in,
+        progress,
+        USB_CONTROL_TRANSFER_SPINS,
+    )
+}
+
+fn xhci_control_transfer_with_progress_and_spins(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    setup: [u8; 8],
+    data_offset: usize,
+    data_len: usize,
+    data_in: bool,
+    progress: Option<XhciControlProgress>,
+    completion_spins: usize,
+) -> Option<usize> {
     let Some(dma_range) = runtime_resource_range(
         descriptor,
         DRIVER_RUNTIME_RESOURCE_KIND_DMA,
@@ -13260,6 +13491,7 @@ fn xhci_control_transfer_with_progress(
             data_len,
         },
         progress,
+        completion_spins,
     );
     if transferred.is_some() && data_in {
         dma_invalidate_range(data_vaddr, data_len);
@@ -14000,7 +14232,29 @@ fn usb_hub_class_transfer(
     len: usize,
     data_in: bool,
 ) -> bool {
-    xhci_control_transfer(
+    usb_hub_class_transfer_with_progress(
+        state,
+        descriptor,
+        device,
+        setup,
+        len,
+        data_in,
+        None,
+        USB_CONTROL_TRANSFER_SPINS,
+    )
+}
+
+fn usb_hub_class_transfer_with_progress(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    setup: [u8; 8],
+    len: usize,
+    data_in: bool,
+    progress: Option<XhciControlProgress>,
+    completion_spins: usize,
+) -> bool {
+    xhci_control_transfer_with_progress_and_spins(
         state,
         descriptor,
         device,
@@ -14008,6 +14262,8 @@ fn usb_hub_class_transfer(
         XHCI_DMA_HUB_BUFFER_OFFSET,
         len,
         data_in,
+        progress,
+        completion_spins,
     )
     .is_some()
 }
@@ -14210,6 +14466,8 @@ fn usb_recover_disconnected_hub_port(
 }
 
 fn usb_read_hub_descriptor(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     device: &mut UsbEnumerationDevice,
@@ -14247,13 +14505,25 @@ fn usb_read_hub_descriptor(
             USB_HUB_DESCRIPTOR_BYTES as u8,
             0,
         ];
-        if usb_hub_class_transfer(
+        if usb_hub_class_transfer_with_progress(
             state,
             descriptor,
             device,
             setup,
             USB_HUB_DESCRIPTOR_BYTES,
             true,
+            Some(XhciControlProgress {
+                sequence,
+                aux0,
+                doorbell_done: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DOORBELL_DONE,
+                wait_begin: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_WAIT_BEGIN,
+                data_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DATA_EVENT,
+                status_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT,
+                failed: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_FAILED,
+                transfer_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_TIMEOUT,
+                status_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_TIMEOUT,
+            }),
+            USB_HUB_DESCRIPTOR_CONTROL_TRANSFER_SPINS,
         ) {
             read_ok = true;
             break;
@@ -14648,7 +14918,9 @@ fn usb_scan_hub_children(
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_BEGIN,
         aux0,
     );
-    let Some(hub_info) = usb_read_hub_descriptor(state, descriptor, &mut hub, hub_info) else {
+    let Some(hub_info) =
+        usb_read_hub_descriptor(sequence, aux0, state, descriptor, &mut hub, hub_info)
+    else {
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED;
         return false;
     };
@@ -15102,9 +15374,13 @@ fn usb_scan_root_ports_for_keyboard(
             DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN,
             aux0,
         );
-        if let Some(speed) =
-            xhci_reset_root_port(state, port, state.port_event_candidate_mask & bit != 0)
-        {
+        if let Some(speed) = xhci_reset_root_port(
+            sequence,
+            aux0,
+            state,
+            port,
+            state.port_event_candidate_mask & bit != 0,
+        ) {
             publish_runtime_progress(
                 sequence,
                 DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE,
@@ -18278,7 +18554,13 @@ mod tests {
         );
         assert_eq!(
             cyw43_control_exchange_timeout_fault_result(
-                Cyw43RxIdleReason::FirstreadEmpty(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES),
+                Cyw43RxIdleReason::FirstreadEmpty {
+                    probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+                    source: Cyw43RxSourceSnapshot {
+                        probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
+                        ..Cyw43RxSourceSnapshot::default()
+                    },
+                },
                 0
             ),
             cyw43_control_exchange_timeout_result(
@@ -18425,6 +18707,29 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_rx_source_snapshot_encodes_probe_and_source_bits() {
+        assert_eq!(
+            Cyw43RxSourceSnapshot {
+                probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
+                interrupt_enable: SDIO_INTERRUPT_ENABLE_MASK,
+                frame_indicated: true,
+                host_interrupt: true,
+                card_interrupt: true,
+                function2_ready: true,
+            }
+            .encode(),
+            DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC
+                | CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u32
+                | ((SDIO_INTERRUPT_ENABLE_MASK as u32)
+                    << DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_SHIFT)
+                | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FRAME_INDICATED
+                | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_HOST_INTERRUPT
+                | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT
+                | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY
+        );
+    }
+
+    #[test]
     fn cyw43_rx_poll_hintless_firstread_empty_reports_idle_detail() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -18444,7 +18749,8 @@ mod tests {
             DriverTaskCompletionRecord::idle_with_detail(
                 83,
                 DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY,
-                CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u32
+                DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC
+                    | CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u32
             )
         );
     }
@@ -20793,6 +21099,10 @@ mod tests {
         assert!(USB_LINKED_RUNTIME_SECOND_ROOT_PORT_RESET);
         assert_eq!(USB_STALE_UBOOT_ROOT_PORT_RESET_SETTLE_SPINS, 200_000);
         assert_eq!(USB_CONTROL_TRANSFER_SPINS, USB_XHCI_SPINS);
+        assert_eq!(
+            USB_HUB_DESCRIPTOR_CONTROL_TRANSFER_SPINS,
+            USB_CONTROL_TRANSFER_SPINS * 2
+        );
         assert_eq!(USB_COMMAND_COMPLETION_SPINS, 20_000_000);
         assert_eq!(USB_COMMAND_COMPLETION_SLICE_SPINS, 128);
         assert_eq!(USB_COMMAND_COMPLETION_EVENTS_PER_SLICE, 4);
@@ -20801,6 +21111,18 @@ mod tests {
         assert_eq!(USB_COMMAND_PROOF_RERING_INTERVAL_SLICES, 8);
         assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN, 190);
         assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE, 191);
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POWER_WRITE_DONE,
+            325
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_TIMEOUT,
+            332
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_FAILED,
+            337
+        );
         assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN, 195);
         assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED, 197);
         assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED, 198);
@@ -20835,6 +21157,11 @@ mod tests {
         assert_eq!(
             DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT,
             249
+        );
+        assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_BEGIN, 303);
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED,
+            324
         );
         assert_eq!(
             XHCI_COMMAND_RING_BYTES,
@@ -22196,6 +22523,33 @@ mod tests {
         assert_eq!(
             xhci_control_transfer_event_diagnostic_phases(progress, true).ignored,
             DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT_IGNORED
+        );
+        let hub_progress = XhciControlProgress {
+            sequence: 8,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            doorbell_done: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DOORBELL_DONE,
+            wait_begin: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_WAIT_BEGIN,
+            data_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DATA_EVENT,
+            status_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT,
+            failed: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_FAILED,
+            transfer_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_TIMEOUT,
+            status_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_TIMEOUT,
+        };
+        assert_eq!(
+            xhci_control_pending_event_phase_for_event(empty, true, hub_progress, false),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY
+        );
+        assert_eq!(
+            xhci_control_pending_event_phase_for_event(stale_cycle, true, hub_progress, true),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH
+        );
+        assert_eq!(
+            xhci_control_transfer_event_diagnostic_phases(hub_progress, false).ignored,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_IGNORED
+        );
+        assert_eq!(
+            xhci_control_transfer_event_diagnostic_phases(hub_progress, true).ignored,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED
         );
         assert!(
             xhci_control_pending_event_phase_rank(

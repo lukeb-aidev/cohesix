@@ -55,6 +55,13 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_FAILED,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_TOO_LARGE,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_SDPCM_DECODE_MISS,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FRAME_INDICATED,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_HOST_INTERRUPT,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_MASK,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_SHIFT, DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC,
+    DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_PROBE_LEN_MASK,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BACKPLANE_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_CARD_READY,
@@ -90,6 +97,7 @@ const CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL: usize = 32 * 1024;
 const CYW43_RUNTIME_STREAM_COMMAND_RETRIES: usize = 2;
 const CYW43_TRANSPORT_ADMISSION_REJECT_RETRIES: usize = 4;
 const CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES: usize = 8;
+const CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_TRANSPORT_PHASE_ATTEMPTS: usize = 128;
 const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 192;
 const CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT: usize = 24;
@@ -345,6 +353,33 @@ struct Cyw43EventFrame {
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cyw43RxSourceResult {
+    probe_len: u16,
+    interrupt_enable: u8,
+    frame_indicated: bool,
+    host_interrupt: bool,
+    card_interrupt: bool,
+    function2_ready: bool,
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_rx_source_result(result: u32) -> Option<Cyw43RxSourceResult> {
+    if result & DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC == 0 {
+        return None;
+    }
+    Some(Cyw43RxSourceResult {
+        probe_len: (result & DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_PROBE_LEN_MASK) as u16,
+        interrupt_enable: ((result & DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_MASK)
+            >> DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_SHIFT) as u8,
+        frame_indicated: result & DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FRAME_INDICATED != 0,
+        host_interrupt: result & DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_HOST_INTERRUPT != 0,
+        card_interrupt: result & DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT != 0,
+        function2_ready: result & DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY != 0,
+    })
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Cyw43HostEapolProgress {
     polls: u32,
     data_rx: u32,
@@ -371,6 +406,8 @@ struct Cyw43HostEapolProgress {
     last_rx_idle_result: u32,
     last_control_rx_idle_detail: u16,
     last_control_rx_idle_result: u32,
+    last_rx_source: Option<Cyw43RxSourceResult>,
+    last_control_rx_source: Option<Cyw43RxSourceResult>,
     last_flags: u16,
     last_len: u16,
     last_ethertype: u16,
@@ -432,6 +469,12 @@ impl Cyw43HostEapolProgress {
     fn record_rx_idle_completion(&mut self, completion: DriverTaskCompletionRecord) {
         self.last_rx_idle_detail = completion.detail;
         self.last_rx_idle_result = completion.result;
+        self.last_rx_source =
+            if completion.detail == DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY {
+                cyw43_rx_source_result(completion.result)
+            } else {
+                None
+            };
         match completion.detail {
             DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY => {
                 self.rx_firstread_attempts = self.rx_firstread_attempts.saturating_add(1);
@@ -464,6 +507,12 @@ impl Cyw43HostEapolProgress {
     fn record_control_rx_idle_completion(&mut self, completion: DriverTaskCompletionRecord) {
         self.last_control_rx_idle_detail = completion.detail;
         self.last_control_rx_idle_result = completion.result;
+        self.last_control_rx_source =
+            if completion.detail == DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY {
+                cyw43_rx_source_result(completion.result)
+            } else {
+                None
+            };
         match completion.detail {
             DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY => {
                 self.control_rx_firstread_attempts =
@@ -2355,10 +2404,12 @@ fn emit_cyw43_host_eapol_status(
     };
     let next_action = cyw43_host_eapol_next_action(status, progress);
     let assoc_event = progress.association_event.unwrap_or("none");
-    let mut line = heapless::String::<1024>::new();
+    let rx_source = progress.last_rx_source.unwrap_or_default();
+    let control_rx_source = progress.last_control_rx_source.unwrap_or_default();
+    let mut line = heapless::String::<1536>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} rxsrc_probe_len={} rxsrc_ien=0x{:02x} rxsrc_frame_ind={} rxsrc_host_int={} rxsrc_card_int={} rxsrc_f2_ready={} control_rxsrc_probe_len={} control_rxsrc_ien=0x{:02x} control_rxsrc_frame_ind={} control_rxsrc_host_int={} control_rxsrc_card_int={} control_rxsrc_f2_ready={} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
         contract.name,
         status,
         reason,
@@ -2389,14 +2440,22 @@ fn emit_cyw43_host_eapol_status(
         progress.last_rx_idle_result,
         progress.last_control_rx_idle_detail,
         progress.last_control_rx_idle_result,
+        rx_source.probe_len,
+        rx_source.interrupt_enable,
+        yes_no(rx_source.frame_indicated),
+        yes_no(rx_source.host_interrupt),
+        yes_no(rx_source.card_interrupt),
+        yes_no(rx_source.function2_ready),
+        control_rx_source.probe_len,
+        control_rx_source.interrupt_enable,
+        yes_no(control_rx_source.frame_indicated),
+        yes_no(control_rx_source.host_interrupt),
+        yes_no(control_rx_source.card_interrupt),
+        yes_no(control_rx_source.function2_ready),
         progress.last_flags,
         progress.last_len,
         progress.last_ethertype,
-        if progress.last_ethertype_valid {
-            "yes"
-        } else {
-            "no"
-        },
+        yes_no(progress.last_ethertype_valid),
         next_action,
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
@@ -3535,6 +3594,7 @@ fn submit_staged_cyw43_runtime_descriptor(
         },
     );
     command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+    let no_reply_resume_limit = cyw43_runtime_no_reply_resume_limit(descriptor.op);
     let mut no_reply_resumes = 0usize;
     let mut admission_reject_retries = 0usize;
     loop {
@@ -3544,13 +3604,11 @@ fn submit_staged_cyw43_runtime_descriptor(
             {
                 break completion;
             }
-            if descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
-                && no_reply_resumes < CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES
-            {
+            if no_reply_resumes < no_reply_resume_limit {
                 no_reply_resumes = no_reply_resumes.saturating_add(1);
                 continue;
             }
-            record_cyw43_runtime_command_no_reply(contract, stage, descriptor);
+            record_cyw43_runtime_command_no_reply(contract, stage, descriptor, no_reply_resumes);
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 contract,
                 DriverTaskHotPath::Cyw43Wifi,
@@ -3628,10 +3686,20 @@ fn submit_staged_cyw43_runtime_descriptor(
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_runtime_no_reply_resume_limit(op: u16) -> usize {
+    match op {
+        DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT => CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES,
+        DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES,
+        _ => 0,
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn record_cyw43_runtime_command_no_reply(
     contract: DriverTaskContract,
     stage: &'static str,
     descriptor: DriverRuntimeCyw43CommandDescriptor,
+    resumes: usize,
 ) {
     use core::fmt::Write;
 
@@ -3648,19 +3716,83 @@ fn record_cyw43_runtime_command_no_reply(
         result: 0,
     });
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
-    let mut line = heapless::String::<384>::new();
-    let _ = write!(
-        line,
-        "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={}",
-        contract.name,
-        stage,
-        descriptor.op,
-        descriptor.flags,
-        descriptor.target_addr,
-        descriptor.payload_offset,
-        descriptor.payload_len,
-        descriptor.total_len,
-    );
+    let request = crate::hal::driver_task::current_driver_task_ring_request(contract);
+    let progress = crate::hal::driver_task::latest_driver_task_ring_progress(contract);
+    let mut line = heapless::String::<512>::new();
+    match (request, progress) {
+        (Some(request), Some(progress)) => {
+            let _ = write!(
+                line,
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
+                contract.name,
+                stage,
+                descriptor.op,
+                descriptor.flags,
+                descriptor.target_addr,
+                descriptor.payload_offset,
+                descriptor.payload_len,
+                descriptor.total_len,
+                request,
+                resumes,
+                if progress.marker_valid { "yes" } else { "no" },
+                progress.sequence,
+                progress.phase,
+                progress.phase_name,
+                progress.aux0,
+            );
+        }
+        (Some(request), None) => {
+            let _ = write!(
+                line,
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
+                contract.name,
+                stage,
+                descriptor.op,
+                descriptor.flags,
+                descriptor.target_addr,
+                descriptor.payload_offset,
+                descriptor.payload_len,
+                descriptor.total_len,
+                request,
+                resumes,
+            );
+        }
+        (None, Some(progress)) => {
+            let _ = write!(
+                line,
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
+                contract.name,
+                stage,
+                descriptor.op,
+                descriptor.flags,
+                descriptor.target_addr,
+                descriptor.payload_offset,
+                descriptor.payload_len,
+                descriptor.total_len,
+                resumes,
+                if progress.marker_valid { "yes" } else { "no" },
+                progress.sequence,
+                progress.phase,
+                progress.phase_name,
+                progress.aux0,
+            );
+        }
+        (None, None) => {
+            let _ = write!(
+                line,
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
+                contract.name,
+                stage,
+                descriptor.op,
+                descriptor.flags,
+                descriptor.target_addr,
+                descriptor.payload_offset,
+                descriptor.payload_len,
+                descriptor.total_len,
+                resumes,
+            );
+        }
+    }
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
@@ -3669,6 +3801,7 @@ fn record_cyw43_runtime_command_no_reply(
     _contract: DriverTaskContract,
     _stage: &'static str,
     _descriptor: DriverRuntimeCyw43CommandDescriptor,
+    _resumes: usize,
 ) {
 }
 
@@ -5459,6 +5592,7 @@ mod tests {
         });
         assert_eq!(progress.rx_firstread_attempts, 1);
         assert_eq!(progress.rx_firstread_empty, 1);
+        assert_eq!(progress.last_rx_source, None);
         assert_eq!(
             cyw43_host_eapol_next_action("required", &progress),
             "inspect-association-event-or-cyw43-rx-latch"
@@ -5482,9 +5616,69 @@ mod tests {
         });
         assert_eq!(progress.rx_firstread_invalid, 1);
         assert_eq!(progress.last_rx_idle_result, 0x3412);
+        assert_eq!(progress.last_rx_source, None);
         assert_eq!(
             cyw43_host_eapol_next_action("required", &progress),
             "inspect-cyw43-data-rx-firstread-prefix"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_firstread_decodes_rx_source_result() {
+        let mut progress = Cyw43HostEapolProgress::default();
+        let result = DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC
+            | 512
+            | (0x07 << DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_SHIFT)
+            | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FRAME_INDICATED
+            | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_HOST_INTERRUPT
+            | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT
+            | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY;
+
+        progress.record_rx_idle_completion(DriverTaskCompletionRecord {
+            sequence: 1,
+            code: DriverTaskCompletionCode::Idle.as_u16(),
+            detail: DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY,
+            result,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        });
+        assert_eq!(
+            progress.last_rx_source,
+            Some(Cyw43RxSourceResult {
+                probe_len: 512,
+                interrupt_enable: 0x07,
+                frame_indicated: true,
+                host_interrupt: true,
+                card_interrupt: true,
+                function2_ready: true,
+            })
+        );
+
+        progress.record_control_rx_idle_completion(DriverTaskCompletionRecord {
+            sequence: 2,
+            code: DriverTaskCompletionCode::Idle.as_u16(),
+            detail: DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY,
+            result: DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC | 64,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        });
+        assert_eq!(
+            progress.last_control_rx_source,
+            Some(Cyw43RxSourceResult {
+                probe_len: 64,
+                interrupt_enable: 0,
+                frame_indicated: false,
+                host_interrupt: false,
+                card_interrupt: false,
+                function2_ready: false,
+            })
         );
     }
 
@@ -5605,6 +5799,27 @@ mod tests {
             "cyw43-firmware-chunk",
             "fault",
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_no_reply_resumes_cover_long_control_exchange_turns() {
+        assert_eq!(
+            cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT),
+            CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES
+        );
+        assert_eq!(
+            cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE),
+            CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES
+        );
+        assert!(
+            CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES
+                > CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES
+        );
+        assert_eq!(
+            cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            0
+        );
     }
 
     #[cfg(feature = "kernel")]

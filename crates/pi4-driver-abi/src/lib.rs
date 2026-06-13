@@ -135,6 +135,22 @@ pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_INVALID_SDPCM: u16 = 0x5
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_FAILED: u16 = 0x570c;
 /// CYW43 RX idle detail: zero-RFRAME first-read SDPCM packet exceeded the bounded window.
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_TOO_LARGE: u16 = 0x570d;
+/// CYW43 RX first-read result: high bit marks a packed RX-source snapshot.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC: u32 = 0x8000_0000;
+/// CYW43 RX first-read result: low bits carry the attempted Function 2 probe length.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_PROBE_LEN_MASK: u32 = 0x0000_ffff;
+/// CYW43 RX first-read result: shift for the sampled CCCR IENx byte.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_SHIFT: u32 = 16;
+/// CYW43 RX first-read result: mask for the sampled CCCR IENx byte.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_IEN_MASK: u32 = 0x00ff_0000;
+/// CYW43 RX first-read result: firmware SDIO core asserted frame-indication.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FRAME_INDICATED: u32 = 1 << 24;
+/// CYW43 RX first-read result: firmware SDIO core asserted a host-interrupt bit.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_HOST_INTERRUPT: u32 = 1 << 25;
+/// CYW43 RX first-read result: host SDHCI reported card interrupt status.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT: u32 = 1 << 26;
+/// CYW43 RX first-read result: CCCR IORx reported Function 2 ready.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY: u32 = 1 << 27;
 /// CYW43 frame flag mask carrying the SDPCM channel on frame-ready completions.
 pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK: u16 = 0x000f;
 /// CYW43 frame flag value for SDPCM control-channel payloads.
@@ -401,6 +417,32 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_READ_DONE: u32 = 
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN: u32 = 190;
 /// USB runtime completed root-port reset and is entering Address Device.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE: u32 = 191;
+/// USB runtime asserted root-port power and flushed the PORTSC write.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POWER_WRITE_DONE: u32 = 325;
+/// USB runtime is waiting for root-port connect status after power assertion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_CONNECT_WAIT_BEGIN: u32 = 326;
+/// USB runtime exhausted the root-port connect wait after power assertion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_CONNECT_TIMEOUT: u32 = 327;
+/// USB runtime set the root-port reset bit and flushed the PORTSC write.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_PR_SET: u32 = 328;
+/// USB runtime is polling for root-port reset completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POLL_BEGIN: u32 = 329;
+/// USB runtime observed root-port reset-change completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_PRC_SEEN: u32 = 330;
+/// USB runtime observed reset completion without a port-enable bit.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_ENABLE_TIMEOUT: u32 = 331;
+/// USB runtime exhausted the root-port reset completion wait.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_TIMEOUT: u32 = 332;
+/// USB runtime is retrying the U-Boot-shaped root-port reset envelope.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_RETRY: u32 = 333;
+/// USB runtime exhausted the U-Boot-shaped root-port reset envelope.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_FAILED: u32 = 334;
+/// USB runtime is running the stale U-Boot root-port cleanup reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_BEGIN: u32 = 335;
+/// USB runtime completed the stale U-Boot root-port cleanup reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_DONE: u32 = 336;
+/// USB runtime could not complete the stale cleanup reset and kept first reset proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_STALE_CLEANUP_FAILED: u32 = 337;
 /// USB runtime is submitting Enable Slot for the Address Device path.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_ENABLE_SLOT_BEGIN: u32 = 192;
 /// USB runtime completed Enable Slot and has a candidate slot id.
@@ -720,6 +762,32 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN: u32 = 309;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY: u32 = 310;
 /// USB runtime is re-probing a hub child with a fallback speed.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_SPEED_FALLBACK_BEGIN: u32 = 311;
+/// USB runtime rang EP0 for the hub descriptor control transfer.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DOORBELL_DONE: u32 = 312;
+/// USB runtime is polling the hub descriptor data-stage transfer event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_WAIT_BEGIN: u32 = 313;
+/// USB runtime observed the hub descriptor data-stage transfer event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DATA_EVENT: u32 = 314;
+/// USB runtime observed the hub descriptor status-stage transfer event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT: u32 = 315;
+/// USB runtime failed the hub descriptor control transfer.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_FAILED: u32 = 316;
+/// USB runtime timed out waiting for the hub descriptor data-stage event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_TIMEOUT: u32 = 317;
+/// USB runtime timed out waiting for the hub descriptor status-stage event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_TIMEOUT: u32 = 318;
+/// USB runtime sees an empty event TRB while polling hub descriptor data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY: u32 = 319;
+/// USB runtime sees a cycle-mismatched event TRB while polling hub descriptor data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_CYCLE_MISMATCH: u32 = 320;
+/// USB runtime consumed an event that did not match hub descriptor data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_IGNORED: u32 = 321;
+/// USB runtime sees an empty event TRB while polling hub descriptor status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_SLOT_EMPTY: u32 = 322;
+/// USB runtime sees a cycle-mismatched event TRB while polling hub descriptor status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH: u32 = 323;
+/// USB runtime consumed an event that did not match hub descriptor status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED: u32 = 324;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-owned command endpoint/shared-ring intake loop.

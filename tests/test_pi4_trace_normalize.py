@@ -5270,6 +5270,42 @@ def test_gate_summary_tracks_raw_command_event_peek_begin_progress() -> None:
     assert gates.usb_blocker == "enable-slot-event-peek-no-reply"
 
 
+def test_gate_summary_preserves_address_failure_over_live_root_reset_marker() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+            "first_byte_source=none proof_gate=6 target_gate=10 "
+            "next=device-descriptor blocker=address-device-failed "
+            "detail=0x0213 result=0x0f200201",
+            "usb: linked_runtime_progress marker_valid=yes sequence=10 phase=190 "
+            "phase_name=usb-root-port-reset-begin aux0=0x55534245 gate=5 "
+            "blocker=root-port-reset-no-reply "
+            "next_action=inspect-root-port-reset-completion",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 6
+    assert gates.usb_blocker == "address-device-failed"
+
+
+def test_gate_summary_tracks_raw_root_port_reset_substage_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
+            "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
+            "marker_phase=329 marker_phase_name=usb-root-port-reset-poll-begin "
+            "marker_aux0=0x55534245",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 5
+    assert gates.usb_blocker == "root-port-reset-completion-no-reply"
+
+
 def test_gate_summary_tracks_raw_address_command_progress() -> None:
     events = normalizer.parse_events(
         [
@@ -5481,6 +5517,19 @@ def test_gate_summary_tracks_hid_endpoint_parse_miss_reasons() -> None:
         "usb-hub-set-configuration-begin": "hub-set-configuration-no-reply",
         "usb-hub-set-configuration-done": "hub-set-configuration-settle-no-reply",
         "usb-hub-descriptor-begin": "hub-descriptor-no-reply",
+        "usb-hub-descriptor-doorbell-done": "hub-descriptor-transfer-no-reply",
+        "usb-hub-descriptor-wait-begin": "hub-descriptor-transfer-no-reply",
+        "usb-hub-descriptor-data-event": "hub-descriptor-status-no-reply",
+        "usb-hub-descriptor-status-event": "hub-context-no-reply",
+        "usb-hub-descriptor-failed": "hub-descriptor-transfer-failed",
+        "usb-hub-descriptor-transfer-timeout": "hub-descriptor-transfer-timeout",
+        "usb-hub-descriptor-status-timeout": "hub-descriptor-status-timeout",
+        "usb-hub-descriptor-transfer-event-slot-empty": "hub-descriptor-transfer-event-slot-empty",
+        "usb-hub-descriptor-transfer-event-cycle-mismatch": "hub-descriptor-transfer-event-cycle-mismatch",
+        "usb-hub-descriptor-transfer-event-ignored": "hub-descriptor-transfer-event-ignored",
+        "usb-hub-descriptor-status-event-slot-empty": "hub-descriptor-status-event-slot-empty",
+        "usb-hub-descriptor-status-event-cycle-mismatch": "hub-descriptor-status-event-cycle-mismatch",
+        "usb-hub-descriptor-status-event-ignored": "hub-descriptor-status-event-ignored",
         "usb-hub-descriptor-done": "hub-context-no-reply",
         "usb-hub-context-begin": "hub-context-no-reply",
         "usb-hub-context-done": "hub-port-power-no-reply",
@@ -6252,6 +6301,39 @@ def test_gate_summary_refines_host_eapol_firstread_empty() -> None:
     assert gates.wifi_phase == "runtime-rx"
 
 
+def test_gate_summary_preserves_host_eapol_firstread_empty_with_rx_source() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=24576 starts=0 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=0 "
+            "control_rx=0 empty_polls=24576 associated=no link_up=no "
+            "assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "rx_firstread_attempts=24576 rx_firstread_empty=24576 "
+            "rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=24576 control_rx_firstread_empty=24576 "
+            "control_rx_firstread_failed=0 last_rx_idle_detail=0x570a "
+            "last_rx_idle_result=0x80000200 last_control_rx_idle_detail=0x570a "
+            "last_control_rx_idle_result=0x80000040 rxsrc_probe_len=512 "
+            "rxsrc_ien=0x07 rxsrc_frame_ind=no rxsrc_host_int=no "
+            "rxsrc_card_int=no rxsrc_f2_ready=yes control_rxsrc_probe_len=64 "
+            "control_rxsrc_ien=0x07 control_rxsrc_frame_ind=no "
+            "control_rxsrc_host_int=no control_rxsrc_card_int=no "
+            "control_rxsrc_f2_ready=yes last_flags=0x0000 last_len=0 "
+            "last_ethertype=0x0000 last_ethertype_valid=no "
+            "next_action=inspect-cyw43-assoc-event-rx-or-ienx",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-empty"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-empty"
+    assert gates.wifi_phase == "runtime-rx"
+
+
 def test_gate_summary_preserves_host_eapol_firstread_over_nettest_symptom() -> None:
     events = normalizer.parse_events(
         [
@@ -6462,6 +6544,32 @@ def test_gate_summary_refines_cyw43_control_exchange_timeout_result() -> None:
     assert gates.wifi_blocker == "control-plane-reply-idle-loop"
     assert gates.wifi_exact == "cyw43-control-rx-no-rframe"
     assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_gate_summary_refines_cyw43_control_exchange_no_reply_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract=cyw43455 "
+            "stage=cyw43-control-exchange op=11 flags=0x0000 "
+            "target=0x00000000 payload_off=284 payload_len=36 total_len=36 "
+            "reason=cyw43-runtime-command-no-reply request=122962 resumes=63 "
+            "progress_marker_valid=yes progress_sequence=122962 "
+            "progress_phase=144 progress_phase_name=cyw43-sdio-owner-reply "
+            "progress_aux0=0x43595734",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=no-reply acceptance=no "
+            "code=none detail=none result=none frame_len=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_exact == "cyw43-runtime-command-no-reply"
+    assert gates.wifi_phase == "cyw43-control-exchange"
 
 
 def test_gate_summary_refines_cyw43_control_exchange_firstread_empty() -> None:
