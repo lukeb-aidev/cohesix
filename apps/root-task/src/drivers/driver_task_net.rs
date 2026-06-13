@@ -24,6 +24,8 @@ use spin::Mutex;
 use crate::drivers::cyw43_host_eapol::{
     self, HostEapolAction, HostEapolState, ETH_P_EAPOL, WPA2_PSK_CCMP_RSN_IE, WSEC_KEY_PAYLOAD_LEN,
 };
+#[cfg(feature = "kernel")]
+use crate::hal::driver_task::DriverTaskRingProgressSnapshot;
 use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
     DriverTaskCompletionCode, DriverTaskCompletionRecord, DriverTaskContract, DriverTaskFaultCode,
@@ -76,6 +78,7 @@ const CYW43_RUNTIME_FIRMWARE_STREAM_CHUNK_BYTES: usize =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
 const CYW43_RUNTIME_STREAM_PROGRESS_INTERVAL: usize = 32 * 1024;
 const CYW43_RUNTIME_STREAM_COMMAND_RETRIES: usize = 2;
+const CYW43_TRANSPORT_ADMISSION_REJECT_RETRIES: usize = 4;
 const CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES: usize = 8;
 const CYW43_RUNTIME_TRANSPORT_PHASE_ATTEMPTS: usize = 128;
 const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 192;
@@ -90,6 +93,7 @@ const CYW43_HOST_EAPOL_START_INTERVAL_POLLS: usize = 4096;
 const CYW43_HOST_EAPOL_START_MAX: u32 = 12;
 const CYW43_HOST_EAPOL_TX_ATTEMPTS: usize = 8;
 const CYW43_BCDC_HEADER_BYTES: usize = 16;
+const CYW43_REVINFO_RESPONSE_BYTES: usize = 68;
 const CYW43_BCDC_FLAG_GET: u16 = 0x0000;
 const CYW43_BCDC_FLAG_SET: u16 = 0x0002;
 const CYW43_WLC_UP: u32 = 2;
@@ -1238,19 +1242,66 @@ fn cyw43_get_bcdc_iovar_optional_unsupported_with_header_mode(
 fn cyw43_get_bcdc_revinfo(contract: DriverTaskContract) -> Result<(), DriverTaskNetError> {
     let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
     let id = cyw43_next_bcdc_ioctl_id();
-    let len = cyw43_write_bcdc_frame(
-        &mut frame,
+    let len = cyw43_write_bcdc_revinfo_frame(&mut frame, id)?;
+    emit_cyw43_control_request_trace(
+        contract,
+        "cyw43-control-revinfo",
         CYW43_WLC_GET_REVINFO,
-        CYW43_BCDC_FLAG_GET,
         id,
-        &[],
-    )?;
+        Cyw43ControlHeaderMode::Extended,
+        len,
+        CYW43_REVINFO_RESPONSE_BYTES,
+    );
     cyw43_submit_control_exchange_checked(
         contract,
         &frame[..len],
         CYW43_WLC_GET_REVINFO,
         id,
         "cyw43-control-revinfo",
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_control_request_trace(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    cmd: u32,
+    id: u16,
+    header_mode: Cyw43ControlHeaderMode,
+    frame_len: usize,
+    response_len: usize,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<256>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_CONTROL_REQUEST contract={} stage={} cmd={} cmd_hex=0x{:08x} id={} runtime_flags=0x{:04x} bcdc_flags=0x{:04x} payload_len={} response_len={}",
+        contract.name,
+        stage,
+        cmd,
+        cmd,
+        id,
+        header_mode.runtime_flags(),
+        CYW43_BCDC_FLAG_GET,
+        frame_len,
+        response_len,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_write_bcdc_revinfo_frame(
+    frame: &mut [u8; MAX_DRIVER_TASK_FRAME_BYTES],
+    id: u16,
+) -> Result<usize, DriverTaskNetError> {
+    let response = [0u8; CYW43_REVINFO_RESPONSE_BYTES];
+    cyw43_write_bcdc_frame(
+        frame,
+        CYW43_WLC_GET_REVINFO,
+        CYW43_BCDC_FLAG_GET,
+        id,
+        &response,
     )
 }
 
@@ -2522,33 +2573,85 @@ fn submit_staged_cyw43_runtime_descriptor(
     );
     command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
     let mut no_reply_resumes = 0usize;
-    let completion = loop {
-        if let Some(completion) =
-            run_driver_task_net_service_staged(contract, command, staging_segments)
+    let mut admission_reject_retries = 0usize;
+    loop {
+        let completion = loop {
+            if let Some(completion) =
+                run_driver_task_net_service_staged(contract, command, staging_segments)
+            {
+                break completion;
+            }
+            if descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+                && no_reply_resumes < CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES
+            {
+                no_reply_resumes = no_reply_resumes.saturating_add(1);
+                continue;
+            }
+            record_cyw43_runtime_command_no_reply(contract, stage, descriptor);
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "no-reply",
+                None,
+            );
+            return Err(Cyw43CommandSubmitError::Runtime(
+                DriverTaskNetError::RuntimeInit("cyw43-command-completion"),
+            ));
+        };
+        if cyw43_transport_admission_reject_without_current_progress(
+            descriptor,
+            completion,
+            crate::hal::driver_task::latest_driver_task_ring_progress(contract),
+        ) && admission_reject_retries < CYW43_TRANSPORT_ADMISSION_REJECT_RETRIES
         {
-            break completion;
-        }
-        if descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
-            && no_reply_resumes < CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES
-        {
-            no_reply_resumes = no_reply_resumes.saturating_add(1);
+            admission_reject_retries = admission_reject_retries.saturating_add(1);
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "transport-admission-retry",
+                Some(completion),
+            );
             continue;
         }
-        record_cyw43_runtime_command_no_reply(contract, stage, descriptor);
-        crate::hal::driver_task::emit_driver_task_resource_init_status(
-            contract,
-            DriverTaskHotPath::Cyw43Wifi,
-            stage,
-            "no-reply",
-            None,
-        );
-        return Err(Cyw43CommandSubmitError::Runtime(
-            DriverTaskNetError::RuntimeInit("cyw43-command-completion"),
-        ));
-    };
-    if cyw43_runtime_command_completion_is_progress(descriptor.op, completion) {
-        if cyw43_command_stage_always_logs_success(descriptor.op) {
-            let status = cyw43_runtime_command_progress_status(descriptor.op, completion.detail);
+        if cyw43_runtime_command_completion_is_progress(descriptor.op, completion) {
+            if cyw43_command_stage_always_logs_success(descriptor.op) {
+                let status =
+                    cyw43_runtime_command_progress_status(descriptor.op, completion.detail);
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    contract,
+                    DriverTaskHotPath::Cyw43Wifi,
+                    stage,
+                    status,
+                    Some(completion),
+                );
+            }
+            return Ok(completion);
+        } else if descriptor.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+            && completion.code == DriverTaskCompletionCode::FrameReady.as_u16()
+        {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "ready",
+                Some(completion),
+            );
+            return Ok(completion);
+        } else {
+            let status = if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
+                "fault"
+            } else {
+                "unexpected-completion"
+            };
+            emit_cyw43_runtime_command_fault(
+                contract,
+                stage,
+                descriptor,
+                completion,
+                producer_payload,
+            );
             crate::hal::driver_task::emit_driver_task_resource_init_status(
                 contract,
                 DriverTaskHotPath::Cyw43Wifi,
@@ -2556,34 +2659,8 @@ fn submit_staged_cyw43_runtime_descriptor(
                 status,
                 Some(completion),
             );
+            return Err(Cyw43CommandSubmitError::Completion(completion));
         }
-        Ok(completion)
-    } else if descriptor.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
-        && completion.code == DriverTaskCompletionCode::FrameReady.as_u16()
-    {
-        crate::hal::driver_task::emit_driver_task_resource_init_status(
-            contract,
-            DriverTaskHotPath::Cyw43Wifi,
-            stage,
-            "ready",
-            Some(completion),
-        );
-        Ok(completion)
-    } else {
-        let status = if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
-            "fault"
-        } else {
-            "unexpected-completion"
-        };
-        emit_cyw43_runtime_command_fault(contract, stage, descriptor, completion, producer_payload);
-        crate::hal::driver_task::emit_driver_task_resource_init_status(
-            contract,
-            DriverTaskHotPath::Cyw43Wifi,
-            stage,
-            status,
-            Some(completion),
-        );
-        Err(Cyw43CommandSubmitError::Completion(completion))
     }
 }
 
@@ -2645,6 +2722,7 @@ fn emit_cyw43_runtime_command_fault(
     if completion.code != DriverTaskCompletionCode::Fault.as_u16() {
         return;
     }
+    let reason = cyw43_runtime_fault_reason_for_descriptor(descriptor, completion);
     *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
         stage,
         op: descriptor.op,
@@ -2654,7 +2732,7 @@ fn emit_cyw43_runtime_command_fault(
         payload_len: descriptor.payload_len,
         total_len: descriptor.total_len,
         detail: completion.detail,
-        reason: cyw43_runtime_fault_reason(completion.detail),
+        reason,
         result: completion.result,
     });
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
@@ -2671,7 +2749,7 @@ fn emit_cyw43_runtime_command_fault(
         descriptor.payload_len,
         descriptor.total_len,
         completion.detail,
-        cyw43_runtime_fault_reason(completion.detail),
+        reason,
         completion.result,
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
@@ -3144,6 +3222,7 @@ const fn cyw43_fault_detail_allows_same_command_retry(detail: u16) -> bool {
 #[cfg(feature = "kernel")]
 pub(crate) const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
     match detail {
+        0x0001 => "rejected-command",
         0x5101 => "sdio-command-unavailable",
         0x5102 => "sdio-descriptor-unavailable",
         0x5103 => "sdio-descriptor-transfer-failed",
@@ -3187,6 +3266,8 @@ pub(crate) const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
         0x532a => "cyw43-post-release-ht-clock",
         0x532b => "cyw43-post-release-function2-ready",
         0x532c => "cyw43-post-release-corecontrol",
+        0x532d => "cyw43-post-release-mailbox-ready",
+        0x532e => "cyw43-post-release-protocol-version",
         0x53ff => "cyw43-command",
         DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START => "cyw43-transport-phase-start",
         DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_BUS_LINK_READY => {
@@ -3206,6 +3287,42 @@ pub(crate) const fn cyw43_runtime_fault_reason(detail: u16) -> &'static str {
         }
         DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY => "cyw43-transport-phase-ready",
         _ => "unknown",
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_runtime_fault_reason_for_descriptor(
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    completion: DriverTaskCompletionRecord,
+) -> &'static str {
+    if descriptor.op == DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+        && completion.detail == DriverTaskFaultCode::RejectedCommand.as_u16()
+    {
+        "cyw43-transport-command-admission"
+    } else {
+        cyw43_runtime_fault_reason(completion.detail)
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_transport_admission_reject_without_current_progress(
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    completion: DriverTaskCompletionRecord,
+    progress: Option<DriverTaskRingProgressSnapshot>,
+) -> bool {
+    if descriptor.op != DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT
+        || completion.code != DriverTaskCompletionCode::Fault.as_u16()
+        || completion.detail != DriverTaskFaultCode::RejectedCommand.as_u16()
+    {
+        return false;
+    }
+    match progress {
+        Some(progress) => {
+            !(progress.marker_valid
+                && progress.sequence == completion.sequence
+                && progress.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX)
+        }
+        None => true,
     }
 }
 
@@ -4012,6 +4129,32 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_revinfo_frame_reserves_known_good_response_bytes() {
+        let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+        let len = cyw43_write_bcdc_revinfo_frame(&mut frame, 7)
+            .expect("revinfo request frame must fit the bounded control buffer");
+
+        assert_eq!(CYW43_REVINFO_RESPONSE_BYTES, 68);
+        assert_eq!(len, CYW43_BCDC_HEADER_BYTES + CYW43_REVINFO_RESPONSE_BYTES);
+        assert_eq!(
+            u32::from_le_bytes([frame[0], frame[1], frame[2], frame[3]]),
+            CYW43_WLC_GET_REVINFO
+        );
+        assert_eq!(
+            u32::from_le_bytes([frame[4], frame[5], frame[6], frame[7]]),
+            CYW43_REVINFO_RESPONSE_BYTES as u32
+        );
+        assert_eq!(
+            u16::from_le_bytes([frame[8], frame[9]]),
+            CYW43_BCDC_FLAG_GET
+        );
+        assert_eq!(u16::from_le_bytes([frame[10], frame[11]]), 7);
+        assert!(frame[CYW43_BCDC_HEADER_BYTES..len]
+            .iter()
+            .all(|byte| *byte == 0));
+    }
+
+    #[test]
     fn driver_task_nic_tx_token_stages_or_counts_drop_without_mmio() {
         let before = GENET_TX_DROPPED.load(Ordering::Acquire);
         let mut dev = GenetDriverTaskDevice::default();
@@ -4159,6 +4302,14 @@ mod tests {
             cyw43_runtime_fault_reason(0x532c),
             "cyw43-post-release-corecontrol"
         );
+        assert_eq!(
+            cyw43_runtime_fault_reason(0x532d),
+            "cyw43-post-release-mailbox-ready"
+        );
+        assert_eq!(
+            cyw43_runtime_fault_reason(0x532e),
+            "cyw43-post-release-protocol-version"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -4175,6 +4326,8 @@ mod tests {
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x532a));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x532b));
         assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x532c));
+        assert!(cyw43_fault_detail_allows_sdio_owner_recovery(0x532d));
+        assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x532e));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5302));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x5306));
         assert!(!cyw43_fault_detail_allows_sdio_owner_recovery(0x53ff));
@@ -4284,6 +4437,56 @@ mod tests {
                 },
             }
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_transport_admission_reject_requires_current_progress() {
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        let completion = DriverTaskCompletionRecord {
+            sequence: 3,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: DriverTaskFaultCode::RejectedCommand.as_u16(),
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+
+        assert!(cyw43_transport_admission_reject_without_current_progress(
+            descriptor, completion, None
+        ));
+        assert!(cyw43_transport_admission_reject_without_current_progress(
+            descriptor,
+            completion,
+            Some(DriverTaskRingProgressSnapshot {
+                marker_valid: true,
+                sequence: 0,
+                phase: 202,
+                phase_name: "runtime-poll-ready",
+                aux0: 4,
+            }),
+        ));
+        assert!(!cyw43_transport_admission_reject_without_current_progress(
+            descriptor,
+            completion,
+            Some(DriverTaskRingProgressSnapshot {
+                marker_valid: true,
+                sequence: 3,
+                phase: 202,
+                phase_name: "command-observed",
+                aux0: DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+            }),
+        ));
+        assert_eq!(
+            cyw43_runtime_fault_reason_for_descriptor(descriptor, completion),
+            "cyw43-transport-command-admission"
+        );
     }
 
     #[cfg(feature = "kernel")]

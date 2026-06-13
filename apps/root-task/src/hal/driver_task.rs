@@ -38,6 +38,12 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_CMD7_SELECT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_HOST_CONFIG_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_FRAME,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_REMAINDER_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_ENGINE_INIT_BRANCH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY,
@@ -52,8 +58,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_POST_CONFIG_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_RESET_VECTOR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN,
@@ -161,7 +170,24 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_FLUSHED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DATA_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DATA_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_WRITTEN, DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_WRITTEN,
@@ -170,6 +196,23 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_LOW_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DATA_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED,
@@ -181,6 +224,21 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_LOW_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN,
@@ -2160,6 +2218,57 @@ fn record_driver_task_ring_progress(
 }
 
 #[cfg(feature = "kernel")]
+fn driver_task_ring_progress_matches_request(
+    progress: DriverTaskRingProgressRecord,
+    request: u32,
+    aux0: u32,
+) -> bool {
+    progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+        && progress.sequence == request
+        && progress.aux0 == aux0
+}
+
+#[cfg(feature = "kernel")]
+fn cached_driver_task_ring_progress_matches_request(
+    slot: &DriverTaskCommandSlot,
+    request: u32,
+    aux0: u32,
+) -> bool {
+    slot.last_progress_magic.load(Ordering::Acquire) == DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+        && slot.last_progress_sequence.load(Ordering::Acquire) == request
+        && slot.last_progress_aux0.load(Ordering::Acquire) == aux0
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_progress_should_record_for_request(
+    slot: &DriverTaskCommandSlot,
+    progress: DriverTaskRingProgressRecord,
+    request: u32,
+    aux0: u32,
+) -> bool {
+    if driver_task_ring_progress_matches_request(progress, request, aux0) {
+        return true;
+    }
+    !cached_driver_task_ring_progress_matches_request(slot, request, aux0)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_progress_advanced_for_request(
+    slot: &DriverTaskCommandSlot,
+    progress: DriverTaskRingProgressRecord,
+    request: u32,
+    aux0: u32,
+) -> bool {
+    if !driver_task_ring_progress_matches_request(progress, request, aux0) {
+        return false;
+    }
+    slot.last_progress_magic.load(Ordering::Acquire) != DRIVER_RUNTIME_RING_PROGRESS_MAGIC
+        || slot.last_progress_sequence.load(Ordering::Acquire) != request
+        || slot.last_progress_aux0.load(Ordering::Acquire) != aux0
+        || slot.last_progress_phase.load(Ordering::Acquire) != progress.phase
+}
+
+#[cfg(feature = "kernel")]
 static DRIVER_TASK_SLOT_SERIAL: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_SLOT_USB_LOCAL_SEAT: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
@@ -3924,6 +4033,134 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN => "usb-address-command-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE => "usb-address-command-done",
         DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED => "usb-address-command-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED => "usb-device-addressed",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN => "usb-device-descriptor-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DOORBELL_DONE => {
+            "usb-device-descriptor-doorbell-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN => {
+            "usb-device-descriptor-wait-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT => {
+            "usb-device-descriptor-data-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT => {
+            "usb-device-descriptor-status-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_FAILED => "usb-device-descriptor-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_TIMEOUT => {
+            "usb-device-descriptor-transfer-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT => {
+            "usb-device-descriptor-status-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_BEGIN => {
+            "usb-device-descriptor-prime-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DOORBELL_DONE => {
+            "usb-device-descriptor-prime-doorbell-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN => {
+            "usb-device-descriptor-prime-wait-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DATA_EVENT => {
+            "usb-device-descriptor-prime-data-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT => {
+            "usb-device-descriptor-prime-status-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_FAILED => {
+            "usb-device-descriptor-prime-failed"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_TIMEOUT => {
+            "usb-device-descriptor-prime-transfer-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_TIMEOUT => {
+            "usb-device-descriptor-prime-status-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_BEGIN => {
+            "usb-config-descriptor-header-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DOORBELL_DONE => {
+            "usb-config-descriptor-header-doorbell-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN => {
+            "usb-config-descriptor-header-wait-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DATA_EVENT => {
+            "usb-config-descriptor-header-data-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT => {
+            "usb-config-descriptor-header-status-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_FAILED => {
+            "usb-config-descriptor-header-failed"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_TIMEOUT => {
+            "usb-config-descriptor-header-transfer-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_TIMEOUT => {
+            "usb-config-descriptor-header-status-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_BEGIN => {
+            "usb-config-descriptor-full-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DOORBELL_DONE => {
+            "usb-config-descriptor-full-doorbell-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN => {
+            "usb-config-descriptor-full-wait-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DATA_EVENT => {
+            "usb-config-descriptor-full-data-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT => {
+            "usb-config-descriptor-full-status-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_FAILED => {
+            "usb-config-descriptor-full-failed"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_TIMEOUT => {
+            "usb-config-descriptor-full-transfer-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT => {
+            "usb-config-descriptor-full-status-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN => "usb-hid-endpoint-parse-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND => "usb-hid-endpoint-parse-found",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING => {
+            "usb-hid-endpoint-parse-missing"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN => {
+            "usb-hid-configure-endpoint-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_DONE => {
+            "usb-hid-configure-endpoint-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_FAILED => {
+            "usb-hid-configure-endpoint-failed"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN => {
+            "usb-hid-set-configuration-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE => {
+            "usb-hid-set-configuration-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED => {
+            "usb-hid-set-configuration-failed"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_BEGIN => "usb-hid-control-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_DONE => "usb-hid-control-done",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED => "usb-hid-control-failed",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN => {
+            "usb-hid-interrupt-queue-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY => {
+            "usb-hid-interrupt-queue-ready"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED => {
+            "usb-hid-interrupt-queue-failed"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN => "usb-state-reset-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE => "usb-state-reset-done",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY => "usb-hw-entry",
@@ -4013,6 +4250,33 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN => "cyw43-release-int-mask-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN => {
             "cyw43-release-corecontrol-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN => {
+            "cyw43-release-mailbox-version-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN => {
+            "cyw43-release-firmware-ready-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE => {
+            "cyw43-release-firmware-ready-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN => {
+            "cyw43-control-rx-firstread-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_DONE => {
+            "cyw43-control-rx-firstread-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY => {
+            "cyw43-control-rx-firstread-empty"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID => {
+            "cyw43-control-rx-firstread-invalid"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_FRAME => {
+            "cyw43-control-rx-firstread-frame"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_REMAINDER_FAILED => {
+            "cyw43-control-rx-remainder-failed"
         }
         DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_BEGIN => "hdmi-frame-begin",
         DRIVER_RUNTIME_RING_PROGRESS_HDMI_FRAME_DONE => "hdmi-frame-done",
@@ -4342,10 +4606,15 @@ fn driver_task_ring_timeout_keep_decision(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
+    progress_advanced: bool,
 ) -> (bool, usize) {
     let limit = driver_task_ring_timeout_keep_active_limit(contract, command, mode);
     if limit == 0 {
         return (false, 0);
+    }
+    if progress_advanced {
+        slot.timeout_resumes.store(0, Ordering::Release);
+        return (true, 0);
     }
     let timeout_count = slot
         .timeout_resumes
@@ -4712,6 +4981,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
         (None, None)
     };
 
+    let mut progress_advanced = false;
     if driver_task_ring_mode_uses_bounded_send(mode) {
         if trace_call && !same_request_resume {
             emit_driver_task_ring_call_begin(contract, endpoint, request, command);
@@ -4757,7 +5027,20 @@ fn run_driver_task_ring_command_with_mode_and_staging(
                 );
             }
             let progress = driver_task_ring_read_progress_record(ring_root_ptr);
-            record_driver_task_ring_progress(slot, progress);
+            progress_advanced = driver_task_ring_progress_advanced_for_request(
+                slot,
+                progress,
+                request as u32,
+                command.aux0,
+            );
+            if driver_task_ring_progress_should_record_for_request(
+                slot,
+                progress,
+                request as u32,
+                command.aux0,
+            ) {
+                record_driver_task_ring_progress(slot, progress);
+            }
             if trace_timeout {
                 emit_driver_task_ring_call_progress(contract, request, command, progress);
             }
@@ -4820,8 +5103,13 @@ fn run_driver_task_ring_command_with_mode_and_staging(
 
     let mut timeout_count = 0usize;
     let keep_active_on_timeout = if completion.sequence != request as u32 {
-        let (keep_active, count) =
-            driver_task_ring_timeout_keep_decision(slot, contract, command, mode);
+        let (keep_active, count) = driver_task_ring_timeout_keep_decision(
+            slot,
+            contract,
+            command,
+            mode,
+            progress_advanced,
+        );
         timeout_count = count;
         keep_active
     } else {
@@ -4848,7 +5136,14 @@ fn run_driver_task_ring_command_with_mode_and_staging(
             && driver_task_ring_completion_trace_enabled(trace_call, completion)
         {
             let progress = driver_task_ring_read_progress_record(ring_root_ptr);
-            record_driver_task_ring_progress(slot, progress);
+            if driver_task_ring_progress_should_record_for_request(
+                slot,
+                progress,
+                request as u32,
+                command.aux0,
+            ) {
+                record_driver_task_ring_progress(slot, progress);
+            }
             emit_driver_task_ring_call_progress(contract, request, command, progress);
         }
         if let (Some(start_ticks), Some(end_ticks), Some(counter_frequency)) = (
@@ -8319,7 +8614,8 @@ mod tests {
                 slot,
                 contract,
                 command,
-                DriverTaskRingCommandMode::NonBlocking
+                DriverTaskRingCommandMode::NonBlocking,
+                false
             ),
             (false, 0)
         );
@@ -8456,6 +8752,171 @@ mod tests {
             DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS,
             DRIVER_TASK_PROMPT_RING_ATTEMPTS * 4
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_enumeration_timeout_budget_resets_on_marker_progress() {
+        let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(contract),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
+        let task_key = driver_task_contract_key(contract).expect("USB task key");
+        let slot = slot_for_task_key(task_key).expect("USB slot");
+        let request = 8;
+
+        slot.timeout_resumes.store(2, Ordering::Release);
+        slot.last_progress_magic
+            .store(DRIVER_RUNTIME_RING_PROGRESS_MAGIC, Ordering::Release);
+        slot.last_progress_sequence
+            .store(request, Ordering::Release);
+        slot.last_progress_phase.store(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN,
+            Ordering::Release,
+        );
+        slot.last_progress_aux0
+            .store(command.aux0, Ordering::Release);
+        let advanced_progress = DriverTaskRingProgressRecord {
+            magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+            sequence: request,
+            phase: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED,
+            aux0: command.aux0,
+        };
+        assert!(driver_task_ring_progress_advanced_for_request(
+            slot,
+            advanced_progress,
+            request,
+            command.aux0
+        ));
+        record_driver_task_ring_progress(slot, advanced_progress);
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                true,
+            ),
+            (true, 0)
+        );
+        assert_eq!(slot.timeout_resumes.load(Ordering::Acquire), 0);
+
+        slot.timeout_resumes.store(
+            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert!(!driver_task_ring_progress_advanced_for_request(
+            slot,
+            advanced_progress,
+            request,
+            command.aux0
+        ));
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                false,
+            ),
+            (false, DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT)
+        );
+        slot.timeout_resumes.store(0, Ordering::Release);
+        slot.last_progress_magic.store(0, Ordering::Release);
+        slot.last_progress_sequence.store(0, Ordering::Release);
+        slot.last_progress_phase.store(0, Ordering::Release);
+        slot.last_progress_aux0.store(0, Ordering::Release);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_enumeration_timeout_preserves_request_progress_across_idle_marker() {
+        let slot = DriverTaskCommandSlot::new();
+        let request = 8;
+        let aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
+        let request_progress = DriverTaskRingProgressRecord {
+            magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+            sequence: request,
+            phase: DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN,
+            aux0,
+        };
+
+        assert!(driver_task_ring_progress_should_record_for_request(
+            &slot,
+            request_progress,
+            request,
+            aux0
+        ));
+        record_driver_task_ring_progress(&slot, request_progress);
+
+        let idle_progress = DriverTaskRingProgressRecord {
+            magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+            sequence: 0,
+            phase: DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY,
+            aux0: DRIVER_TASK_KEY_USB_LOCAL_SEAT as u32,
+        };
+        assert!(!driver_task_ring_progress_matches_request(
+            idle_progress,
+            request,
+            aux0
+        ));
+        assert!(!driver_task_ring_progress_advanced_for_request(
+            &slot,
+            idle_progress,
+            request,
+            aux0
+        ));
+        assert!(!driver_task_ring_progress_should_record_for_request(
+            &slot,
+            idle_progress,
+            request,
+            aux0
+        ));
+        if driver_task_ring_progress_should_record_for_request(&slot, idle_progress, request, aux0)
+        {
+            record_driver_task_ring_progress(&slot, idle_progress);
+        }
+        assert_eq!(slot.last_progress_sequence.load(Ordering::Acquire), request);
+        assert_eq!(
+            slot.last_progress_phase.load(Ordering::Acquire),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_BEGIN
+        );
+        assert_eq!(slot.last_progress_aux0.load(Ordering::Acquire), aux0);
+
+        let fresh_slot = DriverTaskCommandSlot::new();
+        assert!(driver_task_ring_progress_should_record_for_request(
+            &fresh_slot,
+            idle_progress,
+            request,
+            aux0
+        ));
+
+        let advanced_progress = DriverTaskRingProgressRecord {
+            magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+            sequence: request,
+            phase: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED,
+            aux0,
+        };
+        assert!(driver_task_ring_progress_advanced_for_request(
+            &slot,
+            advanced_progress,
+            request,
+            aux0
+        ));
+        assert!(driver_task_ring_progress_should_record_for_request(
+            &slot,
+            advanced_progress,
+            request,
+            aux0
+        ));
     }
 
     #[test]
@@ -8833,6 +9294,54 @@ mod tests {
             "usb-command-proof-event-read-done"
         );
         assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN
+            ),
+            "usb-device-descriptor-wait-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT
+            ),
+            "usb-device-descriptor-status-timeout"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN
+            ),
+            "usb-device-descriptor-prime-wait-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN
+            ),
+            "usb-config-descriptor-header-wait-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT
+            ),
+            "usb-config-descriptor-full-status-event"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN
+            ),
+            "usb-hid-endpoint-parse-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN
+            ),
+            "usb-hid-configure-endpoint-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY
+            ),
+            "usb-hid-interrupt-queue-ready"
+        );
+        assert_eq!(
             driver_task_ring_progress_phase_label(DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN),
             "cyw43-release-begin"
         );
@@ -8883,6 +9392,24 @@ mod tests {
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN
             ),
             "cyw43-release-corecontrol-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN
+            ),
+            "cyw43-release-mailbox-version-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN
+            ),
+            "cyw43-release-firmware-ready-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE
+            ),
+            "cyw43-release-firmware-ready-done"
         );
         assert_eq!(
             driver_task_ring_progress_phase_label(

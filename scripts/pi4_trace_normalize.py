@@ -163,12 +163,50 @@ USB_OUTCOME_BLOCKERS = {
     "hid-attach-failed",
     "hid-first-report",
     "hid-endpoint-not-ready",
+    "hid-endpoint-parse-no-reply",
+    "hid-endpoint-not-found",
+    "hid-configure-endpoint-no-reply",
+    "hid-configure-endpoint-failed",
+    "hid-set-configuration-no-reply",
+    "hid-set-configuration-failed",
+    "hid-control-no-reply",
+    "hid-control-failed",
+    "hid-interrupt-queue-no-reply",
+    "hid-interrupt-queue-failed",
     "root-port-reset-no-reply",
     "address-enable-slot-no-reply",
     "address-device-context-publish-no-reply",
     "address-device-command-submit-no-reply",
     "address-device-command-completion-no-reply",
     "address-device-publish-no-reply",
+    "device-descriptor-no-reply",
+    "device-descriptor-submit-no-reply",
+    "device-descriptor-transfer-no-reply",
+    "device-descriptor-status-no-reply",
+    "device-descriptor-transfer-failed",
+    "device-descriptor-transfer-timeout",
+    "device-descriptor-status-timeout",
+    "device-descriptor-prime-submit-no-reply",
+    "device-descriptor-prime-transfer-no-reply",
+    "device-descriptor-prime-status-no-reply",
+    "device-descriptor-full-read-no-reply",
+    "device-descriptor-prime-transfer-failed",
+    "device-descriptor-prime-transfer-timeout",
+    "device-descriptor-prime-status-timeout",
+    "config-descriptor-no-reply",
+    "config-descriptor-header-submit-no-reply",
+    "config-descriptor-header-transfer-no-reply",
+    "config-descriptor-header-status-no-reply",
+    "config-descriptor-full-read-no-reply",
+    "config-descriptor-header-transfer-failed",
+    "config-descriptor-header-transfer-timeout",
+    "config-descriptor-header-status-timeout",
+    "config-descriptor-full-submit-no-reply",
+    "config-descriptor-full-transfer-no-reply",
+    "config-descriptor-full-status-no-reply",
+    "config-descriptor-full-transfer-failed",
+    "config-descriptor-full-transfer-timeout",
+    "config-descriptor-full-status-timeout",
     "hub-attach-failed",
     "hub-context-failed",
     "hub-descriptor-failed",
@@ -1293,12 +1331,86 @@ def normalize_usb_blocker(value: str) -> str:
         return "no-connected-ports"
     if "address-failed" in lower:
         return "address-failed"
+    if "device-descriptor-submit-no-reply" in lower:
+        return "device-descriptor-submit-no-reply"
+    if "device-descriptor-transfer-no-reply" in lower:
+        return "device-descriptor-transfer-no-reply"
+    if "device-descriptor-status-no-reply" in lower:
+        return "device-descriptor-status-no-reply"
+    if "device-descriptor-transfer-failed" in lower:
+        return "device-descriptor-transfer-failed"
+    if "device-descriptor-transfer-timeout" in lower:
+        return "device-descriptor-transfer-timeout"
+    if "device-descriptor-status-timeout" in lower:
+        return "device-descriptor-status-timeout"
+    if "device-descriptor-prime-submit-no-reply" in lower:
+        return "device-descriptor-prime-submit-no-reply"
+    if "device-descriptor-prime-transfer-no-reply" in lower:
+        return "device-descriptor-prime-transfer-no-reply"
+    if "device-descriptor-prime-status-no-reply" in lower:
+        return "device-descriptor-prime-status-no-reply"
+    if "device-descriptor-full-read-no-reply" in lower:
+        return "device-descriptor-full-read-no-reply"
+    if "device-descriptor-prime-transfer-failed" in lower:
+        return "device-descriptor-prime-transfer-failed"
+    if "device-descriptor-prime-transfer-timeout" in lower:
+        return "device-descriptor-prime-transfer-timeout"
+    if "device-descriptor-prime-status-timeout" in lower:
+        return "device-descriptor-prime-status-timeout"
+    if "config-descriptor-no-reply" in lower:
+        return "config-descriptor-no-reply"
+    if "config-descriptor-header-submit-no-reply" in lower:
+        return "config-descriptor-header-submit-no-reply"
+    if "config-descriptor-header-transfer-no-reply" in lower:
+        return "config-descriptor-header-transfer-no-reply"
+    if "config-descriptor-header-status-no-reply" in lower:
+        return "config-descriptor-header-status-no-reply"
+    if "config-descriptor-full-read-no-reply" in lower:
+        return "config-descriptor-full-read-no-reply"
+    if "config-descriptor-header-transfer-failed" in lower:
+        return "config-descriptor-header-transfer-failed"
+    if "config-descriptor-header-transfer-timeout" in lower:
+        return "config-descriptor-header-transfer-timeout"
+    if "config-descriptor-header-status-timeout" in lower:
+        return "config-descriptor-header-status-timeout"
+    if "config-descriptor-full-submit-no-reply" in lower:
+        return "config-descriptor-full-submit-no-reply"
+    if "config-descriptor-full-transfer-no-reply" in lower:
+        return "config-descriptor-full-transfer-no-reply"
+    if "config-descriptor-full-status-no-reply" in lower:
+        return "config-descriptor-full-status-no-reply"
+    if "config-descriptor-full-transfer-failed" in lower:
+        return "config-descriptor-full-transfer-failed"
+    if "config-descriptor-full-transfer-timeout" in lower:
+        return "config-descriptor-full-transfer-timeout"
+    if "config-descriptor-full-status-timeout" in lower:
+        return "config-descriptor-full-status-timeout"
     if "invalid-config-value" in lower:
         return "invalid-config-value"
     if "hid-init-failed" in lower:
         return "hid-init-failed"
     if "hid-endpoint-not-ready" in lower:
         return "hid-endpoint-not-ready"
+    if "hid-endpoint-parse-no-reply" in lower:
+        return "hid-endpoint-parse-no-reply"
+    if "hid-endpoint-not-found" in lower:
+        return "hid-endpoint-not-found"
+    if "hid-configure-endpoint-no-reply" in lower:
+        return "hid-configure-endpoint-no-reply"
+    if "hid-configure-endpoint-failed" in lower:
+        return "hid-configure-endpoint-failed"
+    if "hid-set-configuration-no-reply" in lower:
+        return "hid-set-configuration-no-reply"
+    if "hid-set-configuration-failed" in lower:
+        return "hid-set-configuration-failed"
+    if "hid-control-no-reply" in lower:
+        return "hid-control-no-reply"
+    if "hid-control-failed" in lower:
+        return "hid-control-failed"
+    if "hid-interrupt-queue-no-reply" in lower:
+        return "hid-interrupt-queue-no-reply"
+    if "hid-interrupt-queue-failed" in lower:
+        return "hid-interrupt-queue-failed"
     if stripped == "first-hid-report":
         return "hid-first-report"
     if "hid-attach-failed" in lower:
@@ -1449,6 +1561,7 @@ def parse_hex_int(value: str | None) -> int | None:
 
 CYW43_CONTROL_EXCHANGE_FAULT_DETAIL = 0x530B
 CYW43_CONTROL_EXCHANGE_OP = 11
+CYW43_CONTROL_EXCHANGE_BCME_BADARG = 0xFFFF_FFFE
 CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC = 0x4300_0000
 CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MASK = 0xFF00_0000
 CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_SHIFT = 16
@@ -1462,6 +1575,11 @@ CYW43_CONTROL_EXCHANGE_TIMEOUT_REASONS = {
     6: "cyw43-control-rx-f2-read-failed",
     7: "cyw43-control-rx-sdpcm-decode-miss",
     8: "cyw43-control-reply-nonmatching",
+    9: "cyw43-control-rx-firstread-failed",
+    10: "cyw43-control-rx-firstread-empty",
+    11: "cyw43-control-rx-firstread-invalid-sdpcm",
+    12: "cyw43-control-rx-firstread-remainder-failed",
+    13: "cyw43-control-rx-firstread-remainder-too-large",
 }
 
 
@@ -1887,6 +2005,10 @@ def normalize_wifi_blocker(value: str) -> str:
         return "firmware-supplicant-unsupported"
     if "control-plane step=gmode" in lower and "action=fail" in lower:
         return "control-plane-legacy-gmode-stall"
+    if "cyw43-control-revinfo-badarg" in lower or (
+        "revinfo" in lower and ("badarg" in lower or "bad-argument" in lower)
+    ):
+        return "control-plane-revinfo-badarg"
     if "ioctl-timeout" in lower or "ioctl timeout" in lower:
         return "ioctl-timeout"
     if "cur-etheraddr-len" in lower:
@@ -2049,6 +2171,10 @@ def normalize_wifi_blocker(value: str) -> str:
         return "cyw43-sdio-descriptor-transfer-failed"
     if lower in {"21289", "0x5329"} or "firmware-retry-exhausted" in lower:
         return "cyw43-firmware-retry-exhausted"
+    if lower in {"21293", "0x532d"} or "cyw43-post-release-mailbox-ready" in lower:
+        return "cyw43-post-release-mailbox-ready"
+    if lower in {"21294", "0x532e"} or "cyw43-post-release-protocol-version" in lower:
+        return "cyw43-post-release-protocol-version"
     if lower in {"20737", "0x5101"} or "sdio-command-unavailable" in lower:
         return "sdio-command-unavailable"
     if "function2-disabled" in lower:
@@ -2139,6 +2265,15 @@ def cyw43_raw_command_progress_blocker(event: TraceEvent) -> str | None:
         "cyw43-release-corecontrol-begin": (
             "cyw43-release-corecontrol-no-reply"
         ),
+        "cyw43-release-mailbox-version-begin": (
+            "cyw43-release-mailbox-version-no-reply"
+        ),
+        "cyw43-release-firmware-ready-begin": (
+            "cyw43-release-firmware-ready-no-reply"
+        ),
+        "cyw43-release-firmware-ready-done": (
+            "cyw43-release-firmware-ready-done-no-reply"
+        ),
     }.get(phase_name)
 
 
@@ -2208,6 +2343,13 @@ def normalize_wifi_exact(value: str) -> str:
         "0x5103": "cyw43-sdio-descriptor-transfer-failed",
         "21289": "cyw43-firmware-retry-exhausted",
         "0x5329": "cyw43-firmware-retry-exhausted",
+        "cyw43-transport-command-admission": (
+            "cyw43-transport-command-admission"
+        ),
+        "21293": "cyw43-post-release-mailbox-ready",
+        "0x532d": "cyw43-post-release-mailbox-ready",
+        "21294": "cyw43-post-release-protocol-version",
+        "0x532e": "cyw43-post-release-protocol-version",
     }
     if lower in cyw43_transport_details:
         return cyw43_transport_details[lower]
@@ -2237,14 +2379,22 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-plane-legacy-gmode-stall",
         "cyw43-control-plane-no-frame-indication-after-write",
         "cyw43-control-plane-partial-hint-visibility",
+        "cyw43-control-revinfo-badarg",
         "cyw43-control-rframe-count-read-failed",
         "cyw43-control-reply-nonmatching",
         "cyw43-control-rx-f2-read-failed",
+        "cyw43-control-rx-firstread-empty",
+        "cyw43-control-rx-firstread-failed",
+        "cyw43-control-rx-firstread-invalid-sdpcm",
+        "cyw43-control-rx-firstread-remainder-failed",
+        "cyw43-control-rx-firstread-remainder-too-large",
         "cyw43-control-rx-invalid-rframe-len",
         "cyw43-control-rx-no-rframe",
         "cyw43-control-rx-not-ready",
         "cyw43-control-rx-request-too-large",
         "cyw43-control-rx-sdpcm-decode-miss",
+        "cyw43-post-release-mailbox-ready",
+        "cyw43-post-release-protocol-version",
         "cyw43-protocol-error-cur-etheraddr-len",
         "wsec-pmk-bad-argument",
         "firmware-supplicant-unsupported",
@@ -2290,7 +2440,11 @@ def wifi_firmware_stream_fault_blocker(event: TraceEvent) -> str | None:
     } and op not in {"1", "2", "3"}:
         return None
     status = fields.get("status", "").lower()
-    detail = fields.get("detail") or fields.get("fault_detail") or fields.get("reason") or ""
+    reason_exact = normalize_wifi_exact(fields.get("reason", ""))
+    if reason_exact in {"none", "cyw43-runtime-command-rejected"}:
+        detail = fields.get("detail") or fields.get("fault_detail") or fields.get("reason") or ""
+    else:
+        detail = fields.get("reason", "")
     if status not in {"fail", "failed", "fault"} and not detail:
         return None
     exact = normalize_wifi_exact(detail) if detail else "cyw43-firmware-chunk"
@@ -2569,10 +2723,18 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     startup_fail_gate = None
                     startup_fail_blocker = None
             elif status == "fail":
-                gate = max(gate, max(0, diag_gate - 1))
-                blocker = normalize_usb_blocker(name)
-                if blocker == "none":
-                    blocker = name
+                failed_gate = max(0, diag_gate - 1)
+                direct_gate = usb_driver_task_blocker_gate(
+                    direct_usb_progress_blocker or ""
+                )
+                if direct_usb_progress_blocker is not None and direct_gate >= failed_gate:
+                    gate = max(gate, direct_gate)
+                    blocker = direct_usb_progress_blocker
+                else:
+                    gate = max(gate, failed_gate)
+                    blocker = normalize_usb_blocker(name)
+                    if blocker == "none":
+                        blocker = name
                 if startup_fail_gate is None or diag_gate < startup_fail_gate:
                     startup_fail_gate = diag_gate
                     startup_fail_blocker = blocker
@@ -2593,6 +2755,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if blocker_gate > 1:
                 gate = max(gate, blocker_gate)
                 blocker = progress_blocker
+                direct_usb_progress_blocker = progress_blocker
             continue
         if raw.startswith("driver_task_ring_progress"):
             progress_blocker = usb_raw_driver_task_progress_blocker(fields)
@@ -4251,6 +4414,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = explicit_blocker
             continue
         if explicit_blocker in {
+            "cyw43-post-release-mailbox-ready",
+            "cyw43-post-release-protocol-version",
+        }:
+            gate = max(gate, 7)
+            post_f2_progress_seen = True
+            blocker = explicit_blocker
+            continue
+        if explicit_blocker in {
             "function2-interrupt-unbound",
             "firmware-channel-f2",
             "firmware-ready-timeout",
@@ -4667,6 +4838,12 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
     raw = event.raw.lower()
     if candidate != wifi_blocker:
         return 100
+    if (
+        candidate == "cyw43-runtime-command-rejected"
+        and wifi_firmware_stream_fault_blocker(event)
+        == "cyw43-transport-command-admission"
+    ):
+        return 0
     if "post-write-no-frame-source-terminal" in raw:
         return 0
     if "hintless-firstread-no-frame-source-terminal" in raw:
@@ -4712,6 +4889,48 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
     if raw.startswith("err nettest") or raw.startswith("ok nettest"):
         return 90
     return 10
+
+
+def summarize_cyw43_control_revinfo_badarg(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, int] | None:
+    """Return exact proof when firmware rejects the linked-runtime revinfo GET."""
+
+    revinfo_active = False
+    for event in events:
+        raw = event.raw.lower()
+        fields = event.fields
+        if (
+            event.domain == "driver"
+            and fields.get("contract", "").lower() == "cyw43455"
+            and "driver_task_resource_init" in raw
+        ):
+            stage = fields.get("stage", "").lower()
+            status = fields.get("status", "").lower()
+            if stage == "cyw43-control-revinfo" and status == "begin":
+                revinfo_active = True
+                continue
+            if stage == "cyw43-control-revinfo" and status in {"ready", "unsupported"}:
+                revinfo_active = False
+                continue
+            if stage.startswith("cyw43-control-") and status == "begin":
+                revinfo_active = stage == "cyw43-control-revinfo"
+        if not revinfo_active or "cyw43_driver_task_command_fault" not in raw:
+            continue
+        if fields.get("contract", "").lower() != "cyw43455":
+            continue
+        if parse_hex_int(fields.get("op")) != CYW43_CONTROL_EXCHANGE_OP:
+            continue
+        if parse_hex_int(fields.get("detail")) != CYW43_CONTROL_EXCHANGE_FAULT_DETAIL:
+            continue
+        if parse_hex_int(fields.get("result")) != CYW43_CONTROL_EXCHANGE_BCME_BADARG:
+            continue
+        return (
+            "cyw43-control-revinfo-badarg",
+            "cyw43-control-revinfo",
+            event.line,
+        )
+    return None
 
 
 def summarize_wifi_failure_detail(
@@ -4788,6 +5007,11 @@ def summarize_wifi_failure_detail(
         firmware_stream_blocker = wifi_firmware_stream_fault_blocker(event)
         if firmware_stream_blocker is not None and wifi_blocker == firmware_stream_blocker:
             candidate = firmware_stream_blocker
+        if (
+            wifi_blocker == "cyw43-runtime-command-rejected"
+            and firmware_stream_blocker == "cyw43-transport-command-admission"
+        ):
+            candidate = wifi_blocker
         if (
             wifi_blocker == "cyw43-driver-task-replay"
             and event.domain == "driver"
@@ -4924,6 +5148,17 @@ def summarize_wifi_failure_detail(
             wifi_blocker == "cyw43-firmware-runtime-replay"
             and event_exact.startswith("cyw43-release-")
             and event_exact.endswith("-no-reply")
+        ):
+            candidate = wifi_blocker
+        if (
+            wifi_blocker == "cyw43-firmware-runtime-replay"
+            and event_exact
+            in {
+                "cyw43-runtime-command-rejected",
+                "cyw43-transport-command-admission",
+                "cyw43-post-release-mailbox-ready",
+                "cyw43-post-release-protocol-version",
+            }
         ):
             candidate = wifi_blocker
         if (
@@ -5546,9 +5781,54 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         return 5
     if blocker in {
         "address-device-publish-no-reply",
+        "device-descriptor-no-reply",
+        "device-descriptor-submit-no-reply",
+        "device-descriptor-transfer-no-reply",
+        "device-descriptor-status-no-reply",
+        "device-descriptor-transfer-failed",
+        "device-descriptor-transfer-timeout",
+        "device-descriptor-status-timeout",
+        "device-descriptor-prime-submit-no-reply",
+        "device-descriptor-prime-transfer-no-reply",
+        "device-descriptor-prime-status-no-reply",
+        "device-descriptor-full-read-no-reply",
+        "device-descriptor-prime-transfer-failed",
+        "device-descriptor-prime-transfer-timeout",
+        "device-descriptor-prime-status-timeout",
         "address-device-failed",
     }:
         return 6
+    if blocker in {
+        "config-descriptor-no-reply",
+        "config-descriptor-header-submit-no-reply",
+        "config-descriptor-header-transfer-no-reply",
+        "config-descriptor-header-status-no-reply",
+        "config-descriptor-full-read-no-reply",
+        "config-descriptor-header-transfer-failed",
+        "config-descriptor-header-transfer-timeout",
+        "config-descriptor-header-status-timeout",
+        "config-descriptor-full-submit-no-reply",
+        "config-descriptor-full-transfer-no-reply",
+        "config-descriptor-full-status-no-reply",
+        "config-descriptor-full-transfer-failed",
+        "config-descriptor-full-transfer-timeout",
+        "config-descriptor-full-status-timeout",
+        "hid-endpoint-not-ready",
+        "hid-endpoint-parse-no-reply",
+        "hid-endpoint-not-found",
+        "hid-configure-endpoint-no-reply",
+        "hid-configure-endpoint-failed",
+        "hid-set-configuration-no-reply",
+        "hid-set-configuration-failed",
+        "hid-control-no-reply",
+        "hid-control-failed",
+    }:
+        return 7
+    if blocker in {
+        "hid-interrupt-queue-no-reply",
+        "hid-interrupt-queue-failed",
+    }:
+        return 8
     if blocker in {
         "usb-engine-init-hardware-no-reply",
         "usb-runtime-init-entry-no-reply",
@@ -5623,6 +5903,54 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-address-command-begin": "address-device-command-completion-no-reply",
         "usb-address-command-done": "address-device-publish-no-reply",
         "usb-address-command-failed": "address-device-failed",
+        "usb-device-addressed": "device-descriptor-no-reply",
+        "usb-device-descriptor-begin": "device-descriptor-submit-no-reply",
+        "usb-device-descriptor-doorbell-done": "device-descriptor-transfer-no-reply",
+        "usb-device-descriptor-wait-begin": "device-descriptor-transfer-no-reply",
+        "usb-device-descriptor-data-event": "device-descriptor-status-no-reply",
+        "usb-device-descriptor-status-event": "config-descriptor-no-reply",
+        "usb-device-descriptor-failed": "device-descriptor-transfer-failed",
+        "usb-device-descriptor-transfer-timeout": "device-descriptor-transfer-timeout",
+        "usb-device-descriptor-status-timeout": "device-descriptor-status-timeout",
+        "usb-device-descriptor-prime-begin": "device-descriptor-prime-submit-no-reply",
+        "usb-device-descriptor-prime-doorbell-done": "device-descriptor-prime-transfer-no-reply",
+        "usb-device-descriptor-prime-wait-begin": "device-descriptor-prime-transfer-no-reply",
+        "usb-device-descriptor-prime-data-event": "device-descriptor-prime-status-no-reply",
+        "usb-device-descriptor-prime-status-event": "device-descriptor-full-read-no-reply",
+        "usb-device-descriptor-prime-failed": "device-descriptor-prime-transfer-failed",
+        "usb-device-descriptor-prime-transfer-timeout": "device-descriptor-prime-transfer-timeout",
+        "usb-device-descriptor-prime-status-timeout": "device-descriptor-prime-status-timeout",
+        "usb-config-descriptor-header-begin": "config-descriptor-header-submit-no-reply",
+        "usb-config-descriptor-header-doorbell-done": "config-descriptor-header-transfer-no-reply",
+        "usb-config-descriptor-header-wait-begin": "config-descriptor-header-transfer-no-reply",
+        "usb-config-descriptor-header-data-event": "config-descriptor-header-status-no-reply",
+        "usb-config-descriptor-header-status-event": "config-descriptor-full-read-no-reply",
+        "usb-config-descriptor-header-failed": "config-descriptor-header-transfer-failed",
+        "usb-config-descriptor-header-transfer-timeout": "config-descriptor-header-transfer-timeout",
+        "usb-config-descriptor-header-status-timeout": "config-descriptor-header-status-timeout",
+        "usb-config-descriptor-full-begin": "config-descriptor-full-submit-no-reply",
+        "usb-config-descriptor-full-doorbell-done": "config-descriptor-full-transfer-no-reply",
+        "usb-config-descriptor-full-wait-begin": "config-descriptor-full-transfer-no-reply",
+        "usb-config-descriptor-full-data-event": "config-descriptor-full-status-no-reply",
+        "usb-config-descriptor-full-status-event": "hid-endpoint-not-ready",
+        "usb-config-descriptor-full-failed": "config-descriptor-full-transfer-failed",
+        "usb-config-descriptor-full-transfer-timeout": "config-descriptor-full-transfer-timeout",
+        "usb-config-descriptor-full-status-timeout": "config-descriptor-full-status-timeout",
+        "usb-hid-endpoint-parse-begin": "hid-endpoint-parse-no-reply",
+        "usb-hid-endpoint-parse-found": "hid-configure-endpoint-no-reply",
+        "usb-hid-endpoint-parse-missing": "hid-endpoint-not-found",
+        "usb-hid-configure-endpoint-begin": "hid-configure-endpoint-no-reply",
+        "usb-hid-configure-endpoint-done": "hid-set-configuration-no-reply",
+        "usb-hid-configure-endpoint-failed": "hid-configure-endpoint-failed",
+        "usb-hid-set-configuration-begin": "hid-set-configuration-no-reply",
+        "usb-hid-set-configuration-done": "hid-control-no-reply",
+        "usb-hid-set-configuration-failed": "hid-set-configuration-failed",
+        "usb-hid-control-begin": "hid-control-no-reply",
+        "usb-hid-control-done": "hid-interrupt-queue-no-reply",
+        "usb-hid-control-failed": "hid-control-failed",
+        "usb-hid-interrupt-queue-begin": "hid-interrupt-queue-no-reply",
+        "usb-hid-interrupt-queue-ready": "hid-first-report",
+        "usb-hid-interrupt-queue-failed": "hid-interrupt-queue-failed",
     }.get(fields.get("marker_phase_name", "").lower())
 
 
@@ -5919,7 +6247,25 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
                 event_list, wifi_blocker
             )
-            if replay_exact != "none":
+            if replay_exact in {
+                "cyw43-runtime-command-rejected",
+                "cyw43-transport-command-admission",
+            }:
+                wifi_gate = max(wifi_gate, 6)
+                wifi_blocker = "cyw43-runtime-command-rejected"
+                wifi_exact = replay_exact
+                wifi_phase = replay_phase
+                wifi_blocker_line = replay_line
+            elif replay_exact in {
+                "cyw43-post-release-mailbox-ready",
+                "cyw43-post-release-protocol-version",
+            }:
+                wifi_gate = max(wifi_gate, 7)
+                wifi_blocker = replay_exact
+                wifi_exact = replay_exact
+                wifi_phase = replay_phase
+                wifi_blocker_line = replay_line
+            elif replay_exact != "none":
                 wifi_exact = replay_exact
                 wifi_phase = replay_phase
                 wifi_blocker_line = replay_line
@@ -5936,7 +6282,25 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
                 event_list, wifi_blocker
             )
-            if replay_exact != "none":
+            if replay_exact in {
+                "cyw43-runtime-command-rejected",
+                "cyw43-transport-command-admission",
+            }:
+                wifi_gate = max(wifi_gate, 6)
+                wifi_blocker = "cyw43-runtime-command-rejected"
+                wifi_exact = replay_exact
+                wifi_phase = replay_phase
+                wifi_blocker_line = replay_line
+            elif replay_exact in {
+                "cyw43-post-release-mailbox-ready",
+                "cyw43-post-release-protocol-version",
+            }:
+                wifi_gate = max(wifi_gate, 7)
+                wifi_blocker = replay_exact
+                wifi_exact = replay_exact
+                wifi_phase = replay_phase
+                wifi_blocker_line = replay_line
+            elif replay_exact != "none":
                 wifi_exact = replay_exact
                 wifi_phase = replay_phase
                 wifi_blocker_line = replay_line
@@ -5958,6 +6322,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     if wifi_exact == "none" and wifi_blocker_is_exact_cyw43_progress(wifi_blocker):
         wifi_exact = wifi_blocker
         wifi_phase = wifi_blocker
+    revinfo_badarg = summarize_cyw43_control_revinfo_badarg(event_list)
+    if revinfo_badarg is not None:
+        wifi_gate = max(wifi_gate, 7)
+        wifi_blocker = "control-plane-revinfo-badarg"
+        wifi_exact, wifi_phase, wifi_blocker_line = revinfo_badarg
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,

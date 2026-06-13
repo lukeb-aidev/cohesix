@@ -385,6 +385,72 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN: u32 = 195;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE: u32 = 196;
 /// USB runtime did not complete the Address Device command.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED: u32 = 197;
+/// USB runtime published the addressed-device state and is entering descriptors.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED: u32 = 198;
+/// USB runtime is submitting the addressed device descriptor request.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN: u32 = 218;
+/// USB runtime published EP0 TRBs and rang the addressed device doorbell.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DOORBELL_DONE: u32 = 219;
+/// USB runtime is polling EP0 for the device descriptor transfer.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN: u32 = 220;
+/// USB runtime observed a device descriptor data-stage transfer event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT: u32 = 221;
+/// USB runtime observed the device descriptor status-stage transfer event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT: u32 = 222;
+/// USB runtime observed a failed device descriptor transfer event or ack edge.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_FAILED: u32 = 223;
+/// USB runtime timed out before any device descriptor data-stage event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_TIMEOUT: u32 = 224;
+/// USB runtime timed out after the data-stage event but before status completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT: u32 = 225;
+/// USB runtime is submitting the full-speed device descriptor prime request.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_BEGIN: u32 = 226;
+/// USB runtime rang EP0 doorbell for the full-speed descriptor prime.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DOORBELL_DONE: u32 = 227;
+/// USB runtime is polling EP0 for the full-speed descriptor prime.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN: u32 = 228;
+/// USB runtime observed a full-speed descriptor-prime data event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DATA_EVENT: u32 = 229;
+/// USB runtime observed the full-speed descriptor-prime status event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT: u32 = 230;
+/// USB runtime observed a failed full-speed descriptor-prime transfer edge.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_FAILED: u32 = 231;
+/// USB runtime timed out before a full-speed descriptor-prime data event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_TIMEOUT: u32 = 232;
+/// USB runtime timed out after full-speed descriptor-prime data but before status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_TIMEOUT: u32 = 233;
+/// USB runtime is submitting the configuration descriptor header request.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_BEGIN: u32 = 234;
+/// USB runtime rang EP0 doorbell for the configuration descriptor header.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DOORBELL_DONE: u32 = 235;
+/// USB runtime is polling EP0 for the configuration descriptor header.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN: u32 = 236;
+/// USB runtime observed a configuration descriptor header data event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DATA_EVENT: u32 = 237;
+/// USB runtime observed the configuration descriptor header status event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT: u32 = 238;
+/// USB runtime observed a failed configuration descriptor header transfer edge.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_FAILED: u32 = 239;
+/// USB runtime timed out before a configuration descriptor header data event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_TIMEOUT: u32 = 240;
+/// USB runtime timed out after configuration descriptor header data but before status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_TIMEOUT: u32 = 241;
+/// USB runtime is submitting the full configuration descriptor request.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_BEGIN: u32 = 242;
+/// USB runtime rang EP0 doorbell for the full configuration descriptor.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DOORBELL_DONE: u32 = 243;
+/// USB runtime is polling EP0 for the full configuration descriptor.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN: u32 = 244;
+/// USB runtime observed a full configuration descriptor data event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DATA_EVENT: u32 = 245;
+/// USB runtime observed the full configuration descriptor status event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT: u32 = 246;
+/// USB runtime observed a failed full configuration descriptor transfer edge.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_FAILED: u32 = 247;
+/// USB runtime timed out before a full configuration descriptor data event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_TIMEOUT: u32 = 248;
+/// USB runtime timed out after full configuration descriptor data but before status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT: u32 = 249;
 /// USB runtime saw a port-status event while polling the command proof.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_EVENT_PORT_STATUS: u32 = 145;
 /// USB runtime saw a command-completion event while polling the command proof.
@@ -481,6 +547,54 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN: u32 = 212;
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN: u32 = 213;
 /// CYW43 runtime is proving SDIO corecontrol Function 2 readiness.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN: u32 = 214;
+/// CYW43 runtime is publishing the SDPCM firmware protocol version mailbox.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN: u32 = 215;
+/// CYW43 runtime is waiting for the firmware ready/devready mailbox.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN: u32 = 216;
+/// CYW43 runtime observed firmware ready/devready mailbox proof.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE: u32 = 217;
+/// CYW43 runtime observed zero RFRAME and is issuing a bounded Function 2 first-read.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN: u32 = 250;
+/// CYW43 runtime completed a bounded Function 2 first-read.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_DONE: u32 = 251;
+/// CYW43 runtime's bounded Function 2 first-read returned an empty prefix.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY: u32 = 252;
+/// CYW43 runtime's bounded Function 2 first-read returned a malformed SDPCM prefix.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID: u32 = 253;
+/// CYW43 runtime's bounded Function 2 first-read reached the expected control reply.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_FRAME: u32 = 254;
+/// CYW43 runtime's bounded Function 2 remainder read failed after a valid first-read.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_REMAINDER_FAILED: u32 = 255;
+/// USB runtime is parsing the full configuration descriptor for a HID keyboard endpoint.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN: u32 = 256;
+/// USB runtime found a candidate HID interrupt-IN endpoint in the configuration descriptor.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND: u32 = 257;
+/// USB runtime did not find a usable HID interrupt-IN endpoint in the configuration descriptor.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING: u32 = 258;
+/// USB runtime is submitting Configure Endpoint for the HID interrupt-IN endpoint.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN: u32 = 259;
+/// USB runtime completed Configure Endpoint for the HID interrupt-IN endpoint.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_DONE: u32 = 260;
+/// USB runtime failed Configure Endpoint for the HID interrupt-IN endpoint.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_FAILED: u32 = 261;
+/// USB runtime is issuing SET_CONFIGURATION for the HID keyboard configuration.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN: u32 = 262;
+/// USB runtime completed SET_CONFIGURATION for the HID keyboard configuration.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE: u32 = 263;
+/// USB runtime failed SET_CONFIGURATION for the HID keyboard configuration.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED: u32 = 264;
+/// USB runtime is issuing HID class control setup after endpoint configuration.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_BEGIN: u32 = 265;
+/// USB runtime completed required HID class control setup.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_DONE: u32 = 266;
+/// USB runtime failed required HID class control setup.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED: u32 = 267;
+/// USB runtime is arming the first HID interrupt-IN transfer queue.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN: u32 = 268;
+/// USB runtime armed the HID interrupt-IN transfer queue.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY: u32 = 269;
+/// USB runtime could not arm the HID interrupt-IN transfer queue.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED: u32 = 270;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-owned command endpoint/shared-ring intake loop.

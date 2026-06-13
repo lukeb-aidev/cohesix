@@ -35,6 +35,7 @@ pub(crate) const fn fault_detail_allows_sdio_owner_recovery(detail: u16) -> bool
             | 0x532a
             | 0x532b
             | 0x532c
+            | 0x532d
     )
 }
 
@@ -82,6 +83,8 @@ mod tests {
         assert!(fault_detail_allows_sdio_owner_recovery(0x532a));
         assert!(fault_detail_allows_sdio_owner_recovery(0x532b));
         assert!(fault_detail_allows_sdio_owner_recovery(0x532c));
+        assert!(fault_detail_allows_sdio_owner_recovery(0x532d));
+        assert!(!fault_detail_allows_sdio_owner_recovery(0x532e));
         assert!(!fault_detail_allows_sdio_owner_recovery(0x5302));
         assert!(!fault_detail_allows_sdio_owner_recovery(0x5306));
         assert!(!fault_detail_allows_sdio_owner_recovery(0x53ff));

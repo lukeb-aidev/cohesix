@@ -6804,8 +6804,11 @@ Milestones 25-26b establish technical capability, transport breadth, and Pi 4 br
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, console grammar, Secure9P, or release-behavior drift may hide under a "refactor", "cleanup", or "humanizing" label.
 - Refactors are behavior-preserving only: extraction, decomposition, deduplication, typed-error cleanup, naming cleanup, and invariant documentation after characterization coverage exists for the touched surface.
 - The only planned 26c behavior changes are the named worker-architecture, phase-1 cap-backed worker endpoint, notification-backed lifecycle, and profile-qualified MCS evidence tasks. They close public Queen/Worker documentation drift without adding new roles, protocols, namespace grammar, or host-only authority paths.
+- The named worker/cap/notification/MCS lanes are not refactors. They must land as authorized behavior-changing tasks, then freeze a post-behavior external-contract baseline before any Phase 4 cleanup wave starts.
+- The target-qualified staged runner is an enabling blocker, not merely closure polish. `scripts/ci/test_plan_run.sh --target qemu|pi4` and `scripts/ci/check_test_plan.sh` must exist and agree before cleanup or structural decomposition can start.
 - Humanization is evidence-first and mostly subtractive: delete generic boilerplate before rewriting, keep comments only for invariants/bounds/authority/failure behavior, and make the AI-fingerprint audit an independent gate.
 - Simplicity must be measured, not asserted. Cleanup/refactor waves must show reduced duplication, clearer ownership, fewer generic comments, smaller or better-named hot modules where practical, and no new abstraction unless it removes real repetition or isolates authority.
+- Every cleanup/refactor wave must be bisectable: one owned surface, one preserved-contract list, one characterization artifact, one scorecard entry, one targeted test subset, and final QEMU/Pi staged-run compatibility evidence before milestone closure.
 - Generated snippets, generated reports, tracked release snapshots, append-only audit evidence, seL4/reference mirrors, and vendored Markdown are update-by-source or inventory-only surfaces. Do not hand-edit them for style.
 - VM-side Cohesix remains `no_std`; shared semantic helpers must be `no_std` by construction and must not pull host transport, filesystem, process, network, or provider crates into VM closure profiles.
 - HAL remains the only path for device authority, MMIO, DMA publication, IRQ binding, physical-address handling, firmware-service handoff, and cache-maintenance policy. SDIO/USB seams are extraction-only and must not introduce new hardware support or a parallel driver framework.
@@ -6825,11 +6828,11 @@ Later phases may start only when earlier phase gates are complete for the touche
 
 | Phase | Purpose | Tasks | Gate |
 | --- | --- | --- | --- |
-| 0 | Scope, ownership, blockers | `m26c-as-built-blocker-ledger`, `m26c-refactor-map-and-risk-ratchet`, lane setup in `M26C_AGENT_HANDOFFS.md` | No unowned files, hidden blockers, missing sub-agent lanes, or unmeasured simplification targets. |
+| 0 | Scope, ownership, blockers | `m26c-as-built-blocker-ledger`, `m26c-target-qualified-runner-baseline`, `m26c-refactor-map-and-risk-ratchet`, lane setup in `M26C_AGENT_HANDOFFS.md` | No unowned files, hidden blockers, missing target-qualified runner contract, missing sub-agent lanes, or unmeasured simplification targets. |
 | 1 | Documentation and provenance truth | `m26c-authoring-charter-and-header-rules`, `m26c-ai-fingerprint-authorship-review`, `m26c-markdown-inventory-and-disposition`, `m26c-mermaid-as-built-diagram-audit`, `m26c-docs-as-built-audit`, `m26c-runtime-boundary-and-semantic-parity-audit` | Inventories, drift ledger, AI-fingerprint audit, parity matrix, and generated-source dispositions are complete. |
-| 2 | Required implementation additions | `m26c-pi-runtime-dma-proof-closure`, `m26c-dma-protection-profile-truth`, `m26c-worker-architecture-implementation`, `m26c-cap-backed-worker-endpoints`, `m26c-notification-backed-worker-lifecycle`, `m26c-worker-driver-mcs-budget-evidence` | New behavior is compiler-declared, tested, documented as-built, and does not create new protocol/namespace grammar. |
+| 2 | Required implementation additions | `m26c-pi-runtime-dma-proof-closure`, `m26c-dma-protection-profile-truth`, `m26c-worker-architecture-implementation`, `m26c-cap-backed-worker-endpoints`, `m26c-notification-backed-worker-lifecycle`, `m26c-worker-driver-mcs-budget-evidence`, `m26c-post-behavior-baseline-freeze` | New behavior is compiler-declared, tested, documented as-built, does not create new protocol/namespace grammar, and is frozen into the post-behavior baseline before refactor work starts. |
 | 3 | Refactor safety gates | `m26c-characterization-gates-before-refactor`, `m26c-no-std-boundary-gates` | Cleanup-sensitive behavior and VM dependency closures are pinned before structural edits. |
-| 4 | Humanization and structural cleanup | `m26c-low-risk-surface-cleanup`, `m26c-host-tool-structural-cleanup`, `m26c-root-task-runtime-decomposition`, `m26c-hal-network-and-local-seat-decomposition` | Before/after characterization passes, risk-ratchet does not regress, HAL/no_std/protocol boundaries hold. |
+| 4 | Humanization and structural cleanup | `m26c-low-risk-surface-cleanup`, `m26c-host-tool-structural-cleanup`, `m26c-root-task-runtime-decomposition`, `m26c-hal-network-and-local-seat-decomposition` | Each cleanup wave is bisectable and starts only after its characterization artifact, preserved-contract list, owner, scorecard entry, and target test subset are recorded; risk-ratchet does not regress and HAL/no_std/protocol boundaries hold. |
 | 5 | Closure | `m26c-full-test-plan-qemu-and-pi4` | QEMU and Pi 4 staged Test Plan runs pass with target-qualified artifacts and no incomplete markers. |
 
 ### Documentation Scope
@@ -6840,7 +6843,7 @@ The inventory must cover root docs, app/crate/tool READMEs, `docs/**/*.md`, audi
 ### Required Artifacts
 Task blocks below own the exact file changes, commands, checks, and deliverables. At milestone level, closure requires these artifact families:
 
-- Audit control: `docs/audit/M26C_AS_BUILT_BLOCKERS.md`, `M26C_AGENT_HANDOFFS.md`, `M26C_REFACTOR_MAP.md`, `M26C_REFACTOR_RISK_RATCHET.csv`, `M26C_REFACTOR_OWNERSHIP.md`, `M26C_SIMPLICITY_SCORECARD.md`.
+- Audit control: `docs/audit/M26C_AS_BUILT_BLOCKERS.md`, `M26C_AGENT_HANDOFFS.md`, `M26C_TARGET_RUNNER_BASELINE.md`, `M26C_REFACTOR_MAP.md`, `M26C_REFACTOR_RISK_RATCHET.csv`, `M26C_REFACTOR_OWNERSHIP.md`, `M26C_SIMPLICITY_SCORECARD.md`, `M26C_POST_BEHAVIOR_BASELINE.md`.
 - Documentation truth: `M26C_MARKDOWN_INVENTORY.{csv,md}`, `M26C_MERMAID_INVENTORY.csv`, `M26C_MERMAID_GITHUB_RENDER_AUDIT.md`, `M26C_DOCS_AS_BUILT_AUDIT.md`, `M26C_DOC_DRIFT_LEDGER.md`, `M26C_AI_FINGERPRINT_AUDIT.md`.
 - Runtime boundaries: `M26C_RUNTIME_BOUNDARY_AUDIT.md`, `M26C_NINEDOOR_PARITY_MATRIX.md`, VM-target dependency trees, generated manifest/snippet hashes, Pi 4 runtime/DMA proof classification, and DMA protection profile evidence.
 - Worker/runtime implementation evidence: worker architecture tests, cap-backed endpoint negative tests, notification lifecycle tests, MCS/non-MCS scheduling evidence, linked runtime ABI tests, and fresh-source provenance for staged Pi runtime artifacts.
@@ -6893,11 +6896,14 @@ Task blocks below own the exact file changes, commands, checks, and deliverables
 
 ### Closure Gates
 - Every task block below satisfies its own Commands, Checks, and Deliverables; any skipped command has a documented environment blocker and remediation owner in the 26c handoff log.
+- The target-qualified runner contract is implemented and checked before Phase 4 begins; `--target qemu|pi4` is not allowed to remain a milestone-closing TODO while cleanup is underway.
 - The blocker ledger is clear or explicitly deferred to named later milestones, and no deferred item is used as satisfied evidence.
 - Markdown, Mermaid, docs-as-built, AI-fingerprint, runtime-boundary, NineDoor parity, refactor-map, risk-ratchet, and sub-agent handoff artifacts all exist and agree with generated/source truth.
 - Pi 4 runtime/DMA evidence separates generated eligibility, target compile, QEMU proof, fresh hardware proof, 26b SDIO owner-state evidence, and full board closure; Pi 4 DMA wording remains `bounded_no_iommu` and never implies SMMU/IOMMU isolation. Milestone 26c does not reopen SDIO graduation.
 - Worker-heart, worker-gpu, and worker-lora have real VM-side worker loops; phase-1 VM worker authority requires matching badged endpoint caps; lifecycle delivery uses generated notifications where applicable; MCS claims are profile-qualified.
+- `docs/audit/M26C_POST_BEHAVIOR_BASELINE.md` records the external behavior snapshot after authorized worker/cap/notification/MCS additions and before cleanup begins; later refactor waves compare against that baseline rather than the pre-26c placeholder behavior.
 - Cleanup/refactor waves have before/after characterization, preserve console/Secure9P/manifest/telemetry/release behavior, keep HAL-only device authority, keep VM builds `no_std`, and do not increase non-test risk indicators without approved exceptions.
+- Each cleanup/refactor wave is small enough to revert independently and records owner, touched surface, preserved contracts, characterization artifact, targeted test subset, before/after result, and scorecard delta.
 - `M26C_SIMPLICITY_SCORECARD.md` records before/after evidence for touched high-value surfaces: boilerplate removed, duplicated logic collapsed, module/function boundaries improved, docs shortened or clarified, and any net complexity increase justified by required worker/runtime behavior or tests.
 - Workspace baseline checks (`fmt`, `clippy -D warnings`, `check`, `test`, `cargo audit`, and `cargo deny check advisories`) pass or have scoped blockers recorded before closure.
 - QEMU and Pi 4 staged Test Plan runs both pass through `stage_05.done`, contain required target artifacts, and contain no incomplete markers.
@@ -6939,6 +6945,28 @@ Checks:
   - No structural cleanup task starts until blockers are fixed or explicitly deferred with dependency impact.
 Deliverables:
   - Auditable 26c blocker ledger that prevents downstream milestones from inheriting unresolved as-built drift silently.
+
+Title/ID: m26c-target-qualified-runner-baseline
+Goal: Make target-qualified staged-run semantics real before any cleanup or structural decomposition depends on them.
+Inputs: docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/ci/check_test_plan.sh, scripts/pi4-image-build.sh, scripts/uboot/qemu-uboot-smoke.sh
+Changes:
+  - scripts/ci/test_plan_run.sh — add explicit `--target qemu|pi4` selection, write target metadata into the shared state dir, pass the selected target to every stage, and reject unsupported target/stage combinations before a stage can write misleading evidence.
+  - scripts/ci/test_plan_stage_*.sh — consume the selected target and write target-qualified stage markers, logs, and incomplete records without treating QEMU artifacts as Pi 4 proof or Pi 4 hardware logs as QEMU proof.
+  - scripts/ci/check_test_plan.sh — enforce that docs, runner usage, stage scripts, and target matrix language agree.
+  - docs/TEST_PLAN.md + docs/HARDWARE_BRINGUP.md — document the QEMU/Pi 4 target matrix, target-specific prerequisites, allowed stage combinations, state-dir metadata, and PASS/INCOMPLETE interpretation.
+  - docs/audit/M26C_TARGET_RUNNER_BASELINE.md — checked-in evidence for runner syntax, target matrix, smoke commands, intentionally unsupported combinations, and the rule that Phase 4 cleanup cannot start without this gate.
+Commands:
+  - scripts/ci/test_plan_run.sh --list
+  - scripts/ci/test_plan_run.sh --target qemu --stage 1 --state-dir out/test-plan/m26c-runner-qemu-smoke
+  - scripts/ci/test_plan_run.sh --target pi4 --stage 1 --state-dir out/test-plan/m26c-runner-pi4-smoke
+  - scripts/ci/check_test_plan.sh
+Checks:
+  - `--target qemu|pi4` is accepted by the runner, recorded in the state dir, and visible to every stage script.
+  - Unsupported target/stage combinations fail before producing `stage_*.done` or target-qualified PASS evidence.
+  - The checker fails if docs mention runner commands, stage matrices, or closure criteria that the scripts do not implement.
+  - No Phase 4 cleanup or structural decomposition task may start until this runner baseline is present and PASS.
+Deliverables:
+  - Target-aware staged-runner contract and smoke evidence available early enough to guard all later cleanup.
 
 Title/ID: m26c-authoring-charter-and-header-rules
 Goal: Replace generic repository-wide authoring templates with explicit human-authored comment, header, and documentation rules.
@@ -7026,8 +7054,8 @@ Title/ID: m26c-refactor-map-and-risk-ratchet
 Goal: Freeze the aggressive refactor scope, ownership, preserved contracts, simplicity targets, and risk-ratchet baseline before structural edits begin.
 Inputs: docs/BUILD_PLAN.md, docs/audit/EXCEPTIONS.md, docs/audit/findings.csv, apps/**/src/**/*.rs, crates/**/src/**/*.rs, tools/**/src/**/*.rs, tools/cohesix-py/**/*.py, scripts/ci/*.sh
 Changes:
-  - docs/audit/M26C_REFACTOR_MAP.md — classify each Cohesix-authored candidate as no-touch, low-risk cleanup, characterization-first refactor, boundary-sensitive refactor, or deferred.
-  - docs/audit/M26C_SIMPLICITY_SCORECARD.md — record before/after simplification targets for high-value authored surfaces: duplicate branches/helpers to collapse, generic comments to delete, large modules/functions to split or explicitly defer, docs to shorten, and abstractions that must justify their existence.
+  - docs/audit/M26C_REFACTOR_MAP.md — classify each Cohesix-authored candidate as no-touch, low-risk cleanup, characterization-first refactor, boundary-sensitive refactor, or deferred, and assign each accepted wave a single owned surface, preserved-contract list, characterization artifact, target test subset, and rollback-sized scope.
+  - docs/audit/M26C_SIMPLICITY_SCORECARD.md — record before/after simplification targets for high-value authored surfaces: duplicate branches/helpers to collapse, generic comments to delete, large modules/functions to split or explicitly defer, docs to shorten, abstractions that must justify their existence, and the post-wave scorecard delta.
   - docs/audit/M26C_REFACTOR_RISK_RATCHET.csv — record the non-test `unsafe`, `unwrap`, `expect`, and `panic!` baseline plus allowed exceptions and reviewer sign-off requirements.
   - docs/audit/M26C_REFACTOR_OWNERSHIP.md — assign disjoint ownership for host tools, root-task adapters, HAL/network, docs/audit, and staged-run plumbing.
   - docs/BUILD_PLAN.md — keep 26c scope synchronized with the checked-in map if refactor lanes are added or deferred.
@@ -7038,6 +7066,7 @@ Commands:
   - cargo clippy --workspace --all-targets -- -D warnings
 Checks:
   - Every structural refactor target has a named owner, preserved external contracts, required characterization evidence, and an explicit rollback-sized scope.
+  - Every accepted Phase 4 wave is independently reviewable and revertible, with its own target test subset and baseline comparison path.
   - Every cleanup/refactor target has a concrete simplicity target or a written deferral reason; "cleaned up" without before/after evidence is not acceptable closure.
   - New abstractions are accepted only when the scorecard shows they remove meaningful duplication, isolate authority, reduce module pressure, or make an invariant easier to audit.
   - Non-test risk indicators do not increase unless an approved exception is recorded before merge.
@@ -7239,6 +7268,32 @@ Checks:
 Deliverables:
   - Profile-qualified scheduling evidence strong enough for seL4 reviewers to audit bounded worker and driver execution claims.
 
+Title/ID: m26c-post-behavior-baseline-freeze
+Goal: Freeze the external behavior snapshot after the authorized 26c worker/runtime additions and before cleanup refactors begin.
+Inputs: docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md, docs/audit/M26C_RUNTIME_BOUNDARY_AUDIT.md, docs/audit/M26C_NINEDOOR_PARITY_MATRIX.md, docs/audit/M26C_TARGET_RUNNER_BASELINE.md, docs/audit/M26C_REFACTOR_MAP.md, apps/root-task/tests/**, apps/nine-door/tests/**, worker test suites, generated snippets/manifests, scripts/ci/test_plan_run.sh, scripts/ci/check_test_plan.sh
+Changes:
+  - docs/audit/M26C_POST_BEHAVIOR_BASELINE.md — record the post-Phase-2 external contract snapshot: console grammar, Secure9P/NineDoor namespace semantics, manifest and generated-snippet hashes, worker ticket/lease/telemetry/lifecycle behavior, cap-backed endpoint evidence, notification evidence, MCS/non-MCS scheduling evidence, Pi runtime/DMA evidence classifications, and known deferred blockers.
+  - docs/audit/M26C_REFACTOR_MAP.md — link every Phase 4 cleanup candidate to the relevant post-behavior baseline section and preserved-contract list.
+  - docs/audit/M26C_AGENT_HANDOFFS.md — record the freeze decision, commands, skipped commands, residual blockers, and PASS/FAIL status before any cleanup lane starts.
+  - docs/TEST_PLAN.md — state that Phase 4 refactors compare against the post-behavior baseline rather than pre-26c placeholder worker behavior.
+Commands:
+  - scripts/check-generated.sh
+  - cargo test -p nine-door --test integration
+  - cargo test -p root-task --tests
+  - cargo test -p worker-heart
+  - cargo test -p worker-gpu
+  - cargo test -p worker-lora
+  - scripts/ci/check_test_plan.sh
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26c-post-behavior-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26c-post-behavior-pi4
+Checks:
+  - The baseline is recorded only after all authorized Phase 2 behavior-changing tasks are complete or explicitly deferred without being used as satisfied evidence.
+  - Refactor waves use this post-behavior snapshot as their preserved external contract, so cleanup does not accidentally revert or mutate the new intended worker/cap/notification/MCS behavior.
+  - Any remaining Pi 4 or runner blocker is recorded with dependency impact, and no Phase 4 task cites blocked evidence as proof.
+  - The target-qualified QEMU/Pi 4 state dirs and command outputs named in the baseline match the runner contract from `m26c-target-qualified-runner-baseline`.
+Deliverables:
+  - Hard baseline separating authorized 26c behavior changes from later behavior-preserving cleanup.
+
 Title/ID: m26c-characterization-gates-before-refactor
 Goal: Add characterization tests and merge gates around cleanup-sensitive crates before accepting structural refactors.
 Inputs: .github/workflows/ci.yml, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/ci/check_test_plan.sh, apps/coh/src/mount.rs, apps/cohsh/src/**, crates/cohsh-core/**, apps/host-ticket-agent/src/*.rs, apps/gpu-bridge-host/src/**, apps/root-task/src/net/**, apps/root-task/src/hal/**, apps/root-task/src/local_seat.rs, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/pi4-driver-runtime/**, crates/pi4-driver-abi/**, apps/nine-door/tests/*.rs, docs/TEST_PLAN.md, docs/audit/M26C_REFACTOR_MAP.md
@@ -7246,7 +7301,7 @@ Changes:
   - .github/workflows/ci.yml — stop excluding cleanup-sensitive crates without compensating gate coverage, or add explicit targeted jobs for `coh`, `cohsh`, `cohsh-core`, `host-ticket-agent`, `gpu-bridge-host`, `root-task`, `pi4-driver-abi`, `pi4-driver-runtime`, and `nine-door` parity surfaces.
   - scripts/ci/test_plan_stage_02_host_fast.sh — exercise `coh`, `cohsh`, `cohsh-core`, `host-ticket-agent`, `gpu-bridge-host`, `nine-door` integration coverage, `root-task --tests`, `root-task --lib`, `pi4-driver-abi`, `pi4-driver-runtime`, and VM-target boundary checks as first-class checks.
   - scripts/ci/check_test_plan.sh — enforce the updated target-aware staged-run contract and authoritative command matrix.
-  - docs/TEST_PLAN.md — document the expanded cleanup-target coverage, VM boundary evidence, target-qualified artifacts, and required artifact retention.
+  - docs/TEST_PLAN.md — document the expanded cleanup-target coverage, VM boundary evidence, target-qualified artifacts, post-behavior baseline comparison, and required artifact retention.
   - apps/coh/src/mount.rs + apps/cohsh/src/** + crates/cohsh-core/** + apps/host-ticket-agent/src/*.rs + apps/gpu-bridge-host/src/** + selected apps/root-task/src/* helpers + selected `apps/nine-door` and root-task parity surfaces — add characterization tests for current outputs, errors, and state transitions before refactor.
 Commands:
   - cargo test -p coh --features mock
@@ -7264,6 +7319,7 @@ Commands:
   - scripts/ci/check_test_plan.sh
 Checks:
   - Cleanup-sensitive crates have deterministic tests that pin current operator-visible behavior.
+  - Characterization artifacts name the post-behavior baseline section they preserve, so behavior-changing Phase 2 work and behavior-preserving Phase 4 cleanup cannot be conflated.
   - Driver runtime ABI descriptors, linked runtime service turns, acceptance-eligibility fixtures, and board-proof boundaries remain pinned before cleanup touches driver-task code.
   - CI and staged test-plan coverage run those tests automatically and retain root-task VM-boundary evidence and target-qualified staged-run artifacts.
   - Risk-ratchet output is attached to refactor reviews and does not drift without an approved exception.
@@ -7309,6 +7365,7 @@ Checks:
   - High-visibility surface files read as authored, file-specific documentation instead of generated scaffolding.
   - Humanized docs remain consistent with the audit evidence produced by `m26c-docs-as-built-audit`.
   - AI-fingerprint findings for touched low-risk surfaces are closed or explicitly deferred in `docs/audit/M26C_AI_FINGERPRINT_AUDIT.md`.
+  - Each cleanup batch maps to one accepted wave in `M26C_REFACTOR_MAP.md`, with a preserved-contract list, targeted tests, and before/after scorecard evidence.
   - The simplicity scorecard shows net clarity improvement for touched surfaces; cleanup-only changes that add more prose, wrappers, or concepts than they remove require explicit reviewer justification.
   - Test names and doc comments describe behaviors and scenarios, not file names.
 Deliverables:
@@ -7334,6 +7391,7 @@ Commands:
   - cargo clippy --workspace --all-targets -- -D warnings
 Checks:
   - Host-side cleanup reduces repetition and makes invariants explicit without protocol, file-layout, receipt, or request-auth drift.
+  - Each host-tool refactor wave is independently reviewable and revertible, with one owner, one preserved-contract list, one characterization artifact, and one targeted test subset recorded before edits.
   - Characterization tests stay unchanged and passing across refactors.
 Deliverables:
   - Human-readable host-side control-plane code with preserved external behavior and tighter shared validation boundaries.
@@ -7362,6 +7420,7 @@ Checks:
   - Root-task decomposition preserves ACK/ERR/END grammar, namespace layout, `/proc` output shapes, event ordering, append-only behavior, and generated-manifest authority.
   - Linked driver-runtime descriptor handling, fixed-ring command/completion ABI, and acceptance-eligibility classification remain unchanged unless a reopened 26a/26b acceptance task changes them with hardware evidence.
   - VM-target builds remain `no_std` across QEMU and Pi 4 closure profiles.
+  - Each root-task decomposition wave has a baseline-linked preserved-contract list and can be reverted without undoing unrelated worker/runtime behavior.
   - No new `unsafe`, `unwrap`, `expect`, or `panic!` appears in non-test root-task code without an approved exception.
 Deliverables:
   - Smaller root-task runtime modules with preserved operator-visible behavior and explicit boundary evidence.
@@ -7386,6 +7445,7 @@ Commands:
 Checks:
   - HAL access remains centralized behind HAL traits; no direct MMIO, physical address, DMA publication, IRQ binding, or firmware-service shortcuts are introduced outside HAL.
   - New SDIO/USB seams are extraction-only, have before/after characterization evidence, and do not add new hardware support or generic future-driver behavior.
+  - Each HAL/network/local-seat wave is isolated to one preserved behavior surface and records the exact tests plus Pi 4/QEMU evidence needed to prove no transcript or authority drift.
   - Linked-runtime acceptance eligibility and the separate fresh-Pi board-proof boundary remain explicit until owner-state proof and fresh Pi hardware evidence close them.
   - Boot transcripts, `netstats`, `netstatus`, DHCP/static policy evidence, Wi-Fi fallback semantics, and no-NIC compatibility remain unchanged unless a separately approved breaking-change path is followed.
   - Pi 4 staged evidence proves the refactor did not regress local-seat, network-policy, or U-Boot handoff behavior.
@@ -7394,12 +7454,12 @@ Deliverables:
 
 Title/ID: m26c-full-test-plan-qemu-and-pi4
 Goal: Make full staged Test Plan PASS on both QEMU and Pi 4 the explicit closure gate for 26c.
-Inputs: docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/ci/check_test_plan.sh, scripts/pi4-image-build.sh, scripts/uboot/qemu-uboot-smoke.sh
+Inputs: docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, docs/audit/M26C_TARGET_RUNNER_BASELINE.md, docs/audit/M26C_POST_BEHAVIOR_BASELINE.md, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/ci/check_test_plan.sh, scripts/pi4-image-build.sh, scripts/uboot/qemu-uboot-smoke.sh
 Changes:
-  - docs/TEST_PLAN.md — define QEMU and Pi 4 execution matrices, evidence paths, PASS criteria, and target-qualified artifact requirements using the same staged contract.
-  - docs/HARDWARE_BRINGUP.md — document Pi 4 hardware setup, log capture, and operator prerequisites needed to run the full Test Plan.
-  - scripts/ci/test_plan_run.sh + scripts/ci/test_plan_stage_*.sh — add explicit `--target qemu|pi4` selection, reject unsupported target/stage combinations, and archive target-qualified evidence so the same runner can execute QEMU and Pi 4 runs without pretending the evidence is identical.
-  - scripts/ci/check_test_plan.sh — enforce alignment between target-aware docs, stage scripts, and authoritative commands.
+  - docs/TEST_PLAN.md — verify QEMU and Pi 4 execution matrices, evidence paths, PASS criteria, and target-qualified artifact requirements still match the early runner baseline and post-behavior baseline.
+  - docs/HARDWARE_BRINGUP.md — verify Pi 4 hardware setup, log capture, and operator prerequisites remain sufficient to run the full Test Plan.
+  - scripts/ci/test_plan_run.sh + scripts/ci/test_plan_stage_*.sh — use the already implemented `--target qemu|pi4` contract to archive final target-qualified evidence without pretending QEMU and Pi 4 evidence are identical.
+  - scripts/ci/check_test_plan.sh — enforce final alignment between target-aware docs, stage scripts, baseline artifacts, and authoritative commands.
   - scripts/pi4-image-build.sh — produce deterministic artifacts consumed by Pi 4 staged test-plan runs.
 Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26c-qemu

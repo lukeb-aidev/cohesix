@@ -4692,7 +4692,55 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_CONTEXTS_PUBLISHED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED => 5,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE => 6,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DATA_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_TIMEOUT => 6,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DATA_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DATA_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED => 7,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED => 8,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_ENGINE_INIT_HW_DONE => 4,
             _ => 0,
@@ -5006,6 +5054,142 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE => {
                 "address-device-publish-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED => {
+                "device-descriptor-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN => {
+                "device-descriptor-submit-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN => {
+                "device-descriptor-transfer-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT => {
+                "device-descriptor-status-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT => {
+                "config-descriptor-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_FAILED => {
+                "device-descriptor-transfer-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_TIMEOUT => {
+                "device-descriptor-transfer-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT => {
+                "device-descriptor-status-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_BEGIN => {
+                "device-descriptor-prime-submit-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN => {
+                "device-descriptor-prime-transfer-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DATA_EVENT => {
+                "device-descriptor-prime-status-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT => {
+                "device-descriptor-full-read-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_FAILED => {
+                "device-descriptor-prime-transfer-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_TIMEOUT => {
+                "device-descriptor-prime-transfer-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_TIMEOUT => {
+                "device-descriptor-prime-status-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_BEGIN => {
+                "config-descriptor-header-submit-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN => {
+                "config-descriptor-header-transfer-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DATA_EVENT => {
+                "config-descriptor-header-status-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT => {
+                "config-descriptor-full-read-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_FAILED => {
+                "config-descriptor-header-transfer-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_TIMEOUT => {
+                "config-descriptor-header-transfer-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_TIMEOUT => {
+                "config-descriptor-header-status-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_BEGIN => {
+                "config-descriptor-full-submit-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN => {
+                "config-descriptor-full-transfer-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DATA_EVENT => {
+                "config-descriptor-full-status-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT => {
+                "hid-endpoint-not-ready"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_FAILED => {
+                "config-descriptor-full-transfer-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_TIMEOUT => {
+                "config-descriptor-full-transfer-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT => {
+                "config-descriptor-full-status-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN => {
+                "hid-endpoint-parse-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND => {
+                "hid-configure-endpoint-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING => {
+                "hid-endpoint-not-found"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN => {
+                "hid-configure-endpoint-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_DONE => {
+                "hid-set-configuration-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_FAILED => {
+                "hid-configure-endpoint-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN => {
+                "hid-set-configuration-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE => {
+                "hid-control-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED => {
+                "hid-set-configuration-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_BEGIN => {
+                "hid-control-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_DONE => {
+                "hid-interrupt-queue-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED => {
+                "hid-control-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN => {
+                "hid-interrupt-queue-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY => {
+                "first-hid-report"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED => {
+                "hid-interrupt-queue-failed"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED => {
                 "address-device-failed"
             }
@@ -5282,6 +5466,142 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE => {
                 "publish-device-addressed-detail"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED => {
+                "read-device-descriptor"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN => {
+                "publish-ep0-device-descriptor-transfer"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN => {
+                "poll-ep0-device-descriptor-transfer"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT => {
+                "poll-ep0-device-descriptor-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT => {
+                "read-config-descriptor"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_FAILED => {
+                "inspect-ep0-device-descriptor-transfer-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_TIMEOUT => {
+                "inspect-missing-ep0-device-descriptor-data-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT => {
+                "inspect-missing-ep0-device-descriptor-status-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_BEGIN => {
+                "publish-ep0-device-descriptor-prime"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN => {
+                "poll-ep0-device-descriptor-prime"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DATA_EVENT => {
+                "poll-ep0-device-descriptor-prime-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT => {
+                "read-full-device-descriptor"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_FAILED => {
+                "inspect-ep0-device-descriptor-prime-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_TIMEOUT => {
+                "inspect-missing-ep0-device-descriptor-prime-data-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_TIMEOUT => {
+                "inspect-missing-ep0-device-descriptor-prime-status-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_BEGIN => {
+                "publish-ep0-config-descriptor-header"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN => {
+                "poll-ep0-config-descriptor-header"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DATA_EVENT => {
+                "poll-ep0-config-descriptor-header-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT => {
+                "read-full-config-descriptor"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_FAILED => {
+                "inspect-ep0-config-descriptor-header-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_TIMEOUT => {
+                "inspect-missing-ep0-config-descriptor-header-data-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_TIMEOUT => {
+                "inspect-missing-ep0-config-descriptor-header-status-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_BEGIN => {
+                "publish-ep0-full-config-descriptor"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN => {
+                "poll-ep0-full-config-descriptor"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DATA_EVENT => {
+                "poll-ep0-full-config-descriptor-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT => {
+                "parse-hid-keyboard-endpoint"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_FAILED => {
+                "inspect-ep0-full-config-descriptor-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_TIMEOUT => {
+                "inspect-missing-ep0-full-config-descriptor-data-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT => {
+                "inspect-missing-ep0-full-config-descriptor-status-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN => {
+                "parse-hid-keyboard-endpoint"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND => {
+                "submit-hid-configure-endpoint"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING => {
+                "inspect-config-descriptor-hid-interface"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN => {
+                "poll-hid-configure-endpoint"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_DONE => {
+                "submit-hid-set-configuration"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_FAILED => {
+                "inspect-hid-endpoint-context"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN => {
+                "poll-hid-set-configuration"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE => {
+                "submit-hid-control-setup"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED => {
+                "inspect-hid-set-configuration-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_BEGIN => {
+                "poll-hid-control-setup"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_DONE => {
+                "arm-hid-interrupt-queue"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED => {
+                "inspect-hid-class-control-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN => {
+                "poll-hid-interrupt-queue-arm"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY => {
+                "wait-first-hid-report"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED => {
+                "inspect-hid-interrupt-doorbell"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED => {
                 "continue-enumeration-same-controller"
             }
@@ -5536,6 +5856,21 @@ where
                 | "address-device-command-submit-no-reply"
                 | "address-device-command-completion-no-reply"
                 | "address-device-publish-no-reply"
+                | "device-descriptor-no-reply"
+                | "device-descriptor-submit-no-reply"
+                | "device-descriptor-transfer-no-reply"
+                | "device-descriptor-status-no-reply"
+                | "device-descriptor-transfer-failed"
+                | "device-descriptor-transfer-timeout"
+                | "device-descriptor-status-timeout"
+                | "device-descriptor-prime-submit-no-reply"
+                | "device-descriptor-prime-transfer-no-reply"
+                | "device-descriptor-prime-status-no-reply"
+                | "device-descriptor-full-read-no-reply"
+                | "device-descriptor-prime-transfer-failed"
+                | "device-descriptor-prime-transfer-timeout"
+                | "device-descriptor-prime-status-timeout"
+                | "config-descriptor-no-reply"
         )
     }
 
@@ -5551,11 +5886,23 @@ where
             let linked_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
                 crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             );
-            let linked_gate = Self::usb_runtime_gate_for_linked_detail(linked_detail).max(
-                linked_progress.map_or(0, |progress| {
-                    Self::usb_runtime_gate_for_progress_phase(progress.phase)
-                }),
-            );
+            let linked_detail_gate = Self::usb_runtime_gate_for_linked_detail(linked_detail);
+            let linked_progress_gate = linked_progress.map_or(0, |progress| {
+                Self::usb_runtime_gate_for_progress_phase(progress.phase)
+            });
+            let linked_progress_blocker = linked_progress.map_or("none", |progress| {
+                Self::usb_runtime_blocker_for_progress_phase(progress.phase)
+            });
+            let linked_progress_next_action = linked_progress
+                .map_or("wait-linked-runtime-init", |progress| {
+                    Self::usb_runtime_next_action_for_progress_phase(progress.phase)
+                });
+            let progress_refines_linked_detail = linked_progress_gate > 0
+                && (linked_progress_gate > linked_detail_gate
+                    || (linked_progress_gate == linked_detail_gate
+                        && linked_detail
+                            == pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED));
+            let linked_gate = linked_detail_gate.max(linked_progress_gate);
             let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
             let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
             let local_trace = self
@@ -5587,6 +5934,8 @@ where
                 "hid-first-report"
             } else if first_report && !first_byte {
                 "keyboard-first-byte"
+            } else if progress_refines_linked_detail {
+                linked_progress_blocker
             } else if linked_detail != 0 {
                 Self::usb_runtime_blocker_for_linked_detail(linked_detail)
             } else if let Some(progress) = linked_progress {
@@ -5614,6 +5963,8 @@ where
                 "inspect-xhci-event-ring-interrupt-delivery"
             } else if first_report && !first_byte {
                 "inspect-hid-report-to-console-byte-path"
+            } else if progress_refines_linked_detail {
+                linked_progress_next_action
             } else if linked_detail != 0 {
                 Self::usb_runtime_next_action_for_linked_detail(linked_detail)
             } else if let Some(progress) = linked_progress {
@@ -7824,7 +8175,7 @@ where
             0x5316 | 0x5317 | 0x5319 => 4,
             0x531a..=0x5323 => 5,
             0x5329 => 6,
-            0x532a..=0x532c => 7,
+            0x532a..=0x532e => 7,
             _ => 8,
         }
     }
@@ -11478,6 +11829,198 @@ mod tests {
             ),
             "publish-device-addressed-detail"
         );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED,
+            ),
+            6
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED,
+            ),
+            "device-descriptor-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED,
+            ),
+            "read-device-descriptor"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN,
+            ),
+            6
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN,
+            ),
+            "device-descriptor-transfer-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN,
+            ),
+            "poll-ep0-device-descriptor-transfer"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT,
+            ),
+            6
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT,
+            ),
+            "device-descriptor-status-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT,
+            ),
+            "poll-ep0-device-descriptor-status"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT,
+            ),
+            7
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT,
+            ),
+            "config-descriptor-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT,
+            ),
+            "read-config-descriptor"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN,
+            ),
+            6
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN,
+            ),
+            "device-descriptor-prime-transfer-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN,
+            ),
+            "poll-ep0-device-descriptor-prime"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN,
+            ),
+            7
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN,
+            ),
+            "config-descriptor-header-transfer-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN,
+            ),
+            "poll-ep0-config-descriptor-header"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT,
+            ),
+            "config-descriptor-full-read-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT,
+            ),
+            "read-full-config-descriptor"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN,
+            ),
+            "config-descriptor-full-transfer-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN,
+            ),
+            "poll-ep0-full-config-descriptor"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT,
+            ),
+            "hid-endpoint-not-ready"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT,
+            ),
+            "parse-hid-keyboard-endpoint"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN,
+            ),
+            7
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN,
+            ),
+            "hid-endpoint-parse-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN,
+            ),
+            "parse-hid-keyboard-endpoint"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN,
+            ),
+            "hid-configure-endpoint-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN,
+            ),
+            "poll-hid-configure-endpoint"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY,
+            ),
+            8
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY,
+            ),
+            "first-hid-report"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY,
+            ),
+            "wait-first-hid-report"
+        );
     }
 
     #[cfg(feature = "net-console")]
@@ -14578,6 +15121,37 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_startup_gate_status(7, 1, 6),
             "blocked"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_post_release_mailbox_faults_stay_at_gate_seven() {
+        let mailbox_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            stage: "cyw43-firmware-release",
+            op: 5,
+            flags: 0,
+            target_addr: 0,
+            payload_offset: 0,
+            payload_len: 0,
+            total_len: 0,
+            detail: 0x532d,
+            reason: "cyw43-post-release-mailbox-ready",
+            result: 0,
+        };
+        let protocol_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
+            detail: 0x532e,
+            reason: "cyw43-post-release-protocol-version",
+            ..mailbox_fault
+        };
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_gate(mailbox_fault),
+            7
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_runtime_fault_gate(protocol_fault),
+            7
         );
     }
 

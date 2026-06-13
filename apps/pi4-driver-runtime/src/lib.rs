@@ -64,6 +64,12 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BUS_LINK_READY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_ADOPT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_FRAME,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_REMAINDER_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_ENGINE_INIT_BRANCH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY,
@@ -78,8 +84,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_CORECONTROL_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_INT_MASK_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_POST_CONFIG_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_RESET_VECTOR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_UPLOAD_CLOCK_BEGIN,
@@ -175,7 +184,24 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_RETURN_PENDING,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_SUBMIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_TRB_WRITTEN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_FLUSHED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DATA_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DATA_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_WRITTEN, DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_CRCR_HIGH_WRITTEN,
@@ -184,6 +210,23 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_FLUSHED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_HIGH_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DCBAAP_LOW_WRITTEN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DATA_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_RANGE_READY, DRIVER_RUNTIME_RING_PROGRESS_USB_DMA_READY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_DNCTRL_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERDP_HIGH_FLUSHED,
@@ -195,6 +238,21 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTBA_LOW_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_ERSTSZ_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
@@ -351,6 +409,8 @@ const FAULT_CYW43_FIRMWARE_RETRY_EXHAUSTED: u16 = 0x5329;
 const FAULT_CYW43_POST_RELEASE_HT: u16 = 0x532a;
 const FAULT_CYW43_POST_RELEASE_F2_READY: u16 = 0x532b;
 const FAULT_CYW43_POST_RELEASE_CORECONTROL: u16 = 0x532c;
+const FAULT_CYW43_POST_RELEASE_MAILBOX_READY: u16 = 0x532d;
+const FAULT_CYW43_POST_RELEASE_PROTOCOL_VERSION: u16 = 0x532e;
 
 const SERIAL_RUNTIME_AUX_INIT: u32 = 0x5345_5249;
 
@@ -875,6 +935,11 @@ const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_RX_REQUEST_TOO_LARGE: u32 = 5;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_F2_READ_FAILED: u32 = 6;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_SDPCM_DECODE_MISS: u32 = 7;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NONMATCHING_REPLY: u32 = 8;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_FAILED: u32 = 9;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_EMPTY: u32 = 10;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_INVALID_SDPCM: u32 = 11;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_REMAINDER_FAILED: u32 = 12;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_REMAINDER_TOO_LARGE: u32 = 13;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NOT_READY: u32 =
     cyw43_control_exchange_timeout_result(CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NOT_READY, 0);
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_RFRAME_READ_FAILED: u32 =
@@ -907,6 +972,10 @@ const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 64;
 const CYW43_RX_QUEUE_CAP: usize = 128;
 const CYW43_FUNCTION2_BLOCK_BYTES: usize = SDIO_FUNCTION2_BLOCK_SIZE as usize;
+const CYW43_CONTROL_RX_FIRSTREAD_BYTES: usize = 64;
+const CYW43_CONTROL_RX_BULK_READ_BYTES: usize = CYW43_FUNCTION2_BLOCK_BYTES * 4;
+const CYW43_CONTROL_RX_FIRSTREAD_CAPACITY: usize =
+    CYW43_CONTROL_RX_FIRSTREAD_BYTES + CYW43_CONTROL_RX_BULK_READ_BYTES;
 const CYW43_RING_PAGE_PAYLOAD_BYTES: usize =
     DRIVER_TASK_RING_PAGE_BYTES - DRIVER_TASK_RING_FRAME_OFFSET;
 const CYW43_RUNTIME_RX_BUFFER_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES as usize;
@@ -1019,13 +1088,22 @@ const SBSDIO_FUNC1_SLEEPCSR_KSO_EN: u8 = 0x01;
 const CY_43455_F2_WATERMARK: u8 = 0x60;
 const CY_43455_MESBUSYCTRL: u8 = 0xd0;
 const SDIO_CORECONTROL: u32 = 0x00;
+const SDIO_INT_STATUS: u32 = 0x20;
 const SDPCMD_REG_HOSTINTMASK: u32 = 0x24;
 const SDPCMD_REG_FUNCTIONINTMASK: u32 = 0x34;
+const SDPCMD_REG_TOSBMAILBOXDATA: u32 = 0x48;
+const SDPCMD_REG_TOHOSTMAILBOXDATA: u32 = 0x4c;
 const CC_F2RDY: u32 = 1 << 2;
+const HMB_DATA_DEVREADY: u32 = 0x0002;
+const HMB_DATA_FWREADY: u32 = 0x0008;
+const HMB_DATA_VERSION_MASK: u32 = 0x00ff_0000;
+const HMB_DATA_VERSION_SHIFT: u32 = 16;
+const SDPCM_PROT_VERSION: u32 = 4;
 const I_HMB_SW_MASK: u32 = 0x0000_00f0;
 const I_CHIPACTIVE: u32 = 1 << 29;
 const HOSTINTMASK: u32 = I_HMB_SW_MASK | I_CHIPACTIVE;
 const FUNCTIONINTMASK: u32 = SDIO_FUNC_ENABLE_2 as u32;
+const CYW43_POST_RELEASE_MAILBOX_POLLS: usize = 1_000;
 
 const fn xhci_poll_only_interrupter_iman() -> u32 {
     0
@@ -1434,6 +1512,7 @@ struct Cyw43RuntimeState {
     rx_queue_lens: [u16; CYW43_RX_QUEUE_CAP],
     rx_queue_flags: [u16; CYW43_RX_QUEUE_CAP],
     rx_queue_frames: [[u8; MAX_DRIVER_TASK_FRAME_BYTES]; CYW43_RX_QUEUE_CAP],
+    control_startup_status_drained: bool,
     tx_frames: u32,
     rx_frames: u32,
     firmware_bytes: u32,
@@ -1481,6 +1560,7 @@ impl Cyw43RuntimeState {
             rx_queue_lens: [0; CYW43_RX_QUEUE_CAP],
             rx_queue_flags: [0; CYW43_RX_QUEUE_CAP],
             rx_queue_frames: [[0; MAX_DRIVER_TASK_FRAME_BYTES]; CYW43_RX_QUEUE_CAP],
+            control_startup_status_drained: false,
             tx_frames: 0,
             rx_frames: 0,
             firmware_bytes: 0,
@@ -4249,6 +4329,7 @@ fn service_cyw43_descriptor_command(
                 desc.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER != 0,
                 desc.arg0,
                 desc.arg1 as u16,
+                command.sequence,
             );
             frame_ready.map_or(0, |frame| u32::from(frame.len).saturating_add(1))
         }
@@ -6392,6 +6473,74 @@ fn cyw43_require_post_release_corecontrol_ready(state: &mut Cyw43RuntimeState) -
     Err(FAULT_CYW43_POST_RELEASE_CORECONTROL)
 }
 
+const fn cyw43_mailbox_version_payload() -> u32 {
+    SDPCM_PROT_VERSION << HMB_DATA_VERSION_SHIFT
+}
+
+const fn cyw43_firmware_mailbox_version(mailbox: u32) -> u32 {
+    (mailbox & HMB_DATA_VERSION_MASK) >> HMB_DATA_VERSION_SHIFT
+}
+
+const fn cyw43_firmware_mailbox_has_ready_bit(mailbox: u32) -> bool {
+    (mailbox & (HMB_DATA_DEVREADY | HMB_DATA_FWREADY)) != 0
+}
+
+const fn cyw43_firmware_mailbox_version_accepted(mailbox: u32) -> bool {
+    let version = cyw43_firmware_mailbox_version(mailbox);
+    version == 0 || version == SDPCM_PROT_VERSION
+}
+
+const fn cyw43_firmware_mailbox_ready(mailbox: u32) -> bool {
+    cyw43_firmware_mailbox_has_ready_bit(mailbox)
+        && cyw43_firmware_mailbox_version_accepted(mailbox)
+}
+
+fn cyw43_write_firmware_mailbox_version(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
+    if cyw43_backplane_write_u32(
+        state,
+        CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOXDATA,
+        cyw43_mailbox_version_payload(),
+    ) {
+        Ok(())
+    } else {
+        Err(cyw43_take_last_fault_detail().unwrap_or(FAULT_CYW43_POST_RELEASE_MAILBOX_READY))
+    }
+}
+
+fn cyw43_wait_for_firmware_mailbox_ready(_state: &mut Cyw43RuntimeState) -> Result<u32, u16> {
+    #[cfg(not(target_os = "none"))]
+    {
+        return Ok(HMB_DATA_DEVREADY | HMB_DATA_FWREADY | cyw43_mailbox_version_payload());
+    }
+    #[cfg(target_os = "none")]
+    {
+        let mut last_mailbox = 0u32;
+        for _ in 0..CYW43_POST_RELEASE_MAILBOX_POLLS {
+            let Some(mailbox) = cyw43_backplane_read_u32(
+                _state,
+                CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOHOSTMAILBOXDATA,
+            ) else {
+                return Err(cyw43_take_last_fault_detail()
+                    .unwrap_or(FAULT_CYW43_POST_RELEASE_MAILBOX_READY));
+            };
+            last_mailbox = mailbox;
+            if cyw43_firmware_mailbox_ready(mailbox) {
+                return Ok(mailbox);
+            }
+            if cyw43_firmware_mailbox_has_ready_bit(mailbox) {
+                cyw43_record_last_fault_with_result(
+                    FAULT_CYW43_POST_RELEASE_PROTOCOL_VERSION,
+                    mailbox,
+                );
+                return Err(FAULT_CYW43_POST_RELEASE_PROTOCOL_VERSION);
+            }
+            core::hint::spin_loop();
+        }
+        cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_MAILBOX_READY, last_mailbox);
+        Err(FAULT_CYW43_POST_RELEASE_MAILBOX_READY)
+    }
+}
+
 fn cyw43_hold_armcr4_for_firmware_upload(state: &mut Cyw43RuntimeState) -> Result<(), u16> {
     let prereset_ioctrl = cyw43_core_reset_prepare_hold_value(ARMCR4_BCMA_IOCTL_CPUHALT);
     if !cyw43_ai_core_write8(
@@ -6635,6 +6784,16 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
     }
     cyw43_publish_release_progress(
         sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN,
+    );
+    if let Err(detail) = cyw43_write_firmware_mailbox_version(state) {
+        if cyw43_take_last_fault_detail().is_none() {
+            cyw43_record_last_fault(detail);
+        }
+        return false;
+    }
+    cyw43_publish_release_progress(
+        sequence,
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_F2_ENABLE_BEGIN,
     );
     if let Err(detail) = cyw43_enable_post_release_function2() {
@@ -6668,6 +6827,23 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
         }
         return false;
     }
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN,
+    );
+    if let Err(detail) = cyw43_wait_for_firmware_mailbox_ready(state) {
+        if cyw43_take_last_fault_detail().is_none() {
+            cyw43_record_last_fault(detail);
+        }
+        return false;
+    }
+    if !cyw43_backplane_write_u32(state, CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS, u32::MAX) {
+        cyw43_clear_last_fault();
+    }
+    cyw43_publish_release_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE,
+    );
     true
 }
 
@@ -7568,7 +7744,7 @@ fn cyw43_runtime_poll_rx(
     state: &mut Cyw43RuntimeState,
     wanted_mask: u16,
 ) -> Option<DriverFrameDescriptor> {
-    match cyw43_runtime_poll_rx_detailed(state, wanted_mask) {
+    match cyw43_runtime_poll_rx_detailed(state, wanted_mask, 0, false) {
         Cyw43RxPollResult::Frame(frame) => Some(frame),
         Cyw43RxPollResult::Idle(_) => None,
     }
@@ -7577,6 +7753,8 @@ fn cyw43_runtime_poll_rx(
 fn cyw43_runtime_poll_rx_detailed(
     state: &mut Cyw43RuntimeState,
     wanted_mask: u16,
+    sequence: u32,
+    allow_hintless_firstread: bool,
 ) -> Cyw43RxPollResult {
     if !state.initialized || !state.transport_ready || !state.firmware_released {
         return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::NotReady);
@@ -7593,6 +7771,9 @@ fn cyw43_runtime_poll_rx_detailed(
     };
     let frame_len = usize::from(lo) | (usize::from(hi) << 8);
     if frame_len == 0 {
+        if allow_hintless_firstread {
+            return cyw43_runtime_poll_rx_hintless_firstread(state, wanted_mask, sequence);
+        }
         return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::NoRframe);
     }
     if !(CYW43_SDPCM_HEADER_BYTES..=CYW43_RUNTIME_RX_BUFFER_BYTES).contains(&frame_len) {
@@ -7642,6 +7823,121 @@ fn cyw43_runtime_poll_rx_detailed(
     )
 }
 
+fn cyw43_runtime_poll_rx_hintless_firstread(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    sequence: u32,
+) -> Cyw43RxPollResult {
+    cyw43_publish_control_rx_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN,
+    );
+    let rx_frame = DriverFrameDescriptor {
+        offset: CYW43_RUNTIME_RX_BUFFER_OFFSET as u32,
+        len: CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16,
+        flags: 0,
+    };
+    let (block_size, block_count) = cyw43_function2_cmd53_shape(CYW43_CONTROL_RX_FIRSTREAD_BYTES);
+    if sdio_execute_transfer(
+        SDIO_CMD53,
+        sdio_cmd53_arg(
+            false,
+            2,
+            BACKPLANE_32BIT_FLAG,
+            false,
+            block_count,
+            CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16,
+        ),
+        DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+        rx_frame,
+        block_size,
+        block_count,
+    )
+    .is_none()
+    {
+        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadFailed);
+    }
+    cyw43_publish_control_rx_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_DONE,
+    );
+    let Some(header) = cyw43_rx_sdpcm_header_prefix_at(
+        CYW43_RUNTIME_RX_BUFFER_OFFSET,
+        CYW43_CONTROL_RX_FIRSTREAD_BYTES,
+        CYW43_CONTROL_RX_FIRSTREAD_CAPACITY,
+    ) else {
+        if cyw43_sdpcm_firstread_prefix_empty(CYW43_RUNTIME_RX_BUFFER_OFFSET) {
+            cyw43_publish_control_rx_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY,
+            );
+            return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadEmpty);
+        }
+        cyw43_publish_control_rx_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID,
+        );
+        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadInvalidSdpcm(
+            cyw43_sdpcm_firstread_prefix_signature(CYW43_RUNTIME_RX_BUFFER_OFFSET),
+        ));
+    };
+    if header.packet_len > CYW43_CONTROL_RX_FIRSTREAD_BYTES {
+        let Some(remainder_request_len) =
+            cyw43_control_rx_firstread_remainder_request_len(header.packet_len)
+        else {
+            return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadRemainderTooLarge(
+                header.packet_len,
+            ));
+        };
+        let remainder_frame = DriverFrameDescriptor {
+            offset: (CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_CONTROL_RX_FIRSTREAD_BYTES) as u32,
+            len: remainder_request_len as u16,
+            flags: 0,
+        };
+        let (block_size, block_count) = cyw43_function2_cmd53_shape(remainder_request_len);
+        if sdio_execute_transfer(
+            SDIO_CMD53,
+            sdio_cmd53_arg(
+                false,
+                2,
+                BACKPLANE_32BIT_FLAG,
+                false,
+                block_count,
+                remainder_request_len as u16,
+            ),
+            DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+            remainder_frame,
+            block_size,
+            block_count,
+        )
+        .is_none()
+        {
+            cyw43_publish_control_rx_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_REMAINDER_FAILED,
+            );
+            return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadRemainderFailed);
+        }
+    }
+    let frame = cyw43_runtime_decode_rx_frame_for(
+        state,
+        CYW43_RUNTIME_RX_BUFFER_OFFSET,
+        header.packet_len,
+        wanted_mask,
+    );
+    if frame.is_some() {
+        cyw43_publish_control_rx_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_FRAME,
+        );
+        state.rx_frames = state.rx_frames.saturating_add(1);
+    }
+    frame.map_or(
+        Cyw43RxPollResult::Idle(Cyw43RxIdleReason::SdpcmDecodeMiss),
+        Cyw43RxPollResult::Frame,
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43ControlReply {
     cmd: u32,
@@ -7666,6 +7962,63 @@ enum Cyw43RxIdleReason {
     RxRequestTooLarge(usize),
     Function2ReadFailed,
     SdpcmDecodeMiss,
+    FirstreadFailed,
+    FirstreadEmpty,
+    FirstreadInvalidSdpcm(u32),
+    FirstreadRemainderFailed,
+    FirstreadRemainderTooLarge(usize),
+}
+
+fn cyw43_publish_control_rx_progress(sequence: u32, phase: u32) {
+    publish_runtime_progress(sequence, phase, DRIVER_RUNTIME_CYW43_COMMAND_AUX);
+}
+
+const fn cyw43_control_exchange_attempt_uses_firstread(attempt: usize) -> bool {
+    matches!(attempt, 1 | 4 | 16 | 64 | 256 | 1024 | 4096)
+}
+
+const fn cyw43_rx_idle_reason_rank(reason: Cyw43RxIdleReason) -> u8 {
+    match reason {
+        Cyw43RxIdleReason::NotReady => 0,
+        Cyw43RxIdleReason::NoRframe => 1,
+        Cyw43RxIdleReason::RframeCountReadFailed
+        | Cyw43RxIdleReason::InvalidRframeLength(_)
+        | Cyw43RxIdleReason::RxRequestTooLarge(_)
+        | Cyw43RxIdleReason::Function2ReadFailed
+        | Cyw43RxIdleReason::SdpcmDecodeMiss => 2,
+        Cyw43RxIdleReason::FirstreadFailed
+        | Cyw43RxIdleReason::FirstreadEmpty
+        | Cyw43RxIdleReason::FirstreadInvalidSdpcm(_)
+        | Cyw43RxIdleReason::FirstreadRemainderFailed
+        | Cyw43RxIdleReason::FirstreadRemainderTooLarge(_) => 3,
+    }
+}
+
+fn cyw43_remember_control_idle_reason(
+    current: &mut Cyw43RxIdleReason,
+    candidate: Cyw43RxIdleReason,
+) {
+    if cyw43_rx_idle_reason_rank(candidate) >= cyw43_rx_idle_reason_rank(*current) {
+        *current = candidate;
+    }
+}
+
+fn cyw43_drain_startup_status_frames(state: &mut Cyw43RuntimeState, sequence: u32) {
+    if state.control_startup_status_drained {
+        return;
+    }
+    state.control_startup_status_drained = true;
+    for _ in 0..2 {
+        match cyw43_runtime_poll_rx_detailed(
+            state,
+            CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT,
+            sequence,
+            true,
+        ) {
+            Cyw43RxPollResult::Frame(_) => continue,
+            Cyw43RxPollResult::Idle(_) => break,
+        }
+    }
 }
 
 fn cyw43_control_exchange(
@@ -7674,22 +8027,29 @@ fn cyw43_control_exchange(
     control_ext_header: bool,
     expected_cmd: u32,
     expected_id: u16,
+    sequence: u32,
 ) -> Option<DriverFrameDescriptor> {
+    cyw43_drain_startup_status_frames(state, sequence);
     if cyw43_submit_sdpcm_frame(state, frame, false, control_ext_header) == 0 {
         return None;
     }
     let mut nonmatching_frames = 0u32;
     let mut last_idle_reason = Cyw43RxIdleReason::NoRframe;
-    for _ in 0..CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS {
-        let reply_frame =
-            match cyw43_runtime_poll_rx_detailed(state, CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT) {
-                Cyw43RxPollResult::Frame(frame) => frame,
-                Cyw43RxPollResult::Idle(reason) => {
-                    last_idle_reason = reason;
-                    core::hint::spin_loop();
-                    continue;
-                }
-            };
+    for attempt in 1..=CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS {
+        let allow_firstread = cyw43_control_exchange_attempt_uses_firstread(attempt);
+        let reply_frame = match cyw43_runtime_poll_rx_detailed(
+            state,
+            CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT,
+            sequence,
+            allow_firstread,
+        ) {
+            Cyw43RxPollResult::Frame(frame) => frame,
+            Cyw43RxPollResult::Idle(reason) => {
+                cyw43_remember_control_idle_reason(&mut last_idle_reason, reason);
+                core::hint::spin_loop();
+                continue;
+            }
+        };
         if nonmatching_frames == 0 {
             last_idle_reason = Cyw43RxIdleReason::SdpcmDecodeMiss;
         };
@@ -7781,6 +8141,30 @@ fn cyw43_control_exchange_timeout_fault_result(
         Cyw43RxIdleReason::SdpcmDecodeMiss => {
             CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_SDPCM_DECODE_MISS
         }
+        Cyw43RxIdleReason::FirstreadFailed => cyw43_control_exchange_timeout_result(
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_FAILED,
+            0,
+        ),
+        Cyw43RxIdleReason::FirstreadEmpty => cyw43_control_exchange_timeout_result(
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_EMPTY,
+            0,
+        ),
+        Cyw43RxIdleReason::FirstreadInvalidSdpcm(signature) => {
+            cyw43_control_exchange_timeout_result(
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_INVALID_SDPCM,
+                signature,
+            )
+        }
+        Cyw43RxIdleReason::FirstreadRemainderFailed => cyw43_control_exchange_timeout_result(
+            CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_REMAINDER_FAILED,
+            0,
+        ),
+        Cyw43RxIdleReason::FirstreadRemainderTooLarge(packet_len) => {
+            cyw43_control_exchange_timeout_result(
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_REMAINDER_TOO_LARGE,
+                bounded_u32(packet_len),
+            )
+        }
     }
 }
 
@@ -7870,6 +8254,21 @@ fn cyw43_rx_sdpcm_header_at(base: usize, frame_len: usize) -> Option<Cyw43RxSdpc
     if !(CYW43_SDPCM_HEADER_BYTES..=CYW43_RUNTIME_RX_BUFFER_BYTES).contains(&frame_len) {
         return None;
     }
+    let header = cyw43_rx_sdpcm_header_prefix_at(base, frame_len, frame_len)?;
+    if header.packet_len > frame_len {
+        return None;
+    }
+    Some(header)
+}
+
+fn cyw43_rx_sdpcm_header_prefix_at(
+    base: usize,
+    prefix_len: usize,
+    max_packet_len: usize,
+) -> Option<Cyw43RxSdpcmHeader> {
+    if prefix_len < CYW43_SDPCM_HEADER_BYTES {
+        return None;
+    }
     let len = u16::from_le_bytes([
         read_runtime_payload_byte(base),
         read_runtime_payload_byte(base + 1),
@@ -7878,7 +8277,7 @@ fn cyw43_rx_sdpcm_header_at(base: usize, frame_len: usize) -> Option<Cyw43RxSdpc
         read_runtime_payload_byte(base + 2),
         read_runtime_payload_byte(base + 3),
     ]);
-    if len == 0 || len > frame_len || len_inv != !(len as u16) {
+    if len == 0 || len > max_packet_len || len_inv != !(len as u16) {
         return None;
     }
     let channel_byte = read_runtime_payload_byte(base + 5);
@@ -7894,6 +8293,22 @@ fn cyw43_rx_sdpcm_header_at(base: usize, frame_len: usize) -> Option<Cyw43RxSdpc
         credit: read_runtime_payload_byte(base + 9),
         glom_descriptor: channel_byte & 0x80 != 0,
     })
+}
+
+fn cyw43_sdpcm_firstread_prefix_empty(base: usize) -> bool {
+    for index in 0..CYW43_SDPCM_HEADER_BYTES {
+        if read_runtime_payload_byte(base + index) != 0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn cyw43_sdpcm_firstread_prefix_signature(base: usize) -> u32 {
+    u32::from(read_runtime_payload_byte(base))
+        | (u32::from(read_runtime_payload_byte(base + 1)) << 8)
+        | (u32::from(read_runtime_payload_byte(base + 2)) << 16)
+        | (u32::from(read_runtime_payload_byte(base + 3)) << 24)
 }
 
 fn cyw43_update_sdpcm_credit(state: &mut Cyw43RuntimeState, header: Cyw43RxSdpcmHeader) {
@@ -8343,6 +8758,33 @@ const fn cyw43_control_tx_request_len(unpadded_len: usize) -> usize {
         }
     } else {
         align4(unpadded_len)
+    }
+}
+
+const fn cyw43_control_rx_request_len(unpadded_len: usize) -> usize {
+    let aligned = (unpadded_len + 3) & !3;
+    if aligned <= SDIO_CMD53_BYTE_MODE_MAX {
+        aligned
+    } else {
+        let remainder = aligned % CYW43_FUNCTION2_BLOCK_BYTES;
+        if remainder == 0 {
+            aligned
+        } else {
+            aligned + (CYW43_FUNCTION2_BLOCK_BYTES - remainder)
+        }
+    }
+}
+
+const fn cyw43_control_rx_firstread_remainder_request_len(packet_len: usize) -> Option<usize> {
+    if packet_len <= CYW43_CONTROL_RX_FIRSTREAD_BYTES {
+        return None;
+    }
+    let remainder_len = packet_len - CYW43_CONTROL_RX_FIRSTREAD_BYTES;
+    let request_len = cyw43_control_rx_request_len(remainder_len);
+    if CYW43_CONTROL_RX_FIRSTREAD_BYTES + request_len <= CYW43_CONTROL_RX_FIRSTREAD_CAPACITY {
+        Some(request_len)
+    } else {
+        None
     }
 }
 
@@ -11328,6 +11770,25 @@ struct XhciControlTransferPlan {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct XhciControlProgress {
+    sequence: u32,
+    aux0: u32,
+    doorbell_done: u32,
+    wait_begin: u32,
+    data_event: u32,
+    status_event: u32,
+    failed: u32,
+    transfer_timeout: u32,
+    status_timeout: u32,
+}
+
+fn xhci_publish_control_progress(progress: Option<XhciControlProgress>, phase: u32) {
+    if let Some(progress) = progress {
+        publish_runtime_progress(progress.sequence, phase, progress.aux0);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum XhciControlTransferEvent {
     Ignore,
     Fail,
@@ -11385,27 +11846,51 @@ fn xhci_wait_control_transfer_completion(
     slot: u8,
     endpoint_id: u8,
     plan: XhciControlTransferPlan,
+    progress: Option<XhciControlProgress>,
 ) -> Option<usize> {
     let mut transferred = if plan.data_len == 0 { Some(0) } else { None };
+    xhci_publish_control_progress(progress, progress.map_or(0, |progress| progress.wait_begin));
     for _ in 0..USB_CONTROL_TRANSFER_SPINS {
         while let Some(event) = xhci_next_event(state, descriptor) {
             if !xhci_ack_event_dequeue(state, descriptor) {
+                xhci_publish_control_progress(
+                    progress,
+                    progress.map_or(0, |progress| progress.failed),
+                );
                 return None;
             }
             match xhci_classify_control_transfer_event(plan, slot, endpoint_id, event) {
                 XhciControlTransferEvent::Complete => {
+                    xhci_publish_control_progress(
+                        progress,
+                        progress.map_or(0, |progress| progress.status_event),
+                    );
                     return Some(transferred.unwrap_or(plan.data_len));
                 }
                 XhciControlTransferEvent::DataStage { transferred: bytes } => {
+                    xhci_publish_control_progress(
+                        progress,
+                        progress.map_or(0, |progress| progress.data_event),
+                    );
                     transferred = Some(bytes);
                 }
-                XhciControlTransferEvent::Fail => return None,
+                XhciControlTransferEvent::Fail => {
+                    xhci_publish_control_progress(
+                        progress,
+                        progress.map_or(0, |progress| progress.failed),
+                    );
+                    return None;
+                }
                 XhciControlTransferEvent::Ignore => {
                     if xhci_trb_type(event.control) == XHCI_TRB_TYPE_PORT_STATUS_CHANGE_EVENT {
                         xhci_preserve_port_status_change_event(state, event);
                     } else if xhci_keyboard_transfer_event_matches(state, event)
                         && !xhci_preserve_keyboard_transfer_event(state, event)
                     {
+                        xhci_publish_control_progress(
+                            progress,
+                            progress.map_or(0, |progress| progress.failed),
+                        );
                         return None;
                     }
                 }
@@ -11413,6 +11898,16 @@ fn xhci_wait_control_transfer_completion(
         }
         core::hint::spin_loop();
     }
+    xhci_publish_control_progress(
+        progress,
+        progress.map_or(0, |progress| {
+            if transferred.is_some() {
+                progress.status_timeout
+            } else {
+                progress.transfer_timeout
+            }
+        }),
+    );
     None
 }
 
@@ -12087,6 +12582,28 @@ fn xhci_control_transfer(
     data_len: usize,
     data_in: bool,
 ) -> Option<usize> {
+    xhci_control_transfer_with_progress(
+        state,
+        descriptor,
+        device,
+        setup,
+        data_offset,
+        data_len,
+        data_in,
+        None,
+    )
+}
+
+fn xhci_control_transfer_with_progress(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    setup: [u8; 8],
+    data_offset: usize,
+    data_len: usize,
+    data_in: bool,
+    progress: Option<XhciControlProgress>,
+) -> Option<usize> {
     let Some(dma_range) = runtime_resource_range(
         descriptor,
         DRIVER_RUNTIME_RESOURCE_KIND_DMA,
@@ -12205,8 +12722,13 @@ fn xhci_control_transfer(
     }
     dma_store_barrier();
     if !xhci_ring_doorbell(state, device.slot, 1) {
+        xhci_publish_control_progress(progress, progress.map_or(0, |progress| progress.failed));
         return None;
     }
+    xhci_publish_control_progress(
+        progress,
+        progress.map_or(0, |progress| progress.doorbell_done),
+    );
     let transferred = xhci_wait_control_transfer_completion(
         state,
         descriptor,
@@ -12218,6 +12740,7 @@ fn xhci_control_transfer(
             status_trb,
             data_len,
         },
+        progress,
     );
     if transferred.is_some() && data_in {
         dma_invalidate_range(data_vaddr, data_len);
@@ -12225,7 +12748,9 @@ fn xhci_control_transfer(
     transferred
 }
 
-fn usb_get_descriptor(
+fn usb_get_descriptor_with_progress(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     device: &mut UsbEnumerationDevice,
@@ -12233,6 +12758,8 @@ fn usb_get_descriptor(
     index: u8,
     offset: usize,
     len: usize,
+    begin_phase: u32,
+    progress: XhciControlProgress,
 ) -> Option<usize> {
     let Some(dma_range) = runtime_resource_range(
         descriptor,
@@ -12241,6 +12768,7 @@ fn usb_get_descriptor(
     ) else {
         return None;
     };
+    publish_runtime_progress(sequence, begin_phase, aux0);
     zero_dma_range(dma_range.vaddr as usize + offset, len);
     let setup = [
         0x80,
@@ -12252,10 +12780,73 @@ fn usb_get_descriptor(
         (len & 0xff) as u8,
         (len >> 8) as u8,
     ];
-    xhci_control_transfer(state, descriptor, device, setup, offset, len, true)
+    xhci_control_transfer_with_progress(
+        state,
+        descriptor,
+        device,
+        setup,
+        offset,
+        len,
+        true,
+        Some(progress),
+    )
+}
+
+fn usb_get_device_descriptor_with_progress(
+    sequence: u32,
+    aux0: u32,
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    offset: usize,
+    len: usize,
+    begin_phase: u32,
+    progress: XhciControlProgress,
+) -> Option<usize> {
+    usb_get_descriptor_with_progress(
+        sequence,
+        aux0,
+        state,
+        descriptor,
+        device,
+        USB_DESCRIPTOR_DEVICE,
+        0,
+        offset,
+        len,
+        begin_phase,
+        progress,
+    )
+}
+
+fn usb_get_config_descriptor_with_progress(
+    sequence: u32,
+    aux0: u32,
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    offset: usize,
+    len: usize,
+    begin_phase: u32,
+    progress: XhciControlProgress,
+) -> Option<usize> {
+    usb_get_descriptor_with_progress(
+        sequence,
+        aux0,
+        state,
+        descriptor,
+        device,
+        USB_DESCRIPTOR_CONFIGURATION,
+        0,
+        offset,
+        len,
+        begin_phase,
+        progress,
+    )
 }
 
 fn usb_prime_full_speed_device_descriptor(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     device: &mut UsbEnumerationDevice,
@@ -12263,14 +12854,27 @@ fn usb_prime_full_speed_device_descriptor(
     if device.speed != XHCI_SPEED_FULL {
         return true;
     }
-    let transferred = usb_get_descriptor(
+    let transferred = usb_get_device_descriptor_with_progress(
+        sequence,
+        aux0,
         state,
         descriptor,
         device,
-        USB_DESCRIPTOR_DEVICE,
-        0,
         XHCI_DMA_CONTROL_BUFFER_OFFSET,
         USB_FULL_SPEED_DESCRIPTOR_PRIME_LEN,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_BEGIN,
+        XhciControlProgress {
+            sequence,
+            aux0,
+            doorbell_done: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DOORBELL_DONE,
+            wait_begin: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_WAIT_BEGIN,
+            data_event: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_DATA_EVENT,
+            status_event: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT,
+            failed: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_FAILED,
+            transfer_timeout:
+                DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_TIMEOUT,
+            status_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_TIMEOUT,
+        },
     );
     match transferred {
         Some(len) if len >= USB_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN => {}
@@ -12281,21 +12885,36 @@ fn usb_prime_full_speed_device_descriptor(
 }
 
 fn usb_read_device_descriptor(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     device: &mut UsbEnumerationDevice,
 ) -> Option<usize> {
-    let _ = usb_prime_full_speed_device_descriptor(state, descriptor, device);
+    let _ = usb_prime_full_speed_device_descriptor(sequence, aux0, state, descriptor, device);
     let mut attempts = 0usize;
     while attempts < USB_DEVICE_DESCRIPTOR_RETRY_ATTEMPTS {
-        if let Some(transferred) = usb_get_descriptor(
+        if let Some(transferred) = usb_get_device_descriptor_with_progress(
+            sequence,
+            aux0,
             state,
             descriptor,
             device,
-            USB_DESCRIPTOR_DEVICE,
-            0,
             XHCI_DMA_CONTROL_BUFFER_OFFSET,
             USB_DEVICE_DESCRIPTOR_BYTES,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN,
+            XhciControlProgress {
+                sequence,
+                aux0,
+                doorbell_done: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DOORBELL_DONE,
+                wait_begin: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_WAIT_BEGIN,
+                data_event: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_DATA_EVENT,
+                status_event: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT,
+                failed: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_FAILED,
+                transfer_timeout:
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_TIMEOUT,
+                status_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT,
+            },
         ) {
             return Some(transferred);
         }
@@ -12654,6 +13273,8 @@ fn cyw43_spin_wait(spins: usize) {
 }
 
 fn usb_read_configuration(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     device: &mut UsbEnumerationDevice,
@@ -12663,7 +13284,7 @@ fn usb_read_configuration(
         if attempt != 0 {
             usb_spin_wait(USB_ROOT_PORT_RESET_SHORT_RETRY_SPINS);
         }
-        if !usb_read_configuration_header(state, descriptor, device, dma_range) {
+        if !usb_read_configuration_header(sequence, aux0, state, descriptor, device, dma_range) {
             xhci_drain_events_preserving_port_changes(state, descriptor);
             continue;
         }
@@ -12673,14 +13294,29 @@ fn usb_read_configuration(
         let config_len = total_len
             .min(USB_CONFIG_BUFFER_BYTES)
             .max(USB_CONFIGURATION_DESCRIPTOR_HEADER_BYTES);
-        let Some(transferred) = usb_get_descriptor(
+        let Some(transferred) = usb_get_config_descriptor_with_progress(
+            sequence,
+            aux0,
             state,
             descriptor,
             device,
-            USB_DESCRIPTOR_CONFIGURATION,
-            0,
             XHCI_DMA_CONFIG_BUFFER_OFFSET,
             config_len,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_BEGIN,
+            XhciControlProgress {
+                sequence,
+                aux0,
+                doorbell_done:
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DOORBELL_DONE,
+                wait_begin: DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_WAIT_BEGIN,
+                data_event: DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_DATA_EVENT,
+                status_event: DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT,
+                failed: DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_FAILED,
+                transfer_timeout:
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_TIMEOUT,
+                status_timeout:
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT,
+            },
         ) else {
             xhci_drain_events_preserving_port_changes(state, descriptor);
             continue;
@@ -12696,19 +13332,35 @@ fn usb_read_configuration(
 }
 
 fn usb_read_configuration_header(
+    sequence: u32,
+    aux0: u32,
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     device: &mut UsbEnumerationDevice,
     dma_range: DriverRuntimeResourceRangeDescriptor,
 ) -> bool {
-    let Some(transferred) = usb_get_descriptor(
+    let Some(transferred) = usb_get_config_descriptor_with_progress(
+        sequence,
+        aux0,
         state,
         descriptor,
         device,
-        USB_DESCRIPTOR_CONFIGURATION,
-        0,
         XHCI_DMA_CONFIG_BUFFER_OFFSET,
         USB_CONFIGURATION_DESCRIPTOR_HEADER_BYTES,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_BEGIN,
+        XhciControlProgress {
+            sequence,
+            aux0,
+            doorbell_done: DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DOORBELL_DONE,
+            wait_begin: DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_WAIT_BEGIN,
+            data_event: DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_DATA_EVENT,
+            status_event: DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT,
+            failed: DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_FAILED,
+            transfer_timeout:
+                DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_TIMEOUT,
+            status_timeout:
+                DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_TIMEOUT,
+        },
     ) else {
         return false;
     };
@@ -13123,6 +13775,11 @@ fn xhci_address_topology_device(
                 sequence, aux0, state, descriptor, dma_range, &device, packet,
             ) {
                 state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED;
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED,
+                    aux0,
+                );
                 usb_spin_wait(USB_ADDRESS_DEVICE_SETTLE_SPINS);
                 *next_device_index = (*next_device_index).saturating_add(1);
                 return Some(device);
@@ -13427,13 +14084,13 @@ fn usb_probe_device_for_keyboard(
     next_device_index: &mut usize,
     depth_remaining: u8,
 ) -> bool {
-    if usb_read_device_descriptor(state, descriptor, &mut device).is_none() {
+    if usb_read_device_descriptor(sequence, aux0, state, descriptor, &mut device).is_none() {
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED;
         return false;
     }
     state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR;
     let Some((config_len, config_value)) =
-        usb_read_configuration(state, descriptor, &mut device, dma_range)
+        usb_read_configuration(sequence, aux0, state, descriptor, &mut device, dma_range)
     else {
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED;
         return false;
@@ -13442,19 +14099,97 @@ fn usb_probe_device_for_keyboard(
     state.keyboard_endpoint_id = 0;
     state.keyboard_endpoint_address = 0;
     state.keyboard_attach_rank = USB_KEYBOARD_ATTACH_RANK_NONE;
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN,
+        aux0,
+    );
     if usb_parse_keyboard_endpoint(state, config_vaddr, config_len) {
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND,
+            aux0,
+        );
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN;
         state.keyboard_slot = device.slot;
         state.keyboard_port = device.root_port;
         state.keyboard_ep0_ring_offset = device.ep0_ring_offset;
         usb_reset_keyboard_interrupt_queue(state);
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN,
+            aux0,
+        );
         let endpoint_ready =
             xhci_configure_keyboard_endpoint(state, descriptor, dma_range, &device);
-        let configured =
-            endpoint_ready && usb_set_configuration(state, descriptor, &mut device, config_value);
-        let protocol_ready =
-            configured && usb_hid_attach_control_ready(state, descriptor, &mut device);
-        let ready = configured && endpoint_ready && protocol_ready;
+        publish_runtime_progress(
+            sequence,
+            if endpoint_ready {
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_DONE
+            } else {
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_FAILED
+            },
+            aux0,
+        );
+        let configured = if endpoint_ready {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN,
+                aux0,
+            );
+            let configured = usb_set_configuration(state, descriptor, &mut device, config_value);
+            publish_runtime_progress(
+                sequence,
+                if configured {
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE
+                } else {
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED
+                },
+                aux0,
+            );
+            configured
+        } else {
+            false
+        };
+        let protocol_ready = if configured {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_BEGIN,
+                aux0,
+            );
+            let protocol_ready = usb_hid_attach_control_ready(state, descriptor, &mut device);
+            publish_runtime_progress(
+                sequence,
+                if protocol_ready {
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_DONE
+                } else {
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED
+                },
+                aux0,
+            );
+            protocol_ready
+        } else {
+            false
+        };
+        let mut interrupt_ready = false;
+        if configured && endpoint_ready && protocol_ready {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN,
+                aux0,
+            );
+            interrupt_ready = xhci_arm_keyboard_interrupt_queue(state, descriptor);
+            publish_runtime_progress(
+                sequence,
+                if interrupt_ready {
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY
+                } else {
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED
+                },
+                aux0,
+            );
+        }
+        let ready = configured && endpoint_ready && protocol_ready && interrupt_ready;
         state.ep0_enqueue = device.ep0_enqueue;
         state.ep0_cycle = device.ep0_cycle;
         if !ready {
@@ -13462,6 +14197,11 @@ fn usb_probe_device_for_keyboard(
         }
         return ready;
     }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING,
+        aux0,
+    );
     if depth_remaining == 0 {
         return false;
     }
@@ -16734,6 +17474,7 @@ mod tests {
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.firmware_released = true;
             state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(1);
+            state.control_startup_status_drained = true;
             queue_cyw43_control_reply(state, cmd, id, CYW43_CDC_STATUS_SUCCESS, &[]);
         });
         stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
@@ -16761,6 +17502,62 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_control_exchange_hintless_firstread_matches_cdc_reply() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        let cmd = 0x107u32;
+        let id = 1u16;
+        let request = [0u8; CYW43_CDC_HEADER_BYTES];
+        let response = *b"ok";
+        stage_bytes(usize::from(payload_offset), &request);
+        let frame_len = CYW43_SDPCM_HEADER_BYTES + CYW43_CDC_HEADER_BYTES + response.len();
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_CONTROL,
+            6,
+            false,
+        );
+        let cdc_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES;
+        stage_u32(cdc_offset, cmd);
+        stage_u32(cdc_offset + 4, response.len() as u32);
+        stage_u16(cdc_offset + 10, id);
+        stage_u32(cdc_offset + 12, CYW43_CDC_STATUS_SUCCESS);
+        stage_bytes(cdc_offset + CYW43_CDC_HEADER_BYTES, &response);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(1);
+            state.control_startup_status_drained = true;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: 0,
+            target_addr: 0,
+            payload_offset,
+            payload_len: request.len() as u16,
+            total_len: request.len() as u32,
+            arg0: cmd,
+            arg1: u32::from(id),
+            reserved: 0,
+        });
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(81)),
+            DriverTaskCompletionRecord::frame_ready_with_descriptor(
+                81,
+                DriverFrameDescriptor {
+                    offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_CDC_HEADER_BYTES) as u32,
+                    len: response.len() as u16,
+                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 6),
+                }
+            )
+        );
+    }
+
+    #[test]
     fn cyw43_control_exchange_faults_nonzero_cdc_status() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -16773,6 +17570,7 @@ mod tests {
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.firmware_released = true;
             state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(1);
+            state.control_startup_status_drained = true;
             queue_cyw43_control_reply(state, cmd, id, 0xffff_fffe, &[]);
         });
         stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
@@ -16819,10 +17617,27 @@ mod tests {
                 3
             )
         );
+        assert_eq!(
+            cyw43_control_exchange_timeout_fault_result(Cyw43RxIdleReason::FirstreadEmpty, 0),
+            cyw43_control_exchange_timeout_result(
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_EMPTY,
+                0
+            )
+        );
+        assert_eq!(
+            cyw43_control_exchange_timeout_fault_result(
+                Cyw43RxIdleReason::FirstreadInvalidSdpcm(0x3412),
+                0
+            ),
+            cyw43_control_exchange_timeout_result(
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_INVALID_SDPCM,
+                0x3412
+            )
+        );
     }
 
     #[test]
-    fn cyw43_control_exchange_timeout_reports_no_rframe_count() {
+    fn cyw43_control_exchange_timeout_reports_hintless_firstread_empty() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -16834,6 +17649,7 @@ mod tests {
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.firmware_released = true;
             state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(1);
+            state.control_startup_status_drained = true;
         });
         stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
@@ -16852,7 +17668,10 @@ mod tests {
             DriverTaskCompletionRecord::fault_with_result(
                 80,
                 FAULT_CYW43_CONTROL_EXCHANGE,
-                CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NO_RFRAME
+                cyw43_control_exchange_timeout_result(
+                    CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_EMPTY,
+                    0
+                )
             )
         );
     }
@@ -17556,6 +18375,25 @@ mod tests {
         assert_eq!(FAULT_CYW43_POST_RELEASE_HT, 0x532a);
         assert_eq!(FAULT_CYW43_POST_RELEASE_F2_READY, 0x532b);
         assert_eq!(FAULT_CYW43_POST_RELEASE_CORECONTROL, 0x532c);
+        assert_eq!(FAULT_CYW43_POST_RELEASE_MAILBOX_READY, 0x532d);
+        assert_eq!(FAULT_CYW43_POST_RELEASE_PROTOCOL_VERSION, 0x532e);
+        assert_eq!(CYW43_POST_RELEASE_MAILBOX_POLLS, 1_000);
+        assert_eq!(cyw43_mailbox_version_payload(), 0x0004_0000);
+        assert!(cyw43_firmware_mailbox_ready(
+            HMB_DATA_FWREADY | cyw43_mailbox_version_payload()
+        ));
+        assert!(cyw43_firmware_mailbox_ready(
+            HMB_DATA_DEVREADY | cyw43_mailbox_version_payload()
+        ));
+        assert!(cyw43_firmware_mailbox_ready(
+            HMB_DATA_DEVREADY | HMB_DATA_FWREADY | cyw43_mailbox_version_payload()
+        ));
+        assert!(!cyw43_firmware_mailbox_ready(
+            cyw43_mailbox_version_payload()
+        ));
+        assert!(!cyw43_firmware_mailbox_ready(
+            HMB_DATA_FWREADY | (5 << HMB_DATA_VERSION_SHIFT)
+        ));
         assert_eq!(
             cyw43_require_post_release_ht_clock().unwrap() & SBSDIO_HT_AVAIL,
             SBSDIO_HT_AVAIL
@@ -17563,6 +18401,12 @@ mod tests {
         assert_eq!(
             cyw43_enable_post_release_function2().unwrap() & SDIO_FUNC_READY_2,
             SDIO_FUNC_READY_2
+        );
+        let mut state = Cyw43RuntimeState::new();
+        assert_eq!(
+            cyw43_wait_for_firmware_mailbox_ready(&mut state).unwrap()
+                & (HMB_DATA_DEVREADY | HMB_DATA_FWREADY | HMB_DATA_VERSION_MASK),
+            HMB_DATA_DEVREADY | HMB_DATA_FWREADY | cyw43_mailbox_version_payload()
         );
     }
 
@@ -18667,6 +19511,8 @@ mod tests {
 
     #[test]
     fn cyw43_release_requires_nvram_tail_after_complete_streams() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
         state.transport_ready = true;
         state.firmware_uploaded = true;
@@ -18675,6 +19521,14 @@ mod tests {
 
         state.nvram_tail_uploaded = true;
         assert!(cyw43_release_firmware(&mut state, 0, 1));
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 1);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_CYW43_COMMAND_AUX);
     }
 
     #[test]
@@ -19199,6 +20053,39 @@ mod tests {
         assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE, 191);
         assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN, 195);
         assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED, 197);
+        assert_eq!(DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED, 198);
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN,
+            218
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT,
+            225
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_BEGIN,
+            226
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_TIMEOUT,
+            233
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_BEGIN,
+            234
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_TIMEOUT,
+            241
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_BEGIN,
+            242
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_TIMEOUT,
+            249
+        );
         assert_eq!(
             XHCI_COMMAND_RING_BYTES,
             XHCI_COMMAND_RING_TRBS * XHCI_TRB_BYTES

@@ -786,26 +786,35 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 13 07:33 post-flash boot supersedes the June 13 07:06 release
-frontier.
-The selected Wi-Fi path completes descriptor replay for both `cyw43455` and
-`sdio-host`, SDIO engine init returns ready with detail `0x5500`,
-`cyw43-sdio-prereq` reports ready, CYW43 engine init returns ready, and the
-transport turn advances into firmware upload. The current frontier is the Gate 6
-post-firmware Function 2/HT clock gate: firmware recovery attempts advance
-through `CYW43_DRIVER_TASK_STREAM_PROGRESS stage=cyw43-firmware-chunk
-uploaded=609309 total_len=609309`, then `stage=cyw43-nvram-chunk
-uploaded=1744 total_len=1744`, publish `cyw43-nvram-tail` ready, and fail at
-`cyw43-firmware-release` with detail `0x532a`
-(`cyw43-post-release-ht-clock`). The normalizer reports
-`WIFI_BLOCKER=function2-ready` and `WIFI_EXACT=subcommand=probe-ht`.
-Association/security, DHCP, `nettest`, `netstats`, and remote-`cohsh` proof
-remain uncredited. Repeated `cyw43-firmware-recover` owner-replay cycles are
-progress when `resume_offset` or `STREAM_PROGRESS uploaded=` advances; root
-keeps the structured `CYW43_DRIVER_TASK_FIRMWARE_RECOVERY` and stream/fault
-records but suppresses redundant human-readable `begin` / `ready` wrappers for
-that recovery stage. The linked runtime now publishes CYW43-specific early and
-release markers:
+The June 13 13:07 post-flash boot supersedes the June 13 12:35, 10:11, 09:27,
+08:50, 08:16, 07:55, and 07:33 Wi-Fi frontiers as current truth. The 12:35
+transport-admission regression is no longer current: descriptor replay for
+`cyw43455` and `sdio-host`, SDIO engine init detail `0x5500`,
+`cyw43-sdio-prereq`, CYW43 engine init, firmware upload, NVRAM/tail, firmware
+release, and owner-state all recover to ready. The linked CYW43 control channel
+then proves multiple Linux-order replies: `bus:txglomalign=8` returns a
+20-byte reply, optional `ulp_sdioctrl` returns matched `BCME_UNSUPPORTED`,
+`bus:rxglom=1` returns a 15-byte reply, and `cur_etheraddr` returns a 20-byte
+reply. The active frontier remains Gate 7 because `cyw43-control-revinfo`
+returns a matched firmware CDC `BCME_BADARG` status (`0xfffffffe`) with the old
+zero-output-buffer frame (`op=11`, extended header, `payload_len=16`). The
+normalizer reports this as `WIFI_BLOCKER=control-plane-revinfo-badarg`,
+`WIFI_EXACT=cyw43-control-revinfo-badarg`, and
+`WIFI_PHASE=cyw43-control-revinfo`; association/security, DHCP, `nettest`,
+`netstats`, and remote-`cohsh` proof remain uncredited. Root now sends
+`BRCMF_C_GET_REVINFO` with the 68-byte zeroed response window proven by the
+May 18-19 known-good traces instead of a header-only request, and emits one
+bounded `CYW43_DRIVER_TASK_CONTROL_REQUEST stage=cyw43-control-revinfo`
+marker with `payload_len=84` and `response_len=68` before submit. The next boot
+should either show that request followed by `cyw43-control-revinfo ready` and
+continue to `mpc=0`, or emit a different request/reply proof for the 84-byte
+revinfo frame. Repeated
+`cyw43-firmware-recover` owner-replay cycles remain progress only when
+`resume_offset` or `STREAM_PROGRESS uploaded=` advances; root keeps the
+structured `CYW43_DRIVER_TASK_FIRMWARE_RECOVERY` and stream/fault records but
+suppresses redundant human-readable `begin` / `ready` wrappers for that recovery
+stage.
+The linked runtime now publishes CYW43-specific early and release markers:
 `cyw43-engine-init-branch`, `cyw43-state-reset-begin`,
 `cyw43-state-reset-done`, `cyw43-forbidden-sdio-mmio`,
 `cyw43-bus-link-check-begin`, `cyw43-shared-control-check-begin`,
@@ -813,8 +822,10 @@ release markers:
 `cyw43-release-begin`, `cyw43-release-reset-vector-begin`,
 `cyw43-release-armcr4-reset-begin`, `cyw43-release-upload-clock-begin`,
 `cyw43-release-post-config-begin`, `cyw43-release-ht-clock-begin`,
-`cyw43-release-f2-enable-begin`, `cyw43-release-int-mask-begin`, and
-`cyw43-release-corecontrol-begin`; after engine-init, transport details and
+`cyw43-release-f2-enable-begin`, `cyw43-release-int-mask-begin`,
+`cyw43-release-corecontrol-begin`, `cyw43-release-mailbox-version-begin`,
+`cyw43-release-firmware-ready-begin`, and
+`cyw43-release-firmware-ready-done`; after engine-init, transport details and
 command-fault records must preserve the exact CYW43/SDIO owner subedge instead
 of collapsing back to stale HAL power/reset, engine-init no-reply, NVRAM retry,
 or generic command-completion failures.
@@ -918,9 +929,10 @@ or generic command-completion failures.
   current linked-runtime proof surface. The as-built control path first sends
   `bus:txglomalign=8`, tolerates only a matched `BCME_UNSUPPORTED` reply for the
   optional `ulp_sdioctrl` query, sends `bus:rxglom=1`, reads `cur_etheraddr`,
-  issues `BRCMF_C_GET_REVINFO` (`cmd=98`), then keeps `mpc=0` established before
-  matched CDC exchanges for `WLC_UP`, `WLC_SET_INFRA`, WPA2 setup, PAE multicast
-  admission, and `WLC_SET_SSID`. Additional Linux probe telemetry such as
+  issues `BRCMF_C_GET_REVINFO` (`cmd=98`) with a 68-byte zeroed response window,
+  then keeps `mpc=0` established before matched CDC exchanges for `WLC_UP`,
+  `WLC_SET_INFRA`, WPA2 setup, PAE multicast admission, and `WLC_SET_SSID`.
+  Additional Linux probe telemetry such as
   firmware `ver`, `clmver`, `join_pref`, scan timing, and event-mask setup
   remains useful comparison evidence, but it is not accepted as proof unless the
   linked runtime observes the corresponding CDC reply. Do not send AP/P2P-only
@@ -1053,11 +1065,16 @@ or generic command-completion failures.
 - If the first control-plane write succeeds but neither `RFRAME` nor
   `I_HMB_FRAME_IND` becomes visible, the HAL must not spin indefinitely on the
   SDIO-core `int_status` word. It performs a sparse, bounded Linux-shaped
-  hintless Function 2 first-read probe, then reports
-  `cyw43-control-plane-hintless-firstread-no-irq` /
-  `control-plane-reply-idle-loop` if no reply arrives. That terminal proof keeps
-  the gate loop honest and preserves IRQ 158 as the only Wi-Fi interrupt source;
-  IRQ 27 remains the seL4 timer.
+  hintless Function 2 first-read probe from the linked CYW43 runtime, then
+  publishes `cyw43-control-rx-firstread-begin`, `cyw43-control-rx-firstread-done`
+  and one of `cyw43-control-rx-firstread-frame`,
+  `cyw43-control-rx-firstread-empty`,
+  `cyw43-control-rx-firstread-invalid`, or
+  `cyw43-control-rx-remainder-failed`. Timeout results preserve those exact
+  first-read outcomes as `cyw43-control-rx-firstread-*` blockers instead of
+  collapsing them back to `cyw43-control-rx-no-rframe`. That terminal proof
+  keeps the gate loop honest and preserves IRQ 158 as the only Wi-Fi interrupt
+  source; IRQ 27 remains the seL4 timer.
 - Control-plane replies are accepted only when both the CDC command and CDC id
   match the outstanding request. This prevents a stale echoed `clmload`, `ver`,
   or `clmver` response from satisfying a later ioctl with the same wrapped id.
@@ -1368,19 +1385,35 @@ active path is Cohesix-owned cold start:
   `keyboard-ready` plus first HID report/byte proof can clear USB acceptance.
   After `root-port-connected`, linked USB publishes bounded Address Device
   substages (`usb-root-port-reset-*`, `usb-address-enable-slot-*`,
-  `usb-address-contexts-published`, and `usb-address-command-*`) so prompt-side
-  diagnostics can keep the ten-gate frontier pinned to gate 5 or gate 6 without
+  `usb-address-contexts-published`, `usb-address-command-*`, and
+  `usb-device-addressed`) plus EP0 device-descriptor prime/full-read and
+  configuration-descriptor header/full-read substages
+  (`usb-device-descriptor-prime-*`, `usb-device-descriptor-*`,
+  `usb-config-descriptor-header-*`, and `usb-config-descriptor-full-*`) plus HID
+  endpoint parse, Configure Endpoint, SET_CONFIGURATION, HID control, and
+  interrupt-queue substages (`usb-hid-endpoint-parse-*`,
+  `usb-hid-configure-endpoint-*`, `usb-hid-set-configuration-*`,
+  `usb-hid-control-*`, and `usb-hid-interrupt-queue-*`) so prompt-side
+  diagnostics can keep the ten-gate frontier pinned to gate 5, gate 6, the
+  first gate-7 descriptor edge, or the gate-8 interrupt-queue edge without
   reopening PCIe/VL805 ownership or introducing a root-owned xHCI fallback.
+  Full-speed devices use the prime markers for the initial 64-byte descriptor
+  request before the final 18-byte device descriptor read; device,
+  configuration, HID endpoint, and interrupt-queue setup stay in the linked
+  runtime.
   Root preserves an in-flight linked-runtime USB enumeration request across
-  bounded no-reply slices only when the active identity still matches. Zero-frame
-  enumeration polls may reach the timeout-resume limit and clear the active latch
-  for a fresh poll, but payload-bearing turns do not get overwritten at that
-  limit; they remain active until a matching completion or explicit reset proof
-  releases the slot. Bounded keep-active resumes are admitted only when the
-  staged command identity still matches the active ring request; a different aux
-  word, frame descriptor, staged byte fingerprint, hot path, role, budget, or
+  bounded no-reply slices only when the active identity still matches. A valid
+  same-request/same-aux progress marker whose phase advances resets the
+  consecutive timeout-resume counter; unchanged markers still count toward the
+  existing timeout-resume limit and clear the active latch when that limit is
+  reached. Bounded keep-active resumes are admitted only when the staged command
+  identity still matches the active ring request; a different aux word, frame
+  descriptor, staged byte fingerprint, hot path, role, budget, or
   command flags is a different request and must not inherit the earlier request's
-  progress.
+  progress. Sequence-zero runtime-idle markers observed while a request-scoped
+  USB enumeration marker is cached are still emitted as raw timeout progress,
+  but they do not evict the request-scoped marker used by timeout accounting and
+  prompt diagnostics for the in-flight request.
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. `hw.local_seat.required=true` requires matching
   required `hw.devices[]` entries; missing manifest devices or HAL-owned
@@ -1463,12 +1496,15 @@ active path is Cohesix-owned cold start:
   completion flags: `IOC` is always set and `ISP` is set for IN endpoints so
   short keyboard reports generate transfer events. The endpoint doorbell write
   uses the xHCI DCI target (`3` for endpoint `0x81`), and HAL logs aligned
-  doorbells beyond doorbell `0` as `role=endpoint-doorbell`. Command waits must
-  preserve any non-command transfer event they drain while waiting for a later
-  command completion, then replay it to the matching endpoint poller; otherwise
-  the first HID report can be acknowledged in ERDP and lost before Gate 8 sees
-  it. CPU-side HID/control descriptor reads must invalidate the DMA buffer after
-  the transfer event before decoding device-written bytes.
+  doorbells beyond doorbell `0` as `role=endpoint-doorbell`. Linked runtime
+  keyboard-ready now requires at least one interrupt-IN TRB to be queued and the
+  endpoint doorbell attempt to be published, so Gate 8 cannot pass on descriptor
+  parsing alone. Command waits must preserve any non-command transfer event they
+  drain while waiting for a later command completion, then replay it to the
+  matching endpoint poller; otherwise the first HID report can be acknowledged
+  in ERDP and lost before Gate 8 sees it. CPU-side HID/control descriptor reads
+  must invalidate the DMA buffer after the transfer event before decoding
+  device-written bytes.
 - For keyboards behind a USB hub, the local-seat runtime must retain the hub
   device slot for as long as the HID keyboard is attached. Dropping the hub
   `UsbDevice` disables that xHCI slot and can silently orphan the interrupt-IN
@@ -1876,7 +1912,11 @@ Required Cohesix shape:
   `proof_gate` evidence rather than silently inferring only the current blocker.
   Gate-4 and pre-gate-5 output includes the xHCI base-register, scratchpad, RUN,
   interrupter, and command-proof subphase so a timeout after command/event-ring
-  setup cannot be mistaken for a root-port or HID blocker.
+  setup cannot be mistaken for a root-port or HID blocker. Gate-6/7 output names
+  Address Device, full-speed descriptor-prime, device-descriptor data/status,
+  config-descriptor header/full-read data/status, and later HID blockers
+  separately so a published addressed-device state cannot be mistaken for HID or
+  keyboard-ready progress.
 - The isolated USB runtime keeps xHCI in the same poll-only shape as the proven
   U-Boot/local-seat path: interrupter moderation and management remain zero
   while command, transfer, and port-change completions are consumed by bounded
