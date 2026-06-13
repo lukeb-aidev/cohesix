@@ -4729,6 +4729,9 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERRUPT_IN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MALFORMED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_FAILED
@@ -4737,7 +4740,10 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_DONE
-            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED => 7,
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD => 7,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED => 8,
@@ -5154,6 +5160,15 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING => {
                 "hid-endpoint-not-found"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE => {
+                "hid-interface-not-found"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERRUPT_IN => {
+                "hid-interrupt-in-not-found"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MALFORMED => {
+                "hid-config-descriptor-malformed"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN => {
                 "hid-configure-endpoint-no-reply"
             }
@@ -5189,6 +5204,15 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED => {
                 "hid-interrupt-queue-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN => {
+                "hub-child-scan-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN => {
+                "hub-child-probe-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD => {
+                "hub-topology-no-keyboard"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED => {
                 "address-device-failed"
@@ -5566,6 +5590,15 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING => {
                 "inspect-config-descriptor-hid-interface"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE => {
+                "inspect-config-descriptor-interface-classes"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERRUPT_IN => {
+                "inspect-config-descriptor-endpoint-shape"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MALFORMED => {
+                "inspect-config-descriptor-lengths"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN => {
                 "poll-hid-configure-endpoint"
             }
@@ -5601,6 +5634,15 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED => {
                 "inspect-hid-interrupt-doorbell"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN => {
+                "probe-hub-child-ports"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN => {
+                "inspect-hub-child-address-or-descriptor"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD => {
+                "inspect-hub-child-config-descriptor"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED => {
                 "continue-enumeration-same-controller"
@@ -6298,7 +6340,15 @@ where
         if !Self::wifi_command_supports_driver_task_snapshot(command) {
             return false;
         }
-        let fault = crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status();
+        let host_eapol_required = self
+            .net_unavailable_detail
+            .as_ref()
+            .is_some_and(|cause| cause.as_str().contains("host-eapol-required"));
+        let fault = if host_eapol_required {
+            None
+        } else {
+            crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status()
+        };
         let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
         if source == "debug-handle-unavailable"
             && self.net_unavailable_detail.is_none()
@@ -6322,7 +6372,11 @@ where
             ));
             self.emit_console_line(detail.as_str());
         }
-        self.emit_wifi_driver_task_startup_blackbox(fault, source);
+        self.emit_wifi_driver_task_startup_blackbox(
+            fault,
+            host_eapol_required.then_some("host-eapol-required"),
+            source,
+        );
         if let Some(fault) = fault {
             let fault_line = format_message(format_args!(
                 "wifi: cyw43 fault stage={} op={} target=0x{:08x} payload_off={} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
@@ -6952,6 +7006,7 @@ where
             control_trace,
             fault,
             None,
+            None,
             "snapshot",
         );
     }
@@ -6960,6 +7015,7 @@ where
     fn emit_wifi_driver_task_startup_blackbox(
         &mut self,
         fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
+        explicit_exact_error: Option<&str>,
         source: &str,
     ) {
         self.emit_console_line(
@@ -6973,6 +7029,7 @@ where
             None,
             fault,
             sdio_runtime_status,
+            explicit_exact_error,
             source,
         );
     }
@@ -6985,9 +7042,17 @@ where
         control_trace: Option<WifiControlPlaneTrace>,
         fault: Option<crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus>,
         sdio_runtime_status: Option<crate::drivers::driver_task_net::SdioRuntimeReplayStatus>,
+        explicit_exact_error: Option<&str>,
         source: &str,
     ) {
-        let cyw43_fault_gate: Option<u8> = fault.map(Self::wifi_runtime_fault_gate);
+        let explicit_exact_error = explicit_exact_error.unwrap_or("");
+        let explicit_join_security =
+            Self::wifi_exact_error_is_join_security_blocker(explicit_exact_error);
+        let cyw43_fault_gate: Option<u8> = if explicit_join_security {
+            None
+        } else {
+            fault.map(Self::wifi_runtime_fault_gate)
+        };
         let sdio_replay_gate: Option<u8> =
             sdio_runtime_status.and_then(Self::wifi_sdio_runtime_replay_gate);
         let sdio_runtime_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
@@ -7000,10 +7065,14 @@ where
             .and_then(|progress| Self::wifi_sdio_runtime_progress_gate(progress.phase));
         let cyw43_progress_gate = cyw43_runtime_progress
             .and_then(|progress| Self::wifi_cyw43_runtime_progress_gate(progress.phase));
-        let driver_task_gate: Option<u8> = cyw43_fault_gate
-            .or(cyw43_progress_gate)
-            .or(sdio_replay_gate)
-            .or(sdio_progress_gate);
+        let driver_task_gate: Option<u8> = if explicit_join_security {
+            Some(8)
+        } else {
+            cyw43_fault_gate
+                .or(cyw43_progress_gate)
+                .or(sdio_replay_gate)
+                .or(sdio_progress_gate)
+        };
         let power_ready = snapshot.is_some_and(|snapshot| {
             matches!(snapshot.power_state, WifiPowerState::On)
                 && matches!(snapshot.reset_state, WifiResetState::Deasserted)
@@ -7049,7 +7118,9 @@ where
             .is_some_and(|snapshot| snapshot.io_ready.is_some_and(|value| (value & 0x04) != 0))
             || control_trace
                 .is_some_and(|trace| trace.cccr_io_ready.is_some_and(|value| (value & 0x04) != 0));
-        let exact_error = snapshot.map_or("", |snapshot| snapshot.control_plane_exact_error);
+        let exact_error = snapshot.map_or(explicit_exact_error, |snapshot| {
+            snapshot.control_plane_exact_error
+        });
         let channel_ready =
             exact_error.is_empty() || Self::wifi_exact_error_is_join_security_blocker(exact_error);
 
@@ -7078,7 +7149,9 @@ where
         } else {
             proof_gate
         };
-        let active_blocker = if let Some(fault) = fault {
+        let active_blocker = if explicit_join_security {
+            exact_error
+        } else if let Some(fault) = fault {
             fault.reason
         } else if let (Some(status), Some(_)) = (sdio_runtime_status, sdio_replay_gate) {
             Self::wifi_sdio_runtime_replay_blocker(status)
@@ -7089,7 +7162,9 @@ where
         } else {
             Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
         };
-        let next_action = if let Some(fault) = fault {
+        let next_action = if explicit_join_security {
+            "inspect-host-eapol-rx-path"
+        } else if let Some(fault) = fault {
             Self::wifi_runtime_fault_next_action(fault)
         } else if let (Some(status), Some(_)) = (sdio_runtime_status, sdio_replay_gate) {
             Self::wifi_sdio_runtime_replay_next_action(status)
@@ -7396,9 +7471,14 @@ where
                 self.emit_console_line(cmd53.as_str());
             };
         }
+        let direct_proof_gate = if explicit_join_security {
+            7
+        } else {
+            proof_gate
+        };
         let boundary = format_message(format_args!(
             "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain={} direct_proof_gate={} proof_gate={} frontier_gate={} failing_gate={} target_gate=10",
-            active_blocker, proof_gate, reported_proof_gate, reported_proof_gate, failing_gate,
+            active_blocker, direct_proof_gate, reported_proof_gate, reported_proof_gate, failing_gate,
         ));
         self.emit_console_line(boundary.as_str());
         let next = format_message(format_args!(
@@ -11993,6 +12073,42 @@ mod tests {
         );
         assert_eq!(
             TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE,
+            ),
+            "hid-interface-not-found"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE,
+            ),
+            "inspect-config-descriptor-interface-classes"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERRUPT_IN,
+            ),
+            "hid-interrupt-in-not-found"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERRUPT_IN,
+            ),
+            "inspect-config-descriptor-endpoint-shape"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN,
+            ),
+            "hub-child-scan-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN,
+            ),
+            "inspect-hub-child-address-or-descriptor"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN,
             ),
             "hid-configure-endpoint-no-reply"
@@ -15716,6 +15832,59 @@ mod tests {
         );
         assert!(
             rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=driver-task-replay-failure"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_diag_reports_host_eapol_required_as_live_frontier() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut cause = HeaplessString::<192>::new();
+        let _ = cause.push_str("host-eapol-required driver-task runtime init failed");
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network_unavailable_detail(Some(cause))
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        let mut transcript = Vec::new();
+        for _ in 0..128 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        }
+
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("cause=host-eapol-required driver-task runtime init failed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: gate 8 name=firmware-channel status=fail evidence=exact=host-eapol-required"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain=host-eapol-required direct_proof_gate=7"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: next_action=inspect-host-eapol-rx-path blocker=host-eapol-required proof_gate=7"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("wifi: cyw43 fault stage=cyw43-control-exchange"),
             "{rendered}"
         );
     }

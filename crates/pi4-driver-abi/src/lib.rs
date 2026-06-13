@@ -107,6 +107,34 @@ pub const DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY: u16 = 0x5408;
 pub const DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE: u16 = 1 << 0;
 /// CYW43 command flag: transmit control frames with the Linux SDPCM hw extension.
 pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER: u16 = 1 << 1;
+/// CYW43 command flag: permit a bounded Function 2 first-read on zero-RFRAME RX polls.
+pub const DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD: u16 = 1 << 2;
+/// CYW43 RX idle detail: no detailed RX result was reported.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NONE: u16 = 0;
+/// CYW43 RX idle detail: firmware/channel state is not ready for RX.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NOT_READY: u16 = 0x5701;
+/// CYW43 RX idle detail: Function 1 RFRAME byte-count read failed.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RFRAME_READ_FAILED: u16 = 0x5702;
+/// CYW43 RX idle detail: Function 1 RFRAME reported no pending frame.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NO_RFRAME: u16 = 0x5703;
+/// CYW43 RX idle detail: Function 1 RFRAME length was outside the RX buffer.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_INVALID_RFRAME_LEN: u16 = 0x5704;
+/// CYW43 RX idle detail: padded Function 2 read request would exceed the RX buffer.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RX_REQUEST_TOO_LARGE: u16 = 0x5705;
+/// CYW43 RX idle detail: Function 2 CMD53 read failed.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_F2_READ_FAILED: u16 = 0x5706;
+/// CYW43 RX idle detail: SDPCM decoded, but no frame matched the requested channel mask.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_SDPCM_DECODE_MISS: u16 = 0x5707;
+/// CYW43 RX idle detail: zero-RFRAME first-read CMD53 failed.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_FAILED: u16 = 0x5709;
+/// CYW43 RX idle detail: zero-RFRAME first-read returned an empty SDPCM prefix.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY: u16 = 0x570a;
+/// CYW43 RX idle detail: zero-RFRAME first-read returned a malformed SDPCM prefix.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_INVALID_SDPCM: u16 = 0x570b;
+/// CYW43 RX idle detail: zero-RFRAME first-read remainder CMD53 failed.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_FAILED: u16 = 0x570c;
+/// CYW43 RX idle detail: zero-RFRAME first-read SDPCM packet exceeded the bounded window.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_TOO_LARGE: u16 = 0x570d;
 /// CYW43 frame flag mask carrying the SDPCM channel on frame-ready completions.
 pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK: u16 = 0x000f;
 /// CYW43 frame flag value for SDPCM control-channel payloads.
@@ -595,6 +623,18 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN: u32 = 268;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY: u32 = 269;
 /// USB runtime could not arm the HID interrupt-IN transfer queue.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED: u32 = 270;
+/// USB runtime is traversing a hub after the root device had no direct keyboard endpoint.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN: u32 = 271;
+/// USB runtime is probing one hub child port for a keyboard-capable device.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN: u32 = 272;
+/// USB runtime completed hub traversal without finding a keyboard endpoint.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD: u32 = 273;
+/// USB runtime parsed a configuration with no HID keyboard-capable interface.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE: u32 = 274;
+/// USB runtime found a keyboard-capable interface without a usable interrupt-IN endpoint.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERRUPT_IN: u32 = 275;
+/// USB runtime stopped HID endpoint parsing at a malformed descriptor boundary.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MALFORMED: u32 = 276;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-owned command endpoint/shared-ring intake loop.
@@ -1077,6 +1117,9 @@ impl DriverRuntimeCyw43CommandDescriptor {
             }
             DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => {
                 self.flags & !DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER == 0
+            }
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL | DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
+                self.flags & !DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD == 0
             }
             _ => self.flags == 0,
         };
@@ -2109,6 +2152,8 @@ mod tests {
         descriptor = DriverRuntimeCyw43CommandDescriptor::empty();
         descriptor.op = DRIVER_RUNTIME_CYW43_OP_RX_POLL;
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD;
+        assert!(descriptor.valid());
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
         assert!(!descriptor.valid());
         descriptor.flags = 0;
@@ -2118,6 +2163,10 @@ mod tests {
         descriptor = DriverRuntimeCyw43CommandDescriptor::empty();
         descriptor.op = DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL;
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD;
+        assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER;
+        assert!(!descriptor.valid());
 
         descriptor = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,

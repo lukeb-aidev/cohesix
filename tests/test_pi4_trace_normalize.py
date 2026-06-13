@@ -5430,6 +5430,35 @@ def test_gate_summary_tracks_hid_endpoint_parse_progress() -> None:
     assert gates.usb_blocker == "hid-endpoint-parse-no-reply"
 
 
+def test_gate_summary_tracks_hid_endpoint_parse_miss_reasons() -> None:
+    cases = {
+        "usb-hid-endpoint-parse-no-interface": "hid-interface-not-found",
+        "usb-hid-endpoint-parse-no-interrupt-in": "hid-interrupt-in-not-found",
+        "usb-hid-endpoint-parse-malformed": "hid-config-descriptor-malformed",
+        "usb-hub-scan-begin": "hub-child-scan-no-reply",
+        "usb-hub-child-probe-begin": "hub-child-probe-no-reply",
+        "usb-hub-scan-no-keyboard": "hub-topology-no-keyboard",
+    }
+    for phase_name, expected_blocker in cases.items():
+        events = normalizer.parse_events(
+            [
+                "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0208 "
+                "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
+                "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+                "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
+                "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
+                "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
+                f"marker_phase=274 marker_phase_name={phase_name} "
+                "marker_aux0=0x55534245",
+            ]
+        )
+
+        gates = normalizer.summarize_gates(events)
+
+        assert gates.usb_gate == 7
+        assert gates.usb_blocker == expected_blocker
+
+
 def test_gate_summary_tracks_hid_configure_endpoint_progress() -> None:
     events = normalizer.parse_events(
         [
@@ -6125,6 +6154,72 @@ def test_gate_summary_preserves_host_eapol_required_over_deferred_eapol_start() 
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "host-eapol-required"
     assert gates.wifi_exact == "host-eapol-required"
+
+
+def test_gate_summary_tracks_structured_host_eapol_required_status() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=24576 starts=6 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 control_rx=0 "
+            "empty_polls=24576 last_flags=0x0000 last_len=0 "
+            "last_ethertype=0x0000 last_ethertype_valid=no "
+            "next_action=inspect-cyw43-data-rx-path",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "host-eapol-required"
+    assert gates.wifi_exact == "host-eapol-required"
+    assert gates.wifi_phase == "join-security"
+
+
+def test_gate_summary_refines_host_eapol_firstread_empty() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=24576 starts=6 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 control_rx=0 "
+            "empty_polls=24576 rx_firstread_attempts=6 rx_firstread_empty=6 "
+            "rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "last_rx_idle_detail=0x570a last_rx_idle_result=0x00000000 "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no next_action=inspect-ap-m1-or-cyw43-rx-latch",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-empty"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-empty"
+    assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_refines_host_eapol_firstread_invalid() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=24576 starts=6 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 control_rx=0 "
+            "empty_polls=24576 rx_firstread_attempts=1 rx_firstread_empty=0 "
+            "rx_firstread_invalid=1 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "last_rx_idle_detail=0x570b last_rx_idle_result=0x34120000 "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no next_action=inspect-cyw43-data-rx-firstread-prefix",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-invalid-sdpcm"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-invalid-sdpcm"
+    assert gates.wifi_phase == "runtime-rx"
 
 
 def test_gate_summary_preserves_host_eapol_after_ready_and_panic() -> None:

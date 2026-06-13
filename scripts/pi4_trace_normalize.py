@@ -165,6 +165,12 @@ USB_OUTCOME_BLOCKERS = {
     "hid-endpoint-not-ready",
     "hid-endpoint-parse-no-reply",
     "hid-endpoint-not-found",
+    "hid-interface-not-found",
+    "hid-interrupt-in-not-found",
+    "hid-config-descriptor-malformed",
+    "hub-child-scan-no-reply",
+    "hub-child-probe-no-reply",
+    "hub-topology-no-keyboard",
     "hid-configure-endpoint-no-reply",
     "hid-configure-endpoint-failed",
     "hid-set-configuration-no-reply",
@@ -1395,6 +1401,18 @@ def normalize_usb_blocker(value: str) -> str:
         return "hid-endpoint-parse-no-reply"
     if "hid-endpoint-not-found" in lower:
         return "hid-endpoint-not-found"
+    if "hid-interface-not-found" in lower:
+        return "hid-interface-not-found"
+    if "hid-interrupt-in-not-found" in lower:
+        return "hid-interrupt-in-not-found"
+    if "hid-config-descriptor-malformed" in lower:
+        return "hid-config-descriptor-malformed"
+    if "hub-child-scan-no-reply" in lower:
+        return "hub-child-scan-no-reply"
+    if "hub-child-probe-no-reply" in lower:
+        return "hub-child-probe-no-reply"
+    if "hub-topology-no-keyboard" in lower:
+        return "hub-topology-no-keyboard"
     if "hid-configure-endpoint-no-reply" in lower:
         return "hid-configure-endpoint-no-reply"
     if "hid-configure-endpoint-failed" in lower:
@@ -1582,6 +1600,38 @@ CYW43_CONTROL_EXCHANGE_TIMEOUT_REASONS = {
     13: "cyw43-control-rx-firstread-remainder-too-large",
 }
 
+CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS = {
+    0x5706: "cyw43-data-rx-f2-read-failed",
+    0x5707: "cyw43-data-rx-sdpcm-decode-miss",
+    0x5709: "cyw43-data-rx-firstread-failed",
+    0x570A: "cyw43-data-rx-firstread-empty",
+    0x570B: "cyw43-data-rx-firstread-invalid-sdpcm",
+    0x570C: "cyw43-data-rx-firstread-remainder-failed",
+    0x570D: "cyw43-data-rx-firstread-remainder-too-large",
+}
+CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES = frozenset(
+    CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS.values()
+)
+
+
+def cyw43_host_eapol_firstread_blocker(fields: dict[str, str]) -> str | None:
+    """Return the precise host-EAPOL RX first-read blocker, if present."""
+
+    detail = parse_hex_int(fields.get("last_rx_idle_detail"))
+    if detail in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS:
+        return CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS[detail]
+    if (parse_hex_int(fields.get("rx_firstread_invalid")) or 0) > 0:
+        return "cyw43-data-rx-firstread-invalid-sdpcm"
+    if (parse_hex_int(fields.get("rx_firstread_remainder_failed")) or 0) > 0:
+        return "cyw43-data-rx-firstread-remainder-failed"
+    if (parse_hex_int(fields.get("rx_firstread_failed")) or 0) > 0:
+        return "cyw43-data-rx-firstread-failed"
+    if (parse_hex_int(fields.get("rx_firstread_decode_miss")) or 0) > 0:
+        return "cyw43-data-rx-sdpcm-decode-miss"
+    if (parse_hex_int(fields.get("rx_firstread_empty")) or 0) > 0:
+        return "cyw43-data-rx-firstread-empty"
+    return None
+
 
 def cyw43_control_exchange_timeout_exact(result: int | None) -> str | None:
     """Return the precise CYW43 control timeout reason encoded by the runtime."""
@@ -1687,6 +1737,17 @@ def normalize_wifi_blocker(value: str) -> str:
         and "status=no-reply" in lower
     ):
         return "cyw43-engine-init-no-reply"
+    if (
+        "host-eapol-required" in lower
+        or "wifi-host-eapol-required" in lower
+        or "completion_rule=host-eapol-required" in lower
+        or ("cyw43-host-eapol" in lower and "status=required" in lower)
+    ):
+        return "host-eapol-required"
+    if "cyw43-host-eapol" in lower and (
+        "status=pending" in lower or " pending" in lower
+    ):
+        return "wifi-host-eapol-pending"
     if (
         stripped == "cyw43-wifi"
         or "pi4-wifi-driver-task-runtime-required" in lower
@@ -1973,8 +2034,13 @@ def normalize_wifi_blocker(value: str) -> str:
         "host-eapol-required" in lower
         or "wifi-host-eapol-required" in lower
         or "completion_rule=host-eapol-required" in lower
+        or ("cyw43-host-eapol" in lower and "status=required" in lower)
     ):
         return "host-eapol-required"
+    if "cyw43-host-eapol" in lower and (
+        "status=pending" in lower or " pending" in lower
+    ):
+        return "wifi-host-eapol-pending"
     if (
         "stage=runtime-rx" in lower
         and (
@@ -2393,6 +2459,13 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-rx-not-ready",
         "cyw43-control-rx-request-too-large",
         "cyw43-control-rx-sdpcm-decode-miss",
+        "cyw43-data-rx-f2-read-failed",
+        "cyw43-data-rx-firstread-empty",
+        "cyw43-data-rx-firstread-failed",
+        "cyw43-data-rx-firstread-invalid-sdpcm",
+        "cyw43-data-rx-firstread-remainder-failed",
+        "cyw43-data-rx-firstread-remainder-too-large",
+        "cyw43-data-rx-sdpcm-decode-miss",
         "cyw43-post-release-mailbox-ready",
         "cyw43-post-release-protocol-version",
         "cyw43-protocol-error-cur-etheraddr-len",
@@ -2441,7 +2514,7 @@ def wifi_firmware_stream_fault_blocker(event: TraceEvent) -> str | None:
         return None
     status = fields.get("status", "").lower()
     reason_exact = normalize_wifi_exact(fields.get("reason", ""))
-    if reason_exact in {"none", "cyw43-runtime-command-rejected"}:
+    if reason_exact in {"none", "unknown", "cyw43-runtime-command-rejected"}:
         detail = fields.get("detail") or fields.get("fault_detail") or fields.get("reason") or ""
     else:
         detail = fields.get("reason", "")
@@ -2771,7 +2844,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             next_gate = usb_driver_task_blocker_gate(next_blocker)
             if next_gate > 1:
                 startup_diag_blocker = next_blocker
-                if usb_driver_task_blocker_caps_gate(next_blocker):
+                if (
+                    startup_fail_gate is not None
+                    and startup_fail_blocker == next_blocker
+                ):
+                    gate = max(gate, max(0, startup_fail_gate - 1))
+                elif usb_driver_task_blocker_caps_gate(next_blocker):
                     gate = next_gate if gate <= 0 else min(gate, next_gate)
                 else:
                     gate = max(gate, next_gate)
@@ -3329,7 +3407,9 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     ):
         if startup_diag_blocker is not None:
             startup_gate = usb_driver_task_blocker_gate(startup_diag_blocker)
-            if usb_driver_task_blocker_caps_gate(startup_diag_blocker):
+            if startup_diag_blocker == startup_fail_blocker:
+                gate = max(gate, max(0, startup_fail_gate - 1))
+            elif usb_driver_task_blocker_caps_gate(startup_diag_blocker):
                 gate = startup_gate if gate <= 0 else min(gate, startup_gate)
             else:
                 gate = max(gate, startup_gate)
@@ -3432,6 +3512,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             event.domain == "driver"
             and normalize_wifi_blocker(event.raw) == "wifi-driver-task-runtime-unproved"
         )
+        or (
+            event.domain == "driver"
+            and (
+                "hot_path=cyw43-wifi" in event.raw.lower()
+                and "cyw43-host-eapol" in event.raw.lower()
+            )
+        )
+        or "cyw43_driver_task_host_eapol_status" in event.raw.lower()
     ]
     if not wifi_events:
         return 0, "missing"
@@ -3488,6 +3576,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         "control-plane-no-frame-indication-after-write",
         "control-plane-partial-hint-visibility",
         "control-plane-reply-idle-loop",
+        *CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES,
         "firmware-supplicant-unsupported",
         "wifi-host-eapol-pending",
         "host-eapol-required",
@@ -3576,11 +3665,26 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             value = fields.get(key)
             if value and value not in {"none", "n/a"}:
                 normalized_value = normalize_wifi_blocker(value)
-                if normalized_value != "none":
+                if normalized_value not in {"none", "unknown"}:
                     explicit_blocker = normalized_value
         raw_contract_blocker = normalize_wifi_blocker(raw)
         if raw_contract_blocker == "control-plane-legacy-gmode-stall":
             legacy_gmode_stall_seen = True
+        if "cyw43_driver_task_host_eapol_status" in raw:
+            status = fields.get("status", "").lower()
+            reason = normalize_wifi_blocker(fields.get("reason", ""))
+            firstread_blocker = cyw43_host_eapol_firstread_blocker(fields)
+            if status == "required" or reason == "host-eapol-required":
+                gate = max(gate, 7)
+                post_f2_progress_seen = True
+                explicit_blocker = firstread_blocker or "host-eapol-required"
+            elif status == "pending":
+                gate = max(gate, 7)
+                post_f2_progress_seen = True
+                explicit_blocker = "wifi-host-eapol-pending"
+            elif status == "secure":
+                gate = max(gate, 8)
+                post_f2_progress_seen = True
         if "[cyw43] control-plane step=join action=begin" in raw:
             join_begin_seen = True
             join_completion_seen = False
@@ -3597,7 +3701,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "wifi-driver-task-runtime-unproved",
         }:
             explicit_blocker = raw_contract_blocker
-        if raw_contract_blocker in precise_control_plane_blockers:
+        if (
+            raw_contract_blocker in precise_control_plane_blockers
+            and explicit_blocker not in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES
+        ):
             explicit_blocker = raw_contract_blocker
         if raw_contract_blocker == "runtime-rx-host-latch-spam":
             runtime_rx_host_latch_spam_count += 1
@@ -3754,6 +3861,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-reply-idle-loop",
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
+            *CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES,
             "firmware-supplicant-unsupported",
             "wifi-host-eapol-pending",
             "host-eapol-required",
@@ -4446,6 +4554,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "control-plane-reply-idle-loop",
             "control-plane-sideband-unreadable",
             "control-plane-startup-link-timeout",
+            *CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES,
             "firmware-supplicant-unsupported",
             "wifi-host-eapol-pending",
             "host-eapol-required",
@@ -4968,6 +5077,7 @@ def summarize_wifi_failure_detail(
             event.domain == "driver"
             and normalize_wifi_blocker(event.raw) == "wifi-driver-task-runtime-unproved"
         )
+        or "cyw43_driver_task_host_eapol_status" in event.raw.lower()
     ):
         raw = event.raw.lower()
         fields = event.fields
@@ -5004,6 +5114,9 @@ def summarize_wifi_failure_detail(
                 socram_core_ctrl_stage = event_stage
 
         candidate = normalize_wifi_blocker(raw)
+        firstread_blocker = cyw43_host_eapol_firstread_blocker(fields)
+        if wifi_blocker == firstread_blocker:
+            candidate = wifi_blocker
         firmware_stream_blocker = wifi_firmware_stream_fault_blocker(event)
         if firmware_stream_blocker is not None and wifi_blocker == firmware_stream_blocker:
             candidate = firmware_stream_blocker
@@ -5211,6 +5324,8 @@ def summarize_wifi_failure_detail(
                 exact = "cyw43-join-programming-host-latch-loop"
             if candidate == "runtime-rx-host-latch-spam":
                 exact = "cyw43-runtime-rx-host-latch-spam"
+            if candidate in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES:
+                exact = candidate
             if candidate in JOIN_SECURITY_EXACT_BY_BLOCKER:
                 exact = JOIN_SECURITY_EXACT_BY_BLOCKER[candidate]
             if candidate == "primary-bsscfg-wrapper-join-security-loop":
@@ -5230,6 +5345,7 @@ def summarize_wifi_failure_detail(
                 else
                 "runtime-rx"
                 if candidate == "runtime-rx-host-latch-spam"
+                or candidate in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES
                 else
                 socram_core_ctrl_stage
                 or fields.get("stage")
@@ -5816,6 +5932,12 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "hid-endpoint-not-ready",
         "hid-endpoint-parse-no-reply",
         "hid-endpoint-not-found",
+        "hid-interface-not-found",
+        "hid-interrupt-in-not-found",
+        "hid-config-descriptor-malformed",
+        "hub-child-scan-no-reply",
+        "hub-child-probe-no-reply",
+        "hub-topology-no-keyboard",
         "hid-configure-endpoint-no-reply",
         "hid-configure-endpoint-failed",
         "hid-set-configuration-no-reply",
@@ -5829,6 +5951,10 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "hid-interrupt-queue-failed",
     }:
         return 8
+    if blocker in {
+        "hid-first-report",
+    }:
+        return 9
     if blocker in {
         "usb-engine-init-hardware-no-reply",
         "usb-runtime-init-entry-no-reply",
@@ -5939,6 +6065,12 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-hid-endpoint-parse-begin": "hid-endpoint-parse-no-reply",
         "usb-hid-endpoint-parse-found": "hid-configure-endpoint-no-reply",
         "usb-hid-endpoint-parse-missing": "hid-endpoint-not-found",
+        "usb-hid-endpoint-parse-no-interface": "hid-interface-not-found",
+        "usb-hid-endpoint-parse-no-interrupt-in": "hid-interrupt-in-not-found",
+        "usb-hid-endpoint-parse-malformed": "hid-config-descriptor-malformed",
+        "usb-hub-scan-begin": "hub-child-scan-no-reply",
+        "usb-hub-child-probe-begin": "hub-child-probe-no-reply",
+        "usb-hub-scan-no-keyboard": "hub-topology-no-keyboard",
         "usb-hid-configure-endpoint-begin": "hid-configure-endpoint-no-reply",
         "usb-hid-configure-endpoint-done": "hid-set-configuration-no-reply",
         "usb-hid-configure-endpoint-failed": "hid-configure-endpoint-failed",
@@ -6327,6 +6459,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_gate = max(wifi_gate, 7)
         wifi_blocker = "control-plane-revinfo-badarg"
         wifi_exact, wifi_phase, wifi_blocker_line = revinfo_badarg
+    if wifi_exact in {"host-eapol-required", "wifi-host-eapol-pending"}:
+        wifi_gate = max(wifi_gate, 7)
+        wifi_blocker = wifi_exact
+        wifi_phase = "join-security"
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
@@ -6788,6 +6924,11 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
             "hub-attach-failed",
             "hub-topology-no-keyboard",
             "hid-endpoint-not-ready",
+            "hid-interface-not-found",
+            "hid-interrupt-in-not-found",
+            "hid-config-descriptor-malformed",
+            "hub-child-scan-no-reply",
+            "hub-child-probe-no-reply",
             "blocked-keyboard-enumeration",
         }:
             if latest_usb_stage == "usb-keyboard-first-report":

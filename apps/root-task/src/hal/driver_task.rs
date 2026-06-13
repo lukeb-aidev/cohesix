@@ -232,13 +232,19 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_FOUND,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MALFORMED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERRUPT_IN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN,
@@ -4131,6 +4137,15 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MISSING => {
             "usb-hid-endpoint-parse-missing"
         }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE => {
+            "usb-hid-endpoint-parse-no-interface"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERRUPT_IN => {
+            "usb-hid-endpoint-parse-no-interrupt-in"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MALFORMED => {
+            "usb-hid-endpoint-parse-malformed"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONFIGURE_ENDPOINT_BEGIN => {
             "usb-hid-configure-endpoint-begin"
         }
@@ -4161,6 +4176,9 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED => {
             "usb-hid-interrupt-queue-failed"
         }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN => "usb-hub-scan-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN => "usb-hub-child-probe-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD => "usb-hub-scan-no-keyboard",
         DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN => "usb-state-reset-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE => "usb-state-reset-done",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY => "usb-hw-entry",
@@ -9328,6 +9346,18 @@ mod tests {
                 DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_BEGIN
             ),
             "usb-hid-endpoint-parse-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE
+            ),
+            "usb-hid-endpoint-parse-no-interface"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN
+            ),
+            "usb-hub-child-probe-begin"
         );
         assert_eq!(
             driver_task_ring_progress_phase_label(
