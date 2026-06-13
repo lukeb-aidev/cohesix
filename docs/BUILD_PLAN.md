@@ -113,6 +113,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
 | [28c](#28c) | Host-Side AI Run Control: Delegated Agents, Durable Context, Attention Budgets | Pending |
 | [28d](#28d) | Hive Gateway MCP + A2A Interop (Existing Grammar Projection) | Pending |
+| [28e](#28e) | VM Cap-Bundle Authority + Structured Fault Lifecycle | Pending |
 | [29](#29) | Edge Local Status (Pi 4 Host Tool) | Pending |
 | [29b](#29b) | AI-Native Namespace Surfaces (Control-Plane Only) | Pending |
 | [30](#30) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
@@ -7614,7 +7615,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 
 **Why now (resilience):** After Pi 4 U-Boot boot + identity (26), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
 
-**As-built alignment note:** Current code has host-side sidecar buffering, telemetry ring snapshot helpers, and U-Boot-owned network/Wi-Fi persistence, but it does **not** have VM-local persistent spool/settings storage, `persistence.*` manifest IR, root-task block-device storage plumbing, or `/proc/spool/*` and `/queen/spool/*` providers. Milestone 27 introduces those surfaces; older docs or code comments that mention persistent spool as already available are drift unless backed by this milestone's acceptance evidence.
+**As-built alignment note:** Current code has host-side sidecar buffering, telemetry ring snapshot helpers, and U-Boot-owned network/Wi-Fi persistence, but it does **not** have VM-local persistent spool/settings storage, `persistence.*` manifest IR, linked storage-runtime block service, root-task persistent-store client plumbing, or `/proc/spool/*` and `/queen/spool/*` providers. Milestone 27 introduces those surfaces; older docs or code comments that mention persistent spool as already available are drift unless backed by this milestone's acceptance evidence.
 
 **Non-negotiable constraints**
 - No changes to console grammar, 9P semantics, or TCP behavior vs VM unless profile‑gated and documented.
@@ -7623,6 +7624,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 - Persistence is exposed only through NineDoor nodes (file‑shaped, bounded).
 - `/proc` remains read-only observability. Milestone 27 must not introduce write-only or append-only controls under `/proc`; mutating spool/settings controls live under explicit role-scoped control roots.
 - Storage selection is profile-gated and role-selected. The default Pi 4 hardware profile uses a manifest-declared raw SD/MMC block region on the boot microSD card, separate from the FAT boot partition and separate from U-Boot-owned `cohesix.env` policy storage.
+- Physical Pi 4 block-device service is linked-runtime only. Root-task may admit HAL resources, publish region descriptors, submit bounded block service turns, validate records, and expose NineDoor state, but it must not contain a root-owned SD/MMC storage driver or direct steady-state SD/MMC MMIO path.
 - The Pi 4 CYW43 SDIO Wi-Fi transport is not a persistence backend. Its `sdio-host` role remains a CYW43 bus role, not a generic SD-card block role.
 - USB mass storage is not the Milestone 27 default path. It may be added only as a later optional removable-media profile after USB local-seat/xHCI ownership is hardware-proved and cannot be a boot-critical dependency.
 
@@ -7646,23 +7648,23 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
   - storage device/region declaration for profiles that enable persistence
 - Storage roles are explicit:
   - `virtio-blk` for QEMU and CI parity.
-  - `pi4-sdmmc-raw` for the default Pi 4 hardware profile, backed by a fixed raw block region/partition on the boot microSD card.
+  - `pi4-sdmmc-raw` for the default Pi 4 hardware profile, backed by a fixed raw block region/partition on the boot microSD card and serviced by a linked storage runtime over the fixed driver-task ABI.
   - `usb-mass-storage` is optional/future and must be rejected unless that profile explicitly admits removable media.
-- Pi 4 validation rejects persistence if the profile attempts to bind storage to `cyw43455`, `sdio-host`, `usb-local-seat`, or any FAT-path/U-Boot policy file. Runtime persistence must not read or write `cohesix.env`.
+- Pi 4 validation rejects persistence if the profile attempts to bind storage to `cyw43455`, the CYW43 `sdio-host` bus role, `usb-local-seat`, root-task SD/MMC MMIO, or any FAT-path/U-Boot policy file. Runtime persistence must not read or write `cohesix.env`.
 - Persistence config is **separate** from existing `sidecars.*.adapters[].spool`; the names must not be reused or overloaded.
 - Generated docs snippets and manifest validation reject persistence when the selected boot profile does not declare a compatible storage region.
 
 #### B) Storage plumbing (hardware + QEMU parity)
-- Block-device abstraction in HAL (role-selected devices, not model-selected).
-- Root-task storage binding is authoritative for the Pi 4 / seL4 path; host `nine-door` may mirror the same semantics for tests, but does not define them.
-- QEMU reference uses `virtio-blk`; the Pi 4 default hardware path uses `pi4-sdmmc-raw`, a bounded SD/MMC block role for a manifest-declared raw region.
-- `pi4-sdmmc-raw` is a new storage role and must not reuse the CYW43 SDIO transport APIs, Wi-Fi SDIO runtime image, or Wi-Fi SDHCI proof markers as block-device proof.
-- The Pi 4 raw region must be outside the FAT boot assets used by firmware/U-Boot and outside any U-Boot environment/policy file. Root-task must access it through bounded block reads/writes only, not a FAT parser.
+- Block-device abstraction in HAL (role-selected devices, not model-selected) plus a fixed-layout block-service ABI for physical storage runtimes.
+- Root-task persistent-store semantics and NineDoor namespace are authoritative for the Pi 4 / seL4 path; physical block I/O is performed only by the linked storage runtime, and host `nine-door` may mirror the same semantics for tests but does not define them.
+- QEMU reference uses `virtio-blk`; the Pi 4 default hardware path uses `pi4-sdmmc-raw`, a bounded SD/MMC block role for a manifest-declared raw region and a linked `driver-storage` runtime image.
+- `pi4-sdmmc-raw` is a new storage role and must not reuse the CYW43 SDIO transport APIs, Wi-Fi SDIO runtime image, Wi-Fi SDHCI proof markers, or a root-owned SD/MMC compatibility driver as block-device proof.
+- The Pi 4 raw region must be outside the FAT boot assets used by firmware/U-Boot and outside any U-Boot environment/policy file. Root-task must access it only as a ring client through bounded block service turns, not a FAT parser or direct SD/MMC driver.
 - USB mass storage support, if later admitted, must be a separate optional profile with explicit removal/error semantics, lower priority than USB keyboard/local-seat service, and tests proving keyboard responsiveness under storage I/O.
 - No `std` dependencies, no POSIX VFS, no general filesystem.
 
 #### C) Telemetry spool store (append‑only ring log)
-- Backing: fixed‑size block region/partition.
+- Backing: fixed-size block region/partition serviced by the profile-selected block backend; on Pi 4 hardware that backend is the linked storage runtime, not root-task SD/MMC code.
 - Record format (versioned, bounded): `magic | version | kind | seq | ts | len | crc | payload`.
 - Crash rule: a record is valid only if header + checksum validate; partial tail records are ignored.
 - Bounded behavior:
@@ -7699,6 +7701,8 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 ### Commands
 - `cargo test -p root-task`
 - `cargo test -p nine-door`
+- `cargo test -p pi4-driver-abi`
+- `cargo test -p pi4-driver-runtime`
 - `cohsh --script scripts/cohsh/spool_roundtrip.coh`
 - `cohsh --script scripts/cohsh/settings_roundtrip.coh`
 
@@ -7707,15 +7711,15 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 - Store/forward works offline and resumes correctly after reboot.
 - Settings updates are atomic across power loss (A/B semantics).
 - Runtime settings do not duplicate or override the Pi 4 U-Boot-owned network/Wi-Fi persistence contract.
-- Pi 4 default persistence uses only the manifest-declared raw SD/MMC region. CYW43 SDIO, USB keyboard/local-seat, FAT boot files, and `cohesix.env` are rejected as storage backends.
+- Pi 4 default persistence uses only the manifest-declared raw SD/MMC region through the linked storage runtime. CYW43 SDIO, USB keyboard/local-seat, FAT boot files, `cohesix.env`, and root-owned SD/MMC/MMIO paths are rejected as storage backends.
 - No general filesystem or POSIX surface introduced.
 - `/proc` remains read-only; spool append/ack writes are accepted only through documented role-scoped control paths.
 - VM vs Pi 4 boot profile semantics remain byte‑stable unless explicitly profile‑gated.
 - Regression pack passes unchanged; new tests are additive.
 
 ### Compiler touchpoints
-- `coh-rtc` emits persistence limits (record size, max bytes, policy mode), settings bounds, and profile storage declarations into manifest IR; docs import the generated snippets.
-- Manifest validation rejects persistence when storage devices are missing or mis-declared for the selected boot profile, including attempts to bind Pi 4 runtime persistence to CYW43 SDIO, USB local-seat, FAT boot files, or U-Boot policy files.
+- `coh-rtc` emits persistence limits (record size, max bytes, policy mode), settings bounds, profile storage declarations, and physical storage-runtime descriptors into manifest IR; docs import the generated snippets.
+- Manifest validation rejects persistence when storage devices or required linked storage-runtime descriptors are missing or mis-declared for the selected boot profile, including attempts to bind Pi 4 runtime persistence to CYW43 SDIO, USB local-seat, FAT boot files, U-Boot policy files, or root-owned SD/MMC MMIO.
 - Persistence IR is distinct from existing sidecar spool IR; docs and generated clients must keep those surfaces disambiguated.
 
 ### Task Breakdown
@@ -7730,24 +7734,28 @@ Commands:
   - cargo test -p coh-rtc
 Checks:
   - Persistence and sidecar spool configs are distinct; invalid storage declarations are rejected.
-  - Pi 4 admits `pi4-sdmmc-raw` only when a bounded raw region is declared, and rejects CYW43 SDIO, USB local-seat, FAT, or `cohesix.env` storage bindings.
+  - Pi 4 admits `pi4-sdmmc-raw` only when a bounded raw region and linked storage-runtime descriptor are declared, and rejects CYW43 SDIO, USB local-seat, FAT, root-task SD/MMC, or `cohesix.env` storage bindings.
 Deliverables:
   - Compiler-enforced persistence admission with docs snippets refreshed.
 
 Title/ID: m27-block-hal
-Goal: Add bounded block-device plumbing for persistent regions.
-Inputs: apps/root-task/src/hal/, docs/ARCHITECTURE.md.
+Goal: Add bounded block-device plumbing for persistent regions without reintroducing root-owned physical storage drivers.
+Inputs: apps/root-task/src/hal/, crates/pi4-driver-abi, apps/pi4-driver-runtime, docs/ARCHITECTURE.md.
 Changes:
-  - apps/root-task/src/hal/block.rs — block traits + role-selected device binding.
+  - apps/root-task/src/hal/block.rs — block traits, role-selected storage admission, and root-side ring-client binding.
   - apps/root-task/src/storage/layout.rs — persistent region selection and bounds.
-  - apps/root-task/src/storage/pi4_sdmmc.rs — Pi 4 raw SD/MMC block-region binding, separate from CYW43 SDIO and U-Boot FAT policy storage.
+  - crates/pi4-driver-abi/src/** — fixed-layout block read/write/flush records and bounded completion evidence for physical storage runtimes.
+  - apps/pi4-driver-runtime/src/** — linked `driver-storage` service for Pi 4 raw SD/MMC block-region access, separate from CYW43 SDIO and U-Boot FAT policy storage.
 Commands:
   - cargo test -p root-task --test spool
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
 Checks:
-  - QEMU `virtio-blk` path and Pi 4 `pi4-sdmmc-raw` path resolve the same bounded block contract.
+  - QEMU `virtio-blk` path and Pi 4 linked `pi4-sdmmc-raw` path resolve the same bounded block contract.
+  - Physical Pi 4 tests fail closed if persistence attempts direct root-task SD/MMC MMIO or a missing linked storage-runtime descriptor.
   - USB mass storage is absent from the default Pi 4 persistence profile and cannot preempt USB keyboard/local-seat service.
 Deliverables:
-  - HAL storage plumbing for the persistent spool/settings layers.
+  - HAL storage admission plus linked-runtime block service plumbing for the persistent spool/settings layers.
 
 Title/ID: m27-root-spool-namespace
 Goal: Implement persistent spool semantics in root-task and expose read-only `/proc/spool/*` plus role-scoped spool controls via the in-VM NineDoor bridge.
@@ -8431,6 +8439,8 @@ This milestone closes those gaps using existing as-built mechanisms (`hive-gatew
 
 **As-built alignment note:** The current REST gateway requires a gateway request-auth token for mutating routes, but REST writes still execute through the gateway's configured role/ticket rather than a delegated per-request capability ticket. Host-ticket idempotency by `id + idempotency_key` and relay dedupe exist, but writer-epoch fencing and strict Queen intent dedupe are not yet implemented. Milestone 28b hardens those specific gaps; it must not present current request-auth, relay dedupe, or host-ticket idempotency as delegated REST identity or failover fencing.
 
+**Sequencing note:** Milestone 28b closes the host/gateway authority floor required by Milestones 28c, 28d, and 29b. Full VM cap-bundle authority and structured worker/driver fault lifecycle are split into Milestone 28e so the host actuation floor can ship and be audited without bundling every seL4 cap-bundle conversion into the same atomic gate.
+
 ---
 
 ## Goal
@@ -8443,8 +8453,7 @@ Strengthen authority and failover guarantees while preserving current transport 
 6. Establish the mandatory authority floor for Milestone 28c host-side AI actuation and Milestone 29b AI namespace projections.
 7. Harden host-ticket execution so target/arg validation and replay durability are strong enough for host side effects.
 8. Harden host bridge and debug surfaces that can otherwise bypass the authority story: GPU bridge authentication/frame bounds and root-console memory diagnostics.
-9. Complete the second phase of cap-backed ticket authority by moving worker and driver resource grants from metadata-only policy into generated seL4 cap bundles.
-10. Treat worker and driver seL4 faults as structured lifecycle events that revoke affected authority and produce bounded evidence.
+9. Leave full worker/driver cap-bundle authority and structured fault lifecycle as the explicit Milestone 28e follow-on, not a hidden prerequisite inside the host/gateway write-safety gate.
 
 ---
 
@@ -8572,37 +8581,19 @@ As-built leverage:
 
 ---
 
-### 8) Full Cap-Bundle Ticket Authority
-**Purpose:** Finish the authority conversion started in 26c by ensuring worker and driver tickets are backed by complete generated seL4 cap bundles, not only badged endpoint caps.
-
-Prerequisites:
-- Milestone 26c `m26c-cap-backed-worker-endpoints` completed, including generated role state for badged endpoint caps and negative metadata-only ticket tests.
-- Milestone 26d seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
-- Terminology remains strict: "cap-backed tickets" in this section means VM worker/driver tickets backed by seL4 caps. Host tickets, REST delegated tickets, and provider/PEFT tickets remain host authority records unless a VM projection explicitly maps them to generated seL4 caps.
+### 8) VM Cap-Bundle/Fault Follow-on Boundary
+**Purpose:** Keep 28b atomic around host/gateway authority while preserving the required VM authority hardening path.
 
 Implementation requirements:
-- Extend generated role state so each worker or driver ticket maps to an explicit cap bundle: endpoint caps, notification caps, fault endpoint caps, shared-ring frames, allowed data frames, declared MMIO frames, and DMA/shared-buffer frames where applicable.
-- Root-task must construct per-role child CSpaces/VSpaces from generated bundle records and must not hand out catch-all root authority, broad namespace authority, or undeclared frame caps.
-- Revocation must delete/revoke derived caps and make late invocations, stale shared-ring turns, and stale telemetry writes fail deterministically.
-- Ledger and evidence state must reconcile cap-bundle creation, transfer, revocation, and fault handling so recovery cannot claim a ticket is active when its cap bundle is gone, or vice versa.
-- The 26c endpoint-cap phase remains the compatibility floor; production profiles that claim cap-backed ticket authority require the full bundle.
+- Milestone 28b must emit generated profile gates and documentation that distinguish:
+  - host tickets, REST delegated tickets, and provider/PEFT tickets as host authority records;
+  - 26c endpoint-cap-backed VM worker tickets as the compatibility floor;
+  - full worker/driver seL4 cap bundles and structured fault lifecycle as Milestone 28e requirements.
+- Target profiles must fail validation if they claim full cap-bundle ticket authority or structured worker/driver fault containment before Milestone 28e evidence exists.
+- Milestones 28c, 28d, and 29b may depend on 28b host/gateway delegated identity, idempotency, fencing, audit/replay, and host-ticket durability, but must not cite full cap-bundle or fault-lifecycle closure until Milestone 28e is complete.
 
 As-built leverage:
-- Build on 26c badged endpoint tickets, existing driver-task CSpace/VSpace bootstrap, generated `root_task.driver_images`, HAL admission, worker lifecycle tests, and 28b audit/replay evidence.
-
----
-
-### 9) Structured Fault Endpoint Lifecycle
-**Purpose:** Make worker and driver faults first-class authority/lifecycle events instead of ad-hoc crashes or serial-log-only diagnostics.
-
-Implementation requirements:
-- Every production worker and driver TCB receives a generated badged fault endpoint whose badge identifies role, instance, lease epoch, and cap-bundle generation.
-- Root-task records bounded fault evidence, revokes the affected cap bundle, marks the lease terminal or quarantined, and refuses late telemetry, shared-ring turns, or receipts from the old epoch.
-- Restart is allowed only through a new ticket/lease/cap-bundle path; fault recovery must not silently reuse stale caps, stale DMA mappings, or stale shared rings.
-- Fault records are exposed through bounded read-only observability paths and included in evidence packs without changing console grammar or Secure9P framing.
-
-As-built leverage:
-- Build on the 28b full cap-bundle ledger, existing fault endpoint slots from driver-task substrate work, worker lifecycle state, and audit/replay evidence exports.
+- Reuse 26c endpoint-cap terminology, current worker/driver scheduling evidence, and 28b audit/replay profile gates without overclaiming full seL4 cap-bundle authority.
 
 ---
 
@@ -8616,6 +8607,7 @@ As-built leverage:
 - `cargo test -p root-task`
 - `cargo test -p tests --test host_ticket_agent`
 - `cargo test -p tests --test failover`
+- `cargo test -p coh-rtc`
 - `scripts/cohsh/run_regression_batch.sh`
 
 ---
@@ -8632,8 +8624,7 @@ As-built leverage:
 - Host ticket crash/restart tests prove no silent duplicate host side effects after an executor succeeds but status writeback fails.
 - `gpu-bridge-host` rejects placeholder auth in live mode and refuses oversized peer frames before allocation.
 - Root-console arbitrary memory diagnostics are unavailable in release/production profiles or constrained to HAL-classified diagnostic ranges.
-- Full cap-bundle production profiles prove that worker/driver tickets correspond to generated seL4 cap bundles, and stale metadata without live caps cannot exercise endpoint, notification, frame, shared-ring, MMIO, or DMA authority.
-- Worker and driver faults produce bounded, badged lifecycle evidence, revoke the affected cap bundle, and require a fresh lease/cap-bundle path before restart.
+- Generated profiles and docs do not claim full worker/driver cap-bundle authority or structured fault containment until Milestone 28e evidence exists.
 - Milestone 28c host-side AI control cannot be enabled in target profiles unless delegated REST identity, writer-epoch fencing, and audit/replay requirements are all active.
 - Regression pack passes unchanged in compatibility mode; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
 
@@ -8649,8 +8640,7 @@ As-built leverage:
   - host-ticket provider target/arg grammars and execution WAL policy,
   - live host-bridge auth and frame-length limits,
   - profile-gated debug diagnostic policy,
-  - full cap-bundle ticket authority profile, generated per-role cap inventories, revoke/recovery evidence, and production enablement gates,
-  - generated badged fault endpoint records, terminal/quarantine policy, and bounded fault evidence paths,
+  - deferred full-cap-bundle and structured-fault profile gates consumed by Milestone 28e,
   - host-AI enablement dependency gates consumed by Milestone 28c and Milestone 29b.
 - Generated snippets refreshed in:
   - `docs/INTERFACES.md`
@@ -8756,59 +8746,19 @@ Commands: cargo test -p root-task --test console_debug_gate && cargo test -p roo
 Checks: Production console cannot read arbitrary memory; bring-up diagnostics are range-bounded and audited.
 Deliverables: Debug memory access is no longer an unbounded operator surface.
 
-Title/ID: m28b-full-cap-bundle-ticket-authority
-Goal: Complete cap-backed tickets by making production worker and driver tickets correspond to generated seL4 cap bundles for endpoints, notifications, frames, shared rings, MMIO, DMA, and fault handling.
-Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/root-task/src/ninedoor.rs, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, tools/coh-rtc/src/**, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md
+Title/ID: m28b-deferred-vm-authority-gates
+Goal: Add explicit validation/docs gates that reserve full worker/driver cap-bundle and structured-fault claims for Milestone 28e.
+Inputs: tools/coh-rtc/src/**, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/BUILD_PLAN.md.
 Changes:
-  - tools/coh-rtc/src/** — add generated per-role cap-bundle records for endpoint, notification, fault, shared-ring, frame, MMIO, DMA/shared-buffer, and revoke policy fields.
-  - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — construct child CSpaces/VSpaces from generated cap-bundle records and retain parent/origin caps for deterministic revoke.
-  - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — reconcile ticket ledger state with live cap-bundle state and refuse metadata-only authority in production profiles.
-  - apps/pi4-driver-runtime/src/** + crates/pi4-driver-abi/src/** — bind driver-runtime command/completion, MMIO, DMA, shared-buffer, IRQ notification, and fault handling to generated cap-bundle descriptors.
-  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — consume full role cap bundles where enabled while preserving the 26c endpoint-cap compatibility floor.
-  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — document full cap-bundle semantics, production profile gates, revoke/recovery behavior, and negative tests.
+  - tools/coh-rtc/src/** — profile flags for 26c endpoint-cap compatibility, 28b host-authority readiness, and 28e full-cap-bundle/fault-lifecycle closure.
+  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/TEST_PLAN.md — document that full cap bundles and structured fault containment remain pending until 28e evidence exists.
 Commands:
-  - cargo test -p root-task --tests cap_bundle
-  - cargo test -p pi4-driver-abi
-  - cargo test -p pi4-driver-runtime
-  - cargo test -p worker-heart
-  - cargo test -p worker-gpu
-  - cargo test -p worker-lora
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
-  - scripts/check-generated.sh
-  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28b-qemu-cap-bundles
-  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m28b-pi4-cap-bundles
-Checks:
-  - Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
-  - Revoked tickets lose endpoint, notification, frame, shared-ring, MMIO, DMA/shared-buffer, and fault authority; stale invocations and stale ring turns fail deterministically.
-  - Recovery reconciles ticket ledger and CSpace/VSpace state so no active ticket exists without live caps and no live caps remain for terminal tickets.
-  - Compatibility profiles may retain 26c endpoint-cap-only tickets only when docs and generated profile state explicitly say full cap bundles are disabled.
-Deliverables:
-  - Production-grade cap-backed ticket authority with generated seL4 cap bundles and evidence strong enough to answer the seL4 criticism that tickets are only application metadata.
-
-Title/ID: m28b-structured-fault-lifecycle
-Goal: Convert worker and driver seL4 faults into structured lifecycle events that revoke stale authority and produce bounded evidence.
-Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/pi4-driver-runtime/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/coh/src/evidence.rs, tools/coh-rtc/src/**, docs/SECURITY.md, docs/INTERFACES.md, docs/TEST_PLAN.md
-Changes:
-  - tools/coh-rtc/src/** — emit generated badged fault endpoint records with role, instance, lease epoch, cap-bundle generation, terminal/quarantine policy, and bounded evidence paths.
-  - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — receive worker/driver fault IPC, record bounded evidence, revoke the affected cap bundle, and transition the lease to terminal or quarantined state.
-  - apps/root-task/src/hal/** + apps/pi4-driver-runtime/src/** — ensure driver faults cut off IRQ, shared-ring, MMIO, DMA/shared-buffer, and fault authority for the old epoch.
-  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — restart only through a fresh ticket/lease/cap-bundle path and refuse stale telemetry or receipts after a fault epoch.
-  - apps/coh/src/evidence.rs + docs/SECURITY.md + docs/INTERFACES.md + docs/TEST_PLAN.md — include bounded fault lifecycle records in evidence exports and document restart/quarantine semantics.
-Commands:
-  - cargo test -p root-task --tests fault
-  - cargo test -p pi4-driver-runtime
-  - cargo test -p worker-heart
-  - cargo test -p worker-gpu
-  - cargo test -p worker-lora
-  - cargo test -p coh --test evidence
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo test -p coh-rtc
   - scripts/check-generated.sh
 Checks:
-  - Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
-  - Fault handling revokes old caps, rejects stale shared-ring turns and telemetry, and requires fresh lease/cap-bundle construction before restart.
-  - Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
+  - Profiles cannot claim full worker/driver cap-bundle or structured fault lifecycle authority from 28b alone.
 Deliverables:
-  - Production fault lifecycle evidence that lets seL4 reviewers audit how Cohesix contains and recovers from faulty workers and drivers.
+  - Honest dependency gate for 28c/28d/29b host actuation work and 28e VM authority closure.
 ```
 
 ---
@@ -8820,6 +8770,7 @@ After Milestone 28b:
 - Queen control retries are safe by construction.
 - Release profiles enforce key hygiene and enable audit-grade reconstruction by default.
 - Host-side AI supervisors gain no special bypass: they inherit delegated identity, idempotency, fencing, and audit/replay before any live actuation is allowed.
+- Worker/driver full cap-bundle authority and structured fault lifecycle remain explicitly pending for Milestone 28e rather than being buried inside the host/gateway authority floor.
 
 ## Milestone 28c — Host-Side AI Run Control: Delegated Agents, Durable Context, Attention Budgets <a id="28c"></a>
 [Milestones](#Milestones)
@@ -9207,6 +9158,8 @@ A2A belongs in the same gateway milestone only as a companion agent-delegation f
 
 **As-built alignment note:** There is no MCP server or A2A facade in `hive-gateway` today. Current gateway behavior is REST/OpenAPI over `LS`/`CAT`/`ECHO`, and the host ecosystem already has bounded providers for CUDA/NVIDIA discovery, GPU leases, PEFT, systemd, Docker, and K8s through Cohesix host tools and `/host/tickets/*`. `coh mount --rest-url` already mounts through `hive-gateway` and is the primary FUSE path for the live Cohesix namespace; Milestone 28d must not rebuild that through MCP or A2A. Milestone 28d adds MCP-compatible and A2A-compatible surfaces only after those existing flows are the implementation substrate. Older prose must not claim MCP or A2A support until the gateway exposes lifecycle/discovery/execution/authorization/conformance evidence for the relevant protocol.
 
+**Sequencing note:** Milestone 28d is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded reads. Phase 2 may add mutating MCP tools and A2A task facades only after the shared provider action registry, 28b delegated authority floor, and 28c run/checkpoint/evidence model are proven. No mutating MCP/A2A path can be accepted solely because read-only MCP conformance passes.
+
 **Goal**
 Expose Cohesix to MCP clients through standard MCP server primitives and to A2A peers through task/artifact protocol primitives while preserving Cohesix's existing grammar and authority model:
 1. MCP resources provide bounded read-only context from existing Cohesix paths and evidence artifacts.
@@ -9468,6 +9421,7 @@ As-built leverage:
 - `crates/cohsh-core/fixtures/grammar.sha256` and generated `docs/snippets/cohsh_grammar.md` remain unchanged unless a separately approved breaking grammar milestone changes them.
 - Every MCP read maps to existing `LS`, `CAT`, or `TAIL`; every MCP write maps to existing `ECHO` into a documented Cohesix control file or `/host/tickets/spec`.
 - Every A2A task maps to an existing 28c run/checkpoint/evidence record and, when mutating, an existing Cohesix host-ticket/control action. No A2A message text or metadata becomes authorization.
+- Read-only MCP acceptance passes before mutating MCP tools or A2A task creation are enabled in the milestone evidence path.
 - MCP tool schemas and A2A skill schemas are generated from the same provider action registry; parity tests fail if CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, or evidence actions drift between protocols.
 - No MCP tool directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
 - No A2A skill directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
@@ -9582,17 +9536,6 @@ Commands: cargo test -p hive-gateway --test mcp_resources
 Checks: Resource reads enforce manifest bounds, reject undeclared paths, redact secrets, and match existing REST/console output for canonical fixtures.
 Deliverables: MCP resource catalog that is a faithful read-only projection of Cohesix state.
 
-Title/ID: m28d-mcp-tool-catalog
-Goal: Expose real Cohesix operations as MCP tools without direct host execution.
-Inputs: apps/hive-gateway, apps/host-ticket-agent, apps/coh, crates/host-cuda, docs/INTERFACES.md.
-Changes:
-  - apps/hive-gateway/src/mcp/tools.rs — schema-defined tools for file reads, CUDA/GPU inventory, host-ticket submission, GPU leases, PEFT, NeMo, K8s, systemd, Docker, and evidence summaries.
-  - apps/hive-gateway/src/mcp/tickets.rs — host-ticket line builder with id/idempotency/writer-epoch validation and provider action mapping.
-  - apps/hive-gateway/tests/mcp_tools.rs — success and refusal fixtures for read-only, delegated mutating, duplicate, and unauthorized calls.
-Commands: cargo test -p hive-gateway --test mcp_tools && cargo test -p host-ticket-agent
-Checks: Mutating tools append only validated Cohesix ticket/control lines; provider executors are never called directly by the MCP server.
-Deliverables: Tool catalog covering CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker under existing Cohesix authority.
-
 Title/ID: m28d-mcp-prompts
 Goal: Add MCP prompt templates for safe operational workflows over existing Cohesix tools/resources.
 Inputs: apps/hive-gateway/src/mcp, docs/HOST_TOOLS.md, docs/SECURITY.md.
@@ -9602,6 +9545,27 @@ Changes:
 Commands: cargo test -p hive-gateway --test mcp_prompts
 Checks: Prompts contain no secrets, name exact Cohesix tools/actions, and require user approval before side-effecting tool calls.
 Deliverables: MCP prompt catalog that improves operator ergonomics without becoming control state.
+
+Title/ID: m28d-readonly-mcp-acceptance-gate
+Goal: Prove read-only MCP transport, resources, prompts, and conformance before enabling mutating tools or A2A task creation.
+Inputs: apps/hive-gateway, generated MCP policy, docs/HOST_API.md, docs/TEST_PLAN.md.
+Changes:
+  - apps/hive-gateway/tests/mcp_readonly_acceptance.rs — lifecycle, resources, templates, prompts, redaction, auth, Origin, and oversize negative fixtures with mutating tools disabled.
+  - docs/TEST_PLAN.md — record read-only MCP acceptance as the first 28d evidence gate.
+Commands: cargo test -p hive-gateway --test mcp_readonly_acceptance && scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28d-qemu-mcp-readonly
+Checks: Standard MCP clients can discover and read admitted context, but mutating tools are unavailable or deterministically refused until provider action registry and delegated-authority gates pass.
+Deliverables: Archived read-only MCP conformance evidence that later mutating MCP/A2A work must cite.
+
+Title/ID: m28d-mcp-tool-catalog
+Goal: Expose real Cohesix operations as MCP tools without direct host execution.
+Inputs: apps/hive-gateway, apps/host-ticket-agent, apps/coh, crates/host-cuda, docs/INTERFACES.md.
+Changes:
+  - apps/hive-gateway/src/mcp/tools.rs — schema-defined tools for file reads, CUDA/GPU inventory, host-ticket submission, GPU leases, PEFT, NeMo, K8s, systemd, Docker, and evidence summaries.
+  - apps/hive-gateway/src/mcp/tickets.rs — host-ticket line builder with id/idempotency/writer-epoch validation and provider action mapping.
+  - apps/hive-gateway/tests/mcp_tools.rs — success and refusal fixtures for read-only, delegated mutating, duplicate, and unauthorized calls.
+Commands: cargo test -p hive-gateway --test mcp_tools && cargo test -p host-ticket-agent
+Checks: Mutating tools append only validated Cohesix ticket/control lines; provider executors are never called directly by the MCP server; read-only MCP acceptance and provider action registry parity evidence already exists.
+Deliverables: Tool catalog covering CUDA/GPU, PEFT, NeMo, K8s, systemd, and Docker under existing Cohesix authority.
 
 Title/ID: m28d-a2a-agent-facade
 Goal: Implement A2A Agent Card discovery and task/message/artifact projection over existing Cohesix run and ticket state.
@@ -9613,7 +9577,7 @@ Changes:
   - apps/hive-gateway/src/a2a/push.rs — disabled-by-default push notification config with allowlist, SSRF validation, per-task auth material, bounded retry, and audit evidence.
   - apps/hive-gateway/tests/a2a_protocol.rs + apps/hive-gateway/tests/a2a_tasks.rs — Agent Card, message, stream, task, artifact, cancel, push-refusal, duplicate, and unauthorized fixtures.
 Commands: cargo test -p hive-gateway --test a2a_protocol && cargo test -p hive-gateway --test a2a_tasks
-Checks: A2A clients can discover Cohesix skills, submit dry-run tasks, observe status/artifacts, and receive deterministic refusals; no A2A path bypasses Cohesix tickets, run records, gateway auth, or provider allowlists.
+Checks: A2A clients can discover Cohesix skills, submit dry-run tasks, observe status/artifacts, and receive deterministic refusals; no A2A path bypasses Cohesix tickets, run records, gateway auth, or provider allowlists; provider action registry parity and read-only MCP acceptance evidence already exists.
 Deliverables: A2A-compatible gateway facade for bounded Cohesix delegation and observation.
 
 Title/ID: m28d-coh-mount-mcp-resource-view
@@ -9663,12 +9627,123 @@ After Milestone 28d:
 - All side effects still flow through Cohesix tickets, files, policy, audit, and evidence.
 - The VM grammar, Secure9P semantics, and generated manifest authority remain unchanged.
 
+## Milestone 28e — VM Cap-Bundle Authority + Structured Fault Lifecycle <a id="28e"></a>
+[Milestones](#Milestones)
+
+**Why now (VM authority closure):** Milestone 28b makes host/gateway writes attributable, idempotent, fenced, durable, and audit-first. The remaining VM-side authority concern is separate: production worker and linked-driver tickets must correspond to generated seL4 cap bundles, and faults must revoke stale authority with bounded evidence. This milestone closes that seL4-facing gap without delaying the host actuation floor that 28c and 28d need.
+
+**Prerequisites**
+- Milestone **26c** `m26c-cap-backed-worker-endpoints` completed, including generated role state for badged endpoint caps and negative metadata-only ticket tests.
+- Milestone **26d** seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
+- Milestone **28b** completed, including audit/replay defaults and generated gates that distinguish host authority records from VM cap-backed tickets.
+
+**Goal**
+Complete production VM authority by making worker and driver tickets correspond to generated seL4 cap bundles and by converting worker/driver faults into structured lifecycle events.
+
+**Non-Goals (Explicit)**
+- No change to REST delegated identity, host-ticket action semantics, MCP/A2A protocol surfaces, or AI run control.
+- No new VM protocol, console grammar, Secure9P verb, or root-owned physical-driver path.
+- No claim that host tickets, REST delegated tickets, provider tickets, or PEFT receipts are seL4 cap-backed unless a generated VM projection explicitly maps them to live caps.
+
+**Deliverables**
+- Generated per-role cap-bundle records for endpoint caps, notification caps, fault endpoint caps, shared-ring frames, allowed data frames, declared MMIO frames, and DMA/shared-buffer frames where applicable.
+- Root-task constructs per-role child CSpaces/VSpaces from generated bundle records and never hands out catch-all root authority, broad namespace authority, or undeclared frame caps.
+- Revocation deletes/revokes derived caps and makes late invocations, stale shared-ring turns, and stale telemetry writes fail deterministically.
+- Every production worker and driver TCB receives a generated badged fault endpoint whose badge identifies role, instance, lease epoch, and cap-bundle generation.
+- Root-task records bounded fault evidence, revokes the affected cap bundle, marks the lease terminal or quarantined, and refuses late telemetry, shared-ring turns, or receipts from the old epoch.
+- Restart is allowed only through a new ticket/lease/cap-bundle path; fault recovery must not silently reuse stale caps, stale DMA mappings, or stale shared rings.
+
+**Commands**
+- `cargo test -p root-task --tests cap_bundle`
+- `cargo test -p root-task --tests fault`
+- `cargo test -p pi4-driver-abi`
+- `cargo test -p pi4-driver-runtime`
+- `cargo test -p worker-heart`
+- `cargo test -p worker-gpu`
+- `cargo test -p worker-lora`
+- `cargo test -p coh --test evidence`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `scripts/check-generated.sh`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28e-qemu-cap-bundles`
+- `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m28e-pi4-cap-bundles`
+
+**Checks (DoD)**
+- Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
+- Revoked tickets lose endpoint, notification, frame, shared-ring, MMIO, DMA/shared-buffer, and fault authority; stale invocations and stale ring turns fail deterministically.
+- Recovery reconciles ticket ledger and CSpace/VSpace state so no active ticket exists without live caps and no live caps remain for terminal tickets.
+- Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
+- Fault handling revokes old caps, rejects stale shared-ring turns and telemetry, and requires fresh lease/cap-bundle construction before restart.
+- Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
+- Compatibility profiles may retain 26c endpoint-cap-only tickets only when docs and generated profile state explicitly say full cap bundles are disabled.
+
+**Compiler touchpoints**
+- `coh-rtc` emits full cap-bundle ticket authority profiles, generated per-role cap inventories, revoke/recovery evidence, production enablement gates, generated badged fault endpoint records, terminal/quarantine policy, and bounded fault evidence paths.
+- Generated snippets refresh `docs/WORKER_TICKETS.md`, `docs/SECURITY.md`, `docs/HARDWARE_BRINGUP.md`, `docs/INTERFACES.md`, and `docs/TEST_PLAN.md`.
+
+**Task Breakdown**
+```
+Title/ID: m28e-full-cap-bundle-ticket-authority
+Goal: Complete cap-backed tickets by making production worker and driver tickets correspond to generated seL4 cap bundles for endpoints, notifications, frames, shared rings, MMIO, DMA, and fault handling.
+Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/root-task/src/ninedoor.rs, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, tools/coh-rtc/src/**, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md
+Changes:
+  - tools/coh-rtc/src/** — add generated per-role cap-bundle records for endpoint, notification, fault, shared-ring, frame, MMIO, DMA/shared-buffer, and revoke policy fields.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — construct child CSpaces/VSpaces from generated cap-bundle records and retain parent/origin caps for deterministic revoke.
+  - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — reconcile ticket ledger state with live cap-bundle state and refuse metadata-only authority in production profiles.
+  - apps/pi4-driver-runtime/src/** + crates/pi4-driver-abi/src/** — bind driver-runtime command/completion, MMIO, DMA, shared-buffer, IRQ notification, and fault handling to generated cap-bundle descriptors.
+  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — consume full role cap bundles where enabled while preserving the 26c endpoint-cap compatibility floor.
+  - docs/WORKER_TICKETS.md + docs/SECURITY.md + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — document full cap-bundle semantics, production profile gates, revoke/recovery behavior, and negative tests.
+Commands:
+  - cargo test -p root-task --tests cap_bundle
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
+  - cargo test -p worker-heart
+  - cargo test -p worker-gpu
+  - cargo test -p worker-lora
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+Checks:
+  - Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
+  - Revoked tickets lose endpoint, notification, frame, shared-ring, MMIO, DMA/shared-buffer, and fault authority; stale invocations and stale ring turns fail deterministically.
+  - Recovery reconciles ticket ledger and CSpace/VSpace state so no active ticket exists without live caps and no live caps remain for terminal tickets.
+Deliverables:
+  - Production-grade cap-backed ticket authority with generated seL4 cap bundles and evidence strong enough to answer the seL4 criticism that tickets are only application metadata.
+
+Title/ID: m28e-structured-fault-lifecycle
+Goal: Convert worker and driver seL4 faults into structured lifecycle events that revoke stale authority and produce bounded evidence.
+Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/event/**, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/pi4-driver-runtime/src/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/coh/src/evidence.rs, tools/coh-rtc/src/**, docs/SECURITY.md, docs/INTERFACES.md, docs/TEST_PLAN.md
+Changes:
+  - tools/coh-rtc/src/** — emit generated badged fault endpoint records with role, instance, lease epoch, cap-bundle generation, terminal/quarantine policy, and bounded evidence paths.
+  - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — receive worker/driver fault IPC, record bounded evidence, revoke the affected cap bundle, and transition the lease to terminal or quarantined state.
+  - apps/root-task/src/hal/** + apps/pi4-driver-runtime/src/** — ensure driver faults cut off IRQ, shared-ring, MMIO, DMA/shared-buffer, and fault authority for the old epoch.
+  - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — restart only through a fresh ticket/lease/cap-bundle path and refuse stale telemetry or receipts after a fault epoch.
+  - apps/coh/src/evidence.rs + docs/SECURITY.md + docs/INTERFACES.md + docs/TEST_PLAN.md — include bounded fault lifecycle records in evidence exports and document restart/quarantine semantics.
+Commands:
+  - cargo test -p root-task --tests fault
+  - cargo test -p pi4-driver-runtime
+  - cargo test -p worker-heart
+  - cargo test -p worker-gpu
+  - cargo test -p worker-lora
+  - cargo test -p coh --test evidence
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - scripts/check-generated.sh
+Checks:
+  - Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
+  - Fault handling revokes old caps, rejects stale shared-ring turns and telemetry, and requires fresh lease/cap-bundle construction before restart.
+  - Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
+Deliverables:
+  - Production fault lifecycle evidence that lets seL4 reviewers audit how Cohesix contains and recovers from faulty workers and drivers.
+```
+
+
 ## Milestone 29 — Edge Local Status (Pi 4 Host Tool)  <a id="29"></a> 
 [Milestones](#Milestones)
 
 **Why now (compiler):** Field techs need offline status on edge devices using the same 9P grammar. Tool must respect Pi 4 boot profile semantics and attestation outputs.
 
 **As-built alignment note:** `apps/coh-status` currently exists as a library crate with trace replay support and a convergence transcript fixture. It is not yet a standalone read-only field CLI, and its current convergence fixture still exercises `/queen/ctl` writes. Milestone 29 promotes that crate into the read-only tool described below and replaces generic convergence coverage with status-specific read-only fixtures.
+
+**Prerequisite**
+- Milestone **28** completed for the shared read-only inspect/attest/evidence-pack internals that `coh-status` reuses. Milestone 29 must not fork a second status parser, attestation verifier, trace reader, or snapshot schema when the Milestone 28 host-tool core already owns that behavior.
 
 **Goal**
 Promote `coh-status` into a **small read-only CLI** for local field inspection of boot/attest data using the existing TCP console transport and offline artifacts, without adding any in-VM 9P/TCP listener and without introducing a second UI stack.
@@ -9887,17 +9962,19 @@ Deliverables:
 Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is the read-only ESP image (UEFI loader + kernel + rootserver + manifest).
 
 **Goal**  
-Boot Cohesix on AWS EC2 (Arm64) via **UEFI → elfloader.efi → seL4 → root-task**, then bring up ENA networking in root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
+Boot Cohesix on AWS EC2 (Arm64) via **UEFI -> elfloader.efi -> seL4 -> root-task**, then bring up ENA networking through a linked AWS network runtime admitted by root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
 
 Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently described by the repo with the newer Pi 4 U-Boot path, then adds the **AWS-specific delta**: AWS profile admission, ENA, outbound bootstrap, optional IMDSv2, and AMI registration.
 
-**As-built alignment note:** The repo currently has UEFI profile/configuration material, a UEFI shim crate, and `scripts/uefi/*` helpers, but it does not have AWS profile admission, `scripts/aws/*`, ENA drivers, outbound 9door mount code, or approved root-task TLS/HTTP/IMDS support. Milestone 30 must start with boot-chain and TCB reconciliation before runtime code depends on UEFI, TLS/HTTP, IMDS, or AWS-specific assumptions.
+**As-built alignment note:** The repo currently has UEFI profile/configuration material, a UEFI shim crate, and `scripts/uefi/*` helpers, but it does not have AWS profile admission, `scripts/aws/*`, linked ENA runtime descriptors/images, outbound 9door mount code, or approved root-task TLS/HTTP/IMDS support. Milestone 30 must start with boot-chain and TCB reconciliation before runtime code depends on UEFI, TLS/HTTP, IMDS, or AWS-specific assumptions.
 
 **Non-negotiable constraints**
 - Milestone 30 may not assume the UEFI/ESP baseline is authoritative until the first AWS task reconciles it against the current Pi 4 U-Boot pivot, `scripts/uefi/esp-build.sh`, `docs/BOOT_REFERENCE.md`, `docs/HARDWARE_BRINGUP.md`, and the charter rule for UEFI tooling. If the baseline is stale, AWS work starts by refreshing or reintroducing it under this milestone with docs and tests.
 - In-VM TLS, HTTP, and IMDSv2 are a deliberate TCB expansion, not a routine AWS delta. They are disabled by default until `docs/ARCHITECTURE.md`, `docs/NETWORK_CONFIG.md`, `docs/SECURITY.md`, `docs/SECURITY_NIST_800_53.md`, and `docs/AWS_AMI.md` explicitly approve the bounded client-only threat model and generated manifest gates.
 - No listener is introduced in the VM. AWS networking is outbound-only after seL4, and any Secure9P fabric mount must preserve existing frame bounds, role-scoped authority, and deterministic error behavior.
 - If the security review rejects in-VM TLS/HTTP, the milestone must use a signed bootstrap manifest and a host/fabric-side termination design instead of importing a web/TLS stack into the root-task closure.
+- ENA is PCIe/MMIO/DMA-backed physical hardware. Steady ENA admin queue, IO queue, interrupt/poll, RX/TX descriptor, and DMA/cache service must live in a linked AWS network runtime over the fixed driver-task ABI after HAL admission. Root-task remains the HAL/resource admitter, descriptor publisher, bounded service-turn client, network stack owner, and diagnostics publisher; it must not contain a root-owned steady ENA driver.
+- The initial single TX/RX queue polling path is bootstrap evidence only. Peak-performance AWS claims require a later generated multi-queue, MSI-X or equivalent notification, queue-affinity, and core-local service-bucket evidence phase.
 
 **Deliverables**
 #### A) AWS compiler + profile admission
@@ -9917,16 +9994,22 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
   - `manifest.json` and `manifest.sha256`
   - embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors)
 
-#### C) ENA driver (adminq + single TX/RX queue) in root-task
-- ENA adminq + completion path
-- Minimal polling dataplane with single TX/RX queue pair
+#### C) ENA linked network runtime (adminq + single TX/RX queue bootstrap)
+- ENA PCIe discovery, BAR admission, adminq, completion path, and single TX/RX queue pair run in a linked AWS network runtime using HAL-declared PCIe/MMIO/DMA/shared-buffer resources.
+- Root-task owns only generated descriptor publication, bounded ENA service turns, net-stack integration, and diagnostics.
+- Minimal polling dataplane with single TX/RX queue pair is accepted only as first-link/bootstrap evidence, not as peak AWS throughput closure.
 
 #### D) Outbound bootstrap core after seL4
-- Reuse the Milestone 26b `no_std` DHCP core and add ENA binding
+- Reuse the Milestone 26b `no_std` DHCP core over the root-task net stack fed by linked ENA runtime RX/TX service turns
 - Add bounded **outbound** TCP connection management
 - Add bounded TLS client support only after the AWS security/TCB expansion gate accepts it for the selected profile
 - Add a minimal outbound Secure9P/9door mount client
-- Diskless bootstrap path **after seL4**: ENA -> DHCP (26b core) -> outbound TCP -> approved security/session layer -> 9door mount
+- Diskless bootstrap path **after seL4**: HAL-admitted linked ENA runtime -> DHCP (26b core) -> outbound TCP -> approved security/session layer -> 9door mount
+
+#### D2) AWS ENA performance closure (post-bootstrap)
+- Add generated queue-count, queue-affinity, notification/MSI-X or poll-budget policy, burst, and backpressure bounds after first-link smoke passes.
+- Map ENA queues into core-local service buckets from Milestone 27c without changing Secure9P, console, or namespace semantics.
+- Keep root-task as the serialized authority/net-stack client; linked runtime owns queue service and DMA/cache maintenance.
 
 #### E) Optional IMDSv2 bootstrap
 - Optional IMDSv2 bootstrap (instance identity + config) is deferred until the bounded HTTP client threat model is approved; the default AWS path uses manifest-authored or signed-bootstrap inputs without IMDS.
@@ -9946,7 +10029,9 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 **Checks (DoD)**
 - EC2 instance boots directly into Cohesix with no intermediate OS.
 - ENA link comes up deterministically; DHCP lease acquired within bounded time.
+- ENA hardware service is linked-runtime-only; root-task direct ENA MMIO/DMA paths fail profile validation outside explicitly named QEMU/host compatibility tests.
 - 9door namespace mounts successfully and control plane is reachable.
+- Single-queue polling evidence is classified as bootstrap/link proof. Peak AWS performance claims require the D2 multi-queue/core-local evidence lane.
 - IMDSv2 metadata fetch is absent by default or optional and bounded after approval; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
 - Power cycle returns to identical clean state (no persistence).
 - Failure cases (no fabric, auth failure, link down) halt safely with explicit console diagnostics.
@@ -9955,7 +10040,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 **Compiler touchpoints**
 - `coh-rtc` emits:
   - AWS profile / backend admission for `ena`
-  - ENA queue bounds and bootstrap retry limits.
+  - linked ENA runtime descriptors, ENA queue bounds, bootstrap retry limits, and later multi-queue/core-local performance gates.
   - Fabric bootstrap manifest schema and signature requirements.
   - IMDSv2 allowlist, max response bytes, and retry bounds (optional gate).
 - Regeneration guard verifies EFI binary hash against recorded compiler output.
@@ -9981,12 +10066,12 @@ Title/ID: m30-aws-profile
 Goal: Admit AWS/ENA/IMDS bootstrap in compiler IR and profile selection before runtime implementation.
 Inputs: tools/coh-rtc, configs/, docs/AWS_AMI.md.
 Changes:
-- tools/coh-rtc/src/ir.rs — AWS profile, `ena` backend, bounded bootstrap schema.
+- tools/coh-rtc/src/ir.rs — AWS profile, `ena` backend, linked ENA runtime descriptor schema, bounded bootstrap schema, and later performance-gate fields.
 - tools/coh-rtc/src/codegen/{docs,rust}.rs — generated AWS/profile snippets.
 Commands:
 - cargo test -p coh-rtc
 Checks:
-- Runtime code can consume authoritative AWS/ENA/IMDS limits from generated outputs.
+- Runtime code can consume authoritative AWS/ENA/IMDS limits from generated outputs, and physical AWS profiles cannot enable root-owned ENA MMIO/DMA paths.
 Deliverables:
 - Compiler-defined AWS admission with docs snippets updated.
 
@@ -10004,33 +10089,56 @@ Checks:
 Deliverables:
 - Documented ESP layout and build recipe for Arm64.
 
-Title/ID: m30-ena-adminq
-Goal: Implement ENA PCIe discovery and admin queue in root-task.
-Inputs: apps/root-task drivers, HAL PCI helpers, docs/AWS_AMI.md.
+Title/ID: m30-ena-runtime-adminq
+Goal: Implement ENA PCIe discovery and admin queue in a linked AWS network runtime.
+Inputs: apps/root-task HAL admission, shared driver-task ABI, apps/aws-driver-runtime, docs/AWS_AMI.md.
 Changes:
-- apps/root-task/src/drivers/ena/pci.rs — PCIe enumeration, BAR mapping.
-- apps/root-task/src/drivers/ena/adminq.rs — admin queue + completion queue.
-- apps/root-task/src/net/ena.rs — ENA init wiring.
+- apps/root-task/src/hal/aws_ena.rs — HAL admission for ENA PCIe BARs, IRQ/notification policy, DMA/shared-buffer descriptors, and runtime image selection.
+- crates/driver-task-abi/src/** — fixed-layout ENA init/adminq command records and completion evidence, preserving compatibility with the Pi 4 driver-task ABI shape.
+- apps/aws-driver-runtime/src/** — linked ENA runtime adminq and completion queue service.
+- apps/root-task/src/net/ena.rs — root-side ENA ring-client/net-stack wiring only.
 Commands:
 - cargo test -p root-task --test ena_adminq
+- cargo test -p driver-task-abi
+- cargo test -p aws-driver-runtime
 Checks:
 - Feature negotiation succeeds with minimal feature set.
+- ENA BAR/MMIO/DMA access occurs only in the linked runtime after HAL admission; root-task remains a bounded client.
 Deliverables:
 - AdminQ protocol notes in docs/AWS_AMI.md.
 
-Title/ID: m30-ena-io
-Goal: Bring up minimal ENA dataplane.
-Inputs: apps/root-task drivers, root-task net stack abstractions.
+Title/ID: m30-ena-runtime-io-bootstrap
+Goal: Bring up minimal linked-runtime ENA dataplane for first-link bootstrap.
+Inputs: linked AWS network runtime, root-task net stack abstractions, generated ENA descriptors.
 Changes:
-- apps/root-task/src/drivers/ena/ioq.rs — single TX/RX SQ + CQ.
-- apps/root-task/src/drivers/ena/poll.rs — polling dataplane (no interrupts).
-- apps/root-task/src/net/mod.rs — integrate ENA dataplane into the runtime.
+- apps/aws-driver-runtime/src/** — single TX/RX SQ + CQ and polling dataplane service turns.
+- crates/driver-task-abi/src/** — fixed-layout RX/TX descriptor service records, queue bounds, and completion counters.
+- apps/root-task/src/net/mod.rs — integrate linked ENA runtime RX/TX service into the root-task net stack.
 Commands:
 - cargo test -p root-task --test ena_ioq
+- cargo test -p driver-task-abi
+- cargo test -p aws-driver-runtime
 Checks:
-- TX reclaim and RX refill invariants hold under sustained traffic.
+- TX reclaim and RX refill invariants hold under sustained traffic, root-owned ENA dataplane paths are absent from physical AWS profiles, and single-queue polling evidence is labeled bootstrap-only.
 Deliverables:
 - Deterministic dataplane invariants documented.
+
+Title/ID: m30-ena-performance-closure
+Goal: Add peak-performance AWS ENA evidence after first-link bootstrap without changing the authority model.
+Inputs: generated ENA queue policy, Milestone 27c service-bucket outputs, linked AWS network runtime, docs/BENCHMARKS.md, docs/AWS_AMI.md.
+Changes:
+- tools/coh-rtc/src/ir.rs — generated ENA queue-count, queue-affinity, notification/MSI-X or poll-budget, burst, and backpressure limits.
+- apps/aws-driver-runtime/src/** — bounded multi-queue service turns and queue-local counters where the platform profile admits them.
+- apps/root-task/src/net/ena.rs — deterministic merge/backpressure handling for linked-runtime queue completions.
+- docs/BENCHMARKS.md + docs/AWS_AMI.md — classify bootstrap link proof separately from peak-throughput proof.
+Commands:
+- cargo test -p coh-rtc
+- cargo test -p root-task --test ena_ioq
+- cargo test -p aws-driver-runtime
+Checks:
+- Multi-queue or notification-backed claims cite generated bounds and archived EC2 evidence; single-queue polling cannot be described as peak performance.
+Deliverables:
+- AWS ENA performance lane aligned to Cohesix service-bucket proof rather than root-owned driver shortcuts.
 
 Title/ID: m30-outbound-bootstrap-core
 Goal: Add bounded outbound TCP/session primitives and only the approved security primitive required before fabric mount.

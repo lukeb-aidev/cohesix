@@ -5390,6 +5390,48 @@ def test_gate_summary_tracks_config_descriptor_header_wait_progress() -> None:
     assert gates.usb_blocker == "config-descriptor-header-transfer-no-reply"
 
 
+def test_gate_summary_tracks_config_descriptor_header_event_empty_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0207 "
+            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
+            "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
+            "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
+            "marker_phase=289 "
+            "marker_phase_name=usb-config-descriptor-header-transfer-event-slot-empty "
+            "marker_aux0=0x55534245",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 7
+    assert gates.usb_blocker == "config-descriptor-header-transfer-event-slot-empty"
+
+
+def test_gate_summary_tracks_device_descriptor_event_cycle_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0206 "
+            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
+            "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
+            "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
+            "marker_phase=284 "
+            "marker_phase_name=usb-device-descriptor-transfer-event-cycle-mismatch "
+            "marker_aux0=0x55534245",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 6
+    assert gates.usb_blocker == "device-descriptor-transfer-event-cycle-mismatch"
+
+
 def test_gate_summary_tracks_config_descriptor_full_status_progress() -> None:
     events = normalizer.parse_events(
         [
@@ -5436,7 +5478,18 @@ def test_gate_summary_tracks_hid_endpoint_parse_miss_reasons() -> None:
         "usb-hid-endpoint-parse-no-interrupt-in": "hid-interrupt-in-not-found",
         "usb-hid-endpoint-parse-malformed": "hid-config-descriptor-malformed",
         "usb-hub-scan-begin": "hub-child-scan-no-reply",
+        "usb-hub-set-configuration-begin": "hub-set-configuration-no-reply",
+        "usb-hub-set-configuration-done": "hub-set-configuration-settle-no-reply",
+        "usb-hub-descriptor-begin": "hub-descriptor-no-reply",
+        "usb-hub-descriptor-done": "hub-context-no-reply",
+        "usb-hub-context-begin": "hub-context-no-reply",
+        "usb-hub-context-done": "hub-port-power-no-reply",
+        "usb-hub-port-power-begin": "hub-port-power-no-reply",
+        "usb-hub-port-power-done": "hub-port-reset-no-reply",
+        "usb-hub-port-reset-begin": "hub-port-reset-no-reply",
+        "usb-hub-port-ready": "hub-child-probe-no-reply",
         "usb-hub-child-probe-begin": "hub-child-probe-no-reply",
+        "usb-hub-child-speed-fallback-begin": "hub-child-speed-fallback-no-reply",
         "usb-hub-scan-no-keyboard": "hub-topology-no-keyboard",
     }
     for phase_name, expected_blocker in cases.items():
@@ -6188,6 +6241,69 @@ def test_gate_summary_refines_host_eapol_firstread_empty() -> None:
             "last_rx_idle_detail=0x570a last_rx_idle_result=0x00000000 "
             "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
             "last_ethertype_valid=no next_action=inspect-ap-m1-or-cyw43-rx-latch",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-empty"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-empty"
+    assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_preserves_host_eapol_firstread_over_nettest_symptom() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-host-eapol status=pending acceptance=no code=none "
+            "detail=none result=none frame_len=0",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 status=pending "
+            "reason=none polls=0 starts=0 tx_retries=0 data_rx=0 eapol_rx=0 "
+            "non_eapol_rx=0 control_rx=0 empty_polls=0 rx_firstread_attempts=0 "
+            "rx_firstread_empty=0 rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "last_rx_idle_detail=0x0000 last_rx_idle_result=0x00000000 "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no next_action=inspect-cyw43-data-rx-path",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_TX contract=cyw43455 "
+            "stage=cyw43-host-eapol-start poll=1024 len=18 "
+            "dst=01:80:c2:00:00:03 src=88:a2:9e:66:59:10 "
+            "ethertype=0x888e bdc_priority=6",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_TX contract=cyw43455 "
+            "stage=cyw43-host-eapol-start poll=4096 len=18 "
+            "dst=01:80:c2:00:00:03 src=88:a2:9e:66:59:10 "
+            "ethertype=0x888e bdc_priority=6",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_TX contract=cyw43455 "
+            "stage=cyw43-host-eapol-start poll=8192 len=18 "
+            "dst=01:80:c2:00:00:03 src=88:a2:9e:66:59:10 "
+            "ethertype=0x888e bdc_priority=6",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_TX contract=cyw43455 "
+            "stage=cyw43-host-eapol-start poll=12288 len=18 "
+            "dst=01:80:c2:00:00:03 src=88:a2:9e:66:59:10 "
+            "ethertype=0x888e bdc_priority=6",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_TX contract=cyw43455 "
+            "stage=cyw43-host-eapol-start poll=16384 len=18 "
+            "dst=01:80:c2:00:00:03 src=88:a2:9e:66:59:10 "
+            "ethertype=0x888e bdc_priority=6",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_TX contract=cyw43455 "
+            "stage=cyw43-host-eapol-start poll=20480 len=18 "
+            "dst=01:80:c2:00:00:03 src=88:a2:9e:66:59:10 "
+            "ethertype=0x888e bdc_priority=6",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=24576 starts=6 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 control_rx=0 "
+            "empty_polls=24576 rx_firstread_attempts=11 rx_firstread_empty=11 "
+            "rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "last_rx_idle_detail=0x570a last_rx_idle_result=0x00000000 "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no next_action=inspect-ap-m1-or-cyw43-rx-latch",
+            "wifi: gate 8 name=firmware-channel status=fail "
+            "evidence=exact=host-eapol-required",
+            "wifi: evidence failure_domain=host-eapol-required direct_proof_gate=7 "
+            "proof_gate=7 frontier_gate=7",
+            "ERR NETTEST net-disabled cause=host-eapol-required",
         ]
     )
 

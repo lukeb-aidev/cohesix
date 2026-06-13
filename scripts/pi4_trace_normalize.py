@@ -192,6 +192,12 @@ USB_OUTCOME_BLOCKERS = {
     "device-descriptor-transfer-failed",
     "device-descriptor-transfer-timeout",
     "device-descriptor-status-timeout",
+    "device-descriptor-transfer-event-slot-empty",
+    "device-descriptor-transfer-event-cycle-mismatch",
+    "device-descriptor-transfer-event-ignored",
+    "device-descriptor-status-event-slot-empty",
+    "device-descriptor-status-event-cycle-mismatch",
+    "device-descriptor-status-event-ignored",
     "device-descriptor-prime-submit-no-reply",
     "device-descriptor-prime-transfer-no-reply",
     "device-descriptor-prime-status-no-reply",
@@ -199,6 +205,12 @@ USB_OUTCOME_BLOCKERS = {
     "device-descriptor-prime-transfer-failed",
     "device-descriptor-prime-transfer-timeout",
     "device-descriptor-prime-status-timeout",
+    "device-descriptor-prime-transfer-event-slot-empty",
+    "device-descriptor-prime-transfer-event-cycle-mismatch",
+    "device-descriptor-prime-transfer-event-ignored",
+    "device-descriptor-prime-status-event-slot-empty",
+    "device-descriptor-prime-status-event-cycle-mismatch",
+    "device-descriptor-prime-status-event-ignored",
     "config-descriptor-no-reply",
     "config-descriptor-header-submit-no-reply",
     "config-descriptor-header-transfer-no-reply",
@@ -207,16 +219,37 @@ USB_OUTCOME_BLOCKERS = {
     "config-descriptor-header-transfer-failed",
     "config-descriptor-header-transfer-timeout",
     "config-descriptor-header-status-timeout",
+    "config-descriptor-header-transfer-event-slot-empty",
+    "config-descriptor-header-transfer-event-cycle-mismatch",
+    "config-descriptor-header-transfer-event-ignored",
+    "config-descriptor-header-status-event-slot-empty",
+    "config-descriptor-header-status-event-cycle-mismatch",
+    "config-descriptor-header-status-event-ignored",
     "config-descriptor-full-submit-no-reply",
     "config-descriptor-full-transfer-no-reply",
     "config-descriptor-full-status-no-reply",
     "config-descriptor-full-transfer-failed",
     "config-descriptor-full-transfer-timeout",
     "config-descriptor-full-status-timeout",
+    "config-descriptor-full-transfer-event-slot-empty",
+    "config-descriptor-full-transfer-event-cycle-mismatch",
+    "config-descriptor-full-transfer-event-ignored",
+    "config-descriptor-full-status-event-slot-empty",
+    "config-descriptor-full-status-event-cycle-mismatch",
+    "config-descriptor-full-status-event-ignored",
     "hub-attach-failed",
     "hub-context-failed",
     "hub-descriptor-failed",
     "hub-set-configuration-failed",
+    "hub-set-configuration-no-reply",
+    "hub-set-configuration-settle-no-reply",
+    "hub-descriptor-no-reply",
+    "hub-context-no-reply",
+    "hub-port-power-no-reply",
+    "hub-port-reset-no-reply",
+    "hub-child-scan-no-reply",
+    "hub-child-probe-no-reply",
+    "hub-child-speed-fallback-no-reply",
     "hub-topology-no-keyboard",
     "hid-init-failed",
     "hid-interrupt-in",
@@ -1349,6 +1382,16 @@ def normalize_usb_blocker(value: str) -> str:
         return "device-descriptor-transfer-timeout"
     if "device-descriptor-status-timeout" in lower:
         return "device-descriptor-status-timeout"
+    for token in (
+        "device-descriptor-transfer-event-slot-empty",
+        "device-descriptor-transfer-event-cycle-mismatch",
+        "device-descriptor-transfer-event-ignored",
+        "device-descriptor-status-event-slot-empty",
+        "device-descriptor-status-event-cycle-mismatch",
+        "device-descriptor-status-event-ignored",
+    ):
+        if token in lower:
+            return token
     if "device-descriptor-prime-submit-no-reply" in lower:
         return "device-descriptor-prime-submit-no-reply"
     if "device-descriptor-prime-transfer-no-reply" in lower:
@@ -1363,6 +1406,16 @@ def normalize_usb_blocker(value: str) -> str:
         return "device-descriptor-prime-transfer-timeout"
     if "device-descriptor-prime-status-timeout" in lower:
         return "device-descriptor-prime-status-timeout"
+    for token in (
+        "device-descriptor-prime-transfer-event-slot-empty",
+        "device-descriptor-prime-transfer-event-cycle-mismatch",
+        "device-descriptor-prime-transfer-event-ignored",
+        "device-descriptor-prime-status-event-slot-empty",
+        "device-descriptor-prime-status-event-cycle-mismatch",
+        "device-descriptor-prime-status-event-ignored",
+    ):
+        if token in lower:
+            return token
     if "config-descriptor-no-reply" in lower:
         return "config-descriptor-no-reply"
     if "config-descriptor-header-submit-no-reply" in lower:
@@ -1379,6 +1432,16 @@ def normalize_usb_blocker(value: str) -> str:
         return "config-descriptor-header-transfer-timeout"
     if "config-descriptor-header-status-timeout" in lower:
         return "config-descriptor-header-status-timeout"
+    for token in (
+        "config-descriptor-header-transfer-event-slot-empty",
+        "config-descriptor-header-transfer-event-cycle-mismatch",
+        "config-descriptor-header-transfer-event-ignored",
+        "config-descriptor-header-status-event-slot-empty",
+        "config-descriptor-header-status-event-cycle-mismatch",
+        "config-descriptor-header-status-event-ignored",
+    ):
+        if token in lower:
+            return token
     if "config-descriptor-full-submit-no-reply" in lower:
         return "config-descriptor-full-submit-no-reply"
     if "config-descriptor-full-transfer-no-reply" in lower:
@@ -1391,6 +1454,16 @@ def normalize_usb_blocker(value: str) -> str:
         return "config-descriptor-full-transfer-timeout"
     if "config-descriptor-full-status-timeout" in lower:
         return "config-descriptor-full-status-timeout"
+    for token in (
+        "config-descriptor-full-transfer-event-slot-empty",
+        "config-descriptor-full-transfer-event-cycle-mismatch",
+        "config-descriptor-full-transfer-event-ignored",
+        "config-descriptor-full-status-event-slot-empty",
+        "config-descriptor-full-status-event-cycle-mismatch",
+        "config-descriptor-full-status-event-ignored",
+    ):
+        if token in lower:
+            return token
     if "invalid-config-value" in lower:
         return "invalid-config-value"
     if "hid-init-failed" in lower:
@@ -1411,6 +1484,17 @@ def normalize_usb_blocker(value: str) -> str:
         return "hub-child-scan-no-reply"
     if "hub-child-probe-no-reply" in lower:
         return "hub-child-probe-no-reply"
+    for token in (
+        "hub-set-configuration-no-reply",
+        "hub-set-configuration-settle-no-reply",
+        "hub-descriptor-no-reply",
+        "hub-context-no-reply",
+        "hub-port-power-no-reply",
+        "hub-port-reset-no-reply",
+        "hub-child-speed-fallback-no-reply",
+    ):
+        if token in lower:
+            return token
     if "hub-topology-no-keyboard" in lower:
         return "hub-topology-no-keyboard"
     if "hid-configure-endpoint-no-reply" in lower:
@@ -1631,6 +1715,26 @@ def cyw43_host_eapol_firstread_blocker(fields: dict[str, str]) -> str | None:
     if (parse_hex_int(fields.get("rx_firstread_empty")) or 0) > 0:
         return "cyw43-data-rx-firstread-empty"
     return None
+
+
+def summarize_host_eapol_firstread_status(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, int] | None:
+    """Return the latest direct host-EAPOL first-read blocker proof."""
+
+    latest: tuple[str, str, int] | None = None
+    for event in events:
+        if "cyw43_driver_task_host_eapol_status" not in event.raw.lower():
+            continue
+        fields = event.fields
+        blocker = cyw43_host_eapol_firstread_blocker(fields)
+        if blocker is None:
+            continue
+        status = fields.get("status", "").lower()
+        reason = normalize_wifi_blocker(fields.get("reason", ""))
+        if status == "required" or reason == "host-eapol-required":
+            latest = (blocker, "runtime-rx", event.line)
+    return latest
 
 
 def cyw43_control_exchange_timeout_exact(result: int | None) -> str | None:
@@ -3638,6 +3742,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     startup_blackbox_gate = 0
     early_startup_blackbox_blocker: str | None = None
     early_startup_blackbox_gate = 0
+    host_eapol_firstread_blocker_seen: str | None = None
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -3677,6 +3782,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if status == "required" or reason == "host-eapol-required":
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
+                if firstread_blocker is not None:
+                    host_eapol_firstread_blocker_seen = firstread_blocker
                 explicit_blocker = firstread_blocker or "host-eapol-required"
             elif status == "pending":
                 gate = max(gate, 7)
@@ -4776,6 +4883,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     if early_startup_blackbox_blocker is not None and not post_f2_progress_seen:
         gate = early_startup_blackbox_gate
         blocker = early_startup_blackbox_blocker
+    if host_eapol_firstread_blocker_seen is not None and blocker in {
+        "cyw43-driver-task-replay",
+        "firmware-channel-f2",
+        "host-eapol-required",
+        "none",
+        "sdio-linked-runtime-progress-no-reply",
+        "unknown",
+        "wifi-host-eapol-pending",
+    }:
+        gate = max(gate, 7)
+        blocker = host_eapol_firstread_blocker_seen
     return gate, blocker
 
 
@@ -5904,6 +6022,12 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "device-descriptor-transfer-failed",
         "device-descriptor-transfer-timeout",
         "device-descriptor-status-timeout",
+        "device-descriptor-transfer-event-slot-empty",
+        "device-descriptor-transfer-event-cycle-mismatch",
+        "device-descriptor-transfer-event-ignored",
+        "device-descriptor-status-event-slot-empty",
+        "device-descriptor-status-event-cycle-mismatch",
+        "device-descriptor-status-event-ignored",
         "device-descriptor-prime-submit-no-reply",
         "device-descriptor-prime-transfer-no-reply",
         "device-descriptor-prime-status-no-reply",
@@ -5911,6 +6035,12 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "device-descriptor-prime-transfer-failed",
         "device-descriptor-prime-transfer-timeout",
         "device-descriptor-prime-status-timeout",
+        "device-descriptor-prime-transfer-event-slot-empty",
+        "device-descriptor-prime-transfer-event-cycle-mismatch",
+        "device-descriptor-prime-transfer-event-ignored",
+        "device-descriptor-prime-status-event-slot-empty",
+        "device-descriptor-prime-status-event-cycle-mismatch",
+        "device-descriptor-prime-status-event-ignored",
         "address-device-failed",
     }:
         return 6
@@ -5923,12 +6053,24 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "config-descriptor-header-transfer-failed",
         "config-descriptor-header-transfer-timeout",
         "config-descriptor-header-status-timeout",
+        "config-descriptor-header-transfer-event-slot-empty",
+        "config-descriptor-header-transfer-event-cycle-mismatch",
+        "config-descriptor-header-transfer-event-ignored",
+        "config-descriptor-header-status-event-slot-empty",
+        "config-descriptor-header-status-event-cycle-mismatch",
+        "config-descriptor-header-status-event-ignored",
         "config-descriptor-full-submit-no-reply",
         "config-descriptor-full-transfer-no-reply",
         "config-descriptor-full-status-no-reply",
         "config-descriptor-full-transfer-failed",
         "config-descriptor-full-transfer-timeout",
         "config-descriptor-full-status-timeout",
+        "config-descriptor-full-transfer-event-slot-empty",
+        "config-descriptor-full-transfer-event-cycle-mismatch",
+        "config-descriptor-full-transfer-event-ignored",
+        "config-descriptor-full-status-event-slot-empty",
+        "config-descriptor-full-status-event-cycle-mismatch",
+        "config-descriptor-full-status-event-ignored",
         "hid-endpoint-not-ready",
         "hid-endpoint-parse-no-reply",
         "hid-endpoint-not-found",
@@ -5936,7 +6078,14 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "hid-interrupt-in-not-found",
         "hid-config-descriptor-malformed",
         "hub-child-scan-no-reply",
+        "hub-set-configuration-no-reply",
+        "hub-set-configuration-settle-no-reply",
+        "hub-descriptor-no-reply",
+        "hub-context-no-reply",
+        "hub-port-power-no-reply",
+        "hub-port-reset-no-reply",
         "hub-child-probe-no-reply",
+        "hub-child-speed-fallback-no-reply",
         "hub-topology-no-keyboard",
         "hid-configure-endpoint-no-reply",
         "hid-configure-endpoint-failed",
@@ -6038,6 +6187,12 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-device-descriptor-failed": "device-descriptor-transfer-failed",
         "usb-device-descriptor-transfer-timeout": "device-descriptor-transfer-timeout",
         "usb-device-descriptor-status-timeout": "device-descriptor-status-timeout",
+        "usb-device-descriptor-transfer-event-slot-empty": "device-descriptor-transfer-event-slot-empty",
+        "usb-device-descriptor-transfer-event-cycle-mismatch": "device-descriptor-transfer-event-cycle-mismatch",
+        "usb-device-descriptor-transfer-event-ignored": "device-descriptor-transfer-event-ignored",
+        "usb-device-descriptor-status-event-slot-empty": "device-descriptor-status-event-slot-empty",
+        "usb-device-descriptor-status-event-cycle-mismatch": "device-descriptor-status-event-cycle-mismatch",
+        "usb-device-descriptor-status-event-ignored": "device-descriptor-status-event-ignored",
         "usb-device-descriptor-prime-begin": "device-descriptor-prime-submit-no-reply",
         "usb-device-descriptor-prime-doorbell-done": "device-descriptor-prime-transfer-no-reply",
         "usb-device-descriptor-prime-wait-begin": "device-descriptor-prime-transfer-no-reply",
@@ -6046,6 +6201,12 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-device-descriptor-prime-failed": "device-descriptor-prime-transfer-failed",
         "usb-device-descriptor-prime-transfer-timeout": "device-descriptor-prime-transfer-timeout",
         "usb-device-descriptor-prime-status-timeout": "device-descriptor-prime-status-timeout",
+        "usb-device-descriptor-prime-transfer-event-slot-empty": "device-descriptor-prime-transfer-event-slot-empty",
+        "usb-device-descriptor-prime-transfer-event-cycle-mismatch": "device-descriptor-prime-transfer-event-cycle-mismatch",
+        "usb-device-descriptor-prime-transfer-event-ignored": "device-descriptor-prime-transfer-event-ignored",
+        "usb-device-descriptor-prime-status-event-slot-empty": "device-descriptor-prime-status-event-slot-empty",
+        "usb-device-descriptor-prime-status-event-cycle-mismatch": "device-descriptor-prime-status-event-cycle-mismatch",
+        "usb-device-descriptor-prime-status-event-ignored": "device-descriptor-prime-status-event-ignored",
         "usb-config-descriptor-header-begin": "config-descriptor-header-submit-no-reply",
         "usb-config-descriptor-header-doorbell-done": "config-descriptor-header-transfer-no-reply",
         "usb-config-descriptor-header-wait-begin": "config-descriptor-header-transfer-no-reply",
@@ -6054,6 +6215,12 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-config-descriptor-header-failed": "config-descriptor-header-transfer-failed",
         "usb-config-descriptor-header-transfer-timeout": "config-descriptor-header-transfer-timeout",
         "usb-config-descriptor-header-status-timeout": "config-descriptor-header-status-timeout",
+        "usb-config-descriptor-header-transfer-event-slot-empty": "config-descriptor-header-transfer-event-slot-empty",
+        "usb-config-descriptor-header-transfer-event-cycle-mismatch": "config-descriptor-header-transfer-event-cycle-mismatch",
+        "usb-config-descriptor-header-transfer-event-ignored": "config-descriptor-header-transfer-event-ignored",
+        "usb-config-descriptor-header-status-event-slot-empty": "config-descriptor-header-status-event-slot-empty",
+        "usb-config-descriptor-header-status-event-cycle-mismatch": "config-descriptor-header-status-event-cycle-mismatch",
+        "usb-config-descriptor-header-status-event-ignored": "config-descriptor-header-status-event-ignored",
         "usb-config-descriptor-full-begin": "config-descriptor-full-submit-no-reply",
         "usb-config-descriptor-full-doorbell-done": "config-descriptor-full-transfer-no-reply",
         "usb-config-descriptor-full-wait-begin": "config-descriptor-full-transfer-no-reply",
@@ -6062,6 +6229,12 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-config-descriptor-full-failed": "config-descriptor-full-transfer-failed",
         "usb-config-descriptor-full-transfer-timeout": "config-descriptor-full-transfer-timeout",
         "usb-config-descriptor-full-status-timeout": "config-descriptor-full-status-timeout",
+        "usb-config-descriptor-full-transfer-event-slot-empty": "config-descriptor-full-transfer-event-slot-empty",
+        "usb-config-descriptor-full-transfer-event-cycle-mismatch": "config-descriptor-full-transfer-event-cycle-mismatch",
+        "usb-config-descriptor-full-transfer-event-ignored": "config-descriptor-full-transfer-event-ignored",
+        "usb-config-descriptor-full-status-event-slot-empty": "config-descriptor-full-status-event-slot-empty",
+        "usb-config-descriptor-full-status-event-cycle-mismatch": "config-descriptor-full-status-event-cycle-mismatch",
+        "usb-config-descriptor-full-status-event-ignored": "config-descriptor-full-status-event-ignored",
         "usb-hid-endpoint-parse-begin": "hid-endpoint-parse-no-reply",
         "usb-hid-endpoint-parse-found": "hid-configure-endpoint-no-reply",
         "usb-hid-endpoint-parse-missing": "hid-endpoint-not-found",
@@ -6069,7 +6242,18 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-hid-endpoint-parse-no-interrupt-in": "hid-interrupt-in-not-found",
         "usb-hid-endpoint-parse-malformed": "hid-config-descriptor-malformed",
         "usb-hub-scan-begin": "hub-child-scan-no-reply",
+        "usb-hub-set-configuration-begin": "hub-set-configuration-no-reply",
+        "usb-hub-set-configuration-done": "hub-set-configuration-settle-no-reply",
+        "usb-hub-descriptor-begin": "hub-descriptor-no-reply",
+        "usb-hub-descriptor-done": "hub-context-no-reply",
+        "usb-hub-context-begin": "hub-context-no-reply",
+        "usb-hub-context-done": "hub-port-power-no-reply",
+        "usb-hub-port-power-begin": "hub-port-power-no-reply",
+        "usb-hub-port-power-done": "hub-port-reset-no-reply",
+        "usb-hub-port-reset-begin": "hub-port-reset-no-reply",
+        "usb-hub-port-ready": "hub-child-probe-no-reply",
         "usb-hub-child-probe-begin": "hub-child-probe-no-reply",
+        "usb-hub-child-speed-fallback-begin": "hub-child-speed-fallback-no-reply",
         "usb-hub-scan-no-keyboard": "hub-topology-no-keyboard",
         "usb-hid-configure-endpoint-begin": "hid-configure-endpoint-no-reply",
         "usb-hid-configure-endpoint-done": "hid-set-configuration-no-reply",
@@ -6459,6 +6643,13 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_gate = max(wifi_gate, 7)
         wifi_blocker = "control-plane-revinfo-badarg"
         wifi_exact, wifi_phase, wifi_blocker_line = revinfo_badarg
+    host_eapol_firstread = summarize_host_eapol_firstread_status(event_list)
+    if host_eapol_firstread is not None and (
+        wifi_gate <= 7 or wifi_exact in {"host-eapol-required", "wifi-host-eapol-pending"}
+    ):
+        wifi_blocker, wifi_phase, wifi_blocker_line = host_eapol_firstread
+        wifi_exact = wifi_blocker
+        wifi_gate = max(wifi_gate, 7)
     if wifi_exact in {"host-eapol-required", "wifi-host-eapol-pending"}:
         wifi_gate = max(wifi_gate, 7)
         wifi_blocker = wifi_exact

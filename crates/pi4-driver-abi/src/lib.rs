@@ -635,6 +635,91 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERFACE: u32 
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_NO_INTERRUPT_IN: u32 = 275;
 /// USB runtime stopped HID endpoint parsing at a malformed descriptor boundary.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_ENDPOINT_PARSE_MALFORMED: u32 = 276;
+/// USB runtime sees an empty event TRB while polling full-speed descriptor-prime data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_EVENT_SLOT_EMPTY: u32 =
+    277;
+/// USB runtime sees a cycle-mismatched event TRB while polling full-speed descriptor-prime data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_EVENT_CYCLE_MISMATCH:
+    u32 = 278;
+/// USB runtime consumed an event that did not match full-speed descriptor-prime data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_EVENT_IGNORED: u32 =
+    279;
+/// USB runtime sees an empty event TRB while polling full-speed descriptor-prime status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT_SLOT_EMPTY: u32 =
+    280;
+/// USB runtime sees a cycle-mismatched event TRB while polling full-speed descriptor-prime status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT_CYCLE_MISMATCH:
+    u32 = 281;
+/// USB runtime consumed an event that did not match full-speed descriptor-prime status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT_IGNORED: u32 = 282;
+/// USB runtime sees an empty event TRB while polling the final device descriptor data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY: u32 = 283;
+/// USB runtime sees a cycle-mismatched event TRB while polling final device descriptor data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_EVENT_CYCLE_MISMATCH: u32 =
+    284;
+/// USB runtime consumed an event that did not match final device descriptor data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_EVENT_IGNORED: u32 = 285;
+/// USB runtime sees an empty event TRB while polling the final device descriptor status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT_SLOT_EMPTY: u32 = 286;
+/// USB runtime sees a cycle-mismatched event TRB while polling final device descriptor status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH: u32 = 287;
+/// USB runtime consumed an event that did not match final device descriptor status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT_IGNORED: u32 = 288;
+/// USB runtime sees an empty event TRB while polling configuration-header data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_EVENT_SLOT_EMPTY: u32 =
+    289;
+/// USB runtime sees a cycle-mismatched event TRB while polling configuration-header data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_EVENT_CYCLE_MISMATCH:
+    u32 = 290;
+/// USB runtime consumed an event that did not match configuration-header data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_TRANSFER_EVENT_IGNORED: u32 =
+    291;
+/// USB runtime sees an empty event TRB while polling configuration-header status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT_SLOT_EMPTY: u32 =
+    292;
+/// USB runtime sees a cycle-mismatched event TRB while polling configuration-header status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT_CYCLE_MISMATCH:
+    u32 = 293;
+/// USB runtime consumed an event that did not match configuration-header status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT_IGNORED: u32 = 294;
+/// USB runtime sees an empty event TRB while polling full-configuration data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_EVENT_SLOT_EMPTY: u32 =
+    295;
+/// USB runtime sees a cycle-mismatched event TRB while polling full-configuration data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_EVENT_CYCLE_MISMATCH:
+    u32 = 296;
+/// USB runtime consumed an event that did not match full-configuration data.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_EVENT_IGNORED: u32 = 297;
+/// USB runtime sees an empty event TRB while polling full-configuration status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_SLOT_EMPTY: u32 =
+    298;
+/// USB runtime sees a cycle-mismatched event TRB while polling full-configuration status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_CYCLE_MISMATCH: u32 =
+    299;
+/// USB runtime consumed an event that did not match full-configuration status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_IGNORED: u32 = 300;
+/// USB runtime is setting the hub configuration before child traversal.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN: u32 = 301;
+/// USB runtime set the hub configuration before child traversal.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DONE: u32 = 302;
+/// USB runtime is reading the USB hub descriptor.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_BEGIN: u32 = 303;
+/// USB runtime read the USB hub descriptor.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DONE: u32 = 304;
+/// USB runtime is evaluating the xHCI hub context.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CONTEXT_BEGIN: u32 = 305;
+/// USB runtime evaluated the xHCI hub context.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CONTEXT_DONE: u32 = 306;
+/// USB runtime is powering a downstream hub port.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN: u32 = 307;
+/// USB runtime completed the downstream hub port power settle.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE: u32 = 308;
+/// USB runtime is resetting a downstream hub port.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN: u32 = 309;
+/// USB runtime found a ready downstream hub port.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY: u32 = 310;
+/// USB runtime is re-probing a hub child with a fallback speed.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_SPEED_FALLBACK_BEGIN: u32 = 311;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-owned command endpoint/shared-ring intake loop.

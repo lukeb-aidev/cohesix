@@ -466,6 +466,8 @@ static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED: AtomicBool = AtomicBool:
 // A controller-ready completion can precede root-port and HID endpoint events by
 // a few linked-runtime turns; keep prompt settling bounded and non-blocking.
 const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 3;
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const LINKED_LOCAL_SEAT_USB_PROBE_PROGRESS_BURST_ATTEMPTS: usize = 3;
 
 #[cfg(all(
     feature = "kernel",
@@ -1246,9 +1248,25 @@ impl LocalSeatRuntime {
                 LocalSeatKeyboardProbeResult::BackendUnavailable
             };
             let was_enabled = self.backend_keyboard_polling_enabled;
+            let mut previous_progress = latest_usb_enumeration_progress_token();
             local_seat_driver_runtime_arm_prompt_safe_probe(self.root_console_ready);
             self.backend_keyboard_polling_enabled = true;
             self.poll_backend_keyboard();
+            for _ in 0..LINKED_LOCAL_SEAT_USB_PROBE_PROGRESS_BURST_ATTEMPTS {
+                let current_progress = latest_usb_enumeration_progress_token();
+                if !usb_enumeration_progress_token_advanced(previous_progress, current_progress) {
+                    break;
+                }
+                if !LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire)
+                    || LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
+                {
+                    break;
+                }
+                previous_progress = current_progress;
+                local_seat_driver_runtime_arm_prompt_safe_probe(self.root_console_ready);
+                self.backend_keyboard_polling_enabled = true;
+                self.poll_backend_keyboard();
+            }
             let keep_polling = was_enabled || local_seat_driver_runtime_keyboard_attached();
             self.backend_keyboard_polling_enabled = keep_polling;
             if !keep_polling {
@@ -2360,6 +2378,24 @@ const fn local_seat_yes_no(value: bool) -> &'static str {
     } else {
         "no"
     }
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn latest_usb_enumeration_progress_token() -> Option<(u32, u32, u32)> {
+    crate::hal::driver_task::latest_driver_task_ring_progress(driver_task_contract()).and_then(
+        |progress| {
+            (progress.marker_valid && progress.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX)
+                .then_some((progress.sequence, progress.phase, progress.aux0))
+        },
+    )
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn usb_enumeration_progress_token_advanced(
+    previous: Option<(u32, u32, u32)>,
+    current: Option<(u32, u32, u32)>,
+) -> bool {
+    matches!(current, Some(current) if Some(current) != previous)
 }
 
 #[cfg(all(
@@ -4683,6 +4719,25 @@ mod tests {
     #[test]
     fn linked_usb_enumeration_resume_remains_bounded_per_retry() {
         assert!((1..=3).contains(&LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn linked_usb_probe_progress_burst_is_progress_bounded() {
+        assert!((1..=3).contains(&LINKED_LOCAL_SEAT_USB_PROBE_PROGRESS_BURST_ATTEMPTS));
+        assert!(!usb_enumeration_progress_token_advanced(None, None));
+        assert!(usb_enumeration_progress_token_advanced(
+            None,
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX))
+        ));
+        assert!(!usb_enumeration_progress_token_advanced(
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX))
+        ));
+        assert!(usb_enumeration_progress_token_advanced(
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            Some((8, 236, DRIVER_RUNTIME_USB_ENUMERATE_AUX))
+        ));
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
