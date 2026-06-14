@@ -296,8 +296,20 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DOORBELL_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_CYCLE_MISMATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_SLOT_EMPTY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_CYCLE_MISMATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_IGNORED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_SLOT_EMPTY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN,
@@ -2051,12 +2063,13 @@ const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRA
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
 const DRIVER_TASK_USB_ENUM_TRANSFER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
-const DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 128;
+const DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 256;
 const DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 256;
 const DRIVER_TASK_PCIE_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 8;
 const DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 64;
 const DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 512;
+const DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32_768;
 const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 0;
 const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
 
@@ -2207,6 +2220,8 @@ struct DriverTaskCommandSlot {
     ring_log_progress_count: AtomicUsize,
     ring_log_keep_active_key: AtomicUsize,
     ring_log_keep_active_count: AtomicUsize,
+    ring_log_abort_key: AtomicUsize,
+    ring_log_abort_count: AtomicUsize,
     ring_handler: AtomicUsize,
     ring_context: AtomicUsize,
     ring_service_kind: AtomicUsize,
@@ -2269,6 +2284,8 @@ impl DriverTaskCommandSlot {
             ring_log_progress_count: AtomicUsize::new(0),
             ring_log_keep_active_key: AtomicUsize::new(0),
             ring_log_keep_active_count: AtomicUsize::new(0),
+            ring_log_abort_key: AtomicUsize::new(0),
+            ring_log_abort_count: AtomicUsize::new(0),
             ring_handler: AtomicUsize::new(0),
             ring_context: AtomicUsize::new(0),
             ring_service_kind: AtomicUsize::new(DriverTaskRingServiceKind::None.as_usize()),
@@ -2387,6 +2404,7 @@ enum DriverTaskRingRepeatLog {
     Timeout,
     Progress,
     KeepActive,
+    Abort,
 }
 
 #[cfg(feature = "kernel")]
@@ -2421,7 +2439,7 @@ fn driver_task_log_nonzero_key(key: usize) -> usize {
 
 #[cfg(feature = "kernel")]
 fn driver_task_log_repeat_milestone(count: usize) -> bool {
-    count <= 4 || count.is_power_of_two() || count % 64 == 0
+    count <= 4 || count.is_power_of_two()
 }
 
 #[cfg(feature = "kernel")]
@@ -2474,6 +2492,7 @@ fn driver_task_ring_repeat_atoms(
             &slot.ring_log_keep_active_key,
             &slot.ring_log_keep_active_count,
         ),
+        DriverTaskRingRepeatLog::Abort => (&slot.ring_log_abort_key, &slot.ring_log_abort_count),
     }
 }
 
@@ -2504,6 +2523,34 @@ fn driver_task_ring_log_key(
     ] {
         key = driver_task_log_hash_usize(key, value);
     }
+    key
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_abort_log_key(
+    endpoint: usize,
+    request: usize,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+    reason: &'static str,
+    timeout_count: usize,
+    progress: DriverTaskRingProgressRecord,
+) -> usize {
+    let request_key =
+        if driver_task_ring_progress_matches_request(progress, request as u32, command.aux0) {
+            request
+        } else {
+            progress.sequence as usize
+        };
+    let mut key = driver_task_ring_log_key(
+        endpoint,
+        request_key,
+        command,
+        mode,
+        progress,
+        timeout_count,
+    );
+    key = driver_task_log_hash_str(key, reason);
     key
 }
 
@@ -2728,6 +2775,44 @@ pub(crate) fn latest_driver_task_ring_progress(
         phase_name: driver_task_ring_progress_phase_label(phase),
         aux0,
     })
+}
+
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_record_driver_task_ring_progress_snapshot(
+    contract: DriverTaskContract,
+    sequence: u32,
+    phase: u32,
+    aux0: u32,
+) {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    record_driver_task_ring_progress(
+        slot,
+        DriverTaskRingProgressRecord {
+            magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+            sequence,
+            phase,
+            aux0,
+        },
+    );
+}
+
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_clear_driver_task_ring_progress_snapshot(contract: DriverTaskContract) {
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.last_progress_magic.store(0, Ordering::Release);
+    slot.last_progress_sequence.store(0, Ordering::Release);
+    slot.last_progress_phase.store(0, Ordering::Release);
+    slot.last_progress_aux0.store(0, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -4779,6 +4864,42 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN => "usb-hub-port-power-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE => "usb-hub-port-power-done",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN => "usb-hub-port-status-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DOORBELL_DONE => {
+            "usb-hub-port-status-doorbell-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN => {
+            "usb-hub-port-status-wait-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT => {
+            "usb-hub-port-status-data-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT => {
+            "usb-hub-port-status-status-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT => {
+            "usb-hub-port-status-transfer-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT => {
+            "usb-hub-port-status-status-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_SLOT_EMPTY => {
+            "usb-hub-port-status-transfer-event-slot-empty"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_CYCLE_MISMATCH => {
+            "usb-hub-port-status-transfer-event-cycle-mismatch"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_IGNORED => {
+            "usb-hub-port-status-transfer-event-ignored"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_SLOT_EMPTY => {
+            "usb-hub-port-status-status-event-slot-empty"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_CYCLE_MISMATCH => {
+            "usb-hub-port-status-status-event-cycle-mismatch"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED => {
+            "usb-hub-port-status-status-event-ignored"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE => "usb-hub-port-status-done",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED => "usb-hub-port-status-failed",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN => "usb-hub-port-reset-begin",
@@ -4983,6 +5104,20 @@ fn emit_driver_task_ring_call_abort(
     use core::fmt::Write;
     use heapless::String;
 
+    let key = driver_task_ring_abort_log_key(
+        endpoint,
+        request,
+        command,
+        mode,
+        reason,
+        timeout_count,
+        progress,
+    );
+    let Some(repeat_count) =
+        driver_task_ring_log_repeat_count(contract, DriverTaskRingRepeatLog::Abort, key)
+    else {
+        return;
+    };
     let mut line = String::<640>::new();
     let _ = write!(
         line,
@@ -5004,6 +5139,9 @@ fn emit_driver_task_ring_call_abort(
         progress.aux0,
         driver_task_ring_progress_blocker(progress, request, command),
     );
+    if repeat_count > 1 {
+        let _ = write!(line, " repeat_count={}", repeat_count);
+    }
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
@@ -5370,10 +5508,21 @@ fn driver_task_ring_timeout_keep_active_limit_for_progress(
         && cached_driver_task_ring_progress_matches_request(slot, request, command.aux0)
         && driver_task_ring_cyw43_sdio_owner_phase(slot.last_progress_phase.load(Ordering::Acquire))
     {
-        DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
+        if driver_task_ring_cyw43_sdio_owner_reply_phase(
+            slot.last_progress_phase.load(Ordering::Acquire),
+        ) {
+            DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT
+        } else {
+            DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
+        }
     } else {
         limit
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_cyw43_sdio_owner_reply_phase(phase: u32) -> bool {
+    phase == DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY
 }
 
 #[cfg(feature = "kernel")]
@@ -5455,6 +5604,18 @@ const fn driver_task_ring_usb_enum_hub_wait_phase(phase: u32) -> bool {
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DOORBELL_DONE
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_SLOT_EMPTY
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_CYCLE_MISMATCH
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_IGNORED
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_SLOT_EMPTY
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_CYCLE_MISMATCH
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN
@@ -9777,7 +9938,7 @@ mod tests {
             DriverTaskRingProgressRecord {
                 magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
                 sequence: request,
-                phase: DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
                 aux0: command.aux0,
             },
         );
@@ -9828,6 +9989,65 @@ mod tests {
             (
                 false,
                 DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
+            )
+        );
+
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+                aux0: command.aux0,
+            },
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+            ),
+            DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        assert!(
+            DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT
+                > DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+
+        slot.timeout_resumes.store(
+            DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
+            (true, DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT)
+        );
+
+        slot.timeout_resumes.store(
+            DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
+            (
+                false,
+                DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT
             )
         );
     }
@@ -10323,6 +10543,30 @@ mod tests {
                 magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
                 sequence: request,
                 phase:
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT_IGNORED,
+                aux0: command.aux0,
+            },
+        );
+
+        slot.timeout_resumes.store(127, Ordering::Release);
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
+            (true, 128)
+        );
+
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase:
                     DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH,
                 aux0: command.aux0,
             },
@@ -10496,6 +10740,18 @@ mod tests {
 
         for phase in [
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DOORBELL_DONE,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_SLOT_EMPTY,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_CYCLE_MISMATCH,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_IGNORED,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_SLOT_EMPTY,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_CYCLE_MISMATCH,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED,
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN,
@@ -10930,10 +11186,83 @@ mod tests {
             driver_task_log_repeat_count(&key_cell, &count_cell, 0x55),
             Some(8)
         );
+        let mut emitted_16 = false;
+        let mut emitted_32 = false;
+        let mut emitted_64 = false;
+        let mut emitted_128 = false;
+        let mut emitted_192 = false;
+        for _ in 9..=192 {
+            if let Some(count) = driver_task_log_repeat_count(&key_cell, &count_cell, 0x55) {
+                emitted_16 |= count == 16;
+                emitted_32 |= count == 32;
+                emitted_64 |= count == 64;
+                emitted_128 |= count == 128;
+                emitted_192 |= count == 192;
+            }
+        }
+        assert!(emitted_16);
+        assert!(emitted_32);
+        assert!(emitted_64);
+        assert!(emitted_128);
+        assert!(!emitted_192);
         assert_eq!(
             driver_task_log_repeat_count(&key_cell, &count_cell, 0x66),
             Some(1)
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_stale_abort_log_key_deduplicates_fresh_request_churn() {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: core::mem::size_of::<pi4_driver_abi::DriverRuntimeCyw43CommandDescriptor>()
+                    as u16,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        let stale_progress = DriverTaskRingProgressRecord {
+            magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+            sequence: 477,
+            phase: DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+            aux0: command.aux0,
+        };
+
+        let key_478 = driver_task_ring_abort_log_key(
+            0x199e,
+            478,
+            command,
+            DriverTaskRingCommandMode::PromptSlice,
+            "timeout-resume-limit",
+            DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT,
+            stale_progress,
+        );
+        let key_479 = driver_task_ring_abort_log_key(
+            0x199e,
+            479,
+            command,
+            DriverTaskRingCommandMode::PromptSlice,
+            "timeout-resume-limit",
+            DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT,
+            stale_progress,
+        );
+        assert_eq!(key_478, key_479);
+
+        let live_request_key = driver_task_ring_abort_log_key(
+            0x199e,
+            477,
+            command,
+            DriverTaskRingCommandMode::PromptSlice,
+            "timeout-resume-limit",
+            DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT,
+            stale_progress,
+        );
+        assert_ne!(key_478, live_request_key);
     }
 
     #[cfg(feature = "kernel")]

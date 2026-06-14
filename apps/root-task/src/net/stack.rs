@@ -188,6 +188,10 @@ fn wifi_host_eapol_blocks_data_path(bringup_status: Option<&'static str>) -> boo
     )
 }
 
+fn wifi_host_eapol_blocks_driver_task_pre_poll(bringup_status: Option<&'static str>) -> bool {
+    wifi_host_eapol_blocks_data_path(bringup_status)
+}
+
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNetStatic;
 #[cfg(not(feature = "net-backend-virtio"))]
@@ -5749,6 +5753,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         hot_path.as_u32() as usize,
                         crate::drivers::driver_task_net::runtime_ring_service,
                     );
+                    if wifi_host_eapol_blocks_driver_task_pre_poll(
+                        self.device.bringup_status_label(),
+                    ) {
+                        return self.poll_with_time(now_ms);
+                    }
                     let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
                         0,
                         hot_path,
@@ -5813,6 +5822,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         hot_path.as_u32() as usize,
                         crate::drivers::driver_task_net::runtime_ring_service,
                     );
+                    if wifi_host_eapol_blocks_driver_task_pre_poll(
+                        self.device.bringup_status_label(),
+                    ) {
+                        return self.poll_budgeted_with_time(now_ms, budget);
+                    }
                     let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
                         0,
                         hot_path,
@@ -6575,6 +6589,20 @@ mod tests {
         )));
         assert!(!wifi_host_eapol_blocks_data_path(Some("dhcp-pending")));
         assert!(!wifi_host_eapol_blocks_data_path(None));
+    }
+
+    #[test]
+    fn host_eapol_pending_and_required_block_driver_task_pre_poll() {
+        assert!(wifi_host_eapol_blocks_driver_task_pre_poll(Some(
+            "wifi-host-eapol-pending"
+        )));
+        assert!(wifi_host_eapol_blocks_driver_task_pre_poll(Some(
+            "wifi-host-eapol-required"
+        )));
+        assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(Some(
+            "dhcp-pending"
+        )));
+        assert!(!wifi_host_eapol_blocks_driver_task_pre_poll(None));
     }
 
     #[test]

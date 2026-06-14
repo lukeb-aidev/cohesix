@@ -2328,6 +2328,7 @@ struct Cyw43HostEapolActivePoll {
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Cyw43HostEapolPollResult {
+    completed: bool,
     observed_frame: bool,
     activity: bool,
     secure: bool,
@@ -2340,7 +2341,6 @@ fn poll_cyw43_host_eapol_once(
     session: &mut Cyw43HostEapolSession,
 ) -> Result<Cyw43HostEapolStep, DriverTaskNetError> {
     let poll = session.progress.polls as usize;
-    session.progress.polls = session.progress.polls.saturating_add(1);
     let mut tx_frame = [0u8; MAX_FRAME_LEN];
     let rx_poll_flags = if cyw43_host_eapol_rx_firstread_due(
         poll,
@@ -2361,11 +2361,9 @@ fn poll_cyw43_host_eapol_once(
             active_poll.kind,
             &mut tx_frame,
         )?;
+        record_cyw43_host_eapol_poll_completion(session, result);
         if result.secure {
             return Ok(Cyw43HostEapolStep::Secure);
-        }
-        if !result.observed_frame {
-            session.progress.record_empty_poll();
         }
         return Ok(Cyw43HostEapolStep::Pending {
             activity: result.activity,
@@ -2399,17 +2397,30 @@ fn poll_cyw43_host_eapol_once(
         }
         result.observed_frame |= data_result.observed_frame;
         result.activity |= data_result.activity;
+        result.completed |= data_result.completed;
     }
 
     if cyw43_active_prompt_poll(contract).is_none() {
         result.activity |= cyw43_service_host_eapol_post_assoc(contract, station_mac, session);
     }
-    if !result.observed_frame {
-        session.progress.record_empty_poll();
-    }
+    record_cyw43_host_eapol_poll_completion(session, result);
     Ok(Cyw43HostEapolStep::Pending {
         activity: result.activity,
     })
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_host_eapol_poll_completion(
+    session: &mut Cyw43HostEapolSession,
+    result: Cyw43HostEapolPollResult,
+) {
+    if !result.completed {
+        return;
+    }
+    session.progress.polls = session.progress.polls.saturating_add(1);
+    if !result.observed_frame {
+        session.progress.record_empty_poll();
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -2458,6 +2469,7 @@ fn process_cyw43_host_eapol_control_completion(
     completion: DriverTaskCompletionRecord,
 ) -> Cyw43HostEapolPollResult {
     let mut result = Cyw43HostEapolPollResult::default();
+    result.completed = true;
     if let Some((flags, token)) = cyw43_driver_task_frame_from_completion(contract, completion) {
         result.observed_frame = true;
         result.activity = true;
@@ -2497,6 +2509,7 @@ fn process_cyw43_host_eapol_data_completion(
     tx_frame: &mut [u8; MAX_FRAME_LEN],
 ) -> Result<Cyw43HostEapolPollResult, DriverTaskNetError> {
     let mut result = Cyw43HostEapolPollResult::default();
+    result.completed = true;
     if let Some((flags, token)) = cyw43_driver_task_frame_from_completion(contract, completion) {
         result.observed_frame = true;
         result.activity = true;
@@ -6986,6 +6999,43 @@ mod tests {
             CYW43_HOST_EAPOL_START_MAX
         ));
         assert!(!cyw43_host_eapol_start_due(2, 1));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_pending_transport_does_not_spend_poll_window() {
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+
+        record_cyw43_host_eapol_poll_completion(&mut session, Cyw43HostEapolPollResult::default());
+        assert_eq!(session.progress.polls, 0);
+        assert_eq!(session.progress.empty_polls, 0);
+
+        record_cyw43_host_eapol_poll_completion(
+            &mut session,
+            Cyw43HostEapolPollResult {
+                completed: true,
+                observed_frame: false,
+                activity: false,
+                secure: false,
+            },
+        );
+        assert_eq!(session.progress.polls, 1);
+        assert_eq!(session.progress.empty_polls, 1);
+
+        record_cyw43_host_eapol_poll_completion(
+            &mut session,
+            Cyw43HostEapolPollResult {
+                completed: true,
+                observed_frame: true,
+                activity: true,
+                secure: false,
+            },
+        );
+        assert_eq!(session.progress.polls, 2);
+        assert_eq!(session.progress.empty_polls, 1);
     }
 
     #[cfg(feature = "kernel")]

@@ -231,9 +231,35 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS: u64 = 10_000;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS: u16 = 1024;
 #[cfg(all(feature = "kernel", feature = "usb"))]
+const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS: u64 = 250;
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS: u16 = 16;
+#[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS: u16 = 1;
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
 const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 32;
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn post_prompt_local_seat_attach_retry_policy(
+    usb_no_reply: bool,
+    usb_active: bool,
+) -> Option<(u64, u16, &'static str)> {
+    if usb_active {
+        Some((
+            POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS,
+            POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS,
+            "serial-safe-active-usb-progress",
+        ))
+    } else if usb_no_reply {
+        None
+    } else {
+        Some((
+            POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS,
+            POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS,
+            "serial-safe-usb-progress",
+        ))
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalSeatConsumePhase {
@@ -1364,6 +1390,7 @@ enum WifiDebugCommand {
 enum UsbDebugCommand {
     Help,
     Status,
+    DumpState,
     Diag,
     EnableKeyboard,
     ProbeKeyboard,
@@ -2596,6 +2623,9 @@ where
                 let keyboard_probe = runtime.probe_backend_keyboard_once();
                 let usb_no_reply = !keyboard_probe.attached()
                     && runtime.keyboard_trace().driver_task_budget_overruns > usb_overruns_before;
+                let usb_active = crate::hal::driver_task::driver_task_ring_command_active(
+                    crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                );
                 if verbose_attempt || keyboard_probe.attached() {
                     let usb_frontier =
                         "[drivers] USB frontier: prompt-settle linked-runtime probe armed; xHCI/keyboard state preserved";
@@ -2630,20 +2660,23 @@ where
                     );
                     boot_log::force_uart_line_raw(probe_line.as_str());
                 }
-                if !keyboard_probe.attached() && !usb_no_reply {
+                let retry_policy = if keyboard_probe.attached() {
+                    None
+                } else {
+                    post_prompt_local_seat_attach_retry_policy(usb_no_reply, usb_active)
+                };
+                if let Some((retry_ms, retry_turns, retry_action)) = retry_policy {
                     self.post_prompt_local_seat_attach_pending = true;
                     self.post_prompt_local_seat_attach_idle_turns = 0;
-                    self.post_prompt_local_seat_attach_retry_turns =
-                        POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS;
-                    self.post_prompt_local_seat_attach_not_before_ms = self
-                        .now_ms
-                        .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS);
+                    self.post_prompt_local_seat_attach_retry_turns = retry_turns;
+                    self.post_prompt_local_seat_attach_not_before_ms =
+                        self.now_ms.saturating_add(retry_ms);
                     if verbose_attempt {
                         let mut retry_line = HeaplessString::<128>::new();
                         let _ = write!(
                             retry_line,
-                            "[local-seat] prompt-settle attach retry scheduled action=serial-safe-usb-progress retry_ms={}",
-                            POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS
+                            "[local-seat] prompt-settle attach retry scheduled action={} retry_ms={}",
+                            retry_action, retry_ms
                         );
                         boot_log::force_uart_line_raw(retry_line.as_str());
                     }
@@ -3752,12 +3785,7 @@ where
             Some(subcommand) if subcommand.eq_ignore_ascii_case("probe-ht") => {
                 WifiDebugCommand::ProbeHt
             }
-            Some(subcommand)
-                if subcommand.eq_ignore_ascii_case("diag")
-                    || subcommand.eq_ignore_ascii_case("triage") =>
-            {
-                WifiDebugCommand::Diag
-            }
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("diag") => WifiDebugCommand::Diag,
             Some(subcommand) if subcommand.eq_ignore_ascii_case("load-fw") => {
                 WifiDebugCommand::LoadFirmware
             }
@@ -3807,18 +3835,13 @@ where
         let command = match parts.next() {
             None => UsbDebugCommand::Help,
             Some(subcommand) if subcommand.eq_ignore_ascii_case("help") => UsbDebugCommand::Help,
-            Some(subcommand)
-                if subcommand.eq_ignore_ascii_case("status")
-                    || subcommand.eq_ignore_ascii_case("dump-state") =>
-            {
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("status") => {
                 UsbDebugCommand::Status
             }
-            Some(subcommand)
-                if subcommand.eq_ignore_ascii_case("diag")
-                    || subcommand.eq_ignore_ascii_case("triage") =>
-            {
-                UsbDebugCommand::Diag
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("dump-state") => {
+                UsbDebugCommand::DumpState
             }
+            Some(subcommand) if subcommand.eq_ignore_ascii_case("diag") => UsbDebugCommand::Diag,
             Some(subcommand) if subcommand.eq_ignore_ascii_case("enable-kbd") => {
                 UsbDebugCommand::EnableKeyboard
             }
@@ -3867,14 +3890,18 @@ where
             self.emit_console_line(
                 "  wifi dump-state - Show cached SDIO, clock, and contract trace state",
             );
-            self.emit_console_line("  wifi probe-ht   - Probe HT clock readiness without reboot");
             self.emit_console_line(
-                "  wifi diag       - Show compact state; probe HT only before preserved control-plane failure",
+                "  wifi probe-ht   - Run linked-runtime-backed HT diagnostics or report runtime-required",
             );
             self.emit_console_line(
-                "  wifi load-fw    - Retry firmware load from current transport",
+                "  wifi diag       - Show compact linked-runtime gate state; passive unless HT diagnostics are safe",
             );
-            self.emit_console_line("  wifi retry      - Rebuild transport, then reload firmware");
+            self.emit_console_line(
+                "  wifi load-fw    - Retry linked-runtime firmware load when the boundary supports it",
+            );
+            self.emit_console_line(
+                "  wifi retry      - Run linked-runtime transport and firmware retry when supported",
+            );
             self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
             self.emit_ack_ok(
                 WIFI_DEBUG_ACK_LABEL,
@@ -4032,6 +4059,7 @@ where
         let subcommand = match command {
             UsbDebugCommand::Help => "help",
             UsbDebugCommand::Status => "status",
+            UsbDebugCommand::DumpState => "dump-state",
             UsbDebugCommand::Diag => "diag",
             UsbDebugCommand::EnableKeyboard => "enable-kbd",
             UsbDebugCommand::ProbeKeyboard => "probe-kbd",
@@ -4044,7 +4072,7 @@ where
             );
             self.emit_console_line("  usb dump-state  - Alias for usb status");
             self.emit_console_line(
-                "  usb diag        - Show status and preflight without live xHCI probing",
+                "  usb diag        - Show passive linked-runtime gates without live xHCI probing",
             );
             self.emit_console_line(
                 "  usb enable-kbd  - Arm runtime USB keyboard probing after boot",
@@ -4066,7 +4094,7 @@ where
         }
         match command {
             UsbDebugCommand::Help => {}
-            UsbDebugCommand::Status => {
+            UsbDebugCommand::Status | UsbDebugCommand::DumpState => {
                 self.with_local_seat_mirror_suppressed(|this| {
                     let (backend_attached, polling_enabled) = {
                         let local_seat = match this.local_seat.as_mut() {
@@ -4086,7 +4114,7 @@ where
                     };
                     this.emit_usb_status(backend_attached, polling_enabled, None);
                 });
-                self.mirror_usb_debug_hdmi_frontier("status");
+                self.mirror_usb_debug_hdmi_frontier(subcommand);
             }
             UsbDebugCommand::Diag => {
                 self.with_local_seat_mirror_suppressed(|this| {
@@ -4162,7 +4190,7 @@ where
             }
             UsbDebugCommand::ProbeKeyboard => {
                 self.emit_console_line("usb: probing local-seat keyboard now");
-                let (backend_attached, polling_enabled) = {
+                let (backend_attached, polling_enabled, probe_result) = {
                     let local_seat = match self.local_seat.as_mut() {
                         Some(local_seat) => local_seat,
                         None => {
@@ -4170,17 +4198,18 @@ where
                             return;
                         }
                     };
-                    local_seat.probe_backend_keyboard_once();
+                    let probe_result = local_seat.probe_backend_keyboard_once();
                     (
                         local_seat.backend_attached(),
                         local_seat.backend_keyboard_polling_enabled(),
+                        probe_result,
                     )
                 };
-                self.emit_usb_status(
-                    backend_attached,
-                    polling_enabled,
-                    Some("action=keyboard-probe-complete"),
-                );
+                let detail = format_message(format_args!(
+                    "action=keyboard-probe-complete probe_result={}",
+                    probe_result.as_str()
+                ));
+                self.emit_usb_status(backend_attached, polling_enabled, Some(detail.as_str()));
             }
         }
 
@@ -4498,7 +4527,7 @@ where
             }
             let runtime_next_action = format_message(format_args!(
                 "usb: runtime_next_action action={} reason={} recovery_policy={} detail=0x{:04x}",
-                Self::usb_runtime_next_action_for_linked_detail(linked_detail),
+                next_step,
                 blocker,
                 Self::usb_runtime_recovery_policy_for_linked_detail(linked_detail),
                 linked_detail,
@@ -4858,6 +4887,18 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_SLOT_EMPTY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_CYCLE_MISMATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_IGNORED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_SLOT_EMPTY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_CYCLE_MISMATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN
@@ -5529,6 +5570,40 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN => {
                 "hub-port-status-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN => {
+                "hub-port-status-transfer-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT => {
+                "hub-port-status-status-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT => {
+                "hub-port-reset-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT => {
+                "hub-port-status-transfer-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT => {
+                "hub-port-status-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_SLOT_EMPTY => {
+                "hub-port-status-transfer-event-slot-empty"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_CYCLE_MISMATCH => {
+                "hub-port-status-transfer-event-cycle-mismatch"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_IGNORED => {
+                "hub-port-status-transfer-event-ignored"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_SLOT_EMPTY => {
+                "hub-port-status-status-event-slot-empty"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_CYCLE_MISMATCH => {
+                "hub-port-status-status-event-cycle-mismatch"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED => {
+                "hub-port-status-status-event-ignored"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE => {
                 "hub-port-reset-no-reply"
             }
@@ -6176,6 +6251,40 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN => {
                 "inspect-hub-port-status-control-transfer"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN => {
+                "poll-ep0-hub-port-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT => {
+                "poll-ep0-hub-port-status-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT => {
+                "clear-hub-port-changes-or-reset"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT => {
+                "inspect-missing-hub-port-status-data-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT => {
+                "inspect-missing-hub-port-status-status-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_SLOT_EMPTY => {
+                "inspect-hub-port-status-event-ring-empty"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_CYCLE_MISMATCH => {
+                "inspect-hub-port-status-event-cycle"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_IGNORED => {
+                "inspect-hub-port-status-ignored-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_SLOT_EMPTY => {
+                "inspect-hub-port-status-status-event-ring-empty"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_CYCLE_MISMATCH => {
+                "inspect-hub-port-status-status-event-cycle"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED => {
+                "inspect-hub-port-status-status-ignored-event"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE => {
                 "clear-hub-port-changes-or-reset"
             }
@@ -6485,6 +6594,87 @@ where
                 | "device-descriptor-prime-transfer-timeout"
                 | "device-descriptor-prime-status-timeout"
                 | "config-descriptor-no-reply"
+                | "config-descriptor-header-submit-no-reply"
+                | "config-descriptor-header-transfer-no-reply"
+                | "config-descriptor-header-status-no-reply"
+                | "config-descriptor-header-transfer-failed"
+                | "config-descriptor-header-transfer-timeout"
+                | "config-descriptor-header-status-timeout"
+                | "config-descriptor-header-transfer-event-slot-empty"
+                | "config-descriptor-header-transfer-event-cycle-mismatch"
+                | "config-descriptor-header-transfer-event-ignored"
+                | "config-descriptor-header-status-event-slot-empty"
+                | "config-descriptor-header-status-event-cycle-mismatch"
+                | "config-descriptor-header-status-event-ignored"
+                | "config-descriptor-full-submit-no-reply"
+                | "config-descriptor-full-transfer-no-reply"
+                | "config-descriptor-full-status-no-reply"
+                | "config-descriptor-full-transfer-failed"
+                | "config-descriptor-full-transfer-timeout"
+                | "config-descriptor-full-status-timeout"
+                | "config-descriptor-full-transfer-event-slot-empty"
+                | "config-descriptor-full-transfer-event-cycle-mismatch"
+                | "config-descriptor-full-transfer-event-ignored"
+                | "config-descriptor-full-status-event-slot-empty"
+                | "config-descriptor-full-status-event-cycle-mismatch"
+                | "config-descriptor-full-status-event-ignored"
+                | "hid-endpoint-not-ready"
+                | "hid-endpoint-parse-no-reply"
+                | "hid-endpoint-not-found"
+                | "hid-interface-not-found"
+                | "hid-interrupt-in-not-found"
+                | "hid-config-descriptor-malformed"
+                | "hid-configure-endpoint-no-reply"
+                | "hid-configure-endpoint-failed"
+                | "hid-set-configuration-no-reply"
+                | "hid-set-configuration-failed"
+                | "hid-control-no-reply"
+                | "hid-control-failed"
+                | "hid-interrupt-queue-no-reply"
+                | "hid-interrupt-queue-failed"
+                | "hub-child-scan-no-reply"
+                | "hub-set-configuration-no-reply"
+                | "hub-set-configuration-status-no-reply"
+                | "hub-set-configuration-complete-no-reply"
+                | "hub-set-configuration-status-event-slot-empty"
+                | "hub-set-configuration-status-event-cycle-mismatch"
+                | "hub-set-configuration-status-event-ignored"
+                | "hub-set-configuration-status-timeout"
+                | "hub-set-configuration-failed"
+                | "hub-set-configuration-settle-no-reply"
+                | "hub-descriptor-no-reply"
+                | "hub-descriptor-transfer-no-reply"
+                | "hub-descriptor-status-no-reply"
+                | "hub-descriptor-transfer-failed"
+                | "hub-descriptor-transfer-timeout"
+                | "hub-descriptor-status-timeout"
+                | "hub-descriptor-transfer-event-slot-empty"
+                | "hub-descriptor-transfer-event-cycle-mismatch"
+                | "hub-descriptor-transfer-event-ignored"
+                | "hub-descriptor-status-event-slot-empty"
+                | "hub-descriptor-status-event-cycle-mismatch"
+                | "hub-descriptor-status-event-ignored"
+                | "hub-context-no-reply"
+                | "hub-port-power-no-reply"
+                | "hub-port-status-no-reply"
+                | "hub-port-status-transfer-no-reply"
+                | "hub-port-status-status-no-reply"
+                | "hub-port-status-transfer-timeout"
+                | "hub-port-status-timeout"
+                | "hub-port-status-transfer-event-slot-empty"
+                | "hub-port-status-transfer-event-cycle-mismatch"
+                | "hub-port-status-transfer-event-ignored"
+                | "hub-port-status-status-event-slot-empty"
+                | "hub-port-status-status-event-cycle-mismatch"
+                | "hub-port-status-status-event-ignored"
+                | "hub-port-status-failed"
+                | "hub-port-reset-no-reply"
+                | "hub-port-reset-set-no-reply"
+                | "hub-port-reset-completion-no-reply"
+                | "hub-port-reset-set-failed"
+                | "hub-child-probe-no-reply"
+                | "hub-child-speed-fallback-no-reply"
+                | "hub-topology-no-keyboard"
         )
     }
 
@@ -6930,24 +7120,34 @@ where
         if !Self::wifi_command_supports_driver_task_snapshot(command) {
             return false;
         }
-        let host_eapol_required = self
+        let host_eapol_exact = self
             .net_unavailable_detail
             .as_ref()
-            .is_some_and(|cause| cause.as_str().contains("host-eapol-required"));
-        let fault = if host_eapol_required {
+            .and_then(|cause| Self::wifi_host_eapol_exact_from_cause(cause.as_str()));
+        let host_eapol_exact =
+            host_eapol_exact.or_else(|| self.wifi_host_eapol_exact_from_current_net_status());
+        let fault = if host_eapol_exact.is_some() {
             None
         } else {
             crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status()
         };
         let sdio_status = crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
+        let progress_present = Self::wifi_driver_task_runtime_progress_present();
         if source == "debug-handle-unavailable"
             && self.net_unavailable_detail.is_none()
+            && host_eapol_exact.is_none()
             && fault.is_none()
             && sdio_status.is_none()
+            && !progress_present
         {
             return false;
         }
-        if self.net_unavailable_detail.is_none() && fault.is_none() && sdio_status.is_none() {
+        if self.net_unavailable_detail.is_none()
+            && host_eapol_exact.is_none()
+            && fault.is_none()
+            && sdio_status.is_none()
+            && !progress_present
+        {
             return false;
         }
 
@@ -6962,11 +7162,7 @@ where
             ));
             self.emit_console_line(detail.as_str());
         }
-        self.emit_wifi_driver_task_startup_blackbox(
-            fault,
-            host_eapol_required.then_some("host-eapol-required"),
-            source,
-        );
+        self.emit_wifi_driver_task_startup_blackbox(fault, host_eapol_exact, source);
         if let Some(fault) = fault {
             let fault_line = format_message(format_args!(
                 "wifi: cyw43 fault stage={} op={} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} detail=0x{:04x} reason={} result=0x{:08x}",
@@ -7025,6 +7221,52 @@ where
             );
         }
         true
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_host_eapol_exact_from_cause(cause: &str) -> Option<&'static str> {
+        if cause.contains("wifi-host-eapol-pending") || cause.contains("host-eapol-pending") {
+            Some("wifi-host-eapol-pending")
+        } else if cause.contains("wifi-host-eapol-required")
+            || cause.contains("host-eapol-required")
+        {
+            Some("host-eapol-required")
+        } else {
+            None
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn wifi_host_eapol_exact_from_status(status: &NetStatusReport) -> Option<&'static str> {
+        Self::wifi_host_eapol_exact_from_cause(status.address_source)
+            .or_else(|| Self::wifi_host_eapol_exact_from_cause(status.dhcp_phase))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_host_eapol_exact_from_current_net_status(&self) -> Option<&'static str> {
+        #[cfg(feature = "net-console")]
+        {
+            self.net.as_ref().and_then(|net| {
+                let status = net.status_report();
+                Self::wifi_host_eapol_exact_from_status(&status)
+            })
+        }
+        #[cfg(not(feature = "net-console"))]
+        {
+            None
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_driver_task_runtime_progress_present() -> bool {
+        crate::hal::driver_task::latest_driver_task_ring_progress(
+            crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+        )
+        .is_some()
+            || crate::hal::driver_task::latest_driver_task_ring_progress(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .is_some()
     }
 
     #[cfg(feature = "kernel")]
@@ -9289,7 +9531,11 @@ where
         exact_error.starts_with("cyw43-join-security-")
             || matches!(
                 exact_error,
-                "firmware-supplicant-unsupported" | "host-eapol-required" | "wsec-pmk-bad-argument"
+                "firmware-supplicant-unsupported"
+                    | "host-eapol-required"
+                    | "host-eapol-pending"
+                    | "wifi-host-eapol-pending"
+                    | "wsec-pmk-bad-argument"
             )
     }
 
@@ -9315,8 +9561,10 @@ where
             && snapshot.control_plane_f2_state == "linux-configured"
         {
             "firmware-feature-boundary"
-        } else if snapshot.control_plane_exact_error == "host-eapol-required"
-            && Self::wifi_sdhci_read_diag_is_clear(snapshot.control_plane_sdhci_read_diag)
+        } else if matches!(
+            snapshot.control_plane_exact_error,
+            "host-eapol-required" | "host-eapol-pending" | "wifi-host-eapol-pending"
+        ) && Self::wifi_sdhci_read_diag_is_clear(snapshot.control_plane_sdhci_read_diag)
             && snapshot.control_plane_f2_state == "linux-configured"
         {
             "host-supplicant-boundary"
@@ -9350,7 +9598,7 @@ where
     fn wifi_join_security_failing_iovar(snapshot: &WifiDebugSnapshot) -> &'static str {
         match snapshot.control_plane_exact_error {
             "firmware-supplicant-unsupported" => "sup_wpa,bsscfg:sup_wpa",
-            "host-eapol-required" => "eapol",
+            "host-eapol-required" | "host-eapol-pending" | "wifi-host-eapol-pending" => "eapol",
             "wsec-pmk-bad-argument" => "WLC_SET_WSEC_PMK",
             "cyw43-join-security-sup-wpa-loop" => "sup_wpa",
             "cyw43-join-security-bsscfg-sup-wpa-loop" => "bsscfg:sup_wpa",
@@ -9369,6 +9617,11 @@ where
             "0xffffffe9"
         } else if snapshot.control_plane_exact_error == "host-eapol-required" {
             "host-required"
+        } else if matches!(
+            snapshot.control_plane_exact_error,
+            "host-eapol-pending" | "wifi-host-eapol-pending"
+        ) {
+            "host-pending"
         } else if snapshot.control_plane_exact_error == "wsec-pmk-bad-argument" {
             "0xfffffffe"
         } else {
@@ -12229,6 +12482,16 @@ mod tests {
     use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer, TicketKey};
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    static WIFI_DRIVER_TASK_PROGRESS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn wifi_driver_task_progress_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        WIFI_DRIVER_TASK_PROGRESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     struct TestTimer {
         ticks: HeaplessVec<TickEvent, 8>,
         index: usize,
@@ -12968,6 +13231,36 @@ mod tests {
         );
         assert_eq!(
             TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN,
+            ),
+            "hub-port-status-transfer-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT,
+            ),
+            "poll-ep0-hub-port-status-status"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT,
+            ),
+            "hub-port-reset-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_IGNORED,
+            ),
+            "hub-port-status-transfer-event-ignored"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT,
+            ),
+            "inspect-missing-hub-port-status-status-event"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
             ),
             "hub-port-reset-no-reply"
@@ -13340,6 +13633,39 @@ mod tests {
             .mirrored_lines_snapshot()
             .iter()
             .any(|line| line.as_str() == "[boot] waiting for Wi-Fi"));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn post_prompt_local_seat_retry_policy_continues_active_usb_request() {
+        assert_eq!(
+            post_prompt_local_seat_attach_retry_policy(false, false),
+            Some((
+                POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS,
+                POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS,
+                "serial-safe-usb-progress"
+            ))
+        );
+        assert_eq!(
+            post_prompt_local_seat_attach_retry_policy(true, false),
+            None
+        );
+        assert_eq!(
+            post_prompt_local_seat_attach_retry_policy(true, true),
+            Some((
+                POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS,
+                POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS,
+                "serial-safe-active-usb-progress"
+            ))
+        );
+        assert_eq!(
+            post_prompt_local_seat_attach_retry_policy(false, true),
+            Some((
+                POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS,
+                POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS,
+                "serial-safe-active-usb-progress"
+            ))
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -16137,6 +16463,27 @@ mod tests {
                 "address-device-command-completion-no-reply"
             )
         );
+        for blocker in [
+            "config-descriptor-header-status-event-ignored",
+            "config-descriptor-full-transfer-event-slot-empty",
+            "hid-endpoint-not-ready",
+            "hid-interface-not-found",
+            "hub-set-configuration-status-event-ignored",
+            "hub-descriptor-transfer-no-reply",
+            "hub-descriptor-status-event-cycle-mismatch",
+            "hub-port-status-no-reply",
+            "hub-port-status-transfer-event-ignored",
+            "hub-port-reset-no-reply",
+            "hub-port-reset-set-no-reply",
+            "hub-port-reset-completion-no-reply",
+            "hub-child-speed-fallback-no-reply",
+            "hub-topology-no-keyboard",
+        ] {
+            assert!(
+                KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate(blocker),
+                "{blocker}"
+            );
+        }
         assert!(
             !KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate("command-ring-ready")
         );
@@ -16572,6 +16919,62 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn serial_usb_wifi_debug_reject_unadvertised_triage_aliases() {
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut()
+            .driver_mut()
+            .push_rx(b"wifi triage\nusb triage\n");
+        for _ in 0..16 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR WIFI reason=policy detail=unknown-subcommand"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("ERR USB reason=policy detail=unknown-subcommand"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("OK WIFI detail=subcommand=diag"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("OK USB detail=subcommand=diag"),
+            "{rendered}"
+        );
+        assert!(wifi.calls.is_empty());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn serial_wifi_diag_command_runs_dump_probe_dump() {
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -16766,6 +17169,63 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn serial_wifi_diag_reports_progress_only_snapshot_without_hal_debug_handle() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let sdio = crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT;
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(cyw43);
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(sdio);
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            cyw43,
+            77,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
+            0x4359_5734,
+        );
+
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        let mut transcript = Vec::new();
+        for _ in 0..128 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        }
+
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        drop(pump);
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(cyw43);
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(sdio);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "wifi: driver-task replay failure detail=net-state-unavailable source=debug-handle-unavailable"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: cyw43 linked_runtime_progress marker_valid=yes sequence=77"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("phase_name=cyw43-control-rx-poll-begin"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-replay-failure"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn serial_wifi_diag_reports_host_eapol_required_as_live_frontier() {
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -16815,6 +17275,107 @@ mod tests {
             !rendered.contains("wifi: cyw43 fault stage=cyw43-control-exchange"),
             "{rendered}"
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_diag_reports_host_eapol_pending_as_live_frontier() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut cause = HeaplessString::<192>::new();
+        let _ = cause.push_str("wifi-host-eapol-pending driver-task runtime init failed");
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network_unavailable_detail(Some(cause))
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        let mut transcript = Vec::new();
+        for _ in 0..128 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        }
+
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("cause=wifi-host-eapol-pending driver-task runtime init failed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: gate 8 name=host-eapol status=fail evidence=exact=wifi-host-eapol-pending"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: evidence boundary console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio failure_domain=wifi-host-eapol-pending direct_proof_gate=7"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: next_action=inspect-host-eapol-rx-path blocker=wifi-host-eapol-pending proof_gate=7"
+            ),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_diag_prefers_live_net_host_eapol_pending_frontier() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.active_interface = "wifi";
+        net.status.address_source = "wifi-host-eapol-pending";
+        net.status.dhcp_phase = "host-eapol-pending";
+        let mut wifi = FakeWifiDebug::new();
+        wifi.runtime_required = true;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        let mut transcript = Vec::new();
+        for _ in 0..128 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        }
+
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "wifi: gate 8 name=host-eapol status=fail evidence=exact=wifi-host-eapol-pending"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: evidence boundary console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio failure_domain=wifi-host-eapol-pending direct_proof_gate=7"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: next_action=inspect-host-eapol-rx-path blocker=wifi-host-eapol-pending proof_gate=7"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("wifi: cyw43 fault stage="), "{rendered}");
+        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -17008,6 +17569,17 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_wifi_diag_unavailable_returns_error_and_prompt() {
+        #[cfg(feature = "net-console")]
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        #[cfg(feature = "net-console")]
+        {
+            crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            );
+            crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+                crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            );
+        }
         let driver = LoopbackSerial::<1024>::new();
         let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -17170,7 +17742,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "usb: local-seat attached=no polling=deferred action=keyboard-probe-complete"
+                "usb: local-seat attached=no polling=deferred action=keyboard-probe-complete probe_result=backend-unavailable"
             ),
             "{rendered}"
         );
@@ -17183,6 +17755,49 @@ mod tests {
             "{rendered}"
         );
         assert!(!local_seat.backend_keyboard_polling_enabled());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_usb_dump_state_reports_lexical_subcommand() {
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 512, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"usb dump-state\n");
+        for _ in 0..4 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("usb: local-seat attached=no polling=deferred"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK USB detail=subcommand=dump-state scope=serial-local"),
+            "{rendered}"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -17905,6 +18520,36 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::wifi_join_security_status(&fake.snapshot),
             "host-required"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_host_eapol_pending_reports_join_gate() {
+        let mut fake = FakeWifiDebug::new();
+        fake.snapshot.debug_snapshot_stage = "cyw43-init-control-plane-fail";
+        fake.snapshot.control_plane_exact_error = "wifi-host-eapol-pending";
+        fake.snapshot.control_plane_sdhci_read_diag = "none";
+        fake.snapshot.control_plane_f2_state = "linux-configured";
+        fake.snapshot.control_plane_bootstrap_phase = "steady-state";
+        fake.snapshot.io_enable = Some(0x06);
+        fake.snapshot.io_ready = Some(0x06);
+
+        assert_eq!(
+            KernelConsoleTestPump::wifi_capture_verdict(&fake.snapshot),
+            ("join-security-edge", "join-security")
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_attribution(&fake.snapshot),
+            "host-supplicant-boundary"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_failing_iovar(&fake.snapshot),
+            "eapol"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_join_security_status(&fake.snapshot),
+            "host-pending"
         );
     }
 

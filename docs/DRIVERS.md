@@ -119,12 +119,26 @@ fixed in the same change.
 
 During hub traversal, the linked USB runtime publishes bounded post-power
 breadcrumbs before child probing: `usb-hub-port-status-begin`,
+`usb-hub-port-status-doorbell-done`, `usb-hub-port-status-wait-begin`,
+`usb-hub-port-status-data-event`, `usb-hub-port-status-status-event`,
 `usb-hub-port-status-done`, `usb-hub-port-status-failed`,
 `usb-hub-port-reset-set-begin`, `usb-hub-port-reset-set-done`, and
-`usb-hub-port-reset-set-failed`. These markers refine Gate 7 evidence between
+`usb-hub-port-reset-set-failed`. Timeout and event-ring diagnostic variants for
+the hub-port status data/status waits refine Gate 7 evidence between
 `usb-hub-port-power-done` and `usb-hub-port-reset-begin` while keeping all hub
 status reads, change clears, and reset requests inside the linked runtime over
 HAL-admitted mappings.
+
+Root-task keeps the admitted linked-runtime USB enumeration request active
+through descriptor status waits and hub traversal phases while same-sequence
+progress is visible. Prompt-side `usb probe-kbd` bursts continue when the
+runtime progress token advances or the same linked-runtime USB request remains
+active, so root does not publish false-fresh USB requests while the child is
+still completing a long EP0 hub-control turn. The linked USB runtime accepts
+same-slot EP0 success transfer events with controller-specific event pointers
+only inside the active data/status wait and only when the remaining-byte count
+matches that wait: bounded data-stage pointer mismatches become data progress,
+and zero-remaining status-stage pointer mismatches become status completion.
 
 ## seL4 Driver Model
 
@@ -575,7 +589,10 @@ detail:
   turn, including linked-runtime owner/root-action fields, active request and
   child-progress correlation, explicit expected-request/expected-aux validity
   for submitted turns, same-request resume status, the first blocker, the
-  current blocker, and the next action to take.
+  current blocker, and the next action to take. Repeated timeout, keep-active,
+  progress, and abort diagnostics are sparse milestone logs with
+  `repeat_count=<n>`; the first line and power-of-two repeats are retained while
+  high-volume identical hot-path failures stay off the serial console.
 - `DRIVER_TASK_BOOT_SMOKE` is QEMU transport proof only; it may exercise isolated
   VSpaces and fixed rings but cannot satisfy Pi hardware acceptance.
 
@@ -721,9 +738,10 @@ Device-visible address policy is not generic:
   control/data RX polls against the single active runtime slot: if a control or
   data poll owns the ring, the next slice resumes that same descriptor before
   trying the alternate poll or any post-association rescue/control action. While
-  host-EAPOL is pending or required, the normal smoltcp, DHCP, TCP, and
-  self-test phases stay parked so data-path RX cannot submit a mismatched CYW43
-  descriptor over the active EAPOL poll. If
+  host-EAPOL is pending or required, the generic driver-task pre-poll service
+  turn and the normal smoltcp, DHCP, TCP, and self-test phases stay parked so
+  data-path RX cannot submit a mismatched CYW43 descriptor over the active
+  EAPOL poll. If
   that proof is missing, root skips the deferred Wi-Fi replay and leaves a
   serial-diagnostic blocker instead of printing a prompt and then monopolizing
   it. The `Cohesix console ready` banner means the serial event pump can accept
@@ -808,6 +826,11 @@ returns ready or is explicitly reset. For payload-bearing SDIO/CYW43 turns, the
 active identity includes the staged descriptor and payload bytes; a changed
 descriptor, firmware/NVRAM chunk, SDIO owner payload, or shared-buffer segment is
 not a resume and must fail busy instead of replacing the in-flight bytes.
+CYW43 parent prompt polls also preserve the parent request while the child
+reports same-request SDIO-owner progress. `cyw43-sdio-owner-reply` means the
+SDIO owner completed its nested turn but the CYW43 parent has not yet published
+the parent completion; root gives only that phase a larger finite keep-active
+window and does not count unresolved transport resumes as host-EAPOL RX polls.
 SDIO engine-init completion details are part of the linked runtime ABI: success
 returns `0x5500` (`ready`), and faults preserve the exact subgate as
 `0x5501` (`adopt-power-missing`), `0x5502` (`adopt-clock-failed`), `0x5503`
@@ -825,25 +848,32 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 14 16:50 post-flash boot
-(`/Users/lukasbower/pi4-serial-20260614-165035.log`) supersedes earlier Wi-Fi
+The June 14 22:12 post-flash boot
+(`/Users/lukasbower/pi4-serial-20260614-221244.log`) supersedes earlier Wi-Fi
 frontiers as current truth. That trace proves prompt-first deferred Wi-Fi
 replay, descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init
-detail `0x5500`, CYW43 engine init, firmware/NVRAM upload, firmware release
-after owner-state recovery, split Linux-order station controls, event-mask
+detail `0x5500`, CYW43 engine init, firmware/NVRAM upload, firmware release,
+owner-state recovery, split Linux-order station controls, event-mask
 programming, `cyw43-join-bsscfg`, and an armed
 `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=pending` session. It does not prove
 association/link, EAPOL M1/M2/M3/M4, DHCP, `nettest`, `netstats`, or remote
-`cohsh`. The active Gate 7 blocker in that capture is runtime-ring
-serialization during host-EAPOL polling: request `478` is still active at
-`cyw43-sdio-owner-wait-begin`, but later slices try to publish a different CYW43
-descriptor and emit `runtime-ring-submit status=busy`. Root-side station setup
-already splits matched CYW43 controls into a `CONTROL_FRAME` TX turn plus
-bounded parent-side `CONTROL_POLL` turns; host-EAPOL now extends that model by
-tracking the active CYW43 prompt poll, recovering the live descriptor from the
-ring if the in-memory tracker is stale, and resuming the same control/data
-descriptor and flags before alternating polls or submitting post-association
-rescue work.
+`cohsh`. The older `runtime-ring-submit status=busy` theory is stale for this
+boot; the active Gate 7 blocker is request `477` reaching
+`cyw43-sdio-owner-reply`, after which no parent CYW43 completion is published
+and fresh prompt-poll requests become stale against runtime sequence `477`.
+Host-EAPOL remains pending with no real control/data/event RX completions
+(`starts=0`, `event_rx=0`, `eapol_rx=0`), so the fix keeps RX-source telemetry
+inside the linked-runtime boundary: when CYW43 is using the SDIO bus-link, it
+does not issue extra CMD52, backplane, or SDHCI host interrupt reads after an
+empty Function 2 first-read. The minimum retained diagnostic is the empty
+first-read detail plus probe length, repeated abort diagnostics stay sparse, and
+unresolved transport resumes do not spend the logical host-EAPOL proof window.
+Root-side station setup already splits matched CYW43 controls into a
+`CONTROL_FRAME` TX turn plus bounded parent-side `CONTROL_POLL` turns;
+host-EAPOL extends that model by tracking the active CYW43 prompt poll,
+recovering the live descriptor from the ring if the in-memory tracker is stale,
+and resuming the same control/data descriptor and flags before alternating polls
+or submitting post-association rescue work.
 Linked-runtime RX polls now request
 `DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD` across the host-EAPOL proof
 window so the runtime can translate the May 18-19 zero-RFRAME/card-interrupt
@@ -1077,10 +1107,10 @@ or generic command-completion failures.
   control/event frames through `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL`, credit-gates
   control TX, suppresses repetitive low-level breadcrumbs, and keeps non-EAPOL
   data blocked. Prompt-side `wifi diag` and `wifi dump-state` render cached or
-  linked-runtime evidence; stateful `wifi probe-ht`, `wifi load-fw`, and
+  linked-runtime evidence; bounded `wifi probe-ht` and stateful `wifi load-fw` /
   `wifi retry` fail closed with `pi4-wifi-driver-task-runtime-required` when no
-  linked runtime can satisfy the request. Post-join `EVENT_LINK` without the link
-  flag is `wifi-link-down`, not DHCP progress.
+  linked runtime can satisfy the request. Post-join `EVENT_LINK` without the
+  link flag is `wifi-link-down`, not DHCP progress.
 - Join-completion event delivery is now subscribed in the linked control path,
   but it is still not Wi-Fi success by itself. The current secure-completion
   gate is host-EAPOL: M1/M2/M3/M4, PTK/GTK `wsec_key` installation, and secure
@@ -1194,9 +1224,10 @@ or generic command-completion failures.
 - Pi 4 local-seat USB is not a reason to disable Wi-Fi diagnostics. The serial
   console retains the Wi-Fi debug grammar after root-console handoff, but direct
   CYW43455/SDIO exercise in root is removed: `wifi diag` and `wifi dump-state`
-  report cached or linked-runtime command-fault evidence, while `wifi load-fw`,
-  `wifi retry`, and live `wifi probe-ht` return bounded runtime-required errors
-  unless the linked runtime has supplied the required state. `wifi diag`,
+  report cached linked-runtime progress, host-EAPOL pending/required, or
+  command-fault evidence, while `wifi load-fw`, `wifi retry`, and live
+  `wifi probe-ht` return bounded runtime-required errors unless the linked
+  runtime has supplied the required state. `wifi diag`,
   `wifi dump-state`, `wifi load-fw`, `wifi retry`, and `wifi probe-ht` replay the
   cached SDIO and CYW43 linked-runtime progress markers when present, including
   the mapped Wi-Fi gate, blocker, and next action, so a prompt capture
@@ -1241,7 +1272,7 @@ or generic command-completion failures.
   predicate so the next pass can distinguish stale ring visibility from a true
   ABI-shape mismatch. None of these cases is a generic disabled-network state.
   Operators can still run the explicit
-  `wifi probe-ht` command when linked-runtime state can support the stateful HT
+  `wifi probe-ht` command when linked-runtime state can support the bounded HT
   probe; otherwise it reports the same driver-task-runtime-required boundary.
 - Wi-Fi association completion is event-pump driven for both explicit `wifi`
   and `auto` interface policies. While linked-runtime pointer-free proof is
@@ -1492,7 +1523,7 @@ active path is Cohesix-owned cold start:
   control, and interrupt-queue substages (`usb-hid-endpoint-parse-*`,
   `usb-hub-scan-*`, `usb-hub-set-configuration-*`,
   `usb-hub-descriptor-*`, `usb-hub-context-*`, `usb-hub-port-power-*`,
-  `usb-hub-port-reset-*`, `usb-hub-port-ready`,
+  `usb-hub-port-status-*`, `usb-hub-port-reset-*`, `usb-hub-port-ready`,
   `usb-hub-child-probe-begin`, `usb-hub-child-speed-fallback-begin`,
   `usb-hid-configure-endpoint-*`, `usb-hid-set-configuration-*`,
   `usb-hid-control-*`, and `usb-hid-interrupt-queue-*`) so prompt-side
@@ -2072,9 +2103,12 @@ Required Cohesix shape:
 - Operator proof uses a single 10-gate USB ladder: 1 controller candidate, 2 live
   PCIe/VL805 ownership, 3 controller-ready, 4 command-ring completion, 5
   root-port connection, 6 device address, 7 descriptors/configuration, 8 HID
-  keyboard ready, 9 first HID report, and 10 first console byte. `usb status`,
-  `usb probe-kbd`, and `scripts/pi4_trace_normalize.py` must preserve
-  `proof_gate` evidence rather than silently inferring only the current blocker.
+  keyboard ready, 9 first HID report, and 10 first console byte. `usb status` /
+  `usb dump-state`, passive `usb diag`, `usb enable-kbd`, `usb probe-kbd`, and
+  `scripts/pi4_trace_normalize.py` must preserve `proof_gate` evidence rather
+  than silently inferring only the current blocker; `usb probe-kbd` must also
+  report the bounded probe result token so an operator can distinguish attached,
+  deferred, unavailable-keyboard, and unavailable-backend outcomes.
   Gate-4 and pre-gate-5 output includes the xHCI base-register, scratchpad, RUN,
   interrupter, and command-proof subphase so a timeout after command/event-ring
   setup cannot be mistaken for a root-port or HID blocker. Gate-6/7 output names

@@ -472,7 +472,7 @@ const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 3;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS: usize = 128;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS: usize = 32;
+const LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS: usize = 128;
 
 #[cfg(all(
     feature = "kernel",
@@ -1262,6 +1262,7 @@ impl LocalSeatRuntime {
                 if !usb_enumeration_progress_token_allows_probe_burst(
                     previous_progress,
                     current_progress,
+                    crate::hal::driver_task::driver_task_ring_command_active(driver_task_contract()),
                 ) {
                     break;
                 }
@@ -2464,8 +2465,10 @@ fn usb_enumeration_progress_token_advanced(
 fn usb_enumeration_progress_token_allows_probe_burst(
     previous: Option<(u32, u32, u32)>,
     current: Option<(u32, u32, u32)>,
+    active_request: bool,
 ) -> bool {
-    current.is_some() || usb_enumeration_progress_token_advanced(previous, current)
+    usb_enumeration_progress_token_advanced(previous, current)
+        || (active_request && current.is_some())
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -4827,7 +4830,7 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
     fn linked_usb_probe_progress_burst_is_progress_bounded() {
-        assert!((1..=32).contains(&LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS));
+        assert!((1..=128).contains(&LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS));
         assert!(!usb_enumeration_progress_token_advanced(None, None));
         assert!(usb_enumeration_progress_token_advanced(
             None,
@@ -4842,11 +4845,22 @@ mod tests {
             Some((8, 236, DRIVER_RUNTIME_USB_ENUMERATE_AUX))
         ));
         assert!(!usb_enumeration_progress_token_allows_probe_burst(
-            None, None
+            None, None, true
+        ));
+        assert!(!usb_enumeration_progress_token_allows_probe_burst(
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            false
         ));
         assert!(usb_enumeration_progress_token_allows_probe_burst(
             Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
-            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX))
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            true
+        ));
+        assert!(usb_enumeration_progress_token_allows_probe_burst(
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            Some((8, 236, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            false
         ));
     }
 
