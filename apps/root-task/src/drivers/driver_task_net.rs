@@ -41,7 +41,8 @@ use crate::net::{
 use pi4_driver_abi::{
     DriverRuntimeCyw43CommandDescriptor, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
-    DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+    DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+    DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
     DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
     DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL, DRIVER_RUNTIME_CYW43_OP_ETH_TX,
@@ -251,6 +252,8 @@ static CYW43_RUNTIME_MAC: Mutex<EthernetAddress> = Mutex::new(CYW43_DRIVER_TASK_
 #[cfg(feature = "kernel")]
 static CYW43_HOST_EAPOL_SESSION: Mutex<Option<Cyw43HostEapolSession>> = Mutex::new(None);
 #[cfg(feature = "kernel")]
+static CYW43_HOST_EAPOL_PENDING_EVENT: Mutex<Option<Cyw43PendingHostEapolEvent>> = Mutex::new(None);
+#[cfg(feature = "kernel")]
 static CYW43_ACTIVE_PROMPT_POLL_REQUEST: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static CYW43_ACTIVE_PROMPT_POLL_OP: AtomicU32 = AtomicU32::new(0);
@@ -406,6 +409,14 @@ struct Cyw43EventFrame {
     status: u32,
     reason: u32,
     auth_type: u32,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cyw43PendingHostEapolEvent {
+    event: Cyw43EventFrame,
+    flags: u16,
+    len: u16,
 }
 
 #[cfg(feature = "kernel")]
@@ -590,6 +601,89 @@ impl Cyw43HostEapolProgress {
             _ => {}
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_store_pending_host_eapol_event(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    flags: u16,
+    len: usize,
+    event: Cyw43EventFrame,
+) {
+    let associated_update = cyw43_event_association_state_update(event);
+    let link_update = cyw43_event_link_state_update(event);
+    let mut associated = CYW43_ASSOCIATED.load(Ordering::Acquire) != 0;
+    let mut link_up = CYW43_LINK_UP.load(Ordering::Acquire) != 0;
+    if let Some(next_associated) = associated_update {
+        associated = next_associated;
+    }
+    if let Some(next_link_up) = link_update {
+        link_up = next_link_up;
+        if next_link_up {
+            associated = true;
+        }
+    }
+    CYW43_ASSOCIATED.store(if associated { 1 } else { 0 }, Ordering::Release);
+    CYW43_LINK_UP.store(if link_up { 1 } else { 0 }, Ordering::Release);
+
+    let event_label = cyw43_host_eapol_post_assoc_event_label(event, associated);
+    let relevant = associated_update.is_some() || link_update.is_some() || event_label.is_some();
+    if relevant {
+        *CYW43_HOST_EAPOL_PENDING_EVENT.lock() = Some(Cyw43PendingHostEapolEvent {
+            event,
+            flags,
+            len: len.min(u16::MAX as usize) as u16,
+        });
+    }
+    emit_cyw43_host_eapol_event_capture(
+        contract,
+        stage,
+        flags,
+        len,
+        event,
+        event_label.unwrap_or("none"),
+        relevant,
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_apply_pending_host_eapol_event(
+    contract: DriverTaskContract,
+    session: &mut Cyw43HostEapolSession,
+    poll: usize,
+) {
+    let pending = {
+        let mut guard = CYW43_HOST_EAPOL_PENDING_EVENT.lock();
+        guard.take()
+    };
+    if let Some(pending) = pending {
+        session.progress.record_event_frame(
+            pending.flags,
+            usize::from(pending.len),
+            pending.event,
+            poll,
+        );
+        emit_cyw43_host_eapol_status(contract, "event-rx", &session.progress);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_capture_event_frame_from_token(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    flags: u16,
+    token: &DriverTaskNetRxToken,
+) -> bool {
+    if cyw43_frame_channel(flags) != DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT {
+        return false;
+    }
+    let frame = &token.buffer[..token.len];
+    let Some(event) = cyw43_parse_control_or_event_frame(frame) else {
+        return false;
+    };
+    cyw43_store_pending_host_eapol_event(contract, stage, flags, frame.len(), event);
+    true
 }
 
 #[cfg(feature = "kernel")]
@@ -2222,12 +2316,13 @@ fn arm_cyw43_host_eapol_pending(
     credentials: WifiCredentials,
     _station_mac: EthernetAddress,
 ) -> Result<(), DriverTaskNetError> {
-    let session = Cyw43HostEapolSession::new(credentials)?;
+    let mut session = Cyw43HostEapolSession::new(credentials)?;
+    cyw43_apply_pending_host_eapol_event(contract, &mut session, 0);
     let progress = session.progress;
     *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
     CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
-    CYW43_ASSOCIATED.store(0, Ordering::Release);
-    CYW43_LINK_UP.store(0, Ordering::Release);
+    CYW43_ASSOCIATED.store(if progress.associated { 1 } else { 0 }, Ordering::Release);
+    CYW43_LINK_UP.store(if progress.link_up { 1 } else { 0 }, Ordering::Release);
     CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
     CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
@@ -2270,6 +2365,8 @@ pub(crate) fn service_cyw43_host_eapol_slice(
     let Some(session) = guard.as_mut() else {
         return false;
     };
+    let poll = session.progress.polls as usize;
+    cyw43_apply_pending_host_eapol_event(contract, session, poll);
 
     let mut activity = false;
     let mut clear_session = false;
@@ -2962,6 +3059,36 @@ fn emit_cyw43_host_eapol_status(
 }
 
 #[cfg(feature = "kernel")]
+fn emit_cyw43_host_eapol_event_capture(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    flags: u16,
+    len: usize,
+    event: Cyw43EventFrame,
+    label: &'static str,
+    retained: bool,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<384>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_EVENT_RX contract={} stage={} flags=0x{:04x} len={} event_type={} status=0x{:08x} reason=0x{:08x} auth=0x{:08x} label={} retained={}",
+        contract.name,
+        stage,
+        flags,
+        len,
+        event.event_type,
+        event.status,
+        event.reason,
+        event.auth_type,
+        label,
+        yes_no(retained),
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
 fn emit_cyw43_host_eapol_tx_shape(
     contract: DriverTaskContract,
     stage: &'static str,
@@ -3398,7 +3525,7 @@ fn cyw43_poll_control_exchange_reply(
             );
             return Err(Cyw43CommandSubmitError::Completion(completion));
         }
-        let Some((_frame_flags, token)) =
+        let Some((frame_flags, token)) =
             cyw43_driver_task_frame_from_completion(contract, completion)
         else {
             record_cyw43_control_split_failure(
@@ -3417,6 +3544,51 @@ fn cyw43_poll_control_exchange_reply(
             );
             continue;
         };
+        let frame_channel = cyw43_frame_channel(frame_flags);
+        if frame_channel == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT {
+            if cyw43_capture_event_frame_from_token(contract, stage, frame_flags, &token) {
+                nonmatching_frames = nonmatching_frames.saturating_add(1);
+                continue;
+            }
+            malformed_frames = malformed_frames.saturating_add(1);
+            emit_cyw43_control_split_reply_trace(
+                contract,
+                stage,
+                "malformed-event",
+                poll,
+                flags,
+                completion.sequence,
+                None,
+                nonmatching_frames,
+                malformed_frames,
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+            );
+            continue;
+        }
+        if frame_channel != DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL {
+            malformed_frames = malformed_frames.saturating_add(1);
+            emit_cyw43_control_split_reply_trace(
+                contract,
+                stage,
+                "unexpected-channel",
+                poll,
+                flags,
+                completion.sequence,
+                None,
+                nonmatching_frames,
+                malformed_frames,
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+            );
+            continue;
+        }
         let Some(reply) = cyw43_control_reply_from_token(&token) else {
             malformed_frames = malformed_frames.saturating_add(1);
             emit_cyw43_control_split_reply_trace(
@@ -3917,10 +4089,16 @@ fn emit_cyw43_control_split_reply_trace(
 fn cyw43_poll_control_plane_frames(stage: &'static str) -> u32 {
     let mut observed = 0u32;
     for _ in 0..CYW43_CONTROL_PLANE_POLL_ATTEMPTS {
-        let Some((_flags, token)) = poll_cyw43_driver_task_control_frame() else {
+        let Some((flags, token)) = poll_cyw43_driver_task_control_frame() else {
             continue;
         };
         observed = observed.saturating_add(1);
+        let _ = cyw43_capture_event_frame_from_token(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            stage,
+            flags,
+            &token,
+        );
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::Cyw43Wifi,
@@ -3947,6 +4125,7 @@ fn reset_cyw43_control_plane_state() {
     CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
+    *CYW43_HOST_EAPOL_PENDING_EVENT.lock() = None;
     clear_cyw43_active_prompt_poll();
     CYW43_BCDC_IOCTL_ID.store(0, Ordering::Release);
     *CYW43_RUNTIME_MAC.lock() = CYW43_DRIVER_TASK_MAC;
@@ -6599,6 +6778,7 @@ mod tests {
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
         *CYW43_HOST_EAPOL_SESSION.lock() = None;
+        *CYW43_HOST_EAPOL_PENDING_EVENT.lock() = None;
         clear_cyw43_active_prompt_poll();
     }
 
@@ -7205,6 +7385,64 @@ mod tests {
             cyw43_host_eapol_next_action("required", &progress),
             "inspect-cyw43-data-rx-path"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_event_token_survives_control_reply_polling() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status-label tests must serialize");
+        reset_cyw43_status_flags();
+
+        let sta = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut packet = [0u8; CYW43_BRCMF_EVENT_MIN_PACKET_LEN];
+        packet[..6].copy_from_slice(&sta);
+        packet[6..12].copy_from_slice(&ap);
+        packet[12..14].copy_from_slice(&CYW43_ETH_P_LINK_CTL.to_be_bytes());
+        packet[14..16].copy_from_slice(&CYW43_BCMILCP_SUBTYPE_VENDOR_LONG.to_be_bytes());
+        packet[19..22].copy_from_slice(&CYW43_BROADCOM_OUI);
+        packet[22..24].copy_from_slice(&CYW43_BCMILCP_BCM_SUBTYPE_EVENT.to_be_bytes());
+        packet[CYW43_BRCMF_EVENT_FLAGS_OFFSET..CYW43_BRCMF_EVENT_FLAGS_OFFSET + 2]
+            .copy_from_slice(&CYW43_EVENT_FLAG_LINK.to_be_bytes());
+        packet[CYW43_BRCMF_EVENT_TYPE_OFFSET] = CYW43_EVENT_LINK;
+        packet[CYW43_BRCMF_EVENT_STATUS_OFFSET..CYW43_BRCMF_EVENT_STATUS_OFFSET + 4]
+            .copy_from_slice(&CYW43_EVENT_STATUS_SUCCESS.to_be_bytes());
+        packet[CYW43_BRCMF_EVENT_ADDR_OFFSET..CYW43_BRCMF_EVENT_ADDR_OFFSET + 6]
+            .copy_from_slice(&ap);
+
+        let mut event_frame = [0u8; CYW43_BDC_HEADER_BYTES + CYW43_BRCMF_EVENT_MIN_PACKET_LEN];
+        event_frame[0] = CYW43_BDC_VERSION << CYW43_BDC_VERSION_SHIFT;
+        event_frame[CYW43_BDC_HEADER_BYTES..].copy_from_slice(&packet);
+        let mut token = DriverTaskNetRxToken {
+            len: event_frame.len(),
+            buffer: [0; MAX_FRAME_LEN],
+        };
+        token.buffer[..event_frame.len()].copy_from_slice(&event_frame);
+
+        assert!(cyw43_capture_event_frame_from_token(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            "test-control-poll",
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT,
+            &token,
+        ));
+        assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 1);
+
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        cyw43_apply_pending_host_eapol_event(CYW43_WIFI_DRIVER_TASK_CONTRACT, &mut session, 7);
+
+        assert_eq!(session.progress.event_rx, 1);
+        assert!(session.progress.associated);
+        assert!(session.progress.link_up);
+        assert_eq!(session.progress.association_event, Some("link-up"));
+        assert_eq!(session.progress.association_poll, 8);
+        assert!(CYW43_HOST_EAPOL_PENDING_EVENT.lock().is_none());
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]

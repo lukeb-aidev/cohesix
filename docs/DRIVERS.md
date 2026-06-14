@@ -134,7 +134,12 @@ through descriptor status waits and hub traversal phases while same-sequence
 progress is visible. Prompt-side `usb probe-kbd` bursts continue when the
 runtime progress token advances or the same linked-runtime USB request remains
 active, so root does not publish false-fresh USB requests while the child is
-still completing a long EP0 hub-control turn. The linked USB runtime accepts
+still completing a long EP0 hub-control turn. Hub-port GET_STATUS event-ring
+diagnostic waits get a longer bounded logical-turn envelope, including same-aux
+markers from the still-running child sequence after a root timeout abort, so
+empty-slot, cycle-mismatch, ignored-event, and timeout markers do not force
+stale fresh requests before the child can finish the hub status/reset retry ladder. The
+linked USB runtime accepts
 same-slot EP0 success transfer events with controller-specific event pointers
 only inside the active data/status wait and only when the remaining-byte count
 matches that wait: bounded data-stage pointer mismatches become data progress,
@@ -848,8 +853,8 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 14 22:12 post-flash boot
-(`/Users/lukasbower/pi4-serial-20260614-221244.log`) supersedes earlier Wi-Fi
+The June 14 22:45 post-flash boot
+(`/Users/lukasbower/pi4-serial-20260614-224509.log`) supersedes earlier Wi-Fi
 frontiers as current truth. That trace proves prompt-first deferred Wi-Fi
 replay, descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init
 detail `0x5500`, CYW43 engine init, firmware/NVRAM upload, firmware release,
@@ -857,23 +862,32 @@ owner-state recovery, split Linux-order station controls, event-mask
 programming, `cyw43-join-bsscfg`, and an armed
 `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=pending` session. It does not prove
 association/link, EAPOL M1/M2/M3/M4, DHCP, `nettest`, `netstats`, or remote
-`cohsh`. The older `runtime-ring-submit status=busy` theory is stale for this
-boot; the active Gate 7 blocker is request `477` reaching
-`cyw43-sdio-owner-reply`, after which no parent CYW43 completion is published
-and fresh prompt-poll requests become stale against runtime sequence `477`.
-Host-EAPOL remains pending with no real control/data/event RX completions
-(`starts=0`, `event_rx=0`, `eapol_rx=0`), so the fix keeps RX-source telemetry
-inside the linked-runtime boundary: when CYW43 is using the SDIO bus-link, it
-does not issue extra CMD52, backplane, or SDHCI host interrupt reads after an
-empty Function 2 first-read. The minimum retained diagnostic is the empty
-first-read detail plus probe length, repeated abort diagnostics stay sparse, and
-unresolved transport resumes do not spend the logical host-EAPOL proof window.
+`cohsh`. Older `runtime-ring-submit status=busy`, `cyw43-sdio-owner-reply`, and
+`txglomalign` theories are stale for this boot. The active normalized blocker is
+`WIFI_GATE=7` / `WIFI_BLOCKER=cyw43-data-rx-firstread-empty`, with
+`CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=required ... starts=0 data_rx=0
+event_rx=0 eapol_rx=0 associated=no link_up=no rx_firstread_empty=18061
+control_rx_firstread_empty=24576` at line 1672. The first missing proof is a
+non-empty post-join control/event/data RX frame that proves association/link or
+AP M1; DHCP remains correctly blocked at `host-eapol-pending` until host-EAPOL
+security completes. Empty first-read RX-source telemetry stays inside the
+linked-runtime boundary: when CYW43 is using the SDIO bus-link, it does not
+issue extra CMD52, backplane, or SDHCI host interrupt reads after an empty
+Function 2 first-read. The minimum retained diagnostic is the empty first-read
+detail plus probe length, repeated abort diagnostics stay sparse, and unresolved
+transport resumes do not spend the logical host-EAPOL proof window.
 Root-side station setup already splits matched CYW43 controls into a
 `CONTROL_FRAME` TX turn plus bounded parent-side `CONTROL_POLL` turns;
 host-EAPOL extends that model by tracking the active CYW43 prompt poll,
 recovering the live descriptor from the ring if the in-memory tracker is stale,
 and resuming the same control/data descriptor and flags before alternating polls
-or submitting post-association rescue work.
+or submitting post-association rescue work. Split control-reply polling now
+checks the runtime frame channel before CDC parsing: event-channel frames are
+decoded as Broadcom events, association/link events are retained in a single
+pending host-EAPOL slot, and host-EAPOL arming or later service slices fold that
+pending event into `event_rx`, `associated`, `link_up`, and `assoc_event`
+progress. Those lines emit `CYW43_DRIVER_TASK_EVENT_RX` and remain linked
+runtime evidence; they do not release DHCP/data without EAPOL secure proof.
 Linked-runtime RX polls now request
 `DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD` across the host-EAPOL proof
 window so the runtime can translate the May 18-19 zero-RFRAME/card-interrupt
