@@ -52,6 +52,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED,
     DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN,
     DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED,
+    DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED,
     DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN,
     DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED, DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
@@ -467,7 +470,7 @@ static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED: AtomicBool = AtomicBool:
 // a few linked-runtime turns; keep prompt settling bounded and non-blocking.
 const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 3;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const LINKED_LOCAL_SEAT_USB_PROBE_PROGRESS_BURST_ATTEMPTS: usize = 3;
+const LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS: usize = 8;
 
 #[cfg(all(
     feature = "kernel",
@@ -1231,7 +1234,7 @@ impl LocalSeatRuntime {
                 )
             {
                 boot_log::force_uart_line(
-                    "[local-seat] cold-boot keyboard probe deferred reason=driver-task-runtime-unproved action=root-prompt-first",
+                    "[local-seat] linked USB runtime keyboard probe deferred contract=usb-local-seat source=linked-runtime reason=driver-task-runtime-unproved action=root-prompt-first",
                 );
                 self.backend_keyboard_polling_enabled = false;
                 self.backend_keyboard_poll_deferred_logged = false;
@@ -1252,9 +1255,12 @@ impl LocalSeatRuntime {
             local_seat_driver_runtime_arm_prompt_safe_probe(self.root_console_ready);
             self.backend_keyboard_polling_enabled = true;
             self.poll_backend_keyboard();
-            for _ in 0..LINKED_LOCAL_SEAT_USB_PROBE_PROGRESS_BURST_ATTEMPTS {
+            for _ in 0..LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS {
                 let current_progress = latest_usb_enumeration_progress_token();
-                if !usb_enumeration_progress_token_advanced(previous_progress, current_progress) {
+                if !usb_enumeration_progress_token_allows_probe_burst(
+                    previous_progress,
+                    current_progress,
+                ) {
                     break;
                 }
                 if !LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire)
@@ -1478,7 +1484,7 @@ impl LocalSeatRuntime {
                     target_os = "none"
                 ))]
                 boot_log::force_uart_line(
-                    "[local-seat] runtime keyboard poll deferred action=serial-shell-first",
+                    "[local-seat] linked USB runtime keyboard poll deferred contract=usb-local-seat source=linked-runtime action=serial-shell-first",
                 );
                 self.backend_keyboard_poll_deferred_logged = true;
             }
@@ -1501,7 +1507,7 @@ impl LocalSeatRuntime {
                     target_os = "none"
                 ))]
                 boot_log::force_uart_line(
-                    "[local-seat] runtime keyboard poll deferred reason=driver-task-runtime-unproved action=serial-shell-first",
+                    "[local-seat] linked USB runtime keyboard poll deferred contract=usb-local-seat source=linked-runtime reason=driver-task-runtime-unproved action=serial-shell-first",
                 );
                 self.backend_keyboard_poll_deferred_logged = true;
             }
@@ -1542,7 +1548,7 @@ impl LocalSeatRuntime {
                         self.backend_keyboard_polling_enabled = false;
                         if !self.backend_keyboard_poll_deferred_logged {
                             boot_log::force_uart_line(
-                                "[local-seat] runtime keyboard poll suspended reason=driver-task-no-reply action=serial-shell",
+                                "[local-seat] linked USB runtime keyboard poll suspended contract=usb-local-seat source=linked-runtime reason=driver-task-no-reply action=serial-shell",
                             );
                             self.backend_keyboard_poll_deferred_logged = true;
                         }
@@ -1700,7 +1706,7 @@ impl LocalSeatRuntime {
                     self.backend_keyboard_polling_enabled = false;
                     if !self.backend_keyboard_poll_deferred_logged {
                         boot_log::force_uart_line(
-                            "[local-seat] runtime keyboard poll suspended reason=driver-task-no-reply action=serial-shell",
+                            "[local-seat] linked USB runtime keyboard poll suspended contract=usb-local-seat source=linked-runtime reason=driver-task-no-reply action=serial-shell",
                         );
                         self.backend_keyboard_poll_deferred_logged = true;
                     }
@@ -1778,8 +1784,8 @@ impl LocalSeatRuntime {
             {
                 if !LOCAL_SEAT_POLL_LOGGED.swap(true, Ordering::AcqRel) {
                     boot_log::force_uart_line(
-                        "[local-seat] runtime keyboard poll routed to driver-task path",
-                    );
+                    "[local-seat] linked USB runtime keyboard poll routed contract=usb-local-seat source=linked-runtime path=driver-task-ring",
+                );
                 }
             }
         }
@@ -2025,6 +2031,9 @@ fn local_seat_usb_engine_progress(
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
         )
 }
@@ -2074,6 +2083,24 @@ fn local_seat_usb_keyboard_enum_status(
                 && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED =>
         {
             "hub-attach-failed"
+        }
+        Some(completion)
+            if local_seat_usb_completion_progress(completion)
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED =>
+        {
+            "hub-set-configuration-failed"
+        }
+        Some(completion)
+            if local_seat_usb_completion_progress(completion)
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED =>
+        {
+            "hub-descriptor-failed"
+        }
+        Some(completion)
+            if local_seat_usb_completion_progress(completion)
+                && completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED =>
+        {
+            "hub-context-failed"
         }
         Some(completion)
             if local_seat_usb_completion_progress(completion)
@@ -2173,6 +2200,9 @@ fn local_seat_usb_keyboard_enumeration_progress(
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+                | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
                 | DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
         )
 }
@@ -2198,6 +2228,9 @@ const fn linked_local_seat_usb_detail_rank(detail: u16) -> u8 {
         | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+        | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
         | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED => 7,
         DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY => 8,
@@ -2222,6 +2255,9 @@ const fn linked_local_seat_usb_detail_warrants_recovery(detail: u16) -> bool {
             | DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
             | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
             | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
     )
 }
 
@@ -2337,16 +2373,29 @@ fn emit_linked_local_seat_usb_enumeration_snapshot(
         DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING
             | DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY
     );
-    let root_mask = if command_proof { 0 } else { root_or_events };
+    let root_port_mask = if command_proof { 0 } else { root_or_events };
     let command_events_seen = if command_proof { root_or_events } else { 0 };
-    let mut line = heapless::String::<512>::new();
+    let progress = crate::hal::driver_task::latest_driver_task_ring_progress(contract);
+    let active_request = crate::hal::driver_task::current_driver_task_ring_request(contract);
+    let request_match = match (active_request, progress) {
+        (Some(request), Some(progress))
+            if progress.marker_valid && progress.sequence == request as u32 =>
+        {
+            "yes"
+        }
+        (Some(_), Some(_)) => "no",
+        (Some(_), None) => "no-progress",
+        (None, Some(_)) => "no-active-request",
+        (None, None) => "none",
+    };
+    let mut line = heapless::String::<768>::new();
     let _ = write!(
         line,
-        "USB_RUNTIME_ENUM_SNAPSHOT contract={} detail=0x{:04x} result=0x{:08x} root_mask=0x{:02x} slot={} ep_id={} scan_pass={} root_power={} cmd_path={} port_event={} hid_ep={} preserved_event={} transfer_event={} endpoint_ready={} cmd_proof={} cmd_events_seen={} cmd_slot_or_polls={} cmd_event_type={} cmd_ack_failures={}",
+        "USB_RUNTIME_ENUM_SNAPSHOT contract={} detail=0x{:04x} result=0x{:08x} root_port_mask=0x{:02x} slot={} ep_id={} scan_pass={} root_port_power={} cmd_path={} port_event={} hid_ep={} preserved_event={} transfer_event={} endpoint_ready={} cmd_proof={} cmd_events_seen={} cmd_slot_or_polls={} cmd_event_type={} cmd_ack_failures={} marker_valid={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x} active_request_valid={} active_request={} request_match={} marker_aux_match={}",
         contract.name,
         completion.detail,
         result,
-        root_mask,
+        root_port_mask,
         slot,
         endpoint,
         scan_pass,
@@ -2362,6 +2411,17 @@ fn emit_linked_local_seat_usb_enumeration_snapshot(
         if command_proof { slot } else { 0 },
         if command_proof { endpoint } else { 0 },
         if command_proof { scan_pass } else { 0 },
+        progress.map_or("no", |progress| local_seat_yes_no(progress.marker_valid)),
+        progress.map_or(0, |progress| progress.sequence),
+        progress.map_or(0, |progress| progress.phase),
+        progress.map_or("none", |progress| progress.phase_name),
+        progress.map_or(0, |progress| progress.aux0),
+        active_request.map_or("no", |_| "yes"),
+        active_request.unwrap_or(0),
+        request_match,
+        progress.map_or("none", |progress| {
+            local_seat_yes_no(progress.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX)
+        }),
     );
     boot_log::force_uart_line(line.as_str());
 }
@@ -2396,6 +2456,14 @@ fn usb_enumeration_progress_token_advanced(
     current: Option<(u32, u32, u32)>,
 ) -> bool {
     matches!(current, Some(current) if Some(current) != previous)
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn usb_enumeration_progress_token_allows_probe_burst(
+    previous: Option<(u32, u32, u32)>,
+    current: Option<(u32, u32, u32)>,
+) -> bool {
+    current.is_some() || usb_enumeration_progress_token_advanced(previous, current)
 }
 
 #[cfg(all(
@@ -3928,12 +3996,10 @@ pub fn attach_platform_backend(
 ) -> Result<(), LocalSeatBackendError> {
     init_local_seat_driver_runtime_on_service(hal, hints)?;
     if local_seat_driver_runtime_attached() {
-        boot_log::force_uart_line(
-            "[local-seat] platform backend attached owner=driver-task-runtime",
-        );
+        boot_log::force_uart_line("[local-seat] platform backend attached owner=linked-runtime");
     } else {
         boot_log::force_uart_line(
-            "[local-seat] platform backend deferred owner=driver-task-runtime action=serial-shell-first",
+            "[local-seat] platform backend deferred owner=linked-runtime action=serial-shell-first",
         );
     }
     Ok(())
@@ -4724,7 +4790,7 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
     fn linked_usb_probe_progress_burst_is_progress_bounded() {
-        assert!((1..=3).contains(&LINKED_LOCAL_SEAT_USB_PROBE_PROGRESS_BURST_ATTEMPTS));
+        assert!((1..=8).contains(&LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS));
         assert!(!usb_enumeration_progress_token_advanced(None, None));
         assert!(usb_enumeration_progress_token_advanced(
             None,
@@ -4737,6 +4803,13 @@ mod tests {
         assert!(usb_enumeration_progress_token_advanced(
             Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
             Some((8, 236, DRIVER_RUNTIME_USB_ENUMERATE_AUX))
+        ));
+        assert!(!usb_enumeration_progress_token_allows_probe_burst(
+            None, None
+        ));
+        assert!(usb_enumeration_progress_token_allows_probe_burst(
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX))
         ));
     }
 

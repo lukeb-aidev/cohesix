@@ -623,6 +623,12 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_MAILBOX_VERSION_BEGIN: u32 
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_BEGIN: u32 = 216;
 /// CYW43 runtime observed firmware ready/devready mailbox proof.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE: u32 = 217;
+/// CYW43 runtime is issuing the SDPCM Function 2 control write.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_BEGIN: u32 = 338;
+/// CYW43 runtime completed the SDPCM Function 2 control write.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_DONE: u32 = 339;
+/// CYW43 runtime is polling for the matching SDPCM/CDC control reply.
+pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN: u32 = 340;
 /// CYW43 runtime observed zero RFRAME and is issuing a bounded Function 2 first-read.
 pub const DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN: u32 = 250;
 /// CYW43 runtime completed a bounded Function 2 first-read.
@@ -788,9 +794,26 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_SLOT_EMPT
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH: u32 = 323;
 /// USB runtime consumed an event that did not match hub descriptor status.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED: u32 = 324;
+/// USB runtime rang EP0 for hub SET_CONFIGURATION.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE: u32 = 400;
+/// USB runtime is polling hub SET_CONFIGURATION status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN: u32 = 401;
+/// USB runtime observed hub SET_CONFIGURATION status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT: u32 = 402;
+/// USB runtime failed hub SET_CONFIGURATION.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED: u32 = 403;
+/// USB runtime timed out waiting for hub SET_CONFIGURATION status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT: u32 = 404;
+/// USB runtime sees an empty event TRB while polling hub SET_CONFIGURATION status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY: u32 = 405;
+/// USB runtime sees a cycle-mismatched event TRB while polling hub SET_CONFIGURATION status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH: u32 =
+    406;
+/// USB runtime consumed an event that did not match hub SET_CONFIGURATION status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED: u32 = 407;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
-/// Linked runtime reached the root-owned command endpoint/shared-ring intake loop.
+/// Linked runtime reached the root-published command endpoint/shared-ring intake loop.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY: u32 = 201;
 /// Linked runtime completed an intake poll without consuming a new command.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_POLL_READY: u32 = 202;

@@ -43,7 +43,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_FRAME,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_REMAINDER_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_ENGINE_INIT_BRANCH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY,
@@ -293,6 +296,14 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_PCIE_FLUSH_BEGIN,
@@ -3811,19 +3822,31 @@ fn emit_deferred_runtime_init_status(
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<224>::new();
+    let mut line = String::<320>::new();
     let action = if status == "resumed" {
         "steady-service-enabled"
     } else {
         "serial-shell"
     };
+    let proof_effect = if status == "resumed" {
+        "deferred-proof-retry-enabled"
+    } else {
+        "acceptance-red-until-replayed"
+    };
+    let next_action = if status == "resumed" {
+        "submit-bounded-service-turn"
+    } else {
+        "retry-after-root-prompt"
+    };
     let _ = write!(
         line,
-        "DRIVER_TASK_RUNTIME_INIT_DEFERRED contract={} hot_path={} status={} action={}",
+        "DRIVER_TASK_RUNTIME_INIT_DEFERRED contract={} hot_path={} status={} owner=linked-runtime root_action=descriptor-replay action={} proof_effect={} next_action={}",
         contract.name,
         hot_path.as_str(),
         status,
         action,
+        proof_effect,
+        next_action,
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
 }
@@ -3921,14 +3944,15 @@ fn emit_driver_task_ring_call_timeout(
     command: DriverTaskCommandRecord,
     mode: DriverTaskRingCommandMode,
     attempts: usize,
+    progress: DriverTaskRingProgressRecord,
 ) {
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<320>::new();
+    let mut line = String::<512>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_RING_CALL_TIMEOUT contract={} endpoint=0x{:04x} request={} mode={} attempts={} opcode={} arg0={} aux0=0x{:08x} frame_len={}",
+        "DRIVER_TASK_RING_CALL_TIMEOUT contract={} endpoint=0x{:04x} request={} mode={} attempts={} opcode={} arg0={} aux0=0x{:08x} frame_len={} owner=linked-runtime marker_valid={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x} blocker={} next_action=check-keep-active",
         contract.name,
         endpoint,
         request,
@@ -3938,8 +3962,52 @@ fn emit_driver_task_ring_call_timeout(
         command.arg0,
         command.aux0,
         command.frame.len,
+        driver_task_ring_progress_marker_valid(progress),
+        progress.sequence,
+        progress.phase,
+        driver_task_ring_progress_phase_label(progress.phase),
+        progress.aux0,
+        driver_task_ring_progress_blocker(progress, request, command),
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_empty_progress_record() -> DriverTaskRingProgressRecord {
+    DriverTaskRingProgressRecord {
+        magic: 0,
+        sequence: 0,
+        phase: 0,
+        aux0: 0,
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_progress_marker_valid(
+    progress: DriverTaskRingProgressRecord,
+) -> &'static str {
+    if progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC {
+        "yes"
+    } else {
+        "no"
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_progress_blocker(
+    progress: DriverTaskRingProgressRecord,
+    request: usize,
+    command: DriverTaskCommandRecord,
+) -> &'static str {
+    if progress.magic != DRIVER_RUNTIME_RING_PROGRESS_MAGIC {
+        "runtime-progress-missing"
+    } else if progress.sequence != request as u32 {
+        "runtime-progress-stale-request"
+    } else if progress.aux0 != command.aux0 {
+        "runtime-progress-aux-mismatch"
+    } else {
+        driver_task_ring_progress_phase_label(progress.phase)
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -4352,6 +4420,30 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN => {
             "usb-hub-set-configuration-begin"
         }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE => {
+            "usb-hub-set-configuration-doorbell-done"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN => {
+            "usb-hub-set-configuration-wait-begin"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT => {
+            "usb-hub-set-configuration-status-event"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY => {
+            "usb-hub-set-configuration-status-event-slot-empty"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH => {
+            "usb-hub-set-configuration-status-event-cycle-mismatch"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED => {
+            "usb-hub-set-configuration-status-event-ignored"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT => {
+            "usb-hub-set-configuration-status-timeout"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED => {
+            "usb-hub-set-configuration-failed"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DONE => {
             "usb-hub-set-configuration-done"
         }
@@ -4504,6 +4596,9 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE => {
             "cyw43-release-firmware-ready-done"
         }
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_BEGIN => "cyw43-control-tx-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_DONE => "cyw43-control-tx-done",
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN => "cyw43-control-rx-poll-begin",
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN => {
             "cyw43-control-rx-firstread-begin"
         }
@@ -4571,14 +4666,15 @@ fn emit_driver_task_ring_call_abort(
     mode: DriverTaskRingCommandMode,
     reason: &'static str,
     timeout_count: usize,
+    progress: DriverTaskRingProgressRecord,
 ) {
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<320>::new();
+    let mut line = String::<512>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_RING_CALL_ABORT contract={} endpoint=0x{:04x} request={} mode={} reason={} timeout_count={} opcode={} arg0={} aux0=0x{:08x} frame_len={}",
+        "DRIVER_TASK_RING_CALL_ABORT contract={} endpoint=0x{:04x} request={} mode={} reason={} timeout_count={} opcode={} arg0={} aux0=0x{:08x} frame_len={} owner=linked-runtime marker_valid={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x} blocker={} next_action=retry-fresh-request-after-blocker-fix",
         contract.name,
         endpoint,
         request,
@@ -4589,6 +4685,52 @@ fn emit_driver_task_ring_call_abort(
         command.arg0,
         command.aux0,
         command.frame.len,
+        driver_task_ring_progress_marker_valid(progress),
+        progress.sequence,
+        progress.phase,
+        driver_task_ring_progress_phase_label(progress.phase),
+        progress.aux0,
+        driver_task_ring_progress_blocker(progress, request, command),
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_ring_call_keep_active(
+    contract: DriverTaskContract,
+    endpoint: usize,
+    request: usize,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+    timeout_count: usize,
+    keep_limit: usize,
+    progress_advanced: bool,
+    progress: DriverTaskRingProgressRecord,
+) {
+    use core::fmt::Write;
+    use heapless::String;
+
+    let mut line = String::<512>::new();
+    let _ = write!(
+        line,
+        "DRIVER_TASK_RING_CALL_KEEP_ACTIVE contract={} endpoint=0x{:04x} request={} mode={} timeout_count={} keep_limit={} progress_advanced={} opcode={} arg0={} aux0=0x{:08x} frame_len={} owner=linked-runtime marker_valid={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x} blocker={} next_action=poll-same-request",
+        contract.name,
+        endpoint,
+        request,
+        mode.as_str(),
+        timeout_count,
+        keep_limit,
+        if progress_advanced { "yes" } else { "no" },
+        command.opcode,
+        command.arg0,
+        command.aux0,
+        command.frame.len,
+        driver_task_ring_progress_marker_valid(progress),
+        progress.sequence,
+        progress.phase,
+        driver_task_ring_progress_phase_label(progress.phase),
+        progress.aux0,
+        driver_task_ring_progress_blocker(progress, request, command),
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
@@ -4696,7 +4838,15 @@ fn emit_driver_task_ring_resource_submit_status(
         return;
     }
     if let Some(hot_path) = DriverTaskHotPath::from_u32(command.arg0) {
-        emit_driver_task_resource_init_status(contract, hot_path, stage, status, None);
+        emit_driver_task_resource_init_status_with_context(
+            contract,
+            hot_path,
+            stage,
+            status,
+            None,
+            Some(command.aux0),
+            Some(command.sequence),
+        );
     }
 }
 
@@ -4959,6 +5109,7 @@ const fn driver_task_ring_usb_enum_hub_wait_phase(phase: u32) -> bool {
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DONE
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DONE
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CONTEXT_BEGIN
@@ -4996,6 +5147,13 @@ const fn driver_task_ring_usb_enum_status_wait_phase(phase: u32) -> bool {
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_SLOT_EMPTY
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT
     )
 }
 
@@ -5358,6 +5516,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
     };
 
     let mut progress_advanced = false;
+    let mut timeout_progress = driver_task_ring_empty_progress_record();
     if driver_task_ring_mode_uses_bounded_send(mode) {
         if trace_call && !same_request_resume {
             emit_driver_task_ring_call_begin(contract, endpoint, request, command);
@@ -5397,12 +5556,8 @@ fn run_driver_task_ring_command_with_mode_and_staging(
         }
         if completion.sequence != request as u32 {
             let trace_timeout = driver_task_ring_timeout_trace_enabled(trace_call, contract);
-            if trace_timeout {
-                emit_driver_task_ring_call_timeout(
-                    contract, endpoint, request, command, mode, attempts,
-                );
-            }
             let progress = driver_task_ring_read_progress_record(ring_root_ptr);
+            timeout_progress = progress;
             progress_advanced = driver_task_ring_progress_advanced_for_request(
                 slot,
                 progress,
@@ -5416,6 +5571,11 @@ fn run_driver_task_ring_command_with_mode_and_staging(
                 command.aux0,
             ) {
                 record_driver_task_ring_progress(slot, progress);
+            }
+            if trace_timeout {
+                emit_driver_task_ring_call_timeout(
+                    contract, endpoint, request, command, mode, attempts, progress,
+                );
             }
             if trace_timeout {
                 emit_driver_task_ring_call_progress(contract, request, command, progress);
@@ -5478,6 +5638,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
     }
 
     let mut timeout_count = 0usize;
+    let mut timeout_keep_limit = 0usize;
     let keep_active_on_timeout = if completion.sequence != request as u32 {
         let (keep_active, count) = driver_task_ring_timeout_keep_decision(
             slot,
@@ -5488,10 +5649,32 @@ fn run_driver_task_ring_command_with_mode_and_staging(
             progress_advanced,
         );
         timeout_count = count;
+        if keep_active {
+            timeout_keep_limit = driver_task_ring_timeout_keep_active_limit_for_progress(
+                slot,
+                contract,
+                command,
+                mode,
+                request as u32,
+            );
+        }
         keep_active
     } else {
         false
     };
+    if keep_active_on_timeout && driver_task_ring_timeout_trace_enabled(trace_call, contract) {
+        emit_driver_task_ring_call_keep_active(
+            contract,
+            endpoint,
+            request,
+            command,
+            mode,
+            timeout_count,
+            timeout_keep_limit,
+            progress_advanced,
+            timeout_progress,
+        );
+    }
     if completion.sequence == request as u32 || !keep_active_on_timeout {
         slot.active.store(0, Ordering::Release);
         slot.active_command_fingerprint.store(0, Ordering::Release);
@@ -5505,6 +5688,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
                 mode,
                 "timeout-resume-limit",
                 timeout_count,
+                timeout_progress,
             );
         }
     }
@@ -5650,14 +5834,51 @@ pub fn emit_driver_task_resource_init_status(
     status: &'static str,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
+    emit_driver_task_resource_init_status_with_context(
+        contract, hot_path, stage, status, completion, None, None,
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_resource_init_status_with_context(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    stage: &'static str,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+    expected_aux0: Option<u32>,
+    expected_request: Option<u32>,
+) {
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<320>::new();
+    let active_request = current_driver_task_ring_request(contract);
+    let progress = latest_driver_task_ring_progress(contract);
+    let progress_request_match = match (active_request, progress) {
+        (Some(request), Some(progress))
+            if progress.marker_valid && progress.sequence == request as u32 =>
+        {
+            "yes"
+        }
+        (Some(_), Some(_)) => "no",
+        (Some(_), None) => "no-progress",
+        (None, Some(_)) => "no-active-request",
+        (None, None) => "none",
+    };
+    let expected_aux0_value = expected_aux0.unwrap_or(0);
+    let expected_request_value = expected_request.unwrap_or(0);
+    let same_request_resume = match (expected_request, active_request) {
+        (Some(expected), Some(active)) if expected == active as u32 => "yes",
+        (Some(_), Some(_)) => "no",
+        (Some(_), None) => "no-active-request",
+        (None, Some(_)) => "unknown",
+        (None, None) => "none",
+    };
+    let mut line = String::<1024>::new();
     if let Some(completion) = completion {
         let _ = write!(
             line,
-            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code={} detail={} result={} frame_len={}",
+            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code={} detail={} result={} frame_len={} owner=linked-runtime root_action={} blocker={}-{} next_action={} active_request_valid={} active_request={} expected_request={} expected_aux0=0x{:08x} same_request_resume={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x} progress_request_match={}",
             contract.name,
             hot_path.as_str(),
             stage,
@@ -5666,15 +5887,49 @@ pub fn emit_driver_task_resource_init_status(
             completion.detail,
             completion.result,
             completion.frame.len,
+            driver_task_resource_root_action(stage, status),
+            stage,
+            status,
+            driver_task_resource_next_action(stage, status),
+            active_request.map_or("no", |_| "yes"),
+            active_request.unwrap_or(0),
+            expected_request_value,
+            expected_aux0_value,
+            same_request_resume,
+            progress.map_or("no", |progress| {
+                if progress.marker_valid { "yes" } else { "no" }
+            }),
+            progress.map_or(0, |progress| progress.sequence),
+            progress.map_or(0, |progress| progress.phase),
+            progress.map_or("none", |progress| progress.phase_name),
+            progress.map_or(0, |progress| progress.aux0),
+            progress_request_match,
         );
     } else {
         let _ = write!(
             line,
-            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code=none detail=none result=none frame_len=0 owner=linked-runtime root_action={} blocker={}-{} next_action={} active_request_valid={} active_request={} expected_request={} expected_aux0=0x{:08x} same_request_resume={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x} progress_request_match={}",
             contract.name,
             hot_path.as_str(),
             stage,
             status,
+            driver_task_resource_root_action(stage, status),
+            stage,
+            status,
+            driver_task_resource_next_action(stage, status),
+            active_request.map_or("no", |_| "yes"),
+            active_request.unwrap_or(0),
+            expected_request_value,
+            expected_aux0_value,
+            same_request_resume,
+            progress.map_or("no", |progress| {
+                if progress.marker_valid { "yes" } else { "no" }
+            }),
+            progress.map_or(0, |progress| progress.sequence),
+            progress.map_or(0, |progress| progress.phase),
+            progress.map_or("none", |progress| progress.phase_name),
+            progress.map_or(0, |progress| progress.aux0),
+            progress_request_match,
         );
     }
     if driver_task_resource_status_requires_uart(status) {
@@ -5686,6 +5941,42 @@ pub fn emit_driver_task_resource_init_status(
 }
 
 #[cfg(feature = "kernel")]
+fn driver_task_resource_root_action(stage: &str, status: &str) -> &'static str {
+    if stage == "runtime-ring-submit" {
+        "submit-turn"
+    } else if stage.contains("descriptor") || status == "descriptor-rejected" {
+        "publish-descriptor"
+    } else if stage.contains("owner-state") {
+        "register-owner-state"
+    } else if status == "begin" || status == "retry" {
+        "submit-turn"
+    } else {
+        "observe-evidence"
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_resource_next_action(stage: &str, status: &str) -> &'static str {
+    match status {
+        "no-endpoint" | "ring-missing" | "slot-missing" => "replay-runtime-bootstrap",
+        "stage-invalid" | "stage-failed" | "invalid-contract" | "descriptor-rejected" => {
+            "fix-driver-task-descriptor"
+        }
+        "busy" => "poll-active-request",
+        "no-reply" => "inspect-linked-runtime-progress",
+        "tx-no-reply" => "inspect-control-tx-progress",
+        "tx-submit-fail" => "inspect-runtime-completion",
+        "begin" | "retry" => "wait-for-linked-runtime-reply",
+        "ready" => "continue-next-driver-gate",
+        "failed" | "fault" | "poll-fault" | "poll-unexpected" => "inspect-runtime-completion",
+        "poll-timeout" => "inspect-control-rx-progress",
+        _ if stage == "runtime-ring-submit" => "inspect-runtime-admission",
+        _ if status.starts_with("blocked") => "satisfy-linked-runtime-prerequisite",
+        _ => "continue-driver-debug",
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_resource_status_requires_uart(status: &str) -> bool {
     status == "failed"
         || status == "no-reply"
@@ -5694,6 +5985,9 @@ fn driver_task_resource_status_requires_uart(status: &str) -> bool {
         || status == "no-endpoint"
         || status == "ring-missing"
         || status == "busy"
+        || status == "poll-timeout"
+        || status == "tx-no-reply"
+        || status == "tx-submit-fail"
         || status.starts_with("blocked")
 }
 
@@ -7707,7 +8001,7 @@ pub fn emit_boot_contract_proof() {
     let mut line = String::<384>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_SUBSTRATE active={} profile=pi4-uboot-aarch64 task_count={} failed_count={} live_tcb_count={} root_authority_retained=yes fault_endpoint_ready={} revoke_ready={} broad_caps_leaked={} sched={} affinity={} affinity_configured={} affinity_applied={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} live_hot_paths={}",
+        "DRIVER_TASK_SUBSTRATE active={} profile=pi4-uboot-aarch64 task_count={} failed_count={} live_tcb_count={} root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime fault_endpoint_ready={} revoke_ready={} broad_caps_leaked={} sched={} affinity={} affinity_configured={} affinity_applied={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} live_hot_paths={}",
         if proof.substrate_active { "yes" } else { "no" },
         proof.configured_count,
         proof.failed_count,
@@ -7864,15 +8158,25 @@ pub fn emit_boot_contract_proof() {
         }
         let contract = hot_path.contract();
         let present = proof.owner_state_hot_path_mask & hot_path.owner_state_bit() != 0;
-        let mut line = String::<192>::new();
+        let mut line = String::<320>::new();
         let _ = write!(
             line,
-            "DRIVER_TASK_OWNER_STATE contract={} hot_path={} owner_state={} descriptor={} root_pointer={}",
+            "DRIVER_TASK_OWNER_STATE contract={} hot_path={} owner_state={} hardware_owner={} descriptor={} root_pointer={} root_authority=admission-descriptor-diagnostics-only proof_effect={}",
             contract.name,
             hot_path.as_str(),
             if present { "driver-owned" } else { "missing" },
+            if present {
+                "linked-runtime"
+            } else {
+                "unproven"
+            },
             if present { "present" } else { "missing" },
             if present { "no" } else { "unknown" },
+            if present {
+                "owner-state-proven"
+            } else {
+                "owner-state-missing"
+            },
         );
         crate::bootstrap::log::force_uart_line(line.as_str());
     }
@@ -7902,9 +8206,15 @@ pub fn emit_boot_contract_proof() {
     };
     let _ = write!(
         line,
-        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} owner_state_hot_paths=0x{:x} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
+        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime proof_effect={} next_action={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} owner_state_hot_paths=0x{:x} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
         if ready { "yes" } else { "no" },
         reason,
+        if ready {
+            "acceptance-green"
+        } else {
+            "acceptance-red"
+        },
+        driver_task_acceptance_next_action(reason),
         required_hot_path_count,
         summary.dedicated_sel4_tasks,
         summary.root_task_compatibility,
@@ -7928,6 +8238,22 @@ pub fn emit_boot_contract_proof() {
         proof.compatibility_service_role_mask,
     );
     crate::bootstrap::log::force_uart_line(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_acceptance_next_action(reason: &str) -> &'static str {
+    match reason {
+        "dedicated-sel4-substrate-active" => "continue-proof-lanes",
+        "dedicated-sel4-substrate-not-active" => "inspect-driver-task-bootstrap",
+        "driver-task-bootstrap-failures" => "inspect-failed-driver-task-tcb",
+        "driver-task-affinity-not-proven" => "verify-driver-task-affinity-proof",
+        "driver-task-vspace-isolation-not-proven" => "verify-isolated-driver-vspaces",
+        "driver-task-pointer-free-ipc-not-proven" => "verify-shared-ring-pointer-free-ipc",
+        "driver-task-owner-state-not-proven" => "inspect-driver-owner-state-descriptors",
+        DEDICATED_DRIVER_TASK_LIVE_HOT_PATHS_MISSING => "inspect-missing-live-hot-paths",
+        "root-task-compatibility-contracts-active" => "remove-physical-pi-compatibility-service",
+        _ => "inspect-driver-task-acceptance-proof",
+    }
 }
 
 #[cfg(test)]
@@ -9580,6 +9906,48 @@ mod tests {
             DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT
         );
 
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN,
+                aux0: command.aux0,
+            },
+        );
+
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+            ),
+            DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED,
+                aux0: command.aux0,
+            },
+        );
+
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+            ),
+            DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+
         slot.timeout_resumes.store(
             DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
             Ordering::Release,
@@ -10350,6 +10718,24 @@ mod tests {
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_FIRMWARE_READY_DONE
             ),
             "cyw43-release-firmware-ready-done"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_BEGIN
+            ),
+            "cyw43-control-tx-begin"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_DONE
+            ),
+            "cyw43-control-tx-done"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN
+            ),
+            "cyw43-control-rx-poll-begin"
         );
         assert_eq!(
             driver_task_ring_progress_phase_label(

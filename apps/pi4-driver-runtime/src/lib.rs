@@ -85,7 +85,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_FRAME,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_REMAINDER_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_ENGINE_INIT_BRANCH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_F1_BLOCK_READY,
@@ -322,6 +325,14 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, DRIVER_RUNTIME_RING_PROGRESS_USB_IMAN_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_IMOD_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_INIT_ENTRY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
@@ -1757,6 +1768,7 @@ static GENET_RX_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_SDIO_BUS_LINK_SEQ: AtomicU32 = AtomicU32::new(0);
+static CYW43_ACTIVE_PARENT_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 static CYW43_LAST_FAULT_DETAIL: AtomicU32 = AtomicU32::new(FAULT_NONE as u32);
 static CYW43_LAST_FAULT_RESULT: AtomicU32 = AtomicU32::new(0);
 static CYW43_LAST_FAULT_FRAME_OFFSET: AtomicU32 = AtomicU32::new(0);
@@ -4260,6 +4272,20 @@ const fn cyw43_transport_progress_result(detail: u16) -> u32 {
     }
 }
 
+#[cfg(target_os = "none")]
+fn cyw43_active_parent_sequence() -> u32 {
+    CYW43_ACTIVE_PARENT_SEQUENCE.load(Ordering::Acquire)
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn cyw43_sdio_owner_progress_sequence(parent_sequence: u32, owner_sequence: u32) -> u32 {
+    if parent_sequence != 0 {
+        parent_sequence
+    } else {
+        owner_sequence
+    }
+}
+
 fn service_cyw43_descriptor_command(
     command: DriverTaskCommandRecord,
 ) -> DriverTaskCompletionRecord {
@@ -4281,6 +4307,8 @@ fn service_cyw43_descriptor_command(
     let mut frame_ready = None;
     let mut progress_detail = None;
     let mut rx_idle_reason = None;
+    let previous_parent_sequence =
+        CYW43_ACTIVE_PARENT_SEQUENCE.swap(command.sequence, Ordering::AcqRel);
     let result = CYW43_RUNTIME_STATE.with_mut(|state| match desc.op {
         DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT => {
             cyw43_transport_init_command(command.sequence, command.aux0, state).map_or_else(
@@ -4417,12 +4445,23 @@ fn service_cyw43_descriptor_command(
                 len: desc.payload_len,
                 flags: 0,
             };
-            cyw43_submit_sdpcm_frame(
+            cyw43_publish_control_rx_progress(
+                command.sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_BEGIN,
+            );
+            let written = cyw43_submit_sdpcm_frame(
                 state,
                 frame,
                 false,
                 desc.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER != 0,
-            ) as u32
+            );
+            if written != 0 {
+                cyw43_publish_control_rx_progress(
+                    command.sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_DONE,
+                );
+            }
+            written as u32
         }
         DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => {
             let frame = DriverFrameDescriptor {
@@ -4484,6 +4523,7 @@ fn service_cyw43_descriptor_command(
         }
         _ => 0,
     });
+    CYW43_ACTIVE_PARENT_SEQUENCE.store(previous_parent_sequence, Ordering::Release);
     if let Some(detail) = exact_fault {
         let fault_result = cyw43_take_last_fault_result();
         let frame = cyw43_take_last_fault_frame();
@@ -5269,8 +5309,10 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
     command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
     let completion_reset = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
     let attempts = cyw43_sdio_bus_link_attempt_limit(command);
+    let progress_sequence =
+        cyw43_sdio_owner_progress_sequence(cyw43_active_parent_sequence(), command.sequence);
     publish_runtime_progress(
-        command.sequence,
+        progress_sequence,
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN,
         DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     );
@@ -5303,12 +5345,12 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
         let info = sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1);
         sel4_sys::seL4_NBSend(DRIVER_TASK_CHILD_SDIO_BUS_ENDPOINT_SLOT, info);
         publish_runtime_progress(
-            command.sequence,
+            progress_sequence,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE,
             DRIVER_RUNTIME_CYW43_COMMAND_AUX,
         );
         publish_runtime_progress(
-            command.sequence,
+            progress_sequence,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN,
             DRIVER_RUNTIME_CYW43_COMMAND_AUX,
         );
@@ -5336,7 +5378,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
                     continue;
                 }
                 publish_runtime_progress(
-                    command.sequence,
+                    progress_sequence,
                     pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
                     DRIVER_RUNTIME_CYW43_COMMAND_AUX,
                 );
@@ -5351,7 +5393,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Option<DriverTask
             }
         }
         publish_runtime_progress(
-            command.sequence,
+            progress_sequence,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
             DRIVER_RUNTIME_CYW43_COMMAND_AUX,
         );
@@ -8385,11 +8427,20 @@ fn cyw43_control_exchange(
     sequence: u32,
 ) -> Option<DriverFrameDescriptor> {
     cyw43_drain_startup_status_frames(state, sequence);
+    cyw43_publish_control_rx_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_BEGIN,
+    );
     if cyw43_submit_sdpcm_frame(state, frame, false, control_ext_header) == 0 {
         return None;
     }
+    cyw43_publish_control_rx_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_DONE);
     let mut nonmatching_frames = 0u32;
     let mut last_idle_reason = Cyw43RxIdleReason::NoRframe;
+    cyw43_publish_control_rx_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
+    );
     for attempt in 1..=CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS {
         let allow_firstread = cyw43_control_exchange_attempt_uses_firstread(attempt);
         let reply_frame = match cyw43_runtime_poll_rx_detailed(
@@ -12278,6 +12329,16 @@ const fn xhci_control_transfer_event_diagnostic_phases(
                 }
             }
         }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT => {
+            XhciControlEventDiagnosticPhases {
+                slot_empty:
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY,
+                cycle_mismatch:
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH,
+                ignored:
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED,
+            }
+        }
         _ => XhciControlEventDiagnosticPhases {
             slot_empty: 0,
             cycle_mismatch: 0,
@@ -12317,7 +12378,8 @@ fn xhci_control_pending_event_phase_rank(phase: u32) -> u8 {
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_EVENT_IGNORED
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_IGNORED
         | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_IGNORED
-        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED => 3,
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED => 3,
         DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_EVENT_CYCLE_MISMATCH
         | DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT_CYCLE_MISMATCH
         | DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_EVENT_CYCLE_MISMATCH
@@ -12327,7 +12389,8 @@ fn xhci_control_pending_event_phase_rank(phase: u32) -> u8 {
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_EVENT_CYCLE_MISMATCH
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_CYCLE_MISMATCH
         | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_CYCLE_MISMATCH
-        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH => 2,
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_CYCLE_MISMATCH
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH => 2,
         DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_TRANSFER_EVENT_SLOT_EMPTY
         | DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_PRIME_STATUS_EVENT_SLOT_EMPTY
         | DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY
@@ -12337,7 +12400,8 @@ fn xhci_control_pending_event_phase_rank(phase: u32) -> u8 {
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_TRANSFER_EVENT_SLOT_EMPTY
         | DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_FULL_STATUS_EVENT_SLOT_EMPTY
         | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY
-        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_SLOT_EMPTY => 1,
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_SLOT_EMPTY
+        | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY => 1,
         _ => 0,
     }
 }
@@ -13704,6 +13768,36 @@ fn usb_set_configuration(
     .is_some()
 }
 
+fn usb_set_configuration_with_progress(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    configuration: u8,
+    progress: XhciControlProgress,
+) -> bool {
+    let setup = [
+        0x00,
+        XHCI_SETUP_SET_CONFIGURATION,
+        configuration,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ];
+    xhci_control_transfer_with_progress(
+        state,
+        descriptor,
+        device,
+        setup,
+        XHCI_DMA_CONTROL_BUFFER_OFFSET,
+        0,
+        false,
+        Some(progress),
+    )
+    .is_some()
+}
+
 fn usb_set_hid_boot_protocol(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
@@ -14903,7 +14997,23 @@ fn usb_scan_hub_children(
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN,
         aux0,
     );
-    if !usb_set_configuration(state, descriptor, &mut hub, config_value) {
+    if !usb_set_configuration_with_progress(
+        state,
+        descriptor,
+        &mut hub,
+        config_value,
+        XhciControlProgress {
+            sequence,
+            aux0,
+            doorbell_done: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE,
+            wait_begin: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN,
+            data_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT,
+            status_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT,
+            failed: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED,
+            transfer_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT,
+            status_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT,
+        },
+    ) {
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED;
         return false;
     }
@@ -16806,6 +16916,7 @@ mod tests {
         CYW43_RUNTIME_FLAGS.store(0, Ordering::Release);
         CYW43_TX_COUNT.store(0, Ordering::Release);
         CYW43_SDIO_BUS_LINK_SEQ.store(0, Ordering::Release);
+        CYW43_ACTIVE_PARENT_SEQUENCE.store(0, Ordering::Release);
         CYW43_LAST_FAULT_DETAIL.store(FAULT_NONE as u32, Ordering::Release);
         CYW43_LAST_FAULT_RESULT.store(0, Ordering::Release);
         CYW43_LAST_FAULT_FRAME_OFFSET.store(0, Ordering::Release);
@@ -18397,6 +18508,12 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_sdio_owner_progress_sequence_prefers_parent_request() {
+        assert_eq!(cyw43_sdio_owner_progress_sequence(174, 76_764), 174);
+        assert_eq!(cyw43_sdio_owner_progress_sequence(0, 76_764), 76_764);
+    }
+
+    #[test]
     fn cyw43_control_exchange_matches_cdc_command_and_ioctl_id() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -18433,6 +18550,17 @@ mod tests {
                     flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 1),
                 }
             )
+        );
+        let progress = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(progress), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(progress + 4), 78);
+        assert_eq!(
+            read_ring_u32(progress + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN
+        );
+        assert_eq!(
+            read_ring_u32(progress + 12),
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX
         );
     }
 
@@ -21164,6 +21292,14 @@ mod tests {
             324
         );
         assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE,
+            400
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED,
+            407
+        );
+        assert_eq!(
             XHCI_COMMAND_RING_BYTES,
             XHCI_COMMAND_RING_TRBS * XHCI_TRB_BYTES
         );
@@ -22550,6 +22686,34 @@ mod tests {
         assert_eq!(
             xhci_control_transfer_event_diagnostic_phases(hub_progress, true).ignored,
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_STATUS_EVENT_IGNORED
+        );
+        let hub_set_config_progress = XhciControlProgress {
+            sequence: 8,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            doorbell_done: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE,
+            wait_begin: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN,
+            data_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT,
+            status_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT,
+            failed: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED,
+            transfer_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT,
+            status_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT,
+        };
+        assert_eq!(
+            xhci_control_pending_event_phase_for_event(empty, true, hub_set_config_progress, true),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY
+        );
+        assert_eq!(
+            xhci_control_pending_event_phase_for_event(
+                stale_cycle,
+                true,
+                hub_set_config_progress,
+                true
+            ),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH
+        );
+        assert_eq!(
+            xhci_control_transfer_event_diagnostic_phases(hub_set_config_progress, true).ignored,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED
         );
         assert!(
             xhci_control_pending_event_phase_rank(

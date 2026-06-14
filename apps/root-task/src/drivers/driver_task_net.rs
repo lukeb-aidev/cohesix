@@ -54,6 +54,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_INVALID_SDPCM,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_FAILED,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_TOO_LARGE,
+    DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_INVALID_RFRAME_LEN,
+    DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NOT_READY, DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NO_RFRAME,
+    DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RFRAME_READ_FAILED,
+    DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RX_REQUEST_TOO_LARGE,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_SDPCM_DECODE_MISS,
     DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT,
     DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FRAME_INDICATED,
@@ -105,6 +109,7 @@ const CYW43_BACKPLANE_ADDRESS_MASK: u32 = 0x7fff;
 const CYW43_BACKPLANE_WINDOW_MASK: u32 = 0xffff_8000;
 const CYW43_BACKPLANE_32BIT_FLAG: u32 = 0x8000;
 const CYW43_CONTROL_PLANE_POLL_ATTEMPTS: usize = 256;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC: u32 = 0x4300_0000;
 const CYW43_HOST_EAPOL_PRE_ASSOC_POLLS: usize = 8_192;
 const CYW43_HOST_EAPOL_POST_ASSOC_POLLS: usize = 16_384;
 const CYW43_HOST_EAPOL_JOIN_POLLS: usize =
@@ -260,6 +265,10 @@ pub(crate) struct Cyw43RuntimeCommandFaultStatus {
     pub payload_offset: u16,
     pub payload_len: u16,
     pub total_len: u32,
+    pub control_cmd: u32,
+    pub control_id: u16,
+    pub control_header_mode: &'static str,
+    pub control_response_len: u16,
     pub detail: u16,
     pub reason: &'static str,
     pub result: u32,
@@ -279,6 +288,44 @@ impl Cyw43ControlHeaderMode {
             Self::Plain => 0,
             Self::Extended => DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
         }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plain => "plain",
+            Self::Extended => "extended",
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_descriptor_control_cmd(descriptor: DriverRuntimeCyw43CommandDescriptor) -> u32 {
+    if descriptor.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE {
+        descriptor.arg0
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_descriptor_control_id(descriptor: DriverRuntimeCyw43CommandDescriptor) -> u16 {
+    if descriptor.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE {
+        descriptor.arg1 as u16
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_descriptor_control_header_mode(
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+) -> &'static str {
+    if descriptor.op != DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE {
+        "not-control"
+    } else if descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER != 0 {
+        "extended"
+    } else {
+        "plain"
     }
 }
 
@@ -742,15 +789,17 @@ fn emit_net_driver_task_replay_status(
         | (NetInterfacePolicy::Auto, DriverTaskHotPath::Cyw43Wifi) => "yes",
         _ => "no",
     };
-    let mut line = heapless::String::<192>::new();
+    let mut line = heapless::String::<320>::new();
     let _ = write!(
         line,
-        "NET_DRIVER_TASK_REPLAY_STATUS role={} selected={} policy={} attempted=yes stage={} blocker={}",
+        "NET_DRIVER_TASK_REPLAY_STATUS role={} selected={} policy={} attempted=yes stage={} blocker={} owner=linked-runtime root_action=descriptor-replay proof_effect={} next_action={}",
         hot_path.as_str(),
         selected,
         config.policy.interface.as_str(),
         stage,
         status,
+        driver_task_replay_proof_effect(status),
+        driver_task_replay_next_action(stage, status),
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
@@ -760,13 +809,38 @@ fn emit_sdio_driver_task_replay_status(stage: &'static str, status: &'static str
     use core::fmt::Write;
 
     *SDIO_LAST_RUNTIME_REPLAY_STATUS.lock() = Some(SdioRuntimeReplayStatus { stage, status });
-    let mut line = heapless::String::<160>::new();
+    let mut line = heapless::String::<320>::new();
     let _ = write!(
         line,
-        "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host selected=wifi-owner-link attempted=yes stage={} blocker={}",
-        stage, status,
+        "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host selected=wifi-owner-link attempted=yes stage={} blocker={} owner=linked-runtime root_action=descriptor-replay proof_effect={} next_action={}",
+        stage,
+        status,
+        driver_task_replay_proof_effect(status),
+        driver_task_replay_next_action(stage, status),
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_replay_proof_effect(status: &str) -> &'static str {
+    match status {
+        "ready" | "preserved-ready" => "replay-ready",
+        "begin" | "pending" | "retry" => "replay-in-progress",
+        _ => "acceptance-red",
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_replay_next_action(stage: &str, status: &str) -> &'static str {
+    match status {
+        "ready" | "preserved-ready" => "continue-next-driver-gate",
+        "begin" | "pending" | "retry" => "poll-linked-runtime-replay",
+        "no-reply" => "inspect-linked-runtime-progress",
+        "unsupported" => "use-linked-runtime-supported-command",
+        "failed" | "fault" | "clock-failed" => "inspect-linked-runtime-fault",
+        _ if stage.contains("descriptor") => "inspect-runtime-descriptor",
+        _ => "inspect-linked-runtime-replay",
+    }
 }
 
 /// Error surfaced by driver-task NIC clients.
@@ -1832,15 +1906,6 @@ fn cyw43_get_bcdc_revinfo(contract: DriverTaskContract) -> Result<(), DriverTask
     let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
     let id = cyw43_next_bcdc_ioctl_id();
     let len = cyw43_write_bcdc_revinfo_frame(&mut frame, id)?;
-    emit_cyw43_control_request_trace(
-        contract,
-        "cyw43-control-revinfo",
-        CYW43_WLC_GET_REVINFO,
-        id,
-        Cyw43ControlHeaderMode::Extended,
-        len,
-        CYW43_REVINFO_RESPONSE_BYTES,
-    );
     cyw43_submit_control_exchange_checked(
         contract,
         &frame[..len],
@@ -1851,31 +1916,153 @@ fn cyw43_get_bcdc_revinfo(contract: DriverTaskContract) -> Result<(), DriverTask
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+struct Cyw43ControlIovarInfo<'a> {
+    name: &'a str,
+    data_len: usize,
+    value_u32: Option<u32>,
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_read_le_u16(bytes: &[u8], offset: usize) -> Option<u16> {
+    let b0 = *bytes.get(offset)?;
+    let b1 = *bytes.get(offset + 1)?;
+    Some(u16::from_le_bytes([b0, b1]))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_read_le_u32(bytes: &[u8], offset: usize) -> Option<u32> {
+    let b0 = *bytes.get(offset)?;
+    let b1 = *bytes.get(offset + 1)?;
+    let b2 = *bytes.get(offset + 2)?;
+    let b3 = *bytes.get(offset + 3)?;
+    Some(u32::from_le_bytes([b0, b1, b2, b3]))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_iovar_info(payload: &[u8], cmd: u32) -> Option<Cyw43ControlIovarInfo<'_>> {
+    if cmd != CYW43_WLC_GET_VAR && cmd != CYW43_WLC_SET_VAR {
+        return None;
+    }
+    let body = payload.get(CYW43_BCDC_HEADER_BYTES..)?;
+    let name_len = body.iter().position(|byte| *byte == 0)?;
+    if name_len == 0 {
+        return None;
+    }
+    let name = core::str::from_utf8(body.get(..name_len)?).ok()?;
+    let data = body.get(name_len + 1..)?;
+    let value_u32 = if data.len() == 4 {
+        cyw43_read_le_u32(data, 0)
+    } else {
+        None
+    };
+    Some(Cyw43ControlIovarInfo {
+        name,
+        data_len: data.len(),
+        value_u32,
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_request_expected_response_len(
+    cmd: u32,
+    info: Option<Cyw43ControlIovarInfo<'_>>,
+) -> usize {
+    if cmd == CYW43_WLC_GET_REVINFO {
+        CYW43_REVINFO_RESPONSE_BYTES
+    } else if cmd == CYW43_WLC_GET_VAR {
+        info.map_or(0, |info| info.data_len)
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_request_digest_len(
+    payload_len: usize,
+    info: Option<Cyw43ControlIovarInfo<'_>>,
+) -> (usize, &'static str) {
+    let Some(info) = info else {
+        return (payload_len.min(CYW43_BCDC_HEADER_BYTES), "header");
+    };
+    if info.data_len <= 4 {
+        return (payload_len, "full");
+    }
+    let redacted_len = CYW43_BCDC_HEADER_BYTES
+        .saturating_add(info.name.len())
+        .saturating_add(1)
+        .min(payload_len);
+    (redacted_len, "header-iovar")
+}
+
+#[cfg(feature = "kernel")]
 fn emit_cyw43_control_request_trace(
     contract: DriverTaskContract,
     stage: &'static str,
     cmd: u32,
     id: u16,
     header_mode: Cyw43ControlHeaderMode,
-    frame_len: usize,
-    response_len: usize,
+    payload: &[u8],
 ) {
     use core::fmt::Write;
 
-    let mut line = heapless::String::<256>::new();
-    let _ = write!(
-        line,
-        "CYW43_DRIVER_TASK_CONTROL_REQUEST contract={} stage={} cmd={} cmd_hex=0x{:08x} id={} runtime_flags=0x{:04x} bcdc_flags=0x{:04x} payload_len={} response_len={}",
-        contract.name,
-        stage,
-        cmd,
-        cmd,
-        id,
-        header_mode.runtime_flags(),
-        CYW43_BCDC_FLAG_GET,
-        frame_len,
-        response_len,
-    );
+    let bcdc_flags = cyw43_read_le_u16(payload, 8).unwrap_or(0xffff);
+    let info = cyw43_control_iovar_info(payload, cmd);
+    let response_len = cyw43_control_request_expected_response_len(cmd, info);
+    let (digest_len, digest_scope) = cyw43_control_request_digest_len(payload.len(), info);
+    let digest = cyw43_payload_digest(&payload[..digest_len]);
+    let iovar = info.map_or("none", |info| info.name);
+    let value = info.and_then(|info| info.value_u32);
+    let mut line = heapless::String::<768>::new();
+    match value {
+        Some(value) => {
+            let _ = write!(
+                line,
+                "CYW43_DRIVER_TASK_CONTROL_REQUEST contract={} stage={} cmd={} cmd_hex=0x{:08x} id={} runtime_flags=0x{:04x} bcdc_flags=0x{:04x} payload_len={} response_len={} iovar={} value=0x{:08x} header_mode={} digest_scope={} digest_len={} first=0x{:02x} last=0x{:02x} xor=0x{:02x} sum=0x{:08x}",
+                contract.name,
+                stage,
+                cmd,
+                cmd,
+                id,
+                header_mode.runtime_flags(),
+                bcdc_flags,
+                payload.len(),
+                response_len,
+                iovar,
+                value,
+                header_mode.as_str(),
+                digest_scope,
+                digest_len,
+                digest.first,
+                digest.last,
+                digest.xor,
+                digest.sum,
+            );
+        }
+        None => {
+            let _ = write!(
+                line,
+                "CYW43_DRIVER_TASK_CONTROL_REQUEST contract={} stage={} cmd={} cmd_hex=0x{:08x} id={} runtime_flags=0x{:04x} bcdc_flags=0x{:04x} payload_len={} response_len={} iovar={} value=none header_mode={} digest_scope={} digest_len={} first=0x{:02x} last=0x{:02x} xor=0x{:02x} sum=0x{:08x}",
+                contract.name,
+                stage,
+                cmd,
+                cmd,
+                id,
+                header_mode.runtime_flags(),
+                bcdc_flags,
+                payload.len(),
+                response_len,
+                iovar,
+                header_mode.as_str(),
+                digest_scope,
+                digest_len,
+                digest.first,
+                digest.last,
+                digest.xor,
+                digest.sum,
+            );
+        }
+    }
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
@@ -2692,10 +2879,95 @@ fn cyw43_submit_control_exchange_unmapped_with_header_mode(
         "begin",
         None,
     );
-    submit_cyw43_runtime_command_checked(
+    emit_cyw43_control_request_trace(contract, stage, cmd, id, header_mode, payload);
+    let control_iovar = cyw43_control_iovar_info(payload, cmd).map_or("none", |info| info.name);
+    let expected_response_len =
+        cyw43_control_request_expected_response_len(cmd, cyw43_control_iovar_info(payload, cmd))
+            as u16;
+    let tx_descriptor = cyw43_control_frame_descriptor(payload.len(), header_mode);
+    let Some(tx_completion) =
+        run_cyw43_runtime_descriptor_command(contract, tx_descriptor, payload)
+    else {
+        record_cyw43_control_split_failure(
+            contract,
+            stage,
+            tx_descriptor,
+            "cyw43-control-tx-no-reply",
+            None,
+            cmd,
+            id,
+            header_mode,
+            expected_response_len,
+            control_iovar,
+            0,
+            0,
+        );
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "tx-no-reply",
+            None,
+        );
+        return Err(Cyw43CommandSubmitError::Runtime(
+            DriverTaskNetError::RuntimeInit("cyw43-command-completion"),
+        ));
+    };
+    emit_cyw43_control_split_completion(
         contract,
-        cyw43_control_exchange_descriptor(payload.len(), cmd, id, header_mode),
-        payload,
+        stage,
+        "tx-complete",
+        0,
+        0,
+        tx_completion,
+        cmd,
+        id,
+        header_mode,
+        expected_response_len,
+        control_iovar,
+        0,
+        0,
+    );
+    if !driver_task_tx_completion_submitted(tx_completion) {
+        record_cyw43_control_split_failure(
+            contract,
+            stage,
+            tx_descriptor,
+            "cyw43-control-tx-not-submitted",
+            Some(tx_completion),
+            cmd,
+            id,
+            header_mode,
+            expected_response_len,
+            control_iovar,
+            0,
+            0,
+        );
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "tx-submit-fail",
+            Some(tx_completion),
+        );
+        return Err(Cyw43CommandSubmitError::Completion(tx_completion));
+    }
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        DriverTaskHotPath::Cyw43Wifi,
+        stage,
+        "tx-ready",
+        Some(tx_completion),
+    );
+    cyw43_poll_control_exchange_reply(
+        contract,
+        stage,
+        cmd,
+        id,
+        payload.len(),
+        header_mode,
+        expected_response_len,
+        control_iovar,
     )
 }
 
@@ -2715,6 +2987,617 @@ fn cyw43_control_exchange_descriptor(
         arg1: u32::from(id),
         ..DriverRuntimeCyw43CommandDescriptor::empty()
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_frame_descriptor(
+    payload_len: usize,
+    header_mode: Cyw43ControlHeaderMode,
+) -> DriverRuntimeCyw43CommandDescriptor {
+    DriverRuntimeCyw43CommandDescriptor {
+        op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+        flags: header_mode.runtime_flags(),
+        payload_len: payload_len as u16,
+        total_len: payload_len as u32,
+        ..DriverRuntimeCyw43CommandDescriptor::empty()
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_poll_control_exchange_reply(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    cmd: u32,
+    id: u16,
+    payload_len: usize,
+    header_mode: Cyw43ControlHeaderMode,
+    expected_response_len: u16,
+    control_iovar: &str,
+) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
+    let exchange_descriptor = cyw43_control_exchange_descriptor(payload_len, cmd, id, header_mode);
+    let mut nonmatching_frames = 0u32;
+    let mut malformed_frames = 0u32;
+    let mut last_completion = None;
+    for poll in 1..=CYW43_CONTROL_PLANE_POLL_ATTEMPTS {
+        let flags = cyw43_control_split_poll_flags(poll);
+        let Some(completion) = poll_cyw43_driver_task_control_completion(flags) else {
+            continue;
+        };
+        last_completion = Some(completion);
+        if cyw43_control_split_poll_completion_should_trace(poll, flags, completion) {
+            emit_cyw43_control_split_completion(
+                contract,
+                stage,
+                "poll-complete",
+                poll,
+                flags,
+                completion,
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+                nonmatching_frames,
+                malformed_frames,
+            );
+        }
+        if completion.code == DriverTaskCompletionCode::Idle.as_u16() {
+            continue;
+        }
+        if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
+            emit_cyw43_runtime_command_fault(
+                contract,
+                stage,
+                exchange_descriptor,
+                completion,
+                None,
+            );
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "poll-fault",
+                Some(completion),
+            );
+            return Err(Cyw43CommandSubmitError::Completion(completion));
+        }
+        if completion.code != DriverTaskCompletionCode::FrameReady.as_u16() {
+            record_cyw43_control_split_failure(
+                contract,
+                stage,
+                exchange_descriptor,
+                "cyw43-control-poll-unexpected-completion",
+                Some(completion),
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+                nonmatching_frames,
+                malformed_frames,
+            );
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "poll-unexpected",
+                Some(completion),
+            );
+            return Err(Cyw43CommandSubmitError::Completion(completion));
+        }
+        let Some((_frame_flags, token)) =
+            cyw43_driver_task_frame_from_completion(contract, completion)
+        else {
+            record_cyw43_control_split_failure(
+                contract,
+                stage,
+                exchange_descriptor,
+                "cyw43-control-frame-unavailable",
+                Some(completion),
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+                nonmatching_frames,
+                malformed_frames,
+            );
+            continue;
+        };
+        let Some(reply) = cyw43_control_reply_from_token(&token) else {
+            malformed_frames = malformed_frames.saturating_add(1);
+            emit_cyw43_control_split_reply_trace(
+                contract,
+                stage,
+                "malformed-reply",
+                poll,
+                flags,
+                completion.sequence,
+                None,
+                nonmatching_frames,
+                malformed_frames,
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+            );
+            continue;
+        };
+        let reply_matches = reply.cmd == cmd && reply.id == id;
+        if !reply_matches {
+            nonmatching_frames = nonmatching_frames.saturating_add(1);
+        }
+        emit_cyw43_control_split_reply_trace(
+            contract,
+            stage,
+            if reply_matches {
+                "matched-reply"
+            } else {
+                "nonmatching-reply"
+            },
+            poll,
+            flags,
+            completion.sequence,
+            Some(reply),
+            nonmatching_frames,
+            malformed_frames,
+            cmd,
+            id,
+            header_mode,
+            expected_response_len,
+            control_iovar,
+        );
+        if !reply_matches {
+            continue;
+        }
+        let response_len = match usize::try_from(reply.response_len) {
+            Ok(len) => len,
+            Err(_) => {
+                let fault = cyw43_control_fault_completion(
+                    completion.sequence,
+                    CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
+                    reply.response_len,
+                );
+                record_cyw43_control_split_failure(
+                    contract,
+                    stage,
+                    exchange_descriptor,
+                    "cyw43-control-reply-len-overflow",
+                    Some(fault),
+                    cmd,
+                    id,
+                    header_mode,
+                    expected_response_len,
+                    control_iovar,
+                    nonmatching_frames,
+                    malformed_frames,
+                );
+                emit_cyw43_runtime_command_fault(contract, stage, exchange_descriptor, fault, None);
+                return Err(Cyw43CommandSubmitError::Completion(fault));
+            }
+        };
+        if response_len > reply.payload_available {
+            let fault = cyw43_control_fault_completion(
+                completion.sequence,
+                CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
+                reply.response_len,
+            );
+            record_cyw43_control_split_failure(
+                contract,
+                stage,
+                exchange_descriptor,
+                "cyw43-control-reply-len-invalid",
+                Some(fault),
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+                nonmatching_frames,
+                malformed_frames,
+            );
+            emit_cyw43_runtime_command_fault(contract, stage, exchange_descriptor, fault, None);
+            return Err(Cyw43CommandSubmitError::Completion(fault));
+        }
+        if reply.status != 0 {
+            let fault = cyw43_control_fault_completion(
+                completion.sequence,
+                CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
+                reply.status,
+            );
+            record_cyw43_control_split_failure(
+                contract,
+                stage,
+                exchange_descriptor,
+                "cyw43-control-reply-status",
+                Some(fault),
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+                nonmatching_frames,
+                malformed_frames,
+            );
+            emit_cyw43_runtime_command_fault(contract, stage, exchange_descriptor, fault, None);
+            return Err(Cyw43CommandSubmitError::Completion(fault));
+        }
+        let Some(response_completion) = cyw43_control_response_completion(completion, response_len)
+        else {
+            let fault = cyw43_control_fault_completion(
+                completion.sequence,
+                CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
+                reply.response_len,
+            );
+            record_cyw43_control_split_failure(
+                contract,
+                stage,
+                exchange_descriptor,
+                "cyw43-control-reply-frame-range",
+                Some(fault),
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+                nonmatching_frames,
+                malformed_frames,
+            );
+            emit_cyw43_runtime_command_fault(contract, stage, exchange_descriptor, fault, None);
+            return Err(Cyw43CommandSubmitError::Completion(fault));
+        };
+        emit_cyw43_control_split_completion(
+            contract,
+            stage,
+            "response-ready",
+            poll,
+            flags,
+            response_completion,
+            cmd,
+            id,
+            header_mode,
+            expected_response_len,
+            control_iovar,
+            nonmatching_frames,
+            malformed_frames,
+        );
+        return Ok(response_completion);
+    }
+    let timeout_event = if nonmatching_frames != 0 || malformed_frames != 0 {
+        "cyw43-control-reply-nonmatching"
+    } else {
+        "cyw43-control-split-no-reply"
+    };
+    record_cyw43_control_split_failure(
+        contract,
+        stage,
+        exchange_descriptor,
+        timeout_event,
+        last_completion,
+        cmd,
+        id,
+        header_mode,
+        expected_response_len,
+        control_iovar,
+        nonmatching_frames,
+        malformed_frames,
+    );
+    record_cyw43_runtime_command_no_reply(contract, stage, exchange_descriptor, 0);
+    let fault = cyw43_control_fault_completion(
+        last_completion.map_or(0, |completion| completion.sequence),
+        CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
+        cyw43_control_split_timeout_result(last_completion, nonmatching_frames, malformed_frames),
+    );
+    emit_cyw43_runtime_command_fault(contract, stage, exchange_descriptor, fault, None);
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        DriverTaskHotPath::Cyw43Wifi,
+        stage,
+        "poll-timeout",
+        Some(fault),
+    );
+    Err(Cyw43CommandSubmitError::Completion(fault))
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_control_exchange_timeout_result(reason: u32, value: u32) -> u32 {
+    let bounded_value = if value > 0xffff { 0xffff } else { value };
+    CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC | ((reason & 0xff) << 16) | bounded_value
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_control_split_timeout_result(
+    completion: Option<DriverTaskCompletionRecord>,
+    nonmatching_frames: u32,
+    malformed_frames: u32,
+) -> u32 {
+    let mismatch_frames = nonmatching_frames.saturating_add(malformed_frames);
+    if mismatch_frames != 0 {
+        return cyw43_control_exchange_timeout_result(8, mismatch_frames);
+    }
+    let completion = match completion {
+        Some(completion) => completion,
+        None => return cyw43_control_exchange_timeout_result(3, 0),
+    };
+    let reason = match completion.detail {
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NOT_READY => 1,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RFRAME_READ_FAILED => 2,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NO_RFRAME => 3,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_INVALID_RFRAME_LEN => 4,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RX_REQUEST_TOO_LARGE => 5,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_F2_READ_FAILED => 6,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_SDPCM_DECODE_MISS => 7,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_FAILED => 9,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY => 10,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_INVALID_SDPCM => 11,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_FAILED => 12,
+        DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_TOO_LARGE => 13,
+        _ => 3,
+    };
+    cyw43_control_exchange_timeout_result(reason, completion.result)
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43ControlReply {
+    cmd: u32,
+    id: u16,
+    status: u32,
+    response_len: u32,
+    payload_available: usize,
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_reply_from_token(token: &DriverTaskNetRxToken) -> Option<Cyw43ControlReply> {
+    if token.len < CYW43_BCDC_HEADER_BYTES {
+        return None;
+    }
+    let bytes = &token.buffer[..token.len];
+    Some(Cyw43ControlReply {
+        cmd: le_u32_at(bytes, 0)?,
+        response_len: le_u32_at(bytes, 4)?,
+        id: le_u16_at(bytes, 10)?,
+        status: le_u32_at(bytes, 12)?,
+        payload_available: token.len.saturating_sub(CYW43_BCDC_HEADER_BYTES),
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_response_completion(
+    completion: DriverTaskCompletionRecord,
+    response_len: usize,
+) -> Option<DriverTaskCompletionRecord> {
+    let frame_len = u16::try_from(response_len).ok()?;
+    let offset = completion
+        .frame
+        .offset
+        .checked_add(CYW43_BCDC_HEADER_BYTES as u32)?;
+    Some(DriverTaskCompletionRecord {
+        sequence: completion.sequence,
+        code: DriverTaskCompletionCode::FrameReady.as_u16(),
+        detail: 0,
+        result: u32::from(frame_len),
+        frame: DriverFrameDescriptor {
+            offset,
+            len: frame_len,
+            flags: completion.frame.flags,
+        },
+    })
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_control_fault_completion(
+    sequence: u32,
+    detail: u16,
+    result: u32,
+) -> DriverTaskCompletionRecord {
+    DriverTaskCompletionRecord {
+        sequence,
+        code: DriverTaskCompletionCode::Fault.as_u16(),
+        detail,
+        result,
+        frame: DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        },
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_control_split_poll_flags(poll: usize) -> u16 {
+    if matches!(poll, 1 | 4 | 16 | 64 | 256) {
+        DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_control_split_poll_completion_should_trace(
+    poll: usize,
+    flags: u16,
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD != 0
+        || completion.code != DriverTaskCompletionCode::Idle.as_u16()
+        || poll == CYW43_CONTROL_PLANE_POLL_ATTEMPTS
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_control_split_failure(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    reason: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+    expected_cmd: u32,
+    expected_id: u16,
+    header_mode: Cyw43ControlHeaderMode,
+    expected_response_len: u16,
+    control_iovar: &str,
+    nonmatching_frames: u32,
+    malformed_frames: u32,
+) {
+    let (detail, result) =
+        completion.map_or((0, 0), |completion| (completion.detail, completion.result));
+    *CYW43_LAST_RUNTIME_COMMAND_FAULT.lock() = Some(Cyw43RuntimeCommandFaultStatus {
+        stage,
+        op: descriptor.op,
+        flags: descriptor.flags,
+        target_addr: descriptor.target_addr,
+        payload_offset: descriptor.payload_offset,
+        payload_len: descriptor.payload_len,
+        total_len: descriptor.total_len,
+        control_cmd: cyw43_descriptor_control_cmd(descriptor),
+        control_id: cyw43_descriptor_control_id(descriptor),
+        control_header_mode: cyw43_descriptor_control_header_mode(descriptor),
+        control_response_len: cyw43_control_request_expected_response_len(
+            cyw43_descriptor_control_cmd(descriptor),
+            None,
+        ) as u16,
+        detail,
+        reason,
+        result,
+    });
+    *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
+    if let Some(completion) = completion {
+        emit_cyw43_control_split_completion(
+            contract,
+            stage,
+            reason,
+            0,
+            descriptor.flags,
+            completion,
+            expected_cmd,
+            expected_id,
+            header_mode,
+            expected_response_len,
+            control_iovar,
+            nonmatching_frames,
+            malformed_frames,
+        );
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_control_split_completion(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    event: &'static str,
+    poll: usize,
+    flags: u16,
+    completion: DriverTaskCompletionRecord,
+    expected_cmd: u32,
+    expected_id: u16,
+    header_mode: Cyw43ControlHeaderMode,
+    expected_response_len: u16,
+    control_iovar: &str,
+    nonmatching_frames: u32,
+    malformed_frames: u32,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<768>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_CONTROL_SPLIT contract={} stage={} event={} poll={} flags=0x{:04x} sequence={} code={} detail=0x{:04x} result=0x{:08x} frame_off={} frame_len={} frame_flags=0x{:04x} expected_cmd={} expected_cmd_hex=0x{:08x} expected_id={} header_mode={} expected_response_len={} iovar={} nonmatching_frames={} malformed_frames={}",
+        contract.name,
+        stage,
+        event,
+        poll,
+        flags,
+        completion.sequence,
+        completion.code,
+        completion.detail,
+        completion.result,
+        completion.frame.offset,
+        completion.frame.len,
+        completion.frame.flags,
+        expected_cmd,
+        expected_cmd,
+        expected_id,
+        header_mode.as_str(),
+        expected_response_len,
+        control_iovar,
+        nonmatching_frames,
+        malformed_frames,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_control_split_reply_trace(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    event: &'static str,
+    poll: usize,
+    flags: u16,
+    completion_sequence: u32,
+    reply: Option<Cyw43ControlReply>,
+    nonmatching_frames: u32,
+    malformed_frames: u32,
+    expected_cmd: u32,
+    expected_id: u16,
+    header_mode: Cyw43ControlHeaderMode,
+    expected_response_len: u16,
+    control_iovar: &str,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<768>::new();
+    if let Some(reply) = reply {
+        let _ = write!(
+            line,
+            "CYW43_DRIVER_TASK_CONTROL_REPLY contract={} stage={} event={} poll={} flags=0x{:04x} completion_sequence={} cmd={} cmd_hex=0x{:08x} id={} status=0x{:08x} response_len={} payload_available={} expected_cmd={} expected_cmd_hex=0x{:08x} expected_id={} header_mode={} expected_response_len={} iovar={} reply_match={} nonmatching_frames={} malformed_frames={}",
+            contract.name,
+            stage,
+            event,
+            poll,
+            flags,
+            completion_sequence,
+            reply.cmd,
+            reply.cmd,
+            reply.id,
+            reply.status,
+            reply.response_len,
+            reply.payload_available,
+            expected_cmd,
+            expected_cmd,
+            expected_id,
+            header_mode.as_str(),
+            expected_response_len,
+            control_iovar,
+            if reply.cmd == expected_cmd && reply.id == expected_id {
+                "yes"
+            } else {
+                "no"
+            },
+            nonmatching_frames,
+            malformed_frames,
+        );
+    } else {
+        let _ = write!(
+            line,
+            "CYW43_DRIVER_TASK_CONTROL_REPLY contract={} stage={} event={} poll={} flags=0x{:04x} completion_sequence={} cmd=none cmd_hex=none id=none status=none response_len=0 payload_available=0 expected_cmd={} expected_cmd_hex=0x{:08x} expected_id={} header_mode={} expected_response_len={} iovar={} reply_match=no nonmatching_frames={} malformed_frames={}",
+            contract.name,
+            stage,
+            event,
+            poll,
+            flags,
+            completion_sequence,
+            expected_cmd,
+            expected_cmd,
+            expected_id,
+            header_mode.as_str(),
+            expected_response_len,
+            control_iovar,
+            nonmatching_frames,
+            malformed_frames,
+        );
+    }
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -3711,6 +4594,13 @@ fn record_cyw43_runtime_command_no_reply(
         payload_offset: descriptor.payload_offset,
         payload_len: descriptor.payload_len,
         total_len: descriptor.total_len,
+        control_cmd: cyw43_descriptor_control_cmd(descriptor),
+        control_id: cyw43_descriptor_control_id(descriptor),
+        control_header_mode: cyw43_descriptor_control_header_mode(descriptor),
+        control_response_len: cyw43_control_request_expected_response_len(
+            cyw43_descriptor_control_cmd(descriptor),
+            None,
+        ) as u16,
         detail: 0,
         reason: "cyw43-runtime-command-no-reply",
         result: 0,
@@ -3718,12 +4608,17 @@ fn record_cyw43_runtime_command_no_reply(
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
     let request = crate::hal::driver_task::current_driver_task_ring_request(contract);
     let progress = crate::hal::driver_task::latest_driver_task_ring_progress(contract);
-    let mut line = heapless::String::<512>::new();
+    let control_cmd = cyw43_descriptor_control_cmd(descriptor);
+    let control_id = cyw43_descriptor_control_id(descriptor);
+    let control_header_mode = cyw43_descriptor_control_header_mode(descriptor);
+    let control_response_len =
+        cyw43_control_request_expected_response_len(control_cmd, None) as u16;
+    let mut line = heapless::String::<768>::new();
     match (request, progress) {
         (Some(request), Some(progress)) => {
             let _ = write!(
                 line,
-                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
                 contract.name,
                 stage,
                 descriptor.op,
@@ -3732,6 +4627,11 @@ fn record_cyw43_runtime_command_no_reply(
                 descriptor.payload_offset,
                 descriptor.payload_len,
                 descriptor.total_len,
+                control_cmd,
+                control_cmd,
+                control_id,
+                control_header_mode,
+                control_response_len,
                 request,
                 resumes,
                 if progress.marker_valid { "yes" } else { "no" },
@@ -3744,7 +4644,7 @@ fn record_cyw43_runtime_command_no_reply(
         (Some(request), None) => {
             let _ = write!(
                 line,
-                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} reason=cyw43-runtime-command-no-reply request={} resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
                 contract.name,
                 stage,
                 descriptor.op,
@@ -3753,6 +4653,11 @@ fn record_cyw43_runtime_command_no_reply(
                 descriptor.payload_offset,
                 descriptor.payload_len,
                 descriptor.total_len,
+                control_cmd,
+                control_cmd,
+                control_id,
+                control_header_mode,
+                control_response_len,
                 request,
                 resumes,
             );
@@ -3760,7 +4665,7 @@ fn record_cyw43_runtime_command_no_reply(
         (None, Some(progress)) => {
             let _ = write!(
                 line,
-                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x}",
                 contract.name,
                 stage,
                 descriptor.op,
@@ -3769,6 +4674,11 @@ fn record_cyw43_runtime_command_no_reply(
                 descriptor.payload_offset,
                 descriptor.payload_len,
                 descriptor.total_len,
+                control_cmd,
+                control_cmd,
+                control_id,
+                control_header_mode,
+                control_response_len,
                 resumes,
                 if progress.marker_valid { "yes" } else { "no" },
                 progress.sequence,
@@ -3780,7 +4690,7 @@ fn record_cyw43_runtime_command_no_reply(
         (None, None) => {
             let _ = write!(
                 line,
-                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
+                "CYW43_DRIVER_TASK_COMMAND_NO_REPLY contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} reason=cyw43-runtime-command-no-reply request=none resumes={} progress_marker_valid=no progress_sequence=0 progress_phase=0 progress_phase_name=none progress_aux0=0x00000000",
                 contract.name,
                 stage,
                 descriptor.op,
@@ -3789,6 +4699,11 @@ fn record_cyw43_runtime_command_no_reply(
                 descriptor.payload_offset,
                 descriptor.payload_len,
                 descriptor.total_len,
+                control_cmd,
+                control_cmd,
+                control_id,
+                control_header_mode,
+                control_response_len,
                 resumes,
             );
         }
@@ -3827,15 +4742,27 @@ fn emit_cyw43_runtime_command_fault(
         payload_offset: descriptor.payload_offset,
         payload_len: descriptor.payload_len,
         total_len: descriptor.total_len,
+        control_cmd: cyw43_descriptor_control_cmd(descriptor),
+        control_id: cyw43_descriptor_control_id(descriptor),
+        control_header_mode: cyw43_descriptor_control_header_mode(descriptor),
+        control_response_len: cyw43_control_request_expected_response_len(
+            cyw43_descriptor_control_cmd(descriptor),
+            None,
+        ) as u16,
         detail: completion.detail,
         reason,
         result: completion.result,
     });
     *CYW43_LAST_SDIO_OWNER_FAULT.lock() = None;
-    let mut line = heapless::String::<384>::new();
+    let control_cmd = cyw43_descriptor_control_cmd(descriptor);
+    let control_id = cyw43_descriptor_control_id(descriptor);
+    let control_header_mode = cyw43_descriptor_control_header_mode(descriptor);
+    let control_response_len =
+        cyw43_control_request_expected_response_len(control_cmd, None) as u16;
+    let mut line = heapless::String::<512>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_COMMAND_FAULT contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} detail={} reason={} result={}",
+        "CYW43_DRIVER_TASK_COMMAND_FAULT contract={} stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} detail={} reason={} result={}",
         contract.name,
         stage,
         descriptor.op,
@@ -3844,6 +4771,11 @@ fn emit_cyw43_runtime_command_fault(
         descriptor.payload_offset,
         descriptor.payload_len,
         descriptor.total_len,
+        control_cmd,
+        control_cmd,
+        control_id,
+        control_header_mode,
+        control_response_len,
         completion.detail,
         reason,
         completion.result,
@@ -4303,6 +5235,13 @@ fn le_u32_at(bytes: &[u8], offset: usize) -> Option<u32> {
             | (u32::from(slice[2]) << 16)
             | (u32::from(slice[3]) << 24),
     )
+}
+
+#[cfg(feature = "kernel")]
+fn le_u16_at(bytes: &[u8], offset: usize) -> Option<u16> {
+    let end = offset.checked_add(2)?;
+    let slice = bytes.get(offset..end)?;
+    Some(u16::from(slice[0]) | (u16::from(slice[1]) << 8))
 }
 
 #[cfg(feature = "kernel")]
@@ -5352,6 +6291,89 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_control_frame_descriptor_uses_split_tx_op() {
+        let plain = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain);
+        let extended = cyw43_control_frame_descriptor(16, Cyw43ControlHeaderMode::Extended);
+
+        assert_eq!(plain.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
+        assert_eq!(plain.flags, 0);
+        assert_eq!(plain.payload_len, 36);
+        assert_eq!(plain.total_len, 36);
+        assert_eq!(extended.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
+        assert_eq!(extended.flags, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER);
+    }
+
+    #[test]
+    fn cyw43_control_reply_parser_decodes_cdc_header() {
+        let mut buffer = [0u8; MAX_FRAME_LEN];
+        buffer[0..4].copy_from_slice(&CYW43_WLC_SET_VAR.to_le_bytes());
+        buffer[4..8].copy_from_slice(&4u32.to_le_bytes());
+        buffer[8..10].copy_from_slice(&CYW43_BCDC_FLAG_SET.to_le_bytes());
+        buffer[10..12].copy_from_slice(&7u16.to_le_bytes());
+        buffer[12..16].copy_from_slice(&0u32.to_le_bytes());
+        buffer[16..20].copy_from_slice(&0x1122_3344u32.to_le_bytes());
+        let token = DriverTaskNetRxToken { len: 20, buffer };
+
+        let reply = cyw43_control_reply_from_token(&token).expect("CDC header must decode");
+
+        assert_eq!(reply.cmd, CYW43_WLC_SET_VAR);
+        assert_eq!(reply.id, 7);
+        assert_eq!(reply.status, 0);
+        assert_eq!(reply.response_len, 4);
+        assert_eq!(reply.payload_available, 4);
+    }
+
+    #[test]
+    fn cyw43_control_response_completion_strips_cdc_header() {
+        let completion = DriverTaskCompletionRecord {
+            sequence: 42,
+            code: DriverTaskCompletionCode::FrameReady.as_u16(),
+            detail: 0,
+            result: 20,
+            frame: DriverFrameDescriptor {
+                offset: 1024,
+                len: 20,
+                flags: 0x0002,
+            },
+        };
+
+        let response =
+            cyw43_control_response_completion(completion, 4).expect("response frame must fit");
+
+        assert_eq!(response.sequence, 42);
+        assert_eq!(response.code, DriverTaskCompletionCode::FrameReady.as_u16());
+        assert_eq!(response.result, 4);
+        assert_eq!(response.frame.offset, 1024 + CYW43_BCDC_HEADER_BYTES as u32);
+        assert_eq!(response.frame.len, 4);
+        assert_eq!(response.frame.flags, 0x0002);
+    }
+
+    #[test]
+    fn cyw43_control_split_timeout_preserves_idle_detail() {
+        let completion = DriverTaskCompletionRecord {
+            sequence: 42,
+            code: DriverTaskCompletionCode::Idle.as_u16(),
+            detail: DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY,
+            result: 0xd700_0000,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+
+        assert_eq!(
+            cyw43_control_split_timeout_result(Some(completion), 0, 0),
+            0x430a_ffff
+        );
+        assert_eq!(cyw43_control_split_timeout_result(None, 0, 0), 0x4303_0000);
+        assert_eq!(
+            cyw43_control_split_timeout_result(Some(completion), 1, 0),
+            0x4308_0001
+        );
+    }
+
+    #[test]
     fn cyw43_revinfo_frame_reserves_known_good_response_bytes() {
         let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
         let len = cyw43_write_bcdc_revinfo_frame(&mut frame, 7)
@@ -6295,6 +7317,64 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_control_request_iovar_info_extracts_txglomalign_value() {
+        let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+        let mut payload = [0u8; 20];
+        payload[..15].copy_from_slice(b"bus:txglomalign");
+        payload[16..20].copy_from_slice(&8u32.to_le_bytes());
+        let len = cyw43_write_bcdc_frame(
+            &mut frame,
+            CYW43_WLC_SET_VAR,
+            CYW43_BCDC_FLAG_SET,
+            1,
+            &payload,
+        )
+        .expect("txglomalign BCDC frame should fit");
+        let info = cyw43_control_iovar_info(&frame[..len], CYW43_WLC_SET_VAR)
+            .expect("txglomalign iovar should decode");
+        let (digest_len, digest_scope) = cyw43_control_request_digest_len(len, Some(info));
+
+        assert_eq!(len, 36);
+        assert_eq!(info.name, "bus:txglomalign");
+        assert_eq!(info.data_len, 4);
+        assert_eq!(info.value_u32, Some(8));
+        assert_eq!(
+            cyw43_read_le_u16(&frame[..len], 8),
+            Some(CYW43_BCDC_FLAG_SET)
+        );
+        assert_eq!(digest_len, len);
+        assert_eq!(digest_scope, "full");
+        assert_eq!(Cyw43ControlHeaderMode::Plain.runtime_flags(), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_control_request_digest_redacts_large_iovar_body() {
+        let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+        let mut payload = [0u8; 24];
+        payload[..8].copy_from_slice(b"wsec_key");
+        payload[9..].fill(0xa5);
+        let len = cyw43_write_bcdc_frame(
+            &mut frame,
+            CYW43_WLC_SET_VAR,
+            CYW43_BCDC_FLAG_SET,
+            9,
+            &payload,
+        )
+        .expect("wsec_key BCDC frame should fit");
+        let info = cyw43_control_iovar_info(&frame[..len], CYW43_WLC_SET_VAR)
+            .expect("wsec_key iovar should decode");
+        let (digest_len, digest_scope) = cyw43_control_request_digest_len(len, Some(info));
+
+        assert_eq!(info.name, "wsec_key");
+        assert_eq!(info.data_len, 15);
+        assert_eq!(info.value_u32, None);
+        assert_eq!(digest_len, CYW43_BCDC_HEADER_BYTES + "wsec_key".len() + 1);
+        assert_eq!(digest_scope, "header-iovar");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn sdio_owner_recovery_preserves_ready_state_before_full_replay() {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK
@@ -6387,6 +7467,10 @@ mod tests {
             payload_offset: 4096,
             payload_len: 1024,
             total_len: 609_309,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
             detail: 0x5103,
             reason: "sdio-descriptor-transfer-failed",
             result: 0x0500_0100,
@@ -6442,6 +7526,10 @@ mod tests {
             payload_offset: 4096,
             payload_len: nvram_len as u16,
             total_len: nvram_len as u32,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
             detail: 0x5329,
             reason: "cyw43-firmware-retry-exhausted",
             result: 0x0500_0800,
@@ -6497,6 +7585,10 @@ mod tests {
             payload_offset: 4096,
             payload_len: 1024,
             total_len: 609_309,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
             detail: 0x5329,
             reason: "cyw43-firmware-retry-exhausted",
             result: 0x0420_8040,

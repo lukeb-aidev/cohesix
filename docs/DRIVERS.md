@@ -557,9 +557,12 @@ detail:
 - `SCHED_CONTRACT` and `DRIVER_TASK` report per-role live TCB, hot-path, capset,
   fault-probe, and revoke readiness.
 - `DRIVER_TASK_RESOURCE_INIT`, `DRIVER_TASK_RING_CALL_BEGIN`,
-  `DRIVER_TASK_RING_CALL_RETURN`, `DRIVER_TASK_RING_CALL_TIMEOUT`, and
+  `DRIVER_TASK_RING_CALL_RETURN`, `DRIVER_TASK_RING_CALL_TIMEOUT`,
+  `DRIVER_TASK_RING_CALL_KEEP_ACTIVE`, `DRIVER_TASK_RING_CALL_ABORT`, and
   `DRIVER_TASK_RING_PROGRESS` report each bounded descriptor, init, and service
-  turn.
+  turn, including linked-runtime owner/root-action fields, active request and
+  child-progress correlation, expected aux/request fields for submitted turns,
+  same-request resume status, the first blocker, and the next action to take.
 - `DRIVER_TASK_BOOT_SMOKE` is QEMU transport proof only; it may exercise isolated
   VSpaces and fixed rings but cannot satisfy Pi hardware acceptance.
 
@@ -786,8 +789,10 @@ returns `0x5500` (`ready`), and faults preserve the exact subgate as
 (`adopt-inhibit-failed`), `0x5510` (`reset-all-failed`), `0x5511`
 (`reset-cmd-data-failed`), `0x5512` (`clock-failed`), or `0x5513`
 (`inhibit-failed`). Root projects those details through
-`SDIO_DRIVER_TASK_REPLAY_STATUS ... stage=engine-init blocker=<status>` and
-`DRIVER_TASK_RESOURCE_INIT ... stage=sdio-engine-init status=<status>`; a generic
+`SDIO_DRIVER_TASK_REPLAY_STATUS ... stage=engine-init blocker=<status>
+owner=linked-runtime proof_effect=<effect> next_action=<action>` and
+`DRIVER_TASK_RESOURCE_INIT ... stage=sdio-engine-init status=<status>
+owner=linked-runtime root_action=<action> next_action=<action>`; a generic
 `DeviceUnavailable` detail is no longer acceptable for this gate because it
 erases the next required hardware action.
 The cold reset path mirrors the May 18-19 working root-owned order inside the
@@ -795,27 +800,27 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 14 07:04 post-flash boot supersedes the June 13 22:44, 20:38, 19:15,
-17:40, 17:01, 16:22, 13:07, 12:35, 10:11, 09:27, 08:50, 08:16, 07:55, and 07:33
-Wi-Fi frontiers as current truth. The June 13 22:44 trace remains the best
-recent post-join proof, but it is not the active blocker for the newest boot.
-The newest trace, `/Users/lukasbower/pi4-serial-20260614-070447.log`, proves
-descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init detail
-`0x5500`, `cyw43-sdio-prereq`, CYW43 engine init, firmware/NVRAM upload,
-firmware release after owner-state recovery, and owner-state readiness. It then
-regresses before the June 13 post-join RX window: the first Linux-order matched
-control exchange, `bus:txglomalign=8` (`op=11`, 36-byte plain-header payload),
-does not publish a completion before root's bounded linked-runtime window
-expires. The active frontier is still Gate 7, but the exact current blocker is
-the linked-runtime `cyw43-runtime-command-no-reply` edge at
-`cyw43-control-txglomalign`, not host-EAPOL or DHCP. `JOIN_REQUEST`,
-`CYW43_DRIVER_TASK_HOST_EAPOL_STATUS`, `rxsrc_*`, association/link, DHCP,
-`nettest`, `netstats`, and remote-`cohsh` proof are uncredited for the June 14
-run. CYW43 `CONTROL_EXCHANGE` turns now receive the same bounded same-request
-resume treatment as long transport turns, and terminal no-reply records include
-the request sequence, resume count, and latest CYW43 progress marker so the next
-capture can distinguish command admission loss from an in-runtime SDPCM/CMD53
-control-RX stall.
+The June 14 13:27 post-flash boot
+(`/Users/lukasbower/pi4-serial-20260614-132747.log`) supersedes earlier Wi-Fi
+frontiers as current truth; the second-most-recent June 14 07:54 boot
+(`/Users/lukasbower/pi4-serial-20260614-075442.log`) confirms the same blocker.
+Those traces prove descriptor replay for `cyw43455` and `sdio-host`, SDIO engine
+init detail `0x5500`, `cyw43-sdio-prereq`, CYW43 engine init, firmware/NVRAM
+upload, firmware release after owner-state recovery, and owner-state readiness.
+Both then stop before the June 13 post-join RX window: the first Linux-order
+startup control, `bus:txglomalign=8` (36-byte plain-header payload), was still
+submitted through a monolithic linked-runtime `CONTROL_EXCHANGE` (`op=11`) and
+did not publish a completion before root exhausted the same-request no-reply
+budget. The active frontier is Gate 7, and the exact blocker for those captures
+is `cyw43-runtime-command-no-reply` at `cyw43-control-txglomalign`, not
+host-EAPOL or DHCP. `JOIN_REQUEST`, `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS`,
+`rxsrc_*`, association/link, DHCP, `nettest`, `netstats`, and remote-`cohsh`
+proof are uncredited for those June 14 runs. Current root-side station setup
+splits matched CYW43 controls into a `CONTROL_FRAME` TX turn plus bounded
+parent-side `CONTROL_POLL` turns, so the next capture can distinguish TX
+admission, TX completion, RX-source/first-read idle, malformed or nonmatching
+CDC reply, firmware status, and parent timeout without waiting on one opaque
+child turn.
 Linked-runtime RX polls now request
 `DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD` across the host-EAPOL proof
 window so the runtime can translate the May 18-19 zero-RFRAME/card-interrupt
@@ -1152,7 +1157,9 @@ or generic command-completion failures.
   may run before `Cohesix console ready`; otherwise Cohesix preserves the Wi-Fi
   policy for diagnostics, emits `action=serial-diagnostics-only`, and publishes
   the prompt. Replay uses bounded nonblocking IPC and UART-visible
-  `SDIO_DRIVER_TASK_REPLAY_STATUS` / `NET_DRIVER_TASK_REPLAY_STATUS` breadcrumbs.
+  `SDIO_DRIVER_TASK_REPLAY_STATUS` / `NET_DRIVER_TASK_REPLAY_STATUS`
+  breadcrumbs with `owner=linked-runtime`, `proof_effect`, and `next_action`
+  fields.
 - CYW43 receives SDIO only through the pointer-free bus-owner link after
   `transport-init` proves the card, Function 1, ALP backplane window, and chip
   identity. Firmware upload may widen SDIO and stage ARMCR4 reset/release, but a
@@ -1177,9 +1184,12 @@ or generic command-completion failures.
   reports an unchanged after-state when it skips the long live HT re-probe, and
   leaves the full transport snapshot to `wifi dump-state`. A no-reply CYW43
   command is recorded as `CYW43_DRIVER_TASK_COMMAND_NO_REPLY` with stage, op,
-  target, payload offset/length, and total length, and root caches the latest
-  quiet CYW43 runtime progress marker even when the command trace itself is
-  suppressed. CYW43 engine-init now publishes early branch, state-reset,
+  target, payload offset/length, total length, control command/id/header,
+  expected response length, active request, resume count, and latest
+  child-progress marker fields. When the marker sequence matches the active
+  request and CYW43 aux tag, summary tooling reports that child marker as the
+  exact blocker instead of leaving a generic runtime no-reply. CYW43 engine-init
+  now publishes early branch, state-reset,
   forbidden-MMIO, bus-link, and shared-control markers before transport starts.
   Transport-init publishes begin/ready markers for card adopt, Function 1/2
   block-size programming, Function 1 enable, startup host config, and backplane
@@ -1472,13 +1482,21 @@ active path is Cohesix-owned cold start:
   runtime. EP0 descriptor waits, including the hub class-descriptor read after
   hub SET_CONFIGURATION, also publish transfer/status event-ring
   `*-event-slot-empty`, `*-event-cycle-mismatch`, and `*-event-ignored`
-  substages before timing out. The hub descriptor read uses its own finite
-  class-control wait budget so old-good hub-control latency can be observed
-  without widening every device/config descriptor transfer. Hub traversal waits
-  publish set-configuration, hub-descriptor, hub-context, downstream port
-  power/reset, port-ready, child probe, and fallback-speed markers and receive a
-  separate finite same-request resume budget so a hub power/reset settle does
-  not erase the in-flight linked enumeration turn.
+  substages before timing out. Hub SET_CONFIGURATION publishes its own no-data
+  EP0 status substages (`usb-hub-set-configuration-doorbell-done`,
+  `usb-hub-set-configuration-wait-begin`,
+  `usb-hub-set-configuration-status-event-*`,
+  `usb-hub-set-configuration-status-timeout`, and
+  `usb-hub-set-configuration-failed`) so a gate-7 hub blocker identifies
+  whether root should fix request lifetime, the runtime should fix retry/cursor
+  preservation, or xHCI control-event classification is consuming the wrong
+  event. The hub descriptor read uses its own finite class-control wait budget
+  so old-good hub-control latency can be observed without widening every
+  device/config descriptor transfer. Hub traversal waits publish
+  set-configuration, hub-descriptor, hub-context, downstream port power/reset,
+  port-ready, child probe, and fallback-speed markers and receive a separate
+  finite same-request resume budget so a hub power/reset settle does not erase
+  the in-flight linked enumeration turn.
   Root preserves an in-flight linked-runtime USB enumeration request across
   bounded no-reply slices only when the active identity still matches. A valid
   same-request/same-aux progress marker whose phase advances resets the
@@ -1488,7 +1506,12 @@ active path is Cohesix-owned cold start:
   identity still matches the active ring request; a different aux word, frame
   descriptor, staged byte fingerprint, hot path, role, budget, or
   command flags is a different request and must not inherit the earlier request's
-  progress. Sequence-zero runtime-idle markers observed while a request-scoped
+  progress. Root logs `DRIVER_TASK_RING_CALL_KEEP_ACTIVE` separately from
+  `DRIVER_TASK_RING_CALL_TIMEOUT` and `DRIVER_TASK_RING_CALL_ABORT`; timeout plus
+  keep-active means the same child turn is still live, while timeout plus abort
+  means root cleared the active latch and the next prompt turn must not be
+  interpreted as preserved xHCI/EP0 state. Sequence-zero runtime-idle markers
+  observed while a request-scoped
   USB enumeration marker is cached are still emitted as raw timeout progress,
   but they do not evict the request-scoped marker used by timeout accounting and
   prompt diagnostics for the in-flight request.
@@ -1902,10 +1925,37 @@ Required Cohesix shape:
   runtime must not perform KSO/WAKEUPCTRL/watermark/Function 2 sideband work as
   part of `transport-init`; that sideband belongs after firmware release. CM3-only
   SOCSRAM remap writes are not part of this path.
-- Station control uses matched CDC `CONTROL_EXCHANGE` descriptors for writes and
-  read iovars. A control-plane command is not accepted merely because the SDPCM
-  frame was transmitted; the runtime must return the expected CDC command/ioctl
-  id or a precise control-exchange fault.
+- Station control uses matched CDC exchanges for writes and read iovars, but
+  root now drives each exchange as a split linked-runtime sequence: a bounded
+  `DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME` TX turn followed by bounded
+  `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL` turns that decode the CDC header in
+  root. A control-plane command is not accepted merely because the SDPCM frame
+  was transmitted; root must observe the expected CDC command/ioctl id and zero
+  firmware status, or preserve a precise control fault.
+- Each matched control exchange emits a bounded
+  `CYW43_DRIVER_TASK_CONTROL_REQUEST` line before submission. For small
+  non-secret iovar bodies such as `bus:txglomalign=8`, the line records the
+  full request digest, `cmd`, ioctl id, runtime flags, BCDC flags, header mode,
+  iovar name, and value. Larger iovar bodies use header/name-only digesting so
+  Wi-Fi key material is not exposed. The CYW43 runtime also publishes
+  `cyw43-control-tx-begin` and `cyw43-control-tx-done` for `CONTROL_FRAME`;
+  parent polling emits sparse `CYW43_DRIVER_TASK_CONTROL_SPLIT` lines for TX
+  completion, first-read/idle poll completions, response readiness, and terminal
+  failures. These split lines carry the completion sequence, expected command,
+  ioctl id, header mode, expected response length, iovar name, and
+  nonmatching/malformed frame counts. `CYW43_DRIVER_TASK_CONTROL_REPLY` lines
+  expose malformed, nonmatching, and matched CDC reply headers (`cmd`, ioctl id,
+  status, response length, available payload) plus the same expected fields and
+  `reply_match`. Nonterminal poll samples and nonmatching replies are context;
+  they become exact blockers only when the same attempt ends in a terminal split
+  timeout/failure. Terminal split timeouts still emit
+  `CYW43_DRIVER_TASK_COMMAND_FAULT` with the existing `0x430*` control-timeout
+  result encoding so `scripts/pi4_trace_normalize.py` can report exact blockers
+  such as `cyw43-control-rx-firstread-empty` or
+  `cyw43-control-reply-nonmatching` instead of generic no-reply.
+  Nested SDIO-owner bus-link progress for those turns is stamped with the active
+  parent CYW43 request sequence while retaining the private owner sequence for
+  SDIO completion matching.
 - Wi-Fi credentials remain bounded: SSID 1-32 printable ASCII bytes; PSK empty,
   8-63 printable ASCII bytes, or 64 ASCII hex digits. A 64-hex PSK is decoded as
   the direct 32-byte PMK before host-EAPOL; shorter passphrases use WPA2

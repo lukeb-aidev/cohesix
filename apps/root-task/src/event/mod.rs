@@ -4331,6 +4331,11 @@ where
             let linked_progress_gate = linked_progress.map_or(0, |progress| {
                 Self::usb_runtime_gate_for_progress_phase(progress.phase)
             });
+            let progress_refines_linked_detail = Self::usb_runtime_progress_refines_linked_detail(
+                linked_detail,
+                linked_detail_gate,
+                linked_progress_gate,
+            );
             let linked_progress_proof_gate = if linked_detail == 0 && linked_progress_gate != 0 {
                 linked_progress_gate.saturating_sub(1)
             } else {
@@ -4375,6 +4380,8 @@ where
                 "keyboard-first-byte"
             } else if keyboard_ready {
                 "keyboard-first-report"
+            } else if progress_refines_linked_detail {
+                progress_next.unwrap_or("inspect-linked-usb-runtime-progress")
             } else if linked_detail != 0 {
                 Self::usb_runtime_next_for_linked_detail(linked_detail)
             } else if let Some(progress_next) = progress_next {
@@ -4390,6 +4397,8 @@ where
                 "keyboard-first-byte"
             } else if keyboard_ready {
                 "hid-first-report"
+            } else if progress_refines_linked_detail {
+                progress_blocker.unwrap_or("linked-runtime-progress")
             } else if linked_detail != 0 {
                 Self::usb_runtime_blocker_for_linked_detail(linked_detail)
             } else if let Some(progress_blocker) = progress_blocker {
@@ -4398,7 +4407,7 @@ where
                 "linked-runtime-no-detail"
             };
             let runtime_line = format_message(format_args!(
-                "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x} result=0x{:08x}",
+                "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x} result=0x{:08x} progress_gate={} progress_phase={} progress_phase_name={}",
                 Self::yes_no(keyboard_ready),
                 Self::yes_no(first_report),
                 Self::yes_no(first_byte),
@@ -4408,6 +4417,9 @@ where
                 blocker,
                 linked_detail,
                 linked_result,
+                linked_progress_gate,
+                linked_progress.map_or(0, |progress| progress.phase),
+                linked_progress.map_or("none", |progress| progress.phase_name),
             ));
             self.emit_console_line(runtime_line.as_str());
             let acceptance_line = format_message(format_args!(
@@ -4431,11 +4443,14 @@ where
             ));
             self.emit_console_line(runtime_contract.as_str());
             let linked_runtime_snapshot = format_message(format_args!(
-                "usb: linked_runtime_snapshot detail=0x{:04x} result=0x{:08x} proof_gate={} source=driver-task recovery_policy={}",
+                "usb: linked_runtime_snapshot detail=0x{:04x} result=0x{:08x} proof_gate={} source=linked-runtime-progress-cache recovery_policy={} progress_gate={} progress_phase={} progress_phase_name={}",
                 linked_detail,
                 linked_result,
                 linked_gate,
                 Self::usb_runtime_recovery_policy_for_linked_detail(linked_detail),
+                linked_progress_gate,
+                linked_progress.map_or(0, |progress| progress.phase),
+                linked_progress.map_or("none", |progress| progress.phase_name),
             ));
             self.emit_console_line(linked_runtime_snapshot.as_str());
             if let Some(progress) = linked_progress {
@@ -4572,6 +4587,38 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => 9,
             _ => 0,
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_linked_detail_refinable_by_progress(detail: u16) -> bool {
+        matches!(
+            detail,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_DESCRIPTOR_FAILED
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_CONFIG_DESCRIPTOR_FAILED
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN
+                | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_progress_refines_linked_detail(
+        linked_detail: u16,
+        linked_detail_gate: u8,
+        linked_progress_gate: u8,
+    ) -> bool {
+        linked_progress_gate > 0
+            && (linked_progress_gate > linked_detail_gate
+                || (linked_progress_gate == linked_detail_gate
+                    && Self::usb_runtime_linked_detail_refinable_by_progress(linked_detail)))
     }
 
     #[cfg(feature = "kernel")]
@@ -4780,6 +4827,14 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_CONTROL_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_DONE
@@ -5382,6 +5437,28 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN => {
                 "hub-set-configuration-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN => {
+                "hub-set-configuration-status-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT => {
+                "hub-set-configuration-complete-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY => {
+                "hub-set-configuration-status-event-slot-empty"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH => {
+                "hub-set-configuration-status-event-cycle-mismatch"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED => {
+                "hub-set-configuration-status-event-ignored"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT => {
+                "hub-set-configuration-status-timeout"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED => {
+                "hub-set-configuration-failed"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DONE => {
                 "hub-set-configuration-settle-no-reply"
@@ -5994,6 +6071,24 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN => {
                 "poll-hub-set-configuration-status"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DOORBELL_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_WAIT_BEGIN => {
+                "poll-hub-set-configuration-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT => {
+                "wait-hub-set-configuration-settle"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_SLOT_EMPTY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CYCLE_MISMATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED => {
+                "inspect-hub-set-configuration-status-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_TIMEOUT => {
+                "inspect-missing-hub-set-configuration-status-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_FAILED => {
+                "inspect-hub-set-configuration-status"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DONE => {
                 "wait-hub-set-configuration-settle"
             }
@@ -6372,11 +6467,11 @@ where
                 .map_or("wait-linked-runtime-init", |progress| {
                     Self::usb_runtime_next_action_for_progress_phase(progress.phase)
                 });
-            let progress_refines_linked_detail = linked_progress_gate > 0
-                && (linked_progress_gate > linked_detail_gate
-                    || (linked_progress_gate == linked_detail_gate
-                        && linked_detail
-                            == pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED));
+            let progress_refines_linked_detail = Self::usb_runtime_progress_refines_linked_detail(
+                linked_detail,
+                linked_detail_gate,
+                linked_progress_gate,
+            );
             let linked_gate = linked_detail_gate.max(linked_progress_gate);
             let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
             let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
@@ -6473,14 +6568,14 @@ where
                     ))
                 } else {
                     format_message(format_args!(
-                        "owner=driver-task linked_controller={} detail=0x{:04x}",
+                        "hardware_owner=linked-runtime root_action=admission-descriptor-diagnostics linked_controller={} detail=0x{:04x}",
                         Self::yes_no(linked_controller_ready),
                         linked_detail,
                     ))
                 }
             } else {
                 format_message(format_args!(
-                    "owner=driver-task linked_controller={} detail=0x{:04x}",
+                    "hardware_owner=linked-runtime root_action=admission-descriptor-diagnostics linked_controller={} detail=0x{:04x}",
                     Self::yes_no(linked_controller_ready),
                     linked_detail,
                 ))
@@ -6545,14 +6640,30 @@ where
                 6,
                 "device-addressed",
                 Self::usb_startup_gate_status(6, proof_gate, failing_gate),
-                format_args!("linked_detail=0x{:04x}", linked_detail),
+                format_args!(
+                    "linked_detail=0x{:04x} progress_phase={} progress_phase_name={} progress_blocker={}",
+                    linked_detail,
+                    linked_progress.map_or(0, |progress| progress.phase),
+                    linked_progress.map_or("none", |progress| progress.phase_name),
+                    linked_progress.map_or("none", |progress| {
+                        Self::usb_runtime_blocker_for_progress_phase(progress.phase)
+                    }),
+                ),
                 "config-and-hid-descriptors",
             );
             self.emit_usb_gate_line(
                 7,
                 "config-and-hid-descriptors",
                 Self::usb_startup_gate_status(7, proof_gate, failing_gate),
-                format_args!("linked_detail=0x{:04x}", linked_detail),
+                format_args!(
+                    "linked_detail=0x{:04x} progress_phase={} progress_phase_name={} progress_blocker={}",
+                    linked_detail,
+                    linked_progress.map_or(0, |progress| progress.phase),
+                    linked_progress.map_or("none", |progress| progress.phase_name),
+                    linked_progress.map_or("none", |progress| {
+                        Self::usb_runtime_blocker_for_progress_phase(progress.phase)
+                    }),
+                ),
                 "keyboard-ready",
             );
             self.emit_usb_gate_line(
@@ -6606,12 +6717,14 @@ where
             ));
             self.emit_console_line(evidence.as_str());
             let boundary = format_message(format_args!(
-                "usb: evidence boundary root=event-pump hal=driver-task runtime=usb-local-seat failure_domain={} proof_gate={} target_gate=10",
-                active_blocker, proof_gate,
+                "usb: evidence boundary console_client=event-pump hal=admission-descriptor-diagnostics-only linked_runtime_owner=usb-local-seat failure_domain={} proof_gate={} target_gate=10 proof_effect={}",
+                active_blocker,
+                proof_gate,
+                if proof_gate >= 10 { "acceptance-green" } else { "acceptance-red" },
             ));
             self.emit_console_line(boundary.as_str());
             let next = format_message(format_args!(
-                "usb: next_action={} blocker={} proof_gate={} target_gate=10 detail=0x{:04x} result=0x{:08x}",
+                "usb: next_action={} blocker={} proof_gate={} target_gate=10 detail=0x{:04x} result=0x{:08x} source=linked-runtime",
                 next_action, active_blocker, proof_gate, linked_detail, linked_result,
             ));
             self.emit_console_line(next.as_str());
@@ -6644,10 +6757,10 @@ where
                 );
             }
             self.emit_console_line(
-                "usb: evidence boundary root=event-pump hal=unavailable runtime=unavailable failure_domain=host-test-profile proof_gate=0 target_gate=10",
+                "usb: evidence boundary console_client=event-pump hal=unavailable linked_runtime_owner=unavailable failure_domain=host-test-profile proof_gate=0 target_gate=10 proof_effect=host-profile-unproven",
             );
             self.emit_console_line(
-                "usb: next_action=boot-pi4-linked-runtime blocker=host-test-profile proof_gate=0 target_gate=10 detail=0x0000 result=0x00000000",
+                "usb: next_action=boot-pi4-linked-runtime blocker=host-test-profile proof_gate=0 target_gate=10 detail=0x0000 result=0x00000000 source=host-profile",
             );
         }
     }
@@ -6812,13 +6925,18 @@ where
         );
         if let Some(fault) = fault {
             let fault_line = format_message(format_args!(
-                "wifi: cyw43 fault stage={} op={} target=0x{:08x} payload_off={} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
+                "wifi: cyw43 fault stage={} op={} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} detail=0x{:04x} reason={} result=0x{:08x}",
                 fault.stage,
                 fault.op,
                 fault.target_addr,
                 fault.payload_offset,
                 fault.payload_len,
                 fault.total_len,
+                fault.control_cmd,
+                fault.control_cmd,
+                fault.control_id,
+                fault.control_header_mode,
+                fault.control_response_len,
                 fault.detail,
                 fault.reason,
                 fault.result,
@@ -6826,7 +6944,7 @@ where
             self.emit_console_line(fault_line.as_str());
             let next = Self::wifi_runtime_fault_next_action(fault);
             let next_line = format_message(format_args!(
-                "wifi: driver-task next_action={} source={} recovery_contract=block-primary+progress-bounded-owner-replay",
+                "wifi: linked_runtime next_action={} source={} recovery_contract=block-primary+progress-bounded-owner-replay",
                 next, source
             ));
             self.emit_console_line(next_line.as_str());
@@ -6836,11 +6954,11 @@ where
                 subcommand,
                 "complete",
                 profile,
-                Some("result=ok source=driver-task-replay-failure"),
+                Some("result=ok source=linked-runtime-replay-failure"),
             );
             self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
             let detail = format_message(format_args!(
-                "detail=subcommand={subcommand} scope=serial-local source=driver-task-replay-failure"
+                "detail=subcommand={subcommand} scope=serial-local source=linked-runtime-replay-failure"
             ));
             self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
         } else {
@@ -6849,12 +6967,12 @@ where
                 "complete",
                 profile,
                 Some(
-                    "result=err source=driver-task-replay-failure error=pi4-wifi-driver-task-runtime-required",
+                    "result=err source=linked-runtime-replay-failure error=pi4-wifi-driver-task-runtime-required",
                 ),
             );
             self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
             let detail = format_message(format_args!(
-                "detail=subcommand={subcommand} error=pi4-wifi-driver-task-runtime-required source=driver-task-replay-failure"
+                "detail=subcommand={subcommand} error=pi4-wifi-driver-task-runtime-required source=linked-runtime-replay-failure"
             ));
             self.emit_refusal(
                 WIFI_DEBUG_ACK_LABEL,
@@ -7452,7 +7570,7 @@ where
         source: &str,
     ) {
         self.emit_console_line(
-            "wifi: diag recorder=startup-blackbox mode=passive source=driver-task",
+            "wifi: diag recorder=startup-blackbox mode=passive source=linked-runtime-replay",
         );
         let sdio_runtime_status =
             crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
@@ -7691,7 +7809,7 @@ where
 
         self.emit_wifi_gate_line(
             1,
-            "hal-power-reset",
+            "runtime-power-reset",
             Self::wifi_startup_gate_status(1, proof_gate, failing_gate),
             format_args!(
                 "power={} reset={} source={}",
@@ -7778,19 +7896,20 @@ where
                 snapshot.map_or("unknown", |snapshot| snapshot.control_plane_f2_state),
                 Self::wifi_gate_dependency_label(7, failing_gate),
             ),
-            "firmware-channel",
+            Self::wifi_startup_gate_name_for_gate(8, exact_error),
         );
         self.emit_wifi_gate_line(
             8,
-            "firmware-channel",
+            Self::wifi_startup_gate_name_for_gate(8, exact_error),
             Self::wifi_startup_gate_status(8, proof_gate, failing_gate),
             format_args!(
-                "exact={} sdhci={} reply_mode={} dependency={}",
+                "exact={} control_stage={} sdhci={} reply_mode={} dependency={}",
                 if exact_error.is_empty() {
                     "none"
                 } else {
                     exact_error
                 },
+                Self::wifi_control_stage_for_exact_error(exact_error),
                 snapshot.map_or("unknown", |snapshot| snapshot.control_plane_sdhci_read_diag),
                 snapshot.map_or("unknown", |snapshot| snapshot.control_plane_reply_mode),
                 Self::wifi_gate_dependency_label(8, failing_gate),
@@ -7823,7 +7942,7 @@ where
             let owner_fault =
                 crate::drivers::driver_task_net::latest_cyw43_sdio_owner_fault_status();
             let fault_line = format_message(format_args!(
-                "wifi: evidence cyw43 stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} detail=0x{:04x} reason={} result=0x{:08x}",
+                "wifi: evidence cyw43 stage={} op={} flags=0x{:04x} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} detail=0x{:04x} reason={} result=0x{:08x}",
                 fault.stage,
                 fault.op,
                 fault.flags,
@@ -7831,6 +7950,11 @@ where
                 fault.payload_offset,
                 fault.payload_len,
                 fault.total_len,
+                fault.control_cmd,
+                fault.control_cmd,
+                fault.control_id,
+                fault.control_header_mode,
+                fault.control_response_len,
                 fault.detail,
                 fault.reason,
                 fault.result,
@@ -7910,7 +8034,7 @@ where
             proof_gate
         };
         let boundary = format_message(format_args!(
-            "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain={} direct_proof_gate={} proof_gate={} frontier_gate={} failing_gate={} target_gate=10",
+            "wifi: evidence boundary console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio failure_domain={} direct_proof_gate={} proof_gate={} frontier_gate={} failing_gate={} target_gate=10",
             active_blocker, direct_proof_gate, reported_proof_gate, reported_proof_gate, failing_gate,
         ));
         self.emit_console_line(boundary.as_str());
@@ -8903,6 +9027,10 @@ where
             8 => {
                 if exact_error.is_empty() {
                     "firmware-channel"
+                } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
+                    "host-eapol"
+                } else if exact_error.starts_with("cyw43-control-") {
+                    "control-exchange"
                 } else {
                     "control-plane-exact-error"
                 }
@@ -8914,10 +9042,50 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_startup_gate_name_for_gate(gate: u8, exact_error: &str) -> &'static str {
+        match gate {
+            1 => "runtime-power-reset",
+            2 => "sdio-card-select",
+            3 => "cccr-fbr-ready",
+            4 => "ht-clock",
+            5 => "backplane-window",
+            6 => "firmware-upload",
+            7 => "function2-ready",
+            8 => {
+                if exact_error.starts_with("cyw43-control-") {
+                    "control-exchange"
+                } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
+                    "host-eapol"
+                } else if exact_error.is_empty() {
+                    "firmware-channel"
+                } else {
+                    "control-plane-exact-error"
+                }
+            }
+            9 => "dhcp-bound",
+            10 => "nettest-netstats-cohsh",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_control_stage_for_exact_error(exact_error: &str) -> &str {
+        if exact_error.is_empty() {
+            "none"
+        } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
+            "host-eapol"
+        } else if exact_error.starts_with("cyw43-control-") {
+            exact_error
+        } else {
+            "firmware-channel"
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_startup_next_action_for_gate(gate: u8, exact_error: &str) -> &'static str {
         match gate {
             0 => "acceptance-complete",
-            1 => "verify-hal-power-reset-resources",
+            1 => "verify-linked-runtime-power-reset-resources",
             2 => "verify-sdio-cmd0-cmd5-cmd3-cmd7",
             3 => "verify-cccr-fbr-and-block-size",
             4 => "verify-chipclkcsr-ht-avail",
@@ -8927,6 +9095,10 @@ where
             8 => {
                 if exact_error.is_empty() {
                     "verify-firmware-channel-first-reply"
+                } else if Self::wifi_exact_error_is_join_security_blocker(exact_error) {
+                    "complete-host-eapol-handshake"
+                } else if exact_error.starts_with("cyw43-control-") {
+                    "inspect-cyw43-control-exchange"
                 } else {
                     "inspect-control-plane-exact-error"
                 }
@@ -12596,6 +12768,24 @@ mod tests {
         );
         assert_eq!(
             TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED,
+            ),
+            7
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED,
+            ),
+            "hub-set-configuration-status-event-ignored"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED,
+            ),
+            "inspect-hub-set-configuration-status-event"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_WAIT_BEGIN,
             ),
             7
@@ -15892,6 +16082,10 @@ mod tests {
             payload_offset: 0,
             payload_len: 0,
             total_len: 0,
+            control_cmd: 0,
+            control_id: 0,
+            control_header_mode: "not-control",
+            control_response_len: 0,
             detail: 0x532d,
             reason: "cyw43-post-release-mailbox-ready",
             result: 0,
@@ -16331,7 +16525,7 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 1 name=hal-power-reset status=pass"),
+            rendered.contains("wifi: gate 1 name=runtime-power-reset status=pass"),
             "{rendered}"
         );
         assert!(
@@ -16458,21 +16652,22 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered
-                .contains("wifi: diag recorder=startup-blackbox mode=passive source=driver-task"),
+            rendered.contains(
+                "wifi: diag recorder=startup-blackbox mode=passive source=linked-runtime-replay"
+            ),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 1 name=hal-power-reset status=fail"),
+            rendered.contains("wifi: gate 1 name=runtime-power-reset status=fail"),
             "{rendered}"
         );
         assert!(rendered.contains("wifi: next_action="), "{rendered}");
         assert!(
-            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=driver-task-replay-failure"),
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=linked-runtime-replay-failure"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=driver-task-replay-failure"),
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-replay-failure"),
             "{rendered}"
         );
     }
@@ -16508,13 +16703,13 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: gate 8 name=firmware-channel status=fail evidence=exact=host-eapol-required"
+                "wifi: gate 8 name=host-eapol status=fail evidence=exact=host-eapol-required"
             ),
             "{rendered}"
         );
         assert!(
             rendered.contains(
-                "wifi: evidence boundary root=net-console hal=driver-task runtime=cyw43+sdio failure_domain=host-eapol-required direct_proof_gate=7"
+                "wifi: evidence boundary console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio failure_domain=host-eapol-required direct_proof_gate=7"
             ),
             "{rendered}"
         );
@@ -16567,11 +16762,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=driver-task-replay-failure"),
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=linked-runtime-replay-failure"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=driver-task-replay-failure"),
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-replay-failure"),
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
@@ -16614,11 +16809,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=err source=driver-task-replay-failure error=pi4-wifi-driver-task-runtime-required"),
+            rendered.contains("wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=err source=linked-runtime-replay-failure error=pi4-wifi-driver-task-runtime-required"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required source=driver-task-replay-failure"),
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required source=linked-runtime-replay-failure"),
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["probe-ht"]);
@@ -16661,11 +16856,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=load-fw action=complete profile=stateful mode=one-shot result=err source=driver-task-replay-failure error=pi4-wifi-driver-task-runtime-required"),
+            rendered.contains("wifi: debug subcommand=load-fw action=complete profile=stateful mode=one-shot result=err source=linked-runtime-replay-failure error=pi4-wifi-driver-task-runtime-required"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("ERR WIFI reason=policy detail=subcommand=load-fw error=pi4-wifi-driver-task-runtime-required source=driver-task-replay-failure"),
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=load-fw error=pi4-wifi-driver-task-runtime-required source=linked-runtime-replay-failure"),
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["load-fw"]);
@@ -16708,11 +16903,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=retry action=complete profile=stateful mode=one-shot result=err source=driver-task-replay-failure error=pi4-wifi-driver-task-runtime-required"),
+            rendered.contains("wifi: debug subcommand=retry action=complete profile=stateful mode=one-shot result=err source=linked-runtime-replay-failure error=pi4-wifi-driver-task-runtime-required"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("ERR WIFI reason=policy detail=subcommand=retry error=pi4-wifi-driver-task-runtime-required source=driver-task-replay-failure"),
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=retry error=pi4-wifi-driver-task-runtime-required source=linked-runtime-replay-failure"),
             "{rendered}"
         );
         assert_eq!(wifi.calls.as_slice(), &["retry"]);

@@ -2924,11 +2924,11 @@ impl<'a> KernelHal<'a> {
         if let Some(builder) = init_descriptor.as_deref_mut() {
             builder.set_framebuffer_region(framebuffer, page_base, map_len, page_count)?;
         }
-        let mut line = heapless::String::<320>::new();
+        let mut line = heapless::String::<512>::new();
         let _ = fmt::Write::write_fmt(
             &mut line,
             format_args!(
-                "DRIVER_TASK_RESOURCE_INIT contract=hdmi-text hot_path=hdmi-text stage=hdmi-framebuffer-map status=ready paddr=0x{paddr:016x} vaddr=0x{vaddr:016x} width={width} height={height} pitch={pitch} pages={page_count} map_len={map_len}",
+                "DRIVER_TASK_RESOURCE_INIT contract=hdmi-text hot_path=hdmi-text stage=hdmi-framebuffer-map status=ready acceptance=no owner=linked-runtime root_action=publish-descriptor blocker=none next_action=continue-next-driver-gate paddr=0x{paddr:016x} vaddr=0x{vaddr:016x} width={width} height={height} pitch={pitch} pages={page_count} map_len={map_len}",
                 paddr = paddr,
                 vaddr = framebuffer.vaddr,
                 width = framebuffer.width,

@@ -252,6 +252,12 @@ USB_OUTCOME_BLOCKERS = {
     "hub-descriptor-failed",
     "hub-set-configuration-failed",
     "hub-set-configuration-no-reply",
+    "hub-set-configuration-status-no-reply",
+    "hub-set-configuration-complete-no-reply",
+    "hub-set-configuration-status-timeout",
+    "hub-set-configuration-status-event-slot-empty",
+    "hub-set-configuration-status-event-cycle-mismatch",
+    "hub-set-configuration-status-event-ignored",
     "hub-set-configuration-settle-no-reply",
     "hub-descriptor-no-reply",
     "hub-descriptor-transfer-no-reply",
@@ -493,6 +499,7 @@ class GateSummary:
     driver_task_ring_call_return: int = 0
     driver_task_ring_call_outstanding: int = 0
     driver_task_ring_call_timeout: int = 0
+    driver_task_ring_call_keep_active: int = 0
     driver_task_ring_call_abort: int = 0
     driver_task_bootstrap_deferred: int = 0
     driver_task_resource_init: int = 0
@@ -632,6 +639,7 @@ class GateSummary:
             "DRIVER_TASK_RING_CALL_RETURN": self.driver_task_ring_call_return,
             "DRIVER_TASK_RING_CALL_OUTSTANDING": self.driver_task_ring_call_outstanding,
             "DRIVER_TASK_RING_CALL_TIMEOUT": self.driver_task_ring_call_timeout,
+            "DRIVER_TASK_RING_CALL_KEEP_ACTIVE": self.driver_task_ring_call_keep_active,
             "DRIVER_TASK_RING_CALL_ABORT": self.driver_task_ring_call_abort,
             "DRIVER_TASK_BOOTSTRAP_DEFERRED": self.driver_task_bootstrap_deferred,
             "DRIVER_TASK_RESOURCE_INIT": self.driver_task_resource_init,
@@ -1507,6 +1515,12 @@ def normalize_usb_blocker(value: str) -> str:
         return "hub-child-probe-no-reply"
     for token in (
         "hub-set-configuration-no-reply",
+        "hub-set-configuration-status-no-reply",
+        "hub-set-configuration-complete-no-reply",
+        "hub-set-configuration-status-timeout",
+        "hub-set-configuration-status-event-slot-empty",
+        "hub-set-configuration-status-event-cycle-mismatch",
+        "hub-set-configuration-status-event-ignored",
         "hub-set-configuration-settle-no-reply",
         "hub-descriptor-no-reply",
         "hub-descriptor-transfer-no-reply",
@@ -1715,6 +1729,20 @@ CYW43_CONTROL_EXCHANGE_TIMEOUT_REASONS = {
     12: "cyw43-control-rx-firstread-remainder-failed",
     13: "cyw43-control-rx-firstread-remainder-too-large",
 }
+CYW43_CONTROL_POLL_IDLE_DETAIL_REASONS = {
+    0x5701: "cyw43-control-rx-not-ready",
+    0x5702: "cyw43-control-rframe-count-read-failed",
+    0x5703: "cyw43-control-rx-no-rframe",
+    0x5704: "cyw43-control-rx-invalid-rframe-len",
+    0x5705: "cyw43-control-rx-request-too-large",
+    0x5706: "cyw43-control-rx-f2-read-failed",
+    0x5707: "cyw43-control-rx-sdpcm-decode-miss",
+    0x5709: "cyw43-control-rx-firstread-failed",
+    0x570A: "cyw43-control-rx-firstread-empty",
+    0x570B: "cyw43-control-rx-firstread-invalid-sdpcm",
+    0x570C: "cyw43-control-rx-firstread-remainder-failed",
+    0x570D: "cyw43-control-rx-firstread-remainder-too-large",
+}
 
 CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS = {
     0x5706: "cyw43-data-rx-f2-read-failed",
@@ -1802,6 +1830,55 @@ def cyw43_control_exchange_timeout_event_exact(event: TraceEvent) -> str | None:
     return cyw43_control_exchange_timeout_exact(parse_hex_int(fields.get("result")))
 
 
+def cyw43_control_split_event_exact(event: TraceEvent) -> str | None:
+    """Return the exact parent-side split-control exchange failure reason."""
+
+    fields = event.fields
+    if "cyw43_driver_task_control_split" not in event.raw.lower():
+        return None
+    if fields.get("contract", "").lower() != "cyw43455":
+        return None
+    event_name = fields.get("event", "").lower()
+    detail_exact = CYW43_CONTROL_POLL_IDLE_DETAIL_REASONS.get(
+        parse_hex_int(fields.get("detail")) or -1
+    )
+    if event_name == "cyw43-control-reply-nonmatching":
+        return "cyw43-control-reply-nonmatching"
+    if event_name == "cyw43-control-split-no-reply":
+        return detail_exact or "cyw43-control-split-timeout"
+    if event_name in {
+        "cyw43-control-tx-no-reply",
+        "cyw43-control-tx-not-submitted",
+        "cyw43-control-poll-unexpected-completion",
+        "cyw43-control-frame-unavailable",
+    }:
+        return event_name
+    return None
+
+
+def cyw43_control_reply_event_exact(event: TraceEvent) -> str | None:
+    """Return the exact CDC reply issue carried by split-control telemetry."""
+
+    fields = event.fields
+    if "cyw43_driver_task_control_reply" not in event.raw.lower():
+        return None
+    if fields.get("contract", "").lower() != "cyw43455":
+        return None
+    event_name = fields.get("event", "").lower()
+    terminal = fields.get("terminal", "").lower() in {"yes", "true", "1"}
+    if event_name == "malformed-reply":
+        return "cyw43-control-reply-malformed" if terminal else None
+    if event_name == "nonmatching-reply":
+        return "cyw43-control-reply-nonmatching" if terminal else None
+    status = parse_hex_int(fields.get("status"))
+    stage = fields.get("stage", "").lower()
+    if event_name == "matched-reply" and status not in {None, 0}:
+        if stage == "cyw43-control-revinfo" and status == CYW43_CONTROL_EXCHANGE_BCME_BADARG:
+            return "cyw43-control-revinfo-badarg"
+        return "cyw43-control-reply-status"
+    return None
+
+
 def cyw43_command_no_reply_event_exact(event: TraceEvent) -> str | None:
     """Return the exact linked-runtime CYW43 command no-reply reason."""
 
@@ -1811,6 +1888,19 @@ def cyw43_command_no_reply_event_exact(event: TraceEvent) -> str | None:
     if fields.get("contract", "").lower() != "cyw43455":
         return None
     exact = normalize_wifi_exact(fields.get("reason", ""))
+    if exact == "cyw43-runtime-command-no-reply":
+        progress_exact = normalize_wifi_exact(fields.get("progress_phase_name", ""))
+        progress_sequence = parse_hex_int(fields.get("progress_sequence"))
+        request = parse_hex_int(fields.get("request"))
+        progress_aux0 = parse_hex_int(fields.get("progress_aux0"))
+        if (
+            fields.get("progress_marker_valid", "").lower() in {"yes", "true", "1"}
+            and request is not None
+            and progress_sequence == request
+            and progress_aux0 == 0x43595734
+            and progress_exact != "none"
+        ):
+            return progress_exact
     if exact != "none":
         return exact
     if parse_hex_int(fields.get("op")) == CYW43_CONTROL_EXCHANGE_OP:
@@ -2255,6 +2345,18 @@ def normalize_wifi_blocker(value: str) -> str:
         return "control-plane-hintless-firstread-no-irq"
     if "control-plane-reply-idle-loop" in lower:
         return "control-plane-reply-idle-loop"
+    if any(
+        token in lower
+        for token in (
+            "cyw43-control-frame-unavailable",
+            "cyw43-control-poll-unexpected-completion",
+            "cyw43-control-reply-",
+            "cyw43-control-rx-",
+            "cyw43-control-split-",
+            "cyw43-control-tx-",
+        )
+    ):
+        return "control-plane-reply-idle-loop"
     if "control-plane" in lower:
         if "hintless-firstread-no-irq" in lower or "post-write-no-irq" in lower:
             return "control-plane-hintless-firstread-no-irq"
@@ -2598,8 +2700,12 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-plane-no-frame-indication-after-write",
         "cyw43-control-plane-partial-hint-visibility",
         "cyw43-control-revinfo-badarg",
+        "cyw43-control-frame-unavailable",
+        "cyw43-control-poll-unexpected-completion",
+        "cyw43-control-reply-malformed",
         "cyw43-control-rframe-count-read-failed",
         "cyw43-control-reply-nonmatching",
+        "cyw43-control-reply-status",
         "cyw43-control-rx-f2-read-failed",
         "cyw43-control-rx-firstread-empty",
         "cyw43-control-rx-firstread-failed",
@@ -2611,6 +2717,9 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-rx-not-ready",
         "cyw43-control-rx-request-too-large",
         "cyw43-control-rx-sdpcm-decode-miss",
+        "cyw43-control-split-timeout",
+        "cyw43-control-tx-no-reply",
+        "cyw43-control-tx-not-submitted",
         "cyw43-runtime-command-no-reply",
         "cyw43-data-rx-f2-read-failed",
         "cyw43-data-rx-firstread-empty",
@@ -4979,10 +5088,29 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
     raw_cyw43_progress = cyw43_raw_command_progress_blocker(event)
     if raw_cyw43_progress is not None:
         return raw_cyw43_progress, raw_cyw43_progress
+    control_split_exact = cyw43_control_split_event_exact(event)
+    if control_split_exact is not None:
+        phase = event.fields.get("stage") or event.stage or "cyw43-control-split"
+        return control_split_exact, phase
+    control_reply_exact = cyw43_control_reply_event_exact(event)
+    if control_reply_exact is not None:
+        phase = event.fields.get("stage") or event.stage or "cyw43-control-reply"
+        return control_reply_exact, phase
     command_no_reply_exact = cyw43_command_no_reply_event_exact(event)
     if command_no_reply_exact is not None:
-        phase = event.fields.get("stage") or event.stage or "cyw43-command"
+        progress_phase = normalize_wifi_exact(
+            event.fields.get("progress_phase_name", "")
+        )
+        if command_no_reply_exact == progress_phase:
+            phase = event.fields.get("progress_phase_name") or "cyw43-command"
+        else:
+            phase = event.fields.get("stage") or event.stage or "cyw43-command"
         return command_no_reply_exact, phase
+    if (
+        "cyw43_driver_task_control_split" in raw
+        and event.fields.get("event", "").lower() == "poll-complete"
+    ):
+        return "none", event.fields.get("stage") or event.stage or "cyw43-control-split"
     control_timeout_exact = cyw43_control_exchange_timeout_event_exact(event)
     if control_timeout_exact is not None:
         phase = event.fields.get("stage") or event.stage or "cyw43-control-exchange"
@@ -5139,6 +5267,11 @@ def wifi_failure_detail_priority(event: TraceEvent, wifi_blocker: str, candidate
     if "post-write-no-irq-terminal" in raw:
         return 0
     if cyw43_control_exchange_timeout_event_exact(event) is not None:
+        return 0
+    if (
+        cyw43_control_split_event_exact(event) is not None
+        or cyw43_control_reply_event_exact(event) is not None
+    ):
         return 0
     if wifi_firmware_stream_fault_blocker(event) == candidate:
         return 0
@@ -5368,6 +5501,14 @@ def summarize_wifi_failure_detail(
             candidate = "control-plane-reply-idle-loop"
         if (
             wifi_blocker == "control-plane-reply-idle-loop"
+            and (
+                cyw43_control_split_event_exact(event) is not None
+                or cyw43_control_reply_event_exact(event) is not None
+            )
+        ):
+            candidate = "control-plane-reply-idle-loop"
+        if (
+            wifi_blocker == "control-plane-reply-idle-loop"
             and cyw43_command_no_reply_event_exact(event) is not None
         ):
             candidate = "control-plane-reply-idle-loop"
@@ -5532,9 +5673,13 @@ def summarize_wifi_failure_detail(
                 or candidate in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES
                 else
                 socram_core_ctrl_stage
+                or (
+                    event_phase
+                    if event_exact != "none" and event_phase != "none"
+                    else None
+                )
                 or fields.get("stage")
                 or event.stage
-                or event_phase
                 or "none"
             )
             line = event.line
@@ -5843,9 +5988,17 @@ def summarize_driver_task_proofs(
                 parsed_failed = parse_hex_int(fields.get("failed_count"))
                 if parsed_failed is not None:
                     failed_count = max(failed_count, parsed_failed)
-                capset_proof |= fields.get("root_authority_retained", "").lower() == "yes" and (
-                    parse_hex_int(fields.get("broad_caps_leaked")) == 0
+                legacy_root_authority = (
+                    fields.get("root_authority_retained", "").lower() == "yes"
                 )
+                linked_runtime_authority = (
+                    fields.get("root_authority", "").lower()
+                    == "admission-descriptor-diagnostics-only"
+                    and fields.get("hardware_owner", "").lower() == "linked-runtime"
+                )
+                capset_proof |= (
+                    legacy_root_authority or linked_runtime_authority
+                ) and parse_hex_int(fields.get("broad_caps_leaked")) == 0
                 fault_proof |= fields.get("fault_endpoint_ready", "").lower() == "yes"
                 revoke_proof |= fields.get("revoke_ready", "").lower() == "yes"
                 sched_proof |= "mcs" in fields or _truthy_field(fields.get("sched"))
@@ -6030,6 +6183,7 @@ WIFI_REPLAY_REFINABLE_BLOCKERS = frozenset(
         "wifi-driver-task-runtime-unproved",
         "wifi-started-no-replay",
         "sdio-linked-runtime-progress-no-reply",
+        "runtime-power-reset",
         "hal-power-reset",
         "root-prompt-printed",
         "root-prompt-delayed",
@@ -6154,9 +6308,17 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "hid-interrupt-in-not-found",
         "hid-config-descriptor-malformed",
         "hub-child-scan-no-reply",
+        "hub-set-configuration-failed",
         "hub-set-configuration-no-reply",
+        "hub-set-configuration-status-no-reply",
+        "hub-set-configuration-complete-no-reply",
+        "hub-set-configuration-status-timeout",
+        "hub-set-configuration-status-event-slot-empty",
+        "hub-set-configuration-status-event-cycle-mismatch",
+        "hub-set-configuration-status-event-ignored",
         "hub-set-configuration-settle-no-reply",
         "hub-descriptor-no-reply",
+        "hub-descriptor-failed",
         "hub-descriptor-transfer-no-reply",
         "hub-descriptor-status-no-reply",
         "hub-descriptor-transfer-failed",
@@ -6169,6 +6331,7 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "hub-descriptor-status-event-cycle-mismatch",
         "hub-descriptor-status-event-ignored",
         "hub-context-no-reply",
+        "hub-context-failed",
         "hub-port-power-no-reply",
         "hub-port-reset-no-reply",
         "hub-child-probe-no-reply",
@@ -6343,6 +6506,14 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-hid-endpoint-parse-malformed": "hid-config-descriptor-malformed",
         "usb-hub-scan-begin": "hub-child-scan-no-reply",
         "usb-hub-set-configuration-begin": "hub-set-configuration-no-reply",
+        "usb-hub-set-configuration-doorbell-done": "hub-set-configuration-status-no-reply",
+        "usb-hub-set-configuration-wait-begin": "hub-set-configuration-status-no-reply",
+        "usb-hub-set-configuration-status-event": "hub-set-configuration-complete-no-reply",
+        "usb-hub-set-configuration-status-event-slot-empty": "hub-set-configuration-status-event-slot-empty",
+        "usb-hub-set-configuration-status-event-cycle-mismatch": "hub-set-configuration-status-event-cycle-mismatch",
+        "usb-hub-set-configuration-status-event-ignored": "hub-set-configuration-status-event-ignored",
+        "usb-hub-set-configuration-status-timeout": "hub-set-configuration-status-timeout",
+        "usb-hub-set-configuration-failed": "hub-set-configuration-failed",
         "usb-hub-set-configuration-done": "hub-set-configuration-settle-no-reply",
         "usb-hub-descriptor-begin": "hub-descriptor-no-reply",
         "usb-hub-descriptor-doorbell-done": "hub-descriptor-transfer-no-reply",
@@ -6610,6 +6781,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         for event in event_list
         if "driver_task_ring_call_timeout" in event.raw.lower()
     )
+    driver_task_ring_call_keep_active = sum(
+        1
+        for event in event_list
+        if "driver_task_ring_call_keep_active" in event.raw.lower()
+    )
     driver_task_ring_call_abort = sum(
         1
         for event in event_list
@@ -6831,6 +7007,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_ring_call_return=driver_task_ring_call_return,
         driver_task_ring_call_outstanding=driver_task_ring_call_outstanding,
         driver_task_ring_call_timeout=driver_task_ring_call_timeout,
+        driver_task_ring_call_keep_active=driver_task_ring_call_keep_active,
         driver_task_ring_call_abort=driver_task_ring_call_abort,
         driver_task_bootstrap_deferred=driver_task_bootstrap_deferred,
         driver_task_resource_init=driver_task_resource_init,
@@ -7232,6 +7409,17 @@ def summarize_usb_driver_task_stall(events: Iterable[TraceEvent]) -> str | None:
             "hid-interrupt-in-not-found",
             "hid-config-descriptor-malformed",
             "hub-child-scan-no-reply",
+            "hub-set-configuration-failed",
+            "hub-set-configuration-no-reply",
+            "hub-set-configuration-status-no-reply",
+            "hub-set-configuration-complete-no-reply",
+            "hub-set-configuration-status-timeout",
+            "hub-set-configuration-status-event-slot-empty",
+            "hub-set-configuration-status-event-cycle-mismatch",
+            "hub-set-configuration-status-event-ignored",
+            "hub-set-configuration-settle-no-reply",
+            "hub-descriptor-failed",
+            "hub-context-failed",
             "hub-child-probe-no-reply",
             "blocked-keyboard-enumeration",
         }:

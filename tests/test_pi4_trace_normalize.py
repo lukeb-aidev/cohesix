@@ -345,6 +345,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_RING_CALL_RETURN": 0,
         "DRIVER_TASK_RING_CALL_OUTSTANDING": 0,
         "DRIVER_TASK_RING_CALL_TIMEOUT": 0,
+        "DRIVER_TASK_RING_CALL_KEEP_ACTIVE": 0,
         "DRIVER_TASK_RING_CALL_ABORT": 0,
         "DRIVER_TASK_BOOTSTRAP_DEFERRED": 0,
         "DRIVER_TASK_RESOURCE_INIT": 0,
@@ -449,7 +450,7 @@ def test_gate_summary_tracks_driver_task_substrate_proof_fields() -> None:
         [
             "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 mcs=0 "
             "task_count=9 failed_count=0 live_tcb_count=9 "
-            "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
+            "root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime fault_endpoint_ready=yes revoke_ready=yes "
             "broad_caps_leaked=0 sched=yes affinity=per-driver "
             "affinity_configured=9 affinity_applied=9 "
             "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes "
@@ -617,7 +618,7 @@ def test_gate_summary_explicit_pointer_free_ipc_no_overrides_abi_label() -> None
     events = normalizer.parse_events(
         [
             "DRIVER_TASK_SUBSTRATE active=yes task_count=9 failed_count=0 live_tcb_count=9 "
-            "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
+            "root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime fault_endpoint_ready=yes revoke_ready=yes "
             "broad_caps_leaked=0 sched=yes affinity=per-driver "
             "affinity_configured=9 affinity_applied=9 "
             "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=no "
@@ -661,7 +662,7 @@ def test_gate_summary_requires_per_hot_path_owner_state_descriptors() -> None:
         [
             "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 mcs=0 "
             "task_count=9 failed_count=0 live_tcb_count=9 "
-            "root_authority_retained=yes fault_endpoint_ready=yes revoke_ready=yes "
+            "root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime fault_endpoint_ready=yes revoke_ready=yes "
             "broad_caps_leaked=0 sched=yes affinity=per-driver "
             "affinity_configured=9 affinity_applied=9 "
             "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes "
@@ -856,7 +857,11 @@ def test_gate_summary_tracks_driver_task_ring_call_timeout() -> None:
             "DRIVER_TASK_RING_CALL_BEGIN contract=serial endpoint=0x05ae "
             "request=1 opcode=1 flags=0x4000 arg0=1 arg1=1",
             "DRIVER_TASK_RING_CALL_TIMEOUT contract=serial endpoint=0x05ae "
-            "request=1 attempts=4096",
+            "request=1 mode=nonblocking attempts=4096 opcode=1 arg0=1 "
+            "aux0=0x00000000 frame_len=0 owner=linked-runtime "
+            "marker_valid=no marker_sequence=0 marker_phase=0 "
+            "marker_phase_name=none marker_aux0=0x00000000 "
+            "blocker=runtime-progress-missing next_action=check-keep-active",
         ]
     )
 
@@ -867,6 +872,35 @@ def test_gate_summary_tracks_driver_task_ring_call_timeout() -> None:
     assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
 
 
+def test_gate_summary_tracks_driver_task_ring_call_keep_active() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RING_CALL_BEGIN contract=usb-local-seat endpoint=0x07a4 "
+            "request=8 opcode=1 flags=0x2000 arg0=2 arg1=2 aux0=0x55534245",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=usb-local-seat endpoint=0x07a4 "
+            "request=8 mode=prompt-slice attempts=512 opcode=1 arg0=2 "
+            "aux0=0x55534245 frame_len=0 owner=linked-runtime "
+            "marker_valid=yes marker_sequence=8 marker_phase=318 "
+            "marker_phase_name=usb-hub-descriptor-wait-begin marker_aux0=0x55534245 "
+            "blocker=usb-hub-descriptor-wait-begin next_action=check-keep-active",
+            "DRIVER_TASK_RING_CALL_KEEP_ACTIVE contract=usb-local-seat endpoint=0x07a4 "
+            "request=8 mode=prompt-slice timeout_count=2 keep_limit=8 "
+            "progress_advanced=no opcode=1 arg0=2 aux0=0x55534245 frame_len=0 "
+            "owner=linked-runtime marker_valid=yes marker_sequence=8 marker_phase=318 "
+            "marker_phase_name=usb-hub-descriptor-wait-begin marker_aux0=0x55534245 "
+            "blocker=usb-hub-descriptor-wait-begin next_action=poll-same-request",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_RING_CALL_BEGIN"] == 1
+    assert record["DRIVER_TASK_RING_CALL_RETURN"] == 0
+    assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
+    assert record["DRIVER_TASK_RING_CALL_KEEP_ACTIVE"] == 1
+    assert record["DRIVER_TASK_RING_CALL_ABORT"] == 0
+    assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 1
+
+
 def test_gate_summary_tracks_driver_task_ring_call_abort() -> None:
     events = normalizer.parse_events(
         [
@@ -874,10 +908,20 @@ def test_gate_summary_tracks_driver_task_ring_call_abort() -> None:
             "request=5 opcode=1 flags=0x2000 arg0=2 arg1=2 aux0=0x55534245",
             "DRIVER_TASK_RING_CALL_TIMEOUT contract=usb-local-seat endpoint=0x07a4 "
             "request=5 mode=prompt-slice attempts=512 opcode=1 arg0=2 "
-            "aux0=0x55534245 frame_len=0",
+            "aux0=0x55534245 frame_len=0 owner=linked-runtime "
+            "marker_valid=yes marker_sequence=5 marker_phase=407 "
+            "marker_phase_name=usb-hub-set-configuration-status-event-ignored "
+            "marker_aux0=0x55534245 "
+            "blocker=usb-hub-set-configuration-status-event-ignored "
+            "next_action=check-keep-active",
             "DRIVER_TASK_RING_CALL_ABORT contract=usb-local-seat endpoint=0x07a4 "
             "request=5 mode=prompt-slice reason=timeout-resume-limit "
-            "timeout_count=3 opcode=1 arg0=2 aux0=0x55534245 frame_len=0",
+            "timeout_count=3 opcode=1 arg0=2 aux0=0x55534245 frame_len=0 "
+            "owner=linked-runtime marker_valid=yes marker_sequence=5 marker_phase=407 "
+            "marker_phase_name=usb-hub-set-configuration-status-event-ignored "
+            "marker_aux0=0x55534245 "
+            "blocker=usb-hub-set-configuration-status-event-ignored "
+            "next_action=retry-fresh-request-after-blocker-fix",
         ]
     )
 
@@ -1284,6 +1328,37 @@ def test_gate_summary_tracks_driver_task_resource_init_blocker() -> None:
     assert (
         record["DRIVER_TASK_RESOURCE_BLOCKER"]
         == "usb-keyboard:usb-xhci-init:no-reply"
+    )
+
+
+def test_driver_task_resource_init_preserves_request_context_fields() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=runtime-ring-submit status=busy "
+            "acceptance=no code=none detail=none result=none frame_len=0 "
+            "owner=linked-runtime root_action=submit-turn "
+            "blocker=runtime-ring-submit-busy next_action=poll-active-request "
+            "active_request_valid=yes active_request=42 expected_request=42 "
+            "expected_aux0=0x55534245 same_request_resume=yes "
+            "progress_marker_valid=yes progress_sequence=42 progress_phase=407 "
+            "progress_phase_name=usb-hub-set-configuration-status-event-ignored "
+            "progress_aux0=0x55534245 progress_request_match=yes",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert events[0].fields["owner"] == "linked-runtime"
+    assert events[0].fields["expected_aux0"] == "0x55534245"
+    assert events[0].fields["same_request_resume"] == "yes"
+    assert (
+        events[0].fields["progress_phase_name"]
+        == "usb-hub-set-configuration-status-event-ignored"
+    )
+    assert (
+        record["DRIVER_TASK_RESOURCE_BLOCKER"]
+        == "usb-keyboard:runtime-ring-submit:busy"
     )
 
 
@@ -2799,8 +2874,8 @@ def test_gate_summary_reports_linked_command_snapshot_events_as_event_ring_alive
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000503 root_mask=0x00 slot=5 ep_id=2 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000503 root_port_mask=0x00 slot=5 ep_id=2 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=3 cmd_slot_or_polls=5 "
             "cmd_event_type=2 cmd_ack_failures=0",
@@ -5118,12 +5193,12 @@ def test_gate_summary_tracks_usb_runtime_enum_snapshot_detail() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0204 "
-            "result=0x0f00001f root_mask=0x1f slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f00001f root_port_mask=0x1f slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0212 "
-            "result=0x0f00001f root_mask=0x1f slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f00001f root_port_mask=0x1f slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
         ]
     )
@@ -5138,8 +5213,8 @@ def test_gate_summary_tracks_root_port_connected_detail() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0205 "
-            "result=0x0f000001 root_mask=0x01 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
         ]
     )
@@ -5154,8 +5229,8 @@ def test_gate_summary_tracks_usb_hub_attach_substep_detail() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0219 "
-            "result=0x0f000201 root_mask=0x00 slot=1 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000201 root_port_mask=0x00 slot=1 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
         ]
     )
@@ -5170,8 +5245,8 @@ def test_gate_summary_tracks_usb_command_ring_pending_detail() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000001 root_mask=0x00 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000001 root_port_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=1 cmd_slot_or_polls=1 cmd_event_type=0 "
             "cmd_ack_failures=0",
@@ -5188,8 +5263,8 @@ def test_gate_summary_preserves_command_pending_over_stale_startup_projection() 
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000000 root_port_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
             "cmd_ack_failures=0",
@@ -5198,7 +5273,7 @@ def test_gate_summary_preserves_command_pending_over_stale_startup_projection() 
             "blocker=enable-slot-completion-pending "
             "next_action=poll-enable-slot-completion",
             "usb: gate 1 name=hal-resources status=pass "
-            "evidence=owner=driver-task linked_controller=yes detail=0x0203 "
+            "evidence=hardware_owner=linked-runtime root_action=admission-descriptor-diagnostics linked_controller=yes detail=0x0203 "
             "next=pcie-vl805",
             "usb: gate 2 name=pcie-vl805 status=pass "
             "evidence=backend_attached=yes linked_controller=yes "
@@ -5228,8 +5303,8 @@ def test_gate_summary_tracks_command_event_peek_begin_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000000 root_port_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
             "cmd_ack_failures=0",
@@ -5250,8 +5325,8 @@ def test_gate_summary_tracks_raw_command_event_peek_begin_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000000 root_port_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
             "cmd_ack_failures=0",
@@ -5310,8 +5385,8 @@ def test_gate_summary_tracks_raw_address_command_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0205 "
-            "result=0x0f000001 root_mask=0x01 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5330,8 +5405,8 @@ def test_gate_summary_tracks_raw_device_addressed_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0206 "
-            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5350,8 +5425,8 @@ def test_gate_summary_tracks_device_descriptor_wait_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0206 "
-            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5390,8 +5465,8 @@ def test_gate_summary_tracks_device_descriptor_status_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0206 "
-            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5410,8 +5485,8 @@ def test_gate_summary_tracks_config_descriptor_header_wait_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0207 "
-            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5430,8 +5505,8 @@ def test_gate_summary_tracks_config_descriptor_header_event_empty_progress() -> 
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0207 "
-            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5451,8 +5526,8 @@ def test_gate_summary_tracks_device_descriptor_event_cycle_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0206 "
-            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5472,8 +5547,8 @@ def test_gate_summary_tracks_config_descriptor_full_status_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0207 "
-            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5492,8 +5567,8 @@ def test_gate_summary_tracks_hid_endpoint_parse_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0211 "
-            "result=0x0f000101 root_mask=0x01 slot=2 ep_id=1 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000101 root_port_mask=0x01 slot=2 ep_id=1 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=yes preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5515,6 +5590,14 @@ def test_gate_summary_tracks_hid_endpoint_parse_miss_reasons() -> None:
         "usb-hid-endpoint-parse-malformed": "hid-config-descriptor-malformed",
         "usb-hub-scan-begin": "hub-child-scan-no-reply",
         "usb-hub-set-configuration-begin": "hub-set-configuration-no-reply",
+        "usb-hub-set-configuration-doorbell-done": "hub-set-configuration-status-no-reply",
+        "usb-hub-set-configuration-wait-begin": "hub-set-configuration-status-no-reply",
+        "usb-hub-set-configuration-status-event": "hub-set-configuration-complete-no-reply",
+        "usb-hub-set-configuration-status-event-slot-empty": "hub-set-configuration-status-event-slot-empty",
+        "usb-hub-set-configuration-status-event-cycle-mismatch": "hub-set-configuration-status-event-cycle-mismatch",
+        "usb-hub-set-configuration-status-event-ignored": "hub-set-configuration-status-event-ignored",
+        "usb-hub-set-configuration-status-timeout": "hub-set-configuration-status-timeout",
+        "usb-hub-set-configuration-failed": "hub-set-configuration-failed",
         "usb-hub-set-configuration-done": "hub-set-configuration-settle-no-reply",
         "usb-hub-descriptor-begin": "hub-descriptor-no-reply",
         "usb-hub-descriptor-doorbell-done": "hub-descriptor-transfer-no-reply",
@@ -5545,8 +5628,8 @@ def test_gate_summary_tracks_hid_endpoint_parse_miss_reasons() -> None:
         events = normalizer.parse_events(
             [
                 "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0208 "
-                "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
-                "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+                "result=0x0f000001 root_port_mask=0x01 slot=2 ep_id=0 "
+                "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
                 "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
                 "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
                 "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5565,8 +5648,8 @@ def test_gate_summary_tracks_hid_configure_endpoint_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0211 "
-            "result=0x0f000101 root_mask=0x01 slot=2 ep_id=1 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000101 root_port_mask=0x01 slot=2 ep_id=1 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=yes preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5585,8 +5668,8 @@ def test_gate_summary_tracks_hid_interrupt_queue_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0211 "
-            "result=0x0f000101 root_mask=0x01 slot=2 ep_id=1 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000101 root_port_mask=0x01 slot=2 ep_id=1 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=yes preserved_event=no transfer_event=no endpoint_ready=yes",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5605,8 +5688,8 @@ def test_gate_summary_tracks_device_descriptor_prime_wait_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0206 "
-            "result=0x0f000001 root_mask=0x01 slot=2 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=yes port_event=yes "
+            "result=0x0f000001 root_port_mask=0x01 slot=2 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=yes port_event=yes "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no",
             "DRIVER_TASK_RING_PROGRESS contract=usb-local-seat request=8 "
             "expected_aux0=0x55534245 marker_valid=yes marker_sequence=8 "
@@ -5625,8 +5708,8 @@ def test_gate_summary_tracks_command_event_read_done_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000000 root_port_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
             "cmd_ack_failures=0",
@@ -5647,8 +5730,8 @@ def test_gate_summary_tracks_command_event_read_begin_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000000 root_port_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
             "cmd_ack_failures=0",
@@ -5669,8 +5752,8 @@ def test_gate_summary_tracks_command_event_dma_load_done_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000000 root_port_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
             "cmd_ack_failures=0",
@@ -5691,8 +5774,8 @@ def test_gate_summary_tracks_command_event_invalidate_done_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000000 root_port_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
             "cmd_ack_failures=0",
@@ -5713,8 +5796,8 @@ def test_gate_summary_tracks_command_event_slot_empty_progress() -> None:
     events = normalizer.parse_events(
         [
             "USB_RUNTIME_ENUM_SNAPSHOT contract=usb-local-seat detail=0x0203 "
-            "result=0x03000000 root_mask=0x00 slot=0 ep_id=0 "
-            "scan_pass=0 root_power=yes cmd_path=no port_event=no "
+            "result=0x03000000 root_port_mask=0x00 slot=0 ep_id=0 "
+            "scan_pass=0 root_port_power=yes cmd_path=no port_event=no "
             "hid_ep=no preserved_event=no transfer_event=no endpoint_ready=no "
             "cmd_proof=yes cmd_events_seen=0 cmd_slot_or_polls=0 cmd_event_type=0 "
             "cmd_ack_failures=0",
@@ -5729,6 +5812,23 @@ def test_gate_summary_tracks_command_event_slot_empty_progress() -> None:
 
     assert gates.usb_gate == 4
     assert gates.usb_blocker == "enable-slot-event-slot-empty"
+
+
+def test_gate_summary_tracks_hub_set_configuration_status_event_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: linked_runtime_progress marker_valid=yes sequence=8 phase=407 "
+            "phase_name=usb-hub-set-configuration-status-event-ignored "
+            "aux0=0x55534245 gate=7 "
+            "blocker=hub-set-configuration-status-event-ignored "
+            "next_action=inspect-hub-set-configuration-status-event",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 7
+    assert gates.usb_blocker == "hub-set-configuration-status-event-ignored"
 
 
 def test_gate_summary_tracks_usb_startup_blackbox_gates() -> None:
@@ -5773,13 +5873,14 @@ def test_gate_summary_preserves_usb_startup_gate_failure_over_driver_noise() -> 
             "runtime_result=0x00000000 next=xhci-operational",
             "usb: gate 3 name=xhci-operational status=blocked "
             "evidence=waiting-on-gate-2 next=command-event-rings",
-            "usb: evidence boundary root=event-pump hal=driver-task "
-            "runtime=usb-local-seat "
+            "usb: evidence boundary console_client=event-pump "
+            "hal=admission-descriptor-diagnostics-only "
+            "linked_runtime_owner=usb-local-seat "
             "failure_domain=linked-runtime-command-not-observed "
-            "proof_gate=1 target_gate=10",
+            "proof_gate=1 target_gate=10 proof_effect=acceptance-red",
             "usb: next_action=inspect-linked-usb-runtime-progress "
             "blocker=linked-runtime-command-not-observed proof_gate=1 "
-            "target_gate=10 detail=0x0000 result=0x00000000",
+            "target_gate=10 detail=0x0000 result=0x00000000 source=linked-runtime",
         ]
     )
 
@@ -6568,8 +6669,8 @@ def test_gate_summary_refines_cyw43_control_exchange_no_reply_progress() -> None
 
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "control-plane-reply-idle-loop"
-    assert gates.wifi_exact == "cyw43-runtime-command-no-reply"
-    assert gates.wifi_phase == "cyw43-control-exchange"
+    assert gates.wifi_exact == "cyw43-sdio-owner-reply"
+    assert gates.wifi_phase == "cyw43-sdio-owner-reply"
 
 
 def test_gate_summary_refines_cyw43_control_exchange_firstread_empty() -> None:
@@ -6589,6 +6690,114 @@ def test_gate_summary_refines_cyw43_control_exchange_firstread_empty() -> None:
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "control-plane-reply-idle-loop"
     assert gates.wifi_exact == "cyw43-control-rx-firstread-empty"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_gate_summary_refines_cyw43_split_control_firstread_empty() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign event=cyw43-control-split-no-reply "
+            "poll=0 flags=0x0000 code=3 detail=0x570a result=0xd7000000 "
+            "frame_off=0 frame_len=0 frame_flags=0x0000",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-control-txglomalign status=poll-timeout acceptance=no "
+            "code=5 detail=21259 result=0x430a0000 frame_len=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_exact == "cyw43-control-rx-firstread-empty"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_gate_summary_ignores_transient_cyw43_split_control_idle_sample() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign event=poll-complete "
+            "poll=1 flags=0x0000 sequence=19 code=3 detail=0x570a "
+            "result=0xd7000000 frame_off=0 frame_len=0 frame_flags=0x0000 "
+            "expected_cmd=263 expected_cmd_hex=0x00000107 expected_id=9 "
+            "header_mode=plain expected_response_len=0 iovar=txglomalign "
+            "nonmatching_frames=0 malformed_frames=0",
+            "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 "
+            "stage=cyw43-control-txglomalign event=matched-reply poll=2 "
+            "flags=0x0000 completion_sequence=20 cmd=263 cmd_hex=0x00000107 "
+            "id=9 status=0x00000000 response_len=0 payload_available=0 "
+            "expected_cmd=263 expected_cmd_hex=0x00000107 expected_id=9 "
+            "header_mode=plain expected_response_len=0 iovar=txglomalign "
+            "reply_match=yes nonmatching_frames=0 malformed_frames=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_exact != "cyw43-control-rx-firstread-empty"
+
+
+def test_gate_summary_refines_cyw43_split_control_terminal_nonmatching_reply() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 "
+            "stage=cyw43-control-txglomalign event=nonmatching-reply poll=2 "
+            "flags=0x0000 completion_sequence=20 cmd=262 cmd_hex=0x00000106 "
+            "id=8 status=0x00000000 response_len=0 payload_available=0 "
+            "expected_cmd=263 expected_cmd_hex=0x00000107 expected_id=9 "
+            "header_mode=plain expected_response_len=0 iovar=txglomalign "
+            "reply_match=no nonmatching_frames=1 malformed_frames=0",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign "
+            "event=cyw43-control-reply-nonmatching poll=0 flags=0x0000 "
+            "sequence=20 code=3 detail=0x5703 result=0xd7000000 "
+            "frame_off=0 frame_len=0 frame_flags=0x0000 "
+            "expected_cmd=263 expected_cmd_hex=0x00000107 expected_id=9 "
+            "header_mode=plain expected_response_len=0 iovar=txglomalign "
+            "nonmatching_frames=1 malformed_frames=0",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign op=11 flags=0x0000 "
+            "target=0x00000000 payload_off=284 payload_len=36 total_len=36 "
+            "detail=21259 reason=cyw43-control-exchange result=0x43080001",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_exact == "cyw43-control-reply-nonmatching"
+    assert gates.wifi_phase == "cyw43-control-txglomalign"
+
+
+def test_gate_summary_refines_cyw43_split_control_tx_not_submitted() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-control-plane blocker=failed",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            "stage=cyw43-control-txglomalign "
+            "event=cyw43-control-tx-not-submitted poll=0 flags=0x0000 "
+            "code=3 detail=0x0000 result=0x00000000 "
+            "frame_off=0 frame_len=0 frame_flags=0x0000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "control-plane-reply-idle-loop"
+    assert gates.wifi_exact == "cyw43-control-tx-not-submitted"
     assert gates.wifi_phase == "cyw43-control-txglomalign"
 
 
