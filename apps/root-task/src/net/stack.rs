@@ -51,7 +51,8 @@ use super::{
     ConsoleLine, ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent,
     NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode, NetPoller,
     NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStage, NetStatusReport,
-    NetTelemetry, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG, NET_STAGE,
+    NetTelemetry, WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG,
+    NET_STAGE,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
@@ -1085,6 +1086,7 @@ pub struct NetStack<D: NetDevice> {
     backend: NetBackend,
     mode: NetMode,
     interface_policy: NetInterfacePolicy,
+    wifi_credentials: Option<WifiCredentials>,
     ip: Ipv4Address,
     gateway: Option<Ipv4Address>,
     prefix_len: u8,
@@ -2699,6 +2701,7 @@ impl<D: NetDevice> NetStack<D> {
             backend,
             mode: console_config.policy.mode,
             interface_policy: console_config.policy.interface,
+            wifi_credentials: console_config.wifi_credentials,
             ip,
             gateway,
             prefix_len: prefix,
@@ -3016,7 +3019,8 @@ impl<D: NetDevice> NetStack<D> {
             return activity;
         }
 
-        let mut activity = self.poll_smoltcp_once(timestamp, now_ms, "main");
+        let mut activity = self.service_wifi_host_eapol_slice();
+        activity |= self.poll_smoltcp_once(timestamp, now_ms, "main");
         let dhcp_start_activity = self.start_dhcp_if_ready(now_ms);
         activity |= dhcp_start_activity;
         let dhcp_activity = self.service_dhcp(now_ms);
@@ -3110,38 +3114,58 @@ impl<D: NetDevice> NetStack<D> {
             return Ok(true);
         }
 
-        let activity = match phase {
-            BudgetedNetPhase::Interface => {
-                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
-            }
-            BudgetedNetPhase::Dhcp => {
-                let start_activity = self.start_dhcp_if_ready(now_ms);
-                let service_activity = self.service_dhcp(now_ms);
-                start_activity || service_activity
-            }
-            BudgetedNetPhase::Tcp => self.stage_policy.allow_tcp && self.process_tcp(now_ms),
-            BudgetedNetPhase::InterfaceFlush => {
-                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
-            }
-            BudgetedNetPhase::SelfTest => {
-                let selftest_activity =
-                    self.stage_policy.allow_selftest && self.service_self_test(now_ms, timestamp);
-                #[cfg(feature = "net-outbound-probe")]
-                {
-                    let outbound_activity = self.stage_policy.allow_outbound_probe
-                        && self.service_outbound_probe(now_ms, timestamp);
-                    selftest_activity || outbound_activity
+        let host_eapol_activity = self.service_wifi_host_eapol_slice();
+        let activity = host_eapol_activity
+            | match phase {
+                BudgetedNetPhase::Interface => {
+                    self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
                 }
-                #[cfg(not(feature = "net-outbound-probe"))]
-                {
-                    selftest_activity
+                BudgetedNetPhase::Dhcp => {
+                    let start_activity = self.start_dhcp_if_ready(now_ms);
+                    let service_activity = self.service_dhcp(now_ms);
+                    start_activity || service_activity
                 }
-            }
-        };
+                BudgetedNetPhase::Tcp => self.stage_policy.allow_tcp && self.process_tcp(now_ms),
+                BudgetedNetPhase::InterfaceFlush => {
+                    self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
+                }
+                BudgetedNetPhase::SelfTest => {
+                    let selftest_activity = self.stage_policy.allow_selftest
+                        && self.service_self_test(now_ms, timestamp);
+                    #[cfg(feature = "net-outbound-probe")]
+                    {
+                        let outbound_activity = self.stage_policy.allow_outbound_probe
+                            && self.service_outbound_probe(now_ms, timestamp);
+                        selftest_activity || outbound_activity
+                    }
+                    #[cfg(not(feature = "net-outbound-probe"))]
+                    {
+                        selftest_activity
+                    }
+                }
+            };
 
         self.budgeted_phase = phase.next();
         self.finish_poll_turn(now_ms, activity);
         Ok(activity)
+    }
+
+    fn service_wifi_host_eapol_slice(&mut self) -> bool {
+        #[cfg(feature = "kernel")]
+        {
+            if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+            {
+                return false;
+            }
+            let Some(credentials) = self.wifi_credentials else {
+                return false;
+            };
+            return crate::drivers::driver_task_net::service_cyw43_host_eapol_slice(credentials, 1);
+        }
+        #[cfg(not(feature = "kernel"))]
+        {
+            false
+        }
     }
 
     fn bump_poll_counter(&mut self) {

@@ -217,15 +217,26 @@ pub fn main(ctx: BootContext) -> ! {
             pump = pump.with_wifi_debug(wifi_debug);
         }
         #[cfg(all(feature = "net-console", feature = "kernel"))]
+        let mut start_deferred_net_after_prompt = false;
+        #[cfg(all(feature = "net-console", feature = "kernel"))]
         {
-            if net_stack.is_none() {
-                let resume_deferred_net_before_root =
-                    deferred_net_console_resume_before_root_allowed(
+            if net_stack.is_none() && net_deferred_config.is_some() {
+                let resume_deferred_net_after_prompt =
+                    deferred_net_console_resume_after_prompt_allowed(
                         crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
                         crate::hal::driver_task::driver_task_runtime_proof().pointer_free_ipc_proof,
                     );
-                if !resume_deferred_net_before_root && net_deferred_config.is_some() {
-                    let skip_reason = deferred_net_console_before_root_skip_reason(
+                if resume_deferred_net_after_prompt {
+                    start_deferred_net_after_prompt = true;
+                    boot_log::force_uart_line(
+                        "[net-console] deferred resume postponed reason=serial-prompt-first action=root-prompt-printed",
+                    );
+                    log::info!(
+                        target: "net-console",
+                        "[net-console] deferred Wi-Fi resume postponed until after serial root prompt"
+                    );
+                } else {
+                    let skip_reason = deferred_net_console_after_prompt_skip_reason(
                         crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
                         crate::hal::driver_task::driver_task_runtime_proof().pointer_free_ipc_proof,
                     );
@@ -237,15 +248,27 @@ pub fn main(ctx: BootContext) -> ! {
                     boot_log::force_uart_line(line.as_str());
                     log::warn!(
                         target: "net-console",
-                        "[net-console] deferred resume skipped before root console: {skip_reason}"
+                        "[net-console] deferred resume skipped: {skip_reason}"
                     );
                     let mut detail = HeaplessString::<192>::new();
                     let _ = write!(detail, "deferred net start skipped: {skip_reason}",);
                     net_unavailable_detail = Some(detail);
                     let _ = net_deferred_config.take();
-                } else if let Some(config) = net_deferred_config.take() {
+                }
+            }
+        }
+
+        if start_deferred_net_after_prompt {
+            #[cfg(feature = "net-console")]
+            {
+                pump = attach_network(pump, None, net_unavailable_detail.take());
+            }
+            start_root_console_prompt(&mut pump);
+            #[cfg(all(feature = "net-console", feature = "kernel"))]
+            {
+                if let Some(config) = net_deferred_config.take() {
                     boot_log::force_uart_line(
-                        "[net-console] deferred resume reason=pre-root-console action=start-wifi",
+                        "[net-console] deferred resume reason=root-prompt-printed action=start-wifi",
                     );
                     let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
                     if local_seat_enabled {
@@ -255,120 +278,60 @@ pub fn main(ctx: BootContext) -> ! {
                     }
                     log::info!(
                         target: "net-console",
-                        "[net-console] deferred resume before serial root console; starting Wi-Fi stack"
+                        "[net-console] deferred resume after serial root prompt; starting Wi-Fi stack"
                     );
                     match init_deferred_net_console(config, ctx.wifi_debug_hal_ptr) {
-                        Ok(stack) => {
-                            let status = stack.status_report();
-                            let mut line = HeaplessString::<192>::new();
-                            let state = match status.address_source {
-                                "wifi-host-eapol-pending" => "deferred pending",
-                                "wifi-host-eapol-required" => "deferred blocked",
-                                _ => "deferred ready",
-                            };
-                            let _ = write!(
-                                line,
-                                "[net-console] {state} backend={} active={} address_source={} dhcp={} port={}",
-                                status.backend,
-                                status.active_interface,
-                                status.address_source,
-                                status.dhcp_phase,
-                                crate::net::CONSOLE_TCP_PORT,
-                            );
-                            if local_seat_enabled {
-                                boot_log::force_uart_line_raw(line.as_str());
-                            } else {
-                                boot_log::force_uart_line(line.as_str());
+                        Ok(mut stack) => {
+                            emit_deferred_net_console_result(&stack, local_seat_enabled);
+                            pump = attach_network(pump, Some(&mut stack), None);
+                            if pump.net_console_enabled() {
+                                log::info!(
+                                    target: "net-console",
+                                    "[net-console] listening on 0.0.0.0:{}",
+                                    crate::net::CONSOLE_TCP_PORT
+                                );
                             }
-                            log::info!(target: "net-console", "{}", line.as_str());
-                            net_stack = Some(stack);
-                            net_unavailable_detail = None;
+                            enter_root_console_loop(pump);
                         }
                         Err(err) => {
                             let mut detail = HeaplessString::<192>::new();
                             let _ = write!(detail, "{err}");
-                            let mut line = HeaplessString::<224>::new();
-                            let _ = write!(
-                                line,
-                                "[net-console] deferred failed detail={}",
-                                detail.as_str(),
-                            );
-                            if local_seat_enabled {
-                                boot_log::force_uart_line_raw(line.as_str());
-                            } else {
-                                boot_log::force_uart_line(line.as_str());
-                            }
-                            log::warn!(target: "net-console", "{}", line.as_str());
-                            net_unavailable_detail = Some(detail);
+                            emit_deferred_net_console_failure(&detail, local_seat_enabled);
+                            pump = attach_network(pump, None, Some(detail));
+                            enter_root_console_loop(pump);
                         }
                     }
                 }
             }
-        }
-        #[cfg(feature = "net-console")]
-        {
+            enter_root_console_loop(pump);
+        } else if let Some(mut active_net_stack) = net_stack.take() {
+            #[cfg(feature = "net-console")]
+            {
+                pump = attach_network(
+                    pump,
+                    Some(&mut active_net_stack),
+                    net_unavailable_detail.take(),
+                );
+                if pump.net_console_enabled() {
+                    log::info!(
+                        target: "net-console",
+                        "[net-console] listening on 0.0.0.0:{}",
+                        crate::net::CONSOLE_TCP_PORT
+                    );
+                }
+            }
             #[cfg(all(feature = "net-console", feature = "kernel"))]
+            wait_for_net_console_before_root_console(&mut pump);
+            start_root_console_prompt(&mut pump);
+            enter_root_console_loop(pump);
+        } else {
+            #[cfg(feature = "net-console")]
             {
-                pump = attach_network(pump, net_stack.as_mut(), net_unavailable_detail.take());
-                if pump.net_console_enabled() {
-                    log::info!(
-                        target: "net-console",
-                        "[net-console] listening on 0.0.0.0:{}",
-                        crate::net::CONSOLE_TCP_PORT
-                    );
-                }
+                pump = attach_network(pump, None, net_unavailable_detail.take());
             }
-            #[cfg(not(all(feature = "net-console", feature = "kernel")))]
-            {
-                pump = attach_network(pump, net_stack.as_mut(), net_unavailable_detail.take());
-                if pump.net_console_enabled() {
-                    log::info!(
-                        target: "net-console",
-                        "[net-console] listening on 0.0.0.0:{}",
-                        crate::net::CONSOLE_TCP_PORT
-                    );
-                }
-            }
+            start_root_console_prompt(&mut pump);
+            enter_root_console_loop(pump);
         }
-        #[cfg(all(feature = "net-console", feature = "kernel"))]
-        wait_for_net_console_before_root_console(&mut pump);
-        log::info!(
-            target: "root_task::kernel",
-            "[boot] TimersAndIPC: root-console.start.begin"
-        );
-        log::info!(target: "boot", "[boot] before starting root shell");
-        log::info!(target: "boot", "[boot] root shell starting");
-        log::info!(target: "console", "[console] starting root CLI");
-        boot_log::force_uart_line_raw("[mark] root-console.start.begin");
-        pump.start_cli();
-        boot_log::force_uart_line_raw("[mark] root-console.start.ok");
-        pump.announce_console_ready();
-        #[cfg(feature = "kernel")]
-        {
-            let now_ms = crate::hal::timebase().now_ms();
-            let result = lifecycle::auto_boot_complete(now_ms);
-            let line = match result {
-                Ok(transition) => lifecycle::format_transition_log(&transition),
-                Err(err) => lifecycle::format_denied_log(lifecycle::state(), "auto-boot", err),
-            };
-            log_buffer::append_log_line(line.as_str());
-        }
-        log::info!(
-            target: "root_task::kernel",
-            "[boot] TimersAndIPC: root-console.start.ok"
-        );
-        log::info!(
-            target: "root_task::kernel",
-            "[boot] TimersAndIPC: queen.start.begin"
-        );
-        log::info!(target: "boot", "[boot] root shell started; entering event loop");
-        log::info!(
-            target: "root_task::kernel",
-            "[boot] TimersAndIPC: queen.start.ok"
-        );
-        log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
-        boot_log::allow_ep_only_transport();
-        pump.run();
     }
 
     #[cfg(not(all(feature = "serial-console", feature = "kernel")))]
@@ -377,6 +340,63 @@ pub fn main(ctx: BootContext) -> ! {
         boot_log::allow_ep_only_transport();
         pump.run();
     }
+}
+
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+fn start_root_console_prompt<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: root-console.start.begin"
+    );
+    log::info!(target: "boot", "[boot] before starting root shell");
+    log::info!(target: "boot", "[boot] root shell starting");
+    log::info!(target: "console", "[console] starting root CLI");
+    boot_log::force_uart_line_raw("[mark] root-console.start.begin");
+    pump.start_cli();
+    boot_log::force_uart_line_raw("[mark] root-console.start.ok");
+    pump.announce_console_ready();
+    let now_ms = crate::hal::timebase().now_ms();
+    let result = lifecycle::auto_boot_complete(now_ms);
+    let line = match result {
+        Ok(transition) => lifecycle::format_transition_log(&transition),
+        Err(err) => lifecycle::format_denied_log(lifecycle::state(), "auto-boot", err),
+    };
+    log_buffer::append_log_line(line.as_str());
+}
+
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+fn enter_root_console_loop<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) -> !
+where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: root-console.start.ok"
+    );
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: queen.start.begin"
+    );
+    log::info!(target: "boot", "[boot] root shell started; entering event loop");
+    log::info!(
+        target: "root_task::kernel",
+        "[boot] TimersAndIPC: queen.start.ok"
+    );
+    log::info!(target: "root_task::kernel", "[boot] phase: TimersAndIPC.end");
+    boot_log::allow_ep_only_transport();
+    pump.run();
 }
 
 /// Start the userland console or Cohesix shell over the serial transport.
@@ -546,15 +566,58 @@ fn init_deferred_net_console(
     }
 
     // SAFETY: `hal_ptr` is the leaked bootstrap `KernelHal` pointer already
-    // used by the root-console Wi-Fi debug handle. The deferred resume is
-    // admitted only before the root prompt is announced, so no event-pump Wi-Fi
-    // debug command can concurrently borrow the HAL while the stack is created.
+    // used by the root-console Wi-Fi debug handle. The deferred resume runs
+    // after the prompt is published but before the event loop dispatches
+    // console input, so no Wi-Fi debug command can concurrently borrow the HAL
+    // while the stack is created.
     let hal = unsafe { &mut *(hal_ptr as *mut KernelHal<'static>) };
     crate::net::init_net_console(hal, config)
 }
 
 #[cfg(all(feature = "net-console", feature = "kernel"))]
-fn deferred_net_console_resume_before_root_allowed(
+fn emit_deferred_net_console_result(stack: &NetStackHandle, local_seat_enabled: bool) {
+    let status = stack.status_report();
+    let mut line = HeaplessString::<192>::new();
+    let state = match status.address_source {
+        "wifi-host-eapol-pending" => "deferred pending",
+        "wifi-host-eapol-required" => "deferred blocked",
+        _ => "deferred ready",
+    };
+    let _ = write!(
+        line,
+        "[net-console] {state} backend={} active={} address_source={} dhcp={} port={}",
+        status.backend,
+        status.active_interface,
+        status.address_source,
+        status.dhcp_phase,
+        crate::net::CONSOLE_TCP_PORT,
+    );
+    if local_seat_enabled {
+        boot_log::force_uart_line_raw(line.as_str());
+    } else {
+        boot_log::force_uart_line(line.as_str());
+    }
+    log::info!(target: "net-console", "{}", line.as_str());
+}
+
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+fn emit_deferred_net_console_failure(detail: &HeaplessString<192>, local_seat_enabled: bool) {
+    let mut line = HeaplessString::<224>::new();
+    let _ = write!(
+        line,
+        "[net-console] deferred failed detail={}",
+        detail.as_str(),
+    );
+    if local_seat_enabled {
+        boot_log::force_uart_line_raw(line.as_str());
+    } else {
+        boot_log::force_uart_line(line.as_str());
+    }
+    log::warn!(target: "net-console", "{}", line.as_str());
+}
+
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+fn deferred_net_console_resume_after_prompt_allowed(
     physical_pi_owner_state: bool,
     pointer_free_ipc_proof: bool,
 ) -> bool {
@@ -562,7 +625,7 @@ fn deferred_net_console_resume_before_root_allowed(
 }
 
 #[cfg(all(feature = "net-console", feature = "kernel"))]
-const fn deferred_net_console_before_root_skip_reason(
+const fn deferred_net_console_after_prompt_skip_reason(
     physical_pi_owner_state: bool,
     pointer_free_ipc_proof: bool,
 ) -> &'static str {
@@ -947,18 +1010,18 @@ fn read_cntfrq() -> u64 {
 mod tests {
     #[cfg(all(feature = "net-console", feature = "kernel"))]
     #[test]
-    fn deferred_net_console_waits_for_driver_task_ring_proof_on_pi() {
-        assert!(!super::deferred_net_console_resume_before_root_allowed(
+    fn deferred_net_console_after_prompt_still_requires_driver_task_ring_proof_on_pi() {
+        assert!(!super::deferred_net_console_resume_after_prompt_allowed(
             true, false
         ));
-        assert!(super::deferred_net_console_resume_before_root_allowed(
+        assert!(super::deferred_net_console_resume_after_prompt_allowed(
             true, true
         ));
-        assert!(super::deferred_net_console_resume_before_root_allowed(
+        assert!(super::deferred_net_console_resume_after_prompt_allowed(
             false, false
         ));
         assert_eq!(
-            super::deferred_net_console_before_root_skip_reason(true, false),
+            super::deferred_net_console_after_prompt_skip_reason(true, false),
             "driver-task-net-runtime-unproved"
         );
     }

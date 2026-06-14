@@ -2044,12 +2044,13 @@ const DRIVER_TASK_CYW43_TRANSPORT_RING_ATTEMPTS: usize = 1_048_576;
 const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
-const DRIVER_TASK_USB_ENUM_TRANSFER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 8;
-const DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 8;
-const DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 16;
+const DRIVER_TASK_USB_ENUM_TRANSFER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
+const DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 128;
+const DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 256;
 const DRIVER_TASK_PCIE_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 8;
 const DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 64;
+const DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 512;
 const DRIVER_TASK_HDMI_FRAME_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 0;
 const DRIVER_TASK_RING_CACHE_POLL_INTERVAL: usize = 64;
 
@@ -2466,6 +2467,17 @@ pub(crate) fn latest_driver_task_ring_progress(
 pub(crate) fn current_driver_task_ring_request(contract: DriverTaskContract) -> Option<usize> {
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
+    let request = slot.request_seq.load(Ordering::Acquire);
+    (request != 0).then_some(request)
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn active_driver_task_ring_request(contract: DriverTaskContract) -> Option<usize> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    if slot.active.load(Ordering::Acquire) == 0 {
+        return None;
+    }
     let request = slot.request_seq.load(Ordering::Acquire);
     (request != 0).then_some(request)
 }
@@ -5044,9 +5056,25 @@ fn driver_task_ring_timeout_keep_active_limit_for_progress(
         } else {
             limit
         }
+    } else if limit == DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT
+        && cached_driver_task_ring_progress_matches_request(slot, request, command.aux0)
+        && driver_task_ring_cyw43_sdio_owner_phase(slot.last_progress_phase.load(Ordering::Acquire))
+    {
+        DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
     } else {
         limit
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_cyw43_sdio_owner_phase(phase: u32) -> bool {
+    matches!(
+        phase,
+        DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE
+            | DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -5852,7 +5880,7 @@ fn emit_driver_task_resource_init_status_with_context(
     use core::fmt::Write;
     use heapless::String;
 
-    let active_request = current_driver_task_ring_request(contract);
+    let active_request = active_driver_task_ring_request(contract);
     let progress = latest_driver_task_ring_progress(contract);
     let progress_request_match = match (active_request, progress) {
         (Some(request), Some(progress))
@@ -9359,6 +9387,114 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_prompt_poll_uses_short_slice_but_keeps_active() {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: core::mem::size_of::<pi4_driver_abi::DriverRuntimeCyw43CommandDescriptor>()
+                    as u16,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice
+            ),
+            DRIVER_TASK_PROMPT_RING_ATTEMPTS
+        );
+        assert!(driver_task_ring_timeout_keeps_active(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::PromptSlice
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_sdio_owner_stage_uses_extended_bounded_timeout() {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: core::mem::size_of::<pi4_driver_abi::DriverRuntimeCyw43CommandDescriptor>()
+                    as u16,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        let slot = DriverTaskCommandSlot::new();
+        let request = 477;
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+                aux0: command.aux0,
+            },
+        );
+
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+            ),
+            DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+
+        slot.timeout_resumes.store(
+            DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
+            (
+                true,
+                DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT + 1
+            )
+        );
+
+        slot.timeout_resumes.store(
+            DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
+            (
+                false,
+                DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
+            )
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn usb_local_seat_engine_init_uses_prompt_slice_at_shell() {
         let mut command = DriverTaskCommandRecord::pi4_hot_path(
             0,
@@ -10040,6 +10176,48 @@ mod tests {
             DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT
         );
 
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE,
+                aux0: command.aux0,
+            },
+        );
+
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+            ),
+            DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN,
+                aux0: command.aux0,
+            },
+        );
+
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+            ),
+            DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+
         slot.timeout_resumes.store(
             DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
             Ordering::Release,
@@ -10070,6 +10248,80 @@ mod tests {
                 false,
             ),
             (false, DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT)
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_enumeration_hub_progress_does_not_advance_request_on_active_child_marker() {
+        let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(contract),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
+        let slot = DriverTaskCommandSlot::new();
+        let request = 8;
+
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase:
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_CONFIG_DESCRIPTOR_HEADER_STATUS_EVENT_IGNORED,
+                aux0: command.aux0,
+            },
+        );
+        slot.timeout_resumes.store(63, Ordering::Release);
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
+            (true, 64)
+        );
+
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE,
+                aux0: command.aux0,
+            },
+        );
+        slot.timeout_resumes.store(127, Ordering::Release);
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
+            (true, 128)
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+            ),
+            DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT
         );
     }
 
@@ -10458,14 +10710,21 @@ mod tests {
         let task_key = driver_task_contract_key(contract).expect("CYW43 task key");
         let slot = slot_for_task_key(task_key).expect("CYW43 slot");
         let previous = slot.request_seq.load(Ordering::Acquire);
+        let previous_active = slot.active.load(Ordering::Acquire);
 
         slot.request_seq.store(73, Ordering::Release);
         assert_eq!(current_driver_task_ring_request(contract), Some(73));
+        assert_eq!(active_driver_task_ring_request(contract), None);
+
+        slot.active.store(1, Ordering::Release);
+        assert_eq!(active_driver_task_ring_request(contract), Some(73));
 
         slot.request_seq.store(0, Ordering::Release);
         assert_eq!(current_driver_task_ring_request(contract), None);
+        assert_eq!(active_driver_task_ring_request(contract), None);
 
         slot.request_seq.store(previous, Ordering::Release);
+        slot.active.store(previous_active, Ordering::Release);
     }
 
     #[cfg(feature = "kernel")]

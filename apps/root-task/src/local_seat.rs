@@ -470,7 +470,9 @@ static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED: AtomicBool = AtomicBool:
 // a few linked-runtime turns; keep prompt settling bounded and non-blocking.
 const LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS: usize = 3;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS: usize = 8;
+const LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS: usize = 128;
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS: usize = 32;
 
 #[cfg(all(
     feature = "kernel",
@@ -2466,6 +2468,28 @@ fn usb_enumeration_progress_token_allows_probe_burst(
     current.is_some() || usb_enumeration_progress_token_advanced(previous, current)
 }
 
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn linked_local_seat_usb_enum_resume_attempts(root_console_ready: bool) -> usize {
+    if root_console_ready {
+        LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS
+    } else {
+        LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn linked_local_seat_usb_enum_no_reply_should_continue(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    root_console_ready: bool,
+) -> bool {
+    !root_console_ready && crate::hal::driver_task::driver_task_ring_command_active(contract)
+}
+
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
@@ -2998,7 +3022,7 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
         );
         if usb_controller_ready && !usb_keyboard_ready {
             usb_command.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
-            for _ in 0..LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS {
+            for _ in 0..linked_local_seat_usb_enum_resume_attempts(root_console_ready) {
                 crate::hal::driver_task::emit_driver_task_resource_init_status(
                     usb_contract,
                     crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
@@ -3030,6 +3054,12 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 );
                 if !resume_replied {
                     usb_enumeration_no_reply = true;
+                    if linked_local_seat_usb_enum_no_reply_should_continue(
+                        usb_contract,
+                        root_console_ready,
+                    ) {
+                        continue;
+                    }
                     break;
                 }
                 if local_seat_usb_engine_init_ready(resume_completion) {
@@ -4785,12 +4815,19 @@ mod tests {
     #[test]
     fn linked_usb_enumeration_resume_remains_bounded_per_retry() {
         assert!((1..=3).contains(&LINKED_LOCAL_SEAT_USB_ENUM_RESUME_ATTEMPTS));
+        assert!(LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS >= 16);
+        assert!(LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS <= 128);
+        assert_eq!(linked_local_seat_usb_enum_resume_attempts(true), 3);
+        assert_eq!(
+            linked_local_seat_usb_enum_resume_attempts(false),
+            LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
     fn linked_usb_probe_progress_burst_is_progress_bounded() {
-        assert!((1..=8).contains(&LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS));
+        assert!((1..=32).contains(&LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS));
         assert!(!usb_enumeration_progress_token_advanced(None, None));
         assert!(usb_enumeration_progress_token_advanced(
             None,

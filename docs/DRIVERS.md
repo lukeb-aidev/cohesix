@@ -282,7 +282,10 @@ active, bounded resend/poll slices may resume only the same request identity:
 role, hot path, opcode, aux words, budget, command flags, frame descriptor, and
 the fingerprint of every staged byte must match. A different payload or
 descriptor while the active slot is owned is a busy condition; it must not
-rewrite the ring page, shared-payload window, or completion slot.
+rewrite the ring page, shared-payload window, or completion slot. Resource
+breadcrumbs report `active_request_valid=yes` only while the per-contract active
+slot is latched; old request sequence numbers without an active latch must not
+be treated as in-flight work.
 
 ### Historical Pi 4 Baseline Mapping
 
@@ -694,12 +697,21 @@ Device-visible address policy is not generic:
   for unrelated DMA devices.
 - Pi 4 local-seat cold boot is USB-first. When local-seat USB is enabled and
   the driver-task pointer-free proof is present, the boot path runs bounded USB
-  keyboard/xHCI service before the root prompt. When the net-console policy
-  selects Wi-Fi (`wifi`, or `auto` with credentials) and the same proof is
-  present, root resumes bounded SDIO/CYW43 linked-runtime work before announcing
-  console readiness, but Wi-Fi readiness and DHCP are not allowed to suppress the
-  serial diagnostic shell beyond the bounded pre-root release window. If that
-  proof is missing, root skips the hidden post-prompt Wi-Fi replay and leaves a
+  keyboard/xHCI service before the root prompt. The pre-prompt USB window is a
+  larger finite cold-boot enumeration budget than the prompt-side settle budget,
+  so the linked runtime can consume command-proof, root-port, descriptor, HID,
+  and hub continuation turns before Wi-Fi starts without creating a root-owned
+  xHCI path. When the net-console policy selects Wi-Fi (`wifi`, or `auto` with
+  credentials) and the same proof is present, root records the deferred
+  SDIO/CYW43 replay decision, publishes the serial root prompt, then resumes the
+  linked-runtime replay after `Cohesix console ready`. WPA2 host-EAPOL is not a
+  synchronous boot wait: join submission arms a `wifi-host-eapol-pending`
+  session, and the event pump advances EAPOL RX/TX through bounded linked-runtime
+  slices before releasing DHCP/data. Host-EAPOL prompt slices serialize CYW43
+  control/data RX polls against the single active runtime slot: if a control or
+  data poll owns the ring, the next slice resumes that same descriptor before
+  trying the alternate poll or any post-association rescue/control action. If
+  that proof is missing, root skips the deferred Wi-Fi replay and leaves a
   serial-diagnostic blocker instead of printing a prompt and then monopolizing
   it. The `Cohesix console ready` banner means the serial event pump can accept
   input; it does not imply Wi-Fi association, DHCP, or TCP-console readiness.
@@ -800,27 +812,25 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 14 13:27 post-flash boot
-(`/Users/lukasbower/pi4-serial-20260614-132747.log`) supersedes earlier Wi-Fi
-frontiers as current truth; the second-most-recent June 14 07:54 boot
-(`/Users/lukasbower/pi4-serial-20260614-075442.log`) confirms the same blocker.
-Those traces prove descriptor replay for `cyw43455` and `sdio-host`, SDIO engine
-init detail `0x5500`, `cyw43-sdio-prereq`, CYW43 engine init, firmware/NVRAM
-upload, firmware release after owner-state recovery, and owner-state readiness.
-Both then stop before the June 13 post-join RX window: the first Linux-order
-startup control, `bus:txglomalign=8` (36-byte plain-header payload), was still
-submitted through a monolithic linked-runtime `CONTROL_EXCHANGE` (`op=11`) and
-did not publish a completion before root exhausted the same-request no-reply
-budget. The active frontier is Gate 7, and the exact blocker for those captures
-is `cyw43-runtime-command-no-reply` at `cyw43-control-txglomalign`, not
-host-EAPOL or DHCP. `JOIN_REQUEST`, `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS`,
-`rxsrc_*`, association/link, DHCP, `nettest`, `netstats`, and remote-`cohsh`
-proof are uncredited for those June 14 runs. Current root-side station setup
-splits matched CYW43 controls into a `CONTROL_FRAME` TX turn plus bounded
-parent-side `CONTROL_POLL` turns, so the next capture can distinguish TX
-admission, TX completion, RX-source/first-read idle, malformed or nonmatching
-CDC reply, firmware status, and parent timeout without waiting on one opaque
-child turn.
+The June 14 16:50 post-flash boot
+(`/Users/lukasbower/pi4-serial-20260614-165035.log`) supersedes earlier Wi-Fi
+frontiers as current truth. That trace proves prompt-first deferred Wi-Fi
+replay, descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init
+detail `0x5500`, CYW43 engine init, firmware/NVRAM upload, firmware release
+after owner-state recovery, split Linux-order station controls, event-mask
+programming, `cyw43-join-bsscfg`, and an armed
+`CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=pending` session. It does not prove
+association/link, EAPOL M1/M2/M3/M4, DHCP, `nettest`, `netstats`, or remote
+`cohsh`. The active Gate 7 blocker in that capture is runtime-ring
+serialization during host-EAPOL polling: request `478` is still active at
+`cyw43-sdio-owner-wait-begin`, but later slices try to publish a different CYW43
+descriptor and emit `runtime-ring-submit status=busy`. Root-side station setup
+already splits matched CYW43 controls into a `CONTROL_FRAME` TX turn plus
+bounded parent-side `CONTROL_POLL` turns; host-EAPOL now extends that model by
+tracking the active CYW43 prompt poll, recovering the live descriptor from the
+ring if the in-memory tracker is stale, and resuming the same control/data
+descriptor and flags before alternating polls or submitting post-association
+rescue work.
 Linked-runtime RX polls now request
 `DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD` across the host-EAPOL proof
 window so the runtime can translate the May 18-19 zero-RFRAME/card-interrupt
@@ -1154,9 +1164,11 @@ or generic command-completion failures.
   keyboard, serial, HDMI, and IPC turns stay responsive.
 - Wi-Fi net-console bring-up must not hide an already-announced serial prompt.
   With complete linked-runtime pointer-free proof, bounded SDIO/CYW43455 replay
-  may run before `Cohesix console ready`; otherwise Cohesix preserves the Wi-Fi
+  starts after `Cohesix console ready`; otherwise Cohesix preserves the Wi-Fi
   policy for diagnostics, emits `action=serial-diagnostics-only`, and publishes
-  the prompt. Replay uses bounded nonblocking IPC and UART-visible
+  the prompt. Host-EAPOL remains pending until bounded event-pump slices prove
+  EAPOL secure and only then releases DHCP/data. Replay uses bounded nonblocking
+  IPC and UART-visible
   `SDIO_DRIVER_TASK_REPLAY_STATUS` / `NET_DRIVER_TASK_REPLAY_STATUS`
   breadcrumbs with `owner=linked-runtime`, `proof_effect`, and `next_action`
   fields.
@@ -1475,7 +1487,11 @@ active path is Cohesix-owned cold start:
   reopening PCIe/VL805 ownership or introducing a root-owned xHCI fallback.
   Root-task gives root-port reset progress a finite reset-specific keep-active
   envelope so prompt-slice timeouts do not mask a live U-Boot-shaped reset
-  retry or stale-cleanup substage.
+  retry or stale-cleanup substage. Descriptor transfer/status waits and hub
+  traversal receive larger finite envelopes than the generic USB enum timeout
+  because the linked runtime owns the in-flight EP0 and hub-port turn; root must
+  continue polling that same ring sequence instead of clearing its local active
+  slot and submitting false-fresh requests against a stale child frontier.
   Full-speed devices use the prime markers for the initial 64-byte descriptor
   request before the final 18-byte device descriptor read; device,
   configuration, HID endpoint, and interrupt-queue setup stay in the linked
@@ -1496,7 +1512,11 @@ active path is Cohesix-owned cold start:
   set-configuration, hub-descriptor, hub-context, downstream port power/reset,
   port-ready, child probe, and fallback-speed markers and receive a separate
   finite same-request resume budget so a hub power/reset settle does not erase
-  the in-flight linked enumeration turn.
+  the in-flight linked enumeration turn. The prompt-slice timeout policy keeps
+  descriptor status-event waits live for 128 consecutive no-reply slices and
+  hub traversal live for 256 consecutive no-reply slices, which is still
+  bounded but long enough for the linked runtime to carry the same request from
+  config-status handling through downstream hub port power/reset progress.
   Root preserves an in-flight linked-runtime USB enumeration request across
   bounded no-reply slices only when the active identity still matches. A valid
   same-request/same-aux progress marker whose phase advances resets the
@@ -1518,13 +1538,16 @@ active path is Cohesix-owned cold start:
 - Pi 4 cold boot must attempt one bounded local-seat keyboard probe before
   net-console initialization. `hw.local_seat.required=true` requires matching
   required `hw.devices[]` entries; missing manifest devices or HAL-owned
-  PCIe/VL805 proof remain pre-shell failures. Runtime no-reply, controller,
-  HID-report, or PCIe owner-state failures are red acceptance states that must
-  emit `DRIVER_TASK_SELECTED`, `DRIVER_TASK_OWNER_STATE`, and
-  `DRIVER_TASK_ACCEPTANCE` before halt or degraded diagnostics. Required local
-  seat keeps polling instead of falling back to serial-only; optional local seat
-  degrades with explicit `[local-seat]` lines and no repeated xHCI probing. USB
-  and Wi-Fi interleave only at explicit boot/event-pump phase boundaries.
+  PCIe/VL805 proof remain pre-shell failures. Cold boot may spend the larger
+  finite USB enumeration resume window before Wi-Fi so `command-ring-ready`
+  continues into root-port sampling and descriptor/HID/hub gates on the same
+  linked-runtime path. Runtime no-reply, controller, HID-report, or PCIe
+  owner-state failures are red acceptance states that must emit
+  `DRIVER_TASK_SELECTED`, `DRIVER_TASK_OWNER_STATE`, and `DRIVER_TASK_ACCEPTANCE`
+  before halt or degraded diagnostics. Required local seat keeps polling instead
+  of falling back to serial-only; optional local seat degrades with explicit
+  `[local-seat]` lines and no repeated xHCI probing. USB and Wi-Fi interleave
+  only at explicit boot/event-pump phase boundaries.
 - Root-port state is cold-boot live evidence only. After mailbox reset, live
   HAL EXT_CFG proof, local HCRST, and fresh ring publication, direct `PORTSC`
   reads remain gated until command/event-ring proof succeeds; local-seat may
