@@ -321,6 +321,12 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN,
@@ -14760,7 +14766,17 @@ fn usb_prepare_hub_port(
     let mut last = None;
     let mut status_seen = false;
     for attempt in 0..USB_HUB_PORT_RETRIES {
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+            aux0,
+        );
         if let Some(pre_status) = usb_hub_get_port_status(state, descriptor, hub, interface, port) {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
+                aux0,
+            );
             status_seen = true;
             usb_hub_clear_port_changes(state, descriptor, hub, interface, port, pre_status.change);
             last = Some(pre_status);
@@ -14778,6 +14794,12 @@ fn usb_prepare_hub_port(
                     continue;
                 }
             }
+        } else {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
+                aux0,
+            );
         }
         if attempt == 0 || last.is_some_and(usb_hub_port_connected) {
             publish_runtime_progress(
@@ -14785,17 +14807,44 @@ fn usb_prepare_hub_port(
                 DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN,
                 aux0,
             );
-            let _ = usb_hub_set_feature(
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN,
+                aux0,
+            );
+            if usb_hub_set_feature(
                 state,
                 descriptor,
                 hub,
                 interface,
                 port,
                 USB_HUB_FEATURE_PORT_RESET,
-            );
+            ) {
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE,
+                    aux0,
+                );
+            } else {
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED,
+                    aux0,
+                );
+            }
         }
         usb_spin_wait(USB_HUB_PORT_RESET_SETTLE_SPINS);
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+            aux0,
+        );
         if let Some(status) = usb_hub_get_port_status(state, descriptor, hub, interface, port) {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
+                aux0,
+            );
             status_seen = true;
             usb_hub_clear_port_changes(state, descriptor, hub, interface, port, status.change);
             last = Some(status);
@@ -14813,6 +14862,12 @@ fn usb_prepare_hub_port(
                 );
                 return Some(usb_hub_speed_from_status(status.status));
             }
+        } else {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
+                aux0,
+            );
         }
     }
     if let Some(status) = last {

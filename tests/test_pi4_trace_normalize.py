@@ -350,6 +350,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_BOOTSTRAP_DEFERRED": 0,
         "DRIVER_TASK_RESOURCE_INIT": 0,
         "DRIVER_TASK_RESOURCE_BLOCKER": "none",
+        "DRIVER_TASK_RESOURCE_CURRENT_BLOCKER": "none",
         "SERIAL_DRIVER_ACCEPTED": "no",
         "SERIAL_FALLBACK_ACTIVE": "no",
         "SERIAL_RUNTIME_FRONTIER": "none",
@@ -1320,14 +1321,21 @@ def test_gate_summary_tracks_driver_task_resource_init_blocker() -> None:
             "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
             "hot_path=usb-keyboard stage=usb-xhci-init status=no-reply "
             "acceptance=no code=none detail=none result=none frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=runtime-ring-submit status=busy "
+            "acceptance=no code=none detail=none result=none frame_len=0",
         ]
     )
 
     record = normalizer.summarize_gates(events).to_record()
-    assert record["DRIVER_TASK_RESOURCE_INIT"] == 2
+    assert record["DRIVER_TASK_RESOURCE_INIT"] == 3
     assert (
         record["DRIVER_TASK_RESOURCE_BLOCKER"]
         == "usb-keyboard:usb-xhci-init:no-reply"
+    )
+    assert (
+        record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"]
+        == "cyw43-wifi:runtime-ring-submit:busy"
     )
 
 
@@ -1339,8 +1347,10 @@ def test_driver_task_resource_init_preserves_request_context_fields() -> None:
             "acceptance=no code=none detail=none result=none frame_len=0 "
             "owner=linked-runtime root_action=submit-turn "
             "blocker=runtime-ring-submit-busy next_action=poll-active-request "
-            "active_request_valid=yes active_request=42 expected_request=42 "
-            "expected_aux0=0x55534245 same_request_resume=yes "
+            "active_request_valid=yes active_request=42 "
+            "expected_request_valid=yes expected_request=42 "
+            "expected_aux0_valid=yes expected_aux0=0x55534245 "
+            "same_request_resume=yes "
             "progress_marker_valid=yes progress_sequence=42 progress_phase=407 "
             "progress_phase_name=usb-hub-set-configuration-status-event-ignored "
             "progress_aux0=0x55534245 progress_request_match=yes",
@@ -1350,6 +1360,8 @@ def test_driver_task_resource_init_preserves_request_context_fields() -> None:
     record = normalizer.summarize_gates(events).to_record()
 
     assert events[0].fields["owner"] == "linked-runtime"
+    assert events[0].fields["expected_request_valid"] == "yes"
+    assert events[0].fields["expected_aux0_valid"] == "yes"
     assert events[0].fields["expected_aux0"] == "0x55534245"
     assert events[0].fields["same_request_resume"] == "yes"
     assert (
@@ -5617,8 +5629,14 @@ def test_gate_summary_tracks_hid_endpoint_parse_miss_reasons() -> None:
         "usb-hub-context-begin": "hub-context-no-reply",
         "usb-hub-context-done": "hub-port-power-no-reply",
         "usb-hub-port-power-begin": "hub-port-power-no-reply",
-        "usb-hub-port-power-done": "hub-port-reset-no-reply",
+        "usb-hub-port-power-done": "hub-port-status-no-reply",
+        "usb-hub-port-status-begin": "hub-port-status-no-reply",
+        "usb-hub-port-status-done": "hub-port-reset-no-reply",
+        "usb-hub-port-status-failed": "hub-port-status-failed",
         "usb-hub-port-reset-begin": "hub-port-reset-no-reply",
+        "usb-hub-port-reset-set-begin": "hub-port-reset-set-no-reply",
+        "usb-hub-port-reset-set-done": "hub-port-reset-completion-no-reply",
+        "usb-hub-port-reset-set-failed": "hub-port-reset-set-failed",
         "usb-hub-port-ready": "hub-child-probe-no-reply",
         "usb-hub-child-probe-begin": "hub-child-probe-no-reply",
         "usb-hub-child-speed-fallback-begin": "hub-child-speed-fallback-no-reply",
@@ -5829,6 +5847,23 @@ def test_gate_summary_tracks_hub_set_configuration_status_event_progress() -> No
 
     assert gates.usb_gate == 7
     assert gates.usb_blocker == "hub-set-configuration-status-event-ignored"
+
+
+def test_gate_summary_refines_hub_port_power_to_status_read() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: linked_runtime_progress marker_valid=yes sequence=20 phase=408 "
+            "phase_name=usb-hub-port-status-begin "
+            "aux0=0x55534245 gate=7 "
+            "blocker=hub-port-status-no-reply "
+            "next_action=inspect-hub-port-status-control-transfer",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 7
+    assert gates.usb_blocker == "hub-port-status-no-reply"
 
 
 def test_gate_summary_tracks_usb_startup_blackbox_gates() -> None:

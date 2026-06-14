@@ -4,7 +4,7 @@
 
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
-- `meta.purpose`: `Root-task manifest input for coh-rtc.`
+- `meta.purpose`: `Pi4 U-Boot aarch64 root-task manifest input for coh-rtc.`
 - `root_task.schema`: `1.5`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
@@ -30,7 +30,7 @@
 - `root_task.driver_images.pi4-cyw43-runtime`: contract=`cyw43455` hot_path=`cyw43-wifi` artifact=`cohesix/bin/pi4-driver-cyw43` root_context_required=`false` hardware_state_migrated=`true`
 - `root_task.driver_images.pi4-sdio-runtime`: contract=`sdio-host` hot_path=`sdio-host` artifact=`cohesix/bin/pi4-driver-sdio` root_context_required=`false` hardware_state_migrated=`true`
 - `root_task.driver_images.pi4-pcie-runtime`: contract=`pcie-root` hot_path=`pcie-root` artifact=`cohesix/bin/pi4-driver-pcie` root_context_required=`false` hardware_state_migrated=`true`
-- `profile.name`: `virt-aarch64`
+- `profile.name`: `pi4-uboot-aarch64`
 - `profile.kernel`: `true`
 - `event_pump.tick_ms`: `5`
 - `secure9p.msize`: `8192`
@@ -191,33 +191,39 @@
 - `features.std_host_tools`: `false`
 - `hw.secure_boot`: `false`
 - `hw.no_nic`: `false`
-- `hw.network.enabled`: `false`
-- `hw.network.backend`: `auto`
-- `hw.network.mode`: `off`
-- `hw.network.interface`: `wired`
-- `hw.network.static_ipv4.ip`: `(unset)`
-- `hw.network.static_ipv4.prefix_len`: `0`
-- `hw.network.static_ipv4.gateway`: `(unset)`
+- `hw.network.enabled`: `true`
+- `hw.network.backend`: `bcmgenet-v5`
+- `hw.network.mode`: `dhcp`
+- `hw.network.interface`: `auto`
+- `hw.network.static_ipv4.ip`: `192.168.10.42`
+- `hw.network.static_ipv4.prefix_len`: `24`
+- `hw.network.static_ipv4.gateway`: `192.168.10.1`
 - `hw.network.dhcp.discover_timeout_ms`: `1000`
 - `hw.network.dhcp.request_timeout_ms`: `1000`
 - `hw.network.dhcp.max_retries`: `4`
-- `hw.attestation.enabled`: `false`
+- `hw.attestation.enabled`: `true`
 - `hw.attestation.policy`: `tpm-or-dice`
 - `hw.attestation.evidence_max_bytes`: `256`
-- `hw.local_seat.enabled`: `false`
-- `hw.local_seat.required`: `false`
+- `hw.local_seat.enabled`: `true`
+- `hw.local_seat.required`: `true`
 - `hw.local_seat.keyboard_device`: `usb-kbd0`
 - `hw.local_seat.display_device`: `hdmi0`
 - `hw.local_seat.line_bytes`: `160`
 - `hw.local_seat.buffer_lines`: `128`
-- `hw.devices`: `0` entries
-- `hw.devices[]`: `(none)`
+- `hw.devices`: `7` entries
+- `hw.devices[]`: `kind=uart` `id=uart0` `required=true`
+- `hw.devices[]`: `kind=rtc` `id=rtc0` `required=true`
+- `hw.devices[]`: `kind=net` `id=bcmgenet0` `required=true`
+- `hw.devices[]`: `kind=wifi` `id=cyw43xx0` `required=false`
+- `hw.devices[]`: `kind=tpm` `id=tpm0` `required=false`
+- `hw.devices[]`: `kind=keyboard` `id=usb-kbd0` `required=true`
+- `hw.devices[]`: `kind=display` `id=hdmi0` `required=true`
 - `namespaces.role_isolation`: `true`
 - `sharding.enabled`: `true`
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `3a8690c01e1c9c165b91d3c366fbe7dcb9667602461f82e51df6ca5e2ba45d77`
+- `manifest.sha256`: `23ceedff3478d8efe6e52053ef58a1180ddec8ac58e1c81c5a615d8ec72fd90d`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -279,4 +285,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `3a8690c01e1c9c165b91d3c366fbe7dcb9667602461f82e51df6ca5e2ba45d77`)._
+_Generated from `configs/root_task.toml` (sha256: `23ceedff3478d8efe6e52053ef58a1180ddec8ac58e1c81c5a615d8ec72fd90d`)._

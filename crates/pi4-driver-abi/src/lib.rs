@@ -811,6 +811,18 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_CY
     406;
 /// USB runtime consumed an event that did not match hub SET_CONFIGURATION status.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_STATUS_EVENT_IGNORED: u32 = 407;
+/// USB runtime is reading downstream hub-port status after power/reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN: u32 = 408;
+/// USB runtime read downstream hub-port status after power/reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE: u32 = 409;
+/// USB runtime could not read downstream hub-port status.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED: u32 = 410;
+/// USB runtime is submitting downstream hub-port reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN: u32 = 411;
+/// USB runtime submitted downstream hub-port reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE: u32 = 412;
+/// USB runtime could not submit downstream hub-port reset.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED: u32 = 413;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-published command endpoint/shared-ring intake loop.

@@ -292,6 +292,12 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_NO_KEYBOARD,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN,
@@ -2189,6 +2195,18 @@ struct DriverTaskCommandSlot {
     last_progress_sequence: AtomicU32,
     last_progress_phase: AtomicU32,
     last_progress_aux0: AtomicU32,
+    resource_log_begin_key: AtomicUsize,
+    resource_log_begin_count: AtomicUsize,
+    resource_log_no_reply_key: AtomicUsize,
+    resource_log_no_reply_count: AtomicUsize,
+    resource_log_busy_key: AtomicUsize,
+    resource_log_busy_count: AtomicUsize,
+    ring_log_timeout_key: AtomicUsize,
+    ring_log_timeout_count: AtomicUsize,
+    ring_log_progress_key: AtomicUsize,
+    ring_log_progress_count: AtomicUsize,
+    ring_log_keep_active_key: AtomicUsize,
+    ring_log_keep_active_count: AtomicUsize,
     ring_handler: AtomicUsize,
     ring_context: AtomicUsize,
     ring_service_kind: AtomicUsize,
@@ -2239,6 +2257,18 @@ impl DriverTaskCommandSlot {
             last_progress_sequence: AtomicU32::new(0),
             last_progress_phase: AtomicU32::new(0),
             last_progress_aux0: AtomicU32::new(0),
+            resource_log_begin_key: AtomicUsize::new(0),
+            resource_log_begin_count: AtomicUsize::new(0),
+            resource_log_no_reply_key: AtomicUsize::new(0),
+            resource_log_no_reply_count: AtomicUsize::new(0),
+            resource_log_busy_key: AtomicUsize::new(0),
+            resource_log_busy_count: AtomicUsize::new(0),
+            ring_log_timeout_key: AtomicUsize::new(0),
+            ring_log_timeout_count: AtomicUsize::new(0),
+            ring_log_progress_key: AtomicUsize::new(0),
+            ring_log_progress_count: AtomicUsize::new(0),
+            ring_log_keep_active_key: AtomicUsize::new(0),
+            ring_log_keep_active_count: AtomicUsize::new(0),
             ring_handler: AtomicUsize::new(0),
             ring_context: AtomicUsize::new(0),
             ring_service_kind: AtomicUsize::new(DriverTaskRingServiceKind::None.as_usize()),
@@ -2349,6 +2379,243 @@ fn driver_task_ring_progress_advanced_for_request(
         || slot.last_progress_sequence.load(Ordering::Acquire) != request
         || slot.last_progress_aux0.load(Ordering::Acquire) != aux0
         || slot.last_progress_phase.load(Ordering::Acquire) != progress.phase
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+enum DriverTaskRingRepeatLog {
+    Timeout,
+    Progress,
+    KeepActive,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+enum DriverTaskResourceRepeatLog {
+    Begin,
+    NoReply,
+    Busy,
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_log_hash_usize(hash: usize, value: usize) -> usize {
+    hash.wrapping_mul(16_777_619) ^ value.wrapping_add(0x9e37_79b9)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_log_hash_str(mut hash: usize, value: &str) -> usize {
+    for byte in value.as_bytes() {
+        hash = driver_task_log_hash_usize(hash, usize::from(*byte));
+    }
+    hash
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_log_nonzero_key(key: usize) -> usize {
+    if key == 0 {
+        1
+    } else {
+        key
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_log_repeat_milestone(count: usize) -> bool {
+    count <= 4 || count.is_power_of_two() || count % 64 == 0
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_log_repeat_count(
+    key_cell: &AtomicUsize,
+    count_cell: &AtomicUsize,
+    key: usize,
+) -> Option<usize> {
+    let key = driver_task_log_nonzero_key(key);
+    if key_cell.load(Ordering::Acquire) != key {
+        key_cell.store(key, Ordering::Release);
+        count_cell.store(1, Ordering::Release);
+        return Some(1);
+    }
+    let count = count_cell.fetch_add(1, Ordering::AcqRel).saturating_add(1);
+    driver_task_log_repeat_milestone(count).then_some(count)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_mode_log_key(mode: DriverTaskRingCommandMode) -> usize {
+    match mode {
+        DriverTaskRingCommandMode::Steady => 1,
+        DriverTaskRingCommandMode::Bootstrap => 2,
+        DriverTaskRingCommandMode::NonBlocking => 3,
+        DriverTaskRingCommandMode::PromptSlice => 4,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_slot_for_contract(
+    contract: DriverTaskContract,
+) -> Option<&'static DriverTaskCommandSlot> {
+    let task_key = driver_task_contract_key(contract)?;
+    slot_for_task_key(task_key)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_repeat_atoms(
+    slot: &DriverTaskCommandSlot,
+    log: DriverTaskRingRepeatLog,
+) -> (&AtomicUsize, &AtomicUsize) {
+    match log {
+        DriverTaskRingRepeatLog::Timeout => {
+            (&slot.ring_log_timeout_key, &slot.ring_log_timeout_count)
+        }
+        DriverTaskRingRepeatLog::Progress => {
+            (&slot.ring_log_progress_key, &slot.ring_log_progress_count)
+        }
+        DriverTaskRingRepeatLog::KeepActive => (
+            &slot.ring_log_keep_active_key,
+            &slot.ring_log_keep_active_count,
+        ),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_log_key(
+    endpoint: usize,
+    request: usize,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+    progress: DriverTaskRingProgressRecord,
+    extra: usize,
+) -> usize {
+    let mut key = 2_166_136_261usize;
+    for value in [
+        endpoint,
+        request,
+        driver_task_ring_mode_log_key(mode),
+        usize::from(command.opcode),
+        command.arg0 as usize,
+        command.aux0 as usize,
+        usize::from(command.frame.len),
+        usize::from(command.frame.flags),
+        progress.magic as usize,
+        progress.sequence as usize,
+        progress.phase as usize,
+        progress.aux0 as usize,
+        extra,
+    ] {
+        key = driver_task_log_hash_usize(key, value);
+    }
+    key
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_log_repeat_count(
+    contract: DriverTaskContract,
+    log: DriverTaskRingRepeatLog,
+    key: usize,
+) -> Option<usize> {
+    let Some(slot) = driver_task_slot_for_contract(contract) else {
+        return Some(1);
+    };
+    let (key_cell, count_cell) = driver_task_ring_repeat_atoms(slot, log);
+    driver_task_log_repeat_count(key_cell, count_cell, key)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_resource_repeat_kind(status: &str) -> Option<DriverTaskResourceRepeatLog> {
+    match status {
+        "begin" => Some(DriverTaskResourceRepeatLog::Begin),
+        "no-reply" | "poll-timeout" | "tx-no-reply" => Some(DriverTaskResourceRepeatLog::NoReply),
+        "busy" => Some(DriverTaskResourceRepeatLog::Busy),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_resource_repeat_atoms(
+    slot: &DriverTaskCommandSlot,
+    log: DriverTaskResourceRepeatLog,
+) -> (&AtomicUsize, &AtomicUsize) {
+    match log {
+        DriverTaskResourceRepeatLog::Begin => {
+            (&slot.resource_log_begin_key, &slot.resource_log_begin_count)
+        }
+        DriverTaskResourceRepeatLog::NoReply => (
+            &slot.resource_log_no_reply_key,
+            &slot.resource_log_no_reply_count,
+        ),
+        DriverTaskResourceRepeatLog::Busy => {
+            (&slot.resource_log_busy_key, &slot.resource_log_busy_count)
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_resource_log_key(
+    hot_path: DriverTaskHotPath,
+    stage: &str,
+    status: &str,
+    completion: Option<DriverTaskCompletionRecord>,
+    expected_aux0_value: u32,
+    expected_request_value: u32,
+    active_request: Option<usize>,
+    progress: Option<DriverTaskRingProgressSnapshot>,
+) -> usize {
+    let mut key = 2_166_136_261usize;
+    key = driver_task_log_hash_usize(key, hot_path.as_u32() as usize);
+    key = driver_task_log_hash_str(key, stage);
+    key = driver_task_log_hash_str(key, status);
+    let completion_code = completion.map_or(0, |completion| completion.code as usize);
+    let completion_detail = completion.map_or(0, |completion| usize::from(completion.detail));
+    let completion_result = completion.map_or(0, |completion| completion.result as usize);
+    let completion_frame_len = completion.map_or(0, |completion| usize::from(completion.frame.len));
+    for value in [
+        completion_code,
+        completion_detail,
+        completion_result,
+        completion_frame_len,
+        expected_aux0_value as usize,
+        expected_request_value as usize,
+        active_request.unwrap_or(0),
+        progress.map_or(0, |progress| progress.marker_valid as usize),
+        progress.map_or(0, |progress| progress.sequence as usize),
+        progress.map_or(0, |progress| progress.phase as usize),
+        progress.map_or(0, |progress| progress.aux0 as usize),
+    ] {
+        key = driver_task_log_hash_usize(key, value);
+    }
+    key
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_resource_log_repeat_count(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    stage: &str,
+    status: &str,
+    completion: Option<DriverTaskCompletionRecord>,
+    expected_aux0_value: u32,
+    expected_request_value: u32,
+    active_request: Option<usize>,
+    progress: Option<DriverTaskRingProgressSnapshot>,
+) -> Option<usize> {
+    let Some(repeat_kind) = driver_task_resource_repeat_kind(status) else {
+        return Some(1);
+    };
+    let Some(slot) = driver_task_slot_for_contract(contract) else {
+        return Some(1);
+    };
+    let key = driver_task_resource_log_key(
+        hot_path,
+        stage,
+        status,
+        completion,
+        expected_aux0_value,
+        expected_request_value,
+        active_request,
+        progress,
+    );
+    let (key_cell, count_cell) = driver_task_resource_repeat_atoms(slot, repeat_kind);
+    driver_task_log_repeat_count(key_cell, count_cell, key)
 }
 
 #[cfg(feature = "kernel")]
@@ -3961,7 +4228,13 @@ fn emit_driver_task_ring_call_timeout(
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<512>::new();
+    let key = driver_task_ring_log_key(endpoint, request, command, mode, progress, attempts);
+    let Some(repeat_count) =
+        driver_task_ring_log_repeat_count(contract, DriverTaskRingRepeatLog::Timeout, key)
+    else {
+        return;
+    };
+    let mut line = String::<640>::new();
     let _ = write!(
         line,
         "DRIVER_TASK_RING_CALL_TIMEOUT contract={} endpoint=0x{:04x} request={} mode={} attempts={} opcode={} arg0={} aux0=0x{:08x} frame_len={} owner=linked-runtime marker_valid={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x} blocker={} next_action=check-keep-active",
@@ -3981,6 +4254,9 @@ fn emit_driver_task_ring_call_timeout(
         progress.aux0,
         driver_task_ring_progress_blocker(progress, request, command),
     );
+    if repeat_count > 1 {
+        let _ = write!(line, " repeat_count={}", repeat_count);
+    }
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
@@ -4502,7 +4778,15 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CONTEXT_DONE => "usb-hub-context-done",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN => "usb-hub-port-power-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE => "usb-hub-port-power-done",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN => "usb-hub-port-status-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE => "usb-hub-port-status-done",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED => "usb-hub-port-status-failed",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN => "usb-hub-port-reset-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN => "usb-hub-port-reset-set-begin",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE => "usb-hub-port-reset-set-done",
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED => {
+            "usb-hub-port-reset-set-failed"
+        }
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY => "usb-hub-port-ready",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN => "usb-hub-child-probe-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_SPEED_FALLBACK_BEGIN => {
@@ -4652,7 +4936,20 @@ fn emit_driver_task_ring_call_progress(
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<320>::new();
+    let key = driver_task_ring_log_key(
+        0,
+        request,
+        command,
+        DriverTaskRingCommandMode::PromptSlice,
+        progress,
+        0,
+    );
+    let Some(repeat_count) =
+        driver_task_ring_log_repeat_count(contract, DriverTaskRingRepeatLog::Progress, key)
+    else {
+        return;
+    };
+    let mut line = String::<384>::new();
     let valid = progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC;
     let _ = write!(
         line,
@@ -4666,6 +4963,9 @@ fn emit_driver_task_ring_call_progress(
         driver_task_ring_progress_phase_label(progress.phase),
         progress.aux0,
     );
+    if repeat_count > 1 {
+        let _ = write!(line, " repeat_count={}", repeat_count);
+    }
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
@@ -4683,7 +4983,7 @@ fn emit_driver_task_ring_call_abort(
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<512>::new();
+    let mut line = String::<640>::new();
     let _ = write!(
         line,
         "DRIVER_TASK_RING_CALL_ABORT contract={} endpoint=0x{:04x} request={} mode={} reason={} timeout_count={} opcode={} arg0={} aux0=0x{:08x} frame_len={} owner=linked-runtime marker_valid={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x} blocker={} next_action=retry-fresh-request-after-blocker-fix",
@@ -4722,7 +5022,14 @@ fn emit_driver_task_ring_call_keep_active(
     use core::fmt::Write;
     use heapless::String;
 
-    let mut line = String::<512>::new();
+    let extra = keep_limit ^ ((progress_advanced as usize) << 16);
+    let key = driver_task_ring_log_key(endpoint, request, command, mode, progress, extra);
+    let Some(repeat_count) =
+        driver_task_ring_log_repeat_count(contract, DriverTaskRingRepeatLog::KeepActive, key)
+    else {
+        return;
+    };
+    let mut line = String::<640>::new();
     let _ = write!(
         line,
         "DRIVER_TASK_RING_CALL_KEEP_ACTIVE contract={} endpoint=0x{:04x} request={} mode={} timeout_count={} keep_limit={} progress_advanced={} opcode={} arg0={} aux0=0x{:08x} frame_len={} owner=linked-runtime marker_valid={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x} blocker={} next_action=poll-same-request",
@@ -4744,6 +5051,9 @@ fn emit_driver_task_ring_call_keep_active(
         progress.aux0,
         driver_task_ring_progress_blocker(progress, request, command),
     );
+    if repeat_count > 1 {
+        let _ = write!(line, " repeat_count={}", repeat_count);
+    }
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
@@ -5144,7 +5454,13 @@ const fn driver_task_ring_usb_enum_hub_wait_phase(phase: u32) -> bool {
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CONTEXT_DONE
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_SPEED_FALLBACK_BEGIN
@@ -5893,6 +6209,9 @@ fn emit_driver_task_resource_init_status_with_context(
         (None, Some(_)) => "no-active-request",
         (None, None) => "none",
     };
+    let expected_request = expected_request.filter(|request| *request != 0);
+    let expected_aux0_valid = expected_aux0.is_some();
+    let expected_request_valid = expected_request.is_some();
     let expected_aux0_value = expected_aux0.unwrap_or(0);
     let expected_request_value = expected_request.unwrap_or(0);
     let same_request_resume = match (expected_request, active_request) {
@@ -5902,11 +6221,24 @@ fn emit_driver_task_resource_init_status_with_context(
         (None, Some(_)) => "unknown",
         (None, None) => "none",
     };
+    let Some(repeat_count) = driver_task_resource_log_repeat_count(
+        contract,
+        hot_path,
+        stage,
+        status,
+        completion,
+        expected_aux0_value,
+        expected_request_value,
+        active_request,
+        progress,
+    ) else {
+        return;
+    };
     let mut line = String::<1024>::new();
     if let Some(completion) = completion {
         let _ = write!(
             line,
-            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code={} detail={} result={} frame_len={} owner=linked-runtime root_action={} blocker={}-{} next_action={} active_request_valid={} active_request={} expected_request={} expected_aux0=0x{:08x} same_request_resume={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x} progress_request_match={}",
+            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code={} detail={} result={} frame_len={} owner=linked-runtime root_action={} blocker={}-{} next_action={} active_request_valid={} active_request={} expected_request_valid={} expected_request={} expected_aux0_valid={} expected_aux0=0x{:08x} same_request_resume={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x} progress_request_match={}",
             contract.name,
             hot_path.as_str(),
             stage,
@@ -5921,7 +6253,9 @@ fn emit_driver_task_resource_init_status_with_context(
             driver_task_resource_next_action(stage, status),
             active_request.map_or("no", |_| "yes"),
             active_request.unwrap_or(0),
+            if expected_request_valid { "yes" } else { "no" },
             expected_request_value,
+            if expected_aux0_valid { "yes" } else { "no" },
             expected_aux0_value,
             same_request_resume,
             progress.map_or("no", |progress| {
@@ -5936,7 +6270,7 @@ fn emit_driver_task_resource_init_status_with_context(
     } else {
         let _ = write!(
             line,
-            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code=none detail=none result=none frame_len=0 owner=linked-runtime root_action={} blocker={}-{} next_action={} active_request_valid={} active_request={} expected_request={} expected_aux0=0x{:08x} same_request_resume={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x} progress_request_match={}",
+            "DRIVER_TASK_RESOURCE_INIT contract={} hot_path={} stage={} status={} acceptance=no code=none detail=none result=none frame_len=0 owner=linked-runtime root_action={} blocker={}-{} next_action={} active_request_valid={} active_request={} expected_request_valid={} expected_request={} expected_aux0_valid={} expected_aux0=0x{:08x} same_request_resume={} progress_marker_valid={} progress_sequence={} progress_phase={} progress_phase_name={} progress_aux0=0x{:08x} progress_request_match={}",
             contract.name,
             hot_path.as_str(),
             stage,
@@ -5947,7 +6281,9 @@ fn emit_driver_task_resource_init_status_with_context(
             driver_task_resource_next_action(stage, status),
             active_request.map_or("no", |_| "yes"),
             active_request.unwrap_or(0),
+            if expected_request_valid { "yes" } else { "no" },
             expected_request_value,
+            if expected_aux0_valid { "yes" } else { "no" },
             expected_aux0_value,
             same_request_resume,
             progress.map_or("no", |progress| {
@@ -5959,6 +6295,9 @@ fn emit_driver_task_resource_init_status_with_context(
             progress.map_or(0, |progress| progress.aux0),
             progress_request_match,
         );
+    }
+    if repeat_count > 1 {
+        let _ = write!(line, " repeat_count={}", repeat_count);
     }
     if driver_task_resource_status_requires_uart(status) {
         crate::bootstrap::log::force_uart_line_raw(line.as_str());
@@ -10155,6 +10494,36 @@ mod tests {
             DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT
         );
 
+        for phase in [
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED,
+        ] {
+            record_driver_task_ring_progress(
+                &slot,
+                DriverTaskRingProgressRecord {
+                    magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                    sequence: request,
+                    phase,
+                    aux0: command.aux0,
+                },
+            );
+
+            assert_eq!(
+                driver_task_ring_timeout_keep_active_limit_for_progress(
+                    &slot,
+                    contract,
+                    command,
+                    DriverTaskRingCommandMode::PromptSlice,
+                    request,
+                ),
+                DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT
+            );
+        }
+
         record_driver_task_ring_progress(
             &slot,
             DriverTaskRingProgressRecord {
@@ -10521,6 +10890,50 @@ mod tests {
         ));
         assert!(driver_task_resource_status_requires_uart("no-reply"));
         assert!(driver_task_resource_status_requires_uart("failed"));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn repeated_log_gate_keeps_first_and_sparse_milestones() {
+        let key_cell = AtomicUsize::new(0);
+        let count_cell = AtomicUsize::new(0);
+
+        assert_eq!(
+            driver_task_log_repeat_count(&key_cell, &count_cell, 0x55),
+            Some(1)
+        );
+        assert_eq!(
+            driver_task_log_repeat_count(&key_cell, &count_cell, 0x55),
+            Some(2)
+        );
+        assert_eq!(
+            driver_task_log_repeat_count(&key_cell, &count_cell, 0x55),
+            Some(3)
+        );
+        assert_eq!(
+            driver_task_log_repeat_count(&key_cell, &count_cell, 0x55),
+            Some(4)
+        );
+        assert_eq!(
+            driver_task_log_repeat_count(&key_cell, &count_cell, 0x55),
+            None
+        );
+        assert_eq!(
+            driver_task_log_repeat_count(&key_cell, &count_cell, 0x55),
+            None
+        );
+        assert_eq!(
+            driver_task_log_repeat_count(&key_cell, &count_cell, 0x55),
+            None
+        );
+        assert_eq!(
+            driver_task_log_repeat_count(&key_cell, &count_cell, 0x55),
+            Some(8)
+        );
+        assert_eq!(
+            driver_task_log_repeat_count(&key_cell, &count_cell, 0x66),
+            Some(1)
+        );
     }
 
     #[cfg(feature = "kernel")]

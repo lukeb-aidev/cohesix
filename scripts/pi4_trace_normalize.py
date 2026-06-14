@@ -273,7 +273,12 @@ USB_OUTCOME_BLOCKERS = {
     "hub-descriptor-status-event-ignored",
     "hub-context-no-reply",
     "hub-port-power-no-reply",
+    "hub-port-status-no-reply",
+    "hub-port-status-failed",
     "hub-port-reset-no-reply",
+    "hub-port-reset-set-no-reply",
+    "hub-port-reset-set-failed",
+    "hub-port-reset-completion-no-reply",
     "hub-child-scan-no-reply",
     "hub-child-probe-no-reply",
     "hub-child-speed-fallback-no-reply",
@@ -504,6 +509,7 @@ class GateSummary:
     driver_task_bootstrap_deferred: int = 0
     driver_task_resource_init: int = 0
     driver_task_resource_blocker: str = "none"
+    driver_task_resource_current_blocker: str = "none"
     serial_driver_accepted: bool = False
     serial_fallback_active: bool = False
     serial_runtime_frontier: str = "none"
@@ -644,6 +650,9 @@ class GateSummary:
             "DRIVER_TASK_BOOTSTRAP_DEFERRED": self.driver_task_bootstrap_deferred,
             "DRIVER_TASK_RESOURCE_INIT": self.driver_task_resource_init,
             "DRIVER_TASK_RESOURCE_BLOCKER": self.driver_task_resource_blocker,
+            "DRIVER_TASK_RESOURCE_CURRENT_BLOCKER": (
+                self.driver_task_resource_current_blocker
+            ),
             "SERIAL_DRIVER_ACCEPTED": (
                 "yes" if self.serial_driver_accepted else "no"
             ),
@@ -1536,7 +1545,12 @@ def normalize_usb_blocker(value: str) -> str:
         "hub-descriptor-status-event-ignored",
         "hub-context-no-reply",
         "hub-port-power-no-reply",
+        "hub-port-status-no-reply",
+        "hub-port-status-failed",
         "hub-port-reset-no-reply",
+        "hub-port-reset-set-no-reply",
+        "hub-port-reset-set-failed",
+        "hub-port-reset-completion-no-reply",
         "hub-child-speed-fallback-no-reply",
     ):
         if token in lower:
@@ -6333,7 +6347,12 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "hub-context-no-reply",
         "hub-context-failed",
         "hub-port-power-no-reply",
+        "hub-port-status-no-reply",
+        "hub-port-status-failed",
         "hub-port-reset-no-reply",
+        "hub-port-reset-set-no-reply",
+        "hub-port-reset-set-failed",
+        "hub-port-reset-completion-no-reply",
         "hub-child-probe-no-reply",
         "hub-child-speed-fallback-no-reply",
         "hub-topology-no-keyboard",
@@ -6533,8 +6552,14 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-hub-context-begin": "hub-context-no-reply",
         "usb-hub-context-done": "hub-port-power-no-reply",
         "usb-hub-port-power-begin": "hub-port-power-no-reply",
-        "usb-hub-port-power-done": "hub-port-reset-no-reply",
+        "usb-hub-port-power-done": "hub-port-status-no-reply",
+        "usb-hub-port-status-begin": "hub-port-status-no-reply",
+        "usb-hub-port-status-done": "hub-port-reset-no-reply",
+        "usb-hub-port-status-failed": "hub-port-status-failed",
         "usb-hub-port-reset-begin": "hub-port-reset-no-reply",
+        "usb-hub-port-reset-set-begin": "hub-port-reset-set-no-reply",
+        "usb-hub-port-reset-set-done": "hub-port-reset-completion-no-reply",
+        "usb-hub-port-reset-set-failed": "hub-port-reset-set-failed",
         "usb-hub-port-ready": "hub-child-probe-no-reply",
         "usb-hub-child-probe-begin": "hub-child-probe-no-reply",
         "usb-hub-child-speed-fallback-begin": "hub-child-speed-fallback-no-reply",
@@ -6817,9 +6842,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         for event in event_list
         if "driver_task_bootstrap_deferred" in event.raw.lower()
     )
-    driver_task_resource_init, driver_task_resource_blocker = (
-        summarize_driver_task_resource_init(event_list)
-    )
+    (
+        driver_task_resource_init,
+        driver_task_resource_blocker,
+        driver_task_resource_current_blocker,
+    ) = summarize_driver_task_resource_init(event_list)
     usb_driver_task_blocker = summarize_usb_driver_task_stall(event_list)
     net_driver_task_replay_events, net_driver_task_replay_blocker = (
         summarize_driver_task_replay_status(event_list, "net_driver_task_replay_status")
@@ -7012,6 +7039,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_bootstrap_deferred=driver_task_bootstrap_deferred,
         driver_task_resource_init=driver_task_resource_init,
         driver_task_resource_blocker=driver_task_resource_blocker,
+        driver_task_resource_current_blocker=driver_task_resource_current_blocker,
         serial_driver_accepted=driver_task_frontiers.serial_driver_accepted,
         serial_fallback_active=driver_task_frontiers.serial_fallback_active,
         serial_runtime_frontier=driver_task_frontiers.serial_runtime_frontier,
@@ -7032,8 +7060,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     )
 
 
-def summarize_driver_task_resource_init(events: Iterable[TraceEvent]) -> tuple[int, str]:
-    """Return resource-init breadcrumb count and the first hard blocker."""
+def summarize_driver_task_resource_init(
+    events: Iterable[TraceEvent],
+) -> tuple[int, str, str]:
+    """Return resource-init breadcrumb count, first blocker, and latest blocker."""
 
     resource_events = [
         event
@@ -7050,6 +7080,8 @@ def summarize_driver_task_resource_init(events: Iterable[TraceEvent]) -> tuple[i
         "sdio-owner-replay",
         "resume-retained-stage",
     }
+    first_blocker = "none"
+    latest_blocker = "none"
     for event in resource_events:
         status = event.fields.get("status", "unknown").lower()
         if status not in non_blocking_statuses:
@@ -7058,8 +7090,11 @@ def summarize_driver_task_resource_init(events: Iterable[TraceEvent]) -> tuple[i
                 event.fields.get("contract", "unknown"),
             )
             stage = event.fields.get("stage", "unknown")
-            return len(resource_events), f"{hot_path}:{stage}:{status}"
-    return len(resource_events), "none"
+            blocker = f"{hot_path}:{stage}:{status}"
+            if first_blocker == "none":
+                first_blocker = blocker
+            latest_blocker = blocker
+    return len(resource_events), first_blocker, latest_blocker
 
 
 def summarize_driver_task_frontiers(

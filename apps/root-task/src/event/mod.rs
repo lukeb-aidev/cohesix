@@ -4406,7 +4406,8 @@ where
             } else {
                 "linked-runtime-no-detail"
             };
-            let runtime_line = format_message(format_args!(
+            let mut runtime_line = HeaplessString::<384>::new();
+            let _ = FmtWrite::write_fmt(&mut runtime_line, format_args!(
                 "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x} result=0x{:08x} progress_gate={} progress_phase={} progress_phase_name={}",
                 Self::yes_no(keyboard_ready),
                 Self::yes_no(first_report),
@@ -4442,7 +4443,8 @@ where
                 linked_result,
             ));
             self.emit_console_line(runtime_contract.as_str());
-            let linked_runtime_snapshot = format_message(format_args!(
+            let mut linked_runtime_snapshot = HeaplessString::<384>::new();
+            let _ = FmtWrite::write_fmt(&mut linked_runtime_snapshot, format_args!(
                 "usb: linked_runtime_snapshot detail=0x{:04x} result=0x{:08x} proof_gate={} source=linked-runtime-progress-cache recovery_policy={} progress_gate={} progress_phase={} progress_phase_name={}",
                 linked_detail,
                 linked_result,
@@ -4855,7 +4857,13 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CONTEXT_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_PROBE_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CHILD_SPEED_FALLBACK_BEGIN
@@ -5516,10 +5524,28 @@ where
                 "hub-port-power-no-reply"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE => {
+                "hub-port-status-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN => {
+                "hub-port-status-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE => {
                 "hub-port-reset-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED => {
+                "hub-port-status-failed"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN => {
                 "hub-port-reset-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN => {
+                "hub-port-reset-set-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE => {
+                "hub-port-reset-completion-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED => {
+                "hub-port-reset-set-failed"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY => {
                 "hub-child-probe-no-reply"
@@ -6145,10 +6171,28 @@ where
                 "wait-hub-port-power"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE => {
-                "reset-hub-child-port"
+                "read-hub-port-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN => {
+                "inspect-hub-port-status-control-transfer"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE => {
+                "clear-hub-port-changes-or-reset"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED => {
+                "inspect-hub-port-status-control-transfer"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN => {
-                "wait-hub-port-reset"
+                "submit-hub-port-reset"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN => {
+                "inspect-hub-port-reset-control-transfer"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE => {
+                "poll-hub-port-reset-completion"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED => {
+                "inspect-hub-port-reset-control-transfer"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY => {
                 "probe-hub-child-device"
@@ -12903,6 +12947,54 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN,
             ),
             "wait-hub-port-power"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+            ),
+            7
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE,
+            ),
+            "hub-port-status-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+            ),
+            "inspect-hub-port-status-control-transfer"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
+            ),
+            "hub-port-reset-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
+            ),
+            "hub-port-status-failed"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_BEGIN,
+            ),
+            "hub-port-reset-set-no-reply"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_DONE,
+            ),
+            "poll-hub-port-reset-completion"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_SET_FAILED,
+            ),
+            "hub-port-reset-set-failed"
         );
         assert_eq!(
             TestPump::usb_runtime_next_action_for_progress_phase(

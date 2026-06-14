@@ -117,6 +117,15 @@ implementation crate. Any reintroduction of an external USB package, generated
 Cargo patch, or root-task USB support crate is driver-model drift and must be
 fixed in the same change.
 
+During hub traversal, the linked USB runtime publishes bounded post-power
+breadcrumbs before child probing: `usb-hub-port-status-begin`,
+`usb-hub-port-status-done`, `usb-hub-port-status-failed`,
+`usb-hub-port-reset-set-begin`, `usb-hub-port-reset-set-done`, and
+`usb-hub-port-reset-set-failed`. These markers refine Gate 7 evidence between
+`usb-hub-port-power-done` and `usb-hub-port-reset-begin` while keeping all hub
+status reads, change clears, and reset requests inside the linked runtime over
+HAL-admitted mappings.
+
 ## seL4 Driver Model
 
 seL4 does not provide Linux-style in-kernel drivers. The root task receives
@@ -564,8 +573,9 @@ detail:
   `DRIVER_TASK_RING_CALL_KEEP_ACTIVE`, `DRIVER_TASK_RING_CALL_ABORT`, and
   `DRIVER_TASK_RING_PROGRESS` report each bounded descriptor, init, and service
   turn, including linked-runtime owner/root-action fields, active request and
-  child-progress correlation, expected aux/request fields for submitted turns,
-  same-request resume status, the first blocker, and the next action to take.
+  child-progress correlation, explicit expected-request/expected-aux validity
+  for submitted turns, same-request resume status, the first blocker, the
+  current blocker, and the next action to take.
 - `DRIVER_TASK_BOOT_SMOKE` is QEMU transport proof only; it may exercise isolated
   VSpaces and fixed rings but cannot satisfy Pi hardware acceptance.
 
@@ -710,7 +720,10 @@ Device-visible address policy is not generic:
   slices before releasing DHCP/data. Host-EAPOL prompt slices serialize CYW43
   control/data RX polls against the single active runtime slot: if a control or
   data poll owns the ring, the next slice resumes that same descriptor before
-  trying the alternate poll or any post-association rescue/control action. If
+  trying the alternate poll or any post-association rescue/control action. While
+  host-EAPOL is pending or required, the normal smoltcp, DHCP, TCP, and
+  self-test phases stay parked so data-path RX cannot submit a mismatched CYW43
+  descriptor over the active EAPOL poll. If
   that proof is missing, root skips the deferred Wi-Fi replay and leaves a
   serial-diagnostic blocker instead of printing a prompt and then monopolizing
   it. The `Cohesix console ready` banner means the serial event pump can accept
@@ -1167,8 +1180,9 @@ or generic command-completion failures.
   starts after `Cohesix console ready`; otherwise Cohesix preserves the Wi-Fi
   policy for diagnostics, emits `action=serial-diagnostics-only`, and publishes
   the prompt. Host-EAPOL remains pending until bounded event-pump slices prove
-  EAPOL secure and only then releases DHCP/data. Replay uses bounded nonblocking
-  IPC and UART-visible
+  EAPOL secure and only then releases DHCP/data; ordinary network data phases do
+  not run while `wifi-host-eapol-pending` or `wifi-host-eapol-required` is the
+  active Wi-Fi status. Replay uses bounded nonblocking IPC and UART-visible
   `SDIO_DRIVER_TASK_REPLAY_STATUS` / `NET_DRIVER_TASK_REPLAY_STATUS`
   breadcrumbs with `owner=linked-runtime`, `proof_effect`, and `next_action`
   fields.

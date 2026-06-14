@@ -181,6 +181,13 @@ fn timebase_stall_warning_suppressed(bringup_status: Option<&'static str>) -> bo
     matches!(bringup_status, Some("wifi-host-eapol-pending"))
 }
 
+fn wifi_host_eapol_blocks_data_path(bringup_status: Option<&'static str>) -> bool {
+    matches!(
+        bringup_status,
+        Some("wifi-host-eapol-pending" | "wifi-host-eapol-required")
+    )
+}
+
 #[cfg(feature = "net-backend-virtio")]
 type DefaultNetDevice = VirtioNetStatic;
 #[cfg(not(feature = "net-backend-virtio"))]
@@ -3020,6 +3027,10 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         let mut activity = self.service_wifi_host_eapol_slice();
+        if wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
+            self.finish_poll_turn(now_ms, activity);
+            return activity;
+        }
         activity |= self.poll_smoltcp_once(timestamp, now_ms, "main");
         let dhcp_start_activity = self.start_dhcp_if_ready(now_ms);
         activity |= dhcp_start_activity;
@@ -3079,6 +3090,17 @@ impl<D: NetDevice> NetStack<D> {
             }
             self.tx_only_sent = true;
             self.budgeted_phase = self.budgeted_phase.next();
+            self.finish_poll_turn(now_ms, activity);
+            return Ok(activity);
+        }
+
+        if wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
+            self.begin_poll_turn(now_ms);
+            if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
+                self.finish_poll_turn(now_ms, false);
+                return Ok(true);
+            }
+            let activity = self.service_wifi_host_eapol_slice();
             self.finish_poll_turn(now_ms, activity);
             return Ok(activity);
         }
@@ -6541,6 +6563,18 @@ mod tests {
             "wifi-host-eapol-required"
         )));
         assert!(!timebase_stall_warning_suppressed(None));
+    }
+
+    #[test]
+    fn host_eapol_pending_and_required_block_data_path() {
+        assert!(wifi_host_eapol_blocks_data_path(Some(
+            "wifi-host-eapol-pending"
+        )));
+        assert!(wifi_host_eapol_blocks_data_path(Some(
+            "wifi-host-eapol-required"
+        )));
+        assert!(!wifi_host_eapol_blocks_data_path(Some("dhcp-pending")));
+        assert!(!wifi_host_eapol_blocks_data_path(None));
     }
 
     #[test]
