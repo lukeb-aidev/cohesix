@@ -919,6 +919,7 @@ const USB_ENDPOINT_DIR_IN: u8 = 0x80;
 const USB_XHCI_SPINS: usize = 10_000_000;
 const USB_CONTROL_TRANSFER_SPINS: usize = USB_XHCI_SPINS;
 const USB_HUB_DESCRIPTOR_CONTROL_TRANSFER_SPINS: usize = USB_CONTROL_TRANSFER_SPINS * 2;
+const USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS: usize = USB_CONTROL_TRANSFER_SPINS / 5;
 const USB_COMMAND_COMPLETION_SPINS: usize = 20_000_000;
 const USB_COMMAND_COMPLETION_SLICE_SPINS: usize = 128;
 const USB_COMMAND_COMPLETION_EVENTS_PER_SLICE: usize = 4;
@@ -11850,6 +11851,13 @@ fn xhci_ack_event_dequeue_prompt_safe(
     true
 }
 
+fn xhci_ack_control_event_dequeue(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> bool {
+    xhci_ack_event_dequeue(state, descriptor)
+}
+
 fn xhci_peek_event(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
@@ -12616,7 +12624,7 @@ fn xhci_wait_control_transfer_completion(
                         progress,
                         progress.map_or(0, |progress| progress.status_event),
                     );
-                    if !xhci_ack_event_dequeue_barrier_only(state, descriptor) {
+                    if !xhci_ack_control_event_dequeue(state, descriptor) {
                         xhci_publish_control_progress(
                             progress,
                             progress.map_or(0, |progress| progress.failed),
@@ -12630,7 +12638,7 @@ fn xhci_wait_control_transfer_completion(
                         progress,
                         progress.map_or(0, |progress| progress.data_event),
                     );
-                    if !xhci_ack_event_dequeue_barrier_only(state, descriptor) {
+                    if !xhci_ack_control_event_dequeue(state, descriptor) {
                         xhci_publish_control_progress(
                             progress,
                             progress.map_or(0, |progress| progress.failed),
@@ -12644,7 +12652,7 @@ fn xhci_wait_control_transfer_completion(
                         progress,
                         progress.map_or(0, |progress| progress.failed),
                     );
-                    let _ = xhci_ack_event_dequeue_barrier_only(state, descriptor);
+                    let _ = xhci_ack_control_event_dequeue(state, descriptor);
                     return None;
                 }
                 XhciControlTransferEvent::Ignore => {
@@ -12661,7 +12669,7 @@ fn xhci_wait_control_transfer_completion(
                     {
                         ignored_event_failed = true;
                     }
-                    if !xhci_ack_event_dequeue_barrier_only(state, descriptor) {
+                    if !xhci_ack_control_event_dequeue(state, descriptor) {
                         xhci_publish_control_progress(
                             progress,
                             progress.map_or(0, |progress| progress.failed),
@@ -14554,7 +14562,7 @@ fn usb_hub_get_port_status_with_progress(
             4,
             true,
             progress,
-            USB_CONTROL_TRANSFER_SPINS,
+            USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS,
         ) {
             let base = match runtime_resource_range(
                 descriptor,
@@ -21437,6 +21445,11 @@ mod tests {
             USB_HUB_DESCRIPTOR_CONTROL_TRANSFER_SPINS,
             USB_CONTROL_TRANSFER_SPINS * 2
         );
+        assert_eq!(
+            USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS,
+            USB_CONTROL_TRANSFER_SPINS / 5
+        );
+        assert!(USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS < USB_CONTROL_TRANSFER_SPINS);
         assert_eq!(USB_COMMAND_COMPLETION_SPINS, 20_000_000);
         assert_eq!(USB_COMMAND_COMPLETION_SLICE_SPINS, 128);
         assert_eq!(USB_COMMAND_COMPLETION_EVENTS_PER_SLICE, 4);
@@ -21815,7 +21828,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_control_erdp_ack_advances_event_dequeue_without_progress_marker() {
+    fn usb_control_erdp_ack_uses_runtime_flush_without_progress_marker() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -21824,7 +21837,7 @@ mod tests {
         state.event_dequeue = 0;
         state.event_cycle = true;
 
-        assert!(xhci_ack_event_dequeue_barrier_only(&mut state, &descriptor));
+        assert!(xhci_ack_control_event_dequeue(&mut state, &descriptor));
         assert_eq!(state.event_dequeue, 1);
         assert!(state.event_cycle);
         assert_eq!(

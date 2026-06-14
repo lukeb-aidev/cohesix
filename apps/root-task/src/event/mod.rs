@@ -231,9 +231,11 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS: u64 = 10_000;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS: u16 = 1024;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS: u64 = 250;
+const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS: u64 =
+    POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS: u16 = 16;
+const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS: u16 =
+    POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS: u16 = 1;
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
@@ -1518,6 +1520,10 @@ where
     post_prompt_local_seat_attach_retry_turns: u16,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_attempts: u16,
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    post_prompt_local_seat_attach_active_usb_traced: bool,
+    #[cfg(all(test, feature = "kernel", feature = "usb"))]
+    post_prompt_local_seat_attach_usb_active_override: Option<bool>,
     last_smp_activity_snapshot: Option<SmpActivitySnapshot>,
 }
 
@@ -1627,6 +1633,10 @@ where
             post_prompt_local_seat_attach_retry_turns: 0,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_attempts: 0,
+            #[cfg(all(feature = "kernel", feature = "usb"))]
+            post_prompt_local_seat_attach_active_usb_traced: false,
+            #[cfg(all(test, feature = "kernel", feature = "usb"))]
+            post_prompt_local_seat_attach_usb_active_override: None,
             last_smp_activity_snapshot: None,
         }
     }
@@ -2519,6 +2529,7 @@ where
             self.post_prompt_local_seat_attach_blocked_traces = 0;
             self.post_prompt_local_seat_attach_retry_turns = 0;
             self.post_prompt_local_seat_attach_attempts = 0;
+            self.post_prompt_local_seat_attach_active_usb_traced = false;
             self.post_prompt_local_seat_attach_not_before_ms = self
                 .now_ms
                 .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS);
@@ -2567,6 +2578,10 @@ where
             {
                 return;
             }
+            if self.post_prompt_local_seat_attach_usb_runtime_active() {
+                self.defer_post_prompt_local_seat_attach_for_active_usb();
+                return;
+            }
             self.post_prompt_local_seat_attach_pending = false;
             self.post_prompt_local_seat_attach_idle_turns = 0;
             self.arm_post_prompt_local_seat_once();
@@ -2591,6 +2606,42 @@ where
                 line,
                 "[local-seat] post-prompt attach deferred reason={} idle_turns={} now_ms={}",
                 reason, self.post_prompt_local_seat_attach_idle_turns, self.now_ms
+            );
+            boot_log::force_uart_line_raw(line.as_str());
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn post_prompt_local_seat_attach_usb_runtime_active(&self) -> bool {
+        #[cfg(test)]
+        if let Some(active) = self.post_prompt_local_seat_attach_usb_active_override {
+            return active;
+        }
+        crate::hal::driver_task::driver_task_ring_command_active(
+            crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+        )
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn defer_post_prompt_local_seat_attach_for_active_usb(&mut self) {
+        self.post_prompt_local_seat_attach_pending = true;
+        self.post_prompt_local_seat_attach_idle_turns = 0;
+        self.post_prompt_local_seat_attach_retry_turns =
+            POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS;
+        self.post_prompt_local_seat_attach_not_before_ms = self
+            .now_ms
+            .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS);
+        if self.post_prompt_local_seat_attach_active_usb_traced {
+            return;
+        }
+        self.post_prompt_local_seat_attach_active_usb_traced = true;
+        #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+        {
+            let mut line = HeaplessString::<160>::new();
+            let _ = write!(
+                line,
+                "[local-seat] prompt-settle attach deferred reason=usb-runtime-active action=serial-shell retry_ms={}",
+                POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS
             );
             boot_log::force_uart_line_raw(line.as_str());
         }
@@ -13637,7 +13688,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
-    fn post_prompt_local_seat_retry_policy_continues_active_usb_request() {
+    fn post_prompt_local_seat_retry_policy_uses_quiet_window_for_active_usb() {
         assert_eq!(
             post_prompt_local_seat_attach_retry_policy(false, false),
             Some((
@@ -13666,6 +13717,45 @@ mod tests {
                 "serial-safe-active-usb-progress"
             ))
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn post_prompt_local_seat_attach_defers_while_usb_runtime_is_active() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1_000);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.post_prompt_local_seat_attach_pending = true;
+        pump.post_prompt_local_seat_attach_not_before_ms = 0;
+        pump.post_prompt_local_seat_attach_usb_active_override = Some(true);
+
+        pump.maybe_run_post_prompt_local_seat_attach(false);
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+
+        pump.maybe_run_post_prompt_local_seat_attach(false);
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+        assert_eq!(pump.post_prompt_local_seat_attach_idle_turns, 0);
+        assert_eq!(
+            pump.post_prompt_local_seat_attach_retry_turns,
+            POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS
+        );
+        assert_eq!(
+            pump.post_prompt_local_seat_attach_not_before_ms,
+            POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS
+        );
+        assert!(pump.post_prompt_local_seat_attach_active_usb_traced);
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

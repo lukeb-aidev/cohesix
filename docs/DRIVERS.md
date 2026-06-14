@@ -125,9 +125,12 @@ breadcrumbs before child probing: `usb-hub-port-status-begin`,
 `usb-hub-port-reset-set-begin`, `usb-hub-port-reset-set-done`, and
 `usb-hub-port-reset-set-failed`. Timeout and event-ring diagnostic variants for
 the hub-port status data/status waits refine Gate 7 evidence between
-`usb-hub-port-power-done` and `usb-hub-port-reset-begin` while keeping all hub
-status reads, change clears, and reset requests inside the linked runtime over
-HAL-admitted mappings.
+`usb-hub-port-power-done` and `usb-hub-port-reset-begin`. Hub descriptor reads
+retain the longer hub-class descriptor wait, while hub-port `GET_STATUS` uses a
+shorter prompt-safe control wait so an empty transfer-event slot cannot consume
+the whole linked-runtime turn before reset or child-probe fallback progress can
+publish. All hub status reads, change clears, and reset requests remain inside
+the linked runtime over HAL-admitted mappings.
 
 Root-task keeps the admitted linked-runtime USB enumeration request active
 through descriptor status waits and hub traversal phases while same-sequence
@@ -735,8 +738,8 @@ Device-visible address policy is not generic:
   and hub continuation turns before Wi-Fi starts without creating a root-owned
   xHCI path. When the net-console policy selects Wi-Fi (`wifi`, or `auto` with
   credentials) and the same proof is present, root records the deferred
-  SDIO/CYW43 replay decision, publishes the serial root prompt, then resumes the
-  linked-runtime replay after `Cohesix console ready`. WPA2 host-EAPOL is not a
+  SDIO/CYW43 replay decision, emits only the startup banner, then resumes the
+  linked-runtime replay before publishing `Cohesix console ready`. WPA2 host-EAPOL is not a
   synchronous boot wait: join submission arms a `wifi-host-eapol-pending`
   session, and the event pump advances EAPOL RX/TX through bounded linked-runtime
   slices before releasing DHCP/data. Host-EAPOL prompt slices serialize CYW43
@@ -853,24 +856,27 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 14 22:45 post-flash boot
-(`/Users/lukasbower/pi4-serial-20260614-224509.log`) supersedes earlier Wi-Fi
-frontiers as current truth. That trace proves prompt-first deferred Wi-Fi
-replay, descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init
+The June 15 06:44 post-flash boot
+(`/Users/lukasbower/pi4-serial-20260615-064435.log`) supersedes the June 14
+22:45 Wi-Fi frontier as current truth. That trace proves bounded deferred
+Wi-Fi replay, descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init
 detail `0x5500`, CYW43 engine init, firmware/NVRAM upload, firmware release,
 owner-state recovery, split Linux-order station controls, event-mask
-programming, `cyw43-join-bsscfg`, and an armed
+programming, early event-channel `CYW43_DRIVER_TASK_EVENT_RX` capture, matched
+`cyw43-join-bsscfg`, and an armed
 `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=pending` session. It does not prove
-association/link, EAPOL M1/M2/M3/M4, DHCP, `nettest`, `netstats`, or remote
-`cohsh`. Older `runtime-ring-submit status=busy`, `cyw43-sdio-owner-reply`, and
-`txglomalign` theories are stale for this boot. The active normalized blocker is
+post-join association/link, EAPOL M1/M2/M3/M4, DHCP, `nettest`, or remote
+`cohsh`; prompt-side `netstats` still reports `ip=0.0.0.0`,
+`wifi_assoc=0`, `wifi_link=0`, `eapol_rx=0`, `eapol_start=0`, and
+`eapol_secure=0`. Older firmware-upload, `txglomalign`, `revinfo`, join-shape,
+and DHCP theories are stale for this boot. The active normalized blocker is
 `WIFI_GATE=7` / `WIFI_BLOCKER=cyw43-data-rx-firstread-empty`, with
 `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=required ... starts=0 data_rx=0
-event_rx=0 eapol_rx=0 associated=no link_up=no rx_firstread_empty=18061
-control_rx_firstread_empty=24576` at line 1672. The first missing proof is a
-non-empty post-join control/event/data RX frame that proves association/link or
-AP M1; DHCP remains correctly blocked at `host-eapol-pending` until host-EAPOL
-security completes. Empty first-read RX-source telemetry stays inside the
+event_rx=0 eapol_rx=0 associated=no link_up=no rx_firstread_empty=19169
+control_rx_firstread_empty=24576` at line 1561. The first missing proof is a
+post-join association/link indication or AP M1; DHCP remains correctly blocked
+at `host-eapol-required` until host-EAPOL security completes. Empty first-read
+RX-source telemetry stays inside the
 linked-runtime boundary: when CYW43 is using the SDIO bus-link, it does not
 issue extra CMD52, backplane, or SDHCI host interrupt reads after an empty
 Function 2 first-read. The minimum retained diagnostic is the empty first-read
@@ -917,7 +923,17 @@ records still report `rx_firstread_attempts`, `rx_firstread_empty`,
 `rx_firstread_remainder_failed`, `rx_firstread_decode_miss`,
 `last_rx_idle_detail`, and `last_rx_idle_result`; the normalizer preserves
 direct `cyw43-data-rx-firstread-*` blockers over later prompt-side
-`host-eapol-required` symptoms. Linked CYW43 station setup also programs the
+`host-eapol-required` symptoms. If no post-join event/control/data frame has
+arrived by the pre-association proof window, root issues one bounded linked
+`WLC_GET_BSSID` control exchange. A valid globally administered AP candidate
+marks only `associated=yes` with `assoc_event=bssid-probe`, then enters the
+existing post-association EAPOL-Start/receive-admission cadence; it does not set
+`link_up`, mark EAPOL secure, release DHCP/data, or bypass the linked runtime.
+The next boot must show
+`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_PROBE status=associated` followed by
+`CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=assoc-probe`, or a precise
+`ignored` / `failed` probe marker that becomes the next blocker. Linked CYW43
+station setup also programs the
 Linux `event_msgs_ext` join-event mask before `WLC_UP` and again after the
 post-up event drain, falling back to global `event_msgs` only on matched
 `BCME_UNSUPPORTED`, so the May 18-19 association/link event subscription is no
@@ -1219,14 +1235,16 @@ or generic command-completion failures.
   pre-net keyboard window. Wi-Fi must keep raw breadcrumbs out of UART/HDMI while
   USB is proving first input, then continue to rate-limit raw HAL output so
   keyboard, serial, HDMI, and IPC turns stay responsive.
-- Wi-Fi net-console bring-up must not hide an already-announced serial prompt.
-  With complete linked-runtime pointer-free proof, bounded SDIO/CYW43455 replay
-  starts after `Cohesix console ready`; otherwise Cohesix preserves the Wi-Fi
-  policy for diagnostics, emits `action=serial-diagnostics-only`, and publishes
-  the prompt. Host-EAPOL remains pending until bounded event-pump slices prove
-  EAPOL secure and only then releases DHCP/data; ordinary network data phases do
-  not run while `wifi-host-eapol-pending` or `wifi-host-eapol-required` is the
-  active Wi-Fi status. Replay uses bounded nonblocking IPC and UART-visible
+- Wi-Fi net-console bring-up must not publish an interactive serial prompt while
+  deferred replay is still producing startup descriptors. With complete
+  linked-runtime pointer-free proof, bounded SDIO/CYW43455 replay starts after
+  the startup banner and before `Cohesix console ready`; otherwise Cohesix
+  preserves the Wi-Fi policy for diagnostics, emits
+  `action=serial-diagnostics-only`, and publishes the prompt. Host-EAPOL remains
+  pending until bounded event-pump slices prove EAPOL secure and only then
+  releases DHCP/data; ordinary network data phases do not run while
+  `wifi-host-eapol-pending` or `wifi-host-eapol-required` is the active Wi-Fi
+  status. Replay uses bounded nonblocking IPC and UART-visible
   `SDIO_DRIVER_TASK_REPLAY_STATUS` / `NET_DRIVER_TASK_REPLAY_STATUS`
   breadcrumbs with `owner=linked-runtime`, `proof_effect`, and `next_action`
   fields.

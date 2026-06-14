@@ -229,11 +229,11 @@ pub fn main(ctx: BootContext) -> ! {
                 if resume_deferred_net_after_prompt {
                     start_deferred_net_after_prompt = true;
                     boot_log::force_uart_line(
-                        "[net-console] deferred resume postponed reason=serial-prompt-first action=root-prompt-printed",
+                        "[net-console] deferred resume scheduled reason=driver-startup-before-root-prompt action=delay-interactive-prompt",
                     );
                     log::info!(
                         target: "net-console",
-                        "[net-console] deferred Wi-Fi resume postponed until after serial root prompt"
+                        "[net-console] deferred Wi-Fi resume scheduled before the interactive serial prompt"
                     );
                 } else {
                     let skip_reason = deferred_net_console_after_prompt_skip_reason(
@@ -263,22 +263,22 @@ pub fn main(ctx: BootContext) -> ! {
             {
                 pump = attach_network(pump, None, net_unavailable_detail.take());
             }
-            start_root_console_prompt(&mut pump);
+            start_root_console_starting(&mut pump);
             #[cfg(all(feature = "net-console", feature = "kernel"))]
             {
                 if let Some(config) = net_deferred_config.take() {
                     boot_log::force_uart_line(
-                        "[net-console] deferred resume reason=root-prompt-printed action=start-wifi",
+                        "[net-console] deferred resume reason=before-root-prompt action=start-wifi",
                     );
                     let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
                     if local_seat_enabled {
                         boot_log::force_uart_line_raw(
-                            "[trace] deferred Wi-Fi logs remain on serial",
+                            "[trace] deferred Wi-Fi logs remain on serial before interactive prompt",
                         );
                     }
                     log::info!(
                         target: "net-console",
-                        "[net-console] deferred resume after serial root prompt; starting Wi-Fi stack"
+                        "[net-console] deferred resume before interactive serial prompt; starting Wi-Fi stack"
                     );
                     match init_deferred_net_console(config, ctx.wifi_debug_hal_ptr) {
                         Ok(mut stack) => {
@@ -291,6 +291,7 @@ pub fn main(ctx: BootContext) -> ! {
                                     crate::net::CONSOLE_TCP_PORT
                                 );
                             }
+                            publish_root_console_ready(&mut pump);
                             enter_root_console_loop(pump);
                         }
                         Err(err) => {
@@ -298,11 +299,13 @@ pub fn main(ctx: BootContext) -> ! {
                             let _ = write!(detail, "{err}");
                             emit_deferred_net_console_failure(&detail, local_seat_enabled);
                             pump = attach_network(pump, None, Some(detail));
+                            publish_root_console_ready(&mut pump);
                             enter_root_console_loop(pump);
                         }
                     }
                 }
             }
+            publish_root_console_ready(&mut pump);
             enter_root_console_loop(pump);
         } else if let Some(mut active_net_stack) = net_stack.take() {
             #[cfg(feature = "net-console")]
@@ -343,7 +346,16 @@ pub fn main(ctx: BootContext) -> ! {
 }
 
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
-fn start_root_console_prompt<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+fn start_root_console_starting<
+    'a,
+    D,
+    T,
+    I,
+    V,
+    const RX: usize,
+    const TX: usize,
+    const LINE: usize,
+>(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
 ) where
     D: crate::serial::SerialDriver,
@@ -361,6 +373,17 @@ fn start_root_console_prompt<'a, D, T, I, V, const RX: usize, const TX: usize, c
     boot_log::force_uart_line_raw("[mark] root-console.start.begin");
     pump.start_cli();
     boot_log::force_uart_line_raw("[mark] root-console.start.ok");
+}
+
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+fn publish_root_console_ready<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
     pump.announce_console_ready();
     let now_ms = crate::hal::timebase().now_ms();
     let result = lifecycle::auto_boot_complete(now_ms);
@@ -369,6 +392,19 @@ fn start_root_console_prompt<'a, D, T, I, V, const RX: usize, const TX: usize, c
         Err(err) => lifecycle::format_denied_log(lifecycle::state(), "auto-boot", err),
     };
     log_buffer::append_log_line(line.as_str());
+}
+
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+fn start_root_console_prompt<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
+    pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+) where
+    D: crate::serial::SerialDriver,
+    T: TimerSource,
+    I: IpcDispatcher,
+    V: CapabilityValidator,
+{
+    start_root_console_starting(pump);
+    publish_root_console_ready(pump);
 }
 
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -567,9 +603,8 @@ fn init_deferred_net_console(
 
     // SAFETY: `hal_ptr` is the leaked bootstrap `KernelHal` pointer already
     // used by the root-console Wi-Fi debug handle. The deferred resume runs
-    // after the prompt is published but before the event loop dispatches
-    // console input, so no Wi-Fi debug command can concurrently borrow the HAL
-    // while the stack is created.
+    // after the startup banner but before the prompt is published, so no Wi-Fi
+    // debug command can concurrently borrow the HAL while the stack is created.
     let hal = unsafe { &mut *(hal_ptr as *mut KernelHal<'static>) };
     crate::net::init_net_console(hal, config)
 }
