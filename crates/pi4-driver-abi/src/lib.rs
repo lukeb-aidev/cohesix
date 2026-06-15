@@ -151,6 +151,10 @@ pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_HOST_INTERRUPT: u32 = 1 << 25;
 pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT: u32 = 1 << 26;
 /// CYW43 RX first-read result: CCCR IORx reported Function 2 ready.
 pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY: u32 = 1 << 27;
+/// CYW43 RX first-read result: source fields are passive under a linked SDIO owner.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_PASSIVE: u32 = 1 << 28;
+/// CYW43 RX first-read result: source fields came from the last bounded owner sample.
+pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CACHED: u32 = 1 << 29;
 /// CYW43 frame flag mask carrying the SDPCM channel on frame-ready completions.
 pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK: u16 = 0x000f;
 /// CYW43 frame flag value for SDPCM control-channel payloads.

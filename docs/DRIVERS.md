@@ -47,7 +47,7 @@ This document is scoped to active Pi 4 work in `docs/BUILD_PLAN.md`:
 
 It targets seL4 13 behavior on AArch64/Pi 4 while preserving Cohesix's current
 as-built constraints. `docs/BUILD_PLAN.md` currently records a future seL4 15
-refresh under Milestone 26d; until that refresh lands, check local generated
+refresh under Milestone 26e; until that refresh lands, check local generated
 headers under `seL4/build/` before assuming an API label, object type, IRQ
 constant, or platform layout.
 
@@ -129,8 +129,17 @@ the hub-port status data/status waits refine Gate 7 evidence between
 retain the longer hub-class descriptor wait, while hub-port `GET_STATUS` uses a
 shorter prompt-safe control wait so an empty transfer-event slot cannot consume
 the whole linked-runtime turn before reset or child-probe fallback progress can
-publish. All hub status reads, change clears, and reset requests remain inside
-the linked runtime over HAL-admitted mappings.
+publish. The linked runtime issues the first hub-port reset before the first
+status read, matching the June 5 linked-runtime-era keyboard-online behavior
+without restoring root-owned steady-state USB. When that first post-reset
+status already proves the hub port is connected, enabled, and no longer in
+reset, the linked runtime clears the change bits and advances directly to child
+probing instead of issuing a redundant second hub-port `GET_STATUS`; this
+matches U-Boot's reset-result behavior while preserving linked-runtime
+ownership. If the first post-reset status proves connection but not enablement
+yet, the linked runtime retries the reset with the U-Boot long-reset settle
+before the next status read. All hub status reads, change clears, and reset
+requests remain inside the linked runtime over HAL-admitted mappings.
 
 Root-task keeps the admitted linked-runtime USB enumeration request active
 through descriptor status waits and hub traversal phases while same-sequence
@@ -856,32 +865,54 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 15 06:44 post-flash boot
-(`/Users/lukasbower/pi4-serial-20260615-064435.log`) supersedes the June 14
-22:45 Wi-Fi frontier as current truth. That trace proves bounded deferred
-Wi-Fi replay, descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init
-detail `0x5500`, CYW43 engine init, firmware/NVRAM upload, firmware release,
-owner-state recovery, split Linux-order station controls, event-mask
-programming, early event-channel `CYW43_DRIVER_TASK_EVENT_RX` capture, matched
-`cyw43-join-bsscfg`, and an armed
-`CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=pending` session. It does not prove
-post-join association/link, EAPOL M1/M2/M3/M4, DHCP, `nettest`, or remote
-`cohsh`; prompt-side `netstats` still reports `ip=0.0.0.0`,
-`wifi_assoc=0`, `wifi_link=0`, `eapol_rx=0`, `eapol_start=0`, and
-`eapol_secure=0`. Older firmware-upload, `txglomalign`, `revinfo`, join-shape,
-and DHCP theories are stale for this boot. The active normalized blocker is
-`WIFI_GATE=7` / `WIFI_BLOCKER=cyw43-data-rx-firstread-empty`, with
+The June 15 08:10 post-flash boot
+(`/Users/lukasbower/pi4-serial-20260615-081036.log`) supersedes the 07:21
+capture, the June 14 22:45 Wi-Fi frontier, and older host-EAPOL theories as
+current truth. That trace proves the rebuilt image was live (`[BUILD]
+1ac71fe04`), bounded deferred Wi-Fi replay, descriptor replay for `cyw43455`
+and `sdio-host`, SDIO engine init detail `0x5500`, CYW43 engine init,
+firmware/NVRAM upload, firmware release, owner-state recovery, split
+Linux-order station controls, event-mask programming, early event-channel
+`CYW43_DRIVER_TASK_EVENT_RX` capture, matched `cyw43-join-bsscfg`, and an
+armed `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=pending` session. It also
+proves that bounded fallback `WLC_GET_BSSID` association probes now run and get
+matched replies: lines 1831, 1891, 1919, and 1927 report attempts
+1/2/3/4 with firmware status `0xffffffef`, ending at
+`reason=firmware-not-associated-limit`. It does not prove post-join
+association/link, EAPOL M1/M2/M3/M4, DHCP, `nettest`, or remote `cohsh`;
+prompt-side `netstats` still reports `ip=0.0.0.0`, `wifi_assoc=0`,
+`wifi_link=0`, `eapol_rx=0`, `eapol_start=0`, and `eapol_secure=0`. Older
+firmware-upload, `txglomalign`, `revinfo`, join-shape, missed-probe, BSSID
+no-reply, and DHCP theories are stale for this boot. The active normalized
+blocker is `WIFI_GATE=7` / `WIFI_BLOCKER=cyw43-data-rx-firstread-empty`, with
 `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=required ... starts=0 data_rx=0
-event_rx=0 eapol_rx=0 associated=no link_up=no rx_firstread_empty=19169
-control_rx_firstread_empty=24576` at line 1561. The first missing proof is a
+event_rx=0 eapol_rx=0 associated=no link_up=no rx_firstread_empty=20024
+control_rx_firstread_empty=24574` at line 1928. The first missing proof is a
 post-join association/link indication or AP M1; DHCP remains correctly blocked
-at `host-eapol-required` until host-EAPOL security completes. Empty first-read
-RX-source telemetry stays inside the
-linked-runtime boundary: when CYW43 is using the SDIO bus-link, it does not
-issue extra CMD52, backplane, or SDHCI host interrupt reads after an empty
-Function 2 first-read. The minimum retained diagnostic is the empty first-read
-detail plus probe length, repeated abort diagnostics stay sparse, and unresolved
-transport resumes do not spend the logical host-EAPOL proof window.
+at `host-eapol-required` until host-EAPOL security completes. The latest
+old-good translation gap is the Linux RSN-capability side effect step: root now
+submits `mfp=0` as optional and `wme_bss_disable=1` as required through matched
+linked-runtime BCDC control exchanges before final `wpa_auth` and join. Empty
+first-read RX-source telemetry stays inside the linked-runtime boundary: when
+CYW43 is using the SDIO bus-link, it samples CCCR `IENx`, CCCR `IORx`, and the
+CYW43 SDIO-core interrupt status through bounded SDIO-owner commands on the
+first empty completion and then every 1024 empty completions. Intermediate
+completions reuse the last owner sample and set the cached-result bit, so root
+reports `rxsrc_mode=owner-card-sampled-cached` /
+`control_rxsrc_mode=owner-card-sampled-cached` instead of treating the
+zero-valued passive placeholder as card state. If every owner read fails, the
+diagnostic remains `passive-sdio-bus-link`; CYW43 still never reads SDHCI host
+interrupt MMIO directly while linked to the SDIO owner. The linked runtime also
+records the SDPCM software-header next-frame length and drains at most four
+immediately indicated Function 2 frames in one RX service turn before returning
+idle. That translates Linux `len_nxtfrm`/bounded readframes behavior without
+moving SDIO ownership into root; nonmatching control/event/data frames are
+queued for the matching root poll, glom descriptors can be followed by their
+superframe on the same turn, and `next_action=inspect-sdpcm-readahead-channel-or-fws-tlv`
+marks a decoded-but-unmatched drain. The next proof must come from owner-side
+IENx/F2/event visibility, SDPCM readahead frames, or later association frames.
+Repeated abort diagnostics stay sparse, and unresolved transport resumes do not
+spend the logical host-EAPOL proof window.
 Root-side station setup already splits matched CYW43 controls into a
 `CONTROL_FRAME` TX turn plus bounded parent-side `CONTROL_POLL` turns;
 host-EAPOL extends that model by tracking the active CYW43 prompt poll,
@@ -904,8 +935,13 @@ keep the 64-byte Linux-style first read before the fallback probe. If the probe
 is empty, the completion keeps `last_rx_idle_detail=0x570a` and packs an
 RX-source snapshot into `last_rx_idle_result`: high bit set, low 16 bits as the
 probe length, CCCR `IENx`, frame-indication, host-interrupt, SDHCI card-int,
-and Function 2 readiness. Root decodes those bits into `rxsrc_*` and
-`control_rxsrc_*` fields on `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS`. After
+Function 2 readiness, a passive-mode bit when all owner reads fail, and a
+cached-result bit when the source fields came from the last bounded owner
+sample. Root decodes those bits into `rxsrc_mode`, `rxsrc_*`,
+`control_rxsrc_mode`, and `control_rxsrc_*` fields on
+`CYW43_DRIVER_TASK_HOST_EAPOL_STATUS`; sampled owner state with missing
+`IENx=0x07` or Function 2 readiness reports
+`next_action=inspect-sdio-owner-function2-rx-source`. After
 post-release Function 2 readiness, the linked runtime also mirrors the old HAL
 interrupt path by writing CCCR `IENx=0x07` before the SDIO core `HOSTINTMASK` /
 `FUNCTIONINTMASK` programming, so association events and AP M1 can reach the
@@ -924,15 +960,22 @@ records still report `rx_firstread_attempts`, `rx_firstread_empty`,
 `last_rx_idle_detail`, and `last_rx_idle_result`; the normalizer preserves
 direct `cyw43-data-rx-firstread-*` blockers over later prompt-side
 `host-eapol-required` symptoms. If no post-join event/control/data frame has
-arrived by the pre-association proof window, root issues one bounded linked
-`WLC_GET_BSSID` control exchange. A valid globally administered AP candidate
-marks only `associated=yes` with `assoc_event=bssid-probe`, then enters the
-existing post-association EAPOL-Start/receive-admission cadence; it does not set
+arrived by the pre-association proof window, root issues bounded linked
+`WLC_GET_BSSID` control exchanges. A transient firmware
+`BCME_NOTASSOCIATED`/`0xffffffef` result is logged as
+`status=pending reason=firmware-not-associated result=0xffffffef` and retried
+at a fixed bounded cadence; it does not consume the whole association-probe
+proof opportunity. A valid globally administered AP candidate marks only
+`associated=yes` with `assoc_event=bssid-probe`, then enters the existing
+post-association EAPOL-Start/receive-admission cadence; it does not set
 `link_up`, mark EAPOL secure, release DHCP/data, or bypass the linked runtime.
-The next boot must show
-`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_PROBE status=associated` followed by
-`CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=assoc-probe`, or a precise
-`ignored` / `failed` probe marker that becomes the next blocker. Linked CYW43
+The next boot must show `cyw43-control-rsn-mfp` and
+`cyw43-control-rsn-wme-bss-disable` ready or tolerated-unsupported status before
+`cyw43-control-wpa-auth-final`, followed by either association/link proof,
+`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_PROBE status=associated
+reason=valid-bssid`, bounded `status=pending reason=firmware-not-associated`
+retries that expose a later precise blocker, or a new direct join/security
+status. Linked CYW43
 station setup also programs the
 Linux `event_msgs_ext` join-event mask before `WLC_UP` and again after the
 post-up event drain, falling back to global `event_msgs` only on matched
@@ -1135,8 +1178,9 @@ or generic command-completion failures.
   must still be proven before DHCP/data. During pending secure joins, the runtime
   keeps Ethernet RX on `DRIVER_RUNTIME_CYW43_OP_RX_POLL`, exposes SDPCM
   control/event frames through `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL`, credit-gates
-  control TX, suppresses repetitive low-level breadcrumbs, and keeps non-EAPOL
-  data blocked. Prompt-side `wifi diag` and `wifi dump-state` render cached or
+  control TX, drains a bounded Linux-style SDPCM next-frame window, suppresses
+  repetitive low-level breadcrumbs, and keeps non-EAPOL data blocked.
+  Prompt-side `wifi diag` and `wifi dump-state` render cached or
   linked-runtime evidence; bounded `wifi probe-ht` and stateful `wifi load-fw` /
   `wifi retry` fail closed with `pi4-wifi-driver-task-runtime-required` when no
   linked runtime can satisfy the request. Post-join `EVENT_LINK` without the
@@ -1333,10 +1377,14 @@ or generic command-completion failures.
   subframes are deaggregated into the data/event/EAPOL path, and malformed or
   oversized glom evidence remains explicit but UART-capped instead of silent or
   flood-prone. Descriptor overshoot is a soft mismatch when the remaining tail is
-  still a complete SDPCM subframe. Pi 4 keeps Linux's `bus:rxglom=1` through
-  attach and join; any future runtime disable or superframe expansion must be
-  owned by the Wi-Fi driver task after secure carrier proof, with bounded work,
-  counters, and recovery gates.
+  still a complete SDPCM subframe. SDPCM software-header next-frame hints are
+  remembered across polls and consumed before falling back to the Function 1
+  RFRAME byte count, so a glom descriptor, event frame, or data frame that
+  points at the next Function 2 frame can be drained before root observes a false
+  empty poll. Pi 4 keeps Linux's `bus:rxglom=1` through attach and join; any
+  future runtime disable or superframe expansion must be owned by the Wi-Fi
+  driver task after secure carrier proof, with bounded work, counters, and
+  recovery gates.
 - `KSO`, cached `DEVON`, `ALP_AVAIL`, or `FORCE_HT` are diagnostic or sideband
   evidence only; they do not authorize strict Function 2 traffic by themselves.
 - No-HT / forced-HT paths remain diagnostics. Forced HT does not authorize
@@ -1685,6 +1733,15 @@ active path is Cohesix-owned cold start:
   forwarding the SET_CONFIGURATION control transfer to the device. Later HID
   attach may reuse the already configured interrupt endpoint, but it must not
   make endpoint setup depend on a successful post-configuration control path.
+- Hub-child Address Device follows U-Boot's reset-recovery ordering: after a
+  hub port reports connected, enabled, and no longer resetting, the linked
+  runtime waits the bounded USB 2.0/U-Boot reset-recovery gap before issuing
+  Address Device for the child. This settle applies only inside the linked
+  runtime hub-child path after HAL admission.
+- HID boot-keyboard control setup follows U-Boot's interrupt-queue polling mode:
+  after selecting boot protocol, the linked runtime sends `SET_IDLE` with
+  duration `0` so compatible keyboards report only changes instead of generating
+  periodic idle reports that can bury real key transitions behind empty events.
 - Periodic endpoint contexts must carry U-Boot-equivalent scheduler fields.
   For the current SINO WEALTH `258a:0f0a` keyboard interface, Linux reports a
   low-speed interrupt-IN endpoint (`0x81`) with `wMaxPacketSize=8` and
@@ -1705,7 +1762,10 @@ active path is Cohesix-owned cold start:
   matching endpoint poller; otherwise the first HID report can be acknowledged
   in ERDP and lost before Gate 8 sees it. CPU-side HID/control descriptor reads
   must invalidate the DMA buffer after the transfer event before decoding
-  device-written bytes.
+  device-written bytes. Strict boot-keyboard interrupt reads use U-Boot's
+  8-byte boot-report transfer size; non-boot fallback HID shapes keep the
+  existing bounded endpoint-packet request so report-ID and compact-report
+  compatibility is not narrowed.
 - For keyboards behind a USB hub, the local-seat runtime must retain the hub
   device slot for as long as the HID keyboard is attached. Dropping the hub
   `UsbDevice` disables that xHCI slot and can silently orphan the interrupt-IN
