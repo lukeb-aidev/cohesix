@@ -127,6 +127,10 @@ const CYW43_HOST_EAPOL_RX_RESCUE_AFTER_STARTS: u32 = 2;
 const CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS: u32 = CYW43_HOST_EAPOL_PRE_ASSOC_POLLS as u32;
 const CYW43_HOST_EAPOL_ASSOC_PROBE_INTERVAL_POLLS: u32 = 4_096;
 const CYW43_HOST_EAPOL_ASSOC_PROBE_MAX_ATTEMPTS: u8 = 4;
+const CYW43_HOST_EAPOL_ASSOC_RESCUE_POLLS: usize = (CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS
+    as usize)
+    + (CYW43_HOST_EAPOL_ASSOC_PROBE_MAX_ATTEMPTS as usize)
+        * (CYW43_HOST_EAPOL_ASSOC_PROBE_INTERVAL_POLLS as usize);
 const CYW43_SDIO_EXPECTED_IENX: u8 = 0x07;
 const CYW43_BCDC_HEADER_BYTES: usize = 16;
 const CYW43_BDC_HEADER_BYTES: usize = 4;
@@ -533,6 +537,7 @@ struct Cyw43HostEapolProgress {
     last_rx_source: Option<Cyw43RxSourceResult>,
     last_control_rx_source: Option<Cyw43RxSourceResult>,
     assoc_probe_not_associated: bool,
+    assoc_set_ssid_rescue_attempted: bool,
     last_flags: u16,
     last_len: u16,
     last_ethertype: u16,
@@ -746,10 +751,12 @@ fn cyw43_capture_event_frame_from_token(
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy)]
 struct Cyw43HostEapolSession {
+    credentials: WifiCredentials,
     eapol: HostEapolState,
     progress: Cyw43HostEapolProgress,
     refreshed_after_assoc: bool,
     rescued_after_assoc: bool,
+    assoc_probe_window_start_poll: u32,
     assoc_bssid_probe_attempts: u8,
     assoc_bssid_probe_last_poll: u32,
 }
@@ -763,10 +770,12 @@ impl Cyw43HostEapolSession {
         let psk = &credentials.psk[..psk_len];
         let eapol = HostEapolState::new(ssid, psk).map_err(DriverTaskNetError::RuntimeInit)?;
         Ok(Self {
+            credentials,
             eapol,
             progress: Cyw43HostEapolProgress::default(),
             refreshed_after_assoc: false,
             rescued_after_assoc: false,
+            assoc_probe_window_start_poll: 0,
             assoc_bssid_probe_attempts: 0,
             assoc_bssid_probe_last_poll: 0,
         })
@@ -2644,7 +2653,7 @@ pub(crate) fn service_cyw43_host_eapol_slice(
     let mut activity = false;
     let mut clear_session = false;
     for _ in 0..poll_limit {
-        if session.progress.polls >= CYW43_HOST_EAPOL_JOIN_POLLS as u32 {
+        if session.progress.polls >= cyw43_host_eapol_join_poll_limit(session) {
             mark_cyw43_host_eapol_required(contract, &session.progress);
             clear_session = true;
             activity = true;
@@ -2995,6 +3004,7 @@ fn cyw43_service_host_eapol_assoc_probe(
         &session.progress,
         session.assoc_bssid_probe_attempts,
         session.assoc_bssid_probe_last_poll,
+        session.assoc_probe_window_start_poll,
     ) {
         return false;
     }
@@ -3027,6 +3037,11 @@ fn cyw43_service_host_eapol_assoc_probe(
         Err(err) => {
             let exhausted =
                 session.assoc_bssid_probe_attempts >= CYW43_HOST_EAPOL_ASSOC_PROBE_MAX_ATTEMPTS;
+            if exhausted
+                && cyw43_try_host_eapol_set_ssid_assoc_rescue(contract, session, poll, attempt, err)
+            {
+                return true;
+            }
             let status = if exhausted { "failed" } else { "pending" };
             let reason = if err.is_not_associated() {
                 if exhausted {
@@ -3052,6 +3067,59 @@ fn cyw43_service_host_eapol_assoc_probe(
             true
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_try_host_eapol_set_ssid_assoc_rescue(
+    contract: DriverTaskContract,
+    session: &mut Cyw43HostEapolSession,
+    poll: usize,
+    attempt: u8,
+    err: Cyw43BssidProbeError,
+) -> bool {
+    if !err.is_not_associated()
+        || session.progress.assoc_set_ssid_rescue_attempted
+        || !cyw43_host_eapol_assoc_rescue_owner_ready(&session.progress)
+    {
+        return false;
+    }
+
+    session.progress.assoc_set_ssid_rescue_attempted = true;
+    match cyw43_submit_bcdc_ssid(
+        contract,
+        session.credentials,
+        "cyw43-host-eapol-assoc-rescue-set-ssid",
+    ) {
+        Ok(()) => {
+            session.progress.assoc_probe_not_associated = false;
+            session.assoc_probe_window_start_poll = session.progress.polls;
+            session.assoc_bssid_probe_attempts = 0;
+            session.assoc_bssid_probe_last_poll = session.progress.polls;
+            emit_cyw43_host_eapol_assoc_rescue(
+                contract,
+                poll,
+                attempt,
+                "ready",
+                "firmware-not-associated-limit",
+                "set-ssid",
+                0,
+            );
+            emit_cyw43_host_eapol_status(contract, "assoc-rescue", &session.progress);
+        }
+        Err(_) => {
+            session.progress.assoc_probe_not_associated = true;
+            emit_cyw43_host_eapol_assoc_rescue(
+                contract,
+                poll,
+                attempt,
+                "failed",
+                "set-ssid-control-error",
+                "set-ssid",
+                0,
+            );
+        }
+    }
+    true
 }
 
 #[cfg(feature = "kernel")]
@@ -3206,6 +3274,7 @@ const fn cyw43_host_eapol_assoc_probe_due(
     progress: &Cyw43HostEapolProgress,
     attempts: u8,
     last_poll: u32,
+    window_start_poll: u32,
 ) -> bool {
     if progress.associated
         || progress.event_rx != 0
@@ -3215,9 +3284,45 @@ const fn cyw43_host_eapol_assoc_probe_due(
         return false;
     }
     if attempts == 0 {
-        return progress.polls >= CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS;
+        return progress.polls
+            >= window_start_poll.saturating_add(CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS);
     }
     progress.polls >= last_poll.saturating_add(CYW43_HOST_EAPOL_ASSOC_PROBE_INTERVAL_POLLS)
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_host_eapol_join_poll_limit(session: &Cyw43HostEapolSession) -> u32 {
+    let base = CYW43_HOST_EAPOL_JOIN_POLLS as u32;
+    if session.progress.assoc_set_ssid_rescue_attempted {
+        let rescue_limit = session
+            .assoc_probe_window_start_poll
+            .saturating_add(CYW43_HOST_EAPOL_ASSOC_RESCUE_POLLS as u32);
+        if rescue_limit > base {
+            rescue_limit
+        } else {
+            base
+        }
+    } else {
+        base
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_rx_source_owner_ready(source: Option<Cyw43RxSourceResult>) -> bool {
+    match source {
+        Some(source) => {
+            !source.passive
+                && source.function2_ready
+                && source.interrupt_enable == CYW43_SDIO_EXPECTED_IENX
+        }
+        None => false,
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_host_eapol_assoc_rescue_owner_ready(progress: &Cyw43HostEapolProgress) -> bool {
+    cyw43_rx_source_owner_ready(progress.last_control_rx_source)
+        || cyw43_rx_source_owner_ready(progress.last_rx_source)
 }
 
 #[cfg(feature = "kernel")]
@@ -3414,7 +3519,7 @@ fn emit_cyw43_host_eapol_status(
     let mut line = heapless::String::<1536>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} rxsrc_mode={} rxsrc_probe_len={} rxsrc_ien=0x{:02x} rxsrc_frame_ind={} rxsrc_host_int={} rxsrc_card_int={} rxsrc_f2_ready={} control_rxsrc_mode={} control_rxsrc_probe_len={} control_rxsrc_ien=0x{:02x} control_rxsrc_frame_ind={} control_rxsrc_host_int={} control_rxsrc_card_int={} control_rxsrc_f2_ready={} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} assoc_set_ssid_rescue={} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} rxsrc_mode={} rxsrc_probe_len={} rxsrc_ien=0x{:02x} rxsrc_frame_ind={} rxsrc_host_int={} rxsrc_card_int={} rxsrc_f2_ready={} control_rxsrc_mode={} control_rxsrc_probe_len={} control_rxsrc_ien=0x{:02x} control_rxsrc_frame_ind={} control_rxsrc_host_int={} control_rxsrc_card_int={} control_rxsrc_f2_ready={} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
         contract.name,
         status,
         reason,
@@ -3432,6 +3537,7 @@ fn emit_cyw43_host_eapol_status(
         assoc_event,
         progress.association_poll,
         progress.post_assoc_polls,
+        yes_no(progress.assoc_set_ssid_rescue_attempted),
         progress.rx_firstread_attempts,
         progress.rx_firstread_empty,
         progress.rx_firstread_invalid,
@@ -3541,6 +3647,33 @@ fn emit_cyw43_host_eapol_assoc_probe(
 }
 
 #[cfg(feature = "kernel")]
+fn emit_cyw43_host_eapol_assoc_rescue(
+    contract: DriverTaskContract,
+    poll: usize,
+    attempt: u8,
+    status: &'static str,
+    reason: &'static str,
+    action: &'static str,
+    result: u32,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<320>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE contract={} poll={} attempt={} status={} reason={} action={} result=0x{:08x}",
+        contract.name,
+        poll,
+        attempt,
+        status,
+        reason,
+        action,
+        result,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
 fn emit_cyw43_host_eapol_tx_shape(
     contract: DriverTaskContract,
     stage: &'static str,
@@ -3607,6 +3740,8 @@ fn cyw43_host_eapol_next_action(
             || cyw43_rx_source_is_passive(progress.last_rx_source)
         {
             "inspect-cyw43-assoc-event-rx-or-sdio-owner-ienx-snapshot"
+        } else if progress.assoc_set_ssid_rescue_attempted {
+            "inspect-cyw43-association-event-after-set-ssid-rescue"
         } else {
             "inspect-cyw43-association-event-or-join-policy"
         }
@@ -3615,6 +3750,8 @@ fn cyw43_host_eapol_next_action(
             "inspect-sdio-owner-function2-rx-source"
         } else if cyw43_rx_source_is_passive(progress.last_control_rx_source) {
             "inspect-cyw43-assoc-event-rx-or-sdio-owner-ienx-snapshot"
+        } else if progress.assoc_set_ssid_rescue_attempted {
+            "inspect-cyw43-association-event-after-set-ssid-rescue"
         } else {
             "inspect-cyw43-assoc-event-rx-or-ienx"
         }
@@ -3625,6 +3762,8 @@ fn cyw43_host_eapol_next_action(
             "inspect-sdio-owner-function2-rx-source"
         } else if cyw43_rx_source_is_passive(progress.last_rx_source) {
             "inspect-association-event-or-sdio-owner-rx-source"
+        } else if progress.assoc_set_ssid_rescue_attempted {
+            "inspect-cyw43-association-event-after-set-ssid-rescue"
         } else {
             "inspect-association-event-or-cyw43-rx-latch"
         }
@@ -7764,6 +7903,7 @@ mod tests {
         assert_eq!(CYW43_HOST_EAPOL_PRE_ASSOC_POLLS, 8_192);
         assert_eq!(CYW43_HOST_EAPOL_POST_ASSOC_POLLS, 16_384);
         assert_eq!(CYW43_HOST_EAPOL_JOIN_POLLS, 24_576);
+        assert_eq!(CYW43_HOST_EAPOL_ASSOC_RESCUE_POLLS, 24_576);
         assert!(!cyw43_host_eapol_start_due(
             CYW43_HOST_EAPOL_START_FIRST_POLL - 1,
             0
@@ -7837,12 +7977,14 @@ mod tests {
             &session.progress,
             session.assoc_bssid_probe_attempts,
             session.assoc_bssid_probe_last_poll,
+            session.assoc_probe_window_start_poll,
         ));
         session.progress.polls = CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS;
         assert!(cyw43_host_eapol_assoc_probe_due(
             &session.progress,
             session.assoc_bssid_probe_attempts,
             session.assoc_bssid_probe_last_poll,
+            session.assoc_probe_window_start_poll,
         ));
         session.assoc_bssid_probe_attempts = 1;
         session.assoc_bssid_probe_last_poll = CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS;
@@ -7853,6 +7995,7 @@ mod tests {
             &session.progress,
             session.assoc_bssid_probe_attempts,
             session.assoc_bssid_probe_last_poll,
+            session.assoc_probe_window_start_poll,
         ));
         session.progress.polls =
             CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS + CYW43_HOST_EAPOL_ASSOC_PROBE_INTERVAL_POLLS;
@@ -7860,15 +8003,35 @@ mod tests {
             &session.progress,
             session.assoc_bssid_probe_attempts,
             session.assoc_bssid_probe_last_poll,
+            session.assoc_probe_window_start_poll,
         ));
         session.assoc_bssid_probe_attempts = CYW43_HOST_EAPOL_ASSOC_PROBE_MAX_ATTEMPTS;
         assert!(!cyw43_host_eapol_assoc_probe_due(
             &session.progress,
             session.assoc_bssid_probe_attempts,
             session.assoc_bssid_probe_last_poll,
+            session.assoc_probe_window_start_poll,
         ));
         session.assoc_bssid_probe_attempts = 0;
         session.assoc_bssid_probe_last_poll = 0;
+        session.assoc_probe_window_start_poll = 20_480;
+        session.progress.polls =
+            session.assoc_probe_window_start_poll + CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS - 1;
+        assert!(!cyw43_host_eapol_assoc_probe_due(
+            &session.progress,
+            session.assoc_bssid_probe_attempts,
+            session.assoc_bssid_probe_last_poll,
+            session.assoc_probe_window_start_poll,
+        ));
+        session.progress.polls =
+            session.assoc_probe_window_start_poll + CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS;
+        assert!(cyw43_host_eapol_assoc_probe_due(
+            &session.progress,
+            session.assoc_bssid_probe_attempts,
+            session.assoc_bssid_probe_last_poll,
+            session.assoc_probe_window_start_poll,
+        ));
+        session.assoc_probe_window_start_poll = 0;
 
         assert!(!cyw43_host_eapol_bssid_candidate(
             EthernetAddress([0; ETHER_ADDR_LEN]),
@@ -7899,6 +8062,86 @@ mod tests {
         assert_eq!(
             session.progress.association_poll,
             CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS + 1
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_set_ssid_rescue_requires_owner_f2_ready() {
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        assert_eq!(
+            cyw43_host_eapol_join_poll_limit(&session),
+            CYW43_HOST_EAPOL_JOIN_POLLS as u32
+        );
+        assert!(!cyw43_host_eapol_assoc_rescue_owner_ready(
+            &session.progress
+        ));
+
+        session.progress.last_control_rx_source = Some(Cyw43RxSourceResult {
+            probe_len: 512,
+            interrupt_enable: 0x06,
+            frame_indicated: true,
+            host_interrupt: true,
+            card_interrupt: false,
+            function2_ready: true,
+            passive: false,
+            cached: false,
+        });
+        assert!(!cyw43_host_eapol_assoc_rescue_owner_ready(
+            &session.progress
+        ));
+
+        session.progress.last_control_rx_source = Some(Cyw43RxSourceResult {
+            probe_len: 512,
+            interrupt_enable: CYW43_SDIO_EXPECTED_IENX,
+            frame_indicated: true,
+            host_interrupt: true,
+            card_interrupt: false,
+            function2_ready: false,
+            passive: false,
+            cached: false,
+        });
+        assert!(!cyw43_host_eapol_assoc_rescue_owner_ready(
+            &session.progress
+        ));
+
+        session.progress.last_control_rx_source = Some(Cyw43RxSourceResult {
+            probe_len: 512,
+            interrupt_enable: CYW43_SDIO_EXPECTED_IENX,
+            frame_indicated: true,
+            host_interrupt: true,
+            card_interrupt: false,
+            function2_ready: true,
+            passive: false,
+            cached: true,
+        });
+        assert!(cyw43_host_eapol_assoc_rescue_owner_ready(&session.progress));
+
+        session.progress.assoc_set_ssid_rescue_attempted = true;
+        session.assoc_probe_window_start_poll = 20_481;
+        assert_eq!(
+            cyw43_host_eapol_join_poll_limit(&session),
+            20_481 + CYW43_HOST_EAPOL_ASSOC_RESCUE_POLLS as u32
+        );
+        assert_eq!(
+            cyw43_host_eapol_next_action("required", &session.progress),
+            "inspect-cyw43-data-rx-path"
+        );
+
+        session.progress.assoc_probe_not_associated = true;
+        assert_eq!(
+            cyw43_host_eapol_next_action("required", &session.progress),
+            "inspect-cyw43-association-event-after-set-ssid-rescue"
+        );
+
+        session.progress.assoc_probe_not_associated = false;
+        session.progress.control_rx_firstread_empty = 1;
+        assert_eq!(
+            cyw43_host_eapol_next_action("required", &session.progress),
+            "inspect-cyw43-association-event-after-set-ssid-rescue"
         );
     }
 

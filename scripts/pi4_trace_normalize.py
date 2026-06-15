@@ -1839,6 +1839,20 @@ def cyw43_host_eapol_firstread_blocker(fields: dict[str, str]) -> str | None:
     return None
 
 
+def cyw43_host_eapol_post_rescue_association_gap(fields: dict[str, str]) -> bool:
+    """Return true when a spent SET_SSID rescue still lacks association proof."""
+
+    return (
+        fields.get("assoc_set_ssid_rescue", "").lower() == "yes"
+        and fields.get("associated", "").lower() == "no"
+        and fields.get("link_up", "").lower() == "no"
+        and fields.get("assoc_event", "").lower() in {"", "none"}
+        and (parse_hex_int(fields.get("data_rx")) or 0) == 0
+        and (parse_hex_int(fields.get("event_rx")) or 0) == 0
+        and (parse_hex_int(fields.get("eapol_rx")) or 0) == 0
+    )
+
+
 def summarize_host_eapol_firstread_status(
     events: Iterable[TraceEvent],
 ) -> tuple[str, str, int] | None:
@@ -1855,6 +1869,8 @@ def summarize_host_eapol_firstread_status(
         status = fields.get("status", "").lower()
         reason = normalize_wifi_blocker(fields.get("reason", ""))
         if reason == "cyw43-association-not-associated":
+            continue
+        if status == "required" and cyw43_host_eapol_post_rescue_association_gap(fields):
             continue
         if status == "required" or reason == "host-eapol-required":
             latest = (blocker, "runtime-rx", event.line)
@@ -4036,6 +4052,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = reason
                 host_eapol_terminal_blocker = reason
                 explicit_blocker = reason
+            elif status == "required" and cyw43_host_eapol_post_rescue_association_gap(fields):
+                gate = max(gate, 7)
+                post_f2_progress_seen = True
+                blocker = "cyw43-association-not-associated"
+                host_eapol_terminal_blocker = blocker
+                explicit_blocker = blocker
             elif status == "required" or reason == "host-eapol-required":
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
@@ -5316,6 +5338,11 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or "join-security"
         )
         return "wifi-host-eapol-pending", phase
+    if (
+        "cyw43_driver_task_host_eapol_status" in event.raw.lower()
+        and cyw43_host_eapol_post_rescue_association_gap(event.fields)
+    ):
+        return "cyw43-association-not-associated", "association"
     if normalize_wifi_blocker(event.raw) == "host-eapol-required":
         phase = (
             event.fields.get("stage")
@@ -5530,6 +5557,12 @@ def summarize_wifi_failure_detail(
 
         candidate = normalize_wifi_blocker(raw)
         firstread_blocker = cyw43_host_eapol_firstread_blocker(fields)
+        if (
+            wifi_blocker == "cyw43-association-not-associated"
+            and "cyw43_driver_task_host_eapol_status" in raw
+            and cyw43_host_eapol_post_rescue_association_gap(fields)
+        ):
+            candidate = wifi_blocker
         if wifi_blocker == firstread_blocker:
             candidate = wifi_blocker
         firmware_stream_blocker = wifi_firmware_stream_fault_blocker(event)

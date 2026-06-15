@@ -6569,6 +6569,47 @@ def test_gate_summary_preserves_host_eapol_firstread_empty_with_rx_source() -> N
     assert gates.wifi_phase == "runtime-rx"
 
 
+def test_gate_summary_names_post_rescue_association_gap_over_firstread_empty() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE contract=cyw43455 "
+            "poll=20481 attempt=4 status=ready "
+            "reason=firmware-not-associated-limit action=set-ssid result=0x00000000",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=32768 starts=0 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=0 "
+            "control_rx=0 empty_polls=32768 associated=no link_up=no "
+            "assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "assoc_set_ssid_rescue=yes rx_firstread_attempts=7902 "
+            "rx_firstread_empty=7902 rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=32762 control_rx_firstread_empty=32762 "
+            "control_rx_firstread_failed=0 last_rx_idle_detail=0x570a "
+            "last_rx_idle_result=0xab070200 last_control_rx_idle_detail=0x570a "
+            "last_control_rx_idle_result=0xab070200 "
+            "rxsrc_mode=owner-card-sampled-cached rxsrc_probe_len=512 "
+            "rxsrc_ien=0x07 rxsrc_frame_ind=yes rxsrc_host_int=yes "
+            "rxsrc_card_int=no rxsrc_f2_ready=yes "
+            "control_rxsrc_mode=owner-card-sampled-cached "
+            "control_rxsrc_probe_len=512 control_rxsrc_ien=0x07 "
+            "control_rxsrc_frame_ind=yes control_rxsrc_host_int=yes "
+            "control_rxsrc_card_int=no control_rxsrc_f2_ready=yes "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no "
+            "next_action=inspect-cyw43-association-event-after-set-ssid-rescue",
+            "netstatus: ip=0.0.0.0 gateway=0.0.0.0 "
+            "src=wifi-host-eapol-required dhcp=host-eapol-required",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-association-not-associated"
+    assert gates.wifi_exact == "cyw43-association-not-associated"
+    assert gates.wifi_phase == "association"
+
+
 def test_gate_summary_preserves_not_associated_probe_over_firstread_empty() -> None:
     events = normalizer.parse_events(
         [

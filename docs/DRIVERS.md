@@ -135,15 +135,29 @@ alternate hub-port `wIndex` probing as a narrow STALL recovery path. The linked
 runtime mirrors that by deduplicating primary/fallback port indexes and by
 trying the fallback only after an explicit xHCI stall completion, not after a
 pending data stage, pending status stage, empty event slot, or generic
-transport failure. The linked runtime issues the first hub-port reset before
+transport failure. Hub-port `GET_STATUS` also follows U-Boot's ordinary
+control-read event shape: the data TRB carries ISP but no IOC, and the status
+TRB remains the completion event for full-length reads. Short data packets may
+still publish the data-stage event before the status event is drained. EP0
+control TD publication also mirrors U-Boot's transfer-ring giveback discipline:
+the runtime queues the setup TRB inactive, queues the rest of the TD, republishes
+the link TRB with the pre-wrap cycle bit before toggling the ring cycle when the
+TD crosses the link entry, then makes the setup TRB active immediately before
+the doorbell. This keeps hub-port status TDs coherent across ring wrap without
+changing timeout, keep-active, or fallback policy. The linked runtime issues
+the first hub-port reset before
 the first status read, matching the June 5 linked-runtime-era keyboard-online
 behavior without restoring root-owned steady-state USB. When that first
 post-reset status already proves the hub port is connected, enabled, and no
-longer in reset, the linked runtime clears the change bits and advances
-directly to child probing instead of issuing a redundant second hub-port
-`GET_STATUS`; this matches U-Boot's reset-result behavior while preserving
-linked-runtime ownership. If the first post-reset status proves connection but
-not enablement yet, the linked runtime retries the reset with the U-Boot
+longer in reset, the linked runtime clears only the reset-change bit and
+advances directly to child probing instead of issuing a redundant second
+hub-port `GET_STATUS`; this matches U-Boot's reset-result behavior while
+preserving linked-runtime ownership. The runtime clears `C_PORT_CONNECTION` as
+the pre-reset change acknowledgement, but clears `C_PORT_RESET` only after a
+status read proves connected, enabled, and reset-cleared; it does not clear
+`C_PORT_ENABLE` or reset-change early while the status-stage proof is still
+pending. If the first post-reset status proves connection but not enablement
+yet, the linked runtime retries the reset with the U-Boot
 long-reset settle before the next status read. Hub-port power and reset waits
 use the same U-Boot-shaped millisecond envelope as the known-good Pi 4 path:
 at least 100 ms after port power, 20 ms after the first reset, 10 ms recovery
@@ -889,37 +903,39 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 15 19:18 serial capture
-(`/Users/lukasbower/pi4-serial-20260615-191840.log`) supersedes the 08:10
-Wi-Fi capture, the June 14 22:45 Wi-Fi frontier, and older host-EAPOL theories
-as current truth. That trace proves the rebuilt image was live (`[BUILD]
-26b24f55b`), bounded deferred Wi-Fi replay, descriptor replay for `cyw43455`
-and `sdio-host`, SDIO engine init detail `0x5500`, CYW43 engine init,
-firmware/NVRAM upload, firmware release, owner-state recovery, split
-Linux-order station controls, `BRCMF_C_GET_REVINFO`, `mpc=0`, event-mask
-programming before and after `WLC_UP`, early event-channel
-`CYW43_DRIVER_TASK_EVENT_RX` capture, matched RSN side-effect replies for
-`mfp=0` and `wme_bss_disable=1`, host-EAPOL RX admission, matched
-`cyw43-join-bsscfg`, and an armed
+The June 16 06:57 serial capture
+(`/Users/lukasbower/pi4-serial-20260616-065748.log`) supersedes the June 15
+22:25 Wi-Fi capture and older host-EAPOL theories as current truth. That trace
+proves the rebuilt image was live (`[BUILD] 1103ba4ce`), bounded deferred Wi-Fi
+replay, descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init
+detail `0x5500`, CYW43 engine init, firmware/NVRAM upload, firmware release,
+owner-state recovery, split Linux-order station controls,
+`BRCMF_C_GET_REVINFO`, `mpc=0`, event-mask programming before and after
+`WLC_UP`, early event-channel `CYW43_DRIVER_TASK_EVENT_RX` capture, matched RSN
+side-effect replies for `mfp=0` and `wme_bss_disable=1`, host-EAPOL RX
+admission, matched `cyw43-join-bsscfg`, and an armed
 `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=pending` session. It also proves
 bounded fallback `WLC_GET_BSSID` association probes run and get matched
-firmware replies: lines 1955, 2035, 2043, and 2051 report attempts 1/2/3/4
-with firmware status `0xffffffef`, ending at
-`reason=firmware-not-associated-limit`. It does not prove post-join
-association/link, EAPOL M1/M2/M3/M4, DHCP, `nettest`, or remote `cohsh`;
-prompt-side `netstats` still reports `ip=0.0.0.0`, `wifi_assoc=0`,
-`wifi_link=0`, `eapol_rx=0`, `eapol_start=0`, and `eapol_secure=0`. Older
-firmware-upload, `txglomalign`, `revinfo`, join-shape, missed-probe, BSSID
-no-reply, and DHCP theories are stale for this boot. The active normalized
-blocker is `WIFI_GATE=7` /
-`WIFI_BLOCKER=cyw43-association-not-associated`: line 2052 reports
-`status=required reason=cyw43-association-not-associated`, `starts=0`,
-`data_rx=0`, `event_rx=0`, `eapol_rx=0`, `associated=no`, `link_up=no`, and
-matched RX-source hints with `rxsrc_ien=0x07`, `rxsrc_frame_ind=yes`,
-`rxsrc_host_int=yes`, and `rxsrc_f2_ready=yes`. The first missing proof is a
-post-join association/link indication or AP M1; DHCP remains correctly blocked
-at `host-eapol-required` until host-EAPOL security completes. The latest
-old-good translation gap is the Linux connect-time station policy: root now
+firmware replies, then proves the one-shot association rescue:
+`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE ... status=ready action=set-ssid`.
+The rescue is not association proof. The same boot still has no post-join
+association/link event, no valid AP BSSID, no EAPOL M1/M2/M3/M4, no DHCP/IP,
+no successful `nettest`, and no remote `cohsh`; prompt-side `netstats` still
+reports `ip=0.0.0.0`, `wifi_assoc=0`, `wifi_link=0`, `eapol_rx=0`,
+`eapol_start=0`, and `eapol_secure=0`. Older firmware-upload, `txglomalign`,
+`revinfo`, join-shape, missing-rescue, BSSID no-reply, and DHCP theories are
+stale for this boot. The active normalized blocker is `WIFI_GATE=7` /
+`WIFI_BLOCKER=cyw43-association-not-associated`: line 2126 reports
+`status=required reason=host-eapol-required`, `assoc_set_ssid_rescue=yes`,
+`starts=0`, `data_rx=0`, `event_rx=0`, `eapol_rx=0`, `associated=no`,
+`link_up=no`, and matched RX-source hints with `rxsrc_ien=0x07`,
+`rxsrc_frame_ind=yes`, `rxsrc_host_int=yes`, and `rxsrc_f2_ready=yes`.
+Normalizer priority treats that post-rescue no-association status as the
+association blocker rather than the generic DHCP policy symptom. The first
+missing proof is a post-rescue association/link indication or valid AP BSSID;
+DHCP remains correctly blocked at `host-eapol-required` until host-EAPOL
+security completes. The latest old-good translation gap is the Linux
+connect-time station policy: root now
 reasserts `mpc=0` and best-effort disables ARP/ND offload with `arp_ol=0`,
 `arpoe=0`, and `ndoe=0` as matched linked-runtime BCDC control exchanges before
 join. Empty first-read RX-source telemetry stays inside the linked-runtime
@@ -996,15 +1012,28 @@ arrived by the pre-association proof window, root issues bounded linked
 `status=pending reason=firmware-not-associated result=0xffffffef` and retried
 at a fixed bounded cadence; it does not consume the whole association-probe
 proof opportunity. If the bounded probes exhaust with firmware still not
-associated, the terminal host-EAPOL status reports
-`reason=cyw43-association-not-associated` and
-`next_action=inspect-cyw43-association-event-or-join-policy`; the normalizer
-preserves that Gate 7 association blocker over generic host-EAPOL symptoms and
-over the expected empty first-read counters. A valid globally administered AP
-candidate marks only `associated=yes` with `assoc_event=bssid-probe`, then
-enters the existing post-association EAPOL-Start/receive-admission cadence; it
-does not set `link_up`, mark EAPOL secure, release DHCP/data, or bypass the
-linked runtime.
+associated after owner-sampled Function 2 readiness is present (`IENx=0x07`
+and `IORx.F2` ready through the SDIO owner), root issues one bounded association
+rescue with legacy `WLC_SET_SSID` and emits
+`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE ... status=ready action=set-ssid`.
+The Linux-shaped `bsscfg:join` remains the primary path. The rescue does not
+send EAPOL-Start, release DHCP/data, or mark association by itself; it only
+opens one additional full bounded pre-association probe window starting from the
+rescue point. That window covers the normal first post-rescue probe delay plus
+four fixed-cadence `WLC_GET_BSSID` attempts before terminal failure. If
+owner-sampled Function 2 readiness is missing, or if the one-shot rescue was
+already spent, the terminal host-EAPOL status reports
+`reason=cyw43-association-not-associated`. After the rescue is spent, the
+expected terminal action is
+`next_action=inspect-cyw43-association-event-after-set-ssid-rescue`; otherwise
+it remains `next_action=inspect-cyw43-association-event-or-join-policy`. The
+normalizer preserves that Gate 7 association blocker over generic host-EAPOL
+symptoms, prompt-side DHCP policy lines, and the expected empty first-read
+counters. A valid globally
+administered AP candidate marks only `associated=yes` with
+`assoc_event=bssid-probe`, then enters the existing post-association
+EAPOL-Start/receive-admission cadence; it does not set `link_up`, mark EAPOL
+secure, release DHCP/data, or bypass the linked runtime.
 The next boot must show `cyw43-control-rsn-mfp` and
 `cyw43-control-rsn-wme-bss-disable` ready or tolerated-unsupported status before
 `cyw43-control-wpa-auth-final`, and it must show
@@ -1026,15 +1055,24 @@ post-up event drain, falling back to global `event_msgs` only on matched
 longer missing from the linked control path. The join request now mirrors the
 old-good managed-station path: root first submits the Linux `join` iovar
 (`CYW43_DRIVER_TASK_JOIN_REQUEST path=primary-bsscfg:join`) with the 68-byte
-`brcmf_ext_join_params` shape, and falls back to legacy `WLC_SET_SSID` only for
-matched `BCME_UNSUPPORTED` or `BCME_BADARG` firmware statuses. Transport faults
-do not fall back. Repeated
+`brcmf_ext_join_params` shape. It falls back to legacy `WLC_SET_SSID` during
+join submit only for matched `BCME_UNSUPPORTED` or `BCME_BADARG` firmware
+statuses; transport faults do not fall back. After an accepted `bsscfg:join`,
+the only additional `WLC_SET_SSID` path is the one-shot host-EAPOL association
+rescue described above, and only after repeated `WLC_GET_BSSID`
+`BCME_NOTASSOCIATED` replies plus owner-sampled Function 2 readiness prove that
+the live blocker is join/association policy rather than SDIO/F2 readiness.
+Repeated
 `cyw43-firmware-recover` owner-replay cycles remain progress only when
 `resume_offset` or `STREAM_PROGRESS uploaded=` advances; root keeps the
 structured `CYW43_DRIVER_TASK_FIRMWARE_RECOVERY` and stream/fault records but
 suppresses redundant human-readable `begin` / `ready` wrappers for that recovery
-stage. The next boot must either show association/link event delivery followed
-by EAPOL data reaching the host handshake, prove the denser post-event-mask
+stage. The next boot must either show a complete post-rescue probe window with
+four post-rescue `WLC_GET_BSSID` attempts and
+`next_action=inspect-cyw43-association-event-after-set-ssid-rescue`, show
+association/link event delivery or a valid AP BSSID after the rescue, show
+association/link event delivery from the primary `bsscfg:join` path followed by
+EAPOL data reaching the host handshake, prove the denser post-event-mask
 block-probe window is still empty/no-reply with `last_rx_idle_detail=0x570a` and
 decoded `rxsrc_*` / `control_rxsrc_*` fields, prove malformed first-read SDPCM
 with `last_rx_idle_detail=0x570b`, prove a CMD53 first-read/remainder failure

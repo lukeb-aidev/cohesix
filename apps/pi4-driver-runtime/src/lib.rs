@@ -12074,6 +12074,38 @@ fn xhci_advance_ring(enqueue: &mut u16, cycle: &mut bool, trbs: usize) {
     }
 }
 
+fn xhci_transfer_ring_link_control(cycle: bool) -> u32 {
+    (XHCI_TRB_TYPE_LINK << 10) | XHCI_TRB_ENT | xhci_cycle_bit(cycle)
+}
+
+fn xhci_publish_transfer_ring_link(base: usize, ring_bus: u64, cycle: bool) {
+    write_xhci_trb(
+        base,
+        XHCI_COMMAND_RING_TRBS - 1,
+        XhciTrb {
+            parameter: ring_bus,
+            status: 0,
+            control: xhci_transfer_ring_link_control(cycle),
+        },
+    );
+}
+
+fn xhci_advance_transfer_ring(
+    base: usize,
+    ring_bus: u64,
+    enqueue: &mut u16,
+    cycle: &mut bool,
+) -> bool {
+    *enqueue = enqueue.wrapping_add(1);
+    if usize::from(*enqueue) < XHCI_COMMAND_RING_TRBS - 1 {
+        return false;
+    }
+    xhci_publish_transfer_ring_link(base, ring_bus, *cycle);
+    *enqueue = 0;
+    *cycle = !*cycle;
+    true
+}
+
 fn xhci_ack_event_dequeue(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
@@ -12866,6 +12898,18 @@ enum XhciControlTransferOutcome {
     PendingStatus,
 }
 
+fn xhci_control_data_stage_control(data_in: bool, data_stage_ioc: bool, cycle: bool) -> u32 {
+    (XHCI_TRB_TYPE_DATA_STAGE << 10)
+        | (if data_in { XHCI_TRB_DIR_IN } else { 0 })
+        | (if data_stage_ioc { XHCI_TRB_IOC } else { 0 })
+        | XHCI_TRB_ISP
+        | xhci_cycle_bit(cycle)
+}
+
+fn xhci_control_setup_stage_control(setup_transfer_type: u32, cycle: bool) -> u32 {
+    (XHCI_TRB_TYPE_SETUP_STAGE << 10) | XHCI_TRB_IDT | setup_transfer_type | xhci_cycle_bit(cycle)
+}
+
 const fn xhci_transfer_event_remaining(status: u32) -> usize {
     (status & 0x00ff_ffff) as usize
 }
@@ -13041,6 +13085,7 @@ fn xhci_wait_control_transfer_completion_outcome(
     }
 }
 
+#[cfg(test)]
 fn xhci_wait_control_transfer_completion(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
@@ -13901,6 +13946,32 @@ fn xhci_control_transfer_with_progress_and_spins_outcome(
     progress: Option<XhciControlProgress>,
     completion_spins: usize,
 ) -> XhciControlTransferOutcome {
+    xhci_control_transfer_with_progress_and_spins_outcome_with_data_ioc(
+        state,
+        descriptor,
+        device,
+        setup,
+        data_offset,
+        data_len,
+        data_in,
+        progress,
+        completion_spins,
+        true,
+    )
+}
+
+fn xhci_control_transfer_with_progress_and_spins_outcome_with_data_ioc(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    setup: [u8; 8],
+    data_offset: usize,
+    data_len: usize,
+    data_in: bool,
+    progress: Option<XhciControlProgress>,
+    completion_spins: usize,
+    data_stage_ioc: bool,
+) -> XhciControlTransferOutcome {
     let Some(dma_range) = runtime_resource_range(
         descriptor,
         DRIVER_RUNTIME_RESOURCE_KIND_DMA,
@@ -13909,6 +13980,10 @@ fn xhci_control_transfer_with_progress_and_spins_outcome(
         return XhciControlTransferOutcome::Failed { code: 0 };
     };
     let base = dma_range.vaddr as usize + device.ep0_ring_offset;
+    let Some(ep0_ring_bus) = xhci_dma_bus_addr(descriptor, dma_range, device.ep0_ring_offset)
+    else {
+        return XhciControlTransferOutcome::Failed { code: 0 };
+    };
     let Some(data_bus) = xhci_dma_bus_addr(descriptor, dma_range, data_offset) else {
         return XhciControlTransferOutcome::Failed { code: 0 };
     };
@@ -13945,16 +14020,14 @@ fn xhci_control_transfer_with_progress_and_spins_outcome(
         XhciTrb {
             parameter: setup_value,
             status: 8,
-            control: (XHCI_TRB_TYPE_SETUP_STAGE << 10)
-                | XHCI_TRB_IDT
-                | setup_transfer_type
-                | xhci_cycle_bit(setup_cycle),
+            control: xhci_control_setup_stage_control(setup_transfer_type, !setup_cycle),
         },
     );
-    xhci_advance_ring(
+    xhci_advance_transfer_ring(
+        base,
+        ep0_ring_bus,
         &mut device.ep0_enqueue,
         &mut device.ep0_cycle,
-        XHCI_COMMAND_RING_TRBS,
     );
     let data_trb = if data_len != 0 {
         let Some(data_trb) = xhci_dma_bus_addr(
@@ -13977,17 +14050,14 @@ fn xhci_control_transfer_with_progress_and_spins_outcome(
             XhciTrb {
                 parameter: data_bus,
                 status: data_len as u32,
-                control: (XHCI_TRB_TYPE_DATA_STAGE << 10)
-                    | (if data_in { XHCI_TRB_DIR_IN } else { 0 })
-                    | XHCI_TRB_IOC
-                    | XHCI_TRB_ISP
-                    | xhci_cycle_bit(device.ep0_cycle),
+                control: xhci_control_data_stage_control(data_in, data_stage_ioc, device.ep0_cycle),
             },
         );
-        xhci_advance_ring(
+        xhci_advance_transfer_ring(
+            base,
+            ep0_ring_bus,
             &mut device.ep0_enqueue,
             &mut device.ep0_cycle,
-            XHCI_COMMAND_RING_TRBS,
         );
     }
     let status_index = usize::from(device.ep0_enqueue);
@@ -14012,10 +14082,20 @@ fn xhci_control_transfer_with_progress_and_spins_outcome(
                 | xhci_cycle_bit(device.ep0_cycle),
         },
     );
-    xhci_advance_ring(
+    xhci_advance_transfer_ring(
+        base,
+        ep0_ring_bus,
         &mut device.ep0_enqueue,
         &mut device.ep0_cycle,
-        XHCI_COMMAND_RING_TRBS,
+    );
+    write_xhci_trb(
+        base,
+        setup_index,
+        XhciTrb {
+            parameter: setup_value,
+            status: 8,
+            control: xhci_control_setup_stage_control(setup_transfer_type, setup_cycle),
+        },
     );
     if data_len != 0 {
         dma_clean_range(data_vaddr, data_len);
@@ -15012,15 +15092,17 @@ fn usb_hub_get_port_status_with_progress(
             4,
             0,
         ];
-        let outcome = usb_hub_class_transfer_with_progress_outcome(
+        let outcome = xhci_control_transfer_with_progress_and_spins_outcome_with_data_ioc(
             state,
             descriptor,
             device,
             setup,
+            XHCI_DMA_HUB_BUFFER_OFFSET,
             4,
             true,
             progress,
             USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS,
+            false,
         );
         match outcome {
             XhciControlTransferOutcome::Complete(_) => {
@@ -15046,15 +15128,15 @@ fn usb_hub_get_port_status_with_progress(
     None
 }
 
-fn usb_hub_clear_port_changes(
+fn usb_hub_clear_port_change_mask(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     device: &mut UsbEnumerationDevice,
     interface: u8,
     port: u8,
-    change: u16,
+    change_mask: u16,
 ) {
-    if change & USB_HUB_CHANGE_CONNECTION != 0 {
+    if change_mask & USB_HUB_CHANGE_CONNECTION != 0 {
         let _ = usb_hub_clear_feature(
             state,
             descriptor,
@@ -15064,7 +15146,7 @@ fn usb_hub_clear_port_changes(
             USB_HUB_FEATURE_C_PORT_CONNECTION,
         );
     }
-    if change & USB_HUB_CHANGE_ENABLE != 0 {
+    if change_mask & USB_HUB_CHANGE_ENABLE != 0 {
         let _ = usb_hub_clear_feature(
             state,
             descriptor,
@@ -15074,7 +15156,7 @@ fn usb_hub_clear_port_changes(
             USB_HUB_FEATURE_C_PORT_ENABLE,
         );
     }
-    if change & USB_HUB_CHANGE_RESET != 0 {
+    if change_mask & USB_HUB_CHANGE_RESET != 0 {
         let _ = usb_hub_clear_feature(
             state,
             descriptor,
@@ -15109,6 +15191,21 @@ fn usb_hub_port_ready_after_reset(status: UsbHubPortStatus) -> bool {
     usb_hub_port_connected(status)
         && status.status & USB_HUB_STATUS_ENABLE != 0
         && status.status & USB_HUB_STATUS_RESET == 0
+}
+
+const fn usb_hub_pre_reset_change_clear_mask(change: u16) -> u16 {
+    change & USB_HUB_CHANGE_CONNECTION
+}
+
+const fn usb_hub_ready_reset_change_clear_mask(status: u16, change: u16) -> u16 {
+    if status & USB_HUB_STATUS_CONNECTION != 0
+        && status & USB_HUB_STATUS_ENABLE != 0
+        && status & USB_HUB_STATUS_RESET == 0
+    {
+        change & USB_HUB_CHANGE_RESET
+    } else {
+        0
+    }
 }
 
 const fn usb_hub_reset_before_status(attempt: usize) -> bool {
@@ -15162,7 +15259,8 @@ fn usb_recover_disconnected_hub_port(
             port,
             Some(usb_hub_port_status_progress(sequence, aux0)),
         ) {
-            usb_hub_clear_port_changes(state, descriptor, hub, interface, port, status.change);
+            let clear_mask = usb_hub_pre_reset_change_clear_mask(status.change);
+            usb_hub_clear_port_change_mask(state, descriptor, hub, interface, port, clear_mask);
             if usb_hub_port_connected(status) {
                 return Some(status);
             }
@@ -15185,7 +15283,12 @@ fn usb_recover_disconnected_hub_port(
         port,
         Some(usb_hub_port_status_progress(sequence, aux0)),
     )?;
-    usb_hub_clear_port_changes(state, descriptor, hub, interface, port, status.change);
+    let clear_mask = if usb_hub_port_ready_after_reset(status) {
+        usb_hub_ready_reset_change_clear_mask(status.status, status.change)
+    } else {
+        usb_hub_pre_reset_change_clear_mask(status.change)
+    };
+    usb_hub_clear_port_change_mask(state, descriptor, hub, interface, port, clear_mask);
     usb_hub_port_connected(status).then_some(status)
 }
 
@@ -15457,7 +15560,8 @@ fn usb_prepare_hub_port(
                 aux0,
             );
             status_seen = true;
-            usb_hub_clear_port_changes(state, descriptor, hub, interface, port, pre_status.change);
+            let clear_mask = usb_hub_pre_reset_change_clear_mask(pre_status.change);
+            usb_hub_clear_port_change_mask(state, descriptor, hub, interface, port, clear_mask);
             last = Some(pre_status);
             if !usb_hub_port_connected(pre_status) {
                 if let Some(recovered) = usb_recover_disconnected_hub_port(
@@ -15485,6 +15589,11 @@ fn usb_prepare_hub_port(
         if reset_before_status {
             if let Some(status) = last {
                 if usb_hub_port_ready_after_reset(status) {
+                    let clear_mask =
+                        usb_hub_ready_reset_change_clear_mask(status.status, status.change);
+                    usb_hub_clear_port_change_mask(
+                        state, descriptor, hub, interface, port, clear_mask,
+                    );
                     publish_runtime_progress(
                         sequence,
                         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
@@ -15519,7 +15628,6 @@ fn usb_prepare_hub_port(
                 aux0,
             );
             status_seen = true;
-            usb_hub_clear_port_changes(state, descriptor, hub, interface, port, status.change);
             last = Some(status);
             if !usb_hub_port_connected(status) {
                 continue;
@@ -15528,6 +15636,9 @@ fn usb_prepare_hub_port(
                 continue;
             }
             if status.status & USB_HUB_STATUS_ENABLE != 0 {
+                let clear_mask =
+                    usb_hub_ready_reset_change_clear_mask(status.status, status.change);
+                usb_hub_clear_port_change_mask(state, descriptor, hub, interface, port, clear_mask);
                 publish_runtime_progress(
                     sequence,
                     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
@@ -22330,6 +22441,27 @@ mod tests {
         assert!(usb_hub_port_ready_after_reset(enabled_after_reset));
         assert!(!usb_hub_port_ready_after_reset(connected));
         assert!(!usb_hub_port_ready_after_reset(still_resetting));
+        assert_eq!(
+            usb_hub_pre_reset_change_clear_mask(
+                USB_HUB_CHANGE_CONNECTION | USB_HUB_CHANGE_ENABLE | USB_HUB_CHANGE_RESET
+            ),
+            USB_HUB_CHANGE_CONNECTION
+        );
+        assert_eq!(
+            usb_hub_ready_reset_change_clear_mask(
+                enabled_after_reset.status,
+                USB_HUB_CHANGE_CONNECTION | USB_HUB_CHANGE_ENABLE | USB_HUB_CHANGE_RESET
+            ),
+            USB_HUB_CHANGE_RESET
+        );
+        assert_eq!(
+            usb_hub_ready_reset_change_clear_mask(connected.status, USB_HUB_CHANGE_RESET),
+            0
+        );
+        assert_eq!(
+            usb_hub_ready_reset_change_clear_mask(still_resetting.status, USB_HUB_CHANGE_RESET),
+            0
+        );
         assert!(!usb_hub_reset_after_status(true, Some(enabled_after_reset)));
         assert!(usb_hub_reset_after_status(true, Some(connected)));
         assert!(usb_hub_reset_after_status(true, Some(still_resetting)));
@@ -23728,6 +23860,57 @@ mod tests {
         assert_ne!(XHCI_FLUSH_STAGE_ERDP_LOW, XHCI_FLUSH_STAGE_ERDP_HIGH);
         assert_ne!(XHCI_FLUSH_STAGE_INIT_LOW, XHCI_FLUSH_STAGE_ERDP_LOW);
         assert_ne!(XHCI_FLUSH_STAGE_INIT_HIGH, XHCI_FLUSH_STAGE_ERDP_HIGH);
+    }
+
+    #[test]
+    fn usb_ep0_transfer_ring_wrap_republishes_link_before_cycle_toggle() {
+        let _guard = test_guard();
+        let base = DRIVER_TASK_DMA_BUFFER_VADDR + XHCI_DMA_COMMAND_RING_OFFSET;
+        let ring_bus = 0x1200_4000;
+        zero_dma_range(base, XHCI_COMMAND_RING_BYTES);
+
+        let mut enqueue = (XHCI_COMMAND_RING_TRBS - 2) as u16;
+        let mut cycle = true;
+        assert!(xhci_advance_transfer_ring(
+            base,
+            ring_bus,
+            &mut enqueue,
+            &mut cycle
+        ));
+
+        let link = read_xhci_trb(base, XHCI_COMMAND_RING_TRBS - 1);
+        assert_eq!(link.parameter, ring_bus);
+        assert_eq!(link.status, 0);
+        assert_eq!(link.control, xhci_transfer_ring_link_control(true));
+        assert_eq!(enqueue, 0);
+        assert!(!cycle);
+    }
+
+    #[test]
+    fn usb_control_setup_stage_can_be_queued_inactive_until_td_is_ready() {
+        let active = xhci_control_setup_stage_control(XHCI_TRB_TRANSFER_TYPE_IN, true);
+        let inactive = xhci_control_setup_stage_control(XHCI_TRB_TRANSFER_TYPE_IN, false);
+
+        assert_ne!(active & XHCI_TRB_CYCLE, 0);
+        assert_eq!(inactive & XHCI_TRB_CYCLE, 0);
+        assert_eq!(active & !XHCI_TRB_CYCLE, inactive & !XHCI_TRB_CYCLE);
+    }
+
+    #[test]
+    fn usb_hub_status_uses_uboot_style_data_stage_interrupt_policy() {
+        let default_control = xhci_control_data_stage_control(true, true, true);
+        assert_ne!(default_control & XHCI_TRB_IOC, 0);
+        assert_ne!(default_control & XHCI_TRB_ISP, 0);
+        assert_ne!(default_control & XHCI_TRB_DIR_IN, 0);
+
+        let hub_status_control = xhci_control_data_stage_control(true, false, true);
+        assert_eq!(hub_status_control & XHCI_TRB_IOC, 0);
+        assert_ne!(hub_status_control & XHCI_TRB_ISP, 0);
+        assert_ne!(hub_status_control & XHCI_TRB_DIR_IN, 0);
+        assert_eq!(
+            hub_status_control & (XHCI_TRB_TYPE_DATA_STAGE << 10),
+            XHCI_TRB_TYPE_DATA_STAGE << 10
+        );
     }
 
     #[test]
