@@ -2777,6 +2777,30 @@ fn driver_task_ring_log_repeat_count(
 }
 
 #[cfg(feature = "kernel")]
+const fn driver_task_ring_repeat_allowed(
+    mode: DriverTaskRingCommandMode,
+    repeat_count: usize,
+) -> bool {
+    match mode {
+        DriverTaskRingCommandMode::PromptSlice => repeat_count == 1,
+        DriverTaskRingCommandMode::Steady
+        | DriverTaskRingCommandMode::Bootstrap
+        | DriverTaskRingCommandMode::NonBlocking => true,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_log_repeat_count_for_mode(
+    contract: DriverTaskContract,
+    log: DriverTaskRingRepeatLog,
+    key: usize,
+    mode: DriverTaskRingCommandMode,
+) -> Option<usize> {
+    let repeat_count = driver_task_ring_log_repeat_count(contract, log, key)?;
+    driver_task_ring_repeat_allowed(mode, repeat_count).then_some(repeat_count)
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_resource_repeat_kind(status: &str) -> Option<DriverTaskResourceRepeatLog> {
     match status {
         "begin" => Some(DriverTaskResourceRepeatLog::Begin),
@@ -4591,9 +4615,12 @@ fn emit_driver_task_ring_call_timeout(
     use heapless::String;
 
     let key = driver_task_ring_log_key(endpoint, request, command, mode, progress, attempts);
-    let Some(repeat_count) =
-        driver_task_ring_log_repeat_count(contract, DriverTaskRingRepeatLog::Timeout, key)
-    else {
+    let Some(repeat_count) = driver_task_ring_log_repeat_count_for_mode(
+        contract,
+        DriverTaskRingRepeatLog::Timeout,
+        key,
+        mode,
+    ) else {
         return;
     };
     let mut line = String::<640>::new();
@@ -5342,9 +5369,12 @@ fn emit_driver_task_ring_call_progress(
         progress,
         0,
     );
-    let Some(repeat_count) =
-        driver_task_ring_log_repeat_count(contract, DriverTaskRingRepeatLog::Progress, key)
-    else {
+    let Some(repeat_count) = driver_task_ring_log_repeat_count_for_mode(
+        contract,
+        DriverTaskRingRepeatLog::Progress,
+        key,
+        DriverTaskRingCommandMode::PromptSlice,
+    ) else {
         return;
     };
     let mut line = String::<384>::new();
@@ -5390,9 +5420,12 @@ fn emit_driver_task_ring_call_abort(
         timeout_count,
         progress,
     );
-    let Some(repeat_count) =
-        driver_task_ring_log_repeat_count(contract, DriverTaskRingRepeatLog::Abort, key)
-    else {
+    let Some(repeat_count) = driver_task_ring_log_repeat_count_for_mode(
+        contract,
+        DriverTaskRingRepeatLog::Abort,
+        key,
+        mode,
+    ) else {
         return;
     };
     let mut line = String::<640>::new();
@@ -5439,9 +5472,12 @@ fn emit_driver_task_ring_call_keep_active(
 
     let extra = keep_limit ^ ((progress_advanced as usize) << 16);
     let key = driver_task_ring_log_key(endpoint, request, command, mode, progress, extra);
-    let Some(repeat_count) =
-        driver_task_ring_log_repeat_count(contract, DriverTaskRingRepeatLog::KeepActive, key)
-    else {
+    let Some(repeat_count) = driver_task_ring_log_repeat_count_for_mode(
+        contract,
+        DriverTaskRingRepeatLog::KeepActive,
+        key,
+        mode,
+    ) else {
         return;
     };
     let mut line = String::<640>::new();
@@ -5770,7 +5806,9 @@ fn driver_task_ring_timeout_keep_active_limit_for_progress(
         && cached_driver_task_ring_progress_matches_request(slot, request, command.aux0)
     {
         let phase = slot.last_progress_phase.load(Ordering::Acquire);
-        if driver_task_ring_usb_enum_root_reset_phase(phase) {
+        if driver_task_ring_usb_enum_controller_reset_phase(phase)
+            || driver_task_ring_usb_enum_root_reset_phase(phase)
+        {
             DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT
         } else if driver_task_ring_usb_enum_status_wait_phase(phase) {
             DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT
@@ -5816,6 +5854,21 @@ const fn driver_task_ring_cyw43_sdio_owner_phase(phase: u32) -> bool {
             | DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_SEND_DONE
             | DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY
+    )
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_usb_enum_controller_reset_phase(phase: u32) -> bool {
+    matches!(
+        phase,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN
     )
 }
 
@@ -10750,6 +10803,90 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn usb_engine_init_controller_reset_stage_uses_extended_bounded_timeout() {
+        let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(contract),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX;
+        let slot = DriverTaskCommandSlot::new();
+        let request = 2;
+        for phase in [
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HALT_WAIT_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN,
+        ] {
+            record_driver_task_ring_progress(
+                &slot,
+                DriverTaskRingProgressRecord {
+                    magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                    sequence: request,
+                    phase,
+                    aux0: command.aux0,
+                },
+            );
+            assert_eq!(
+                driver_task_ring_timeout_keep_active_limit_for_progress(
+                    &slot,
+                    contract,
+                    command,
+                    DriverTaskRingCommandMode::PromptSlice,
+                    request,
+                ),
+                DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT
+            );
+        }
+
+        slot.timeout_resumes.store(
+            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
+            (true, DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT)
+        );
+
+        slot.timeout_resumes.store(
+            DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                request,
+                false,
+            ),
+            (
+                false,
+                DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT
+            )
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn usb_enumeration_root_reset_stage_uses_extended_bounded_timeout() {
         let contract = USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT;
         let mut command = DriverTaskCommandRecord::pi4_hot_path(
@@ -11819,6 +11956,35 @@ mod tests {
             driver_task_log_repeat_count(&key_cell, &count_cell, 0x66),
             Some(1)
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn prompt_slice_repeat_gate_keeps_only_first_stable_ring_line() {
+        assert!(driver_task_ring_repeat_allowed(
+            DriverTaskRingCommandMode::PromptSlice,
+            1
+        ));
+        assert!(!driver_task_ring_repeat_allowed(
+            DriverTaskRingCommandMode::PromptSlice,
+            2
+        ));
+        assert!(!driver_task_ring_repeat_allowed(
+            DriverTaskRingCommandMode::PromptSlice,
+            64
+        ));
+        assert!(driver_task_ring_repeat_allowed(
+            DriverTaskRingCommandMode::Steady,
+            64
+        ));
+        assert!(driver_task_ring_repeat_allowed(
+            DriverTaskRingCommandMode::Bootstrap,
+            64
+        ));
+        assert!(driver_task_ring_repeat_allowed(
+            DriverTaskRingCommandMode::NonBlocking,
+            64
+        ));
     }
 
     #[cfg(feature = "kernel")]

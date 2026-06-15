@@ -222,6 +222,8 @@ const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
 const SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS: u64 = 10_000;
 #[cfg(feature = "kernel")]
 const SERIAL_INPUT_IDLE_TRACE_LIMIT: u8 = 2;
+#[cfg(feature = "kernel")]
+const SERIAL_RAW_UART_PREFLUSH_TURNS: usize = 8;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS: u64 = 750;
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -2815,6 +2817,16 @@ where
         }
     }
 
+    #[cfg(feature = "kernel")]
+    fn preflush_serial_before_raw_uart(&mut self) {
+        for _ in 0..SERIAL_RAW_UART_PREFLUSH_TURNS {
+            if !self.serial.tx_pending() {
+                break;
+            }
+            self.serial.flush_tx();
+        }
+    }
+
     fn emit_help(&mut self) {
         self.emit_console_line("Commands:");
         self.emit_console_line("  help  - Show this help");
@@ -3938,6 +3950,7 @@ where
 
         if matches!(command, WifiDebugCommand::Help) {
             self.emit_console_line("WiFi debug commands:");
+            self.emit_console_line("  wifi help       - Show WiFi debug command help");
             self.emit_console_line(
                 "  wifi dump-state - Show cached SDIO, clock, and contract trace state",
             );
@@ -4118,6 +4131,7 @@ where
 
         if matches!(command, UsbDebugCommand::Help) {
             self.emit_console_line("USB local-seat debug commands:");
+            self.emit_console_line("  usb help        - Show USB local-seat debug command help");
             self.emit_console_line(
                 "  usb status      - Show local-seat runtime attach, polling, and contract trace",
             );
@@ -4241,6 +4255,7 @@ where
             }
             UsbDebugCommand::ProbeKeyboard => {
                 self.emit_console_line("usb: probing local-seat keyboard now");
+                self.preflush_serial_before_raw_uart();
                 let (backend_attached, polling_enabled, probe_result) = {
                     let local_seat = match self.local_seat.as_mut() {
                         Some(local_seat) => local_seat,
@@ -17061,6 +17076,61 @@ mod tests {
             "{rendered}"
         );
         assert!(wifi.calls.is_empty());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_usb_wifi_help_lists_help_subcommands() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_wifi_debug(&mut wifi)
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut()
+            .driver_mut()
+            .push_rx(b"usb help\nwifi help\n");
+        for _ in 0..16 {
+            pump.poll();
+        }
+
+        let transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("usb help        - Show USB local-seat debug command help"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi help       - Show WiFi debug command help"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK USB detail=subcommand=help scope=serial-local"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("OK WIFI detail=subcommand=help scope=serial-local"),
+            "{rendered}"
+        );
     }
 
     #[cfg(feature = "kernel")]

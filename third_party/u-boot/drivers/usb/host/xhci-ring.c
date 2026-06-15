@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
  * Author: Lukas Bower
- * Purpose: Trace xHCI ring and control-transfer failures during Cohesix Pi 4 U-Boot bring-up.
+ * Purpose: Provide xHCI ring handling for Cohesix Pi 4 U-Boot builds.
  * Copyright 2026 Lukas Bower
  */
 /*
@@ -911,32 +911,11 @@ int xhci_ctrl_tx(struct usb_device *udev, unsigned long pipe,
 	 * prepare_trasfer() as there in 'Linux' since we are not
 	 * maintaining multiple TDs/transfer at the same time.
 	 */
-	u32 ep_state = le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK;
+	ret = prepare_ring(ctrl, ep_ring,
+				le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK);
 
-	ret = prepare_ring(ctrl, ep_ring, ep_state);
-	if (ret < 0 && ep_state == EP_STATE_HALTED) {
-		printf("[xhci] ctrl halt-recover slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u\n",
-		       slot_id, ep_index, req->request, req->requesttype,
-		       le16_to_cpu(req->value), le16_to_cpu(req->index),
-		       le16_to_cpu(req->length));
-		reset_ep(udev, ep_index);
-		ep_state = le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK;
-		ret = prepare_ring(ctrl, ep_ring, ep_state);
-		if (!ret) {
-			printf("[xhci] ctrl halt-recovered slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u ep_state=0x%x\n",
-			       slot_id, ep_index, req->request, req->requesttype,
-			       le16_to_cpu(req->value), le16_to_cpu(req->index),
-			       le16_to_cpu(req->length), ep_state);
-		}
-	}
-
-	if (ret < 0) {
-		printf("[xhci] ctrl prepare failed slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u ep_state=0x%x ret=%d\n",
-		       slot_id, ep_index, req->request, req->requesttype,
-		       le16_to_cpu(req->value), le16_to_cpu(req->index),
-		       le16_to_cpu(req->length), ep_state, ret);
+	if (ret < 0)
 		return ret;
-	}
 
 	/*
 	 * Don't give the first TRB to the hardware (by toggling the cycle bit)
@@ -1043,26 +1022,7 @@ int xhci_ctrl_tx(struct usb_device *udev, unsigned long pipe,
 	BUG_ON(TRB_TO_EP_INDEX(field) != ep_index);
 
 	record_transfer_result(udev, event, length);
-	if (udev->status != 0) {
-		xhci_inval_cache((uintptr_t)virt_dev->out_ctx->bytes,
-				 virt_dev->out_ctx->size);
-		ep_state = le32_to_cpu(ep_ctx->ep_info) & EP_STATE_MASK;
-		printf("[xhci] ctrl completion comp=%u usb=%lu ep_state=0x%x slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u act_len=%d\n",
-		       GET_COMP_CODE(le32_to_cpu(event->trans_event.transfer_len)),
-		       udev->status, ep_state, slot_id, ep_index, req->request,
-		       req->requesttype, le16_to_cpu(req->value),
-		       le16_to_cpu(req->index), le16_to_cpu(req->length),
-		       udev->act_len);
-	}
 	xhci_acknowledge_event(ctrl);
-	if (udev->status != 0 && ep_state == EP_STATE_HALTED) {
-		printf("[xhci] ctrl completion halt slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u\n",
-		       slot_id, ep_index, req->request, req->requesttype,
-		       le16_to_cpu(req->value), le16_to_cpu(req->index),
-		       le16_to_cpu(req->length));
-		reset_ep(udev, ep_index);
-		return -EPIPE;
-	}
 	if (udev->status == USB_ST_STALLED) {
 		reset_ep(udev, ep_index);
 		return -EPIPE;
@@ -1089,10 +1049,6 @@ int xhci_ctrl_tx(struct usb_device *udev, unsigned long pipe,
 
 abort:
 	debug("XHCI control transfer timed out, aborting...\n");
-	printf("[xhci] ctrl abort slot=%d ep=%d req=0x%02x type=0x%02x value=0x%04x index=0x%04x len=%u\n",
-	       slot_id, ep_index, req->request, req->requesttype,
-	       le16_to_cpu(req->value), le16_to_cpu(req->index),
-	       le16_to_cpu(req->length));
 	abort_td(udev, ep_index);
 	udev->status = USB_ST_NAK_REC;
 	udev->act_len = 0;

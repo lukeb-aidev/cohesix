@@ -768,6 +768,8 @@ const PCIE_VL805_PCI_DEV_ADDR: u32 = 0x0010_0000;
 const PCIE_VL805_PCI_VENDOR_DEVICE: u32 = 0x3483_1106;
 const PCIE_VL805_EXPECTED_CLASS_REV: u32 = 0x000c_0330 << 8;
 const PCIE_POLL_SPINS: usize = 10_000_000;
+const USB_XHCI_RESET_WAIT_POLLS: usize = 250_000;
+const USB_XHCI_RESET_WAIT_SETTLE_SPINS: usize = 512;
 
 const XHCI_CAPLENGTH: usize = 0x00;
 const XHCI_HCSPARAMS1: usize = 0x04;
@@ -870,6 +872,7 @@ const XHCI_TRB_DIR_IN: u32 = 1 << 16;
 const XHCI_TRB_TRANSFER_TYPE_OUT: u32 = 2 << 16;
 const XHCI_TRB_TRANSFER_TYPE_IN: u32 = 3 << 16;
 const XHCI_COMPLETION_SUCCESS: u32 = 1;
+const XHCI_COMPLETION_STALL_ERROR: u32 = 6;
 const XHCI_COMPLETION_SHORT_PACKET: u32 = 13;
 const XHCI_ENDPOINT_TYPE_CONTROL: u32 = 4;
 const XHCI_ENDPOINT_TYPE_INTERRUPT_IN: u32 = 7;
@@ -922,7 +925,7 @@ const USB_ENDPOINT_DIR_IN: u8 = 0x80;
 const USB_XHCI_SPINS: usize = 10_000_000;
 const USB_CONTROL_TRANSFER_SPINS: usize = USB_XHCI_SPINS;
 const USB_HUB_DESCRIPTOR_CONTROL_TRANSFER_SPINS: usize = USB_CONTROL_TRANSFER_SPINS * 2;
-const USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS: usize = USB_CONTROL_TRANSFER_SPINS / 5;
+const USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS: usize = USB_CONTROL_TRANSFER_SPINS;
 const USB_COMMAND_COMPLETION_SPINS: usize = 20_000_000;
 const USB_COMMAND_COMPLETION_SLICE_SPINS: usize = 128;
 const USB_COMMAND_COMPLETION_EVENTS_PER_SLICE: usize = 4;
@@ -966,11 +969,12 @@ const USB_COMMAND_PROOF_EVENT_PORT_STATUS: u8 = 2;
 const USB_COMMAND_PROOF_EVENT_TRANSFER: u8 = 3;
 const USB_COMMAND_PROOF_EVENT_OTHER: u8 = 31;
 const USB_HUB_SET_CONFIGURATION_SETTLE_SPINS: usize = 200_000;
-const USB_HUB_PORT_POWER_SETTLE_SPINS: usize = 200_000;
-const USB_HUB_PORT_POWER_GOOD_UNIT_SPINS: usize = 2_000;
-const USB_HUB_PORT_RESET_SETTLE_SPINS: usize = 20_000;
-const USB_HUB_PORT_RESET_RECOVERY_SPINS: usize = 10_000;
-const USB_HUB_PORT_RESET_RETRY_SETTLE_SPINS: usize = 200_000;
+const USB_MSEC_SPINS: usize = USB_CONTROL_TRANSFER_SPINS / 100;
+const USB_HUB_PORT_POWER_SETTLE_SPINS: usize = USB_MSEC_SPINS * 100;
+const USB_HUB_PORT_POWER_GOOD_UNIT_SPINS: usize = USB_MSEC_SPINS * 2;
+const USB_HUB_PORT_RESET_SETTLE_SPINS: usize = USB_MSEC_SPINS * 20;
+const USB_HUB_PORT_RESET_RECOVERY_SPINS: usize = USB_MSEC_SPINS * 10;
+const USB_HUB_PORT_RESET_RETRY_SETTLE_SPINS: usize = USB_MSEC_SPINS * 200;
 const USB_ADDRESS_DEVICE_SLOT_RECYCLES: usize = 4;
 const USB_HUB_PROTOCOL_HIGH_SPEED_MULTI_TT: u8 = 2;
 const USB_HUB_PROTOCOL_SUPER_SPEED: u8 = 3;
@@ -1025,6 +1029,8 @@ const SDHCI_STARTUP_CLOCK_HZ: u32 = 400_000;
 const BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ: u32 = 250_000_000;
 const CYW43_BACKPLANE_FORCE_ALP_SETTLE_SPINS: usize = 4_000;
 const CYW43_SDIO_WAIT_F2_READY_POLLS: usize = 3_000;
+const CYW43_SDIO_F2_READY_REENABLE_RETRIES: usize = 1;
+const CYW43_SDIO_F2_REENABLE_SETTLE_SPINS: usize = 5_000;
 
 const CYW43_SDPCM_HEADER_BYTES: usize = 12;
 const CYW43_SDPCM_HWHDR_BYTES: usize = 4;
@@ -1209,6 +1215,7 @@ const SBSDIO_FUNC1_SLEEPCSR: u32 = 0x1001f;
 const SBSDIO_ALP_AVAIL_REQ: u8 = 0x08;
 const SBSDIO_HT_AVAIL_REQ: u8 = 0x10;
 const SBSDIO_FORCE_ALP: u8 = 0x01;
+const SBSDIO_FORCE_HT: u8 = 0x02;
 const SBSDIO_FORCE_HW_CLKREQ_OFF: u8 = 0x20;
 const SBSDIO_ALP_AVAIL: u8 = 0x40;
 const SBSDIO_HT_AVAIL: u8 = 0x80;
@@ -6650,6 +6657,44 @@ fn cyw43_require_post_release_ht_clock() -> Result<u8, u16> {
     }
 }
 
+const fn cyw43_function2_force_ht_clock_value(chipclk: u8) -> u8 {
+    if chipclk & SBSDIO_HT_AVAIL != 0 {
+        chipclk | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+    } else {
+        SBSDIO_HT_AVAIL_REQ
+    }
+}
+
+fn cyw43_force_ht_clock_for_function2() -> Result<u8, u16> {
+    #[cfg(not(target_os = "none"))]
+    {
+        return Ok(SBSDIO_HT_AVAIL | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT);
+    }
+    #[cfg(target_os = "none")]
+    {
+        let Some(before) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR) else {
+            return Err(FAULT_CYW43_POST_RELEASE_HT);
+        };
+        if before & SBSDIO_HT_AVAIL == 0 {
+            cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, u32::from(before));
+            return Err(FAULT_CYW43_POST_RELEASE_HT);
+        }
+        let forced = cyw43_function2_force_ht_clock_value(before);
+        if !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_CHIPCLKCSR, forced) {
+            cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, u32::from(forced));
+            return Err(FAULT_CYW43_POST_RELEASE_HT);
+        }
+        let Some(after) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR) else {
+            return Err(FAULT_CYW43_POST_RELEASE_HT);
+        };
+        if after & SBSDIO_HT_AVAIL == 0 {
+            cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, u32::from(after));
+            return Err(FAULT_CYW43_POST_RELEASE_HT);
+        }
+        Ok(after)
+    }
+}
+
 fn cyw43_enable_post_release_function2() -> Result<u8, u16> {
     #[cfg(not(target_os = "none"))]
     {
@@ -6659,27 +6704,50 @@ fn cyw43_enable_post_release_function2() -> Result<u8, u16> {
     {
         let current_ioex = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IOEX).unwrap_or(0);
         let desired_ioex = current_ioex | SDIO_FUNC_ENABLE_2;
-        if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, desired_ioex) {
-            cyw43_record_last_fault_with_result(
-                FAULT_CYW43_POST_RELEASE_F2_READY,
-                u32::from(desired_ioex) << 8,
-            );
-            return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
-        }
         let mut last_iordy = 0u8;
-        for _ in 0..SDHCI_INIT_SPINS {
-            let Some(iordy) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX) else {
+        for attempt in 0..=CYW43_SDIO_F2_READY_REENABLE_RETRIES {
+            if attempt != 0 {
+                let cleared = desired_ioex & !SDIO_FUNC_ENABLE_2;
+                if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, cleared) {
+                    cyw43_record_last_fault_with_result(
+                        FAULT_CYW43_POST_RELEASE_F2_READY,
+                        u32::from(desired_ioex) << 8 | u32::from(last_iordy),
+                    );
+                    return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
+                }
+                cyw43_spin_wait(CYW43_SDIO_F2_REENABLE_SETTLE_SPINS);
+                if let Err(detail) = cyw43_force_ht_clock_for_function2() {
+                    return Err(detail);
+                }
+            }
+            if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, desired_ioex) {
                 cyw43_record_last_fault_with_result(
                     FAULT_CYW43_POST_RELEASE_F2_READY,
-                    u32::from(desired_ioex) << 8,
+                    u32::from(desired_ioex) << 8 | u32::from(last_iordy),
                 );
                 return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
-            };
-            last_iordy = iordy;
-            if iordy & SDIO_FUNC_READY_2 != 0 {
-                return Ok(iordy);
             }
-            core::hint::spin_loop();
+            for _ in 0..CYW43_SDIO_WAIT_F2_READY_POLLS {
+                let Some(iordy) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX) else {
+                    cyw43_record_last_fault_with_result(
+                        FAULT_CYW43_POST_RELEASE_F2_READY,
+                        u32::from(desired_ioex) << 8 | u32::from(last_iordy),
+                    );
+                    return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
+                };
+                last_iordy = iordy;
+                if iordy & SDIO_FUNC_READY_2 != 0 {
+                    if !cyw43_set_function_block_size(2, SDIO_FUNCTION2_BLOCK_SIZE) {
+                        cyw43_record_last_fault_with_result(
+                            FAULT_CYW43_POST_RELEASE_F2_READY,
+                            u32::from(desired_ioex) << 8 | u32::from(last_iordy),
+                        );
+                        return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
+                    }
+                    return Ok(iordy);
+                }
+                core::hint::spin_loop();
+            }
         }
         cyw43_record_last_fault_with_result(
             FAULT_CYW43_POST_RELEASE_F2_READY,
@@ -7044,6 +7112,12 @@ fn cyw43_release_firmware(state: &mut Cyw43RuntimeState, reset_vector: u32, sequ
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_HT_CLOCK_BEGIN,
     );
     if let Err(detail) = cyw43_require_post_release_ht_clock() {
+        if cyw43_take_last_fault_detail().is_none() {
+            cyw43_record_last_fault(detail);
+        }
+        return false;
+    }
+    if let Err(detail) = cyw43_force_ht_clock_for_function2() {
         if cyw43_take_last_fault_detail().is_none() {
             cyw43_record_last_fault(detail);
         }
@@ -12779,9 +12853,17 @@ fn xhci_publish_control_ignored_event_progress(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum XhciControlTransferEvent {
     Ignore,
-    Fail,
+    Fail { code: u32 },
     DataStage { transferred: usize },
     Complete,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum XhciControlTransferOutcome {
+    Complete(usize),
+    Failed { code: u32 },
+    PendingData,
+    PendingStatus,
 }
 
 const fn xhci_transfer_event_remaining(status: u32) -> usize {
@@ -12811,7 +12893,7 @@ const fn xhci_classify_control_transfer_event(
     }
     let code = xhci_completion_code(event.status);
     if !xhci_control_completion_ok(code) {
-        return XhciControlTransferEvent::Fail;
+        return XhciControlTransferEvent::Fail { code };
     }
     let completion_ptr = xhci_transfer_event_trb_pointer(event.parameter);
     let event_remaining = xhci_transfer_event_remaining(event.status);
@@ -12842,7 +12924,7 @@ const fn xhci_classify_control_transfer_event(
     XhciControlTransferEvent::Ignore
 }
 
-fn xhci_wait_control_transfer_completion(
+fn xhci_wait_control_transfer_completion_outcome(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     slot: u8,
@@ -12850,7 +12932,7 @@ fn xhci_wait_control_transfer_completion(
     plan: XhciControlTransferPlan,
     progress: Option<XhciControlProgress>,
     completion_spins: usize,
-) -> Option<usize> {
+) -> XhciControlTransferOutcome {
     let mut transferred = if plan.data_len == 0 { Some(0) } else { None };
     let mut published_pending = None;
     xhci_publish_control_progress(progress, progress.map_or(0, |progress| progress.wait_begin));
@@ -12874,9 +12956,11 @@ fn xhci_wait_control_transfer_completion(
                             progress,
                             progress.map_or(0, |progress| progress.failed),
                         );
-                        return None;
+                        return XhciControlTransferOutcome::Failed { code: 0 };
                     }
-                    return Some(transferred.unwrap_or(plan.data_len));
+                    return XhciControlTransferOutcome::Complete(
+                        transferred.unwrap_or(plan.data_len),
+                    );
                 }
                 XhciControlTransferEvent::DataStage { transferred: bytes } => {
                     xhci_publish_control_progress(
@@ -12888,17 +12972,17 @@ fn xhci_wait_control_transfer_completion(
                             progress,
                             progress.map_or(0, |progress| progress.failed),
                         );
-                        return None;
+                        return XhciControlTransferOutcome::Failed { code: 0 };
                     }
                     transferred = Some(bytes);
                 }
-                XhciControlTransferEvent::Fail => {
+                XhciControlTransferEvent::Fail { code } => {
                     xhci_publish_control_progress(
                         progress,
                         progress.map_or(0, |progress| progress.failed),
                     );
                     let _ = xhci_ack_control_event_dequeue(state, descriptor);
-                    return None;
+                    return XhciControlTransferOutcome::Failed { code };
                 }
                 XhciControlTransferEvent::Ignore => {
                     if let Some(phase) =
@@ -12919,14 +13003,14 @@ fn xhci_wait_control_transfer_completion(
                             progress,
                             progress.map_or(0, |progress| progress.failed),
                         );
-                        return None;
+                        return XhciControlTransferOutcome::Failed { code: 0 };
                     }
                     if ignored_event_failed {
                         xhci_publish_control_progress(
                             progress,
                             progress.map_or(0, |progress| progress.failed),
                         );
-                        return None;
+                        return XhciControlTransferOutcome::Failed { code: 0 };
                     }
                 }
             }
@@ -12950,7 +13034,36 @@ fn xhci_wait_control_transfer_completion(
             }
         }),
     );
-    None
+    if transferred.is_some() {
+        XhciControlTransferOutcome::PendingStatus
+    } else {
+        XhciControlTransferOutcome::PendingData
+    }
+}
+
+fn xhci_wait_control_transfer_completion(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    slot: u8,
+    endpoint_id: u8,
+    plan: XhciControlTransferPlan,
+    progress: Option<XhciControlProgress>,
+    completion_spins: usize,
+) -> Option<usize> {
+    match xhci_wait_control_transfer_completion_outcome(
+        state,
+        descriptor,
+        slot,
+        endpoint_id,
+        plan,
+        progress,
+        completion_spins,
+    ) {
+        XhciControlTransferOutcome::Complete(transferred) => Some(transferred),
+        XhciControlTransferOutcome::Failed { .. }
+        | XhciControlTransferOutcome::PendingData
+        | XhciControlTransferOutcome::PendingStatus => None,
+    }
 }
 
 fn xhci_context_addr(dma_base: usize, offset: usize, context_bytes: usize, index: usize) -> usize {
@@ -13759,16 +13872,45 @@ fn xhci_control_transfer_with_progress_and_spins(
     progress: Option<XhciControlProgress>,
     completion_spins: usize,
 ) -> Option<usize> {
+    match xhci_control_transfer_with_progress_and_spins_outcome(
+        state,
+        descriptor,
+        device,
+        setup,
+        data_offset,
+        data_len,
+        data_in,
+        progress,
+        completion_spins,
+    ) {
+        XhciControlTransferOutcome::Complete(transferred) => Some(transferred),
+        XhciControlTransferOutcome::Failed { .. }
+        | XhciControlTransferOutcome::PendingData
+        | XhciControlTransferOutcome::PendingStatus => None,
+    }
+}
+
+fn xhci_control_transfer_with_progress_and_spins_outcome(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    setup: [u8; 8],
+    data_offset: usize,
+    data_len: usize,
+    data_in: bool,
+    progress: Option<XhciControlProgress>,
+    completion_spins: usize,
+) -> XhciControlTransferOutcome {
     let Some(dma_range) = runtime_resource_range(
         descriptor,
         DRIVER_RUNTIME_RESOURCE_KIND_DMA,
         DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
     ) else {
-        return None;
+        return XhciControlTransferOutcome::Failed { code: 0 };
     };
     let base = dma_range.vaddr as usize + device.ep0_ring_offset;
     let Some(data_bus) = xhci_dma_bus_addr(descriptor, dma_range, data_offset) else {
-        return None;
+        return XhciControlTransferOutcome::Failed { code: 0 };
     };
     let data_vaddr = dma_range.vaddr as usize + data_offset;
     let setup_value = u64::from(setup[0])
@@ -13788,7 +13930,7 @@ fn xhci_control_transfer_with_progress_and_spins(
             .ep0_ring_offset
             .saturating_add(setup_index.saturating_mul(XHCI_TRB_BYTES)),
     ) else {
-        return None;
+        return XhciControlTransferOutcome::Failed { code: 0 };
     };
     let setup_transfer_type = if data_len == 0 {
         0
@@ -13815,13 +13957,16 @@ fn xhci_control_transfer_with_progress_and_spins(
         XHCI_COMMAND_RING_TRBS,
     );
     let data_trb = if data_len != 0 {
-        xhci_dma_bus_addr(
+        let Some(data_trb) = xhci_dma_bus_addr(
             descriptor,
             dma_range,
             device
                 .ep0_ring_offset
                 .saturating_add(usize::from(device.ep0_enqueue).saturating_mul(XHCI_TRB_BYTES)),
-        )?
+        ) else {
+            return XhciControlTransferOutcome::Failed { code: 0 };
+        };
+        data_trb
     } else {
         0
     };
@@ -13853,7 +13998,7 @@ fn xhci_control_transfer_with_progress_and_spins(
             .ep0_ring_offset
             .saturating_add(status_index.saturating_mul(XHCI_TRB_BYTES)),
     ) else {
-        return None;
+        return XhciControlTransferOutcome::Failed { code: 0 };
     };
     write_xhci_trb(
         base,
@@ -13879,13 +14024,13 @@ fn xhci_control_transfer_with_progress_and_spins(
     dma_store_barrier();
     if !xhci_ring_doorbell(state, device.slot, 1) {
         xhci_publish_control_progress(progress, progress.map_or(0, |progress| progress.failed));
-        return None;
+        return XhciControlTransferOutcome::Failed { code: 0 };
     }
     xhci_publish_control_progress(
         progress,
         progress.map_or(0, |progress| progress.doorbell_done),
     );
-    let transferred = xhci_wait_control_transfer_completion(
+    let outcome = xhci_wait_control_transfer_completion_outcome(
         state,
         descriptor,
         device.slot,
@@ -13899,10 +14044,10 @@ fn xhci_control_transfer_with_progress_and_spins(
         progress,
         completion_spins,
     );
-    if transferred.is_some() && data_in {
+    if matches!(outcome, XhciControlTransferOutcome::Complete(_)) && data_in {
         dma_invalidate_range(data_vaddr, data_len);
     }
-    transferred
+    outcome
 }
 
 fn usb_get_descriptor_with_progress(
@@ -14694,7 +14839,32 @@ fn usb_hub_class_transfer_with_progress(
     progress: Option<XhciControlProgress>,
     completion_spins: usize,
 ) -> bool {
-    xhci_control_transfer_with_progress_and_spins(
+    matches!(
+        usb_hub_class_transfer_with_progress_outcome(
+            state,
+            descriptor,
+            device,
+            setup,
+            len,
+            data_in,
+            progress,
+            completion_spins,
+        ),
+        XhciControlTransferOutcome::Complete(_)
+    )
+}
+
+fn usb_hub_class_transfer_with_progress_outcome(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    setup: [u8; 8],
+    len: usize,
+    data_in: bool,
+    progress: Option<XhciControlProgress>,
+    completion_spins: usize,
+) -> XhciControlTransferOutcome {
+    xhci_control_transfer_with_progress_and_spins_outcome(
         state,
         descriptor,
         device,
@@ -14705,7 +14875,13 @@ fn usb_hub_class_transfer_with_progress(
         progress,
         completion_spins,
     )
-    .is_some()
+}
+
+fn usb_hub_control_should_try_fallback(outcome: XhciControlTransferOutcome) -> bool {
+    matches!(
+        outcome,
+        XhciControlTransferOutcome::Failed { code } if code == XHCI_COMPLETION_STALL_ERROR
+    )
 }
 
 const fn usb_hub_port_status_progress(sequence: u32, aux0: u32) -> XhciControlProgress {
@@ -14738,7 +14914,10 @@ fn usb_hub_set_feature(
     feature: u16,
 ) -> bool {
     let [primary, fallback] = usb_hub_port_index_candidates(interface, port);
-    for index in [primary, fallback] {
+    for (attempt, index) in [primary, fallback].iter().copied().enumerate() {
+        if attempt != 0 && index == primary {
+            continue;
+        }
         let setup = [
             0x23,
             XHCI_SETUP_SET_FEATURE,
@@ -14749,8 +14928,20 @@ fn usb_hub_set_feature(
             0,
             0,
         ];
-        if usb_hub_class_transfer(state, descriptor, device, setup, 0, false) {
-            return true;
+        let outcome = usb_hub_class_transfer_with_progress_outcome(
+            state,
+            descriptor,
+            device,
+            setup,
+            0,
+            false,
+            None,
+            USB_CONTROL_TRANSFER_SPINS,
+        );
+        match outcome {
+            XhciControlTransferOutcome::Complete(_) => return true,
+            _ if usb_hub_control_should_try_fallback(outcome) => {}
+            _ => return false,
         }
     }
     false
@@ -14765,7 +14956,10 @@ fn usb_hub_clear_feature(
     feature: u16,
 ) -> bool {
     let [primary, fallback] = usb_hub_port_index_candidates(interface, port);
-    for index in [primary, fallback] {
+    for (attempt, index) in [primary, fallback].iter().copied().enumerate() {
+        if attempt != 0 && index == primary {
+            continue;
+        }
         let setup = [
             0x23,
             XHCI_SETUP_CLEAR_FEATURE,
@@ -14776,8 +14970,20 @@ fn usb_hub_clear_feature(
             0,
             0,
         ];
-        if usb_hub_class_transfer(state, descriptor, device, setup, 0, false) {
-            return true;
+        let outcome = usb_hub_class_transfer_with_progress_outcome(
+            state,
+            descriptor,
+            device,
+            setup,
+            0,
+            false,
+            None,
+            USB_CONTROL_TRANSFER_SPINS,
+        );
+        match outcome {
+            XhciControlTransferOutcome::Complete(_) => return true,
+            _ if usb_hub_control_should_try_fallback(outcome) => {}
+            _ => return false,
         }
     }
     false
@@ -14792,7 +14998,10 @@ fn usb_hub_get_port_status_with_progress(
     progress: Option<XhciControlProgress>,
 ) -> Option<UsbHubPortStatus> {
     let [primary, fallback] = usb_hub_port_index_candidates(interface, port);
-    for index in [primary, fallback] {
+    for (attempt, index) in [primary, fallback].iter().copied().enumerate() {
+        if attempt != 0 && index == primary {
+            continue;
+        }
         let setup = [
             0xa3,
             XHCI_SETUP_GET_STATUS,
@@ -14803,7 +15012,7 @@ fn usb_hub_get_port_status_with_progress(
             4,
             0,
         ];
-        if usb_hub_class_transfer_with_progress(
+        let outcome = usb_hub_class_transfer_with_progress_outcome(
             state,
             descriptor,
             device,
@@ -14812,20 +15021,26 @@ fn usb_hub_get_port_status_with_progress(
             true,
             progress,
             USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS,
-        ) {
-            let base = match runtime_resource_range(
-                descriptor,
-                DRIVER_RUNTIME_RESOURCE_KIND_DMA,
-                DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
-            ) {
-                Some(range) => range.vaddr as usize + XHCI_DMA_HUB_BUFFER_OFFSET,
-                None => return None,
-            };
-            return Some(UsbHubPortStatus {
-                status: u16::from(read_dma_byte(base)) | (u16::from(read_dma_byte(base + 1)) << 8),
-                change: u16::from(read_dma_byte(base + 2))
-                    | (u16::from(read_dma_byte(base + 3)) << 8),
-            });
+        );
+        match outcome {
+            XhciControlTransferOutcome::Complete(_) => {
+                let base = match runtime_resource_range(
+                    descriptor,
+                    DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+                    DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+                ) {
+                    Some(range) => range.vaddr as usize + XHCI_DMA_HUB_BUFFER_OFFSET,
+                    None => return None,
+                };
+                return Some(UsbHubPortStatus {
+                    status: u16::from(read_dma_byte(base))
+                        | (u16::from(read_dma_byte(base + 1)) << 8),
+                    change: u16::from(read_dma_byte(base + 2))
+                        | (u16::from(read_dma_byte(base + 3)) << 8),
+                });
+            }
+            _ if usb_hub_control_should_try_fallback(outcome) => {}
+            _ => return None,
         }
     }
     None
@@ -16314,14 +16529,39 @@ fn usb_wait_status(op_base: usize, mask: u32, expected: u32) -> bool {
     false
 }
 
-fn usb_wait_command_clear(op_base: usize, mask: u32) -> bool {
-    for _ in 0..PCIE_POLL_SPINS {
+fn usb_wait_status_with_settle(
+    op_base: usize,
+    mask: u32,
+    expected: u32,
+    polls: usize,
+    settle_spins: usize,
+) -> bool {
+    for _ in 0..polls {
+        if usb_read32(op_base + XHCI_USBSTS) & mask == expected {
+            return true;
+        }
+        runtime_spin(settle_spins);
+    }
+    false
+}
+
+fn usb_wait_command_clear_with_settle(
+    op_base: usize,
+    mask: u32,
+    polls: usize,
+    settle_spins: usize,
+) -> bool {
+    for _ in 0..polls {
         if usb_read32(op_base + XHCI_USBCMD) & mask == 0 {
             return true;
         }
-        core::hint::spin_loop();
+        runtime_spin(settle_spins);
     }
     false
+}
+
+const fn usb_xhci_reset_command_value(current: u32) -> u32 {
+    current | XHCI_USBCMD_HCRST
 }
 
 #[inline(never)]
@@ -16413,14 +16653,15 @@ fn usb_runtime_init_hw(
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_HALTED, aux0);
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN, aux0);
-    usb_write32(op_base + XHCI_USBCMD, XHCI_USBCMD_HCRST);
+    let reset_command = usb_xhci_reset_command_value(usb_read32(op_base + XHCI_USBCMD));
+    usb_write32(op_base + XHCI_USBCMD, reset_command);
     if !xhci_flush_posted_write_progress(
         sequence,
         aux0,
         state,
         XHCI_FLUSH_STAGE_INIT,
         op_base + XHCI_USBCMD,
-        XHCI_USBCMD_HCRST,
+        reset_command,
     ) {
         return None;
     }
@@ -16429,7 +16670,12 @@ fn usb_runtime_init_hw(
         DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
         aux0,
     );
-    if !usb_wait_command_clear(op_base, XHCI_USBCMD_HCRST) {
+    if !usb_wait_command_clear_with_settle(
+        op_base,
+        XHCI_USBCMD_HCRST,
+        USB_XHCI_RESET_WAIT_POLLS,
+        USB_XHCI_RESET_WAIT_SETTLE_SPINS,
+    ) {
         return None;
     }
     publish_runtime_progress(
@@ -16437,7 +16683,13 @@ fn usb_runtime_init_hw(
         DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN,
         aux0,
     );
-    if !usb_wait_status(op_base, XHCI_USBSTS_CNR, 0) {
+    if !usb_wait_status_with_settle(
+        op_base,
+        XHCI_USBSTS_CNR,
+        0,
+        USB_XHCI_RESET_WAIT_POLLS,
+        USB_XHCI_RESET_WAIT_SETTLE_SPINS,
+    ) {
         return None;
     }
     publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE, aux0);
@@ -20222,6 +20474,8 @@ mod tests {
         assert_eq!(FAULT_CYW43_POST_RELEASE_MAILBOX_READY, 0x532d);
         assert_eq!(FAULT_CYW43_POST_RELEASE_PROTOCOL_VERSION, 0x532e);
         assert_eq!(CYW43_POST_RELEASE_MAILBOX_POLLS, 1_000);
+        assert_eq!(CYW43_SDIO_F2_READY_REENABLE_RETRIES, 1);
+        assert_eq!(CYW43_SDIO_F2_REENABLE_SETTLE_SPINS, 5_000);
         assert_eq!(cyw43_mailbox_version_payload(), 0x0004_0000);
         assert!(cyw43_firmware_mailbox_ready(
             HMB_DATA_FWREADY | cyw43_mailbox_version_payload()
@@ -20246,6 +20500,7 @@ mod tests {
             cyw43_enable_post_release_function2().unwrap() & SDIO_FUNC_READY_2,
             SDIO_FUNC_READY_2
         );
+        assert_eq!(SDIO_FUNCTION2_BLOCK_SIZE, 512);
         assert_eq!(SDIO_CCCR_IENX, 0x04);
         assert_eq!(SDIO_INTERRUPT_ENABLE_MASK, 0x07);
         assert!(cyw43_arm_post_release_function_interrupts().is_ok());
@@ -20254,6 +20509,24 @@ mod tests {
             cyw43_wait_for_firmware_mailbox_ready(&mut state).unwrap()
                 & (HMB_DATA_DEVREADY | HMB_DATA_FWREADY | HMB_DATA_VERSION_MASK),
             HMB_DATA_DEVREADY | HMB_DATA_FWREADY | cyw43_mailbox_version_payload()
+        );
+    }
+
+    #[test]
+    fn cyw43_function2_force_ht_clock_preserves_strict_ht_proof() {
+        assert_eq!(SBSDIO_FORCE_HT, 0x02);
+        assert_eq!(cyw43_function2_force_ht_clock_value(0), SBSDIO_HT_AVAIL_REQ);
+        assert_eq!(
+            cyw43_function2_force_ht_clock_value(SBSDIO_HT_AVAIL_REQ | SBSDIO_ALP_AVAIL),
+            SBSDIO_HT_AVAIL_REQ
+        );
+        assert_eq!(
+            cyw43_function2_force_ht_clock_value(SBSDIO_HT_AVAIL),
+            SBSDIO_HT_AVAIL | SBSDIO_HT_AVAIL_REQ | SBSDIO_FORCE_HT
+        );
+        assert_eq!(
+            cyw43_force_ht_clock_for_function2().unwrap() & SBSDIO_FORCE_HT,
+            SBSDIO_FORCE_HT
         );
     }
 
@@ -21567,6 +21840,9 @@ mod tests {
 
     #[test]
     fn usb_hub_power_settle_uses_descriptor_power_good_delay() {
+        assert_eq!(USB_MSEC_SPINS, USB_CONTROL_TRANSFER_SPINS / 100);
+        assert_eq!(USB_HUB_PORT_POWER_SETTLE_SPINS, USB_MSEC_SPINS * 100);
+        assert_eq!(USB_HUB_PORT_POWER_GOOD_UNIT_SPINS, USB_MSEC_SPINS * 2);
         assert_eq!(
             usb_hub_power_settle_spins(0),
             USB_HUB_PORT_POWER_SETTLE_SPINS
@@ -21888,6 +22164,40 @@ mod tests {
             ([512, 64, 0], 2)
         );
         assert_eq!(usb_hub_port_index_candidates(7, 4), [0x0004, 0x0704]);
+        assert_eq!(usb_hub_port_index_candidates(0, 4), [0x0004, 0x0004]);
+    }
+
+    #[test]
+    fn usb_hub_port_control_fallback_is_stall_only() {
+        assert!(usb_hub_control_should_try_fallback(
+            XhciControlTransferOutcome::Failed {
+                code: XHCI_COMPLETION_STALL_ERROR
+            }
+        ));
+        assert!(!usb_hub_control_should_try_fallback(
+            XhciControlTransferOutcome::Failed { code: 4 }
+        ));
+        assert!(!usb_hub_control_should_try_fallback(
+            XhciControlTransferOutcome::PendingData
+        ));
+        assert!(!usb_hub_control_should_try_fallback(
+            XhciControlTransferOutcome::PendingStatus
+        ));
+        assert!(!usb_hub_control_should_try_fallback(
+            XhciControlTransferOutcome::Complete(4)
+        ));
+    }
+
+    #[test]
+    fn usb_xhci_reset_wait_matches_uboot_handshake_shape() {
+        assert_eq!(USB_XHCI_RESET_WAIT_POLLS, 250_000);
+        assert_eq!(USB_XHCI_RESET_WAIT_SETTLE_SPINS, 512);
+        assert!(USB_XHCI_RESET_WAIT_POLLS < PCIE_POLL_SPINS);
+        assert_eq!(usb_xhci_reset_command_value(0), XHCI_USBCMD_HCRST);
+        assert_eq!(
+            usb_xhci_reset_command_value(XHCI_USBCMD_RUN | 0x0000_0040),
+            XHCI_USBCMD_RUN | XHCI_USBCMD_HCRST | 0x0000_0040
+        );
     }
 
     #[test]
@@ -21905,9 +22215,8 @@ mod tests {
         );
         assert_eq!(
             USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS,
-            USB_CONTROL_TRANSFER_SPINS / 5
+            USB_CONTROL_TRANSFER_SPINS
         );
-        assert!(USB_HUB_PORT_STATUS_CONTROL_TRANSFER_SPINS < USB_CONTROL_TRANSFER_SPINS);
         assert_eq!(USB_COMMAND_COMPLETION_SPINS, 20_000_000);
         assert_eq!(USB_COMMAND_COMPLETION_SLICE_SPINS, 128);
         assert_eq!(USB_COMMAND_COMPLETION_EVENTS_PER_SLICE, 4);
@@ -22035,7 +22344,9 @@ mod tests {
             usb_hub_reset_after_status_settle_spins(false),
             USB_HUB_PORT_RESET_SETTLE_SPINS
         );
-        assert_eq!(usb_hub_port_reset_recovery_spins(), 10_000);
+        assert_eq!(USB_HUB_PORT_RESET_SETTLE_SPINS, USB_MSEC_SPINS * 20);
+        assert_eq!(USB_HUB_PORT_RESET_RETRY_SETTLE_SPINS, USB_MSEC_SPINS * 200);
+        assert_eq!(usb_hub_port_reset_recovery_spins(), USB_MSEC_SPINS * 10);
         assert!(usb_hub_port_reset_recovery_spins() < USB_HUB_PORT_RESET_SETTLE_SPINS);
     }
 
@@ -23467,7 +23778,7 @@ mod tests {
         };
         assert_eq!(
             xhci_classify_control_transfer_event(plan, 3, 1, failed_status, true),
-            XhciControlTransferEvent::Fail
+            XhciControlTransferEvent::Fail { code: 2 }
         );
     }
 

@@ -42,6 +42,7 @@ PI4_TOTAL_MEM_MB=2048
 RESTORE_CANONICAL_CODEGEN=0
 PI4_DTB_PADDED_SIZE=$((128 * 1024))
 U_BOOT_CROSS_COMPILE="aarch64-linux-gnu-"
+U_BOOT_MENU_INPUT="${COHESIX_UBOOT_MENU_INPUT:-usb}"
 
 usage() {
     cat <<'USAGE'
@@ -73,6 +74,8 @@ Options:
                             (default: cohesix-image-arm-bcm2711)
   --root-task-features <f>  Comma-separated root-task feature list
                             (default: release-pi4,bootstrap-trace)
+  --uboot-menu-input <m>    U-Boot setup menu input mode: usb or serial
+                            (default: usb; env: COHESIX_UBOOT_MENU_INPUT)
   --clean                   Clean and rebuild root-task, Pi4 seL4/U-Boot outputs,
                             and the Pi 4 U-Boot binary before staging/flashing
   --skip-build              Skip rebuild and reuse existing seL4 image in sel4 build dir
@@ -81,6 +84,7 @@ Options:
   -h, --help                Show this help
 
 Environment:
+  COHESIX_UBOOT_MENU_INPUT may be serial or usb.
   USB is always staged as Cohesix-owned cold boot. U-Boot xHCI handoff export is disabled.
 USAGE
 }
@@ -196,10 +200,12 @@ verify_u_boot_pi4_target() {
       fail "u-boot.bin is missing CONFIG_CMD_BOOTM; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
     grep -q '^CONFIG_LEGACY_IMAGE_FORMAT=y$' "${config_file}" || \
       fail "u-boot.bin is missing CONFIG_LEGACY_IMAGE_FORMAT; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
-    grep -q '^CONFIG_USB_KEYBOARD=y$' "${config_file}" || \
-      fail "u-boot.bin is missing CONFIG_USB_KEYBOARD; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
-    if ! grep -Eq '^CONFIG_SYS_USB_EVENT_POLL=y$|^CONFIG_SYS_USB_EVENT_POLL_VIA_CONTROL_EP=y$' "${config_file}"; then
-      fail "u-boot.bin is missing a supported USB keyboard polling mode; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    if [[ "${U_BOOT_MENU_INPUT}" == "usb" ]]; then
+        grep -q '^CONFIG_USB_KEYBOARD=y$' "${config_file}" || \
+          fail "u-boot.bin is missing CONFIG_USB_KEYBOARD for --uboot-menu-input usb; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+        if ! grep -Eq '^CONFIG_SYS_USB_EVENT_POLL=y$|^CONFIG_SYS_USB_EVENT_POLL_VIA_CONTROL_EP=y$' "${config_file}"; then
+          fail "u-boot.bin is missing a supported USB keyboard polling mode for --uboot-menu-input usb; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+        fi
     fi
     grep -q '^CONFIG_SYS_CONSOLE_IS_IN_ENV=y$' "${config_file}" || \
       fail "u-boot.bin is missing CONFIG_SYS_CONSOLE_IS_IN_ENV; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
@@ -238,17 +244,17 @@ verify_skip_build_image_fresh() {
     done
 }
 
-verify_boot_cmd_usb_cold_boot() {
+verify_boot_cmd_handoff() {
     local path="$1"
 
     require_file "$path"
 
-    grep -q 'setenv stdin usbkbd,serial' "$path" || fail "boot.cmd is missing USB keyboard stdin setup"
+    grep -q "setenv coh_menu_input ${U_BOOT_MENU_INPUT}" "$path" || fail "boot.cmd menu input mode does not match ${U_BOOT_MENU_INPUT}"
+    grep -q 'test "${coh_menu_input}" = "usb"' "$path" || fail "boot.cmd is missing guarded USB menu-input setup"
     grep -q 'run coh_quiesce_usb' "$path" || fail "boot.cmd is missing USB quiesce step"
     grep -q 'run coh_clear_xhci_handoff_live' "$path" || fail "boot.cmd is missing xHCI stale-token clearing before usb stop"
     grep -q 'setenv coh_xhci_mmio;' "$path" || fail "boot.cmd does not clear stale xHCI MMIO before usb stop"
     grep -q 'setenv coh_xhci_pci_cmd;' "$path" || fail "boot.cmd does not clear stale xHCI PCI command before usb stop"
-    grep -q 'setenv coh_xhci_handoff_opt_in 0' "$path" || fail "boot.cmd must disable xHCI handoff export"
     grep -q 'xHCI state discarded before Cohesix cold boot' "$path" || fail "boot.cmd does not discard stopped U-Boot xHCI state before Cohesix cold boot"
     grep -q 'xHCI cold boot starts unseeded' "$path" || fail "boot.cmd does not make the no-U-Boot-USB cold-boot path explicit"
     ! grep -q 'coh_export_xhci_stop_seed' "$path" || fail "boot.cmd still exports an xHCI stop-state seed"
@@ -611,6 +617,11 @@ parse_args() {
                 ROOT_TASK_FEATURES="$2"
                 shift 2
                 ;;
+            --uboot-menu-input)
+                [[ $# -ge 2 ]] || fail "--uboot-menu-input requires serial or usb"
+                U_BOOT_MENU_INPUT="$2"
+                shift 2
+                ;;
             --clean)
                 CLEAN_BUILD=1
                 shift
@@ -638,6 +649,13 @@ parse_args() {
                 ;;
         esac
     done
+}
+
+validate_menu_input_mode() {
+    case "${U_BOOT_MENU_INPUT}" in
+        serial|usb) ;;
+        *) fail "--uboot-menu-input must be serial or usb (got ${U_BOOT_MENU_INPUT})" ;;
+    esac
 }
 
 activate_venv() {
@@ -940,13 +958,13 @@ setenv coh_runtime_cpio_file __COH_RUNTIME_CPIO_FILE__
 setenv coh_logo_addr 0x02000000
 setenv coh_logo_file __COH_LOGO_FILE__
 setenv coh_logo_bootstd_file __COH_BOOTSTD_LOGO_FILE__
-setenv coh_logo_delay 0
+setenv coh_logo_delay 2
 setenv coh_logo_x 20
 setenv coh_logo_y 20
-setenv coh_xhci_handoff_opt_in 0
+setenv coh_menu_input __COH_MENU_INPUT__
 setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""'
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
-setenv coh_bootstrap_usb_session 'if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi'
+setenv coh_bootstrap_usb_session 'if test "${coh_menu_input}" = "usb"; then if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi; else setenv coh_usb_input_ready 0; fi'
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
 setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_mmio; setenv coh_xhci_pci_cmd; setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
 setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if test "${coh_usb_input_ready}" = "1"; then if usb stop; then run coh_clear_xhci_handoff_live; echo "[cohesix] USB host stopped; xHCI state discarded before Cohesix cold boot"; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed before Cohesix boot"; fi; else run coh_clear_xhci_handoff_live; echo "[cohesix] USB host session was not active; xHCI cold boot starts unseeded"; fi'
@@ -973,6 +991,7 @@ run coh_prompt_root
 EOF
     sed -i '' "s/__COH_IMAGE__/${coh_image}/g" "$out"
     sed -i '' "s/__COH_IMAGE_FALLBACK__/${fallback_image}/g" "$out"
+    sed -i '' "s/__COH_MENU_INPUT__/${U_BOOT_MENU_INPUT}/g" "$out"
     sed -i '' "s/__COH_LOGO_FILE__/${COHESIX_LOGO_STAGE_NAME}/g" "$out"
     sed -i '' "s/__COH_BOOTSTD_LOGO_FILE__/${BOOTSTD_LOGO_STAGE_NAME}/g" "$out"
     sed -i '' "s/__COH_RUNTIME_CPIO_FILE__/${DRIVER_RUNTIME_CPIO_STAGE_NAME}/g" "$out"
@@ -1235,7 +1254,7 @@ total_mem=${PI4_TOTAL_MEM_MB}
 EOF
 
     write_boot_cmd "${STAGE_DIR}/boot.cmd" "${COHESIX_IMAGE_NAME}" "${SEL4_UPSTREAM_IMAGE_NAME}"
-    verify_boot_cmd_usb_cold_boot "${STAGE_DIR}/boot.cmd"
+    verify_boot_cmd_handoff "${STAGE_DIR}/boot.cmd"
     "$mkimage_bin" \
       -A arm64 \
       -T script \
@@ -1424,6 +1443,7 @@ unmount_flashed_disk() {
 
 main() {
     parse_args "$@"
+    validate_menu_input_mode
     canonicalize_input_paths
 
     cd "$ROOT_DIR"

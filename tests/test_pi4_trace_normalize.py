@@ -1242,6 +1242,36 @@ def test_gate_summary_tracks_cyw43_post_release_mailbox_ready_fault() -> None:
     assert gates.wifi_phase == "cyw43-firmware-release"
 
 
+def test_gate_summary_tracks_cyw43_post_release_function2_ready_fault() -> None:
+    events = normalizer.parse_events(
+        [
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "policy=wifi attempted=yes stage=cyw43-firmware blocker=failed",
+            "DRIVER_TASK_RING_PROGRESS contract=cyw43455 request=99 "
+            "expected_aux0=0x43595734 marker_valid=yes marker_sequence=99 "
+            "marker_phase=216 marker_phase_name=cyw43-release-firmware-ready-begin "
+            "marker_aux0=0x43595734",
+            "CYW43_DRIVER_TASK_COMMAND_FAULT contract=cyw43455 "
+            "stage=cyw43-firmware-release op=5 flags=0x0000 "
+            "target=0x00000000 payload_off=0 payload_len=0 total_len=0 "
+            "detail=21291 reason=cyw43-post-release-function2-ready "
+            "result=0x00000600",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-firmware-release status=fault acceptance=no "
+            "code=5 detail=21291 result=0x00000600 frame_len=0",
+            "ERR NETTEST reason=policy detail=net-disabled "
+            "cause=cyw43-command driver-task runtime init failed",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-post-release-function2-ready"
+    assert gates.wifi_exact == "cyw43-post-release-function2-ready"
+    assert gates.wifi_phase == "cyw43-firmware-release"
+
+
 def test_gate_summary_keeps_wifi_blackbox_fault_over_later_prompt_replay() -> None:
     events = normalizer.parse_events(
         [
@@ -5061,6 +5091,8 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         "ioctl-timeout": "ioctl-timeout",
         "join-timeout": "join-timeout",
         "wifi-association-failed": "wifi-association-failed",
+        "cyw43-association-not-associated": "cyw43-association-not-associated",
+        "association-not-associated": "cyw43-association-not-associated",
         "dhcp-pending": "dhcp-pending",
         "dhcp-failed": "dhcp-failed",
         "not-ready:ipc-buffer": "net-not-ready-ipc-buffer",
@@ -6535,6 +6567,50 @@ def test_gate_summary_preserves_host_eapol_firstread_empty_with_rx_source() -> N
     assert gates.wifi_blocker == "cyw43-data-rx-firstread-empty"
     assert gates.wifi_exact == "cyw43-data-rx-firstread-empty"
     assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_preserves_not_associated_probe_over_firstread_empty() -> None:
+    events = normalizer.parse_events(
+        [
+            "wifi: sdio linked_runtime_progress marker_valid=yes sequence=0 "
+            "phase=202 phase_name=runtime-poll-ready aux0=0x00000007 "
+            "gate=0 blocker=sdio-linked-runtime-progress-no-reply "
+            "next_action=inspect-linked-sdio-runtime-progress",
+            "wifi: gate 8 name=host-eapol status=fail "
+            "evidence=exact=wifi-host-eapol-pending control_stage=host-eapol "
+            "dependency=ready-for-direct-evidence next=dhcp-bound",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_PROBE contract=cyw43455 "
+            "poll=24576 attempt=4 status=failed bssid=00:00:00:00:00:00 "
+            "reason=firmware-not-associated-limit result=0xffffffef",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-not-associated polls=24576 "
+            "starts=0 tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 "
+            "event_rx=0 control_rx=0 empty_polls=24576 associated=no "
+            "link_up=no assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "rx_firstread_attempts=13494 rx_firstread_empty=13494 "
+            "rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=24576 control_rx_firstread_empty=24576 "
+            "control_rx_firstread_failed=0 last_rx_idle_detail=0x570a "
+            "last_rx_idle_result=0xab070200 last_control_rx_idle_detail=0x570a "
+            "last_control_rx_idle_result=0xab070200 rxsrc_mode=owner-card-sampled-cached "
+            "rxsrc_probe_len=512 rxsrc_ien=0x07 rxsrc_frame_ind=yes "
+            "rxsrc_host_int=yes rxsrc_card_int=no rxsrc_f2_ready=yes "
+            "control_rxsrc_mode=owner-card-sampled-cached control_rxsrc_probe_len=512 "
+            "control_rxsrc_ien=0x07 control_rxsrc_frame_ind=yes "
+            "control_rxsrc_host_int=yes control_rxsrc_card_int=no "
+            "control_rxsrc_f2_ready=yes last_flags=0x0000 last_len=0 "
+            "last_ethertype=0x0000 last_ethertype_valid=no "
+            "next_action=inspect-cyw43-association-event-or-join-policy",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-association-not-associated"
+    assert gates.wifi_exact == "cyw43-association-not-associated"
+    assert gates.wifi_phase == "association"
 
 
 def test_gate_summary_preserves_host_eapol_firstread_over_nettest_symptom() -> None:

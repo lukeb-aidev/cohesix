@@ -144,6 +144,8 @@ const CYW43_WLC_SET_SSID: u32 = 26;
 const CYW43_WLC_GET_REVINFO: u32 = 98;
 const CYW43_WLC_SET_WSEC: u32 = 134;
 const CYW43_WLC_SET_WPA_AUTH: u32 = 165;
+const CYW43_WLC_SET_SCAN_CHANNEL_TIME: u32 = 185;
+const CYW43_WLC_SET_SCAN_UNASSOC_TIME: u32 = 187;
 const CYW43_WLC_GET_VAR: u32 = 262;
 const CYW43_WLC_SET_VAR: u32 = 263;
 const CYW43_CONTROL_EXCHANGE_FAULT_DETAIL: u16 = 0x530b;
@@ -154,6 +156,17 @@ const CYW43_WSEC_NONE: u32 = 0;
 const CYW43_WSEC_AES: u32 = 4;
 const CYW43_MFP_NONE: u32 = 0;
 const CYW43_WME_BSS_DISABLE_RSN_DEFAULT: u32 = 1;
+const CYW43_LINUX_PREJOIN_MPC_ENABLED: u32 = 1;
+const CYW43_LINUX_SCAN_CHANNEL_TIME_MS: u32 = 40;
+const CYW43_LINUX_SCAN_UNASSOC_TIME_MS: u32 = 40;
+const CYW43_CONNECT_STATION_POLICY_DISABLED: u32 = 0;
+const CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS: [(&str, u32); 4] = [
+    ("mpc", CYW43_CONNECT_STATION_POLICY_DISABLED),
+    ("arp_ol", CYW43_CONNECT_STATION_POLICY_DISABLED),
+    ("arpoe", CYW43_CONNECT_STATION_POLICY_DISABLED),
+    ("ndoe", CYW43_CONNECT_STATION_POLICY_DISABLED),
+];
+const CYW43_LINUX_JOIN_PREF_DEFAULT: [u8; 8] = [0x04, 0x02, 0x08, 0x01, 0x01, 0x02, 0x00, 0x00];
 const CYW43_WPA_AUTH_DISABLED: u32 = 0;
 const CYW43_WPA2_AUTH_PSK_OR_UNSPECIFIED: u32 = 0x00c0;
 const CYW43_WPA2_AUTH_PSK: u32 = 0x0080;
@@ -519,6 +532,7 @@ struct Cyw43HostEapolProgress {
     last_control_rx_idle_result: u32,
     last_rx_source: Option<Cyw43RxSourceResult>,
     last_control_rx_source: Option<Cyw43RxSourceResult>,
+    assoc_probe_not_associated: bool,
     last_flags: u16,
     last_len: u16,
     last_ethertype: u16,
@@ -1494,6 +1508,7 @@ where
             CYW43_WPA2_AUTH_PSK,
             "cyw43-control-wpa-auth-final",
         )?;
+        cyw43_apply_linux_connect_station_policy(contract)?;
         cyw43_configure_host_eapol_rx(contract)?;
         cyw43_submit_join_request(contract, credentials)?;
         arm_cyw43_host_eapol_pending(contract, credentials, mac)?;
@@ -1512,6 +1527,7 @@ where
         CYW43_WPA_AUTH_DISABLED,
         "cyw43-control-wpa-auth",
     )?;
+    cyw43_apply_linux_connect_station_policy(contract)?;
     cyw43_submit_join_request(contract, credentials)?;
     let _observed = cyw43_poll_control_plane_frames("cyw43-control-poll");
     crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -1539,6 +1555,35 @@ fn cyw43_apply_linux_wpa2_rsn_capability_policy(
         "wme_bss_disable",
         CYW43_WME_BSS_DISABLE_RSN_DEFAULT,
         "cyw43-control-rsn-wme-bss-disable",
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_apply_linux_connect_station_policy(
+    contract: DriverTaskContract,
+) -> Result<(), DriverTaskNetError> {
+    let (mpc_name, mpc_value) = CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS[0];
+    let (arp_ol_name, arp_ol_value) = CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS[1];
+    let (arpoe_name, arpoe_value) = CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS[2];
+    let (ndoe_name, ndoe_value) = CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS[3];
+    cyw43_submit_bcdc_iovar_u32(contract, mpc_name, mpc_value, "cyw43-control-connect-mpc")?;
+    cyw43_submit_bcdc_iovar_u32_optional_unsupported(
+        contract,
+        arp_ol_name,
+        arp_ol_value,
+        "cyw43-control-connect-arp-ol",
+    )?;
+    cyw43_submit_bcdc_iovar_u32_optional_unsupported(
+        contract,
+        arpoe_name,
+        arpoe_value,
+        "cyw43-control-connect-arpoe",
+    )?;
+    cyw43_submit_bcdc_iovar_u32_optional_unsupported(
+        contract,
+        ndoe_name,
+        ndoe_value,
+        "cyw43-control-connect-ndoe",
     )
 }
 
@@ -2112,7 +2157,44 @@ fn cyw43_prepare_runtime_control_plane(
     let mac = cyw43_query_runtime_mac(contract)?;
     cyw43_get_bcdc_revinfo(contract)?;
     cyw43_submit_bcdc_iovar_u32(contract, "mpc", 0, "cyw43-control-mpc")?;
+    cyw43_apply_linux_prejoin_association_policy(contract)?;
     Ok(mac)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_apply_linux_prejoin_association_policy(
+    contract: DriverTaskContract,
+) -> Result<(), DriverTaskNetError> {
+    cyw43_submit_bcdc_iovar_u32(
+        contract,
+        "mpc",
+        CYW43_LINUX_PREJOIN_MPC_ENABLED,
+        "cyw43-control-prejoin-mpc",
+    )?;
+    cyw43_submit_bcdc_iovar_bytes(
+        contract,
+        "join_pref",
+        &CYW43_LINUX_JOIN_PREF_DEFAULT,
+        "cyw43-control-prejoin-join-pref",
+    )?;
+    cyw43_submit_bcdc_u32(
+        contract,
+        CYW43_WLC_SET_SCAN_CHANNEL_TIME,
+        CYW43_LINUX_SCAN_CHANNEL_TIME_MS,
+        "cyw43-control-prejoin-scan-channel-time",
+    )?;
+    cyw43_submit_bcdc_u32(
+        contract,
+        CYW43_WLC_SET_SCAN_UNASSOC_TIME,
+        CYW43_LINUX_SCAN_UNASSOC_TIME_MS,
+        "cyw43-control-prejoin-scan-unassoc-time",
+    )?;
+    cyw43_submit_bcdc_iovar_u32_optional_unsupported(
+        contract,
+        "txbf",
+        1,
+        "cyw43-control-prejoin-txbf",
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -2948,6 +3030,7 @@ fn cyw43_service_host_eapol_assoc_probe(
             let status = if exhausted { "failed" } else { "pending" };
             let reason = if err.is_not_associated() {
                 if exhausted {
+                    session.progress.assoc_probe_not_associated = true;
                     "firmware-not-associated-limit"
                 } else {
                     "firmware-not-associated"
@@ -3318,7 +3401,7 @@ fn emit_cyw43_host_eapol_status(
     use core::fmt::Write;
 
     let reason = if status == "required" {
-        "host-eapol-required"
+        cyw43_host_eapol_required_reason(progress)
     } else {
         "none"
     };
@@ -3383,6 +3466,15 @@ fn emit_cyw43_host_eapol_status(
         next_action,
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_host_eapol_required_reason(progress: &Cyw43HostEapolProgress) -> &'static str {
+    if progress.assoc_probe_not_associated && !progress.associated {
+        "cyw43-association-not-associated"
+    } else {
+        "host-eapol-required"
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -3506,6 +3598,18 @@ fn cyw43_host_eapol_next_action(
         "inspect-sdpcm-readahead-channel-or-fws-tlv"
     } else if progress.rx_firstread_failed != 0 || progress.rx_firstread_remainder_failed != 0 {
         "inspect-cyw43-data-rx-cmd53-firstread"
+    } else if progress.assoc_probe_not_associated && !progress.associated {
+        if cyw43_rx_source_owner_state_missing(progress.last_control_rx_source)
+            || cyw43_rx_source_owner_state_missing(progress.last_rx_source)
+        {
+            "inspect-sdio-owner-function2-rx-source"
+        } else if cyw43_rx_source_is_passive(progress.last_control_rx_source)
+            || cyw43_rx_source_is_passive(progress.last_rx_source)
+        {
+            "inspect-cyw43-assoc-event-rx-or-sdio-owner-ienx-snapshot"
+        } else {
+            "inspect-cyw43-association-event-or-join-policy"
+        }
     } else if progress.control_rx_firstread_empty != 0 && !progress.associated {
         if cyw43_rx_source_owner_state_missing(progress.last_control_rx_source) {
             "inspect-sdio-owner-function2-rx-source"
@@ -7225,6 +7329,93 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_connect_station_policy_iovars_match_linux_values() {
+        for (name, value) in CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS {
+            let mut payload = [0u8; 32];
+            let name_len = name.len();
+            payload[..name_len].copy_from_slice(name.as_bytes());
+            payload[name_len] = 0;
+            payload[name_len + 1..name_len + 5].copy_from_slice(&value.to_le_bytes());
+
+            let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+            let len = cyw43_write_bcdc_frame(
+                &mut frame,
+                CYW43_WLC_SET_VAR,
+                CYW43_BCDC_FLAG_SET,
+                1,
+                &payload[..name_len + 5],
+            )
+            .expect("connect station policy iovar frame should fit");
+            let info = cyw43_control_iovar_info(&frame[..len], CYW43_WLC_SET_VAR)
+                .expect("connect station policy iovar should decode");
+
+            assert_eq!(info.name, name);
+            assert_eq!(info.data_len, 4);
+            assert_eq!(info.value_u32, Some(value));
+        }
+    }
+
+    #[test]
+    fn cyw43_prejoin_association_policy_matches_linux_values() {
+        let mut join_pref_payload = [0u8; 32];
+        let name = "join_pref";
+        let name_len = name.len();
+        join_pref_payload[..name_len].copy_from_slice(name.as_bytes());
+        join_pref_payload[name_len] = 0;
+        join_pref_payload[name_len + 1..name_len + 1 + CYW43_LINUX_JOIN_PREF_DEFAULT.len()]
+            .copy_from_slice(&CYW43_LINUX_JOIN_PREF_DEFAULT);
+
+        let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+        let payload_len = name_len + 1 + CYW43_LINUX_JOIN_PREF_DEFAULT.len();
+        let len = cyw43_write_bcdc_frame(
+            &mut frame,
+            CYW43_WLC_SET_VAR,
+            CYW43_BCDC_FLAG_SET,
+            1,
+            &join_pref_payload[..payload_len],
+        )
+        .expect("join_pref BCDC frame should fit");
+        let info = cyw43_control_iovar_info(&frame[..len], CYW43_WLC_SET_VAR)
+            .expect("join_pref iovar should decode");
+        let value_start = CYW43_BCDC_HEADER_BYTES + name_len + 1;
+
+        assert_eq!(CYW43_LINUX_PREJOIN_MPC_ENABLED, 1);
+        assert_eq!(info.name, "join_pref");
+        assert_eq!(info.data_len, CYW43_LINUX_JOIN_PREF_DEFAULT.len());
+        assert_eq!(info.value_u32, None);
+        assert_eq!(
+            &frame[value_start..value_start + CYW43_LINUX_JOIN_PREF_DEFAULT.len()],
+            &CYW43_LINUX_JOIN_PREF_DEFAULT
+        );
+
+        for (cmd, value) in [
+            (
+                CYW43_WLC_SET_SCAN_CHANNEL_TIME,
+                CYW43_LINUX_SCAN_CHANNEL_TIME_MS,
+            ),
+            (
+                CYW43_WLC_SET_SCAN_UNASSOC_TIME,
+                CYW43_LINUX_SCAN_UNASSOC_TIME_MS,
+            ),
+        ] {
+            let mut scan_frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+            let len = cyw43_write_bcdc_frame(
+                &mut scan_frame,
+                cmd,
+                CYW43_BCDC_FLAG_SET,
+                2,
+                &value.to_le_bytes(),
+            )
+            .expect("scan timing BCDC frame should fit");
+
+            assert_eq!(
+                cyw43_read_le_u32(&scan_frame[..len], CYW43_BCDC_HEADER_BYTES),
+                Some(value)
+            );
+        }
+    }
+
+    #[test]
     fn cyw43_join_event_mask_matches_old_good_event_msgs_ext_shape() {
         let mask = cyw43_linux_join_event_mask().expect("join event mask must fit");
         let mut payload = [0u8; CYW43_EVENTMSGS_EXT_PAYLOAD_LEN];
@@ -7828,6 +8019,29 @@ mod tests {
         assert_eq!(
             cyw43_host_eapol_next_action("secure", &progress),
             "release-dhcp-data"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_required_after_not_associated_probe_names_association_gap() {
+        let mut progress = Cyw43HostEapolProgress::default();
+        progress.polls = CYW43_HOST_EAPOL_JOIN_POLLS as u32;
+        progress.assoc_probe_not_associated = true;
+
+        assert_eq!(
+            cyw43_host_eapol_required_reason(&progress),
+            "cyw43-association-not-associated"
+        );
+        assert_eq!(
+            cyw43_host_eapol_next_action("required", &progress),
+            "inspect-cyw43-association-event-or-join-policy"
+        );
+
+        progress.associated = true;
+        assert_eq!(
+            cyw43_host_eapol_required_reason(&progress),
+            "host-eapol-required"
         );
     }
 

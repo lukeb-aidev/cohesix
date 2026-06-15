@@ -53,3 +53,53 @@ def test_pi4_image_build_skip_build_rejects_stale_selected_image() -> None:
     assert 'apps/root-task/src' in source
     assert 'apps/root-task/src/generated' in source
     assert 'apps/pi4-driver-runtime/src' in source
+
+
+def test_pi4_image_build_defaults_to_usb_uboot_menu_input() -> None:
+    """The HDMI setup menu must keep USB keyboard input working by default."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'U_BOOT_MENU_INPUT="${COHESIX_UBOOT_MENU_INPUT:-usb}"' in source
+    assert "--uboot-menu-input <m>" in source
+    assert 'validate_menu_input_mode' in source
+    assert 'setenv coh_menu_input __COH_MENU_INPUT__' in source
+    assert 'test "${coh_menu_input}" = "usb"' in source
+    assert 'sed -i \'\' "s/__COH_MENU_INPUT__/${U_BOOT_MENU_INPUT}/g" "$out"' in source
+    assert "setenv coh_logo_delay 2" in source
+
+
+def test_pi4_image_build_keeps_dtb_policy_handoff_common() -> None:
+    """Menu input changes must not bypass DTB policy handoff to seL4."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'setenv coh_apply_dtb_policy' in source
+    for prop in (
+        "cohesix,net-mode",
+        "cohesix,net-interface",
+        "cohesix,static-ipv4",
+        "cohesix,static-prefix-len",
+        "cohesix,static-gateway",
+        "cohesix,wifi-ssid",
+        "cohesix,wifi-psk",
+    ):
+        assert prop in source
+    assert 'bootm ${coh_addr} ${coh_runtime_cpio_addr} ${coh_dtb_addr}' in source
+
+
+def test_pi4_image_build_allows_serial_menu_without_usb_keyboard() -> None:
+    """The explicit serial menu opt-out must not require U-Boot USB keyboard support."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    usb_gate = 'if [[ "${U_BOOT_MENU_INPUT}" == "usb" ]]; then'
+    usb_keyboard = "u-boot.bin is missing CONFIG_USB_KEYBOARD for --uboot-menu-input usb"
+    usb_poll = (
+        "u-boot.bin is missing a supported USB keyboard polling mode "
+        "for --uboot-menu-input usb"
+    )
+
+    assert usb_gate in source
+    assert source.index(usb_gate) < source.index(usb_keyboard)
+    assert source.index(usb_gate) < source.index(usb_poll)

@@ -1854,6 +1854,8 @@ def summarize_host_eapol_firstread_status(
             continue
         status = fields.get("status", "").lower()
         reason = normalize_wifi_blocker(fields.get("reason", ""))
+        if reason == "cyw43-association-not-associated":
+            continue
         if status == "required" or reason == "host-eapol-required":
             latest = (blocker, "runtime-rx", event.line)
     return latest
@@ -2041,6 +2043,11 @@ def normalize_wifi_blocker(value: str) -> str:
         and "status=no-reply" in lower
     ):
         return "cyw43-engine-init-no-reply"
+    if (
+        "cyw43-association-not-associated" in lower
+        or "association-not-associated" in lower
+    ):
+        return "cyw43-association-not-associated"
     if (
         "host-eapol-required" in lower
         or "wifi-host-eapol-required" in lower
@@ -2553,6 +2560,12 @@ def normalize_wifi_blocker(value: str) -> str:
         return "cyw43-sdio-descriptor-transfer-failed"
     if lower in {"21289", "0x5329"} or "firmware-retry-exhausted" in lower:
         return "cyw43-firmware-retry-exhausted"
+    if lower in {"21290", "0x532a"} or "cyw43-post-release-ht-clock" in lower:
+        return "cyw43-post-release-ht-clock"
+    if lower in {"21291", "0x532b"} or "cyw43-post-release-function2-ready" in lower:
+        return "cyw43-post-release-function2-ready"
+    if lower in {"21292", "0x532c"} or "cyw43-post-release-corecontrol" in lower:
+        return "cyw43-post-release-corecontrol"
     if lower in {"21293", "0x532d"} or "cyw43-post-release-mailbox-ready" in lower:
         return "cyw43-post-release-mailbox-ready"
     if lower in {"21294", "0x532e"} or "cyw43-post-release-protocol-version" in lower:
@@ -2725,6 +2738,12 @@ def normalize_wifi_exact(value: str) -> str:
         "0x5103": "cyw43-sdio-descriptor-transfer-failed",
         "21289": "cyw43-firmware-retry-exhausted",
         "0x5329": "cyw43-firmware-retry-exhausted",
+        "21290": "cyw43-post-release-ht-clock",
+        "0x532a": "cyw43-post-release-ht-clock",
+        "21291": "cyw43-post-release-function2-ready",
+        "0x532b": "cyw43-post-release-function2-ready",
+        "21292": "cyw43-post-release-corecontrol",
+        "0x532c": "cyw43-post-release-corecontrol",
         "cyw43-transport-command-admission": (
             "cyw43-transport-command-admission"
         ),
@@ -2790,6 +2809,9 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-data-rx-firstread-remainder-failed",
         "cyw43-data-rx-firstread-remainder-too-large",
         "cyw43-data-rx-sdpcm-decode-miss",
+        "cyw43-post-release-ht-clock",
+        "cyw43-post-release-function2-ready",
+        "cyw43-post-release-corecontrol",
         "cyw43-post-release-mailbox-ready",
         "cyw43-post-release-protocol-version",
         "cyw43-protocol-error-cur-etheraddr-len",
@@ -3971,6 +3993,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     early_startup_blackbox_blocker: str | None = None
     early_startup_blackbox_gate = 0
     host_eapol_firstread_blocker_seen: str | None = None
+    host_eapol_terminal_blocker: str | None = None
     for event in wifi_events:
         raw = event.raw.lower()
         fields = event.fields
@@ -4007,7 +4030,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             status = fields.get("status", "").lower()
             reason = normalize_wifi_blocker(fields.get("reason", ""))
             firstread_blocker = cyw43_host_eapol_firstread_blocker(fields)
-            if status == "required" or reason == "host-eapol-required":
+            if reason == "cyw43-association-not-associated":
+                gate = max(gate, 7)
+                post_f2_progress_seen = True
+                blocker = reason
+                host_eapol_terminal_blocker = reason
+                explicit_blocker = reason
+            elif status == "required" or reason == "host-eapol-required":
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 if firstread_blocker is not None:
@@ -5122,6 +5151,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     }:
         gate = max(gate, 7)
         blocker = host_eapol_firstread_blocker_seen
+    if host_eapol_terminal_blocker is not None:
+        gate = max(gate, 7)
+        blocker = host_eapol_terminal_blocker
     return gate, blocker
 
 
@@ -5294,6 +5326,15 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or "join-security"
         )
         return "host-eapol-required", phase
+    if normalize_wifi_blocker(event.raw) == "cyw43-association-not-associated":
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or "association"
+        )
+        return "cyw43-association-not-associated", phase
     for key in ("exact", "exact_error", "err", "cause", "detail", "reason"):
         value = event.fields.get(key)
         if value and value not in {"none", "n/a"}:
@@ -5656,6 +5697,9 @@ def summarize_wifi_failure_detail(
             in {
                 "cyw43-runtime-command-rejected",
                 "cyw43-transport-command-admission",
+                "cyw43-post-release-ht-clock",
+                "cyw43-post-release-function2-ready",
+                "cyw43-post-release-corecontrol",
                 "cyw43-post-release-mailbox-ready",
                 "cyw43-post-release-protocol-version",
             }
@@ -7079,6 +7123,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 wifi_phase = replay_phase
                 wifi_blocker_line = replay_line
             elif replay_exact in {
+                "cyw43-post-release-ht-clock",
+                "cyw43-post-release-function2-ready",
+                "cyw43-post-release-corecontrol",
                 "cyw43-post-release-mailbox-ready",
                 "cyw43-post-release-protocol-version",
             }:
@@ -7114,6 +7161,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 wifi_phase = replay_phase
                 wifi_blocker_line = replay_line
             elif replay_exact in {
+                "cyw43-post-release-ht-clock",
+                "cyw43-post-release-function2-ready",
+                "cyw43-post-release-corecontrol",
                 "cyw43-post-release-mailbox-ready",
                 "cyw43-post-release-protocol-version",
             }:
