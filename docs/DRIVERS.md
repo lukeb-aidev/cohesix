@@ -1528,11 +1528,15 @@ active path is Cohesix-owned cold start:
   not issue same-window xHCI readback while the proof command is outstanding.
   If the event-ring dequeue pointer cannot be translated to the device-visible
   DMA address, the path fails closed instead of publishing `ERDP.EHB` against
-  address zero. Generic command/control waits keep the normal runtime ERDP ack
-  path. Init-time 64-bit ownership-register publications use low/high writes
-  followed by high-dword posted-write flush. Runtime `ERDP.EHB` ack logs must
-  identify the low/control flush separately from the high DMA-alias flush so
-  Gate 3 proof does not collapse both halves into one ambiguous stage. Command doorbell `0`
+  address zero. Generic command waits keep the normal runtime ERDP ack path,
+  while control-transfer waits consume matching EP0 events with the same
+  barrier-only `ERDP.EHB` path used by prompt-safe command proof, avoiding a
+  same-window xHCI readback after hub-port status events. Init-time 64-bit
+  ownership-register publications use low/high writes followed by high-dword
+  posted-write flush. Runtime `ERDP.EHB` ack logs on the readback-backed command
+  wait path must identify the low/control flush separately from the high
+  DMA-alias flush so Gate 3 proof does not collapse both halves into one
+  ambiguous stage. Command doorbell `0`
   itself still uses the U-Boot command value, but the linked USB runtime now
   publishes the doorbell with barriers only instead of issuing either a nested
   PCIe-owner flush or a same-window xHCI readback. A missing xHCI aperture or a

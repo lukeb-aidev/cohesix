@@ -6708,6 +6708,25 @@ fn cyw43_arm_post_release_function_interrupts() -> Result<(), u16> {
     }
 }
 
+fn cyw43_rearm_post_release_function_interrupts_if_needed(
+    interrupt_enable: Option<u8>,
+) -> Option<u8> {
+    if !cyw43_sdio_interrupt_enable_needs_rearm(interrupt_enable) {
+        return interrupt_enable;
+    }
+    if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IENX, SDIO_INTERRUPT_ENABLE_MASK) {
+        return interrupt_enable;
+    }
+    cyw43_sdio_cmd52_read(0, SDIO_CCCR_IENX).or(interrupt_enable)
+}
+
+const fn cyw43_sdio_interrupt_enable_needs_rearm(interrupt_enable: Option<u8>) -> bool {
+    match interrupt_enable {
+        Some(value) => value != SDIO_INTERRUPT_ENABLE_MASK,
+        None => false,
+    }
+}
+
 fn cyw43_require_post_release_corecontrol_ready(state: &mut Cyw43RuntimeState) -> Result<u32, u16> {
     let Some(corecontrol) =
         cyw43_backplane_read_u32(state, CYW43_SDIO_CORE_BASE + SDIO_CORECONTROL)
@@ -8444,7 +8463,9 @@ fn cyw43_sample_rx_source_snapshot(
     if !cyw43_rx_source_snapshot_queries_card(cyw43_uses_sdio_bus_link()) {
         return None;
     }
-    let interrupt_enable = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IENX);
+    let interrupt_enable = cyw43_rearm_post_release_function_interrupts_if_needed(
+        cyw43_sdio_cmd52_read(0, SDIO_CCCR_IENX),
+    );
     let iordy = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX);
     let int_status = cyw43_backplane_read_u32(state, CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS);
     if interrupt_enable.is_none() && iordy.is_none() && int_status.is_none() {
@@ -11153,6 +11174,9 @@ struct TestRing(UnsafeCell<[u8; DRIVER_TASK_RING_PAGE_BYTES]>);
 struct TestSharedBuffer(UnsafeCell<[u8; DRIVER_TASK_RING_PAGE_BYTES * 64]>);
 
 #[cfg(all(not(target_os = "none"), test))]
+struct TestDmaBuffer(UnsafeCell<[u8; XHCI_DMA_ZERO_BYTES]>);
+
+#[cfg(all(not(target_os = "none"), test))]
 // SAFETY: Runtime tests serialize all access through `test_guard`, so the
 // process-local ring buffer is never concurrently mutated.
 unsafe impl Sync for TestRing {}
@@ -11163,6 +11187,11 @@ unsafe impl Sync for TestRing {}
 unsafe impl Sync for TestSharedBuffer {}
 
 #[cfg(all(not(target_os = "none"), test))]
+// SAFETY: Runtime tests serialize all access through `test_guard`, so the
+// process-local DMA buffer is never concurrently mutated.
+unsafe impl Sync for TestDmaBuffer {}
+
+#[cfg(all(not(target_os = "none"), test))]
 static TEST_RING: TestRing = TestRing(UnsafeCell::new([0; DRIVER_TASK_RING_PAGE_BYTES]));
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -11170,11 +11199,15 @@ static TEST_SHARED_BUFFER: TestSharedBuffer =
     TestSharedBuffer(UnsafeCell::new([0; DRIVER_TASK_RING_PAGE_BYTES * 64]));
 
 #[cfg(all(not(target_os = "none"), test))]
+static TEST_DMA_BUFFER: TestDmaBuffer = TestDmaBuffer(UnsafeCell::new([0; XHCI_DMA_ZERO_BYTES]));
+
+#[cfg(all(not(target_os = "none"), test))]
 fn reset_test_ring() {
     // SAFETY: Runtime tests hold `test_guard` before resetting shared state.
     unsafe {
         (*TEST_RING.0.get()).fill(0);
         (*TEST_SHARED_BUFFER.0.get()).fill(0);
+        (*TEST_DMA_BUFFER.0.get()).fill(0);
     }
 }
 
@@ -11458,6 +11491,12 @@ fn write_framebuffer_pixel(addr: usize, color: u32, bytes_per_pixel: usize) {
 #[cfg(not(target_os = "none"))]
 fn write_framebuffer_pixel(_addr: usize, _color: u32, _bytes_per_pixel: usize) {}
 
+#[cfg(all(not(target_os = "none"), test))]
+fn test_dma_offset(addr: usize) -> Option<usize> {
+    let offset = addr.checked_sub(DRIVER_TASK_DMA_BUFFER_VADDR)?;
+    (offset < XHCI_DMA_ZERO_BYTES).then_some(offset)
+}
+
 #[cfg(target_os = "none")]
 fn runtime_spin(iterations: usize) {
     for _ in 0..iterations {
@@ -11603,7 +11642,17 @@ fn read_dma_byte(addr: usize) -> u8 {
     unsafe { core::ptr::read_volatile(addr as *const u8) }
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), test))]
+fn read_dma_byte(addr: usize) -> u8 {
+    let Some(offset) = test_dma_offset(addr) else {
+        return 0;
+    };
+    // SAFETY: Runtime tests hold `test_guard` and `test_dma_offset` bounds the
+    // address inside the process-local fixed DMA buffer.
+    unsafe { (*TEST_DMA_BUFFER.0.get())[offset] }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
 fn read_dma_byte(_addr: usize) -> u8 {
     0
 }
@@ -11617,7 +11666,19 @@ fn write_dma_byte(addr: usize, value: u8) {
     }
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), test))]
+fn write_dma_byte(addr: usize, value: u8) {
+    let Some(offset) = test_dma_offset(addr) else {
+        return;
+    };
+    // SAFETY: Runtime tests hold `test_guard` and `test_dma_offset` bounds the
+    // address inside the process-local fixed DMA buffer.
+    unsafe {
+        (*TEST_DMA_BUFFER.0.get())[offset] = value;
+    }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
 fn write_dma_byte(_addr: usize, _value: u8) {}
 
 #[cfg(target_os = "none")]
@@ -12039,7 +12100,7 @@ fn xhci_ack_control_event_dequeue(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> bool {
-    xhci_ack_event_dequeue(state, descriptor)
+    xhci_ack_event_dequeue_barrier_only(state, descriptor)
 }
 
 fn xhci_peek_event(
@@ -19416,6 +19477,21 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_rx_source_snapshot_rearms_exact_function_interrupt_mask() {
+        assert!(!cyw43_sdio_interrupt_enable_needs_rearm(None));
+        assert!(!cyw43_sdio_interrupt_enable_needs_rearm(Some(
+            SDIO_INTERRUPT_ENABLE_MASK
+        )));
+        assert!(cyw43_sdio_interrupt_enable_needs_rearm(Some(0)));
+        assert!(cyw43_sdio_interrupt_enable_needs_rearm(Some(
+            SDIO_CCCR_IEN_FUNC0 | SDIO_CCCR_IEN_FUNC1
+        )));
+        assert!(cyw43_sdio_interrupt_enable_needs_rearm(Some(
+            SDIO_INTERRUPT_ENABLE_MASK | 0x08
+        )));
+    }
+
+    #[test]
     fn cyw43_linked_sdio_owner_hides_direct_sdhci_status() {
         assert!(cyw43_rx_source_snapshot_queries_card(true));
         assert!(cyw43_rx_source_snapshot_queries_card(false));
@@ -22253,7 +22329,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_control_erdp_ack_uses_runtime_flush_without_progress_marker() {
+    fn usb_control_erdp_ack_uses_barrier_only_without_progress_marker() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -22268,6 +22344,103 @@ mod tests {
         assert_eq!(
             read_ring_u32(DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize),
             0
+        );
+    }
+
+    #[test]
+    fn usb_control_wait_acks_data_and_status_with_barrier_only_path() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let mut state = UsbRuntimeState::new();
+        state.rt_offset = 0x2000;
+        state.event_dequeue = 0;
+        state.event_cycle = true;
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor must carry DMA arena range");
+        let plan = XhciControlTransferPlan {
+            setup_trb: xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_EP0_RING_OFFSET)
+                .expect("EP0 setup TRB must be bus-visible"),
+            data_trb: xhci_dma_bus_addr(
+                &descriptor,
+                dma_range,
+                XHCI_DMA_EP0_RING_OFFSET + XHCI_TRB_BYTES,
+            )
+            .expect("EP0 data TRB must be bus-visible"),
+            status_trb: xhci_dma_bus_addr(
+                &descriptor,
+                dma_range,
+                XHCI_DMA_EP0_RING_OFFSET + XHCI_TRB_BYTES * 2,
+            )
+            .expect("EP0 status TRB must be bus-visible"),
+            data_len: 64,
+        };
+        let event_base = DRIVER_TASK_DMA_BUFFER_VADDR + XHCI_DMA_EVENT_RING_OFFSET;
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: plan.data_trb,
+                status: (XHCI_COMPLETION_SHORT_PACKET << 24) | 16,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_TRANSFER_EVENT << 10)
+                    | (1 << 16)
+                    | (3 << 24),
+            },
+        );
+        write_xhci_trb(
+            event_base,
+            1,
+            XhciTrb {
+                parameter: plan.status_trb,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_TRANSFER_EVENT << 10)
+                    | (1 << 16)
+                    | (3 << 24),
+            },
+        );
+        let progress = XhciControlProgress {
+            sequence: 91,
+            aux0: DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            doorbell_done: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DOORBELL_DONE,
+            wait_begin: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN,
+            data_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT,
+            status_event: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT,
+            failed: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
+            transfer_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT,
+            status_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT,
+        };
+
+        assert_eq!(
+            xhci_wait_control_transfer_completion(
+                &mut state,
+                &descriptor,
+                3,
+                1,
+                plan,
+                Some(progress),
+                1
+            ),
+            Some(48)
+        );
+        assert_eq!(state.event_dequeue, 2);
+        assert!(state.event_cycle);
+        let offset = DRIVER_RUNTIME_RING_PROGRESS_OFFSET as usize;
+        assert_eq!(read_ring_u32(offset), DRIVER_RUNTIME_RING_PROGRESS_MAGIC);
+        assert_eq!(read_ring_u32(offset + 4), 91);
+        assert_eq!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT
+        );
+        assert_eq!(read_ring_u32(offset + 12), DRIVER_RUNTIME_USB_ENUMERATE_AUX);
+        assert_ne!(
+            read_ring_u32(offset + 8),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_COMMAND_PROOF_ERDP_ACK_DONE
         );
     }
 
