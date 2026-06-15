@@ -47,7 +47,7 @@ This document is scoped to active Pi 4 work in `docs/BUILD_PLAN.md`:
 
 It targets seL4 13 behavior on AArch64/Pi 4 while preserving Cohesix's current
 as-built constraints. `docs/BUILD_PLAN.md` currently records a future seL4 15
-refresh under Milestone 26e; until that refresh lands, check local generated
+refresh under Milestone 26d; until that refresh lands, check local generated
 headers under `seL4/build/` before assuming an API label, object type, IRQ
 constant, or platform layout.
 

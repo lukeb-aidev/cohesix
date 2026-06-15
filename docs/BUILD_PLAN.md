@@ -105,8 +105,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26a](#26a) | Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation | Reopened |
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Reopened |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Not Started |
-| [26d](#26d) | Linked Runtime Driver Performance Parity (QEMU Benchmark Closure) | Pending |
-| [26e](#26e) | seL4 15 Baseline Refresh + Reference Manual Realignment | Pending |
+| [26d](#26d) | seL4 15 Baseline Refresh + Reference Manual Realignment | Pending |
 | [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
 | [27b](#27b) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
 | [27c](#27c) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Pending |
@@ -6361,10 +6360,10 @@ Deliverables:
 ## Milestone 26b — Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency <a id="26b"></a>
 [Milestones](#Milestones)
 
-**Status:** Reopened — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi, and QEMU compatibility guardrails remain the compatibility baseline. The reopened scope moves USB/xHCI/HID and CYW43/SDIO behind dedicated driver-task scheduling contracts and adds concurrency/performance gates so Wi-Fi work cannot regress USB keyboard, serial console, or HDMI responsiveness.
+**Status:** Reopened — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi, and QEMU compatibility guardrails remain the compatibility baseline. The reopened scope moves USB/xHCI/HID and CYW43/SDIO behind dedicated driver-task scheduling contracts and adds concurrency/performance gates so Wi-Fi work cannot regress USB keyboard, serial console, or HDMI responsiveness. Closure also requires the selected linked-runtime Pi path to meet or exceed the accepted best-QEMU throughput reference under the same harness, with latency recorded but excluded from the pass/fail verdict.
 
 **Why now (operator continuity):**  
-Reopened Milestone 26b depends on reopened 26a providing the driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi performance must improve by moving SDIO/firmware/RX/TX progress onto a bounded driver task, not by extending the root event-loop turn.
+Reopened Milestone 26b depends on reopened 26a providing the driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi and selected-network performance must improve by moving SDIO/firmware/RX/TX or GENET RX/TX progress onto bounded linked driver runtimes, not by extending the root event-loop turn.
 
 **Non-negotiable constraints:**
 - DHCP implementation must be pure Rust, `no_std`, and intentionally bare-bones (DHCPv4 only: DISCOVER/OFFER/REQUEST/ACK plus bounded timeout/retry logic).
@@ -6377,14 +6376,15 @@ Reopened Milestone 26b depends on reopened 26a providing the driver-task substra
 - USB/xHCI/HID owns a higher-priority driver-task contract than Wi-Fi data. Keyboard first-byte and fast-typing proof are hard gates before Wi-Fi performance claims.
 - CYW43/SDIO runs under separate network-control and network-data budgets. EAPOL, DHCP, ARP, and TCP ACK progress may preempt Wi-Fi bulk data, but neither class may preempt USB/local-seat or serial input.
 - Runtime RX aggregation/glom may be enabled only after bounded superframe storage, capped deaggregation work, drop counters, and recovery gates are implemented inside the Wi-Fi driver task.
-- Performance claims use normalized parity: raw `cohsh` over Pi Wi-Fi is measured first, REST gateway overhead is measured separately, and QEMU remains a compatibility/capacity reference rather than a physical Wi-Fi ceiling.
+- Performance claims use normalized parity: raw `cohsh` over Pi Wi-Fi is measured first, REST gateway overhead is measured separately, QEMU remains a compatibility/capacity reference by itself, and any Pi parity claim must come from a fresh same-harness Pi run that meets or exceeds the selected best-QEMU throughput reference.
+- The linked-runtime throughput verdict excludes latency only after recording latency fields in the artifacts. Throughput, successful operation count, error rate, and bounded-backpressure behavior remain verdict inputs.
 - Backward compatibility is mandatory: Milestone 26b must not break existing macOS/Linux QEMU workflows, fixtures, or transport semantics.
 
 ### Prerequisite
 - Reopened Milestone **26a** must be completed before 26b closure, including the HAL driver-task admission substrate, serial/display isolation, GENET driver-task migration, and preserved Pi 4 GENETv5/static-IPv4 compatibility behavior.
 
 ### Goal
-Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task contracts, preserve DHCP and single-interface policy behavior, and prove Wi-Fi/network load cannot degrade USB keyboard, serial console, or HDMI responsiveness.
+Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task contracts, preserve DHCP and single-interface policy behavior, prove Wi-Fi/network load cannot degrade USB keyboard, serial console, or HDMI responsiveness, and close same-harness linked-runtime throughput parity against the accepted best-QEMU reference.
 
 ### Deliverables
 - **USB/xHCI/HID driver task**
@@ -6401,10 +6401,12 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
   - CYW43 startup preserves Linux's `bus:rxglom=1` through `event_msgs_ext` and `WLC_UP`; aggregated RX is bounded in the driver task, and any future runtime disable/superframe expansion must run only after secure carrier proof with capped work and recovery gates.
   - Runtime Wi-Fi data/glom RX is separated from control-plane reply reads: control replies retain the conservative Linux first-read/remainder shape, while runtime RX uses one 512-byte block-aligned Function 2 read into an 8192-byte bounded buffer and caps deaggregation at 16 subframes plus a 16-entry ready queue.
 
-- **Normalized benchmark gates**
+- **Normalized benchmark and linked-runtime parity gates**
   - Add benchmark reporting that separates raw `cohsh` over Pi Wi-Fi, REST cold gateway overhead, and REST hot/cache projection.
-  - QEMU benchmark results remain semantic/capacity references; they must not be used to claim Pi Wi-Fi physical parity.
-  - Pi 4 performance acceptance requires zero USB/serial/HDMI responsiveness regression during Wi-Fi/NIC load.
+  - Define the accepted best-QEMU reference by artifact path, harness command, worker count, request suite, gateway/auth mode, QEMU SMP topology, pressure settings, and error-budget policy.
+  - Compare QEMU and Pi linked-runtime artifacts with the same harness and matched workload/provenance. QEMU results alone remain semantic/capacity references; Pi hardware parity requires fresh Pi evidence.
+  - Exclude latency from pass/fail only after preserving latency fields in JSON and human summaries; throughput, successful operation count, error rate, and bounded-backpressure behavior decide the verdict.
+  - Pi 4 performance acceptance requires zero USB/serial/HDMI responsiveness regression during Wi-Fi/NIC load and no root-owned steady-state physical-driver service path.
 
 - **Minimal DHCP core (`no_std`)**
   - Add a bounded DHCPv4 client core in root-task with strict packet validation, deterministic timers, bounded retransmits, and no dynamic protocol extensions beyond required lease fields.
@@ -6438,11 +6440,16 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib serial::tests`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests`
 - `cargo test -p root-task net:: -- --nocapture`
+- `cargo test -p pi4-driver-abi`
+- `cargo test -p pi4-driver-runtime`
 - `cargo test -p coh-rtc`
+- `python3 -m pytest tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py`
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26b-qemu-reference`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26b-pi4-linked-runtime`
 
 ### Checks (DoD)
 - `driver-usb` proves `USB_GATE=10`, `USB_BLOCKER=none`, first-byte/first-printable-byte evidence, and fast typing remains fluid while the manifest-selected network driver consumes its data budget.
@@ -6456,12 +6463,17 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 - U-Boot-configurable network policy (where available) is honored through compiler-validated handoff structures; missing/unsupported bootloader policy cleanly falls back to manifest defaults.
 - Existing macOS/Linux QEMU workflows remain backward compatible, including serial/TCP console behavior and existing regression fixtures.
 - CYW43xx Wi-Fi path demonstrates HAL-only access in runtime code and tests; no direct MMIO/bootloader-service usage exists outside HAL-owned modules.
-- Raw Pi `cohsh` Wi-Fi latency, REST cold gateway overhead, and REST hot projection latency are reported separately; QEMU benchmark results are not used as Pi Wi-Fi hardware proof.
+- Raw Pi `cohsh` Wi-Fi latency, REST cold gateway overhead, and REST hot projection latency are reported separately; QEMU benchmark results are not used as Pi Wi-Fi hardware proof without a matched fresh Pi run.
+- A comparator identifies the selected best-QEMU benchmark artifact and the matched Pi linked-runtime artifact, rejects workload/provenance mismatches, excludes latency from pass/fail, and reports a deterministic PASS only when Pi throughput meets or exceeds QEMU with the accepted error budget.
+- Linked-runtime hot-path changes remain bounded and preserve active-slot, fingerprint, completion, and busy-on-conflict invariants; no root-owned physical driver service path is added or re-enabled to win the benchmark.
+- Pi benchmark evidence is fresh, non-empty, normalized, and separated from flash, shell, USB/local-seat, HDMI, and serial-responsiveness proof lanes.
 - Full regression pack remains green on QEMU; any profile-gated divergence is explicitly documented and fixture-backed.
 
 ### Compiler touchpoints
 - `coh-rtc` adds bounded `pi4-uboot-aarch64` network policy fields for mode/interface selection and DHCP retry/timing limits.
 - `coh-rtc` extends driver-task contract emission for USB, CYW43/SDIO, and network-control/network-data priority classes.
+- Benchmark or counter fields that become generated artifacts must be covered by `scripts/check-generated.sh` before 26b closes.
+- `docs/DRIVERS.md`, `docs/BENCHMARKS.md`, `docs/TEST_PLAN.md`, and `scripts/ci/test_plan_run.sh` must agree on which evidence is benchmark proof, board-acceptance proof, and compatibility-only proof.
 - Validation enforces:
   - policy bounds and enum validity,
   - interface/profile compatibility (wired vs Wi-Fi declarations),
@@ -6562,6 +6574,59 @@ Checks:
   - Hot projection results are labeled separately and cannot satisfy raw Wi-Fi hardware gates.
 Deliverables:
   - Honest Pi Wi-Fi benchmark model that optimizes toward QEMU semantics without claiming impossible physical loopback parity.
+
+Title/ID: m26b-benchmark-comparator
+Goal: Define and enforce same-harness QEMU-vs-Pi linked-runtime throughput parity while excluding latency from the verdict.
+Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, tests/test_pi4_compare_driver_models.py, docs/BENCHMARKS.md, existing out/bench QEMU and Pi summaries.
+Changes:
+  - scripts/rest_perf_harness.py or scripts/pi4_compare_driver_models.py — emit/compare benchmark provenance, reject mismatched workloads, and calculate pass/fail from throughput/error metrics only.
+  - tests/test_rest_perf_harness.py and tests/test_pi4_compare_driver_models.py — cover matched PASS, throughput FAIL, workload mismatch, stale-artifact rejection, and latency-excluded verdict behavior.
+  - docs/BENCHMARKS.md — document the best-QEMU selection rule, Pi artifact requirements, and latency-exclusion rule.
+Commands:
+  - python3 -m pytest tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py
+Checks: comparator rejects stale or mismatched artifacts and produces deterministic PASS/FAIL for matched QEMU/Pi runs without using latency as a verdict metric.
+Deliverables: benchmark comparator, tests, and documented parity rule.
+
+Title/ID: m26b-linked-runtime-counters
+Goal: Add bounded counters required to explain linked-runtime benchmark misses without UART spam.
+Inputs: crates/pi4-driver-abi, apps/pi4-driver-runtime, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/drivers/driver_task_net.rs.
+Changes:
+  - crates/pi4-driver-abi/src/** — fixed-layout counter fields for turns, drained descriptors, staged bytes, cache work, busy/backpressure, and overruns where existing records are insufficient.
+  - apps/pi4-driver-runtime/src/** — update counters inside GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe service loops.
+  - apps/root-task/src/hal/driver_task.rs and apps/root-task/src/drivers/driver_task_net.rs — expose bounded counter snapshots through existing diagnostics/evidence surfaces.
+Commands:
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::driver_task_net
+Checks: counters are fixed-layout, bounded, non-authority-bearing, and do not change console grammar or Secure9P semantics.
+Deliverables: counter ABI, runtime updates, root-side evidence snapshots, and tests.
+
+Title/ID: m26b-linked-driver-hotpath-closure
+Goal: Remove avoidable single-frame or single-descriptor overhead while preserving linked-runtime active-slot invariants.
+Inputs: apps/pi4-driver-runtime, crates/pi4-driver-abi, apps/root-task/src/hal/driver_task.rs, docs/DRIVERS.md.
+Changes:
+  - apps/pi4-driver-runtime/src/** — bounded local batching for descriptor drain, cache maintenance, completion publication, and telemetry counters where benchmark evidence shows contention.
+  - crates/pi4-driver-abi/src/** — fixed burst bounds and max-turn evidence where ABI fields are needed.
+  - apps/root-task/src/hal/driver_task.rs — preserve staged active-slot submit, range validation, busy-on-conflict, and completion publication under batching.
+Commands:
+  - cargo test -p pi4-driver-abi
+  - cargo test -p pi4-driver-runtime
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib
+Checks: batching is bounded, cannot overwrite active payload-bearing turns, and does not add root-owned physical-driver service.
+Deliverables: lower-contention linked-runtime hot paths with contract-local backpressure evidence.
+
+Title/ID: m26b-target-benchmark-proof
+Goal: Produce fresh same-harness QEMU and Pi 4 linked-runtime benchmark evidence before 26b closes.
+Inputs: scripts/rest_perf_harness.py, selected QEMU reference, Pi 4 serial capture, active wired or Wi-Fi profile, docs/TEST_PLAN.md.
+Changes:
+  - out/bench/m26b-* — archived QEMU reference, Pi linked-runtime run, comparator output, and normalized serial evidence.
+  - docs/BENCHMARKS.md — update benchmark verdict and artifact table after proof is produced.
+  - docs/TEST_PLAN.md and scripts/ci/test_plan_run.sh — add 26b QEMU/Pi benchmark stages if not already covered by target-qualified runner configuration.
+Commands:
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26b-qemu-reference
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26b-pi4-linked-runtime
+Checks: Pi linked-runtime throughput meets or exceeds the selected QEMU reference under matched workload/provenance, latency remains recorded but excluded from verdict, and side proof lanes stay separate.
+Deliverables: fresh benchmark artifacts, comparator PASS/FAIL, normalized Pi proof, and updated benchmark docs.
 
 Compatibility baseline tasks below are retained because they describe the original 26b DHCP, U-Boot policy, Wi-Fi, and QEMU guardrails that must not regress. They do not close reopened 26b by themselves; closure now requires the USB/Wi-Fi driver-task and concurrency/benchmark gates above plus the retained baseline checks below.
 
@@ -6798,7 +6863,7 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (reviewer trust):**
-Milestones 25-26b establish technical capability, transport breadth, and Pi 4 bring-up evidence, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window before linked-runtime benchmark closure and seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
+Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-up evidence, and linked-runtime benchmark closure, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window after linked-runtime benchmark closure and before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
 **Current planning status:** Not Started. Milestones 26a and 26b have been reopened for the Pi 4 driver-task migration, so 26c is blocked until those reopened acceptance gates close. No 26c cleanup, refactor, target-qualified runner implementation, or closure evidence has started yet.
 
@@ -7478,159 +7543,24 @@ Deliverables:
 
 ---
 
-## Milestone 26d — Linked Runtime Driver Performance Parity (QEMU Benchmark Closure) <a id="26d"></a>
-[Milestones](#Milestones)
-
-**Why now (migration proof):**
-The root-owned to linked-runtime driver migration is justified by performance, not only isolation. Milestones 26a and 26b move physical Pi 4 hot paths behind linked driver runtimes, but `docs/BENCHMARKS.md` still treats the latest Pi REST numbers as diagnostic baselines and says the linked-runtime hot-path work is not yet a Pi benchmark result. Before the kernel-baseline refresh, persistence work, formal verification, or wider SMP service-bucket scheduling build on this substrate, Cohesix must prove that the linked-runtime driver model can meet or exceed the best accepted QEMU throughput benchmark using the same harness, with latency excluded only from the pass/fail verdict and still preserved in artifacts.
-
-**As-built alignment note:** Cohesix already has fixed-ring linked runtime engines, staged active-slot submission, bounded descriptor turns, role-selected Pi network runtimes, and offline hot-path improvements in GENET/CYW43/SDIO/USB/PCIe/display/serial service code. It does **not** yet have a normative best-QEMU comparator, same-harness Pi performance artifacts, explicit latency-exclusion rules, benchmark provenance in summary artifacts, or enough bounded counters to attribute a linked-runtime parity miss without reopening root-owned driver paths.
-
-**Non-negotiable constraints:**
-- Physical Pi 4 drivers remain linked-runtime only. Root-task may admit HAL resources, publish descriptors, submit bounded service turns, validate completions, and expose evidence; it must not regain steady-state physical device ownership to win a benchmark.
-- The pass/fail comparison uses the same benchmarking harness, workload shape, request mix, worker count, gateway mode, auth mode, and error-budget rules as the accepted QEMU reference. Any intentional mismatch must be recorded as a separate lane and cannot satisfy parity.
-- The verdict excludes latency from the meet/exceed comparison only after recording latency fields in the artifacts. Throughput, successful operation count, error rate, and bounded-backpressure behavior remain verdict inputs.
-- Flash proof, shell transport proof, USB/local-seat proof, HDMI proof, active network proof, serial responsiveness, and benchmark proof remain separate lanes. A fast benchmark run does not close board acceptance by itself.
-- Batching and counter additions must stay bounded, fixed-layout, and manifest/test-plan aligned. No unbounded queues, hidden work stealing, POSIX threads, general async runtime, console grammar change, Secure9P semantic change, or new authority path is permitted.
-- Routine successful dataplane turns must not spam UART or corrupt foreground console output; observability belongs in bounded counters, benchmark summaries, normalized Pi logs, and evidence packs.
-
-### Prerequisite
-- Reopened Milestones **26a** and **26b** completed or explicitly scoped for the selected Pi network role, including linked-runtime owner-state proof for the active wired or Wi-Fi path and no root-owned steady-state physical driver fallback.
-- Milestone **26c** completed, including target-qualified Test Plan runner support, characterization gates for touched driver/runtime paths, and a blocker ledger clear enough to distinguish performance work from cleanup.
-
-### Goal
-Prove that linked-runtime Pi 4 driver paths meet or exceed Cohesix's best accepted QEMU throughput benchmark, excluding latency from the verdict, through the same benchmarking harness and with enough bounded runtime evidence to explain any miss.
-
-### Deliverables
-
-#### A) Benchmark definition and comparator
-- Define the accepted QEMU reference selection rule: artifact path, harness command, worker count, request suite, gateway mode, auth/token mode, QEMU SMP topology, base RPS or perf-suite settings, error-budget threshold, and which metrics are verdict-bearing.
-- Add or extend a comparator that reads QEMU and Pi harness summaries, ignores latency for pass/fail, and fails closed when workload shape, request mix, worker count, error-budget policy, gateway mode, or provenance fields do not match.
-- Preserve latency fields in JSON and human summaries so later optimization work can analyze them without letting latency block this parity gate.
-- Record the selected best-QEMU baseline and Pi linked-runtime run under `docs/BENCHMARKS.md` or `out/bench/` with enough provenance to reproduce the comparison.
-
-#### B) Harness artifact provenance
-- Extend `scripts/rest_perf_harness.py` summaries, or add an adjacent normalization step, so artifacts include benchmark target (`qemu`, `pi4-wired`, `pi4-wifi`), launched-vs-external backend, gateway mode, QEMU SMP string when present, worker counts, suite/request mix, run count, auth mode, base RPS or perf-suite settings, max in-flight or equivalent pressure bound, error-budget policy, and source artifact paths.
-- Pi runs must identify the active driver role (`genet-nic` or `cyw43-wifi`), linked-runtime owner-state markers, and the serial log used to prove driver-task health during the run.
-- The comparator must reject stale or partial artifacts rather than silently mixing old QEMU and new Pi evidence.
-
-#### C) Linked-runtime hot-path closure
-- Add only the bounded local batching needed to remove avoidable single-frame or single-descriptor overhead from GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe service turns while preserving staged active-slot submission for payload-bearing requests.
-- Cache maintenance, descriptor drain, completion publication, and telemetry counter updates may batch locally inside the linked runtime when the burst bound is fixed and visible in evidence.
-- Root-side submit paths keep range validation, staged-byte fingerprinting where required, busy-on-conflict behavior, and no overwrite of an in-flight turn.
-- Any performance fix that would require root-owned physical MMIO/DMA service is invalid; the correct fix is runtime-side batching, ABI evidence, or benchmark-scoped backpressure.
-
-#### D) Miss attribution and observability
-- Add bounded counters for service turns, descriptors drained, payload bytes staged, cache-maintenance bytes or operations, busy returns, backpressure returns, max observed turn work, dropped/overrun evidence, and selected active driver role.
-- Expose counters through existing diagnostic/evidence surfaces without changing ACK/ERR/END, Secure9P, console grammar, or namespace authority.
-- Normalize Pi serial logs so benchmark reports can cite the exact run, active linked-runtime driver role, owner-state proof, DHCP/network proof, USB/HDMI/shell side proofs, and any runtime fault or overrun.
-
-#### E) Target-qualified proof lanes
-- QEMU reference runs prove harness semantics and best-known throughput.
-- Pi 4 wired and Wi-Fi runs prove physical linked-runtime performance only when fresh logs show the selected active runtime, clean serial responsiveness, DHCP or configured-network readiness, no linked-runtime fault, and separated USB/HDMI/local-seat evidence.
-- Host/offline tests and compatibility paths remain useful characterization evidence but cannot satisfy the Pi linked-runtime benchmark verdict.
-
-### Commands
-- `cargo test -p pi4-driver-abi`
-- `cargo test -p pi4-driver-runtime`
-- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::driver_task_net`
-- `python3 -m pytest tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py`
-- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-reference`
-- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-linked-runtime`
-- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu-performance`
-- `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4-performance`
-
-### Checks (DoD)
-- A committed or generated comparator identifies the selected best QEMU benchmark artifact and the matched Pi linked-runtime artifact, rejects workload/provenance mismatches, excludes latency from pass/fail, and reports a deterministic PASS only when Pi throughput meets or exceeds QEMU with the accepted error budget.
-- `docs/BENCHMARKS.md` records the selected QEMU reference, the fresh Pi linked-runtime result, the latency-exclusion rule, and every artifact path needed to reproduce the verdict.
-- Linked-runtime hot-path changes remain bounded and preserve active-slot, fingerprint, completion, and busy-on-conflict invariants; no root-owned physical driver service path is added or re-enabled.
-- Pi benchmark evidence is fresh, non-empty, normalized, and separated from flash, shell, USB/local-seat, HDMI, and serial-responsiveness proof lanes.
-- QEMU and Pi target-qualified Test Plan stages pass with no undocumented operator-visible drift.
-- Any failure to meet parity leaves a concrete blocker ledger: bottleneck class, evidence artifact, touched runtime/ABI/harness surface, and the next bounded fix, without reopening broad architecture.
-
-### Compiler / docsystem touchpoints
-- `coh-rtc` outputs and resolved manifests remain the source of truth for active driver runtime selection, affinity, DMA/shared-memory bounds, and generated docs snippets.
-- If benchmark or counter fields become generated artifacts, `scripts/check-generated.sh` must compare them before 26d closes.
-- `docs/DRIVERS.md`, `docs/BENCHMARKS.md`, `docs/TEST_PLAN.md`, and `scripts/ci/test_plan_run.sh` must agree on which evidence is benchmark proof, which evidence is board-acceptance proof, and which evidence is compatibility-only.
-
-### Atomic tasks
-```
-Title/ID: m26d-benchmark-comparator
-Goal: Define and enforce same-harness QEMU-vs-Pi linked-runtime throughput parity while excluding latency from the verdict.
-Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, docs/BENCHMARKS.md, existing out/bench QEMU and Pi summaries.
-Changes:
-  - scripts/rest_perf_harness.py or scripts/pi4_compare_driver_models.py — emit/compare benchmark provenance, reject mismatched workloads, and calculate pass/fail from throughput/error metrics only.
-  - tests/test_rest_perf_harness.py and tests/test_pi4_compare_driver_models.py — cover matched PASS, throughput FAIL, workload mismatch, stale-artifact rejection, and latency-excluded verdict behavior.
-  - docs/BENCHMARKS.md — document the best-QEMU selection rule, Pi artifact requirements, and latency-exclusion rule.
-Commands:
-  - python3 -m pytest tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py
-Checks: comparator rejects stale or mismatched artifacts and produces deterministic PASS/FAIL for matched QEMU/Pi runs without using latency as a verdict metric.
-Deliverables: benchmark comparator, tests, and documented parity rule.
-
-Title/ID: m26d-linked-runtime-counters
-Goal: Add bounded counters required to explain linked-runtime benchmark misses without UART spam.
-Inputs: crates/pi4-driver-abi, apps/pi4-driver-runtime, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/drivers/driver_task_net.rs.
-Changes:
-  - crates/pi4-driver-abi/src/** — fixed-layout counter fields for turns, drained descriptors, staged bytes, cache work, busy/backpressure, and overruns.
-  - apps/pi4-driver-runtime/src/** — update counters inside GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe service loops.
-  - apps/root-task/src/hal/driver_task.rs and apps/root-task/src/drivers/driver_task_net.rs — expose bounded counter snapshots through existing diagnostics/evidence surfaces.
-Commands:
-  - cargo test -p pi4-driver-abi
-  - cargo test -p pi4-driver-runtime
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::driver_task_net
-Checks: counters are fixed-layout, bounded, non-authority-bearing, and do not change console grammar or Secure9P semantics.
-Deliverables: counter ABI, runtime updates, root-side evidence snapshots, and tests.
-
-Title/ID: m26d-linked-driver-hotpath-batching
-Goal: Remove avoidable single-frame or single-descriptor overhead while preserving linked-runtime active-slot invariants.
-Inputs: apps/pi4-driver-runtime, crates/pi4-driver-abi, apps/root-task/src/hal/driver_task.rs, docs/DRIVERS.md.
-Changes:
-  - apps/pi4-driver-runtime/src/** — bounded local batching for descriptor drain, cache maintenance, completion publication, and telemetry counters where benchmark evidence shows contention.
-  - crates/pi4-driver-abi/src/** — fixed burst bounds and max-turn evidence where ABI fields are needed.
-  - apps/root-task/src/hal/driver_task.rs — preserve staged active-slot submit, range validation, busy-on-conflict, and completion publication under batching.
-Commands:
-  - cargo test -p pi4-driver-abi
-  - cargo test -p pi4-driver-runtime
-  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib
-Checks: batching is bounded, cannot overwrite active payload-bearing turns, and does not add root-owned physical-driver service.
-Deliverables: lower-contention linked-runtime hot paths with contract-local backpressure evidence.
-
-Title/ID: m26d-target-benchmark-proof
-Goal: Produce fresh same-harness QEMU and Pi 4 linked-runtime benchmark evidence.
-Inputs: scripts/rest_perf_harness.py, selected QEMU reference, Pi 4 serial capture, active wired or Wi-Fi profile, docs/TEST_PLAN.md.
-Changes:
-  - out/bench/m26d-* — archived QEMU reference, Pi linked-runtime run, comparator output, and normalized serial evidence.
-  - docs/BENCHMARKS.md — update benchmark verdict and artifact table after proof is produced.
-  - docs/TEST_PLAN.md and scripts/ci/test_plan_run.sh — add m26d QEMU/Pi benchmark stages if not already covered by target-qualified runner configuration.
-Commands:
-  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-reference
-  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-linked-runtime
-  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu-performance
-  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4-performance
-Checks: Pi linked-runtime throughput meets or exceeds the selected QEMU reference under matched workload/provenance, latency remains recorded but excluded from verdict, and side proof lanes stay separate.
-Deliverables: fresh benchmark artifacts, comparator PASS/FAIL, normalized Pi proof, and updated benchmark docs.
-```
-
----
-
-## Milestone 26e — seL4 15 Baseline Refresh + Reference Manual Realignment <a id="26e"></a>
+## Milestone 26d — seL4 15 Baseline Refresh + Reference Manual Realignment <a id="26d"></a>
 [Milestones](#Milestones)
 
 **Why now (kernel truth):**
-Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26e refreshes the external kernel baseline and canonical references to seL4 15.0.0, anchors manual alignment to the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)), proves the reopened 26a/26b driver-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions.
+Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 15.0.0, anchors manual alignment to the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)), proves the reopened 26a/26b driver-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions.
 
 **Non-negotiable constraints:**
-- No further system-model change beyond the reopened 26a/26b driver-task baseline. Cohesix remains an upstream seL4, pure-Rust root-task authority system with hardware driver tasks; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26e.
+- No further system-model change beyond the reopened 26a/26b driver-task baseline. Cohesix remains an upstream seL4, pure-Rust root-task authority system with hardware driver tasks; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26d.
 - No new operator-visible protocol, namespace, ACK/ERR/END, telemetry, manifest, or release-behavior changes are permitted under a kernel-refresh label.
-- `rust-sel4` adoption is out of scope. Cohesix may audit upstream Rust support for compatibility reference, but 26e must preserve the current Cohesix-owned `sel4-sys` / `sel4-runtime` / root-task bootstrap stack unless a separate milestone authorizes replacement.
+- `rust-sel4` adoption is out of scope. Cohesix may audit upstream Rust support for compatibility reference, but 26d must preserve the current Cohesix-owned `sel4-sys` / `sel4-runtime` / root-task bootstrap stack unless a separate milestone authorizes replacement.
 - Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
-- Older manual/reference mentions are known 26e blockers, not acceptable post-26e residue. Later milestones must not cite seL4 15 alignment until `m26e-kernel-provenance-refresh` updates or explicitly retires those references.
+- Older manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 15 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
 - Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 15 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
-- QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26e can close.
+- QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
 
 ### Prerequisite
 - Milestone **26c** completed (target-qualified test-plan runner, docs-as-built audit, refactor map, risk-ratchet baseline, and no-std boundary evidence available).
-- Milestone **26d** completed or explicitly scoped where its benchmark artifacts are not inputs to the kernel refresh; no linked-runtime performance assumption may be rewritten under the kernel-refresh label.
+- Reopened Milestones **26a** and **26b** completed or explicitly scoped where their driver-task and benchmark artifacts are inputs to the kernel refresh; no linked-runtime performance assumption may be rewritten under the kernel-refresh label.
 
 ### Goal
 Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0 while preserving root-task authority plus the reopened 26a/26b hardware driver-task model, and prove zero operator-visible drift across QEMU and Pi 4.
@@ -7673,8 +7603,8 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - `cargo check -p pi4-driver-runtime --target aarch64-unknown-none`
 - `scripts/cohesix-build-run.sh --sel4-build seL4/build --no-run --cargo-target aarch64-unknown-none --profile release --root-task-features cohesix-dev`
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir seL4/build_UBOOT`
-- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-qemu`
-- `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-pi4`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu`
+- `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4`
 
 ### Checks (DoD)
 - Canonical docs link the official seL4 Reference Manual v15.0.0 PDF and explicitly align to the accepted seL4 15.0.0 baseline, remaining consistent with the refreshed as-built evidence.
@@ -7685,13 +7615,13 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - The carried seL4 manual/reference artifacts, if tracked in-repo, match the accepted kernel baseline or are explicitly relinked to the authoritative upstream 15.0.0 source.
 
 ### Compiler / docsystem touchpoints
-- `coh-rtc` outputs, docs snippets, and manifest fingerprints remain authoritative; 26e may update generators or schemas only when required by the seL4 15 baseline refresh, and any such change must be reflected in the same evidence set.
-- Pi 4 linked driver-runtime ABI/descriptors/images remain authoritative for driver-task bootstrap evidence during the kernel refresh; 26e may adapt them only for seL4 15 compatibility and must not reclassify runtime-spec acceptance or board-proof boundaries without reopened 26a/26b hardware acceptance evidence.
+- `coh-rtc` outputs, docs snippets, and manifest fingerprints remain authoritative; 26d may update generators or schemas only when required by the seL4 15 baseline refresh, and any such change must be reflected in the same evidence set.
+- Pi 4 linked driver-runtime ABI/descriptors/images remain authoritative for driver-task bootstrap evidence during the kernel refresh; 26d may adapt them only for seL4 15 compatibility and must not reclassify runtime-spec acceptance or board-proof boundaries without reopened 26a/26b hardware acceptance evidence.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and target-qualified state-dir evidence remain the source of truth for QEMU/Pi 4 pass semantics during the kernel refresh.
 
 ### Atomic tasks
 ```
-Title/ID: m26e-kernel-provenance-refresh
+Title/ID: m26d-kernel-provenance-refresh
 Goal: Refresh Cohesix seL4 baseline inputs and record accepted seL4 15.0.0 provenance.
 Inputs: external seL4 source/build trees, seL4 15.0.0 release notes, official seL4 Reference Manual v15.0.0 PDF (`https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf`), docs/TOOLCHAIN_MAC_ARM64.md, README.md.
 Changes:
@@ -7704,7 +7634,7 @@ Deliverables: updated docs/reference provenance and a checked-in note of the acc
 ```
 
 ```
-Title/ID: m26e-sel4-api-compat-audit
+Title/ID: m26d-sel4-api-compat-audit
 Goal: Bring Cohesix-owned seL4 bindings/runtime/bootstrap code into clean alignment with seL4 15 generated artifacts.
 Inputs: crates/sel4-sys, crates/sel4-runtime, crates/pi4-driver-abi, apps/pi4-driver-runtime, apps/root-task, configs/root_task*.toml, seL4/build, seL4/SMP_build, seL4/build_UBOOT.
 Changes:
@@ -7722,7 +7652,7 @@ Deliverables: passing workspace/build-target checks and refreshed low-level comp
 ```
 
 ```
-Title/ID: m26e-domain-schedule-debt-removal
+Title/ID: m26d-domain-schedule-debt-removal
 Goal: Remove or explicitly resolve stale legacy domain-schedule dependencies from Cohesix seL4 build configurations.
 Inputs: seL4/build_UBOOT/CMakeCache.txt, seL4/build*/generated artifacts, Pi 4 build scripts, seL4 15.0.0 upgrade notes.
 Changes:
@@ -7734,13 +7664,13 @@ Deliverables: documented and verified domain-schedule posture for Cohesix seL4 1
 ```
 
 ```
-Title/ID: m26e-full-regression-refresh
+Title/ID: m26d-full-regression-refresh
 Goal: Prove the seL4 15 baseline refresh preserves operator-visible behavior across QEMU and Pi 4.
 Inputs: refreshed generated artifacts, seL4 15 build trees, docs/TEST_PLAN.md, scripts/ci/test_plan_run.sh.
 Changes:
   - docs/TEST_PLAN.md — update kernel-baseline references only where needed to match the refreshed evidence.
-  - out/test-plan/m26e-qemu and out/test-plan/m26e-pi4 — target-qualified PASS evidence on the refreshed baseline.
-Commands: scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-qemu
+  - out/test-plan/m26d-qemu and out/test-plan/m26d-pi4 — target-qualified PASS evidence on the refreshed baseline.
+Commands: scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu
 Checks: QEMU and Pi 4 staged Test Plan runs are PASS with no undocumented drift.
 Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety for Cohesix.
 ```
@@ -7766,7 +7696,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 - USB mass storage is not the Milestone 27 default path. It may be added only as a later optional removable-media profile after USB local-seat/xHCI ownership is hardware-proved and cannot be a boot-critical dependency.
 
 ### Prerequisite
-- Reopened Milestones **26a** and **26b**, plus Milestones **26c**, **26d**, and **26e**, completed where they are dependencies for the selected profile: Pi 4 driver-task concurrency evidence is available, the 26c blocker ledger is clear or scoped, linked-runtime benchmark closure is recorded or explicitly non-blocking for the selected persistence profile, and the seL4 baseline used by the persistence profile is current.
+- Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed where they are dependencies for the selected profile: Pi 4 driver-task concurrency evidence is available, the 26b benchmark ledger is closed or explicitly non-blocking for the selected persistence profile, the 26c blocker ledger is clear or scoped, and the seL4 baseline used by the persistence profile is current.
 
 ### Goal
 Provide **bounded, crash‑resilient on‑device persistence** for:
@@ -7967,7 +7897,7 @@ Deliverables:
 
 ### Prerequisite
 - Milestone **27** completed for the selected profile, including manifest-bound persistence, generated docs alignment, and deterministic regression evidence.
-- Reopened Milestones **26a** and **26b**, plus Milestones **26c**, **26d**, and **26e**, completed or explicitly scoped where their artifacts are inputs to the proof surface: driver-task substrate, HAL admission, linked runtime descriptors, benchmark parity evidence, target-qualified tests, and refreshed seL4 baseline evidence.
+- Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to the proof surface: driver-task substrate, HAL admission, linked runtime descriptors, 26b benchmark parity evidence, target-qualified tests, and refreshed seL4 baseline evidence.
 
 ### Goal
 Establish a machine-checkable verification baseline for the highest-value Cohesix contracts:
@@ -8157,9 +8087,9 @@ Deliverables:
 ## Milestone 27c — Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) <a id="27c"></a>
 [Milestones](#Milestones)
 
-**Why now (core-local performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Milestone 26d closes the immediate linked-runtime same-harness benchmark parity gate. Milestones 26c, 27, and 27b add the missing enforcement substrate around generated worker/driver scheduling evidence, persistence drains, profile-qualified MCS/non-MCS budget fields, proof witnesses, HAL authority checks, and verification gates. Milestone 27c is the right point to turn affinity placement and the 26d hot-path evidence into compiler-owned core-local service scheduling without weakening authority, replay, or hardware-proof boundaries.
+**Why now (core-local performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Milestone 26b closes the immediate linked-runtime same-harness benchmark parity gate. Milestones 26c, 26d, 27, and 27b add the missing enforcement substrate around generated worker/driver scheduling evidence, seL4 baseline alignment, persistence drains, profile-qualified MCS/non-MCS budget fields, proof witnesses, HAL authority checks, and verification gates. Milestone 27c is the right point to turn affinity placement and the 26b hot-path evidence into compiler-owned core-local service scheduling without weakening authority, replay, or hardware-proof boundaries.
 
-**As-built alignment note:** Cohesix already has manifest affinity, `smp activity`, linked driver-runtime active-slot rules, bounded service-turn language, and host-safe pressure evidence. Milestone 26d owns the first linked-runtime benchmark comparator, same-harness Pi/QEMU parity result, and immediate bounded driver hot-path fixes. Cohesix does **not** yet have compiler-owned core-local service buckets, generated per-core service-turn budgets, per-core telemetry/spool drain policy, IRQ-locality witnesses, or Pi/QEMU evidence proving that hot paths stay local to their assigned core under mixed load. Older prose must not claim core-local hot-path scheduling or multicore throughput closure until this milestone has passing evidence.
+**As-built alignment note:** Cohesix already has manifest affinity, `smp activity`, linked driver-runtime active-slot rules, bounded service-turn language, and host-safe pressure evidence. Milestone 26b owns the first linked-runtime benchmark comparator, same-harness Pi/QEMU parity result, and immediate bounded driver hot-path fixes. Cohesix does **not** yet have compiler-owned core-local service buckets, generated per-core service-turn budgets, per-core telemetry/spool drain policy, IRQ-locality witnesses, or Pi/QEMU evidence proving that hot paths stay local to their assigned core under mixed load. Older prose must not claim core-local hot-path scheduling or multicore throughput closure until this milestone has passing evidence.
 
 **Non-negotiable constraints**
 - No POSIX threads, general SMP runtime, async executor, shared work-stealing queue, or bulky SMP library inside the VM.
@@ -8172,7 +8102,7 @@ Deliverables:
 ### Prerequisite
 - Milestone **26c** completed for the selected profile, including worker/driver scheduling evidence, notification lifecycle evidence, and the MCS/non-MCS budget distinction.
 - Milestone **27b** completed for the selected profile, including proof witnesses, HAL/driver-task authority checks, and verification-gate evidence.
-- Reopened Milestones **26a** and **26b**, plus Milestones **26d** and **26e**, completed or explicitly scoped where their artifacts are inputs to Pi 4 driver-runtime, linked-runtime benchmark parity, affinity, seL4 baseline, and target-qualified proof.
+- Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to Pi 4 driver-runtime, linked-runtime benchmark parity, affinity, seL4 baseline, and target-qualified proof.
 
 ### Goal
 Convert existing manifest affinity into **core-local, bounded service-turn execution** for workers, linked driver runtimes, NineDoor/provider paths, telemetry drains, and persistent-spool drains while preserving Cohesix's file-shaped control plane, deterministic ordering, and tiny TCB.
@@ -8204,7 +8134,7 @@ This milestone optimizes the runtime shape; it does not add user-visible capabil
 - Non-MCS profiles expose priority/domain plus service-turn fallback evidence; MCS profiles expose scheduling-context binding, consumed-budget, and timeout evidence.
 
 #### C) Core-local linked-driver hot-path integration
-- Build on the Milestone 26d bounded batching and counter evidence by binding GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe service loops to generated service buckets.
+- Build on the Milestone 26b bounded batching and counter evidence by binding GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe service loops to generated service buckets.
 - Payload-bearing submits continue to use the staged active-slot path: range validation, staged-byte fingerprint, busy-on-conflict, and no overwrite of an in-flight turn.
 - Routine successful dataplane turns must not spam UART or corrupt foreground console output; hot counters are exposed through bounded observability instead.
 - IRQ notification, DMA/cache maintenance, service turn, and completion publication stay local to the assigned runtime core wherever the platform profile supports it.
@@ -8245,7 +8175,7 @@ This milestone optimizes the runtime shape; it does not add user-visible capabil
 - Generated manifests and proof witnesses identify every service bucket, owner core, role/driver membership, budget, burst limit, queue bound, and backpressure rule.
 - MCS profiles prove scheduling-context binding and consumed-budget evidence; non-MCS profiles prove priority/domain plus bounded service-turn fallback evidence without claiming MCS enforcement.
 - Linked driver runtimes keep payload-bearing work on staged active-slot APIs, return busy on conflicting payloads, and never overwrite in-flight turns.
-- Service-bucket integration preserves the Milestone 26d batching and counter bounds while reducing multicore contention without changing ACK/ERR/END, Secure9P, console, worker namespace, or persistent-spool semantics.
+- Service-bucket integration preserves the Milestone 26b batching and counter bounds while reducing multicore contention without changing ACK/ERR/END, Secure9P, console, worker namespace, or persistent-spool semantics.
 - `smp activity` and `/proc/schedule/*` report bounded service-bucket counters with `cpu_pct=unavailable` unless a real kernel-backed utilization source exists.
 - Host-safe pressure tests pass and remain classified as semantic/regression evidence, not Pi hardware throughput proof.
 - QEMU and Pi 4 target-qualified Test Plan runs pass with no undocumented output drift; Pi 4 throughput claims cite fresh target evidence and keep USB/Wi-Fi/HDMI/shell proof lanes separate.
@@ -8280,7 +8210,7 @@ Checks: Each loop respects max work, bytes, completions, and deterministic busy/
 Deliverables: Core-local event-pump execution without a VM thread pool or work-stealing runtime.
 
 Title/ID: m27c-linked-driver-hotpath-batching
-Goal: Bind Milestone 26d linked driver-runtime batching and counters to generated core-local service buckets while preserving staged active-slot semantics.
+Goal: Bind Milestone 26b linked driver-runtime batching and counters to generated core-local service buckets while preserving staged active-slot semantics.
 Inputs: apps/pi4-driver-runtime, crates/pi4-driver-abi, apps/root-task/src/hal/driver_task.rs, docs/DRIVERS.md.
 Changes:
   - apps/pi4-driver-runtime/src/** — assign GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe bursts/counters to generated service buckets.
@@ -8333,7 +8263,7 @@ Deliverables: Repeatable validation lanes for core-local SMP optimization.
 [Milestones](#Milestones)
 
 **Why now (operator & adoption):**  
-After Milestones 26c, 26d, 26e, 27, 27b, and 27c close, Cohesix should have the Pi 4 linked-runtime benchmark baseline, refreshed seL4 baseline, persistence evidence, formal-verification claim register, and core-local SMP service-bucket evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
+After Milestones 26b, 26c, 26d, 27, 27b, and 27c close, Cohesix should have the Pi 4 linked-runtime benchmark baseline, refreshed seL4 baseline, persistence evidence, formal-verification claim register, and core-local SMP service-bucket evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
 
 **As-built alignment note:** `coh evidence pack` and `coh evidence timeline` already exist and are reused here. `coh inspect`, a first-class trace diagnostics command, `coh diff`, `coh attest`, and any `coh bundle` alias are not implemented as of the 26c planning audit and must be added as thin, read-only projections over existing file-shaped state and evidence packs.
 
@@ -9771,7 +9701,7 @@ After Milestone 28d:
 
 **Prerequisites**
 - Milestone **26c** `m26c-cap-backed-worker-endpoints` completed, including generated role state for badged endpoint caps and negative metadata-only ticket tests.
-- Milestone **26e** seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
+- Milestone **26d** seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
 - Milestone **28b** completed, including audit/replay defaults and generated gates that distinguish host authority records from VM cap-backed tickets.
 
 **Goal**
