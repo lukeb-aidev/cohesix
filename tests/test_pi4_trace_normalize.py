@@ -351,6 +351,20 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_RESOURCE_INIT": 0,
         "DRIVER_TASK_RESOURCE_BLOCKER": "none",
         "DRIVER_TASK_RESOURCE_CURRENT_BLOCKER": "none",
+        "DRIVER_TASK_COUNTER_SNAPSHOTS": 0,
+        "DRIVER_TASK_COUNTER_INVALID": 0,
+        "DRIVER_TASK_COUNTER_BUSY": 0,
+        "DRIVER_TASK_COUNTER_SAME_REQUEST": 0,
+        "DRIVER_TASK_COUNTER_TIMEOUTS": 0,
+        "DRIVER_TASK_COUNTER_KEEP_ACTIVE": 0,
+        "DRIVER_TASK_COUNTER_ABORTS": 0,
+        "DRIVER_TASK_COUNTER_STAGED_BYTES": 0,
+        "DRIVER_TASK_COUNTER_CACHE_OPS": 0,
+        "DRIVER_TASK_COUNTER_CACHE_BYTES": 0,
+        "DRIVER_TASK_COUNTER_RX_FRAMES": 0,
+        "DRIVER_TASK_COUNTER_TX_FRAMES": 0,
+        "DRIVER_TASK_COUNTER_RX_BYTES": 0,
+        "DRIVER_TASK_COUNTER_TX_BYTES": 0,
         "SERIAL_DRIVER_ACCEPTED": "no",
         "SERIAL_FALLBACK_ACTIVE": "no",
         "SERIAL_RUNTIME_FRONTIER": "none",
@@ -423,6 +437,47 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["USB_BURST_PROOF"] == "yes"
     assert record["USB_BURST_DROPS"] == 0
     assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_gate_summary_tracks_driver_task_counter_snapshots() -> None:
+    """Counter snapshots are diagnostic evidence and must be activity-bearing."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_COUNTER contract=cyw43455 hot_path=cyw43-wifi "
+            "source=root-ring sequence=12 submitted=3 completed=2 idle=1 "
+            "fault=0 budget=0 frame=1 desc=1 staged_bytes=256 clean_ops=4 "
+            "clean_bytes=512 inv_ops=3 inv_bytes=60 sends=8 yields=8 busy=1 "
+            "same_request=2 timeouts=3 keep_active=2 aborts=1 rx_frames=5 "
+            "rx_bytes=1500 tx_frames=4 tx_bytes=1200",
+            "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
+            "source=root-ring sequence=0 submitted=0 completed=0 idle=0 "
+            "fault=0 budget=0 frame=0 desc=0 staged_bytes=0 clean_ops=0 "
+            "clean_bytes=0 inv_ops=0 inv_bytes=0 sends=0 yields=0 busy=0 "
+            "same_request=0 timeouts=0 keep_active=0 aborts=0 rx_frames=0 "
+            "rx_bytes=0 tx_frames=0 tx_bytes=0",
+            "DRIVER_TASK_COUNTER contract=sdio-host hot_path=sdio-host "
+            "source=root-ring sequence=7 submitted=1 completed=1 idle=0 "
+            "fault=0 budget=0 frame=0 desc=0 staged_bytes=64 clean_ops=2",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_COUNTER_SNAPSHOTS"] == 3
+    assert record["DRIVER_TASK_COUNTER_INVALID"] == 2
+    assert record["DRIVER_TASK_COUNTER_BUSY"] == 1
+    assert record["DRIVER_TASK_COUNTER_SAME_REQUEST"] == 2
+    assert record["DRIVER_TASK_COUNTER_TIMEOUTS"] == 3
+    assert record["DRIVER_TASK_COUNTER_KEEP_ACTIVE"] == 2
+    assert record["DRIVER_TASK_COUNTER_ABORTS"] == 1
+    assert record["DRIVER_TASK_COUNTER_STAGED_BYTES"] == 256
+    assert record["DRIVER_TASK_COUNTER_CACHE_OPS"] == 7
+    assert record["DRIVER_TASK_COUNTER_CACHE_BYTES"] == 572
+    assert record["DRIVER_TASK_COUNTER_RX_FRAMES"] == 5
+    assert record["DRIVER_TASK_COUNTER_TX_FRAMES"] == 4
+    assert record["DRIVER_TASK_COUNTER_RX_BYTES"] == 1500
+    assert record["DRIVER_TASK_COUNTER_TX_BYTES"] == 1200
+    assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
 
 
 def test_gate_summary_treats_serial_input_trace_as_responsive_proof() -> None:

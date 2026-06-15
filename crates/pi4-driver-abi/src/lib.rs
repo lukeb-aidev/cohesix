@@ -1054,6 +1054,166 @@ pub const HOT_PATH_SDIO_HOST: u32 = 6;
 /// PCIe root hot-path id.
 pub const HOT_PATH_PCIE_ROOT: u32 = 7;
 
+/// Magic value for fixed-layout runtime counter snapshots.
+pub const DRIVER_RUNTIME_COUNTER_MAGIC: u32 = 0x4452_4354;
+/// Runtime counter snapshot layout version.
+pub const DRIVER_RUNTIME_COUNTER_VERSION: u16 = 1;
+/// Counter snapshot was produced by root-side ring bookkeeping.
+pub const DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT: u32 = 1 << 0;
+/// Counter snapshot was produced by linked-runtime-local bookkeeping.
+pub const DRIVER_RUNTIME_COUNTER_FLAG_RUNTIME_SNAPSHOT: u32 = 1 << 1;
+
+/// Primitive-only linked-runtime counter snapshot.
+///
+/// This record is intentionally separate from command and completion records so
+/// benchmark evidence cannot change command authority or completion semantics.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCounterSnapshot {
+    /// [`DRIVER_RUNTIME_COUNTER_MAGIC`].
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_COUNTER_VERSION`].
+    pub version: u16,
+    /// Total record bytes.
+    pub len: u16,
+    /// Runtime hot-path id covered by this snapshot.
+    pub hot_path: u32,
+    /// Primitive snapshot flags.
+    pub flags: u32,
+    /// Last root-assigned sequence observed by the producer.
+    pub sequence: u32,
+    /// Reserved for alignment and future fields.
+    pub reserved: u32,
+    /// Root-submitted turns accepted into the active slot.
+    pub submitted_turns: u64,
+    /// Turns that published a matching completion sequence.
+    pub completed_turns: u64,
+    /// Completed turns whose result was idle.
+    pub idle_turns: u64,
+    /// Completed turns whose result was fault.
+    pub fault_turns: u64,
+    /// Completed turns whose result exhausted the service budget.
+    pub budget_exhausted_turns: u64,
+    /// Completed turns that published one frame descriptor.
+    pub frame_ready_turns: u64,
+    /// Descriptors consumed or returned by bounded service turns.
+    pub descriptors_drained: u64,
+    /// Bytes staged into root/runtime shared payload areas.
+    pub staged_bytes: u64,
+    /// Root/runtime cache-clean operations.
+    pub cache_clean_ops: u64,
+    /// Bytes covered by cache-clean operations.
+    pub cache_clean_bytes: u64,
+    /// Root/runtime cache-invalidate operations.
+    pub cache_invalidate_ops: u64,
+    /// Bytes covered by cache-invalidate operations.
+    pub cache_invalidate_bytes: u64,
+    /// IPC send attempts for bounded nonblocking turns.
+    pub send_attempts: u64,
+    /// Cooperative yields issued while waiting for completions.
+    pub yield_count: u64,
+    /// Active-slot conflicts that returned busy/backpressure.
+    pub busy_conflicts: u64,
+    /// Same-request keep-active resumes admitted by fingerprint.
+    pub same_request_resumes: u64,
+    /// Bounded turns that timed out before completion.
+    pub timeouts: u64,
+    /// Timeouts deliberately kept active for later prompt slices.
+    pub keep_active_timeouts: u64,
+    /// Active turns aborted after exhausting the keep-active limit.
+    pub aborts: u64,
+    /// Budget or service overruns reported by the producer.
+    pub overruns: u64,
+    /// Drops reported by bounded queues or producer pressure.
+    pub drops: u64,
+    /// Frame-ready RX frames observed by the producer.
+    pub rx_frames: u64,
+    /// TX frames submitted or completed by the producer.
+    pub tx_frames: u64,
+    /// Frame-ready RX bytes observed by the producer.
+    pub rx_bytes: u64,
+    /// TX bytes submitted or completed by the producer.
+    pub tx_bytes: u64,
+    /// Role-specific counter slot 0.
+    pub role_aux0: u64,
+    /// Role-specific counter slot 1.
+    pub role_aux1: u64,
+    /// Role-specific counter slot 2.
+    pub role_aux2: u64,
+    /// Role-specific counter slot 3.
+    pub role_aux3: u64,
+}
+
+impl DriverRuntimeCounterSnapshot {
+    /// Empty counter snapshot with the fixed header populated.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_COUNTER_MAGIC,
+            version: DRIVER_RUNTIME_COUNTER_VERSION,
+            len: core::mem::size_of::<Self>() as u16,
+            hot_path: 0,
+            flags: 0,
+            sequence: 0,
+            reserved: 0,
+            submitted_turns: 0,
+            completed_turns: 0,
+            idle_turns: 0,
+            fault_turns: 0,
+            budget_exhausted_turns: 0,
+            frame_ready_turns: 0,
+            descriptors_drained: 0,
+            staged_bytes: 0,
+            cache_clean_ops: 0,
+            cache_clean_bytes: 0,
+            cache_invalidate_ops: 0,
+            cache_invalidate_bytes: 0,
+            send_attempts: 0,
+            yield_count: 0,
+            busy_conflicts: 0,
+            same_request_resumes: 0,
+            timeouts: 0,
+            keep_active_timeouts: 0,
+            aborts: 0,
+            overruns: 0,
+            drops: 0,
+            rx_frames: 0,
+            tx_frames: 0,
+            rx_bytes: 0,
+            tx_bytes: 0,
+            role_aux0: 0,
+            role_aux1: 0,
+            role_aux2: 0,
+            role_aux3: 0,
+        }
+    }
+
+    /// Empty snapshot for one known hot path.
+    #[must_use]
+    pub const fn for_hot_path(hot_path: u32, flags: u32, sequence: u32) -> Self {
+        let mut snapshot = Self::empty();
+        snapshot.hot_path = hot_path;
+        snapshot.flags = flags;
+        snapshot.sequence = sequence;
+        snapshot
+    }
+
+    /// Returns true when the snapshot is bounded and non-authority-bearing.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.magic == DRIVER_RUNTIME_COUNTER_MAGIC
+            && self.version == DRIVER_RUNTIME_COUNTER_VERSION
+            && self.len as usize == core::mem::size_of::<Self>()
+            && self.hot_path >= HOT_PATH_SERIAL_CONSOLE
+            && self.hot_path <= HOT_PATH_PCIE_ROOT
+            && self.reserved == 0
+            && (self.flags
+                & !(DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT
+                    | DRIVER_RUNTIME_COUNTER_FLAG_RUNTIME_SNAPSHOT))
+                == 0
+    }
+}
+
 /// Descriptor flag: MMIO pages are mapped at the fixed runtime MMIO base.
 pub const DRIVER_RUNTIME_INIT_FLAG_MMIO_MAPPED: u32 = 1 << 0;
 /// Descriptor flag: DMA pages include device-visible physical addresses.
@@ -1902,6 +2062,38 @@ mod tests {
         assert!(core::mem::size_of::<DriverRuntimeInitDescriptor>() <= 1536);
         assert_eq!(core::mem::align_of::<DriverRuntimeInitDescriptor>(), 8);
         assert!(DRIVER_RUNTIME_INIT_MAX_DMA_PAGES >= 80);
+    }
+
+    #[test]
+    fn counter_snapshot_is_fixed_layout_and_non_authority_bearing() {
+        assert_eq!(core::mem::size_of::<DriverRuntimeCounterSnapshot>(), 256);
+        assert_eq!(core::mem::align_of::<DriverRuntimeCounterSnapshot>(), 8);
+        assert_eq!(DRIVER_RUNTIME_COUNTER_MAGIC, 0x4452_4354);
+        assert_eq!(DRIVER_RUNTIME_COUNTER_VERSION, 1);
+
+        let empty = DriverRuntimeCounterSnapshot::empty();
+        assert!(!empty.valid());
+        assert_eq!(empty.magic, DRIVER_RUNTIME_COUNTER_MAGIC);
+        assert_eq!(
+            empty.len as usize,
+            core::mem::size_of::<DriverRuntimeCounterSnapshot>()
+        );
+
+        let snapshot = DriverRuntimeCounterSnapshot::for_hot_path(
+            HOT_PATH_CYW43_WIFI,
+            DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT,
+            73,
+        );
+        assert!(snapshot.valid());
+        assert_eq!(snapshot.hot_path, HOT_PATH_CYW43_WIFI);
+        assert_eq!(snapshot.sequence, 73);
+
+        let mut invalid = snapshot;
+        invalid.flags = 1 << 31;
+        assert!(!invalid.valid());
+        invalid = snapshot;
+        invalid.reserved = 1;
+        assert!(!invalid.valid());
     }
 
     #[test]

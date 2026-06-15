@@ -6593,13 +6593,15 @@ Inputs: crates/pi4-driver-abi, apps/pi4-driver-runtime, apps/root-task/src/hal/d
 Changes:
   - crates/pi4-driver-abi/src/** — fixed-layout counter fields for turns, drained descriptors, staged bytes, cache work, busy/backpressure, and overruns where existing records are insufficient.
   - apps/pi4-driver-runtime/src/** — update counters inside GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe service loops.
-  - apps/root-task/src/hal/driver_task.rs and apps/root-task/src/drivers/driver_task_net.rs — expose bounded counter snapshots through existing diagnostics/evidence surfaces.
+  - apps/root-task/src/hal/driver_task.rs and apps/root-task/src/drivers/driver_task_net.rs — expose bounded, activity-gated counter snapshots through existing diagnostics/evidence surfaces.
+  - scripts/pi4_trace_normalize.py + tests/test_pi4_trace_normalize.py — normalize `DRIVER_TASK_COUNTER_*` fields, reject empty or truncated counter lines through `DRIVER_TASK_COUNTER_INVALID`, and keep counters diagnostic-only.
 Commands:
   - cargo test -p pi4-driver-abi
   - cargo test -p pi4-driver-runtime
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib drivers::driver_task_net
-Checks: counters are fixed-layout, bounded, non-authority-bearing, and do not change console grammar or Secure9P semantics.
-Deliverables: counter ABI, runtime updates, root-side evidence snapshots, and tests.
+  - python3 -m pytest -q tests/test_pi4_trace_normalize.py
+Checks: counters are fixed-layout, bounded, non-authority-bearing, activity-gated, not updated from polling-loop atomics, normalized with `DRIVER_TASK_COUNTER_INVALID=0`, and do not change console grammar or Secure9P semantics.
+Deliverables: counter ABI, runtime updates, root-side evidence snapshots, normalizer guard fields, and tests.
 
 Title/ID: m26b-linked-driver-hotpath-closure
 Goal: Remove avoidable single-frame or single-descriptor overhead while preserving linked-runtime active-slot invariants.

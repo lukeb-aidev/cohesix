@@ -520,6 +520,20 @@ class GateSummary:
     driver_task_resource_init: int = 0
     driver_task_resource_blocker: str = "none"
     driver_task_resource_current_blocker: str = "none"
+    driver_task_counter_snapshots: int = 0
+    driver_task_counter_invalid: int = 0
+    driver_task_counter_busy: int = 0
+    driver_task_counter_same_request: int = 0
+    driver_task_counter_timeouts: int = 0
+    driver_task_counter_keep_active: int = 0
+    driver_task_counter_aborts: int = 0
+    driver_task_counter_staged_bytes: int = 0
+    driver_task_counter_cache_ops: int = 0
+    driver_task_counter_cache_bytes: int = 0
+    driver_task_counter_rx_frames: int = 0
+    driver_task_counter_tx_frames: int = 0
+    driver_task_counter_rx_bytes: int = 0
+    driver_task_counter_tx_bytes: int = 0
     serial_driver_accepted: bool = False
     serial_fallback_active: bool = False
     serial_runtime_frontier: str = "none"
@@ -663,6 +677,20 @@ class GateSummary:
             "DRIVER_TASK_RESOURCE_CURRENT_BLOCKER": (
                 self.driver_task_resource_current_blocker
             ),
+            "DRIVER_TASK_COUNTER_SNAPSHOTS": self.driver_task_counter_snapshots,
+            "DRIVER_TASK_COUNTER_INVALID": self.driver_task_counter_invalid,
+            "DRIVER_TASK_COUNTER_BUSY": self.driver_task_counter_busy,
+            "DRIVER_TASK_COUNTER_SAME_REQUEST": self.driver_task_counter_same_request,
+            "DRIVER_TASK_COUNTER_TIMEOUTS": self.driver_task_counter_timeouts,
+            "DRIVER_TASK_COUNTER_KEEP_ACTIVE": self.driver_task_counter_keep_active,
+            "DRIVER_TASK_COUNTER_ABORTS": self.driver_task_counter_aborts,
+            "DRIVER_TASK_COUNTER_STAGED_BYTES": self.driver_task_counter_staged_bytes,
+            "DRIVER_TASK_COUNTER_CACHE_OPS": self.driver_task_counter_cache_ops,
+            "DRIVER_TASK_COUNTER_CACHE_BYTES": self.driver_task_counter_cache_bytes,
+            "DRIVER_TASK_COUNTER_RX_FRAMES": self.driver_task_counter_rx_frames,
+            "DRIVER_TASK_COUNTER_TX_FRAMES": self.driver_task_counter_tx_frames,
+            "DRIVER_TASK_COUNTER_RX_BYTES": self.driver_task_counter_rx_bytes,
+            "DRIVER_TASK_COUNTER_TX_BYTES": self.driver_task_counter_tx_bytes,
             "SERIAL_DRIVER_ACCEPTED": (
                 "yes" if self.serial_driver_accepted else "no"
             ),
@@ -5728,6 +5756,125 @@ def _truthy_field(value: str | None) -> bool:
     return value.lower() not in {"", "0", "false", "no", "none", "n/a"}
 
 
+DRIVER_TASK_COUNTER_REQUIRED_FIELDS = (
+    "contract",
+    "hot_path",
+    "source",
+    "sequence",
+    "submitted",
+    "completed",
+    "idle",
+    "fault",
+    "budget",
+    "frame",
+    "desc",
+    "staged_bytes",
+    "clean_ops",
+    "clean_bytes",
+    "inv_ops",
+    "inv_bytes",
+    "sends",
+    "yields",
+    "busy",
+    "same_request",
+    "timeouts",
+    "keep_active",
+    "aborts",
+    "rx_frames",
+    "rx_bytes",
+    "tx_frames",
+    "tx_bytes",
+)
+DRIVER_TASK_COUNTER_ACTIVITY_FIELDS = DRIVER_TASK_COUNTER_REQUIRED_FIELDS[3:]
+
+
+@dataclass(frozen=True)
+class DriverTaskCounterSummary:
+    """Aggregate non-authority driver-task counter evidence."""
+
+    snapshots: int = 0
+    invalid: int = 0
+    busy: int = 0
+    same_request: int = 0
+    timeouts: int = 0
+    keep_active: int = 0
+    aborts: int = 0
+    staged_bytes: int = 0
+    cache_ops: int = 0
+    cache_bytes: int = 0
+    rx_frames: int = 0
+    tx_frames: int = 0
+    rx_bytes: int = 0
+    tx_bytes: int = 0
+
+
+def summarize_driver_task_counters(
+    events: Iterable[TraceEvent],
+) -> DriverTaskCounterSummary:
+    """Return bounded diagnostic counter totals from DRIVER_TASK_COUNTER lines."""
+
+    snapshots = 0
+    invalid = 0
+    busy = 0
+    same_request = 0
+    timeouts = 0
+    keep_active = 0
+    aborts = 0
+    staged_bytes = 0
+    cache_ops = 0
+    cache_bytes = 0
+    rx_frames = 0
+    tx_frames = 0
+    rx_bytes = 0
+    tx_bytes = 0
+    for event in events:
+        if not event.raw.lower().startswith("driver_task_counter "):
+            continue
+        snapshots += 1
+        fields = event.fields
+        missing_required = any(
+            field not in fields for field in DRIVER_TASK_COUNTER_REQUIRED_FIELDS
+        )
+        parsed = {
+            field: parse_hex_int(fields.get(field))
+            for field in DRIVER_TASK_COUNTER_ACTIVITY_FIELDS
+        }
+        bad_numeric = any(value is None for value in parsed.values())
+        source = fields.get("source", "").lower()
+        no_activity = not any((value or 0) != 0 for value in parsed.values())
+        if missing_required or bad_numeric or source != "root-ring" or no_activity:
+            invalid += 1
+            continue
+        busy += parsed["busy"] or 0
+        same_request += parsed["same_request"] or 0
+        timeouts += parsed["timeouts"] or 0
+        keep_active += parsed["keep_active"] or 0
+        aborts += parsed["aborts"] or 0
+        staged_bytes += parsed["staged_bytes"] or 0
+        cache_ops += (parsed["clean_ops"] or 0) + (parsed["inv_ops"] or 0)
+        cache_bytes += (parsed["clean_bytes"] or 0) + (parsed["inv_bytes"] or 0)
+        rx_frames += parsed["rx_frames"] or 0
+        tx_frames += parsed["tx_frames"] or 0
+        rx_bytes += parsed["rx_bytes"] or 0
+        tx_bytes += parsed["tx_bytes"] or 0
+    return DriverTaskCounterSummary(
+        snapshots=snapshots,
+        invalid=invalid,
+        busy=busy,
+        same_request=same_request,
+        timeouts=timeouts,
+        keep_active=keep_active,
+        aborts=aborts,
+        staged_bytes=staged_bytes,
+        cache_ops=cache_ops,
+        cache_bytes=cache_bytes,
+        rx_frames=rx_frames,
+        tx_frames=tx_frames,
+        rx_bytes=rx_bytes,
+        tx_bytes=tx_bytes,
+    )
+
+
 def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str]:
     """Return the latest compact netstats/netstatus state."""
 
@@ -6889,6 +7036,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_resource_blocker,
         driver_task_resource_current_blocker,
     ) = summarize_driver_task_resource_init(event_list)
+    driver_task_counter_summary = summarize_driver_task_counters(event_list)
     usb_driver_task_blocker = summarize_usb_driver_task_stall(event_list)
     net_driver_task_replay_events, net_driver_task_replay_blocker = (
         summarize_driver_task_replay_status(event_list, "net_driver_task_replay_status")
@@ -7082,6 +7230,20 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_resource_init=driver_task_resource_init,
         driver_task_resource_blocker=driver_task_resource_blocker,
         driver_task_resource_current_blocker=driver_task_resource_current_blocker,
+        driver_task_counter_snapshots=driver_task_counter_summary.snapshots,
+        driver_task_counter_invalid=driver_task_counter_summary.invalid,
+        driver_task_counter_busy=driver_task_counter_summary.busy,
+        driver_task_counter_same_request=driver_task_counter_summary.same_request,
+        driver_task_counter_timeouts=driver_task_counter_summary.timeouts,
+        driver_task_counter_keep_active=driver_task_counter_summary.keep_active,
+        driver_task_counter_aborts=driver_task_counter_summary.aborts,
+        driver_task_counter_staged_bytes=driver_task_counter_summary.staged_bytes,
+        driver_task_counter_cache_ops=driver_task_counter_summary.cache_ops,
+        driver_task_counter_cache_bytes=driver_task_counter_summary.cache_bytes,
+        driver_task_counter_rx_frames=driver_task_counter_summary.rx_frames,
+        driver_task_counter_tx_frames=driver_task_counter_summary.tx_frames,
+        driver_task_counter_rx_bytes=driver_task_counter_summary.rx_bytes,
+        driver_task_counter_tx_bytes=driver_task_counter_summary.tx_bytes,
         serial_driver_accepted=driver_task_frontiers.serial_driver_accepted,
         serial_fallback_active=driver_task_frontiers.serial_fallback_active,
         serial_runtime_frontier=driver_task_frontiers.serial_runtime_frontier,

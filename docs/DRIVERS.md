@@ -599,6 +599,16 @@ detail:
   current acceptance hot path.
 - `SCHED_CONTRACT` and `DRIVER_TASK` report per-role live TCB, hot-path, capset,
   fault-probe, and revoke readiness.
+- `DRIVER_TASK_COUNTER` reports bounded, non-authority root-ring counter
+  snapshots after a contract has activity. They cover submitted and completed
+  turns, staged bytes, batched cache work, nonblocking sends/yields, busy
+  conflicts, same-request resumes, timeouts, keep-active timeouts, aborts, and
+  frame bytes. These counters are benchmark triage evidence only; they do not
+  satisfy owner-state proof or change command and completion ABI authority.
+  `scripts/pi4_trace_normalize.py --gate-summary` exposes counter snapshot
+  count, invalid snapshot count, backpressure, same-request, timeout,
+  keep-active, abort, cache, staged-byte, RX, and TX totals so performance
+  regressions can be gated without adding hot-path UART spam.
 - `DRIVER_TASK_RESOURCE_INIT`, `DRIVER_TASK_RING_CALL_BEGIN`,
   `DRIVER_TASK_RING_CALL_RETURN`, `DRIVER_TASK_RING_CALL_TIMEOUT`,
   `DRIVER_TASK_RING_CALL_KEEP_ACTIVE`, `DRIVER_TASK_RING_CALL_ABORT`, and
