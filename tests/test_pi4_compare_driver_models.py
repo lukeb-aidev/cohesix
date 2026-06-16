@@ -44,8 +44,10 @@ def _old_good_log() -> list[str]:
         "DRIVER_TASK_OWNER_STATE contract=usb-local-seat "
         "hot_path=usb-keyboard owner_state=driver-owned",
         "[local-seat] keyboard route=usb-keyboard parser=shared",
-        "[local-seat] runtime keyboard first-byte read=1 ascii=0x54 key=0x17",
-        "[local-seat] pi4 keyboard runtime proof result=online gate=10 source=first-byte",
+        "[local-seat] runtime keyboard first-byte read=1 ascii=0x54 key=0x17 "
+        "source=linked-runtime-hid",
+        "[local-seat] pi4 keyboard runtime proof result=online gate=10 "
+        "source=linked-runtime-hid first_byte_source=linked-runtime-hid",
         "USB_BURST bytes=16 drops=0",
         "DRIVER_TASK_SDIO_DEDICATED=yes",
         "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
@@ -237,6 +239,47 @@ def test_latest_diagnostics_do_not_credit_usb_burst_or_dhcp_next_as_acceptance(
     assert fields["NEW_WIFI_BLOCKER_SEEN"] == "yes"
     assert fields["NEW_WIFI_BLOCKER"] == "cyw43-firmware-retry-exhausted"
     assert fields["COMPARISON_VERDICT"] == "regression"
+
+
+def test_unsourced_usb_first_byte_does_not_count_as_linked_runtime_proof(
+    tmp_path: pathlib.Path,
+) -> None:
+    old_path = _write_log(tmp_path, "old.log", _partial_old_log())
+    new_path = _write_log(
+        tmp_path,
+        "new.log",
+        [
+            "U-Boot 2026.01-dirty",
+            "[Cohesix] Root console ready (type 'help' for commands)",
+            "[local-seat] keyboard route=usb-keyboard parser=shared",
+            "[local-seat] runtime keyboard first-byte read=1 ascii=0x54 key=0x17",
+            "[local-seat] pi4 keyboard runtime proof result=online gate=10 "
+            "source=first-byte",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "proof_gate=10 target_gate=10 blocker=none first_byte_source=local-seat-queue",
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(MODULE_PATH),
+            "--old",
+            str(old_path),
+            "--new",
+            str(new_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    fields = _parse_env(result.stdout)
+
+    assert result.returncode == 0
+    assert fields["NEW_USB_KEYBOARD_ROUTE_SEEN"] == "yes"
+    assert fields["NEW_USB_FIRST_BYTE_SEEN"] == "no"
+    assert "usb" in fields["NEW_MILESTONE_STATE"].split("-", 1)[1].split("+")
 
 
 def test_latest_diagnostics_classify_cyw43_descriptor_invalid(

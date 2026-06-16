@@ -19,7 +19,7 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, TextIO
+from typing import Callable, Iterable, TextIO
 
 
 KEY_VALUE_RE = re.compile(
@@ -446,6 +446,23 @@ class DriverTaskFrontiers:
 
 
 @dataclass(frozen=True)
+class SequenceStep:
+    """One ordered old-good replay step for reopened Pi 4 acceptance."""
+
+    name: str
+    matcher: Callable[["TraceEvent"], bool]
+
+
+@dataclass(frozen=True)
+class SequenceResult:
+    """Machine-checkable result for one ordered replay profile."""
+
+    replay: bool
+    last: str
+    missing: str
+
+
+@dataclass(frozen=True)
 class GateSummary:
     """Current USB/WiFi hardware bring-up gate state."""
 
@@ -453,6 +470,12 @@ class GateSummary:
     usb_blocker: str
     wifi_gate: int
     wifi_blocker: str
+    usb_oldgood_replay: bool = False
+    usb_oldgood_last: str = "none"
+    usb_oldgood_missing: str = "not-run"
+    wifi_oldgood_replay: bool = False
+    wifi_oldgood_last: str = "none"
+    wifi_oldgood_missing: str = "not-run"
     wifi_exact: str = "none"
     wifi_phase: str = "none"
     wifi_blocker_line: int = 0
@@ -560,6 +583,12 @@ class GateSummary:
             "USB_BLOCKER": self.usb_blocker,
             "WIFI_GATE": self.wifi_gate,
             "WIFI_BLOCKER": self.wifi_blocker,
+            "USB_OLDGOOD_REPLAY": "yes" if self.usb_oldgood_replay else "no",
+            "USB_OLDGOOD_LAST": self.usb_oldgood_last,
+            "USB_OLDGOOD_MISSING": self.usb_oldgood_missing,
+            "WIFI_OLDGOOD_REPLAY": "yes" if self.wifi_oldgood_replay else "no",
+            "WIFI_OLDGOOD_LAST": self.wifi_oldgood_last,
+            "WIFI_OLDGOOD_MISSING": self.wifi_oldgood_missing,
             "WIFI_EXACT": self.wifi_exact,
             "WIFI_PHASE": self.wifi_phase,
             "WIFI_BLOCKER_LINE": self.wifi_blocker_line,
@@ -1790,6 +1819,7 @@ CYW43_CONTROL_EXCHANGE_TIMEOUT_REASONS = {
     11: "cyw43-control-rx-firstread-invalid-sdpcm",
     12: "cyw43-control-rx-firstread-remainder-failed",
     13: "cyw43-control-rx-firstread-remainder-too-large",
+    14: "cyw43-control-rx-firstread-source-asserted-empty",
 }
 CYW43_CONTROL_POLL_IDLE_DETAIL_REASONS = {
     0x5701: "cyw43-control-rx-not-ready",
@@ -1804,6 +1834,7 @@ CYW43_CONTROL_POLL_IDLE_DETAIL_REASONS = {
     0x570B: "cyw43-control-rx-firstread-invalid-sdpcm",
     0x570C: "cyw43-control-rx-firstread-remainder-failed",
     0x570D: "cyw43-control-rx-firstread-remainder-too-large",
+    0x570E: "cyw43-control-rx-firstread-source-asserted-empty",
 }
 
 CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS = {
@@ -1814,6 +1845,7 @@ CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS = {
     0x570B: "cyw43-data-rx-firstread-invalid-sdpcm",
     0x570C: "cyw43-data-rx-firstread-remainder-failed",
     0x570D: "cyw43-data-rx-firstread-remainder-too-large",
+    0x570E: "cyw43-data-rx-firstread-source-asserted-empty",
 }
 CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES = frozenset(
     CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS.values()
@@ -3151,6 +3183,12 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         explicit_proof_gate = parse_hex_int(fields.get("proof_gate"))
         if explicit_proof_gate is not None and explicit_proof_gate > 0:
+            if (
+                raw.startswith("usb: runtime_gate")
+                and explicit_proof_gate >= 10
+                and field_lower(event, "first_byte_source") != "linked-runtime-hid"
+            ):
+                explicit_proof_gate = 9
             gate = max(gate, explicit_proof_gate)
         diag_gate = startup_diag_gate(raw, "usb")
         if diag_gate is not None:
@@ -3182,10 +3220,21 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if raw.startswith("usb: runtime_gate"):
             proof_gate = parse_hex_int(fields.get("proof_gate"))
+            linked_first_byte = field_lower(event, "first_byte_source") == "linked-runtime-hid"
             if proof_gate is not None and proof_gate > 0:
+                clamped_unlinked_gate10 = proof_gate >= 10 and not linked_first_byte
+                if proof_gate >= 10 and not linked_first_byte:
+                    proof_gate = 9
                 gate = max(gate, proof_gate)
                 runtime_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
-                blocker = "none" if runtime_blocker == "none" else runtime_blocker
+                if runtime_blocker == "none" and proof_gate >= 10:
+                    blocker = "none"
+                elif runtime_blocker == "none" and clamped_unlinked_gate10:
+                    blocker = "keyboard-first-byte"
+                elif runtime_blocker == "none":
+                    blocker = "none"
+                else:
+                    blocker = runtime_blocker
             continue
         if "linked_runtime_progress" in raw:
             progress_gate = parse_hex_int(fields.get("gate"))
@@ -3390,9 +3439,14 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = "hid-queue-read-failed"
             continue
         if tag == "usb-hid-report-event":
-            gate = max(gate, 8)
-            if blocker in {"unknown", "none"}:
-                blocker = "hid-report-event"
+            if usb_linked_hid_source(event):
+                gate = max(gate, 9)
+                if blocker in {"unknown", "none", "hid-report-event"}:
+                    blocker = "none"
+            else:
+                gate = max(gate, 8)
+                if blocker in {"unknown", "none"}:
+                    blocker = "hid-report-event"
             continue
         if tag == "usb-hid-report-decode-fail":
             gate = max(gate, 8)
@@ -3410,19 +3464,28 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 8)
             blocker = "hid-first-report"
             continue
-        if "usb hid first report" in raw:
+        if "usb hid first report" in raw and usb_linked_hid_source(event):
             gate = max(gate, 9)
             blocker = "none"
-        if "runtime keyboard first-byte" in raw:
+        elif "usb hid first report" in raw and blocker in {"unknown", "none"}:
+            blocker = "hid-first-report"
+        if "runtime keyboard first-byte" in raw and usb_linked_hid_source(event):
             gate = max(gate, 10)
             blocker = "none"
+        elif "runtime keyboard first-byte" in raw and blocker in {"unknown", "none"}:
+            blocker = "keyboard-first-byte"
         if "pi4 keyboard runtime proof" in raw:
             proof_gate = parse_hex_int(fields.get("gate"))
+            linked_hid = usb_linked_hid_source(event)
+            if proof_gate is not None and proof_gate >= 10 and not linked_hid:
+                proof_gate = 9
             if proof_gate is not None and proof_gate > 0:
                 gate = max(gate, proof_gate)
             proof_result = normalize_usb_blocker(fields.get("result", "none"))
-            if proof_result == "none":
+            if proof_result == "none" and (proof_gate is None or proof_gate < 10 or linked_hid):
                 blocker = "none"
+            elif proof_result == "none":
+                blocker = "keyboard-first-byte"
             elif proof_result == "unavailable" and blocker not in {"unknown", "none"}:
                 pass
             elif (
@@ -6022,6 +6085,62 @@ REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS = {
     "pcie-root",
 }
 
+BASE_DRIVER_TASK_OWNER_HOT_PATHS = {
+    "serial-console",
+    "usb-keyboard",
+    "hdmi-text",
+    "pcie-root",
+}
+
+BASE_DRIVER_TASK_ROLES = {"serial", "usb", "display", "pcie"}
+
+
+def normalize_active_net_selection(selected_net: str, active_net: str) -> str:
+    """Return the selected concrete Pi 4 network owner label."""
+
+    normalized_active = active_net.lower().replace("_", "-")
+    if normalized_active in {"cyw43", "genet", "none"}:
+        return normalized_active
+    normalized_selected = selected_net.lower().replace("_", "-")
+    if normalized_selected in {"wifi", "wireless", "cyw43", "cyw43-wifi"}:
+        return "cyw43"
+    if normalized_selected in {"wired", "ethernet", "genet", "genet-nic", "bcmgenet-v5"}:
+        return "genet"
+    if normalized_selected in {"disabled", "none", "off"}:
+        return "none"
+    return "unknown"
+
+
+def required_driver_task_owner_hot_paths(
+    selected_net: str,
+    active_net: str,
+) -> set[str]:
+    """Return owner-state hot paths required for the selected Pi 4 network."""
+
+    normalized = normalize_active_net_selection(selected_net, active_net)
+    required = set(BASE_DRIVER_TASK_OWNER_HOT_PATHS)
+    if normalized == "cyw43":
+        required.update({"cyw43-wifi", "sdio-host"})
+    elif normalized == "genet":
+        required.add("genet-nic")
+    elif normalized == "unknown":
+        required = set(REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS)
+    return required
+
+
+def required_driver_task_roles(selected_net: str, active_net: str) -> set[str]:
+    """Return dedicated driver roles required for the selected Pi 4 network."""
+
+    normalized = normalize_active_net_selection(selected_net, active_net)
+    required = set(BASE_DRIVER_TASK_ROLES)
+    if normalized == "cyw43":
+        required.update({"net", "sdio"})
+    elif normalized == "genet":
+        required.add("net")
+    elif normalized == "unknown":
+        required.update({"net", "sdio"})
+    return required
+
 
 def classify_owner_state_hot_path(fields: dict[str, str]) -> str | None:
     """Classify a DRIVER_TASK_OWNER_STATE line into a concrete Pi 4 hot path."""
@@ -6152,6 +6271,18 @@ def summarize_driver_task_proofs(
                         affinity_manifest_mismatches += 1
             if "driver_task_selected" in raw:
                 selected_net = fields.get("selection", selected_net).lower()
+                active_net = fields.get("active_net", active_net).lower()
+            if (
+                "net_driver_task_replay_status" in raw
+                and fields.get("selected", "").lower() == "yes"
+            ):
+                role = field_lower(event, "role")
+                if role in {"cyw43-wifi", "cyw43455"}:
+                    selected_net = "wifi"
+                    active_net = "cyw43"
+                elif role in {"genet-nic", "bcmgenet-v5", "genet"}:
+                    selected_net = "wired"
+                    active_net = "genet"
             if "driver_task_default" in raw:
                 default_requested |= fields.get("requested", "").lower() in {
                     "dedicated",
@@ -6240,7 +6371,7 @@ def summarize_driver_task_proofs(
                 vspace_proof |= fields.get("vspace", "").lower() in {"isolated", "yes", "pass"}
                 pointer_free_ipc_proof |= _pointer_free_ipc_proven(fields)
                 live_hot_paths |= _truthy_field(fields.get("live_hot_paths"))
-                active_net = fields.get("active_net", active_net)
+                active_net = fields.get("active_net", active_net).lower()
             if "driver_task_substrate" in raw:
                 substrate_ready |= fields.get("active", "").lower() == "yes"
                 parsed_failed = parse_hex_int(fields.get("failed_count"))
@@ -6301,7 +6432,7 @@ def summarize_driver_task_proofs(
             sched_proof |= _truthy_field(fields.get("sched")) or _truthy_field(
                 fields.get("priority")
             )
-            active_net = fields.get("active_net", active_net)
+            active_net = fields.get("active_net", active_net).lower()
             if "budget_overrun" in raw or "budget overrun" in raw or _truthy_field(
                 fields.get("budget_overrun")
             ):
@@ -6328,8 +6459,10 @@ def summarize_driver_task_proofs(
             usb_burst_drops = 0 if drops is None else drops
         if line_has_hdmi_responsiveness(raw, fields):
             hdmi_responsive = True
-    required_roles = {"serial", "usb", "display", "net", "sdio", "pcie"}
-    owner_state_proof = REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS.issubset(owner_state_hot_paths)
+    active_net = normalize_active_net_selection(selected_net, active_net)
+    required_owner_hot_paths = required_driver_task_owner_hot_paths(selected_net, active_net)
+    required_roles = required_driver_task_roles(selected_net, active_net)
+    owner_state_proof = required_owner_hot_paths.issubset(owner_state_hot_paths)
     expected_affinity_contracts = pi4_selected_driver_task_affinity_contracts(
         selected_net, selected_only
     )
@@ -6906,15 +7039,903 @@ def wifi_blocker_is_exact_cyw43_progress(blocker: str) -> bool:
     ) or blocker == "cyw43-forbidden-sdio-mmio"
 
 
+def field_lower(event: TraceEvent, key: str) -> str:
+    """Return a lower-cased parsed field value."""
+
+    return event.fields.get(key, "").lower()
+
+
+def raw_has(event: TraceEvent, *tokens: str) -> bool:
+    """Return true when all tokens appear in the raw event text."""
+
+    raw = event.raw.lower()
+    return all(token.lower() in raw for token in tokens)
+
+
+def raw_has_any(event: TraceEvent, tokens: Iterable[str]) -> bool:
+    """Return true when any token appears in the raw event text."""
+
+    raw = event.raw.lower()
+    return any(token.lower() in raw for token in tokens)
+
+
+def field_is(event: TraceEvent, key: str, values: set[str] | tuple[str, ...]) -> bool:
+    """Return true when a parsed field matches one normalized value."""
+
+    return field_lower(event, key).replace("_", "-") in values
+
+
+def usb_linked_hid_source(event: TraceEvent) -> bool:
+    """Return true when USB input proof came from the linked HID runtime."""
+
+    return field_lower(event, "source") == "linked-runtime-hid"
+
+
+def resource_init_step(
+    event: TraceEvent,
+    *,
+    contract: str | None = None,
+    hot_path: str | None = None,
+    stages: set[str] | tuple[str, ...],
+    statuses: set[str] | tuple[str, ...],
+) -> bool:
+    """Return true for a matching DRIVER_TASK_RESOURCE_INIT breadcrumb."""
+
+    if "driver_task_resource_init" not in event.raw.lower():
+        return False
+    if contract is not None and field_lower(event, "contract") != contract:
+        return False
+    if hot_path is not None and field_lower(event, "hot_path") != hot_path:
+        return False
+    return field_is(event, "stage", stages) and field_is(event, "status", statuses)
+
+
+def control_reply_matched_step(event: TraceEvent, stage: str) -> bool:
+    """Return true for a matched CYW43 control reply at one stage."""
+
+    result = parse_hex_int(event.fields.get("status"))
+    return (
+        "cyw43_driver_task_control_reply" in event.raw.lower()
+        and field_lower(event, "stage") == stage
+        and field_lower(event, "reply_match") == "yes"
+        and (result is None or result == 0)
+    )
+
+
+def owner_state_step(
+    event: TraceEvent,
+    hot_path: str,
+    contract: str | None = None,
+) -> bool:
+    """Return true for a pointer-free linked driver owner-state line."""
+
+    if "driver_task_owner_state" not in event.raw.lower():
+        return False
+    if field_lower(event, "hot_path") != hot_path:
+        return False
+    if contract is not None and field_lower(event, "contract") != contract:
+        return False
+    return (
+        field_lower(event, "owner_state") == "driver-owned"
+        and field_lower(event, "descriptor") == "present"
+        and field_lower(event, "root_pointer") == "no"
+    )
+
+
+def ordered_sequence_result(
+    events: Iterable[TraceEvent],
+    steps: list[SequenceStep],
+    required_any: list[SequenceStep] | None = None,
+    forbidden: list[SequenceStep] | None = None,
+) -> SequenceResult:
+    """Match ordered replay steps while checking unordered prerequisites."""
+
+    event_list = list(events)
+    for forbidden_step in forbidden or []:
+        if any(forbidden_step.matcher(event) for event in event_list):
+            return SequenceResult(False, "none", f"forbidden-{forbidden_step.name}")
+
+    for required_step in required_any or []:
+        if not any(required_step.matcher(event) for event in event_list):
+            return SequenceResult(False, "none", required_step.name)
+
+    index = 0
+    last = "none"
+    for event in event_list:
+        if index < len(steps) and steps[index].matcher(event):
+            last = steps[index].name
+            index += 1
+    if index == len(steps):
+        return SequenceResult(True, last, "none")
+    return SequenceResult(False, last, steps[index].name)
+
+
+def usb_xhci_ready_step(event: TraceEvent) -> bool:
+    """Return true once linked runtime xHCI readiness is proven."""
+
+    if resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-engine-init", "usb-xhci-init", "net-engine-init"},
+        statuses={"ready"},
+    ):
+        return True
+    if event.domain != "usb":
+        return False
+    diag_gate = startup_diag_gate(event.raw.lower(), "usb")
+    if (
+        diag_gate is not None
+        and diag_gate >= 3
+        and field_lower(event, "status") == "pass"
+    ):
+        return True
+    return raw_has_any(
+        event,
+        (
+            "controller-ready",
+            "controller-init-complete",
+            "usb-controller-ready",
+            "usb-xhci-ready",
+        ),
+    )
+
+
+def usb_command_event_step(event: TraceEvent) -> bool:
+    """Return true for linked Enable Slot command-event proof."""
+
+    if resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"command-ring-ready", "usb-command-ring-ready"},
+    ):
+        return True
+    if event.domain != "usb":
+        return False
+    raw = event.raw.lower()
+    if (
+        "xhci root-port command-probe" in raw
+        or "no-op" in raw
+        or "linux-event" in raw
+        or "linux-shaped" in raw
+    ):
+        return False
+    diag_gate = startup_diag_gate(raw, "usb")
+    if (
+        diag_gate is not None
+        and diag_gate >= 4
+        and field_lower(event, "status") == "pass"
+    ):
+        return True
+    if raw.startswith("usb_runtime_enum_snapshot"):
+        detail = parse_hex_int(event.fields.get("detail"))
+        return detail == 0x0204 and field_lower(event, "cmd_path") == "yes"
+    return (
+        raw_has(event, "linked_runtime", "command-probe", "enable-slot-ok")
+        or raw_has_any(
+            event,
+            (
+                "usb-command-ring-ready",
+                "usb-command-event-proof",
+                "usb-enable-slot-completion",
+            ),
+        )
+        or field_lower(event, "status") == "command-ring-ready"
+    )
+
+
+def usb_root_port_reset_step(event: TraceEvent) -> bool:
+    """Return true after live root-port reset completes."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"root-port-connected"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        (
+            "usb-root-port-reset-done",
+            "root-port-reset-done",
+            "usb-root-port-connected",
+        ),
+    ))
+
+
+def usb_hub_addressed_step(event: TraceEvent) -> bool:
+    """Return true once the root hub device has been addressed."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"device-addressed"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        (
+            "usb-device-addressed",
+            "hub-device-addressed",
+            "usb root hub addressed",
+        ),
+    ))
+
+
+def usb_hub_configured_step(event: TraceEvent) -> bool:
+    """Return true once hub set-configuration completes."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"hub-set-configuration-done", "usb-hub-set-configuration-done"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        (
+            "usb-hub-set-configuration-done",
+            "usb hub configured",
+            "hub set-config ready",
+        ),
+    ))
+
+
+def usb_hub_descriptor_step(event: TraceEvent) -> bool:
+    """Return true after hub descriptor and context proof."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"hub-context-done", "hub-descriptor-done", "usb-hub-context-done"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        (
+            "usb-hub-context-done",
+            "usb-hub-descriptor-done",
+            "hub descriptor ready",
+        ),
+    ))
+
+
+def usb_hub_port_power_step(event: TraceEvent) -> bool:
+    """Return true once hub port power is applied."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"hub-port-power-done", "usb-hub-port-power-done"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        ("usb-hub-port-power-done", "hub port power done"),
+    ))
+
+
+def usb_hub_port_status_step(event: TraceEvent) -> bool:
+    """Return true after same-slot hub-port GET_STATUS completes."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"hub-port-status-done", "usb-hub-port-status-done"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        ("usb-hub-port-status-done", "hub-port-status-done"),
+    ))
+
+
+def usb_hub_port_ready_step(event: TraceEvent) -> bool:
+    """Return true after hub port reset leaves the child port enabled."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"hub-port-ready", "hub-port-reset-set-done", "usb-hub-port-ready"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        (
+            "usb-hub-port-reset-set-done",
+            "usb-hub-port-ready",
+            "hub port terminal",
+        ),
+    ))
+
+
+def usb_hub_child_probe_step(event: TraceEvent) -> bool:
+    """Return true when the keyboard child probe starts from the hub slot."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"hub-child-probe-begin", "hub-child-probe-done"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        (
+            "usb-hub-child-probe-begin",
+            "usb-hub-child-probe-done",
+            "hub child device-desc ready",
+        ),
+    ))
+
+
+def usb_hid_endpoint_step(event: TraceEvent) -> bool:
+    """Return true once the boot keyboard interrupt-IN endpoint is found."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-enumeration", "usb-keyboard-enumeration-retry"},
+        statuses={"hid-endpoint-ready", "ready"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        (
+            "usb-hid-endpoint-parse-found",
+            "usb hid keyboard ready",
+        ),
+    ))
+
+
+def usb_interrupt_in_step(event: TraceEvent) -> bool:
+    """Return true once an interrupt-IN TRB is queued for the HID endpoint."""
+
+    return resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-interrupt-in"},
+        statuses={"interrupt-in-ready", "ready"},
+    ) or (event.domain == "usb" and raw_has_any(
+        event,
+        ("usb-hid-interrupt-queue-ready", "hid interrupt queue ready"),
+    ))
+
+
+def usb_first_report_step(event: TraceEvent) -> bool:
+    """Return true for a non-pending HID first-report proof."""
+
+    if resource_init_step(
+        event,
+        contract="usb-local-seat",
+        hot_path="usb-keyboard",
+        stages={"usb-keyboard-first-report"},
+        statuses={"ready"},
+    ):
+        return True
+    if event.domain != "usb":
+        return False
+    raw = event.raw.lower()
+    if "pending" in raw or "empty" in raw or "failed" in raw:
+        return False
+    return (
+        ("usb hid first report" in raw or field_lower(event, "tag") == "usb-hid-report-event")
+        and usb_linked_hid_source(event)
+    )
+
+
+def usb_first_byte_step(event: TraceEvent) -> bool:
+    """Return true when the runtime decodes a keyboard byte."""
+
+    if event.domain != "usb":
+        return False
+    return (
+        "runtime keyboard first-byte" in event.raw.lower()
+        and usb_linked_hid_source(event)
+    ) or (
+        "pi4 keyboard runtime proof" in event.raw.lower()
+        and field_lower(event, "result") in {"online", "ready"}
+        and usb_linked_hid_source(event)
+    )
+
+
+def usb_runtime_gate10_step(event: TraceEvent) -> bool:
+    """Return true for the final USB gate-10 summary after first byte."""
+
+    if event.domain != "usb":
+        return False
+    proof_gate = parse_hex_int(event.fields.get("proof_gate"))
+    return (
+        event.raw.lower().startswith("usb: runtime_gate")
+        and proof_gate is not None
+        and proof_gate >= 10
+        and field_lower(event, "keyboard") == "yes"
+        and field_lower(event, "first_report") == "yes"
+        and field_lower(event, "first_byte") == "yes"
+        and field_lower(event, "first_byte_source") == "linked-runtime-hid"
+        and normalize_usb_blocker(event.fields.get("blocker", "none")) == "none"
+    )
+
+
+def summarize_usb_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResult:
+    """Validate the reopened 26b USB hub-keyboard old-good replay profile."""
+
+    return ordered_sequence_result(
+        events,
+        required_any=[
+            SequenceStep("cold-boot-unseeded", usb_cold_boot_evidence),
+            SequenceStep(
+                "usb-owner-state",
+                lambda event: owner_state_step(
+                    event,
+                    hot_path="usb-keyboard",
+                    contract="usb-local-seat",
+                ),
+            ),
+            SequenceStep(
+                "pcie-owner-state",
+                lambda event: owner_state_step(
+                    event,
+                    hot_path="pcie-root",
+                    contract="pcie-root",
+                ),
+            ),
+        ],
+        forbidden=[SequenceStep("bootloader-handoff", usb_bootloader_handoff_evidence)],
+        steps=[
+            SequenceStep("xhci-controller-ready", usb_xhci_ready_step),
+            SequenceStep("command-event-proof", usb_command_event_step),
+            SequenceStep("root-port-live-reset", usb_root_port_reset_step),
+            SequenceStep("hub-device-addressed", usb_hub_addressed_step),
+            SequenceStep("hub-configured", usb_hub_configured_step),
+            SequenceStep("hub-descriptor-context", usb_hub_descriptor_step),
+            SequenceStep("hub-port-power-done", usb_hub_port_power_step),
+            SequenceStep("hub-port-status-done", usb_hub_port_status_step),
+            SequenceStep("hub-port-reset-ready", usb_hub_port_ready_step),
+            SequenceStep("hub-child-probe", usb_hub_child_probe_step),
+            SequenceStep("hid-endpoint", usb_hid_endpoint_step),
+            SequenceStep("interrupt-in-armed", usb_interrupt_in_step),
+            SequenceStep("first-report", usb_first_report_step),
+            SequenceStep("first-byte", usb_first_byte_step),
+            SequenceStep("runtime-gate10", usb_runtime_gate10_step),
+        ],
+    )
+
+
+def wifi_sdio_engine_ready_step(event: TraceEvent) -> bool:
+    """Return true when linked SDIO engine-init is ready."""
+
+    raw = event.raw.lower()
+    if (
+        "sdio_driver_task_replay_status" in raw
+        and field_lower(event, "stage") == "engine-init"
+    ):
+        return field_lower(event, "blocker") in {"ready", "none"}
+    return (
+        "driver_task_resource_init" in raw
+        and field_lower(event, "contract") == "sdio-host"
+        and "engine-init" in field_lower(event, "stage")
+        and field_lower(event, "status") == "ready"
+    ) or (
+        event.domain in {"wifi", "driver"}
+        and field_lower(event, "status") == "ready"
+        and raw_has_any(
+            event,
+            (
+                "sdio-engine-init",
+                "sdio engine-init",
+            ),
+        )
+    )
+
+
+def wifi_cyw43_transport_step(event: TraceEvent) -> bool:
+    """Return true when the linked CYW43 transport is admitted and live."""
+
+    if resource_init_step(
+        event,
+        contract="cyw43455",
+        hot_path="cyw43-wifi",
+        stages={"net-engine-init", "cyw43-transport-init"},
+        statuses={"ready"},
+    ):
+        return True
+    if (
+        "net_driver_task_replay_status" in event.raw.lower()
+        and field_lower(event, "role") == "cyw43-wifi"
+        and field_lower(event, "stage") == "engine-init"
+        and field_lower(event, "blocker") in {"ready", "none"}
+    ):
+        return True
+    if event.domain not in {"wifi", "driver"}:
+        return False
+    return raw_has_any(
+        event,
+        (
+            "cyw43-transport-ready",
+            "cyw43-engine-init status=ready",
+            "cyw43 linked transport ready",
+        ),
+    )
+
+
+def wifi_firmware_ready_step(event: TraceEvent) -> bool:
+    """Return true after firmware upload/release reaches ready."""
+
+    if resource_init_step(
+        event,
+        contract="cyw43455",
+        hot_path="cyw43-wifi",
+        stages={"cyw43-firmware", "cyw43-firmware-release"},
+        statuses={"ready"},
+    ):
+        return True
+    if event.domain not in {"wifi", "driver"}:
+        return False
+    return (
+        field_lower(event, "status") == "ready"
+        and raw_has_any(
+            event,
+            (
+                "cyw43-release-firmware-ready-done",
+                "firmware release ready",
+                "cyw43 firmware-ready",
+                "firmware-ready",
+            ),
+        )
+    )
+
+
+def wifi_function2_ready_step(event: TraceEvent) -> bool:
+    """Return true when Function 2 is enabled and usable."""
+
+    if resource_init_step(
+        event,
+        contract="cyw43455",
+        hot_path="cyw43-wifi",
+        stages={"cyw43-function2"},
+        statuses={"ready"},
+    ):
+        return True
+    if event.domain not in {"wifi", "driver"}:
+        return False
+    return field_lower(event, "f2_enabled") == "yes" and field_lower(event, "f2_ready") == "yes"
+
+
+def wifi_control_rxglom_step(event: TraceEvent) -> bool:
+    """Return true once the Linux-shaped rxglom control step is matched."""
+
+    return (
+        resource_init_step(
+            event,
+            contract="cyw43455",
+            hot_path="cyw43-wifi",
+            stages={"cyw43-control-rxglom"},
+            statuses={"ready"},
+        )
+        or control_reply_matched_step(event, "cyw43-control-rxglom")
+        or (event.domain in {"wifi", "driver"} and raw_has_any(
+        event,
+        (
+            "cyw43-control-rxglom ready",
+            "control_exchange step=cyw43-control-rxglom status=matched",
+            "bus:rxglom=1",
+        ),
+        ))
+    )
+
+
+def wifi_control_revinfo_step(event: TraceEvent) -> bool:
+    """Return true once revinfo has a matched control reply."""
+
+    return (
+        resource_init_step(
+            event,
+            contract="cyw43455",
+            hot_path="cyw43-wifi",
+            stages={"cyw43-control-revinfo"},
+            statuses={"ready"},
+        )
+        or control_reply_matched_step(event, "cyw43-control-revinfo")
+        or (event.domain in {"wifi", "driver"} and raw_has_any(
+        event,
+        (
+            "cyw43-control-revinfo ready",
+            "control_exchange step=cyw43-control-revinfo status=matched",
+            "revinfo matched",
+        ),
+        ))
+    )
+
+
+def wifi_control_up_step(event: TraceEvent) -> bool:
+    """Return true once WLC_UP and related control setup are complete."""
+
+    return (
+        resource_init_step(
+            event,
+            contract="cyw43455",
+            hot_path="cyw43-wifi",
+            stages={"cyw43-control-up"},
+            statuses={"ready"},
+        )
+        or control_reply_matched_step(event, "cyw43-control-up")
+        or (event.domain in {"wifi", "driver"} and raw_has_any(
+        event,
+        (
+            "cyw43-control-up ready",
+            "control_exchange step=cyw43-control-up status=matched",
+            "wlc_up ready",
+            "control-plane ready",
+        ),
+        ))
+    )
+
+
+def wifi_join_request_step(event: TraceEvent) -> bool:
+    """Return true for the primary BSS join request, not rescue shortcuts."""
+
+    raw = event.raw.lower()
+    if "assoc_rescue" in raw or "action=set-ssid" in raw:
+        return False
+    result = parse_hex_int(event.fields.get("result"))
+    return (
+        "cyw43_driver_task_join_request" in raw
+        and field_lower(event, "contract") == "cyw43455"
+        and field_lower(event, "path") == "primary-bsscfg:join"
+        and field_lower(event, "action") == "ready"
+        and (result is None or result == 0)
+    ) or (
+        raw_has(event, "primary-bsscfg:join", "action=ready")
+        and (result is None or result == 0)
+    )
+
+
+def wifi_association_link_step(event: TraceEvent) -> bool:
+    """Return true when association and link-up are both proven."""
+
+    if event.domain not in {"wifi", "driver"}:
+        return False
+    return (
+        "cyw43_driver_task_host_eapol_status" in event.raw.lower()
+        and field_lower(event, "associated") == "yes"
+        and field_lower(event, "link_up") == "yes"
+    ) or (
+        event.raw.lower().startswith("netstats:")
+        and event.fields.get("wifi_assoc") == "1"
+        and event.fields.get("wifi_link") == "1"
+    )
+
+
+def wifi_eapol_message_step(event: TraceEvent, message: str) -> bool:
+    """Return true for one explicit host-EAPOL message step."""
+
+    if event.domain not in {"wifi", "driver"}:
+        return False
+    raw = event.raw.lower()
+    msg = message.lower()
+    explicit = "cyw43_driver_task_host_eapol_message" in raw
+    legacy_host_eapol = "host-eapol" in raw
+    message_matches = (
+        field_lower(event, "msg") == msg
+        or field_lower(event, "message") == msg
+        or f"stage=cyw43-host-eapol-{msg}" in raw
+        or f"action=send-{msg}" in raw
+        or f"action=recv-{msg}" in raw
+        or f"host-eapol-{msg}" in raw
+    )
+    return (explicit or legacy_host_eapol) and message_matches
+
+
+def wifi_key_install_step(event: TraceEvent, key_kind: str) -> bool:
+    """Return true when the host EAPOL path installs one key class."""
+
+    if event.domain not in {"wifi", "driver"}:
+        return False
+    raw = event.raw.lower()
+    kind = key_kind.lower()
+    return (
+        "cyw43_driver_task_host_eapol_key" in raw
+        and field_lower(event, "kind") == kind
+        and field_lower(event, "status") in {"ready", "ok"}
+    ) or raw_has(event, "install-wsec-key", f"kind={kind}") or (
+        field_lower(event, "kind") == kind
+        and raw_has_any(
+            event,
+            (
+                "cyw43-host-eapol-ptk",
+                "cyw43-host-eapol-gtk",
+            ),
+        )
+    )
+
+
+def wifi_secure_release_step(event: TraceEvent) -> bool:
+    """Return true once secure host-EAPOL state releases DHCP/data."""
+
+    if event.domain not in {"wifi", "driver"}:
+        return False
+    raw = event.raw.lower()
+    eapol_rx = parse_hex_int(event.fields.get("eapol_rx")) or 0
+    if (
+        "cyw43_driver_task_host_eapol_status" in raw
+        and field_lower(event, "status") == "secure"
+        and field_lower(event, "associated") == "yes"
+        and field_lower(event, "link_up") == "yes"
+        and eapol_rx >= 2
+    ):
+        return True
+    if resource_init_step(
+        event,
+        contract="cyw43455",
+        hot_path="cyw43-wifi",
+        stages={"cyw43-host-eapol"},
+        statuses={"secure"},
+    ):
+        return True
+    return raw_has(event, "host-eapol-complete", "action=allow-dhcp")
+
+
+def wifi_dhcp_start_step(event: TraceEvent) -> bool:
+    """Return true when DHCP starts after secure release."""
+
+    return event.domain == "wifi" and "[dhcp] start ready" in event.raw.lower()
+
+
+def wifi_dhcp_bound_step(event: TraceEvent) -> bool:
+    """Return true when WiFi DHCP binds a non-zero address."""
+
+    raw = event.raw.lower()
+    if event.domain != "wifi" or "[dhcp] lease bound" not in raw:
+        return False
+    ip = event.fields.get("ip", "")
+    gateway = event.fields.get("gateway", "")
+    return ip and not ip.startswith("0.0.0.0") and gateway and gateway != "0.0.0.0"
+
+
+def wifi_nettest_step(event: TraceEvent) -> bool:
+    """Return true for successful WiFi nettest evidence."""
+
+    raw = event.raw.lower()
+    return event.domain == "wifi" and (
+        (
+            raw.startswith("ok nettest")
+            and (field_lower(event, "detail") == "pass" or "success" in raw)
+        )
+        or raw_has(event, "[net-selftest] result", "tx_ok=true", "console_ok=true")
+    )
+
+
+def wifi_netstats_bound_step(event: TraceEvent) -> bool:
+    """Return true for bound WiFi netstats mode/state."""
+
+    return (
+        event.domain == "wifi"
+        and event.raw.lower().startswith("netstats:")
+        and event.fields.get("active") == "wifi"
+        and event.fields.get("addr_src") == "dhcp-lease"
+        and event.fields.get("dhcp") == "bound"
+    )
+
+
+def wifi_netstats_counters_step(event: TraceEvent) -> bool:
+    """Return true for non-zero WiFi RX/TX counters."""
+
+    return (
+        event.domain == "wifi"
+        and event.raw.lower().startswith("netstats:")
+        and (parse_hex_int(event.fields.get("rx_pkts")) or 0) > 0
+        and (parse_hex_int(event.fields.get("tx_pkts")) or 0) > 0
+    )
+
+
+def wifi_netstats_secure_step(event: TraceEvent) -> bool:
+    """Return true for final secure WiFi association/link counters."""
+
+    return (
+        event.domain == "wifi"
+        and event.raw.lower().startswith("netstats:")
+        and event.fields.get("wifi_assoc") == "1"
+        and event.fields.get("wifi_link") == "1"
+        and event.fields.get("eapol_secure") == "1"
+        and (parse_hex_int(event.fields.get("eapol_rx")) or 0) >= 2
+    )
+
+
+def wifi_forbidden_shortcut(event: TraceEvent) -> bool:
+    """Return true for root/shortcut evidence that cannot satisfy acceptance."""
+
+    raw = event.raw.lower()
+    return (
+        field_lower(event, "root_pointer") == "yes"
+        or "root-context" in raw
+        or "compatibility service" in raw
+        or "firmware supplicant" in raw
+        or "psk_sup" in raw
+    )
+
+
+def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResult:
+    """Validate the reopened 26b CYW43 host-EAPOL old-good replay profile."""
+
+    return ordered_sequence_result(
+        events,
+        required_any=[
+            SequenceStep(
+                "cyw43-owner-state",
+                lambda event: owner_state_step(
+                    event,
+                    hot_path="cyw43-wifi",
+                    contract="cyw43455",
+                ),
+            ),
+            SequenceStep(
+                "sdio-owner-state",
+                lambda event: owner_state_step(
+                    event,
+                    hot_path="sdio-host",
+                    contract="sdio-host",
+                ),
+            ),
+        ],
+        forbidden=[SequenceStep("wifi-shortcut", wifi_forbidden_shortcut)],
+        steps=[
+            SequenceStep("sdio-engine-ready", wifi_sdio_engine_ready_step),
+            SequenceStep("cyw43-transport-ready", wifi_cyw43_transport_step),
+            SequenceStep("firmware-ready", wifi_firmware_ready_step),
+            SequenceStep("function2-ready", wifi_function2_ready_step),
+            SequenceStep("control-rxglom", wifi_control_rxglom_step),
+            SequenceStep("control-revinfo", wifi_control_revinfo_step),
+            SequenceStep("control-up", wifi_control_up_step),
+            SequenceStep("join-request", wifi_join_request_step),
+            SequenceStep("association-link", wifi_association_link_step),
+            SequenceStep(
+                "host-eapol-m1",
+                lambda event: wifi_eapol_message_step(event, "m1"),
+            ),
+            SequenceStep(
+                "host-eapol-m2",
+                lambda event: wifi_eapol_message_step(event, "m2"),
+            ),
+            SequenceStep(
+                "host-eapol-m3",
+                lambda event: wifi_eapol_message_step(event, "m3"),
+            ),
+            SequenceStep(
+                "host-eapol-m4",
+                lambda event: wifi_eapol_message_step(event, "m4"),
+            ),
+            SequenceStep(
+                "ptk-install",
+                lambda event: wifi_key_install_step(event, "ptk"),
+            ),
+            SequenceStep(
+                "gtk-install",
+                lambda event: wifi_key_install_step(event, "gtk"),
+            ),
+            SequenceStep("secure-release", wifi_secure_release_step),
+            SequenceStep("dhcp-start", wifi_dhcp_start_step),
+            SequenceStep("dhcp-bound", wifi_dhcp_bound_step),
+            SequenceStep("nettest", wifi_nettest_step),
+            SequenceStep("netstats-bound", wifi_netstats_bound_step),
+            SequenceStep("netstats-counters", wifi_netstats_counters_step),
+            SequenceStep("netstats-secure", wifi_netstats_secure_step),
+        ],
+    )
+
+
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
     event_list = list(events)
     usb_gate, usb_blocker = summarize_usb_gate(event_list)
+    usb_oldgood = summarize_usb_oldgood_replay(event_list)
     usb_event_ring_alive, usb_psc_drain_count, usb_psc_drain_mask = (
         summarize_usb_event_ring_state(event_list)
     )
     wifi_gate, wifi_blocker = summarize_wifi_gate(event_list)
+    wifi_oldgood = summarize_wifi_oldgood_replay(event_list)
     wifi_exact, wifi_phase, wifi_blocker_line = summarize_wifi_failure_detail(
         event_list, wifi_blocker
     )
@@ -7248,6 +8269,12 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_blocker=usb_blocker,
         wifi_gate=wifi_gate,
         wifi_blocker=wifi_blocker,
+        usb_oldgood_replay=usb_oldgood.replay,
+        usb_oldgood_last=usb_oldgood.last,
+        usb_oldgood_missing=usb_oldgood.missing,
+        wifi_oldgood_replay=wifi_oldgood.replay,
+        wifi_oldgood_last=wifi_oldgood.last,
+        wifi_oldgood_missing=wifi_oldgood.missing,
         wifi_exact=wifi_exact,
         wifi_phase=wifi_phase,
         wifi_blocker_line=wifi_blocker_line,

@@ -104,6 +104,15 @@ def normalize_line(line: str) -> str:
     return ANSI_RE.sub("", line.replace("\r", "")).strip()
 
 
+def usb_linked_hid_source(fields: dict[str, str]) -> bool:
+    """Return whether USB first-byte proof came from the linked HID runtime."""
+
+    return (
+        fields.get("source", "").lower() == "linked-runtime-hid"
+        or fields.get("first_byte_source", "").lower() == "linked-runtime-hid"
+    )
+
+
 def latest_boot_slice(lines: list[str]) -> tuple[int, list[str]]:
     """Return the latest boot-like slice from an accumulated serial capture."""
 
@@ -476,9 +485,8 @@ def update_usb(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         )
     ):
         summary.usb_keyboard_route_seen = True
-    if (
+    if usb_linked_hid_source(fields) and (
         "runtime keyboard first-byte" in lowered
-        or "source=first-byte" in lowered
         or fields.get("first_byte") == "yes"
         or (
             fields.get("proof_gate") == "10"

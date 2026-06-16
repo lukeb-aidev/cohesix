@@ -818,7 +818,8 @@ build_pi4_image() {
     package_driver_runtime_raw_cpio "${embedded_runtime_cpio}"
 
     log "Building root-task (${ROOT_TASK_FEATURES})"
-    COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="${embedded_runtime_cpio}" \
+    COHESIX_BUILD_STAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+      COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="${embedded_runtime_cpio}" \
       cargo build \
         --target aarch64-unknown-none \
         --release \

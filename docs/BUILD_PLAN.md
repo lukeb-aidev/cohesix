@@ -106,13 +106,14 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Reopened |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Not Started |
 | [26d](#26d) | seL4 15 Baseline Refresh + Reference Manual Realignment | Pending |
-| [27](#27) | Pi 4 On-Device Spool Stores + Settings Persistence | Pending |
+| [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
 | [27b](#27b) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
 | [27c](#27c) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Pending |
 | [28](#28) | Operator Utilities: Inspect, Trace, Bundle, Diff, Attest | Pending |
 | [28b](#28b) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
-| [28c](#28c) | Host-Side AI Run Control: Delegated Agents, Durable Context, Attention Budgets | Pending |
-| [28d](#28d) | Hive Gateway MCP + A2A Interop (Existing Grammar Projection) | Pending |
+| [28b1](#28b1) | Provider Action Registry + Ecosystem Coexistence Conformance | Pending |
+| [28c](#28c) | Host-Side AI Coexistence: Delegated Runs, Durable Context, Provider Receipts | Pending |
+| [28d](#28d) | MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later | Pending |
 | [28e](#28e) | VM Cap-Bundle Authority + Structured Fault Lifecycle | Pending |
 | [29](#29) | Edge Local Status (Pi 4 Host Tool) | Pending |
 | [29b](#29b) | AI-Native Namespace Surfaces (Control-Plane Only) | Pending |
@@ -6391,12 +6392,14 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
   - Promote Pi 4 VL805/xHCI/HID keyboard service from in-root compatibility polling to a `driver-usb` task with a realtime-input scheduling contract.
   - Preserve the poll-only xHCI lane until hardware proves interrupt delivery; timer IRQ 27 remains timer-only evidence, not USB evidence.
   - Preserve the 128 armed keyboard interrupt-IN runway, bounded HID event draining, bounded EP0 `GET_REPORT` input fallback, and Gate 10 first-byte/first-printable-byte acceptance criteria.
+  - Preserve the May 18-19 old-good hub-keyboard order as an additive linked-runtime replay contract. Reopened USB closure requires both `USB_GATE=10` / `USB_BLOCKER=none` and `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none`; late Gate 10 text without controller, hub, interrupt-IN, first-report, and first-byte sequence evidence is not closure.
   - Root consumes only bounded local-seat byte events; it does not own xHCI registers, rings, DMA, or HID polling after driver-task handoff.
 
 - **CYW43/SDIO Wi-Fi driver task**
   - Promote SDIO host I/O, CYW43 firmware/control plane, EAPOL admission, RX/TX queues, credit handling, and optional glom/deaggregation into `driver-wifi`.
   - Graduate standalone `sdio-host` into the 26b acceptance set with one HAL-declared SDHCI MMIO page, fixed-layout CMD52/CMD53/POLL_IRQ service records, and required owner-state proof.
   - Split Wi-Fi work into network-control and network-data budgets so EAPOL/DHCP/TCP ACK progress cannot be starved by bulk RX/TX, while USB/serial still preempt both.
+  - Preserve the May 18-19 Linux-shaped host-EAPOL order as an additive linked-runtime replay contract. Reopened Wi-Fi closure requires both `WIFI_GATE=10` / `WIFI_BLOCKER=none` and `WIFI_OLDGOOD_REPLAY=yes` / `WIFI_OLDGOOD_MISSING=none`; DHCP/netstats and condensed `join complete` summaries cannot substitute for ordered SDIO/CYW43 owner-state, control setup, association/link, M1/M2/M3/M4, PTK/GTK, secure release, DHCP, nettest, and final netstats proof.
   - Root receives Ethernet frames through bounded IPC/rings and never waits synchronously on SDIO credit, CMD52/CMD53 loops, firmware replies, or glom deaggregation.
   - CYW43 startup preserves Linux's `bus:rxglom=1` through `event_msgs_ext` and `WLC_UP`; aggregated RX is bounded in the driver task, and any future runtime disable/superframe expansion must run only after secure carrier proof with capped work and recovery gates.
   - Runtime Wi-Fi data/glom RX is separated from control-plane reply reads: control replies retain the conservative Linux first-read/remainder shape, while runtime RX uses one 512-byte block-aligned Function 2 read into an 8192-byte bounded buffer and caps deaggregation at 16 subframes plus a 16-entry ready queue.
@@ -7679,7 +7682,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 
 ---
 
-## Milestone 27 — Pi 4 On-Device Spool Stores + Settings Persistence <a id="27"></a> 
+## Milestone 27 — Bounded VM-Local Persistence: Spool Stores + Settings <a id="27"></a>
 [Milestones](#Milestones)
 
 **Why now (resilience):** After Pi 4 U-Boot boot + identity (26), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
@@ -8508,7 +8511,7 @@ This milestone closes those gaps using existing as-built mechanisms (`hive-gatew
 
 **As-built alignment note:** The current REST gateway requires a gateway request-auth token for mutating routes, but REST writes still execute through the gateway's configured role/ticket rather than a delegated per-request capability ticket. Host-ticket idempotency by `id + idempotency_key` and relay dedupe exist, but writer-epoch fencing and strict Queen intent dedupe are not yet implemented. Milestone 28b hardens those specific gaps; it must not present current request-auth, relay dedupe, or host-ticket idempotency as delegated REST identity or failover fencing.
 
-**Sequencing note:** Milestone 28b closes the host/gateway authority floor required by Milestones 28c, 28d, and 29b. Full VM cap-bundle authority and structured worker/driver fault lifecycle are split into Milestone 28e so the host actuation floor can ship and be audited without bundling every seL4 cap-bundle conversion into the same atomic gate.
+**Sequencing note:** Milestone 28b closes the host/gateway authority floor required by the Milestone 28b1 coexistence gate and by Milestones 28c, 28d, and 29b. Full VM cap-bundle authority and structured worker/driver fault lifecycle are split into Milestone 28e so the host actuation floor can ship and be audited without bundling every seL4 cap-bundle conversion into the same atomic gate.
 
 ---
 
@@ -8519,7 +8522,7 @@ Strengthen authority and failover guarantees while preserving current transport 
 3. Add explicit writer-epoch fencing for failover and relay paths.
 4. Eliminate fixture/bootstrap secret usage from release profiles.
 5. Ship production profiles with audit/replay enabled and bounded by manifest limits.
-6. Establish the mandatory authority floor for Milestone 28c host-side AI actuation and Milestone 29b AI namespace projections.
+6. Establish the mandatory authority floor for Milestone 28b1 provider conformance, Milestone 28c host-side AI actuation, and Milestone 29b AI namespace projections.
 7. Harden host-ticket execution so target/arg validation and replay durability are strong enough for host side effects.
 8. Harden host bridge and debug surfaces that can otherwise bypass the authority story: GPU bridge authentication/frame bounds and root-console memory diagnostics.
 9. Leave full worker/driver cap-bundle authority and structured fault lifecycle as the explicit Milestone 28e follow-on, not a hidden prerequisite inside the host/gateway write-safety gate.
@@ -8710,7 +8713,7 @@ As-built leverage:
   - live host-bridge auth and frame-length limits,
   - profile-gated debug diagnostic policy,
   - deferred full-cap-bundle and structured-fault profile gates consumed by Milestone 28e,
-  - host-AI enablement dependency gates consumed by Milestone 28c and Milestone 29b.
+  - provider-registry and host-AI enablement dependency gates consumed by Milestone 28b1, Milestone 28c, and Milestone 29b.
 - Generated snippets refreshed in:
   - `docs/INTERFACES.md`
   - `docs/ARCHITECTURE.md`
@@ -8838,21 +8841,304 @@ After Milestone 28b:
 - Failover safety relies on deterministic writer fencing, not operator luck.
 - Queen control retries are safe by construction.
 - Release profiles enforce key hygiene and enable audit-grade reconstruction by default.
+- Production coexistence is still not complete until Milestone 28b1 turns the hardened authority floor into provider schemas, identity mapping, deployment artifacts, and conformance evidence.
 - Host-side AI supervisors gain no special bypass: they inherit delegated identity, idempotency, fencing, and audit/replay before any live actuation is allowed.
 - Worker/driver full cap-bundle authority and structured fault lifecycle remain explicitly pending for Milestone 28e rather than being buried inside the host/gateway authority floor.
 
-## Milestone 28c — Host-Side AI Run Control: Delegated Agents, Durable Context, Attention Budgets <a id="28c"></a>
+## Milestone 28b1 — Provider Action Registry + Ecosystem Coexistence Conformance <a id="28b1"></a>
+[Milestones](#Milestones)
+
+**Why now (coexistence floor):**
+Milestone 25g delivered the host-ticket mechanism and high-value adapters. Milestone 28b makes writes attributable, replay-safe, fenced, durable, and audit-first. The remaining adoption gap is broader: Cohesix needs one compiler-owned provider/action contract, real conformance evidence for each ecosystem it claims to coexist with, and installable host-side deployment shapes that do not smuggle new authority or heavy stacks into the VM. This milestone turns the hardened authority floor into a production coexistence gate before AI run control, MCP/A2A, or AI namespace work can depend on those providers.
+
+**As-built alignment note:** Current host tools already project GPU/CUDA inventory, PEFT/model lifecycle, host sidecar state, host tickets, REST gateway access, evidence packs, and SIEM exports. Kubernetes, systemd, Docker, NVIDIA/CUDA/NVML, PEFT, and federation flows have useful fixtures and mock/dry-run coverage. Cohesix does **not** yet have one generated provider action registry shared by host-ticket-agent, REST, Python, MCP/A2A, docs, and tests; it does not have an ecosystem-wide conformance matrix; and it does not have production install bundles, identity-federation mappings, Prometheus/OpenTelemetry projections, or a use-case evidence matrix that separates supported, mock-only, and explicitly unsupported integrations.
+
+**Prerequisites**
+- Milestone **28** completed for read-only inspect, attest, evidence, and audit-ledger refresh.
+- Milestone **28b** completed for delegated REST identity, idempotent intents, writer-epoch fencing, production audit/replay defaults, host-ticket durable execution, live bridge auth/frame caps, and production debug gates.
+- Milestone **25g** and **25h** remain feature-complete inputs, but production coexistence claims must cite this milestone's conformance evidence, not only the earlier ticket/relay implementation.
+
+**Goal**
+Define and prove the production coexistence contract:
+1. Generate one provider/action registry from compiler IR and use it everywhere host-side actuation is described, validated, displayed, or exposed.
+2. Map enterprise, Kubernetes, and host identities into delegated Cohesix tickets without making an identity provider part of the VM TCB.
+3. Prove provider conformance for systemd, Docker, Kubernetes, NVIDIA/CUDA/NVML, PEFT/model registry, SIEM, Prometheus/OpenTelemetry, and staged OT/industry sidecars.
+4. Package gateway, host-ticket-agent, sidecar bridges, GPU bridge, evidence exporters, and doctor checks as installable host-side bundles for realistic coexistence deployments.
+5. Add a use-case evidence matrix so docs cannot claim an ecosystem integration without code, generated policy, tests, deployment instructions, and evidence-pack reconstruction.
+6. Classify every ecosystem-facing read projection as public, delegated-ticket scoped, or admin-only before REST, MCP, A2A, FUSE, Python, or UI clients can expose it.
+
+**Non-Goals (Explicit)**
+- No in-VM Kubernetes, Docker, systemd, CUDA/NVML, PEFT, NeMo, Prometheus, OpenTelemetry, DICOM, CCSDS, MODBUS, CAN, DNP3, IEC-104, or other ecosystem runtime.
+- No POSIX compatibility layer, libc facade, process supervisor, shell command executor, package manager, or mutable general-purpose filesystem inside Cohesix.
+- No direct host executor calls from REST, Python, MCP, A2A, FUSE, or UI code. Side effects still resolve to validated Cohesix control files or `/host/tickets/spec`.
+- No provider-specific schema maintained only in docs, Python, OpenAPI, MCP, or an executor crate. Provider action truth comes from generated manifests and checked registry output.
+- No write-capable OT/industry sidecar action until the corresponding read-only evidence, safety policy, failure mapping, and operator approval flow are proven.
+- No identity claim, group, service account, or model prompt text is authorization by itself. All authority resolves to delegated Cohesix tickets and manifest-scoped actions.
+
+## Deliverables
+
+### 1) Generated provider action registry
+**Purpose:** Make provider actions one compiler-owned contract instead of a set of hand-aligned adapters.
+
+Implementation requirements:
+- Extend `coh-rtc` with `providers.*` IR for:
+  - provider id, version, enablement profile, action names, target selectors, dry-run/live mode, idempotency requirements, writer-epoch requirements, policy approval requirements, receipt schema, redaction rules, and evidence refs.
+  - initial families: `systemd`, `docker`, `k8s`, `nvidia`, `gpu.lease`, `peft`, `model_registry`, `siem`, `prometheus`, `otel`, `modbus`, `dnp3`, `lora`, `can`, `iec104`, `dicom`, and `ccsds`.
+  - optional future families may be reserved but must generate unavailable status until an implementation and tests exist.
+- Generate or check the registry for:
+  - `host-ticket-agent` validators/executors,
+  - `coh` and `cohsh` host-tool help,
+  - Python SDK integration defaults,
+  - OpenAPI/REST docs,
+  - later MCP tool schemas and A2A skill schemas,
+  - docs snippets and test fixtures.
+- Reject provider actions with free-form shell commands, arbitrary host paths, raw provider credentials, unbounded payloads, or target grammars that cannot be validated before executor dispatch.
+
+### 2) Ecosystem conformance matrix
+**Purpose:** Distinguish real coexistence from mock-only or aspirational support.
+
+Implementation requirements:
+- Add a checked matrix covering each enabled provider:
+  - supported host OS/profile,
+  - provider version bounds or unavailable state,
+  - auth mode,
+  - mock, dry-run, and live-safe coverage,
+  - negative cases,
+  - expected receipt fields,
+  - evidence-pack reconstruction path,
+  - failure and rollback behavior.
+- Minimum acceptance families:
+  - systemd status/start/stop/restart,
+  - Docker status/stop/restart,
+  - Kubernetes cordon/drain/lease-sync/RBAC-to-ticket translation,
+  - NVIDIA/CUDA/NVML inventory and GPU lease projection,
+  - PEFT/model registry import/activate/rollback receipts,
+  - SIEM export,
+  - Prometheus/OpenTelemetry read-only export,
+  - MODBUS/DNP3/LoRa read-only sidecar parity from Milestone 18,
+  - CAN/IEC-104/DICOM/CCSDS explicitly staged as read-only or not-enabled until their bridge contracts land.
+- Unsupported providers must produce deterministic `not_enabled` or `not_implemented` diagnostics; silent omission is not acceptable for documented use cases.
+
+### 3) Read visibility classification
+**Purpose:** Ensure read-only projections do not leak cross-caller state.
+
+Implementation requirements:
+- Generate or check a visibility class for every provider, evidence, ticket, audit, replay, telemetry, and `/proc` read exposed to REST, Python, FUSE, UI, later MCP, or later A2A surfaces:
+  - `public` for non-sensitive version/capability summaries,
+  - `ticket_scoped` for caller-owned tickets, receipts, provider status, run/checkpoint state, and evidence refs,
+  - `admin_only` for global provider state, deadletters, audit/replay internals, identity-mapping diagnostics, and raw conformance snapshots.
+- Read-only REST compatibility mode may remain gateway-role scoped only for paths explicitly classified as public or admin-only under the configured gateway role. Ticket-scoped reads require delegated identity before they can be exposed through multi-caller surfaces.
+- Negative tests must prove a caller cannot read another caller's host tickets, provider receipts, evidence artifacts, task state, or identity-mapping diagnostics through REST, Python, FUSE, MCP, A2A, or UI projections.
+
+### 4) Enterprise identity and subject mapping
+**Purpose:** Let existing identity systems coexist with Cohesix without entering the VM TCB.
+
+Implementation requirements:
+- Add host-side subject mappers for OIDC/JWT claims, SPIFFE IDs, Kubernetes service accounts/RBAC, and local host identities where enabled.
+- Mappers produce delegated Cohesix ticket requests or ticket references; they do not mint authority outside the existing Cohesix ticket rules.
+- Generated policy defines accepted issuer/audience/subject/group mappings, TTL bounds, role scopes, provider action scopes, and audit subject normalization.
+- Forged, expired, overbroad, wrong-audience, or unmapped claims fail before any mutation reaches REST, `/queen/ctl`, or `/host/tickets/spec`.
+
+### 5) Packaging and deployment profiles
+**Purpose:** Make coexistence deployable without bespoke host assembly.
+
+Implementation requirements:
+- Add installable host-side profiles for:
+  - local macOS operator,
+  - Linux/systemd edge node,
+  - GPU host/Jetson-compatible host sidecar mode,
+  - Kubernetes-adjacent gateway/agent deployment using Helm, Kustomize, or plain YAML.
+- Packages may install `hive-gateway`, `host-ticket-agent`, `host-sidecar-bridge`, `gpu-bridge-host`, evidence exporters, and doctor checks; they must not add VM services or in-VM ecosystem stacks.
+- Systemd units, launchd examples, container manifests, and Kubernetes manifests must run with least privilege, explicit secret refs, loopback-by-default network posture, and documented non-loopback risk overrides.
+- `coh doctor` reports installed provider status, missing optional providers, auth configuration, ticket scope, registry version, evidence export availability, and packaging drift.
+
+### 6) Observability and compliance projections
+**Purpose:** Fit existing monitoring/compliance systems without replacing them.
+
+Implementation requirements:
+- Prometheus and OpenTelemetry exporters are host-side read-only projections from `/proc`, audit, replay, telemetry, provider receipts, and evidence-pack summaries.
+- SIEM exports remain bounded, redacted, schema-versioned JSONL/NDJSON with stable field names.
+- Exporters must not expose raw tickets, secret refs, provider credentials, large payloads, PHI, model weights, gradients, or prompt transcripts unless a documented profile explicitly authorizes the field and redaction policy.
+- Evidence packs include provider registry version, conformance matrix snapshot, identity-mapping decision refs, packaging profile, exporter schema version, and provider receipt correlation.
+
+### 7) OT and industry sidecar staging
+**Purpose:** Keep industrial/health/science integrations as host-side bridges with explicit safety posture.
+
+Implementation requirements:
+- MODBUS, DNP3, LoRa, CAN, IEC-104, DICOM, and CCSDS adapters are host-side sidecars only.
+- Read-only inventory/status/event capture must land before write/control actions.
+- Any write-capable action requires a separate provider action, explicit policy approval, target grammar, safety interlock description, dry-run fixture, live-safe refusal case, and evidence-pack reconstruction.
+- DICOM and other sensitive-domain adapters must default to metadata and evidence refs only; raw PHI or large payload publication is disabled unless a later profile explicitly approves the redaction and retention model.
+
+### 8) Use-case evidence matrix and release gate
+**Purpose:** Prevent documentation from outrunning implementation.
+
+Implementation requirements:
+- Add a generated or checked `docs/USE_CASES` mapping table that classifies each use case as:
+  - implemented and production-proven,
+  - mock/dry-run only,
+  - read-only only,
+  - explicitly not enabled,
+  - future milestone.
+- Each production-proven row must link to:
+  - provider registry action(s),
+  - delegated authority requirement,
+  - package/deployment profile,
+  - identity mapping where relevant,
+  - observability/export surface,
+  - failure-mode fixture,
+  - evidence-pack reconstruction path.
+- Release gates fail if public docs claim production coexistence for an ecosystem without registry, tests, packaging, identity/security posture, and evidence matrix entries.
+
+**Commands**
+- `cargo test -p coh-rtc`
+- `cargo test -p host-ticket-agent`
+- `cargo test -p coh`
+- `cargo test -p cohsh`
+- `cargo test -p hive-gateway`
+- `python -m pytest tools/cohesix-py/tests/test_integrations.py`
+- `scripts/check-generated.sh`
+- `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1`
+- `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28b1-coexistence`
+
+**Checks (Definition of Done)**
+- Provider actions are generated or checked from one registry; host-ticket-agent, REST/OpenAPI docs, Python defaults, host tools, and later MCP/A2A schema inputs cannot drift independently.
+- Every REST/Python/FUSE/UI read projection is classified as public, ticket-scoped, or admin-only; cross-caller ticket, provider, evidence, audit, replay, and identity reads fail deterministic negative tests.
+- Invalid provider target, action, argument, auth, writer epoch, idempotency key, dry-run/live-mode, or identity claim fails before executor dispatch.
+- Every documented production provider has mock, dry-run, negative, and at least one live-safe conformance path or an explicit not-enabled status.
+- Kubernetes RBAC, OIDC/JWT, SPIFFE, and local-host subject mappings produce bounded delegated ticket scopes and deterministic audit lines.
+- Packaging artifacts deploy only host-side tools and preserve loopback defaults, least privilege, secret references, and delegated-ticket write requirements.
+- Prometheus/OpenTelemetry/SIEM outputs are read-only, bounded, redacted, schema-versioned, and reconstructable from Cohesix evidence without becoming authority.
+- OT/industry sidecars remain host-only, read-only-first, and profile-gated; write-capable actions are refused unless explicitly admitted by provider policy and approval flow.
+- Evidence packs include provider registry, conformance matrix, identity-mapping refs, packaging profile, exporter schemas, and provider receipts.
+- `docs/USE_CASES.md`, `docs/HOST_TOOLS.md`, `docs/API_GUIDELINES.md`, `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and `docs/TEST_PLAN.md` describe support levels exactly as proven.
+
+**Compiler touchpoints**
+- `coh-rtc` emits provider registry artifacts, provider availability snippets, provider action schemas, read visibility classes, identity-mapping bounds, conformance matrix defaults, exporter schema bounds, and package profile metadata.
+- Manifest validation rejects enabled provider actions without target grammar, authority scope, idempotency policy, receipt schema, redaction policy, and evidence mapping.
+- Generated docs distinguish production-proven, mock-only, read-only-only, not-enabled, and future integrations.
+
+## Task Breakdown
+```
+Title/ID: m28b1-provider-action-registry
+Goal: Create the compiler-owned provider/action registry used by host tickets, REST/OpenAPI docs, Python, host tools, and later MCP/A2A schemas.
+Inputs: tools/coh-rtc, apps/host-ticket-agent, apps/coh, apps/cohsh, docs/INTERFACES.md, docs/HOST_API.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — `providers.*` schema for action names, targets, modes, authority, receipts, redaction, and evidence refs.
+  - tools/coh-rtc/src/codegen/{docs,rust}.rs — generated provider registry artifacts and snippets.
+  - apps/host-ticket-agent/src/registry.rs — consume generated provider/action metadata before executor dispatch.
+  - apps/coh/src/provider.rs + apps/cohsh/src/provider.rs — display generated provider action availability without hand-maintained lists.
+Commands: cargo test -p coh-rtc && cargo test -p host-ticket-agent && cargo test -p coh && cargo test -p cohsh
+Checks: Provider action schemas cannot drift between executor validation, host tools, docs, and future gateway protocol schema inputs.
+Deliverables: Single source of truth for host-side ecosystem action semantics.
+
+Title/ID: m28b1-ecosystem-conformance-matrix
+Goal: Add provider conformance fixtures and evidence lanes for production coexistence claims.
+Inputs: configs/provider_conformance.toml, scripts/ci/, docs/TEST_PLAN.md, docs/USE_CASES.md.
+Changes:
+  - configs/provider_conformance.toml — provider version, profile, auth, mock/dry-run/live-safe, negative, receipt, and evidence requirements.
+  - scripts/ci/provider_conformance_run.sh — deterministic matrix runner.
+  - docs/TEST_PLAN.md — provider conformance stage and evidence paths.
+  - docs/USE_CASES.md — support-level mapping for each documented ecosystem integration.
+Commands: scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1
+Checks: Every claimed production provider has passing conformance evidence or an explicit not-enabled status.
+Deliverables: Production coexistence matrix tied to release evidence.
+
+Title/ID: m28b1-read-visibility-classes
+Goal: Classify every ecosystem-facing read projection before multi-caller REST, Python, FUSE, MCP, A2A, or UI clients expose it.
+Inputs: tools/coh-rtc, apps/hive-gateway, apps/coh, apps/cohsh, apps/swarmui, docs/SECURITY.md, docs/API_GUIDELINES.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs — read visibility class for provider, evidence, ticket, audit, replay, telemetry, and `/proc` paths.
+  - apps/hive-gateway/src/auth.rs — enforce delegated identity for ticket-scoped reads and admin-only policy for global reads.
+  - apps/coh/src/read_scope.rs + apps/cohsh/src/read_scope.rs — preserve read-scope refusals in host tools.
+  - docs/SECURITY.md + docs/API_GUIDELINES.md — document public, ticket-scoped, and admin-only read behavior.
+Commands: cargo test -p coh-rtc && cargo test -p hive-gateway && cargo test -p coh && cargo test -p cohsh
+Checks: Cross-caller ticket, provider receipt, evidence, audit/replay, task, and identity diagnostics reads fail deterministically before data is returned.
+Deliverables: Read-only ecosystem projections are scoped with the same rigor as writes.
+
+Title/ID: m28b1-identity-mapping
+Goal: Map external identities into delegated Cohesix tickets without adding an identity provider to the VM.
+Inputs: apps/hive-gateway, apps/coh, tools/cohesix-py, tools/coh-rtc, docs/SECURITY.md.
+Changes:
+  - apps/hive-gateway/src/identity.rs — validate configured OIDC/JWT, SPIFFE, Kubernetes service account, and local-host subject claims.
+  - tools/coh-rtc/src/validate.rs — issuer/audience/subject/group/TTL/action-scope mapping validation.
+  - tools/cohesix-py/cohesix/identity.py — reference host-side subject mapping helpers.
+  - docs/SECURITY.md + docs/API_GUIDELINES.md — identity-to-ticket mapping and refusal semantics.
+Commands: cargo test -p hive-gateway && cargo test -p coh-rtc && python -m pytest tools/cohesix-py/tests/test_identity.py
+Checks: Forged, expired, wrong-audience, overbroad, or unmapped claims fail before mutation and emit deterministic audit evidence.
+Deliverables: Enterprise identity coexistence without expanding the VM TCB.
+
+Title/ID: m28b1-packaging-deployment-profiles
+Goal: Ship least-privilege host-side deployment shapes for real coexistence environments.
+Inputs: scripts/install/, packaging/, apps/hive-gateway, apps/host-ticket-agent, apps/host-sidecar-bridge, apps/gpu-bridge-host, apps/coh.
+Changes:
+  - packaging/systemd/ — hardened unit templates for gateway, ticket agent, sidecar bridge, GPU bridge, and exporters.
+  - packaging/launchd/ — macOS operator launchd examples.
+  - packaging/k8s/ — Helm/Kustomize or plain YAML for gateway/agent sidecar deployments.
+  - apps/coh/src/doctor.rs — provider registry, package profile, auth, secret-ref, and exporter health checks.
+  - docs/HOST_TOOLS.md — install and risk guidance for each deployment profile.
+Commands: cargo test -p coh --test doctor && scripts/ci/provider_conformance_run.sh --packaging-only
+Checks: Packages install only host-side tools, preserve least privilege and loopback defaults, and report optional missing providers deterministically.
+Deliverables: Repeatable host deployment profiles that coexist with existing systems instead of replacing them.
+
+Title/ID: m28b1-observability-exporters
+Goal: Add host-side Prometheus/OpenTelemetry/SIEM projection adapters over existing evidence and telemetry.
+Inputs: apps/coh, apps/hive-gateway, docs/HOST_TOOLS.md, docs/SECURITY.md, docs/TEST_PLAN.md.
+Changes:
+  - apps/coh/src/export/prometheus.rs — bounded read-only metrics projection.
+  - apps/coh/src/export/otel.rs — bounded OpenTelemetry projection.
+  - apps/coh/src/export/siem.rs — schema-versioned SIEM export reuse/extension.
+  - docs/HOST_TOOLS.md + docs/SECURITY.md — redaction and authority posture.
+Commands: cargo test -p coh --test export && scripts/ci/provider_conformance_run.sh --observability-only
+Checks: Exporters are read-only, bounded, redacted, schema-versioned, and reconstructable from evidence packs.
+Deliverables: Observability coexistence without in-VM monitoring stacks.
+
+Title/ID: m28b1-industry-sidecar-contracts
+Goal: Stage OT, healthcare, and science sidecars as host-only, read-only-first provider families.
+Inputs: apps/host-sidecar-bridge, tools/coh-rtc, docs/USE_CASES.md, docs/SECURITY.md.
+Changes:
+  - apps/host-sidecar-bridge/src/providers/ — read-only contracts for MODBUS, DNP3, LoRa, CAN, IEC-104, DICOM metadata, and CCSDS telemetry.
+  - tools/coh-rtc/src/ir.rs — provider gating and write-action refusal defaults for safety-critical sidecars.
+  - docs/SECURITY.md + docs/INTERFACES.md — read-only-first and sensitive-data redaction posture.
+Commands: cargo test -p host-sidecar-bridge && cargo test -p coh-rtc
+Checks: Protocol code stays host-side, reads are bounded and redacted, and write-capable actions are unavailable until a later profile explicitly admits them.
+Deliverables: Clear bridge contracts for broader industry coexistence without TCB expansion.
+
+Title/ID: m28b1-use-case-release-gate
+Goal: Prevent public use-case claims from exceeding implementation and evidence.
+Inputs: docs/USE_CASES.md, docs/BUILD_PLAN.md, docs/TEST_PLAN.md, provider registry artifacts, evidence packs.
+Changes:
+  - docs/USE_CASES.md — support-level matrix for each use case and ecosystem.
+  - scripts/ci/use_case_gate.sh — validate docs links to provider registry, conformance evidence, packaging, identity, observability, and failure fixtures.
+  - apps/coh/src/evidence.rs — include provider registry and conformance snapshots in evidence packs.
+Commands: scripts/ci/use_case_gate.sh && cargo test -p coh --test evidence_pack
+Checks: Release docs cannot claim production coexistence without matching generated policy, tests, deployment profile, and evidence reconstruction.
+Deliverables: Cohesix adoption claims stay honest and auditable.
+```
+
+## Outcome
+After Milestone 28b1:
+- Cohesix has a production coexistence contract, not only individual host adapters.
+- Provider action semantics are compiler-owned and shared by host tickets, REST, Python, docs, tests, and later MCP/A2A schemas.
+- Existing ecosystems stay outside the VM TCB while still gaining delegated authority, receipts, evidence, deployment profiles, identity mapping, and observability exports.
+- AI run control and MCP/A2A interop can build on proven provider schemas instead of inventing their own action catalogs.
+
+## Milestone 28c — Host-Side AI Coexistence: Delegated Runs, Durable Context, Provider Receipts <a id="28c"></a>
 [Milestones](#Milestones)
 
 **Why now (bridge):**
-Milestone 28b makes writes attributable, replay-safe, fenced, and audit-first. Before promoting AI lifecycle state into first-class VM-visible namespace roots in 29b, Cohesix needs a host-only proving ground for the operating model refined here:
+Milestone 28b makes writes attributable, replay-safe, fenced, and audit-first. Milestone 28b1 then freezes provider action schemas, identity mapping, deployment posture, read visibility, observability exports, and conformance evidence for the ecosystems AI supervisors will touch. Before promoting AI lifecycle state into first-class VM-visible namespace roots in 29b, Cohesix needs a host-only proving ground for the operating model refined here:
 1. Cohesix is the trusted execution, evidence, and governance layer beneath agent frameworks, not a replacement for them.
 2. Long-context cost is dominated by repeated prefill, duplicated prompt state, and lossy summarization.
 3. The highest-leverage fix is to keep durable run state, retrieval manifests, approvals, and evidence outside the live prompt, then route each run to the right host-side inference strategy under ticketed authority.
 
-This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, evidence packs, GPU leases, telemetry ingest, Python playbooks) to prove that model without adding VM AI roots yet.
+This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, provider action registry, evidence packs, GPU leases, telemetry ingest, Python playbooks) to prove that model without adding VM AI roots yet.
 
 **As-built alignment note:** Python orchestration currently provides typed schedule, lease, export, host-ticket, federation, and Kubernetes coexistence helpers over existing control files. That substrate is useful leverage, but it is not yet the AI run/task graph envelope, checkpoint model, context-budget contract, prefix/hotset lifecycle, or NeMo provider family described here. Milestone 28c extends the host-ticket/evidence model; it must not re-label existing generic orchestration helpers as completed AI run control.
+
+**Prerequisites**
+- Milestone **28b** completed for delegated REST identity, idempotency, writer-epoch fencing, host-ticket durable execution, audit/replay defaults, and production secret/debug gates.
+- Milestone **28b1** completed for provider action registry, read visibility classification, provider conformance, identity mapping, packaging profiles, observability exports, and use-case evidence matrix.
 
 **Goal**
 Add a host-side AI run substrate that lets external supervisors and agent frameworks coordinate long-context workflows through delegated tickets and existing host-ticket flows while preserving Cohesix's single-writer, append-only, audit-first discipline:
@@ -8869,6 +9155,7 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 - No in-VM transformer kernels, sparse-attention implementations, KV-compression implementations, or CUDA/NVML changes.
 - No direct many-agent writes to raw `/queen/ctl`; multi-agent host automation writes through delegated REST and/or `/host/tickets/spec`.
 - No active/active multi-queen control for one logical hive.
+- No live AI, PEFT, NeMo, Kubernetes, Docker, systemd, CUDA/NVML, or model-registry mutation from Python, adapters, playbooks, or framework integrations unless it appends a validated host ticket and is executed by `host-ticket-agent` under the generated provider action registry.
 - No generic mutable `/store`, vector database, or prompt blob sink divorced from existing evidence/CAS discipline.
 - No new 9P verbs, no console grammar changes, and no hidden RPC behind file names.
 - No claim that Cohesix replaces agent planners/orchestrators; it remains the authority, evidence, and actuation layer beneath them.
@@ -9064,6 +9351,8 @@ As-built leverage:
 **Compiler touchpoints**
 - `coh-rtc` emits generated host-tool defaults for AI run envelope limits, task-graph/handoff bounds, context budget ceilings, retrieval-manifest and artifact-ref bounds, prefix/hotset TTLs, and metrics bounds under the existing host policy/codegen path.
 - Manifest validation rejects AI host-control enablement when Milestone 28b delegated identity or audit/replay requirements are disabled in the target profile.
+- Manifest validation rejects AI host-control enablement when Milestone 28b1 provider registry, read visibility, identity mapping, provider conformance, or use-case evidence requirements are missing for a side-effecting provider action.
+- Live provider mutation tests prove Python adapters, framework adapters, NeMo helpers, PEFT flows, Kubernetes helpers, Docker helpers, and systemd helpers cannot bypass `/host/tickets/spec`, `host-ticket-agent`, generated provider action validation, delegated ticket scope, idempotency, writer epoch, and evidence receipts.
 - Manifest/docs validation rejects worker-role claims that exceed the current code/generated worker implementation boundary.
 - `coh-rtc` emits PEFT/model registry transaction/provenance bounds consumed by host tools and evidence exports.
 - `coh-rtc` additionally emits optional provider-family policy for NeMo capability probes, action allowlists, endpoint/auth refs, deployment/evaluation/guardrail bounds, and alternate-provider parity requirements.
@@ -9133,7 +9422,7 @@ Changes:
   - tools/cohesix-py/examples/ — bounded examples for repo-scale analysis and dry-run delegated handoff flows.
   - docs/PYTHON_SUPPORT.md + docs/HOST_TOOLS.md — integration contract for external supervisors over delegated tickets and evidence receipts.
 Commands: python -m pytest tools/cohesix-py/tests/test_integrations.py && python -m pytest tools/cohesix-py/tests/test_examples_ci_siem.py
-Checks: Reference adapters use delegated tickets, explicit handoff/checkpoint refs, and evidence exports only; no hidden side-channel state or direct `/queen/ctl` mutation is required.
+Checks: Reference adapters use delegated tickets, explicit handoff/checkpoint refs, generated provider actions, and evidence exports only; no hidden side-channel state, direct `/queen/ctl` mutation, direct provider API mutation, or direct host executor call is required or accepted.
 Deliverables: Cohesix remains the authority/evidence layer beneath supervisor frameworks instead of becoming one.
 
 Title/ID: m28c-worker-boundary-closure
@@ -9215,11 +9504,11 @@ After Milestone 28c:
 - Optional NeMo capabilities can be used where they materially improve guardrails, evaluation, deployment, or retrieval workflows, without becoming a second control plane or displacing Cohesix authority.
 - Milestone 29b can expose stable AI namespace roots based on proven host-side semantics rather than speculation.
 
-## Milestone 28d — Hive Gateway MCP + A2A Interop (Existing Grammar Projection) <a id="28d"></a>
+## Milestone 28d — MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later <a id="28d"></a>
 [Milestones](#Milestones)
 
 **Why now (ecosystem boundary):**
-Milestone 28b gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 28c defines the host-side AI/provider model for delegated runs, PEFT/model lifecycle, optional NeMo providers, GPU leases, and evidence receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane or a new VM grammar to satisfy them.
+Milestone 28b gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 28b1 provides the generated provider action registry, read visibility classes, identity mappings, conformance matrix, and deployment posture that gateway protocol projections must consume. Milestone 28c defines the host-side AI/provider model for delegated runs, PEFT/model lifecycle, optional NeMo providers, GPU leases, and evidence receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane or a new VM grammar to satisfy them.
 
 MCP support belongs inside or immediately beside `hive-gateway` because the gateway is already the host-only multiplexer over existing Cohesix file semantics. This milestone makes MCP a client-facing projection over the same `LS`, `CAT`, `TAIL`, and `ECHO` paths, plus the existing `/host/tickets/spec` actuation lane. It is not a new runtime, not an in-VM endpoint, and not an excuse to expose `systemctl`, `docker`, `kubectl`, CUDA, PEFT, or NeMo APIs directly to an agent.
 
@@ -9227,7 +9516,7 @@ A2A belongs in the same gateway milestone only as a companion agent-delegation f
 
 **As-built alignment note:** There is no MCP server or A2A facade in `hive-gateway` today. Current gateway behavior is REST/OpenAPI over `LS`/`CAT`/`ECHO`, and the host ecosystem already has bounded providers for CUDA/NVIDIA discovery, GPU leases, PEFT, systemd, Docker, and K8s through Cohesix host tools and `/host/tickets/*`. `coh mount --rest-url` already mounts through `hive-gateway` and is the primary FUSE path for the live Cohesix namespace; Milestone 28d must not rebuild that through MCP or A2A. Milestone 28d adds MCP-compatible and A2A-compatible surfaces only after those existing flows are the implementation substrate. Older prose must not claim MCP or A2A support until the gateway exposes lifecycle/discovery/execution/authorization/conformance evidence for the relevant protocol.
 
-**Sequencing note:** Milestone 28d is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded reads. Phase 2 may add mutating MCP tools and A2A task facades only after the shared provider action registry, 28b delegated authority floor, and 28c run/checkpoint/evidence model are proven. No mutating MCP/A2A path can be accepted solely because read-only MCP conformance passes.
+**Sequencing note:** Milestone 28d is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded reads, with every resource classified by the Milestone 28b1 visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 28b1 provider action registry, 28b delegated authority floor, and 28c run/checkpoint/evidence model are proven. No mutating MCP/A2A path can be accepted solely because read-only MCP conformance passes.
 
 **Goal**
 Expose Cohesix to MCP clients through standard MCP server primitives and to A2A peers through task/artifact protocol primitives while preserving Cohesix's existing grammar and authority model:
@@ -9491,6 +9780,7 @@ As-built leverage:
 - Every MCP read maps to existing `LS`, `CAT`, or `TAIL`; every MCP write maps to existing `ECHO` into a documented Cohesix control file or `/host/tickets/spec`.
 - Every A2A task maps to an existing 28c run/checkpoint/evidence record and, when mutating, an existing Cohesix host-ticket/control action. No A2A message text or metadata becomes authorization.
 - Read-only MCP acceptance passes before mutating MCP tools or A2A task creation are enabled in the milestone evidence path.
+- Read-only MCP and A2A artifact/resource acceptance includes negative tests for public, ticket-scoped, and admin-only read visibility; ticket/provider/evidence/audit reads for the wrong delegated identity fail before payload construction.
 - MCP tool schemas and A2A skill schemas are generated from the same provider action registry; parity tests fail if CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, or evidence actions drift between protocols.
 - No MCP tool directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
 - No A2A skill directly invokes host executors, shell commands, CUDA/NVML calls, PEFT filesystem mutation, NeMo endpoints, `systemctl`, `docker`, or `kubectl` outside the existing Cohesix adapters.
@@ -9572,17 +9862,16 @@ Commands: cargo test -p coh-rtc && scripts/check-generated.sh
 Checks: A2A policy is compiler-owned, profile-gated, and does not touch `cohsh-core` grammar specs or NineDoor semantics.
 Deliverables: Generated A2A gateway policy, Agent Card metadata, and validation gates.
 
-Title/ID: m28d-provider-action-registry
-Goal: Create the shared provider action registry that keeps MCP tools and A2A skills aligned with existing Cohesix host-ticket semantics.
+Title/ID: m28d-provider-action-registry-projection
+Goal: Consume the Milestone 28b1 provider action registry so MCP tools and A2A skills cannot define independent action schemas.
 Inputs: tools/coh-rtc, apps/hive-gateway, apps/host-ticket-agent, crates/host-cuda, docs/INTERFACES.md, docs/HOST_API.md.
 Changes:
-  - tools/coh-rtc/src/ir.rs — `gateway.provider_actions.*` schema for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence actions with target schemas, dry-run capability, idempotency, writer-epoch, receipt, and evidence metadata.
-  - tools/coh-rtc/src/validate.rs — reject MCP/A2A projections that reference undeclared provider actions or drift from shared target/receipt schemas.
-  - apps/hive-gateway/src/actions/registry.rs — generated provider action registry consumed by MCP tools, A2A skills, evidence mapping, and security checks.
+  - tools/coh-rtc/src/validate.rs — reject MCP/A2A projections that reference undeclared 28b1 provider actions or drift from generated target/receipt/read-visibility schemas.
+  - apps/hive-gateway/src/actions/registry.rs — generated 28b1 provider action registry view consumed by MCP tools, A2A skills, evidence mapping, and security checks.
   - apps/hive-gateway/tests/gateway_action_registry.rs — parity fixtures proving MCP and A2A expose the same allowed actions, bounds, receipt refs, and refusal semantics where the same provider operation exists.
 Commands: cargo test -p coh-rtc && cargo test -p hive-gateway --test gateway_action_registry && scripts/check-generated.sh
-Checks: Provider action metadata is generated once, protocol-neutral, and rejects action drift between MCP tools, A2A skills, host-ticket lines, and evidence receipts.
-Deliverables: Shared action registry and parity tests for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence operations.
+Checks: Provider action metadata is generated once by 28b1, remains protocol-neutral, and rejects action drift between MCP tools, A2A skills, host-ticket lines, read visibility classes, and evidence receipts.
+Deliverables: Gateway protocol projection and parity tests for CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence operations without a second registry.
 
 Title/ID: m28d-gateway-mcp-transport
 Goal: Implement MCP lifecycle and stdio/Streamable HTTP transport in `hive-gateway`.
@@ -9910,17 +10199,19 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (positioning):**  
-Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28c proves the host-side AI operating model first: delegated agent authority, durable checkpoints/evidence, explicit context budgets, and host-ticket-based actuation. Milestone 28d then proves that standard MCP clients and A2A peers can consume those semantics through `hive-gateway` without a new Cohesix grammar. The next strategic step is to make that AI fleet state legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS or creating a second executor.
+Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28b1 proves the provider coexistence registry and evidence contract, Milestone 28c proves the host-side AI operating model first: delegated agent authority, durable checkpoints/evidence, explicit context budgets, and host-ticket-based actuation. Milestone 28d then proves that standard MCP clients and A2A peers can consume those semantics through `hive-gateway` without a new Cohesix grammar. The next strategic step is to make that AI fleet state legible through the same namespace discipline without turning Cohesix into a general-purpose runtime OS or creating a second executor.
 
 **Goal**  
 Add a manifest-defined, role-scoped AI control namespace that lets operators and automation inspect and drive AI lifecycle state through existing Secure9P semantics. This milestone is limited to **control-plane surfaces only**: no in-VM application runtime, no general UI stack, no mutable POSIX-like filesystem, and no new transport or RPC model.
 
-**As-built alignment note:** There is no `ecosystem.ai.*` manifest IR and no `/jobs`, `/datasets`, `/experiments`, `/infer`, or `/metrics` AI namespace provider in the host or VM NineDoor implementations as of the 26c planning audit. Milestone 29b adds those roots only after 28b, 28c, and 28d prove delegated authority, host-ticket AI actions, checkpoints/evidence semantics, and MCP/A2A gateway projection without grammar drift.
+**As-built alignment note:** There is no `ecosystem.ai.*` manifest IR and no `/jobs`, `/datasets`, `/experiments`, `/infer`, or `/metrics` AI namespace provider in the host or VM NineDoor implementations as of the 26c planning audit. Milestone 29b adds those roots only after 28b, 28b1, 28c, and 28d prove delegated authority, provider action/read-visibility conformance, host-ticket AI actions, checkpoints/evidence semantics, and MCP/A2A gateway projection without grammar drift.
 
 ### Prerequisites
 - Milestone **28b** completed (delegated REST identity, idempotent queen intents, writer-epoch fencing, audit/replay baseline).
+- Milestone **28b1** completed (provider action registry, read visibility classification, provider conformance, identity mapping, packaging, observability, and use-case evidence matrix).
 - Milestone **28c** completed (host-side AI run envelopes, checkpoint/evidence model, and `/host/tickets/spec` AI actuation semantics).
 - Milestone **28d** completed (MCP/A2A gateway projection over existing Cohesix grammar, with no new VM protocol, agent bus, or host-executor bypass).
+- Production profiles that claim VM worker/driver authority for AI namespace projections require Milestone **28e** cap-bundle and structured fault lifecycle evidence. Read-model-only or host-ticket-only profiles may remain gated by 28b/28b1/28c/28d without claiming full VM cap-bundle authority.
 
 **Non-Goals**
 - No app runtime, package manager, bundle loader, or process model beyond the existing Queen/worker control model.
@@ -9929,6 +10220,7 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - No mutable general-purpose `/store`; existing CAS, models, telemetry, and spool semantics remain authoritative and distinct.
 - No new 9P verbs, no console grammar changes, and no deviation from `ERR = no side effects`.
 - No second host-execution plane parallel to `/host/tickets/spec`; VM-visible AI paths do not bypass delegated host-ticket authority or Milestone 28b fencing/idempotency rules.
+- No create, unlink, rename, chmod, symlink, dynamic prompt/blob tree, arbitrary path component, or general directory mutation semantics. AI namespace writes target fixed generated control files only.
 - No opaque inter-agent mailbox or prompt-transcript tree exposed as a first-class namespace primitive.
 
 **Deliverables**
@@ -9955,6 +10247,7 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 
 **Checks (DoD)**
 - All new AI namespace paths are manifest-gated, bounded, and role-scoped.
+- Write-capable AI paths are fixed generated control files with declared target grammar; no dynamic file creation, unlink, rename, chmod, symlink, arbitrary path expansion, prompt/blob tree, or hidden request/response RPC is accepted.
 - Writes remain append-only and auditable; reads stay within declared `msize` and path bounds.
 - Existing ACK/ERR/END grammar, Secure9P transport behavior, and host-tool semantics remain byte-stable unless intentionally versioned in the same change.
 - Missing AI paths are treated as gate state, not client bugs.
@@ -9963,6 +10256,7 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 
 **Compiler touchpoints**
 - `coh-rtc` admits `ecosystem.ai.*` IR fields for path gating, quotas, and per-surface limits.
+- `coh-rtc` rejects AI namespace definitions that require dynamic path creation, unconstrained components, directory mutation, prompt/blob-tree storage, or side effects outside generated host-ticket-backed receipt mappings.
 - Generated snippets refresh `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, and `docs/USERLAND_AND_CLI.md` so host tools consume authoritative bounds and namespace roots.
 - Validation and generated docs make the authority mapping explicit: AI namespace writes that trigger external execution are projections over the 28c host-ticket/evidence model, not an independent executor.
 - Validation rejects configurations that overload existing `/updates`, `/models`, telemetry, or spool semantics.
@@ -9992,7 +10286,8 @@ Commands:
   - cargo test -p nine-door
   - cargo test -p root-task
 Checks:
-  - Paths enforce append-only/read-only semantics, role filters, deterministic refusals, and documented handoff to host-ticket-backed actuation where side effects are involved; checkpoint/handoff/prefix read views remain receipt projections only.
+  - Paths enforce append-only/read-only semantics, role filters, deterministic refusals, fixed generated control files, and documented handoff to host-ticket-backed actuation where side effects are involved; checkpoint/handoff/prefix read views remain receipt projections only.
+  - Dynamic create/unlink/rename/chmod/symlink/path-component expansion and prompt/blob-tree storage are refused before any state mutation.
 Deliverables:
   - AI control-plane namespace available in host and VM implementations with matching semantics.
 
@@ -10040,7 +10335,9 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 **Non-negotiable constraints**
 - Milestone 30 may not assume the UEFI/ESP baseline is authoritative until the first AWS task reconciles it against the current Pi 4 U-Boot pivot, `scripts/uefi/esp-build.sh`, `docs/BOOT_REFERENCE.md`, `docs/HARDWARE_BRINGUP.md`, and the charter rule for UEFI tooling. If the baseline is stale, AWS work starts by refreshing or reintroducing it under this milestone with docs and tests.
 - In-VM TLS, HTTP, and IMDSv2 are a deliberate TCB expansion, not a routine AWS delta. They are disabled by default until `docs/ARCHITECTURE.md`, `docs/NETWORK_CONFIG.md`, `docs/SECURITY.md`, `docs/SECURITY_NIST_800_53.md`, and `docs/AWS_AMI.md` explicitly approve the bounded client-only threat model and generated manifest gates.
+- AWS VM profiles require dependency-closure evidence before runtime code lands: no `std`, libc, POSIX filesystem/process API, DNS resolver, web framework, unapproved TLS/HTTP stack, or host-only ecosystem dependency may enter the root-task or linked-runtime closure.
 - No listener is introduced in the VM. AWS networking is outbound-only after seL4, and any Secure9P fabric mount must preserve existing frame bounds, role-scoped authority, and deterministic error behavior.
+- AWS ecosystem coexistence remains host/fabric-side unless explicitly admitted by the TCB gate. Cloud-side adapters, observability, deployment automation, and policy workflows must reuse `/host/tickets/*`, provider registry evidence, and host/fabric termination where the security review rejects in-VM TLS/HTTP.
 - If the security review rejects in-VM TLS/HTTP, the milestone must use a signed bootstrap manifest and a host/fabric-side termination design instead of importing a web/TLS stack into the root-task closure.
 - ENA is PCIe/MMIO/DMA-backed physical hardware. Steady ENA admin queue, IO queue, interrupt/poll, RX/TX descriptor, and DMA/cache service must live in a linked AWS network runtime over the fixed driver-task ABI after HAL admission. Root-task remains the HAL/resource admitter, descriptor publisher, bounded service-turn client, network stack owner, and diagnostics publisher; it must not contain a root-owned steady ENA driver.
 - The initial single TX/RX queue polling path is bootstrap evidence only. Peak-performance AWS claims require a later generated multi-queue, MSI-X or equivalent notification, queue-affinity, and core-local service-bucket evidence phase.
@@ -10087,6 +10384,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 #### F) AMI registration tooling
 - AWS scripts for ESP image registration and smoke tests for Arm64 (`uefi` / `uefi-preferred`)
 - Documentation in `docs/AWS_AMI.md` covering boot path, failure modes, and recovery
+- Dependency-closure and hostile-fabric evidence for every AWS-enabled VM profile before production claims.
 
 **Commands**
 - `cmake --build seL4/build --target elfloader.efi`
@@ -10094,16 +10392,20 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 - `scripts/aws/build-esp.sh`
 - `scripts/aws/register-ami.sh`
 - `scripts/aws/launch-smoke.sh`
+- `cargo tree -p root-task --target aarch64-unknown-none --no-default-features`
+- `cargo deny check bans`
 
 **Checks (DoD)**
 - EC2 instance boots directly into Cohesix with no intermediate OS.
+- AWS dependency-closure gate proves the VM profile remains `no_std` and excludes libc, POSIX filesystem/process APIs, DNS resolver, web framework, and unapproved TLS/HTTP dependencies.
 - ENA link comes up deterministically; DHCP lease acquired within bounded time.
 - ENA hardware service is linked-runtime-only; root-task direct ENA MMIO/DMA paths fail profile validation outside explicitly named QEMU/host compatibility tests.
 - 9door namespace mounts successfully and control plane is reachable.
 - Single-queue polling evidence is classified as bootstrap/link proof. Peak AWS performance claims require the D2 multi-queue/core-local evidence lane.
 - IMDSv2 metadata fetch is absent by default or optional and bounded after approval; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
+- If TLS/HTTP is approved, proof shows it remains client-only and non-persistent: no listener, no background refresh loop, bounded trust-anchor/cert storage from signed manifest inputs, bounded handshake/input parsing, and deterministic boot behavior when fabric, TLS, or IMDS is unavailable.
 - Power cycle returns to identical clean state (no persistence).
-- Failure cases (no fabric, auth failure, link down) halt safely with explicit console diagnostics.
+- Failure cases (no fabric, hostile fabric, forged remote manifest, auth failure, ticket widening attempt, Secure9P-bound relaxation attempt, replay, malformed frame, link down) fail terminally or refuse boundedly with explicit console diagnostics, no local policy mutation, no widened authority, and no partial trust state.
 - AWS security docs record the accepted posture for any root-task TLS/HTTP code, or explicitly state that TLS/HTTP termination remains outside the VM.
 
 **Compiler touchpoints**
@@ -10111,6 +10413,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
   - AWS profile / backend admission for `ena`
   - linked ENA runtime descriptors, ENA queue bounds, bootstrap retry limits, and later multi-queue/core-local performance gates.
   - Fabric bootstrap manifest schema and signature requirements.
+  - dependency-closure allow/deny lists for AWS VM profile crates.
   - IMDSv2 allowlist, max response bytes, and retry bounds (optional gate).
 - Regeneration guard verifies EFI binary hash against recorded compiler output.
 
@@ -10136,13 +10439,30 @@ Goal: Admit AWS/ENA/IMDS bootstrap in compiler IR and profile selection before r
 Inputs: tools/coh-rtc, configs/, docs/AWS_AMI.md.
 Changes:
 - tools/coh-rtc/src/ir.rs — AWS profile, `ena` backend, linked ENA runtime descriptor schema, bounded bootstrap schema, and later performance-gate fields.
-- tools/coh-rtc/src/codegen/{docs,rust}.rs — generated AWS/profile snippets.
+- tools/coh-rtc/src/codegen/{docs,rust}.rs — generated AWS/profile snippets and dependency allow/deny policy summaries.
 Commands:
 - cargo test -p coh-rtc
 Checks:
 - Runtime code can consume authoritative AWS/ENA/IMDS limits from generated outputs, and physical AWS profiles cannot enable root-owned ENA MMIO/DMA paths.
+- AWS profiles cannot enable TLS/HTTP/IMDS/fabric support without matching TCB posture and dependency-closure gates.
 Deliverables:
 - Compiler-defined AWS admission with docs snippets updated.
+
+Title/ID: m30-vm-dependency-closure
+Goal: Prove AWS VM profiles do not import unapproved host, POSIX, web, or TLS/HTTP dependencies into root-task or linked runtimes.
+Inputs: Cargo.toml workspace metadata, apps/root-task, apps/aws-driver-runtime, tools/coh-rtc, deny configuration, docs/AWS_AMI.md.
+Changes:
+- tools/coh-rtc/src/validate.rs — generated AWS dependency allow/deny policy for selected VM profiles.
+- scripts/ci/aws_dependency_closure.sh — target-qualified `cargo tree`/deny check for root-task and linked AWS runtime closure.
+- docs/AWS_AMI.md + docs/SECURITY.md — accepted dependency posture and approved exceptions, if any.
+Commands:
+- scripts/ci/aws_dependency_closure.sh
+- cargo tree -p root-task --target aarch64-unknown-none --no-default-features
+- cargo deny check bans
+Checks:
+- `std`, libc, POSIX filesystem/process APIs, DNS resolver crates, web frameworks, host-only ecosystem crates, and unapproved TLS/HTTP dependencies are absent from AWS VM artifacts.
+Deliverables:
+- Reproducible AWS VM dependency-closure evidence before runtime code can cite TLS/HTTP/IMDS or outbound fabric support.
 
 Title/ID: m30-uefi-esp
 Goal: Reuse the existing deterministic ESP builder for AWS Arm64 packaging.
@@ -10221,6 +10541,7 @@ Commands:
 - cargo test -p root-task --test net_bootstrap
 Checks:
 - Network reaches "fabric-ready" state within defined bounds.
+- If TLS/HTTP is approved, it is client-only, non-persistent, bounded, and deterministic when fabric/TLS/IMDS is unavailable; no listener or background refresh loop is introduced.
 Deliverables:
 - Bootstrap timing guarantees recorded.
 
@@ -10248,7 +10569,8 @@ Changes:
 Commands:
 - cargo test -p root-task --test fabric_mount
 Checks:
-- Namespace mount is read/write correct; auth failures are terminal and explicit.
+- Namespace mount preserves Secure9P frame/path/fid/ticket bounds and read/write semantics.
+- Hostile fabric, forged manifest, auth failure, ticket widening, Secure9P-bound relaxation, replay, and malformed-frame cases are terminal or bounded refusals that leave no local policy mutation, widened authority, or partial trust state.
 Deliverables:
 - Fabric bootstrap flow documented.
 

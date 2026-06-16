@@ -6,6 +6,17 @@
 #![cfg_attr(target_os = "none", no_std)]
 #![cfg_attr(not(target_os = "none"), allow(dead_code))]
 #![allow(unsafe_code)]
+#![allow(
+    clippy::absurd_extreme_comparisons,
+    clippy::assertions_on_constants,
+    clippy::manual_clamp,
+    clippy::manual_is_multiple_of,
+    clippy::manual_range_contains,
+    clippy::manual_unwrap_or,
+    clippy::needless_return,
+    clippy::question_mark,
+    clippy::too_many_arguments
+)]
 
 use core::{
     cell::UnsafeCell,
@@ -38,6 +49,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_INVALID_SDPCM,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_FAILED,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_TOO_LARGE,
+    DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_SOURCE_ASSERTED_EMPTY,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_INVALID_RFRAME_LEN,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NOT_READY, DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NO_RFRAME,
     DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_RFRAME_READ_FAILED,
@@ -1064,6 +1076,7 @@ const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_EMPTY: u32 = 10;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_INVALID_SDPCM: u32 = 11;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_REMAINDER_FAILED: u32 = 12;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_REMAINDER_TOO_LARGE: u32 = 13;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_SOURCE_ASSERTED_EMPTY: u32 = 14;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NOT_READY: u32 =
     cyw43_control_exchange_timeout_result(CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NOT_READY, 0);
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_RFRAME_READ_FAILED: u32 =
@@ -1242,6 +1255,7 @@ const HOSTINTMASK: u32 = I_HMB_SW_MASK | I_CHIPACTIVE;
 const FUNCTIONINTMASK: u32 = SDIO_FUNC_ENABLE_2 as u32;
 const CYW43_POST_RELEASE_MAILBOX_POLLS: usize = 1_000;
 const CYW43_RX_SOURCE_SAMPLE_INTERVAL_EMPTY_POLLS: u32 = 1024;
+const CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS: usize = 1;
 
 const fn xhci_poll_only_interrupter_iman() -> u32 {
     0
@@ -8288,6 +8302,38 @@ fn cyw43_runtime_poll_rx_hintless_block_probe(
     wanted_mask: u16,
     sequence: u32,
 ) -> Cyw43RxPollResult {
+    match cyw43_runtime_read_hintless_block_probe_once(state, wanted_mask, sequence) {
+        Cyw43HintlessBlockProbeResult::Frame(frame) => Cyw43RxPollResult::Frame(frame),
+        Cyw43HintlessBlockProbeResult::Idle(reason) => Cyw43RxPollResult::Idle(reason),
+        Cyw43HintlessBlockProbeResult::Empty => {
+            let source = cyw43_rx_source_snapshot(state, CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16);
+            if cyw43_rx_source_asserts_pending_frame(source) {
+                return cyw43_runtime_recover_asserted_empty_firstread(
+                    state,
+                    wanted_mask,
+                    sequence,
+                    source,
+                );
+            }
+            Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadEmpty {
+                probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+                source,
+            })
+        }
+    }
+}
+
+enum Cyw43HintlessBlockProbeResult {
+    Frame(DriverFrameDescriptor),
+    Empty,
+    Idle(Cyw43RxIdleReason),
+}
+
+fn cyw43_runtime_read_hintless_block_probe_once(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    sequence: u32,
+) -> Cyw43HintlessBlockProbeResult {
     cyw43_publish_control_rx_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN,
@@ -8315,7 +8361,7 @@ fn cyw43_runtime_poll_rx_hintless_block_probe(
     )
     .is_none()
     {
-        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadFailed);
+        return Cyw43HintlessBlockProbeResult::Idle(Cyw43RxIdleReason::FirstreadFailed);
     }
     cyw43_publish_control_rx_progress(
         sequence,
@@ -8331,26 +8377,95 @@ fn cyw43_runtime_poll_rx_hintless_block_probe(
                 sequence,
                 DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY,
             );
-            return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadEmpty {
-                probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
-                source: cyw43_rx_source_snapshot(state, CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16),
-            });
+            return Cyw43HintlessBlockProbeResult::Empty;
         }
         cyw43_publish_control_rx_progress(
             sequence,
             DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID,
         );
-        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadInvalidSdpcm(
+        return Cyw43HintlessBlockProbeResult::Idle(Cyw43RxIdleReason::FirstreadInvalidSdpcm(
             cyw43_sdpcm_firstread_prefix_signature(CYW43_RUNTIME_RX_BUFFER_OFFSET),
         ));
     };
-    cyw43_runtime_finish_hintless_firstread(
+    match cyw43_runtime_finish_hintless_firstread(
         state,
         wanted_mask,
         sequence,
         CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
         header,
-    )
+    ) {
+        Cyw43RxPollResult::Frame(frame) => Cyw43HintlessBlockProbeResult::Frame(frame),
+        Cyw43RxPollResult::Idle(reason) => Cyw43HintlessBlockProbeResult::Idle(reason),
+    }
+}
+
+fn cyw43_runtime_recover_asserted_empty_firstread(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    sequence: u32,
+    first_source: Cyw43RxSourceSnapshot,
+) -> Cyw43RxPollResult {
+    let mut source =
+        cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16)
+            .unwrap_or(first_source);
+    if let Some(result) = cyw43_runtime_read_rframe_if_present(state, wanted_mask) {
+        return result;
+    }
+    for _ in 0..CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS {
+        match cyw43_runtime_read_hintless_block_probe_once(state, wanted_mask, sequence) {
+            Cyw43HintlessBlockProbeResult::Frame(frame) => {
+                return Cyw43RxPollResult::Frame(frame);
+            }
+            Cyw43HintlessBlockProbeResult::Idle(reason) => {
+                return Cyw43RxPollResult::Idle(reason);
+            }
+            Cyw43HintlessBlockProbeResult::Empty => {
+                source = cyw43_rx_source_snapshot_force(
+                    state,
+                    CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
+                )
+                .unwrap_or(source);
+            }
+        }
+    }
+    let reason = if cyw43_rx_source_asserts_pending_frame(source) {
+        Cyw43RxIdleReason::FirstreadSourceAssertedEmpty {
+            probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+            source,
+        }
+    } else {
+        Cyw43RxIdleReason::FirstreadEmpty {
+            probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+            source,
+        }
+    };
+    Cyw43RxPollResult::Idle(reason)
+}
+
+fn cyw43_runtime_read_rframe_if_present(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+) -> Option<Cyw43RxPollResult> {
+    let frame_len = match cyw43_runtime_next_rx_frame_len(state) {
+        Ok(Some(frame_len)) => frame_len,
+        Ok(None) => return None,
+        Err(reason) => return Some(Cyw43RxPollResult::Idle(reason)),
+    };
+    let frame = match cyw43_runtime_read_rx_frame(state, frame_len) {
+        Ok(()) => cyw43_runtime_decode_rx_frame_for(
+            state,
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            frame_len,
+            wanted_mask,
+        ),
+        Err(reason) => return Some(Cyw43RxPollResult::Idle(reason)),
+    };
+    if let Some(frame) = frame {
+        state.rx_frames = state.rx_frames.saturating_add(1);
+        Some(Cyw43RxPollResult::Frame(frame))
+    } else {
+        Some(Cyw43RxPollResult::Idle(Cyw43RxIdleReason::SdpcmDecodeMiss))
+    }
 }
 
 fn cyw43_runtime_finish_hintless_firstread(
@@ -8530,6 +8645,16 @@ fn cyw43_rx_source_snapshot(
     snapshot
 }
 
+fn cyw43_rx_source_snapshot_force(
+    state: &mut Cyw43RuntimeState,
+    probe_len: u16,
+) -> Option<Cyw43RxSourceSnapshot> {
+    let snapshot = cyw43_sample_rx_source_snapshot(state, probe_len)?;
+    state.rx_source_snapshot = snapshot.with_probe_len(0);
+    state.rx_source_snapshot_valid = true;
+    Some(snapshot)
+}
+
 fn cyw43_sample_rx_source_snapshot(
     state: &mut Cyw43RuntimeState,
     probe_len: u16,
@@ -8566,6 +8691,12 @@ fn cyw43_cached_rx_source_snapshot(
         return state.rx_source_snapshot.cached(probe_len);
     }
     Cyw43RxSourceSnapshot::passive(probe_len)
+}
+
+const fn cyw43_rx_source_asserts_pending_frame(source: Cyw43RxSourceSnapshot) -> bool {
+    !source.passive
+        && source.function2_ready
+        && (source.frame_indicated || source.host_interrupt || source.card_interrupt)
 }
 
 const fn cyw43_rx_source_snapshot_queries_card(using_bus_link: bool) -> bool {
@@ -8609,6 +8740,10 @@ enum Cyw43RxIdleReason {
         probe_len: usize,
         source: Cyw43RxSourceSnapshot,
     },
+    FirstreadSourceAssertedEmpty {
+        probe_len: usize,
+        source: Cyw43RxSourceSnapshot,
+    },
     FirstreadInvalidSdpcm(u32),
     FirstreadRemainderFailed,
     FirstreadRemainderTooLarge(usize),
@@ -8635,6 +8770,9 @@ const fn cyw43_rx_idle_detail(reason: Cyw43RxIdleReason) -> u16 {
         Cyw43RxIdleReason::FirstreadEmpty { .. } => {
             DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY
         }
+        Cyw43RxIdleReason::FirstreadSourceAssertedEmpty { .. } => {
+            DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_SOURCE_ASSERTED_EMPTY
+        }
         Cyw43RxIdleReason::FirstreadInvalidSdpcm(_) => {
             DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_INVALID_SDPCM
         }
@@ -8652,7 +8790,8 @@ fn cyw43_rx_idle_result(reason: Cyw43RxIdleReason) -> u32 {
         Cyw43RxIdleReason::InvalidRframeLength(frame_len)
         | Cyw43RxIdleReason::RxRequestTooLarge(frame_len)
         | Cyw43RxIdleReason::FirstreadRemainderTooLarge(frame_len) => bounded_u32(frame_len),
-        Cyw43RxIdleReason::FirstreadEmpty { source, .. } => source.encode(),
+        Cyw43RxIdleReason::FirstreadEmpty { source, .. }
+        | Cyw43RxIdleReason::FirstreadSourceAssertedEmpty { source, .. } => source.encode(),
         Cyw43RxIdleReason::FirstreadInvalidSdpcm(signature) => signature,
         _ => 0,
     }
@@ -8677,6 +8816,7 @@ const fn cyw43_rx_idle_reason_rank(reason: Cyw43RxIdleReason) -> u8 {
         | Cyw43RxIdleReason::SdpcmDecodeMiss => 2,
         Cyw43RxIdleReason::FirstreadFailed
         | Cyw43RxIdleReason::FirstreadEmpty { .. }
+        | Cyw43RxIdleReason::FirstreadSourceAssertedEmpty { .. }
         | Cyw43RxIdleReason::FirstreadInvalidSdpcm(_)
         | Cyw43RxIdleReason::FirstreadRemainderFailed
         | Cyw43RxIdleReason::FirstreadRemainderTooLarge(_) => 3,
@@ -8846,6 +8986,12 @@ fn cyw43_control_exchange_timeout_fault_result(
         Cyw43RxIdleReason::FirstreadEmpty { probe_len, .. } => {
             cyw43_control_exchange_timeout_result(
                 CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_EMPTY,
+                bounded_u32(probe_len),
+            )
+        }
+        Cyw43RxIdleReason::FirstreadSourceAssertedEmpty { probe_len, .. } => {
+            cyw43_control_exchange_timeout_result(
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_SOURCE_ASSERTED_EMPTY,
                 bounded_u32(probe_len),
             )
         }
@@ -12599,6 +12745,7 @@ struct XhciControlTransferPlan {
     data_trb: u64,
     status_trb: u64,
     data_len: usize,
+    data_stage_event_expected: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12958,6 +13105,14 @@ const fn xhci_classify_control_transfer_event(
         return XhciControlTransferEvent::Ignore;
     }
     if !status_stage && plan.data_len != 0 && event_remaining <= plan.data_len {
+        // Hub GET_STATUS clears data-stage IOC; a full-length same-EP success
+        // event with an implementation-specific pointer is the status event.
+        if !plan.data_stage_event_expected
+            && code == XHCI_COMPLETION_SUCCESS
+            && event_remaining == 0
+        {
+            return XhciControlTransferEvent::Complete;
+        }
         return XhciControlTransferEvent::DataStage {
             transferred: plan.data_len - event_remaining,
         };
@@ -14120,6 +14275,7 @@ fn xhci_control_transfer_with_progress_and_spins_outcome_with_data_ioc(
             data_trb,
             status_trb,
             data_len,
+            data_stage_event_expected: data_stage_ioc,
         },
         progress,
         completion_spins,
@@ -19603,6 +19759,25 @@ mod tests {
         );
         assert_eq!(
             cyw43_control_exchange_timeout_fault_result(
+                Cyw43RxIdleReason::FirstreadSourceAssertedEmpty {
+                    probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+                    source: Cyw43RxSourceSnapshot {
+                        probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
+                        frame_indicated: true,
+                        host_interrupt: true,
+                        function2_ready: true,
+                        ..Cyw43RxSourceSnapshot::default()
+                    },
+                },
+                0
+            ),
+            cyw43_control_exchange_timeout_result(
+                CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_SOURCE_ASSERTED_EMPTY,
+                CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u32
+            )
+        );
+        assert_eq!(
+            cyw43_control_exchange_timeout_fault_result(
                 Cyw43RxIdleReason::FirstreadInvalidSdpcm(0x3412),
                 0
             ),
@@ -19837,6 +20012,32 @@ mod tests {
                 | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_CARD_INTERRUPT
                 | DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_FUNCTION2_READY
         );
+    }
+
+    #[test]
+    fn cyw43_asserted_empty_firstread_has_distinct_detail_and_result() {
+        let source = Cyw43RxSourceSnapshot {
+            probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
+            interrupt_enable: SDIO_INTERRUPT_ENABLE_MASK,
+            frame_indicated: true,
+            host_interrupt: true,
+            function2_ready: true,
+            ..Cyw43RxSourceSnapshot::empty()
+        };
+        let reason = Cyw43RxIdleReason::FirstreadSourceAssertedEmpty {
+            probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+            source,
+        };
+
+        assert!(cyw43_rx_source_asserts_pending_frame(source));
+        assert_eq!(
+            cyw43_rx_idle_detail(reason),
+            DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_SOURCE_ASSERTED_EMPTY
+        );
+        assert_eq!(cyw43_rx_idle_result(reason), source.encode());
+        assert!(!cyw43_rx_source_asserts_pending_frame(
+            Cyw43RxSourceSnapshot::passive(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16)
+        ));
     }
 
     #[test]
@@ -22821,6 +23022,7 @@ mod tests {
             )
             .expect("EP0 status TRB must be bus-visible"),
             data_len: 64,
+            data_stage_event_expected: true,
         };
         let event_base = DRIVER_TASK_DMA_BUFFER_VADDR + XHCI_DMA_EVENT_RING_OFFSET;
         write_xhci_trb(
@@ -23920,6 +24122,7 @@ mod tests {
             data_trb: 0x4010,
             status_trb: 0x4020,
             data_len: 64,
+            data_stage_event_expected: true,
         };
         let data_event = XhciTrb {
             parameter: plan.data_trb | 0x0c,
@@ -23972,6 +24175,7 @@ mod tests {
             data_trb: 0,
             status_trb: 0x4010,
             data_len: 0,
+            data_stage_event_expected: false,
         };
         let pointer_mismatch_status = XhciTrb {
             parameter: 0x4050,
@@ -24007,6 +24211,7 @@ mod tests {
             data_trb: 0x4010,
             status_trb: 0x4020,
             data_len: 64,
+            data_stage_event_expected: true,
         };
         let pointer_mismatch_data = XhciTrb {
             parameter: 0x4050,
@@ -24041,6 +24246,50 @@ mod tests {
         assert_eq!(
             xhci_classify_control_transfer_event(plan, 3, 1, setup_echo, false),
             XhciControlTransferEvent::Ignore
+        );
+    }
+
+    #[test]
+    fn usb_hub_status_no_data_ioc_accepts_zero_remaining_status_pointer_mismatch() {
+        let plan = XhciControlTransferPlan {
+            setup_trb: 0x4000,
+            data_trb: 0x4010,
+            status_trb: 0x4020,
+            data_len: 4,
+            data_stage_event_expected: false,
+        };
+        let pointer_mismatch_status = XhciTrb {
+            parameter: 0x4050,
+            status: XHCI_COMPLETION_SUCCESS << 24,
+            control: (XHCI_TRB_TYPE_TRANSFER_EVENT << 10) | (1 << 16) | (3 << 24),
+        };
+        assert_eq!(
+            xhci_classify_control_transfer_event(plan, 3, 1, pointer_mismatch_status, false),
+            XhciControlTransferEvent::Complete
+        );
+
+        let short_packet_data = XhciTrb {
+            status: (XHCI_COMPLETION_SHORT_PACKET << 24) | 2,
+            ..pointer_mismatch_status
+        };
+        assert_eq!(
+            xhci_classify_control_transfer_event(plan, 3, 1, short_packet_data, false),
+            XhciControlTransferEvent::DataStage { transferred: 2 }
+        );
+
+        let data_ioc_plan = XhciControlTransferPlan {
+            data_stage_event_expected: true,
+            ..plan
+        };
+        assert_eq!(
+            xhci_classify_control_transfer_event(
+                data_ioc_plan,
+                3,
+                1,
+                pointer_mismatch_status,
+                false,
+            ),
+            XhciControlTransferEvent::DataStage { transferred: 4 }
         );
     }
 

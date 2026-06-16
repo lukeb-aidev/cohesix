@@ -433,7 +433,7 @@ fn push_live_driver_core_assignment<const N: usize>(
 }
 
 fn core_slice_has(cores: &[u8], core: u8) -> bool {
-    cores.iter().any(|candidate| *candidate == core)
+    cores.contains(&core)
 }
 
 #[cfg(feature = "kernel")]

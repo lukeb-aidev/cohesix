@@ -3067,8 +3067,10 @@ where
         let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
         #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let linked_first_report = false;
-        let linked_first_byte =
-            trace.backend_read_bytes != 0 || trace.accepted_bytes != 0 || trace.echoed_bytes != 0;
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_first_byte = crate::local_seat::linked_local_seat_usb_first_byte_ready();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_first_byte = false;
         let metrics = self.metrics;
         let line = format_message(format_args!(
             "[smp] activity local-seat runtime=present attached={} keyboard_device={} display={} backend_poll={} keyboard_ready={} first_report={} first_byte={} queued={} accepted={} drained={} echoed={} drop={} hdmi_drop={}",
@@ -3078,7 +3080,7 @@ where
             Self::yes_no(backend_enabled),
             Self::yes_no(linked_keyboard_ready || backend_attached),
             Self::yes_no(linked_first_report),
-            Self::yes_no(linked_first_byte || trace.accepted_bytes != 0 || trace.echoed_bytes != 0),
+            Self::yes_no(linked_first_byte),
             trace.queued_bytes,
             trace.accepted_bytes,
             trace.drained_bytes,
@@ -4417,6 +4419,7 @@ where
                 crate::local_seat::linked_local_seat_usb_controller_ready();
             let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
             let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
+            let linked_first_byte = crate::local_seat::linked_local_seat_usb_first_byte_ready();
             let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
             let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
             let linked_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
@@ -4442,7 +4445,7 @@ where
                 .as_ref()
                 .map(|local_seat| local_seat.keyboard_trace())
                 .unwrap_or_default();
-            let first_byte = local_trace.backend_read_bytes != 0
+            let parser_ingress = local_trace.backend_read_bytes != 0
                 || local_trace.accepted_bytes != 0
                 || local_trace.echoed_bytes != 0;
             let keyboard_ready = linked_keyboard_ready;
@@ -4451,8 +4454,11 @@ where
                 .local_seat
                 .as_ref()
                 .is_some_and(|local_seat| local_seat.backend_keyboard_polling_enabled());
+            let first_byte = linked_first_byte;
             let first_byte_source = if first_byte {
-                "local-seat-queue"
+                "linked-runtime-hid"
+            } else if parser_ingress {
+                "local-seat-queue-diagnostic"
             } else {
                 "none"
             };
@@ -4602,7 +4608,7 @@ where
             let keyboard_trace_source = if linked_keyboard_ready || linked_first_report {
                 "linked-runtime"
             } else {
-                "local-seat-queue"
+                "local-seat-queue-diagnostic"
             };
             let keyboard_line = format_message(format_args!(
                 "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} accepted={} drained={} echoed={} dropped={} overruns={}",
@@ -6775,6 +6781,7 @@ where
             let linked_gate = linked_detail_gate.max(linked_progress_gate);
             let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
             let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
+            let linked_first_byte = crate::local_seat::linked_local_seat_usb_first_byte_ready();
             let local_trace = self
                 .local_seat
                 .as_ref()
@@ -6782,9 +6789,10 @@ where
                 .unwrap_or_default();
             let keyboard_ready = linked_keyboard_ready;
             let first_report = linked_first_report;
-            let first_byte = local_trace.backend_read_bytes != 0
+            let parser_ingress = local_trace.backend_read_bytes != 0
                 || local_trace.accepted_bytes != 0
                 || local_trace.echoed_bytes != 0;
+            let first_byte = linked_first_byte;
             let mut proof_gate = linked_gate;
             if linked_controller_ready {
                 proof_gate = proof_gate.max(3);
@@ -6999,21 +7007,40 @@ where
                 "first-console-byte",
                 Self::usb_startup_gate_status(10, proof_gate, failing_gate),
                 format_args!(
-                    "first_byte={} backend_bytes={} accepted={} echoed={}",
+                    "first_byte={} first_byte_source={} parser_ingress={} backend_bytes={} accepted={} echoed={}",
                     Self::yes_no(first_byte),
+                    if first_byte {
+                        "linked-runtime-hid"
+                    } else if parser_ingress {
+                        "local-seat-queue-diagnostic"
+                    } else {
+                        "none"
+                    },
+                    Self::yes_no(parser_ingress),
                     local_trace.backend_read_bytes,
                     local_trace.accepted_bytes,
                     local_trace.echoed_bytes,
                 ),
                 "acceptance-complete",
             );
+            let interrupt_in_proven = first_report
+                || keyboard_ready
+                || linked_progress.is_some_and(|progress| {
+                    progress.phase
+                        == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY
+                });
             let evidence = format_message(format_args!(
-                "usb: evidence xhci queue_result={} transfer_ring_queued={} doorbell={} preserved_events={} transfer_events={} endpoint=interrupt-in first_report_policy=deep-queue-rering-doorbell cerr=3 max_packet=runtime-private interval=runtime-private source=linked-runtime-result",
+                "usb: evidence xhci queue_result={} transfer_ring_queued={} doorbell={} preserved_events={} transfer_events={} endpoint={} first_report_policy=deep-queue-rering-doorbell cerr=3 max_packet=runtime-private interval=runtime-private source=linked-runtime-result",
                 if queue_result { "yes" } else { "no" },
                 queued_reports,
                 Self::yes_no(doorbell_pending),
                 preserved_events,
                 transfer_events,
+                if interrupt_in_proven {
+                    "interrupt-in"
+                } else {
+                    "unproven"
+                },
             ));
             self.emit_console_line(evidence.as_str());
             let boundary = format_message(format_args!(

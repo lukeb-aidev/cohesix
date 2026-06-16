@@ -40,6 +40,170 @@ JOIN_COMPLETE_HOST_EAPOL = (
 )
 
 
+def oldgood_usb_replay_lines() -> list[str]:
+    """Return a synthetic linked-runtime USB old-good replay trace."""
+
+    return [
+        "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "usb: controller-ready source=linked-runtime",
+        "usb: linked_runtime command-probe result=enable-slot-ok",
+        "usb: phase=usb-root-port-reset-done cmd_path=yes",
+        "usb: phase=usb-device-addressed slot=1",
+        "usb: phase=usb-hub-set-configuration-done hub_slot=1 config_value=1",
+        "usb: phase=usb-hub-context-done hub_slot=1 num_ports=4",
+        "usb: phase=usb-hub-port-power-done hub_slot=1 hub_port=1",
+        "usb: phase=usb-hub-port-status-done hub_slot=1 hub_port=1 "
+        "connected=yes enabled=yes reset=no",
+        "usb: phase=usb-hub-port-reset-set-done hub_slot=1 hub_port=1",
+        "usb: phase=usb-hub-child-probe-begin hub_slot=1 hub_port=1 child_slot=2",
+        "usb: phase=usb-hid-endpoint-parse-found slot=2 iface=0 class=0x03 "
+        "subclass=0x01 protocol=0x01 ep=0x81 direction=in transfer=interrupt",
+        "usb: phase=usb-hid-interrupt-queue-ready slot=2 ep=0x81 dci=3 queued=1",
+        "[local-seat] usb hid first report source=linked-runtime-hid "
+        "len=8 keys=0x17 transfer_event=yes",
+        "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+        "read=1 ascii=0x74 key=0x17",
+        "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+        "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 blocker=none",
+    ]
+
+
+def oldgood_wifi_replay_lines() -> list[str]:
+    """Return a synthetic linked-runtime CYW43 old-good replay trace."""
+
+    return [
+        "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "SDIO_DRIVER_TASK_REPLAY_STATUS stage=engine-init blocker=ready detail=0x5500",
+        "wifi: cyw43-transport-ready owner=linked-runtime",
+        "wifi: cyw43-release-firmware-ready-done status=ready",
+        "wifi: function2-ready f2_enabled=yes f2_ready=yes",
+        "wifi: control_exchange step=cyw43-control-rxglom status=matched bus:rxglom=1",
+        "wifi: control_exchange step=cyw43-control-revinfo status=matched",
+        "wifi: control_exchange step=cyw43-control-up status=matched",
+        "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+        "path=primary-bsscfg:join action=ready ssid_len=7 result=0x00000000",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=required "
+        "associated=yes link_up=yes eapol_rx=0",
+        "wifi: host-eapol msg=m1 ethertype=0x888e last_ethertype_valid=yes",
+        "wifi: host-eapol action=send-m2 msg=m2",
+        "wifi: host-eapol msg=m3 ethertype=0x888e last_ethertype_valid=yes",
+        "wifi: host-eapol action=send-m4 msg=m4",
+        "[cyw43] host-eapol action=install-wsec-key kind=ptk result=ok",
+        "[cyw43] host-eapol action=install-wsec-key kind=gtk result=ok",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=secure "
+        "associated=yes link_up=yes eapol_rx=2",
+        "[dhcp] start ready interface=wifi",
+        "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+        "server=192.168.10.1 lease_s=3600",
+        "OK NETTEST detail=pass scope=serial-local",
+        "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
+        "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
+        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+        "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
+    ]
+
+
+def oldgood_usb_resource_replay_lines() -> list[str]:
+    """Return linked USB old-good replay using resource-init breadcrumbs."""
+
+    return [
+        "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-engine-init status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=command-ring-ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=root-port-connected",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=device-addressed",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=hub-set-configuration-done",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=hub-context-done",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=hub-port-power-done",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=hub-port-status-done",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=hub-port-ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=hub-child-probe-begin",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-enumeration status=hid-endpoint-ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-interrupt-in status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
+        "stage=usb-keyboard-first-report status=ready",
+        "[local-seat] runtime keyboard first-byte source=linked-runtime-hid read=1 "
+        "ascii=0x74 detail=0x0501 result=0x00000001",
+        "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+        "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 blocker=none",
+    ]
+
+
+def oldgood_wifi_resource_replay_lines() -> list[str]:
+    """Return linked CYW43 old-good replay using resource-init breadcrumbs."""
+
+    return [
+        "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host stage=engine-init blocker=ready detail=0x5500",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=net-engine-init status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-firmware status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-function2 status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-rxglom status=ready",
+        "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 stage=cyw43-control-rxglom "
+        "event=matched-reply status=0x00000000 reply_match=yes",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-revinfo status=ready",
+        "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 stage=cyw43-control-revinfo "
+        "event=matched-reply status=0x00000000 reply_match=yes",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-up status=ready",
+        "CYW43_DRIVER_TASK_CONTROL_REPLY contract=cyw43455 stage=cyw43-control-up "
+        "event=matched-reply status=0x00000000 reply_match=yes",
+        "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+        "path=primary-bsscfg:join action=ready ssid_len=7 result=0x00000000",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 status=required "
+        "associated=yes link_up=yes assoc_event=link-up eapol_rx=0",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m1 action=recv-m1 poll=12 len=121",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m2 action=send-m2 poll=12 len=121",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m3 action=recv-m3 poll=15 len=151",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m4 action=send-m4 poll=15 len=95",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=ptk "
+        "stage=cyw43-host-eapol-ptk status=ready",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=gtk "
+        "stage=cyw43-host-eapol-gtk status=ready",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 status=secure "
+        "associated=yes link_up=yes eapol_rx=2",
+        "[dhcp] start ready interface=wifi",
+        "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+        "server=192.168.10.1 lease_s=3600",
+        "OK NETTEST detail=pass scope=serial-local",
+        "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
+        "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
+        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+        "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
+    ]
+
+
 def test_usb_trace_line_extracts_stage_and_tokens() -> None:
     event = normalizer.parse_line(
         "[cohesix:usb-trace] stage=handoff-usb-reset-begin input=0 "
@@ -286,6 +450,12 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_BLOCKER": "cmd-poll-only-timeout",
         "WIFI_GATE": 4,
         "WIFI_BLOCKER": "ht-clock-timeout",
+        "USB_OLDGOOD_REPLAY": "no",
+        "USB_OLDGOOD_LAST": "none",
+        "USB_OLDGOOD_MISSING": "cold-boot-unseeded",
+        "WIFI_OLDGOOD_REPLAY": "no",
+        "WIFI_OLDGOOD_LAST": "none",
+        "WIFI_OLDGOOD_MISSING": "cyw43-owner-state",
         "WIFI_EXACT": "cyw43-ht-clock-timeout-before-function2",
         "WIFI_PHASE": "cyw43-load-firmware-fail",
         "WIFI_BLOCKER_LINE": 8,
@@ -666,6 +836,58 @@ def test_gate_summary_affinity_follows_selected_pi4_network_profile() -> None:
     assert wired_record["DRIVER_TASK_AFFINITY_MANIFEST_MATCHES"] == 5
     assert wired_record["DRIVER_TASK_AFFINITY_MANIFEST_MISSING"] == 0
     assert wired_record["DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES"] == 0
+
+
+def test_gate_summary_owner_state_follows_selected_pi4_network_profile() -> None:
+    """Owner-state proof must require the selected NIC, not every NIC."""
+
+    base_owner_state = [
+        "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+    ]
+    wifi_events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wifi active_net=cyw43",
+            *base_owner_state,
+            "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+        ]
+    )
+    wifi_record = normalizer.summarize_gates(wifi_events).to_record()
+    assert wifi_record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
+    assert wifi_record["DRIVER_TASK_ACTIVE_NET"] == "cyw43"
+
+    missing_sdio_events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wifi active_net=cyw43",
+            *base_owner_state,
+            "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+        ]
+    )
+    missing_sdio_record = normalizer.summarize_gates(missing_sdio_events).to_record()
+    assert missing_sdio_record["DRIVER_TASK_OWNER_STATE_PROOF"] == "no"
+    assert missing_sdio_record["DRIVER_TASK_ACTIVE_NET"] == "cyw43"
+
+    wired_events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wired active_net=genet",
+            *base_owner_state,
+            "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+        ]
+    )
+    wired_record = normalizer.summarize_gates(wired_events).to_record()
+    assert wired_record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
+    assert wired_record["DRIVER_TASK_ACTIVE_NET"] == "genet"
 
 
 def test_gate_summary_explicit_pointer_free_ipc_no_overrides_abi_label() -> None:
@@ -2746,7 +2968,7 @@ def test_gate_summary_derives_sdio_irq158_bound_from_hal_init_when_irq_breadcrum
             "[pi4-wifi] hal init: clock=41666666Hz bus_width=4 ioex=0x06 "
             "iordy=0x06 irq_bound=true",
             "[local-seat] pi4 keyboard runtime proof result=online gate=10 "
-            "source=first-byte",
+            "source=linked-runtime-hid",
         ]
     )
 
@@ -5223,13 +5445,30 @@ def test_gate_summary_tracks_usb_invalid_config_value_gate() -> None:
     assert gates.usb_blocker == "invalid-config-value"
 
 
-def test_gate_summary_tracks_usb_keyboard_report_and_first_byte() -> None:
+def test_gate_summary_rejects_unsourced_usb_keyboard_report_and_first_byte() -> None:
     events = normalizer.parse_events(
         [
             "[local-seat] usb hid keyboard ready slot=1 iface=0 ep=0x81 "
             "source=direct layout=boot subclass=0x01 protocol=0x01",
             "[local-seat] usb hid first report shift=0 keys=04,00,00,00,00,00",
             "[local-seat] runtime keyboard first-byte read=1",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 8
+    assert gates.usb_blocker == "hid-first-report"
+
+
+def test_gate_summary_tracks_linked_usb_keyboard_report_and_first_byte() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb hid keyboard ready slot=1 iface=0 ep=0x81 "
+            "source=linked-runtime layout=boot subclass=0x01 protocol=0x01",
+            "[local-seat] usb hid first report source=linked-runtime-hid "
+            "shift=0 keys=04,00,00,00,00,00",
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid read=1",
         ]
     )
 
@@ -5243,7 +5482,7 @@ def test_gate_summary_treats_usb_keyboard_runtime_online_as_ready() -> None:
     events = normalizer.parse_events(
         [
             "[local-seat] pi4 keyboard runtime proof result=online gate=10 "
-            "source=first-byte",
+            "source=linked-runtime-hid",
         ]
     )
 
@@ -5263,7 +5502,8 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
             "proof_gate=9 target_gate=10 next=keyboard-first-byte "
             "blocker=keyboard-first-byte",
             "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
-            "proof_gate=10 target_gate=10 next=none blocker=none",
+            "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 "
+            "next=none blocker=none",
         ]
     )
 
@@ -5271,6 +5511,113 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
 
     assert gates.usb_gate == 10
     assert gates.usb_blocker == "none"
+
+
+def test_gate_summary_rejects_runtime_gate10_without_linked_hid_source() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "proof_gate=10 target_gate=10 next=none blocker=none",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 9
+    assert gates.usb_blocker == "keyboard-first-byte"
+
+
+def test_gate_summary_accepts_oldgood_usb_replay_contract() -> None:
+    events = normalizer.parse_events(oldgood_usb_replay_lines())
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.usb_gate == 10
+    assert gates.usb_blocker == "none"
+    assert record["USB_OLDGOOD_REPLAY"] == "yes"
+    assert record["USB_OLDGOOD_LAST"] == "runtime-gate10"
+    assert record["USB_OLDGOOD_MISSING"] == "none"
+
+
+def test_gate_summary_accepts_oldgood_usb_resource_replay_contract() -> None:
+    events = normalizer.parse_events(oldgood_usb_resource_replay_lines())
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_OLDGOOD_REPLAY"] == "yes"
+    assert record["USB_OLDGOOD_LAST"] == "runtime-gate10"
+    assert record["USB_OLDGOOD_MISSING"] == "none"
+
+
+def test_gate_summary_rejects_usb_oldgood_hid_endpoint_not_ready() -> None:
+    """A not-ready HID endpoint breadcrumb is a blocker, not endpoint proof."""
+
+    lines = [
+        line.replace("status=hid-endpoint-ready", "status=hid-endpoint-not-ready")
+        for line in oldgood_usb_resource_replay_lines()
+        if "stage=usb-keyboard-interrupt-in" not in line
+        and "stage=usb-keyboard-first-report" not in line
+        and "runtime keyboard first-byte" not in line
+        and "usb: runtime_gate" not in line
+    ]
+
+    events = normalizer.parse_events(
+        [
+            *lines,
+            "[local-seat] usb hid first report contract=usb-local-seat "
+            "source=linked-runtime-hid tag=usb-hid-report-event len=8 accepted=8 "
+            "detail=0x0501 result=0x00000001 transfer_event=yes",
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid read=1 "
+            "ascii=0x74 detail=0x0501 result=0x00000001",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_OLDGOOD_REPLAY"] == "no"
+    assert record["USB_OLDGOOD_LAST"] == "hub-child-probe"
+    assert record["USB_OLDGOOD_MISSING"] == "hid-endpoint"
+
+
+def test_gate_summary_rejects_usb_gate10_without_oldgood_replay() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 "
+            "next=none blocker=none",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.usb_gate == 10
+    assert gates.usb_blocker == "none"
+    assert record["USB_OLDGOOD_REPLAY"] == "no"
+    assert record["USB_OLDGOOD_MISSING"] == "xhci-controller-ready"
+
+
+def test_gate_summary_does_not_credit_uboot_usb_handoff_as_replay() -> None:
+    events = normalizer.parse_events(
+        [
+            "[cohesix:usb-trace] stage=handoff-usb-reset-begin input=0",
+            *oldgood_usb_replay_lines(),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_BOOTLOADER_HANDOFF_SEEN"] == "yes"
+    assert record["USB_OLDGOOD_REPLAY"] == "no"
+    assert record["USB_OLDGOOD_MISSING"] == "forbidden-bootloader-handoff"
 
 
 def test_gate_summary_normalizes_legacy_hid_first_byte_blocker() -> None:
@@ -6569,6 +6916,40 @@ def test_gate_summary_preserves_host_eapol_firstread_empty_with_rx_source() -> N
     assert gates.wifi_phase == "runtime-rx"
 
 
+def test_gate_summary_names_firstread_source_asserted_empty() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=24576 starts=0 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=0 "
+            "control_rx=0 empty_polls=24576 associated=no link_up=no "
+            "assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "rx_firstread_attempts=24576 rx_firstread_empty=24576 "
+            "rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=24576 control_rx_firstread_empty=24576 "
+            "control_rx_firstread_failed=0 last_rx_idle_detail=0x570e "
+            "last_rx_idle_result=0xab070200 last_control_rx_idle_detail=0x570e "
+            "last_control_rx_idle_result=0xab070200 "
+            "rxsrc_mode=owner-card-sampled rxsrc_probe_len=512 rxsrc_ien=0x07 "
+            "rxsrc_frame_ind=yes rxsrc_host_int=yes rxsrc_card_int=no "
+            "rxsrc_f2_ready=yes control_rxsrc_mode=owner-card-sampled "
+            "control_rxsrc_probe_len=512 control_rxsrc_ien=0x07 "
+            "control_rxsrc_frame_ind=yes control_rxsrc_host_int=yes "
+            "control_rxsrc_card_int=no control_rxsrc_f2_ready=yes "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no next_action=inspect-cyw43-rx-source-latch",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-source-asserted-empty"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-source-asserted-empty"
+    assert gates.wifi_phase == "runtime-rx"
+
+
 def test_gate_summary_names_post_rescue_association_gap_over_firstread_empty() -> None:
     events = normalizer.parse_events(
         [
@@ -7095,7 +7476,7 @@ def test_gate_summary_preserves_host_card_int_no_dongle_source_over_later_diag_s
             "[pi4-wifi] hal init: clock=41666666Hz bus_width=4 ioex=0x06 "
             "iordy=0x06 irq_bound=true",
             "[local-seat] pi4 keyboard runtime proof result=online gate=10 "
-            "source=first-byte",
+            "source=linked-runtime-hid",
             "[INFO root_task::drivers::driver_task_net] [cyw43] control-plane "
             "preinit step=mpc action=begin",
             "[WARN root_task::drivers::driver_task_net] [cyw43] iovar set failed "
@@ -7763,6 +8144,132 @@ def test_gate_summary_accepts_host_eapol_secure_join_proof() -> None:
 
     assert gates.wifi_gate == 8
     assert gates.wifi_blocker == "none"
+
+
+def test_gate_summary_accepts_oldgood_wifi_replay_contract() -> None:
+    events = normalizer.parse_events(oldgood_wifi_replay_lines())
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.wifi_gate == 10
+    assert gates.wifi_blocker == "none"
+    assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
+    assert record["WIFI_OLDGOOD_LAST"] == "netstats-secure"
+    assert record["WIFI_OLDGOOD_MISSING"] == "none"
+
+
+def test_gate_summary_accepts_oldgood_wifi_resource_replay_contract() -> None:
+    events = normalizer.parse_events(oldgood_wifi_resource_replay_lines())
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
+    assert record["WIFI_OLDGOOD_LAST"] == "netstats-secure"
+    assert record["WIFI_OLDGOOD_MISSING"] == "none"
+
+
+def test_gate_summary_rejects_failed_function2_as_wifi_oldgood_replay() -> None:
+    lines = [
+        line.replace(
+            "stage=cyw43-function2 status=ready",
+            "stage=cyw43-function2 status=inferred f2_ready=no",
+        )
+        for line in oldgood_wifi_resource_replay_lines()
+    ]
+    lines.append("wifi: gate 7 name=function2-ready status=inferred f2_ready=no")
+    events = normalizer.parse_events(lines)
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "firmware-ready"
+    assert record["WIFI_OLDGOOD_MISSING"] == "function2-ready"
+
+
+def test_gate_summary_rejects_nonzero_join_result_as_wifi_oldgood_replay() -> None:
+    lines = [
+        line.replace("result=0x00000000", "result=0xffffffff")
+        if "CYW43_DRIVER_TASK_JOIN_REQUEST" in line
+        else line
+        for line in oldgood_wifi_resource_replay_lines()
+    ]
+    events = normalizer.parse_events(lines)
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "control-up"
+    assert record["WIFI_OLDGOOD_MISSING"] == "join-request"
+
+
+def test_gate_summary_rejects_generic_eapol_message_as_wifi_oldgood_replay() -> None:
+    lines = [
+        "wifi: rx msg=m1 ethertype=0x888e" if "msg=m1" in line else line
+        for line in oldgood_wifi_resource_replay_lines()
+    ]
+    events = normalizer.parse_events(lines)
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "association-link"
+    assert record["WIFI_OLDGOOD_MISSING"] == "host-eapol-m1"
+
+
+def test_gate_summary_rejects_nonpass_nettest_as_wifi_oldgood_replay() -> None:
+    lines = [
+        line.replace("OK NETTEST detail=pass", "OK NETTEST detail=started")
+        for line in oldgood_wifi_resource_replay_lines()
+    ]
+    events = normalizer.parse_events(lines)
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "dhcp-bound"
+    assert record["WIFI_OLDGOOD_MISSING"] == "nettest"
+
+
+def test_gate_summary_rejects_condensed_host_eapol_as_oldgood_replay() -> None:
+    lines = oldgood_wifi_replay_lines()[:11]
+    lines.extend(
+        [
+            JOIN_COMPLETE_HOST_EAPOL,
+            "[dhcp] start ready interface=wifi",
+            "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+            "server=192.168.10.1 lease_s=3600",
+            "OK NETTEST detail=pass scope=serial-local",
+            "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
+            "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
+            "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+            "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 "
+            "eapol_start=1 eapol_secure=1",
+        ]
+    )
+    events = normalizer.parse_events(lines)
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.wifi_gate == 10
+    assert gates.wifi_blocker == "none"
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_MISSING"] == "host-eapol-m1"
+
+
+def test_gate_summary_rejects_wifi_dhcp_before_secure_replay() -> None:
+    lines = oldgood_wifi_replay_lines()[:11]
+    lines.extend(oldgood_wifi_replay_lines()[18:20])
+    lines.extend(oldgood_wifi_replay_lines()[11:18])
+    lines.extend(oldgood_wifi_replay_lines()[20:])
+    events = normalizer.parse_events(lines)
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_LAST"] == "secure-release"
+    assert record["WIFI_OLDGOOD_MISSING"] == "dhcp-start"
 
 
 def test_gate_summary_tracks_wifi_nettest_readiness_blocker() -> None:

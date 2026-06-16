@@ -42,6 +42,7 @@ DEFAULT_COMMANDS=(
     "usb diag"
     "usb status"
     "netstats"
+    "smp activity"
 )
 EXTRA_COMMANDS=()
 EXPECTATIONS=()
@@ -99,8 +100,10 @@ Options:
                              Example: USB_BLOCKER=cmd-poll-only-timeout.
   --allow-summary-only       Do not require USB/WiFi evidence gates. This is
                              for exploratory summaries only, not proof output.
-  --require-usb-ready        Require USB gate 10 with USB_BLOCKER=none.
-  --require-wifi-ready       Require WiFi gate 10 with WIFI_BLOCKER=none.
+  --require-usb-ready        Require USB gate 10, USB_BLOCKER=none, and the
+                             linked old-good USB replay contract.
+  --require-wifi-ready       Require WiFi gate 10, WIFI_BLOCKER=none, and the
+                             linked old-good CYW43 replay contract.
   --require-wired-ready      Require netstats to report active=wired.
   --require-driver-task-proof
                              Require driver-task substrate, capset, fault,
@@ -109,7 +112,8 @@ Options:
                              and zero budget-overrun proof.
   --require-input-responsive Require serial echo, USB burst, and HDMI proof
                              breadcrumbs with zero USB burst drops.
-  --require-ready            Require both USB and WiFi gate 10 with no blocker.
+  --require-ready            Require both USB and WiFi ready gates plus their
+                             linked old-good replay contracts.
   -h, --help                 Show this help
 
 Default proof commands:
@@ -466,14 +470,22 @@ run_normalizer() {
     fi
     if [[ "${REQUIRE_USB_READY}" -eq 1 ]]; then
         args+=("--expect-min" "USB_GATE=10" "--expect" "USB_BLOCKER=none")
+        args+=("--expect" "USB_OLDGOOD_REPLAY=yes")
+        args+=("--expect" "USB_OLDGOOD_MISSING=none")
     fi
     if [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]; then
         args+=("--expect-min" "WIFI_GATE=10" "--expect" "WIFI_BLOCKER=none")
+        args+=("--expect" "WIFI_OLDGOOD_REPLAY=yes")
+        args+=("--expect" "WIFI_OLDGOOD_MISSING=none")
     fi
     if [[ "${REQUIRE_WIRED_READY}" -eq 1 ]]; then
         args+=("--expect" "NET_ACTIVE=wired")
     fi
     if [[ "${REQUIRE_DRIVER_TASK_PROOF}" -eq 1 ]]; then
+        local require_sdio_proof=1
+        if [[ "${REQUIRE_WIRED_READY}" -eq 1 && "${REQUIRE_WIFI_READY}" -eq 0 ]]; then
+            require_sdio_proof=0
+        fi
         args+=("--expect" "DRIVER_TASK_DEFAULT_REQUESTED=yes")
         args+=("--expect" "DRIVER_TASK_LIVE_HOT_PATHS=yes")
         args+=("--expect-min" "DRIVER_TASK_CONTRACTS=5")
@@ -484,7 +496,9 @@ run_normalizer() {
         args+=("--expect" "DRIVER_TASK_USB_DEDICATED=yes")
         args+=("--expect" "DRIVER_TASK_DISPLAY_DEDICATED=yes")
         args+=("--expect" "DRIVER_TASK_NET_DEDICATED=yes")
-        args+=("--expect" "DRIVER_TASK_SDIO_DEDICATED=yes")
+        if [[ "${require_sdio_proof}" -eq 1 ]]; then
+            args+=("--expect" "DRIVER_TASK_SDIO_DEDICATED=yes")
+        fi
         args+=("--expect" "DRIVER_TASK_PCIE_DEDICATED=yes")
         args+=("--expect" "DRIVER_TASK_SUBSTRATE_READY=yes")
         args+=("--expect" "DRIVER_TASK_FAILED_COUNT=0")

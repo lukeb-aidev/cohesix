@@ -110,6 +110,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=SEL4_LD");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD_DIR");
     println!("cargo:rerun-if-env-changed=SEL4_BUILD");
+    println!("cargo:rerun-if-env-changed=COHESIX_BUILD_STAMP");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_debug_build)");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_printing)");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_kernel_mcs)");
@@ -165,21 +166,35 @@ fn main() {
 
 fn emit_built_info() -> io::Result<()> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
-    let git = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
-        .ok()
-        .and_then(|output| String::from_utf8(output.stdout).ok())
-        .unwrap_or_else(|| "nogit".to_owned());
-    let timestamp = Utc::now().to_rfc3339();
+    let git = git_stdout(["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "nogit".to_owned());
+    let git_dirty_suffix = if git_has_tracked_changes() {
+        "-dirty"
+    } else {
+        ""
+    };
+    let timestamp = env::var("COHESIX_BUILD_STAMP").unwrap_or_else(|_| Utc::now().to_rfc3339());
     let contents = format!(
         "pub const GIT_HASH:&str=\"{}\";\npub const BUILD_TS:&str=\"{}\";\n",
-        git.trim(),
+        format_args!("{}{}", git.trim(), git_dirty_suffix),
         timestamp
     );
     fs::write(out_dir.join("built_info.rs"), contents)?;
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())
+}
+
+fn git_stdout<const N: usize>(args: [&str; N]) -> Option<String> {
+    Command::new("git")
+        .args(args)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+}
+
+fn git_has_tracked_changes() -> bool {
+    git_stdout(["status", "--porcelain", "--untracked-files=no"])
+        .is_some_and(|status| !status.trim().is_empty())
 }
 
 fn validate_generated_manifest() -> io::Result<()> {

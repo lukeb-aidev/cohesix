@@ -181,7 +181,11 @@ linked USB runtime accepts
 same-slot EP0 success transfer events with controller-specific event pointers
 only inside the active data/status wait and only when the remaining-byte count
 matches that wait: bounded data-stage pointer mismatches become data progress,
-and zero-remaining status-stage pointer mismatches become status completion.
+and zero-remaining status-stage pointer mismatches become status completion. For
+hub-port `GET_STATUS`, where the data TRB intentionally has ISP but no IOC, a
+same-slot EP0 success event with zero remaining and a controller-specific
+pointer is treated as the status completion even if no separate data-stage event
+was observed; short-packet evidence still remains data-stage progress.
 
 ## seL4 Driver Model
 
@@ -362,6 +366,14 @@ USB keyboard input, selected Wi-Fi DHCP progress, and visible local-seat
 feedback; reopened 26a/26b closure still requires fresh driver-task owner-state
 proof from the linked-runtime model.
 
+`scripts/pi4_trace_normalize.py --gate-summary` now reports the old-good replay
+contract beside the existing frontier gates. `USB_GATE` / `USB_BLOCKER` and
+`WIFI_GATE` / `WIFI_BLOCKER` still describe the latest proven frontier and next
+blocker. Full ready proof additionally requires `USB_OLDGOOD_REPLAY=yes` and
+`WIFI_OLDGOOD_REPLAY=yes`; failures report `*_OLDGOOD_LAST` and
+`*_OLDGOOD_MISSING` so the next task targets the first missing translated
+May/U-Boot/Linux behavior instead of rediscovering it from late symptoms.
+
 - HAL owns resource admission, MMIO mapping, DMA publication, IRQ binding and
   acknowledgement, board-level mailbox reset/power calls, and BCM2711
   PCIe/VL805 prep. Steady SDIO/CYW43 command service belongs to linked runtimes
@@ -379,6 +391,21 @@ proof from the linked-runtime model.
   the new model that behavior must live behind the linked `cyw43455` runtime and
   pointer-free command ABI. A PSK network is not DHCP-ready while host EAPOL is a
   root-side stub or while control replies are not matched by the runtime.
+- USB old-good replay is the hub-keyboard linked-runtime sequence, not a single
+  late readiness line: cold unseeded boot, USB and PCIe owner-state descriptors,
+  linked xHCI controller readiness, real Enable Slot command-event proof,
+  root-port live reset, hub address/config/descriptor proof, hub-port
+  power/status/reset, child probe, HID endpoint discovery, interrupt-IN queue
+  arming, first HID report, first decoded byte, and only then runtime Gate 10.
+  A `hid-endpoint-not-ready` breadcrumb is the blocker for endpoint discovery,
+  not endpoint proof; only `hid-endpoint-ready` or later interrupt-IN readiness
+  can advance the replay contract past the HID endpoint step. The first HID
+  report and first decoded byte must be tagged as linked HID runtime evidence
+  (`source=linked-runtime-hid`, or `first_byte_source=linked-runtime-hid` on a
+  runtime-gate summary). Local-seat parser, queue, or `source=first-byte`
+  breadcrumbs are user-experience diagnostics only. The replay matcher advances
+  at most one ordered endpoint/interrupt/report/byte step per event, so one late
+  line cannot collapse the May 18-19 sequence into acceptance.
 - The first root prompt and serial input are the safety boundary. No USB, HDMI,
   PCIe, SDIO, GENET, CYW43, DHCP, or log-stream proof may hold them hostage;
   unproved work must leave deferred/no-reply breadcrumbs and retry only through
@@ -903,11 +930,11 @@ linked runtime: after all-reset and power-on, a stale command/data inhibit does
 not make the pre-clock CMD/DATA reset terminal. The runtime programs the 400 kHz
 startup clock first, then clears post-clock inhibit with CMD/DATA reset and only
 then reports `reset-cmd-data-failed`, `clock-failed`, or `inhibit-failed`.
-The June 16 06:57 serial capture
-(`/Users/lukasbower/pi4-serial-20260616-065748.log`) supersedes the June 15
-22:25 Wi-Fi capture and older host-EAPOL theories as current truth. That trace
-proves the rebuilt image was live (`[BUILD] 1103ba4ce`), bounded deferred Wi-Fi
-replay, descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init
+The June 16 07:30 serial capture
+(`/Users/lukasbower/pi4-serial-20260616-073007.log`) supersedes the June 16
+06:57 Wi-Fi capture and older host-EAPOL theories as current truth. That trace
+proves the prior rebuilt image was live (`[BUILD] 1103ba4ce`), bounded deferred
+Wi-Fi replay, descriptor replay for `cyw43455` and `sdio-host`, SDIO engine init
 detail `0x5500`, CYW43 engine init, firmware/NVRAM upload, firmware release,
 owner-state recovery, split Linux-order station controls,
 `BRCMF_C_GET_REVINFO`, `mpc=0`, event-mask programming before and after
@@ -925,16 +952,21 @@ reports `ip=0.0.0.0`, `wifi_assoc=0`, `wifi_link=0`, `eapol_rx=0`,
 `eapol_start=0`, and `eapol_secure=0`. Older firmware-upload, `txglomalign`,
 `revinfo`, join-shape, missing-rescue, BSSID no-reply, and DHCP theories are
 stale for this boot. The active normalized blocker is `WIFI_GATE=7` /
-`WIFI_BLOCKER=cyw43-association-not-associated`: line 2126 reports
-`status=required reason=host-eapol-required`, `assoc_set_ssid_rescue=yes`,
-`starts=0`, `data_rx=0`, `event_rx=0`, `eapol_rx=0`, `associated=no`,
+`WIFI_BLOCKER=cyw43-association-not-associated`: line 2089 reports
+`status=required reason=cyw43-association-not-associated`,
+`assoc_set_ssid_rescue=yes`, `polls=45056`, `starts=0`, `data_rx=0`,
+`event_rx=0`, `eapol_rx=0`, `associated=no`,
 `link_up=no`, and matched RX-source hints with `rxsrc_ien=0x07`,
 `rxsrc_frame_ind=yes`, `rxsrc_host_int=yes`, and `rxsrc_f2_ready=yes`.
 Normalizer priority treats that post-rescue no-association status as the
 association blocker rather than the generic DHCP policy symptom. The first
 missing proof is a post-rescue association/link indication or valid AP BSSID;
 DHCP remains correctly blocked at `host-eapol-required` until host-EAPOL
-security completes. The latest old-good translation gap is the Linux
+security completes. Pi 4 image builds now force a fresh `COHESIX_BUILD_STAMP`
+into the root-task build and append `-dirty` to the reported Git hash when
+tracked local changes are present, so next-boot serial evidence can distinguish
+a genuinely new hardware run from a stale or ambiguous image marker. The latest
+old-good translation gap is the Linux
 connect-time station policy: root now
 reasserts `mpc=0` and best-effort disables ARP/ND offload with `arp_ol=0`,
 `arpoe=0`, and `ndoe=0` as matched linked-runtime BCDC control exchanges before
@@ -987,8 +1019,18 @@ sample. Root decodes those bits into `rxsrc_mode`, `rxsrc_*`,
 `control_rxsrc_mode`, and `control_rxsrc_*` fields on
 `CYW43_DRIVER_TASK_HOST_EAPOL_STATUS`; sampled owner state with missing
 `IENx=0x07` or Function 2 readiness reports
-`next_action=inspect-sdio-owner-function2-rx-source`. After
-post-release Function 2 readiness, the linked runtime also mirrors the old HAL
+`next_action=inspect-sdio-owner-function2-rx-source`. If a 512-byte hintless
+block probe is empty while owner-sampled CYW43 source bits still show
+Function 2 ready plus frame-indication, host-interrupt, or card-interrupt
+asserted, the linked runtime now forces a fresh owner-side sample, re-checks
+Function 1 `RFRAME`, retries one bounded Function 2 block probe, and only then
+publishes `last_rx_idle_detail=0x570e`
+(`cyw43-data-rx-firstread-source-asserted-empty` /
+`cyw43-control-rx-firstread-source-asserted-empty`) with the packed source
+snapshot. A successful retry is delivered as the recovered control/event/data
+frame and keeps queued nonmatching frames for the matching root poll; an empty
+retry keeps DHCP/data blocked and names the RX-source latch as the next
+blocker. After post-release Function 2 readiness, the linked runtime also mirrors the old HAL
 interrupt path by writing CCCR `IENx=0x07` before the SDIO core `HOSTINTMASK` /
 `FUNCTIONINTMASK` programming, so association events and AP M1 can reach the
 Function 2 receive lane.
@@ -1774,10 +1816,13 @@ active path is Cohesix-owned cold start:
   linked-runtime path. Runtime no-reply, controller, HID-report, or PCIe
   owner-state failures are red acceptance states that must emit
   `DRIVER_TASK_SELECTED`, `DRIVER_TASK_OWNER_STATE`, and `DRIVER_TASK_ACCEPTANCE`
-  before halt or degraded diagnostics. Required local seat keeps polling instead
-  of falling back to serial-only; optional local seat degrades with explicit
-  `[local-seat]` lines and no repeated xHCI probing. USB and Wi-Fi interleave
-  only at explicit boot/event-pump phase boundaries.
+  before halt or degraded diagnostics. `DRIVER_TASK_SELECTED` carries
+  `active_net=cyw43|genet|none`; owner-state closure is selected-only, requiring
+  serial, USB, HDMI, PCIe, and the active network owner set (`cyw43-wifi` plus
+  `sdio-host` for Wi-Fi, or `genet-nic` for wired). Required local seat keeps
+  polling instead of falling back to serial-only; optional local seat degrades
+  with explicit `[local-seat]` lines and no repeated xHCI probing. USB and
+  Wi-Fi interleave only at explicit boot/event-pump phase boundaries.
 - Root-port state is cold-boot live evidence only. After mailbox reset, live
   HAL EXT_CFG proof, local HCRST, and fresh ring publication, direct `PORTSC`
   reads remain gated until command/event-ring proof succeeds; local-seat may
@@ -1877,7 +1922,9 @@ active path is Cohesix-owned cold start:
   pipe after Gate 8. HDMI may show `local-seat USB keyboard online` only after
   the existing runtime first-byte proof reaches Gate 10; enumeration-only
   Gate 8 is reported as detected/pending input. Gate 10 proves at least one
-  byte entered the root-console path. It is not full keyboard closure unless a
+  byte from the linked HID `FrameReady` path was accepted by the root-console
+  queue. Local parser ingress is reported as `local-seat-queue-diagnostic` and
+  cannot close Gate 10 by itself. It is not full keyboard closure unless a
   printable key is also proven. Printable-key closure is separately evidenced
   by the first non-empty HID report and first printable-byte diagnostic, while
   the first unmapped HID usage is logged once if decode rejects a key. The
@@ -2232,6 +2279,23 @@ Required Cohesix shape:
 
 Do not debug DHCP over Wi-Fi until association and the first CYW43 Ethernet
 frame path are proven independently.
+
+Wi-Fi old-good replay is now an explicit linked-runtime contract. The
+normalizer requires ordered proof for SDIO engine readiness, CYW43 transport,
+firmware release, Function 2 readiness, matched `rxglom` / `revinfo` / `WLC_UP`
+control replies, the primary join request, independent association/link-up,
+M1/M2/M3/M4 host-EAPOL messages, PTK and GTK installs, secure host-EAPOL
+release, DHCP start/bound, `nettest`, and final secure/non-zero `netstats`.
+Readiness markers must be positive readiness proof (`status=ready` or explicit
+Function 2 `f2_ready=yes` where applicable), the primary join request must have
+a zero or absent success result, host-EAPOL M1/M2/M3/M4 proof must come from
+explicit host-EAPOL markers or scoped legacy host-EAPOL lines, and `nettest`
+must report pass/success rather than merely started.
+`CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE` and
+`CYW43_DRIVER_TASK_HOST_EAPOL_KEY` lines are sparse proof markers and must not
+carry key material. Secure host-EAPOL completion does not manufacture
+association or link state; if those fields are not already proven, DHCP/data
+remain blocked at `host-eapol-required`.
 
 ### xHCI/VL805 Local Seat
 

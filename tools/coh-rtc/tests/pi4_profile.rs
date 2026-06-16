@@ -135,20 +135,18 @@ fn pi4_uboot_profile_emits_network_policy() {
         64
     );
     assert_eq!(runtime_pages(images, "cyw43-wifi", "mmio-pages"), 0);
-    assert_eq!(
-        runtime_bool(images, "cyw43-wifi", "hardware-state-migrated"),
-        true
-    );
+    assert!(runtime_bool(
+        images,
+        "cyw43-wifi",
+        "hardware-state-migrated"
+    ));
     assert_eq!(runtime_pages(images, "sdio-host", "mmio-pages"), 1);
     assert_eq!(runtime_pages(images, "sdio-host", "dma-pages"), 0);
     assert_eq!(
         runtime_pages(images, "sdio-host", "shared-buffer-pages"),
         32
     );
-    assert_eq!(
-        runtime_bool(images, "sdio-host", "hardware-state-migrated"),
-        true
-    );
+    assert!(runtime_bool(images, "sdio-host", "hardware-state-migrated"));
     assert_eq!(
         runtime_pages(images, "pcie-root", "shared-buffer-pages"),
         16

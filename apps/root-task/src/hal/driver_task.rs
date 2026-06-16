@@ -415,6 +415,16 @@ impl Pi4PreRootNetBootstrapSelection {
         }
     }
 
+    /// Stable normalizer label for the selected active network owner.
+    #[must_use]
+    pub const fn active_net_label(self) -> &'static str {
+        match self {
+            Self::Disabled => "none",
+            Self::Wired => "genet",
+            Self::Wifi => "cyw43",
+        }
+    }
+
     #[cfg(feature = "kernel")]
     const fn as_u32(self) -> u32 {
         match self {
@@ -1494,6 +1504,10 @@ impl DriverTaskRuntimeImageSpec {
     /// Construct a runtime-image spec with the common code/stack/IPC/ring pages
     /// plus explicit MMIO, DMA, and shared-buffer ranges.
     #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "runtime-image ABI spec keeps fixed page-count fields explicit"
+    )]
     pub const fn new(
         hot_path: DriverTaskHotPath,
         code_pages: u16,
@@ -1940,12 +1954,9 @@ pub fn pi4_driver_task_runtime_image_spec(
 pub fn pi4_driver_task_runtime_image_spec_for_contract(
     contract: DriverTaskContract,
 ) -> Option<DriverTaskRuntimeImageSpec> {
-    for spec in pi4_driver_task_runtime_image_specs() {
-        if spec.hot_path.contract() == contract {
-            return Some(spec);
-        }
-    }
-    None
+    pi4_driver_task_runtime_image_specs()
+        .into_iter()
+        .find(|spec| spec.hot_path.contract() == contract)
 }
 
 /// Small dedicated CSpace radix for bootstrap driver tasks.
@@ -3859,8 +3870,8 @@ pub fn driver_task_runtime_owner_state_registered(hot_path: DriverTaskHotPath) -
 #[cfg(feature = "kernel")]
 fn refresh_driver_task_owner_state_proof() {
     let owner_hot_paths = DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire);
-    let ready = owner_hot_paths & REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
-        == REQUIRED_PI4_ACCEPTANCE_HOT_PATH_MASK
+    let required_hot_paths = current_pi4_acceptance_hot_path_mask();
+    let ready = owner_hot_paths & required_hot_paths == required_hot_paths
         && DRIVER_TASK_VSPACE_PROOF.load(Ordering::Acquire) != 0
         && DRIVER_TASK_POINTER_FREE_IPC_PROOF.load(Ordering::Acquire) != 0;
     DRIVER_TASK_OWNER_STATE_PROOF.store(ready as usize, Ordering::Release);
@@ -5377,7 +5388,7 @@ fn emit_driver_task_ring_call_progress(
     ) else {
         return;
     };
-    let mut line = String::<384>::new();
+    let mut line = String::<512>::new();
     let valid = progress.magic == DRIVER_RUNTIME_RING_PROGRESS_MAGIC;
     let _ = write!(
         line,
@@ -8912,6 +8923,7 @@ pub fn emit_boot_contract_proof() {
     let required_role_mask = current_pi4_acceptance_role_mask();
     let required_hot_path_mask = current_pi4_acceptance_hot_path_mask();
     let required_hot_path_count = current_pi4_acceptance_hot_path_count();
+    let net_selection = pi4_pre_root_net_bootstrap_selection();
     let mut line = String::<192>::new();
     let _ = write!(
         line,
@@ -8933,19 +8945,20 @@ pub fn emit_boot_contract_proof() {
             "no"
         },
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 
     let mut line = String::<512>::new();
     let _ = write!(
         line,
-        "DRIVER_TASK_SELECTED profile={} selection={} required_roles=0x{:x} required_hot_paths=0x{:x} required_tasks={}",
+        "DRIVER_TASK_SELECTED profile={} selection={} active_net={} required_roles=0x{:x} required_hot_paths=0x{:x} required_tasks={}",
         CURRENT_DRIVER_TASK_RUNTIME_PROFILE.as_str(),
-        pi4_pre_root_net_bootstrap_selection().as_str(),
+        net_selection.as_str(),
+        net_selection.active_net_label(),
         required_role_mask,
         required_hot_path_mask,
         required_hot_path_count,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 
     let mut line = String::<384>::new();
     let _ = write!(
@@ -8977,7 +8990,7 @@ pub fn emit_boot_contract_proof() {
             "no"
         },
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
     for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
         if !driver_task_contract_active_for_current_profile(*contract) {
             continue;
@@ -9052,7 +9065,7 @@ pub fn emit_boot_contract_proof() {
                 },
             );
         }
-        crate::bootstrap::log::force_uart_line(line.as_str());
+        crate::bootstrap::log::force_uart_line_raw(line.as_str());
 
         let mut line = String::<320>::new();
         let _ = write!(
@@ -9080,12 +9093,12 @@ pub fn emit_boot_contract_proof() {
                 "no"
             },
         );
-        crate::bootstrap::log::force_uart_line(line.as_str());
+        crate::bootstrap::log::force_uart_line_raw(line.as_str());
 
         if let Some(counters) = driver_task_counter_snapshot(*contract) {
             let mut line = String::<DRIVER_TASK_COUNTER_LINE_BYTES>::new();
             if write_driver_task_counter_line(&mut line, contract.name, counters).is_ok() {
-                crate::bootstrap::log::force_uart_line(line.as_str());
+                crate::bootstrap::log::force_uart_line_raw(line.as_str());
             }
         }
     }
@@ -9106,7 +9119,7 @@ pub fn emit_boot_contract_proof() {
         proof.owner_state_hot_path_mask,
         proof.compatibility_service_role_mask,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 
     for hot_path in PI4_DRIVER_TASK_HOT_PATHS {
         if required_hot_path_mask & hot_path.owner_state_bit() == 0 {
@@ -9134,10 +9147,10 @@ pub fn emit_boot_contract_proof() {
                 "owner-state-missing"
             },
         );
-        crate::bootstrap::log::force_uart_line(line.as_str());
+        crate::bootstrap::log::force_uart_line_raw(line.as_str());
     }
 
-    let mut line = String::<384>::new();
+    let mut line = String::<512>::new();
     let ready = dedicated_driver_task_acceptance_ready();
     let reason = if ready {
         "dedicated-sel4-substrate-active"
@@ -9162,9 +9175,10 @@ pub fn emit_boot_contract_proof() {
     };
     let _ = write!(
         line,
-        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime proof_effect={} next_action={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} owner_state_hot_paths=0x{:x} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
+        "DRIVER_TASK_ACCEPTANCE dedicated_ready={} reason={} active_net={} root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime proof_effect={} next_action={} required={} dedicated={} compatibility={} substrate={} capset={} fault={} revoke={} sched={} affinity={} vspace={} ipc_abi={} pointer_free_ipc={} owner_state={} owner_state_hot_paths=0x{:x} live_tcb_roles=0x{:x} hot_path_roles=0x{:x} compatibility_roles=0x{:x}",
         if ready { "yes" } else { "no" },
         reason,
+        net_selection.active_net_label(),
         if ready {
             "acceptance-green"
         } else {
@@ -9193,7 +9207,7 @@ pub fn emit_boot_contract_proof() {
         proof.hot_path_role_mask,
         proof.compatibility_service_role_mask,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -9635,6 +9649,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::assertions_on_constants,
+        reason = "test documents the compile-time Pi 4 compatibility boundary"
+    )]
     fn physical_pi4_builds_do_not_compile_steady_state_compat_service() {
         if matches!(
             CURRENT_DRIVER_TASK_RUNTIME_PROFILE,
@@ -9744,6 +9762,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::assertions_on_constants,
+        reason = "test documents fixed wire-layout bounds for the shared ring ABI"
+    )]
     fn shared_ring_wire_records_are_fixed_pointer_free_layout() {
         assert_eq!(core::mem::size_of::<DriverFrameDescriptor>(), 8);
         assert_eq!(core::mem::align_of::<DriverFrameDescriptor>(), 4);
@@ -12843,7 +12865,7 @@ mod tests {
     #[test]
     fn cpio_runtime_payload_lookup_accepts_uimage_wrapped_archive() {
         fn pad4(bytes: &mut Vec<u8>) {
-            while bytes.len() % 4 != 0 {
+            while !bytes.len().is_multiple_of(4) {
                 bytes.push(0);
             }
         }
@@ -12895,7 +12917,7 @@ mod tests {
     #[test]
     fn physical_pi_runtime_payload_lookup_requires_embedded_cpio() {
         fn pad4(bytes: &mut Vec<u8>) {
-            while bytes.len() % 4 != 0 {
+            while !bytes.len().is_multiple_of(4) {
                 bytes.push(0);
             }
         }
@@ -12992,7 +13014,7 @@ mod tests {
     #[test]
     fn physical_pi_runtime_payload_lookup_accepts_deduplicated_runtime_entry() {
         fn pad4(bytes: &mut Vec<u8>) {
-            while bytes.len() % 4 != 0 {
+            while !bytes.len().is_multiple_of(4) {
                 bytes.push(0);
             }
         }

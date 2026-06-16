@@ -51,7 +51,8 @@ def _strong_driver_task_proof_lines() -> list[str]:
         "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
         "[Cohesix] Root console ready (type 'help' for commands)",
         "cohesix> driver proof",
-        "usb: runtime_gate proof_gate=10 blocker=none",
+        "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+        "first_byte_source=linked-runtime-hid proof_gate=10 blocker=none",
         "OK NETTEST success",
         "netstats: active=wifi addr_src=dhcp-lease dhcp=bound wifi_assoc=1 "
         "wifi_link=1 eapol_secure=1 eapol_rx=1 rx_pkts=1 tx_pkts=1",
@@ -90,6 +91,119 @@ def _strong_driver_task_proof_lines() -> list[str]:
     ]
 
 
+def _strong_wired_driver_task_proof_lines() -> list[str]:
+    return [
+        "U-Boot 2026.01-dirty",
+        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "[Cohesix] Root console ready (type 'help' for commands)",
+        "cohesix> driver proof",
+        "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+        "first_byte_source=linked-runtime-hid proof_gate=10 blocker=none",
+        "OK NETTEST success",
+        "netstats: mode=dhcp policy=wired active=wired standby=wifi "
+        "addr_src=dhcp-lease dhcp=bound ip=192.168.10.60 gateway=192.168.10.1 "
+        "rx_pkts=4 tx_pkts=9",
+        "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wired "
+        "active_net=genet required_roles=0x2f required_hot_paths=0x4f required_tasks=5",
+        "[smp] activity selected profile=pi4-hardware net=wired "
+        "active_contracts=selected-only",
+        "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+        "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
+        "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
+        "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
+        "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
+        "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+        "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
+        "task_count=5 failed_count=0 live_tcb_count=5 "
+        "root_authority=admission-descriptor-diagnostics-only hardware_owner=linked-runtime "
+        "fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 sched=yes "
+        "affinity=per-driver affinity_configured=5 affinity_applied=5 vspace=isolated "
+        "ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=driver-owned "
+        "live_hot_paths=yes",
+        "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=18",
+        "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=22",
+        "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=44",
+        "SCHED_CONTRACT contract=genet isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=73",
+        "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=36",
+        "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
+        "active_net=genet substrate=active capset=pass fault=pass revoke=pass sched=pass "
+        "affinity=pass vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes "
+        "owner_state=driver-owned required=5 dedicated=5 compatibility=0",
+    ]
+
+
+def _oldgood_usb_replay_lines() -> list[str]:
+    return [
+        "usb: controller-ready source=linked-runtime",
+        "usb: linked_runtime command-probe result=enable-slot-ok",
+        "usb: phase=usb-root-port-reset-done cmd_path=yes",
+        "usb: phase=usb-device-addressed slot=1",
+        "usb: phase=usb-hub-set-configuration-done hub_slot=1 config_value=1",
+        "usb: phase=usb-hub-context-done hub_slot=1 num_ports=4",
+        "usb: phase=usb-hub-port-power-done hub_slot=1 hub_port=1",
+        "usb: phase=usb-hub-port-status-done hub_slot=1 hub_port=1 "
+        "connected=yes enabled=yes reset=no",
+        "usb: phase=usb-hub-port-reset-set-done hub_slot=1 hub_port=1",
+        "usb: phase=usb-hub-child-probe-begin hub_slot=1 hub_port=1 child_slot=2",
+        "usb: phase=usb-hid-endpoint-parse-found slot=2 iface=0 class=0x03 "
+        "subclass=0x01 protocol=0x01 ep=0x81 direction=in transfer=interrupt",
+        "usb: phase=usb-hid-interrupt-queue-ready slot=2 ep=0x81 dci=3 queued=1",
+        "[local-seat] usb hid first report source=linked-runtime-hid "
+        "len=8 keys=0x17 transfer_event=yes",
+        "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+        "read=1 ascii=0x74 key=0x17",
+        "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+        "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 blocker=none",
+    ]
+
+
+def _oldgood_wifi_replay_lines() -> list[str]:
+    return [
+        "SDIO_DRIVER_TASK_REPLAY_STATUS stage=engine-init blocker=ready detail=0x5500",
+        "wifi: cyw43-transport-ready owner=linked-runtime",
+        "wifi: cyw43-release-firmware-ready-done status=ready",
+        "wifi: function2-ready f2_enabled=yes f2_ready=yes",
+        "wifi: control_exchange step=cyw43-control-rxglom status=matched bus:rxglom=1",
+        "wifi: control_exchange step=cyw43-control-revinfo status=matched",
+        "wifi: control_exchange step=cyw43-control-up status=matched",
+        "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+        "path=primary-bsscfg:join action=ready ssid_len=7 result=0x00000000",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=required "
+        "associated=yes link_up=yes eapol_rx=0",
+        "wifi: host-eapol msg=m1 ethertype=0x888e last_ethertype_valid=yes",
+        "wifi: host-eapol action=send-m2 msg=m2",
+        "wifi: host-eapol msg=m3 ethertype=0x888e last_ethertype_valid=yes",
+        "wifi: host-eapol action=send-m4 msg=m4",
+        "[cyw43] host-eapol action=install-wsec-key kind=ptk result=ok",
+        "[cyw43] host-eapol action=install-wsec-key kind=gtk result=ok",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=secure "
+        "associated=yes link_up=yes eapol_rx=2",
+        "[dhcp] start ready interface=wifi",
+        "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+        "server=192.168.10.1 lease_s=3600",
+        "OK NETTEST detail=pass scope=serial-local",
+        "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
+        "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
+        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+        "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
+    ]
+
+
 def test_gate_proof_does_not_emit_leading_carriage_return() -> None:
     """Serial proof commands should not manufacture empty console commands."""
 
@@ -116,6 +230,7 @@ def test_gate_proof_runs_smp_activity_for_post_prompt_driver_proof() -> None:
 
     assert '"smp activity"' in source
     assert source.index('"smp activity"') < source.index('"wifi diag"')
+    assert source.rindex('"netstats"') < source.rindex('"smp activity"')
 
 
 def test_gate_proof_refuses_existing_capture_log(tmp_path: pathlib.Path) -> None:
@@ -681,6 +796,119 @@ def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
     assert "DRIVER_TASK_OWNER_STATE_PROOF=yes" in result.stdout
     assert "DRIVER_TASK_DEDICATED_READY=yes" in result.stdout
     assert "DRIVER_TASK_SDIO_DEDICATED=yes" in result.stdout
+
+
+def test_gate_proof_accepts_wired_driver_task_proof_without_sdio(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Wired closure must not require the inactive SDIO/CYW43 path."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(_strong_wired_driver_task_proof_lines()),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-driver-task-proof",
+            "--require-wired-ready",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "DRIVER_TASK_ACTIVE_NET=genet" in result.stdout
+    assert "DRIVER_TASK_OWNER_STATE_PROOF=yes" in result.stdout
+    assert "DRIVER_TASK_SDIO_DEDICATED=no" in result.stdout
+
+
+def test_gate_proof_requires_usb_oldgood_replay_for_ready(
+    tmp_path: pathlib.Path,
+) -> None:
+    """USB gate 10 alone must not satisfy the full ready proof."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(_strong_driver_task_proof_lines()),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-usb-ready",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "USB_OLDGOOD_REPLAY=no" in result.stdout
+    assert "USB_OLDGOOD_REPLAY expected yes got no" in result.stderr
+
+
+def test_gate_proof_accepts_ready_with_oldgood_replay_contracts(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Full ready proof requires both gates and linked old-good replay."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    lines = [
+        *_strong_driver_task_proof_lines(),
+        *_oldgood_usb_replay_lines(),
+        *_oldgood_wifi_replay_lines(),
+    ]
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-ready",
+            "--require-driver-task-proof",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "USB_OLDGOOD_REPLAY=yes" in result.stdout
+    assert "WIFI_OLDGOOD_REPLAY=yes" in result.stdout
 
 
 def test_gate_proof_rejects_outstanding_driver_task_ring_call(

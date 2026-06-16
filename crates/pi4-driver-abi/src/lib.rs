@@ -135,6 +135,8 @@ pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_INVALID_SDPCM: u16 = 0x5
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_FAILED: u16 = 0x570c;
 /// CYW43 RX idle detail: zero-RFRAME first-read SDPCM packet exceeded the bounded window.
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_REMAINDER_TOO_LARGE: u16 = 0x570d;
+/// CYW43 RX idle detail: source stayed asserted after bounded empty first-read retry.
+pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_SOURCE_ASSERTED_EMPTY: u16 = 0x570e;
 /// CYW43 RX first-read result: high bit marks a packed RX-source snapshot.
 pub const DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC: u32 = 0x8000_0000;
 /// CYW43 RX first-read result: low bits carry the attempted Function 2 probe length.
@@ -1709,6 +1711,10 @@ impl DriverRuntimeResourceRangeDescriptor {
 
     /// Construct a non-empty resource range descriptor.
     #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "fixed-layout ABI constructor mirrors the descriptor field order"
+    )]
     pub const fn new(
         kind: u16,
         flags: u16,
@@ -2054,6 +2060,7 @@ impl DriverRuntimeInitDescriptor {
 }
 
 #[cfg(test)]
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 

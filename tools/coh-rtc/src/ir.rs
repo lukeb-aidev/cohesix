@@ -2429,7 +2429,7 @@ pub struct RootTaskSection {
     pub driver_images: DriverRuntimeImagePolicy,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct DriverRuntimeImagePolicy {
     pub required: bool,
@@ -2541,15 +2541,6 @@ impl DriverRuntimeImageSpec {
             );
         }
         Ok(())
-    }
-}
-
-impl Default for DriverRuntimeImagePolicy {
-    fn default() -> Self {
-        Self {
-            required: false,
-            images: Vec::new(),
-        }
     }
 }
 

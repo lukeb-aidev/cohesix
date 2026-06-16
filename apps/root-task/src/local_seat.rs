@@ -465,6 +465,22 @@ static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_PENDING_LOGGED: AtomicBool = AtomicBoo
 ))]
 static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_USB_FIRST_REPORT_EVENT_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+
 #[cfg(all(feature = "kernel", feature = "usb"))]
 // A controller-ready completion can precede root-port and HID endpoint events by
 // a few linked-runtime turns; keep prompt settling bounded and non-blocking.
@@ -1610,7 +1626,10 @@ impl LocalSeatRuntime {
                                 .backend_keyboard_read_bytes
                                 .saturating_add(bytes.len() as u64);
                             LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
-                            let _ = self.enqueue_keyboard_bytes(bytes);
+                            let accepted = self.enqueue_keyboard_bytes(bytes);
+                            publish_linked_local_seat_usb_first_report_event(
+                                contract, completion, bytes, accepted,
+                            );
                         }
                         return;
                     }
@@ -2353,6 +2372,53 @@ fn publish_local_seat_usb_keyboard_owner_ready(
             "descriptor-rejected",
             Some(completion),
         );
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn publish_linked_local_seat_usb_first_report_event(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+    bytes: &[u8],
+    accepted: usize,
+) {
+    use core::fmt::Write;
+
+    if bytes.is_empty() {
+        return;
+    }
+    if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_EVENT_LOGGED.swap(true, Ordering::AcqRel) {
+        let mut line = heapless::String::<256>::new();
+        let _ = write!(
+            line,
+            "[local-seat] usb hid first report contract={} source=linked-runtime-hid tag=usb-hid-report-event len={} accepted={} detail=0x{:04x} result=0x{:08x} transfer_event=yes",
+            contract.name,
+            bytes.len(),
+            accepted,
+            completion.detail,
+            completion.result,
+        );
+        boot_log::force_uart_line_raw(line.as_str());
+    }
+    if accepted == 0 {
+        return;
+    }
+    if !LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.swap(true, Ordering::AcqRel) {
+        let byte = bytes.first().copied().unwrap_or(0);
+        let mut line = heapless::String::<192>::new();
+        let _ = write!(
+            line,
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid read=1 ascii=0x{:02x} detail=0x{:04x} result=0x{:08x}",
+            byte,
+            completion.detail,
+            completion.result,
+        );
+        boot_log::force_uart_line_raw(line.as_str());
     }
 }
 
@@ -3241,6 +3307,17 @@ pub(crate) fn linked_local_seat_usb_controller_ready() -> bool {
 ))]
 pub(crate) fn linked_local_seat_usb_first_report_ready() -> bool {
     LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+#[must_use]
+pub(crate) fn linked_local_seat_usb_first_byte_ready() -> bool {
+    LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.load(Ordering::Acquire)
 }
 
 #[cfg(all(
