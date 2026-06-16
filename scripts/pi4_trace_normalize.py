@@ -284,6 +284,7 @@ USB_OUTCOME_BLOCKERS = {
     "hub-port-status-status-event-slot-empty",
     "hub-port-status-status-event-cycle-mismatch",
     "hub-port-status-status-event-ignored",
+    "hub-port-status-payload-no-reply",
     "hub-port-status-failed",
     "hub-port-reset-no-reply",
     "hub-port-reset-set-no-reply",
@@ -1623,6 +1624,7 @@ def normalize_usb_blocker(value: str) -> str:
         "hub-port-status-status-event-slot-empty",
         "hub-port-status-status-event-cycle-mismatch",
         "hub-port-status-status-event-ignored",
+        "hub-port-status-payload-no-reply",
         "hub-port-status-failed",
         "hub-port-reset-no-reply",
         "hub-port-reset-set-no-reply",
@@ -1850,6 +1852,9 @@ CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS = {
 CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES = frozenset(
     CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS.values()
 )
+CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY = (
+    "cyw43-data-rx-firstread-source-asserted-empty"
+)
 
 
 def cyw43_host_eapol_firstread_blocker(fields: dict[str, str]) -> str | None:
@@ -1900,11 +1905,16 @@ def summarize_host_eapol_firstread_status(
             continue
         status = fields.get("status", "").lower()
         reason = normalize_wifi_blocker(fields.get("reason", ""))
-        if reason == "cyw43-association-not-associated":
+        source_asserted_empty = blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
+        if reason == "cyw43-association-not-associated" and not source_asserted_empty:
             continue
-        if status == "required" and cyw43_host_eapol_post_rescue_association_gap(fields):
+        if (
+            status == "required"
+            and cyw43_host_eapol_post_rescue_association_gap(fields)
+            and not source_asserted_empty
+        ):
             continue
-        if status == "required" or reason == "host-eapol-required":
+        if status == "required" or reason == "host-eapol-required" or source_asserted_empty:
             latest = (blocker, "runtime-rx", event.line)
     return latest
 
@@ -4109,19 +4119,30 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             status = fields.get("status", "").lower()
             reason = normalize_wifi_blocker(fields.get("reason", ""))
             firstread_blocker = cyw43_host_eapol_firstread_blocker(fields)
-            if reason == "cyw43-association-not-associated":
+            source_asserted_empty = (
+                firstread_blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
+            )
+            if reason == "cyw43-association-not-associated" and not source_asserted_empty:
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 blocker = reason
                 host_eapol_terminal_blocker = reason
                 explicit_blocker = reason
-            elif status == "required" and cyw43_host_eapol_post_rescue_association_gap(fields):
+            elif (
+                status == "required"
+                and cyw43_host_eapol_post_rescue_association_gap(fields)
+                and not source_asserted_empty
+            ):
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 blocker = "cyw43-association-not-associated"
                 host_eapol_terminal_blocker = blocker
                 explicit_blocker = blocker
-            elif status == "required" or reason == "host-eapol-required":
+            elif (
+                status == "required"
+                or reason == "host-eapol-required"
+                or source_asserted_empty
+            ):
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 if firstread_blocker is not None:
@@ -5405,6 +5426,9 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
         "cyw43_driver_task_host_eapol_status" in event.raw.lower()
         and cyw43_host_eapol_post_rescue_association_gap(event.fields)
     ):
+        firstread_blocker = cyw43_host_eapol_firstread_blocker(event.fields)
+        if firstread_blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY:
+            return firstread_blocker, "runtime-rx"
         return "cyw43-association-not-associated", "association"
     if normalize_wifi_blocker(event.raw) == "host-eapol-required":
         phase = (
@@ -5624,6 +5648,7 @@ def summarize_wifi_failure_detail(
             wifi_blocker == "cyw43-association-not-associated"
             and "cyw43_driver_task_host_eapol_status" in raw
             and cyw43_host_eapol_post_rescue_association_gap(fields)
+            and firstread_blocker != CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
         ):
             candidate = wifi_blocker
         if wifi_blocker == firstread_blocker:
@@ -6735,6 +6760,7 @@ def usb_driver_task_blocker_gate(blocker: str) -> int:
         "hub-port-status-status-event-slot-empty",
         "hub-port-status-status-event-cycle-mismatch",
         "hub-port-status-status-event-ignored",
+        "hub-port-status-payload-no-reply",
         "hub-port-status-failed",
         "hub-port-reset-no-reply",
         "hub-port-reset-set-no-reply",
@@ -6945,6 +6971,8 @@ def usb_raw_driver_task_progress_blocker(fields: dict[str, str]) -> str | None:
         "usb-hub-port-status-wait-begin": "hub-port-status-transfer-no-reply",
         "usb-hub-port-status-data-event": "hub-port-status-status-no-reply",
         "usb-hub-port-status-status-event": "hub-port-reset-no-reply",
+        "usb-hub-port-status-ack-done": "hub-port-status-payload-no-reply",
+        "usb-hub-port-status-payload-read": "hub-port-reset-no-reply",
         "usb-hub-port-status-transfer-timeout": "hub-port-status-transfer-timeout",
         "usb-hub-port-status-status-timeout": "hub-port-status-timeout",
         "usb-hub-port-status-transfer-event-slot-empty": "hub-port-status-transfer-event-slot-empty",
@@ -8255,7 +8283,12 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_exact, wifi_phase, wifi_blocker_line = revinfo_badarg
     host_eapol_firstread = summarize_host_eapol_firstread_status(event_list)
     if host_eapol_firstread is not None and (
-        wifi_gate <= 7 or wifi_exact in {"host-eapol-required", "wifi-host-eapol-pending"}
+        wifi_gate <= 7
+        or wifi_exact in {
+            "host-eapol-required",
+            "wifi-host-eapol-pending",
+            "cyw43-association-not-associated",
+        }
     ):
         wifi_blocker, wifi_phase, wifi_blocker_line = host_eapol_firstread
         wifi_exact = wifi_blocker

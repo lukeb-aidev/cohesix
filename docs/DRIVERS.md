@@ -121,11 +121,21 @@ During hub traversal, the linked USB runtime publishes bounded post-power
 breadcrumbs before child probing: `usb-hub-port-status-begin`,
 `usb-hub-port-status-doorbell-done`, `usb-hub-port-status-wait-begin`,
 `usb-hub-port-status-data-event`, `usb-hub-port-status-status-event`,
+`usb-hub-port-status-ack-done`, `usb-hub-port-status-payload-read`,
 `usb-hub-port-status-done`, `usb-hub-port-status-failed`,
 `usb-hub-port-reset-set-begin`, `usb-hub-port-reset-set-done`, and
-`usb-hub-port-reset-set-failed`. Timeout and event-ring diagnostic variants for
-the hub-port status data/status waits refine Gate 7 evidence between
-`usb-hub-port-power-done` and `usb-hub-port-reset-begin`. Hub descriptor reads
+`usb-hub-port-reset-set-failed`. The status-tail markers separate xHCI ERDP
+acknowledgement from the DMA payload read so Gate 7 can distinguish an event
+ack/cache tail from later clear-change or reset policy. Control-transfer ERDP
+acknowledgement uses the same flushed/readback write path as initial ERDP
+publication, not the command-proof prompt-safe barrier-only path. Timeout and
+event-ring diagnostic variants for the hub-port status data/status waits refine
+Gate 7 evidence between `usb-hub-port-power-done` and
+`usb-hub-port-reset-begin`. Downstream port reset retries are U-Boot-shaped:
+`PORT_RESET` SET_FEATURE failure is a failed reset attempt, each retry reads
+status after the reset delay, and `usb-hub-port-ready` requires connection,
+enable, and reset-cleared status rather than a connected-only fallback.
+Hub descriptor reads
 retain the longer hub-class descriptor wait, while hub-port `GET_STATUS` uses
 the normal control-transfer wait budget rather than the former short status
 poll. This matches U-Boot's `usb_get_port_status()` timeout behavior and avoids
@@ -1023,8 +1033,12 @@ sample. Root decodes those bits into `rxsrc_mode`, `rxsrc_*`,
 block probe is empty while owner-sampled CYW43 source bits still show
 Function 2 ready plus frame-indication, host-interrupt, or card-interrupt
 asserted, the linked runtime now forces a fresh owner-side sample, re-checks
-Function 1 `RFRAME`, retries one bounded Function 2 block probe, and only then
-publishes `last_rx_idle_detail=0x570e`
+Function 1 `RFRAME`, terminates the stale Function 2 RX frame with CCCR
+`ABORT` plus Function 1 `FRAMECTRL.RF_TERM`, sends Linux-style `SMB_NAK` on the
+SDIO core mailbox, treats `HMB_DATA_NAKHANDLED` as a retransmit RX source while
+that NAK is pending, waits through a bounded Function 1 `RFRAME` resample
+window, retries one bounded Function 2 block probe, and only then publishes
+`last_rx_idle_detail=0x570e`
 (`cyw43-data-rx-firstread-source-asserted-empty` /
 `cyw43-control-rx-firstread-source-asserted-empty`) with the packed source
 snapshot. A successful retry is delivered as the recovered control/event/data
@@ -1047,7 +1061,9 @@ records still report `rx_firstread_attempts`, `rx_firstread_empty`,
 `rx_firstread_remainder_failed`, `rx_firstread_decode_miss`,
 `last_rx_idle_detail`, and `last_rx_idle_result`; the normalizer preserves
 direct `cyw43-data-rx-firstread-*` blockers over later prompt-side
-`host-eapol-required` symptoms. If no post-join event/control/data frame has
+`host-eapol-required` symptoms and over the post-rescue association gap when
+`last_rx_idle_detail=0x570e` names asserted owner-side RX source with an empty
+bounded Function 2 first-read. If no post-join event/control/data frame has
 arrived by the pre-association proof window, root issues bounded linked
 `WLC_GET_BSSID` control exchanges. A transient firmware
 `BCME_NOTASSOCIATED`/`0xffffffef` result is logged as

@@ -4963,6 +4963,8 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_WAIT_BEGIN
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ACK_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_SLOT_EMPTY
@@ -5652,6 +5654,12 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT => {
                 "hub-port-reset-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ACK_DONE => {
+                "hub-port-status-payload-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ => {
+                "hub-port-reset-no-reply"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT => {
                 "hub-port-status-transfer-timeout"
             }
@@ -6331,6 +6339,12 @@ where
                 "poll-ep0-hub-port-status-status"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT => {
+                "clear-hub-port-changes-or-reset"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ACK_DONE => {
+                "read-hub-port-status-payload"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ => {
                 "clear-hub-port-changes-or-reset"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT => {

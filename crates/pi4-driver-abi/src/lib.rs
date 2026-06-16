@@ -853,6 +853,10 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_SLOT_EMP
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_CYCLE_MISMATCH: u32 = 424;
 /// USB runtime consumed an event that did not match hub-port GET_STATUS status.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED: u32 = 425;
+/// USB runtime acknowledged the hub-port GET_STATUS status event to ERDP.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ACK_DONE: u32 = 426;
+/// USB runtime invalidated and read the hub-port GET_STATUS payload bytes.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ: u32 = 427;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-published command endpoint/shared-ring intake loop.
