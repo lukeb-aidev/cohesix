@@ -857,6 +857,18 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED:
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ACK_DONE: u32 = 426;
 /// USB runtime invalidated and read the hub-port GET_STATUS payload bytes.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ: u32 = 427;
+/// USB runtime read a downstream hub-port status with no connected device.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DISCONNECTED: u32 = 428;
+/// USB runtime read downstream hub-port status while reset is still asserted.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_RESET_ACTIVE: u32 = 429;
+/// USB runtime read downstream hub-port status without the enable bit.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ENABLE_MISSING: u32 = 430;
+/// USB runtime started clearing downstream hub-port status-change bits.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_BEGIN: u32 = 431;
+/// USB runtime finished clearing downstream hub-port status-change bits.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_DONE: u32 = 432;
+/// USB runtime failed while clearing downstream hub-port status-change bits.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_FAILED: u32 = 433;
 /// Linked runtime entered its no_std entry path and installed its IPC buffer.
 pub const DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_ENTRY_READY: u32 = 200;
 /// Linked runtime reached the root-published command endpoint/shared-ring intake loop.

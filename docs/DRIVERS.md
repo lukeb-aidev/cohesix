@@ -122,19 +122,24 @@ breadcrumbs before child probing: `usb-hub-port-status-begin`,
 `usb-hub-port-status-doorbell-done`, `usb-hub-port-status-wait-begin`,
 `usb-hub-port-status-data-event`, `usb-hub-port-status-status-event`,
 `usb-hub-port-status-ack-done`, `usb-hub-port-status-payload-read`,
-`usb-hub-port-status-done`, `usb-hub-port-status-failed`,
+`usb-hub-port-status-done`, `usb-hub-port-status-disconnected`,
+`usb-hub-port-status-reset-active`, `usb-hub-port-status-enable-missing`,
+`usb-hub-port-clear-changes-begin`, `usb-hub-port-clear-changes-done`,
+`usb-hub-port-clear-changes-failed`, `usb-hub-port-status-failed`,
 `usb-hub-port-reset-set-begin`, `usb-hub-port-reset-set-done`, and
 `usb-hub-port-reset-set-failed`. The status-tail markers separate xHCI ERDP
-acknowledgement from the DMA payload read so Gate 7 can distinguish an event
-ack/cache tail from later clear-change or reset policy. Control-transfer ERDP
-acknowledgement uses the same flushed/readback write path as initial ERDP
-publication, not the command-proof prompt-safe barrier-only path. Timeout and
-event-ring diagnostic variants for the hub-port status data/status waits refine
-Gate 7 evidence between `usb-hub-port-power-done` and
-`usb-hub-port-reset-begin`. Downstream port reset retries are U-Boot-shaped:
-`PORT_RESET` SET_FEATURE failure is a failed reset attempt, each retry reads
-status after the reset delay, and `usb-hub-port-ready` requires connection,
-enable, and reset-cleared status rather than a connected-only fallback.
+acknowledgement from the DMA payload read, decoded status bits, and hub
+ClearFeature edge so Gate 7 can distinguish an event ack/cache tail from later
+clear-change or reset policy. Control-transfer ERDP acknowledgement uses the
+same flushed/readback write path as initial ERDP publication, not the
+command-proof prompt-safe barrier-only path. Timeout and event-ring diagnostic
+variants for the hub-port status data/status waits refine Gate 7 evidence
+between `usb-hub-port-power-done` and `usb-hub-port-reset-begin`. Downstream
+port reset retries are U-Boot-shaped: the runtime reads and clears connection
+change status after power before the reset ladder, `PORT_RESET` SET_FEATURE
+failure is a failed reset attempt, each retry reads status after the reset
+delay, and `usb-hub-port-ready` requires enable with reset cleared rather than
+a connected-only fallback or a strict connection-bit requirement.
 Hub descriptor reads
 retain the longer hub-class descriptor wait, while hub-port `GET_STATUS` uses
 the normal control-transfer wait budget rather than the former short status
@@ -1044,7 +1049,15 @@ window, retries one bounded Function 2 block probe, and only then publishes
 snapshot. A successful retry is delivered as the recovered control/event/data
 frame and keeps queued nonmatching frames for the matching root poll; an empty
 retry keeps DHCP/data blocked and names the RX-source latch as the next
-blocker. After post-release Function 2 readiness, the linked runtime also mirrors the old HAL
+blocker. If a Function 2 CMD53 transfer itself fails before the runtime can
+classify the first-read payload, the linked runtime now performs the same
+bounded recovery on the real transfer path: it aborts Function 2, writes
+Function 1 `FRAMECTRL.RF_TERM` for RX or `FRAMECTRL.WF_TERM` for TX, drains the
+matching `RFRAME` or `WFRAME` counter, posts `SMB_NAK` for RX retransmit, and
+retries the CMD53 transfer once. A second failed RX attempt remains
+`last_rx_idle_detail=0x5709`; a second failed TX attempt keeps the parent
+control/data submit blocked instead of falling through to association, EAPOL, or
+DHCP policy. After post-release Function 2 readiness, the linked runtime also mirrors the old HAL
 interrupt path by writing CCCR `IENx=0x07` before the SDIO core `HOSTINTMASK` /
 `FUNCTIONINTMASK` programming, so association events and AP M1 can reach the
 Function 2 receive lane.
@@ -1134,7 +1147,8 @@ EAPOL data reaching the host handshake, prove the denser post-event-mask
 block-probe window is still empty/no-reply with `last_rx_idle_detail=0x570a` and
 decoded `rxsrc_*` / `control_rxsrc_*` fields, prove malformed first-read SDPCM
 with `last_rx_idle_detail=0x570b`, prove a CMD53 first-read/remainder failure
-with `0x5709` or `0x570c`, expose a `cyw43-join-bsscfg` firmware status, or
+after the bounded transfer-recovery retry with `0x5709` or `0x570c`, expose a
+`cyw43-join-bsscfg` firmware status, or
 prove that a non-EAPOL data frame reached the RX path after the join edge.
 The linked runtime now publishes CYW43-specific early and release markers:
 `cyw43-engine-init-branch`, `cyw43-state-reset-begin`,

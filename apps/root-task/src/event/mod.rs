@@ -4965,6 +4965,12 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ACK_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DISCONNECTED
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_RESET_ACTIVE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ENABLE_MISSING
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_FAILED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_TIMEOUT
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_EVENT_SLOT_EMPTY
@@ -5660,6 +5666,24 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ => {
                 "hub-port-reset-no-reply"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DISCONNECTED => {
+                "hub-port-disconnected"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_RESET_ACTIVE => {
+                "hub-port-reset-still-active"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ENABLE_MISSING => {
+                "hub-port-enable-missing"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_BEGIN => {
+                "hub-port-clear-changes-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_DONE => {
+                "hub-port-reset-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_FAILED => {
+                "hub-port-clear-changes-failed"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT => {
                 "hub-port-status-transfer-timeout"
             }
@@ -6346,6 +6370,24 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ => {
                 "clear-hub-port-changes-or-reset"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DISCONNECTED => {
+                "power-cycle-or-skip-hub-port"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_RESET_ACTIVE => {
+                "wait-hub-port-reset-clear"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ENABLE_MISSING => {
+                "retry-hub-port-reset"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_BEGIN => {
+                "wait-hub-port-clear-changes"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_DONE => {
+                "retry-hub-port-reset-or-child-probe"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_FAILED => {
+                "inspect-hub-port-clear-changes"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_TRANSFER_TIMEOUT => {
                 "inspect-missing-hub-port-status-data-event"

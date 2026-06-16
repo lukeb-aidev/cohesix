@@ -331,6 +331,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_EVENT_SLOT_EMPTY,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_TRANSFER_TIMEOUT,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_DESCRIPTOR_WAIT_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_BEGIN,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
@@ -341,10 +344,13 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ACK_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DATA_EVENT,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DISCONNECTED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DOORBELL_DONE,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ENABLE_MISSING,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_RESET_ACTIVE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_CYCLE_MISMATCH,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_STATUS_EVENT_IGNORED,
@@ -1224,12 +1230,15 @@ const SBSDIO_FUNC1_SBADDRMID: u32 = 0x1000b;
 const SBSDIO_FUNC1_SBADDRHIGH: u32 = 0x1000c;
 const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1000d;
 const SBSDIO_FUNC1_CHIPCLKCSR: u32 = 0x1000e;
+const SBSDIO_FUNC1_WFRAMEBCLO: u32 = 0x10019;
+const SBSDIO_FUNC1_WFRAMEBCHI: u32 = 0x1001a;
 const SBSDIO_FUNC1_RFRAMEBCLO: u32 = 0x1001b;
 const SBSDIO_FUNC1_RFRAMEBCHI: u32 = 0x1001c;
 const SBSDIO_FUNC1_MESBUSYCTRL: u32 = 0x1001d;
 const SBSDIO_FUNC1_WAKEUPCTRL: u32 = 0x1001e;
 const SBSDIO_FUNC1_SLEEPCSR: u32 = 0x1001f;
 const SFC_RF_TERM: u8 = 1 << 0;
+const SFC_WF_TERM: u8 = 1 << 1;
 const SBSDIO_ALP_AVAIL_REQ: u8 = 0x08;
 const SBSDIO_HT_AVAIL_REQ: u8 = 0x10;
 const SBSDIO_FORCE_ALP: u8 = 0x01;
@@ -5639,13 +5648,17 @@ fn sdio_execute_transfer(
     block_size: u16,
     block_count: u16,
 ) -> Option<u32> {
-    test_sdio_transfer_log_record(TestSdioTransferRecord {
+    let record = TestSdioTransferRecord {
         cmd,
         arg,
         flags,
         block_size,
         block_count,
-    });
+    };
+    test_sdio_transfer_log_record(record);
+    if test_sdio_transfer_should_fail(record) {
+        return None;
+    }
     Some(0)
 }
 
@@ -8007,6 +8020,60 @@ const fn cyw43_function2_cmd53_shape(request_len: usize) -> (u16, u16) {
     }
 }
 
+fn cyw43_function2_execute_transfer(
+    state: &mut Cyw43RuntimeState,
+    write: bool,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+) -> bool {
+    let arg = sdio_cmd53_arg(
+        write,
+        2,
+        BACKPLANE_32BIT_FLAG,
+        false,
+        block_count,
+        frame.len,
+    );
+    let flags = DRIVER_RUNTIME_SDIO_FLAG_DATA
+        | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT
+        | if write {
+            DRIVER_RUNTIME_SDIO_FLAG_WRITE
+        } else {
+            0
+        };
+    if sdio_execute_transfer(SDIO_CMD53, arg, flags, frame, block_size, block_count).is_some() {
+        return true;
+    }
+    if !cyw43_runtime_recover_failed_function2_transfer(state, write) {
+        return false;
+    }
+    sdio_execute_transfer(SDIO_CMD53, arg, flags, frame, block_size, block_count).is_some()
+}
+
+fn cyw43_runtime_recover_failed_function2_transfer(
+    state: &mut Cyw43RuntimeState,
+    write: bool,
+) -> bool {
+    let framectrl = if write { SFC_WF_TERM } else { SFC_RF_TERM };
+    let _ = cyw43_sdio_cmd52_write(0, SDIO_CCCR_ABORT, SDIO_FUNC_ENABLE_2);
+    if !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_FRAMECTRL, framectrl) {
+        if !write {
+            state.rx_retransmit_pending = false;
+        }
+        return false;
+    }
+    let _ = cyw43_runtime_drain_function2_frame_count(write);
+    if !write {
+        state.rx_retransmit_pending = cyw43_backplane_write_u32(
+            state,
+            CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX,
+            SMB_NAK,
+        );
+    }
+    true
+}
+
 fn cyw43_ram_payload_bounds(addr: u32, len: u16) -> bool {
     let Some(end) = addr.checked_add(u32::from(len)) else {
         return false;
@@ -8109,25 +8176,7 @@ fn cyw43_submit_sdpcm_frame(
         len: request_len as u16,
         flags: 0,
     };
-    if sdio_execute_transfer(
-        SDIO_CMD53,
-        sdio_cmd53_arg(
-            true,
-            2,
-            BACKPLANE_32BIT_FLAG,
-            false,
-            block_count,
-            request_len as u16,
-        ),
-        DRIVER_RUNTIME_SDIO_FLAG_DATA
-            | DRIVER_RUNTIME_SDIO_FLAG_WRITE
-            | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        tx_frame,
-        block_size,
-        block_count,
-    )
-    .is_none()
-    {
+    if !cyw43_function2_execute_transfer(state, true, tx_frame, block_size, block_count) {
         return 0;
     }
     state.sdpcm_seq = state.sdpcm_seq.wrapping_add(1);
@@ -8228,7 +8277,7 @@ fn cyw43_runtime_next_rx_frame_len(
 }
 
 fn cyw43_runtime_read_rx_frame(
-    _state: &mut Cyw43RuntimeState,
+    state: &mut Cyw43RuntimeState,
     frame_len: usize,
 ) -> Result<(), Cyw43RxIdleReason> {
     if !cyw43_sdpcm_frame_len_valid(frame_len) {
@@ -8244,23 +8293,7 @@ fn cyw43_runtime_read_rx_frame(
         flags: 0,
     };
     let (block_size, block_count) = cyw43_function2_cmd53_shape(request_len);
-    if sdio_execute_transfer(
-        SDIO_CMD53,
-        sdio_cmd53_arg(
-            false,
-            2,
-            BACKPLANE_32BIT_FLAG,
-            false,
-            block_count,
-            request_len as u16,
-        ),
-        DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        rx_frame,
-        block_size,
-        block_count,
-    )
-    .is_none()
-    {
+    if !cyw43_function2_execute_transfer(state, false, rx_frame, block_size, block_count) {
         return Err(Cyw43RxIdleReason::Function2ReadFailed);
     }
     Ok(())
@@ -8285,23 +8318,7 @@ fn cyw43_runtime_poll_rx_hintless_firstread(
         flags: 0,
     };
     let (block_size, block_count) = cyw43_function2_cmd53_shape(CYW43_CONTROL_RX_FIRSTREAD_BYTES);
-    if sdio_execute_transfer(
-        SDIO_CMD53,
-        sdio_cmd53_arg(
-            false,
-            2,
-            BACKPLANE_32BIT_FLAG,
-            false,
-            block_count,
-            CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16,
-        ),
-        DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        rx_frame,
-        block_size,
-        block_count,
-    )
-    .is_none()
-    {
+    if !cyw43_function2_execute_transfer(state, false, rx_frame, block_size, block_count) {
         return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadFailed);
     }
     cyw43_publish_control_rx_progress(
@@ -8380,23 +8397,7 @@ fn cyw43_runtime_read_hintless_block_probe_once(
         flags: 0,
     };
     let (block_size, block_count) = cyw43_function2_cmd53_shape(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES);
-    if sdio_execute_transfer(
-        SDIO_CMD53,
-        sdio_cmd53_arg(
-            false,
-            2,
-            BACKPLANE_32BIT_FLAG,
-            false,
-            block_count,
-            CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
-        ),
-        DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-        rx_frame,
-        block_size,
-        block_count,
-    )
-    .is_none()
-    {
+    if !cyw43_function2_execute_transfer(state, false, rx_frame, block_size, block_count) {
         return Cyw43HintlessBlockProbeResult::Idle(Cyw43RxIdleReason::FirstreadFailed);
     }
     cyw43_publish_control_rx_progress(
@@ -8534,10 +8535,19 @@ fn cyw43_runtime_request_rx_retransmit(state: &mut Cyw43RuntimeState) -> bool {
 }
 
 fn cyw43_runtime_drain_rframe_count() -> u16 {
+    cyw43_runtime_drain_function2_frame_count(false)
+}
+
+fn cyw43_runtime_drain_function2_frame_count(write: bool) -> u16 {
+    let (count_lo_reg, count_hi_reg) = if write {
+        (SBSDIO_FUNC1_WFRAMEBCLO, SBSDIO_FUNC1_WFRAMEBCHI)
+    } else {
+        (SBSDIO_FUNC1_RFRAMEBCLO, SBSDIO_FUNC1_RFRAMEBCHI)
+    };
     let mut last_count = u16::MAX;
     for _ in 0..CYW43_RX_SOURCE_RECOVERY_DRAIN_POLLS {
-        let lo = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_RFRAMEBCLO).unwrap_or(0xff);
-        let hi = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_RFRAMEBCHI).unwrap_or(0xff);
+        let lo = cyw43_sdio_cmd52_read(1, count_lo_reg).unwrap_or(0xff);
+        let hi = cyw43_sdio_cmd52_read(1, count_hi_reg).unwrap_or(0xff);
         last_count = u16::from(lo) | (u16::from(hi) << 8);
         if last_count == 0 {
             break;
@@ -8597,22 +8607,7 @@ fn cyw43_runtime_finish_hintless_firstread(
             flags: 0,
         };
         let (block_size, block_count) = cyw43_function2_cmd53_shape(remainder_request_len);
-        if sdio_execute_transfer(
-            SDIO_CMD53,
-            sdio_cmd53_arg(
-                false,
-                2,
-                BACKPLANE_32BIT_FLAG,
-                false,
-                block_count,
-                remainder_request_len as u16,
-            ),
-            DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
-            remainder_frame,
-            block_size,
-            block_count,
-        )
-        .is_none()
+        if !cyw43_function2_execute_transfer(state, false, remainder_frame, block_size, block_count)
         {
             cyw43_publish_control_rx_progress(
                 sequence,
@@ -11552,10 +11547,22 @@ struct TestSdioTransferRecord {
 struct TestSdioTransferLog(UnsafeCell<TestSdioTransferLogState>);
 
 #[cfg(all(not(target_os = "none"), test))]
+struct TestSdioTransferFailure(UnsafeCell<TestSdioTransferFailureState>);
+
+#[cfg(all(not(target_os = "none"), test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TestSdioTransferLogState {
     count: usize,
     records: [TestSdioTransferRecord; TEST_SDIO_TRANSFER_LOG_CAP],
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct TestSdioTransferFailureState {
+    cmd: u16,
+    function: u8,
+    write: bool,
+    remaining: usize,
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -11582,6 +11589,11 @@ unsafe impl Sync for TestDmaBuffer {}
 unsafe impl Sync for TestSdioTransferLog {}
 
 #[cfg(all(not(target_os = "none"), test))]
+// SAFETY: Runtime tests serialize all access through `test_guard`, so the
+// process-local SDIO failure hook is never concurrently mutated.
+unsafe impl Sync for TestSdioTransferFailure {}
+
+#[cfg(all(not(target_os = "none"), test))]
 static TEST_RING: TestRing = TestRing(UnsafeCell::new([0; DRIVER_TASK_RING_PAGE_BYTES]));
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -11605,6 +11617,15 @@ static TEST_SDIO_TRANSFER_LOG: TestSdioTransferLog =
     }));
 
 #[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_TRANSFER_FAILURE: TestSdioTransferFailure =
+    TestSdioTransferFailure(UnsafeCell::new(TestSdioTransferFailureState {
+        cmd: 0,
+        function: 0,
+        write: false,
+        remaining: 0,
+    }));
+
+#[cfg(all(not(target_os = "none"), test))]
 fn reset_test_ring() {
     // SAFETY: Runtime tests hold `test_guard` before resetting shared state.
     unsafe {
@@ -11613,6 +11634,7 @@ fn reset_test_ring() {
         (*TEST_DMA_BUFFER.0.get()).fill(0);
     }
     reset_test_sdio_transfer_log();
+    reset_test_sdio_transfer_failure();
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -11622,6 +11644,46 @@ fn reset_test_sdio_transfer_log() {
         let log = &mut *TEST_SDIO_TRANSFER_LOG.0.get();
         log.count = 0;
         log.records.fill(TestSdioTransferRecord::default());
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn reset_test_sdio_transfer_failure() {
+    // SAFETY: Runtime tests hold `test_guard` before resetting shared state.
+    unsafe {
+        *TEST_SDIO_TRANSFER_FAILURE.0.get() = TestSdioTransferFailureState::default();
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_transfer_fail_next(cmd: u16, function: u8, write: bool) {
+    // SAFETY: Runtime tests hold `test_guard` before configuring shared state.
+    unsafe {
+        *TEST_SDIO_TRANSFER_FAILURE.0.get() = TestSdioTransferFailureState {
+            cmd,
+            function,
+            write,
+            remaining: 1,
+        };
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_transfer_should_fail(record: TestSdioTransferRecord) -> bool {
+    // SAFETY: Runtime tests hold `test_guard` while servicing commands.
+    unsafe {
+        let failure = &mut *TEST_SDIO_TRANSFER_FAILURE.0.get();
+        if failure.remaining == 0 || failure.cmd != record.cmd {
+            return false;
+        }
+        if record.cmd == SDIO_CMD53
+            && (failure.function != sdio_cmd53_arg_function(record.arg)
+                || failure.write != sdio_cmd53_arg_write(record.arg))
+        {
+            return false;
+        }
+        failure.remaining -= 1;
+        true
     }
 }
 
@@ -15536,9 +15598,10 @@ fn usb_hub_clear_port_change_mask(
     interface: u8,
     port: u8,
     change_mask: u16,
-) {
+) -> bool {
+    let mut cleared = true;
     if change_mask & USB_HUB_CHANGE_CONNECTION != 0 {
-        let _ = usb_hub_clear_feature(
+        cleared &= usb_hub_clear_feature(
             state,
             descriptor,
             device,
@@ -15548,7 +15611,7 @@ fn usb_hub_clear_port_change_mask(
         );
     }
     if change_mask & USB_HUB_CHANGE_ENABLE != 0 {
-        let _ = usb_hub_clear_feature(
+        cleared &= usb_hub_clear_feature(
             state,
             descriptor,
             device,
@@ -15558,7 +15621,7 @@ fn usb_hub_clear_port_change_mask(
         );
     }
     if change_mask & USB_HUB_CHANGE_RESET != 0 {
-        let _ = usb_hub_clear_feature(
+        cleared &= usb_hub_clear_feature(
             state,
             descriptor,
             device,
@@ -15567,6 +15630,39 @@ fn usb_hub_clear_port_change_mask(
             USB_HUB_FEATURE_C_PORT_RESET,
         );
     }
+    cleared
+}
+
+fn usb_hub_clear_port_change_mask_with_progress(
+    sequence: u32,
+    aux0: u32,
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    interface: u8,
+    port: u8,
+    change_mask: u16,
+) -> bool {
+    if change_mask == 0 {
+        return true;
+    }
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_BEGIN,
+        aux0,
+    );
+    let cleared =
+        usb_hub_clear_port_change_mask(state, descriptor, device, interface, port, change_mask);
+    publish_runtime_progress(
+        sequence,
+        if cleared {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_DONE
+        } else {
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_FAILED
+        },
+        aux0,
+    );
+    cleared
 }
 
 fn usb_hub_speed_from_status(status: u16) -> u32 {
@@ -15589,9 +15685,7 @@ fn usb_hub_port_connected(status: UsbHubPortStatus) -> bool {
 }
 
 fn usb_hub_port_ready_after_reset(status: UsbHubPortStatus) -> bool {
-    usb_hub_port_connected(status)
-        && status.status & USB_HUB_STATUS_ENABLE != 0
-        && status.status & USB_HUB_STATUS_RESET == 0
+    status.status & USB_HUB_STATUS_ENABLE != 0 && status.status & USB_HUB_STATUS_RESET == 0
 }
 
 const fn usb_hub_pre_reset_change_clear_mask(change: u16) -> u16 {
@@ -15599,14 +15693,25 @@ const fn usb_hub_pre_reset_change_clear_mask(change: u16) -> u16 {
 }
 
 const fn usb_hub_ready_reset_change_clear_mask(status: u16, change: u16) -> u16 {
-    if status & USB_HUB_STATUS_CONNECTION != 0
-        && status & USB_HUB_STATUS_ENABLE != 0
-        && status & USB_HUB_STATUS_RESET == 0
-    {
+    if status & USB_HUB_STATUS_ENABLE != 0 && status & USB_HUB_STATUS_RESET == 0 {
         change & USB_HUB_CHANGE_RESET
     } else {
         0
     }
+}
+
+fn usb_hub_port_not_ready_progress(status: UsbHubPortStatus) -> u32 {
+    if status.status & USB_HUB_STATUS_RESET != 0 {
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_RESET_ACTIVE
+    } else if usb_hub_port_connected(status) {
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ENABLE_MISSING
+    } else {
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DISCONNECTED
+    }
+}
+
+fn usb_hub_publish_port_not_ready(sequence: u32, aux0: u32, status: UsbHubPortStatus) {
+    publish_runtime_progress(sequence, usb_hub_port_not_ready_progress(status), aux0);
 }
 
 const fn usb_hub_reset_settle_spins(attempt: usize) -> usize {
@@ -15650,7 +15755,9 @@ fn usb_recover_disconnected_hub_port(
             Some(usb_hub_port_status_progress(sequence, aux0)),
         ) {
             let clear_mask = usb_hub_pre_reset_change_clear_mask(status.change);
-            usb_hub_clear_port_change_mask(state, descriptor, hub, interface, port, clear_mask);
+            let _ = usb_hub_clear_port_change_mask_with_progress(
+                sequence, aux0, state, descriptor, hub, interface, port, clear_mask,
+            );
             if usb_hub_port_connected(status) {
                 return Some(status);
             }
@@ -15678,8 +15785,10 @@ fn usb_recover_disconnected_hub_port(
     } else {
         usb_hub_pre_reset_change_clear_mask(status.change)
     };
-    usb_hub_clear_port_change_mask(state, descriptor, hub, interface, port, clear_mask);
-    usb_hub_port_connected(status).then_some(status)
+    let _ = usb_hub_clear_port_change_mask_with_progress(
+        sequence, aux0, state, descriptor, hub, interface, port, clear_mask,
+    );
+    (usb_hub_port_connected(status) || usb_hub_port_ready_after_reset(status)).then_some(status)
 }
 
 fn usb_hub_reset_port_with_progress(
@@ -15925,6 +16034,45 @@ fn usb_prepare_hub_port(
     );
     let mut last = None;
     let mut status_seen = false;
+    publish_runtime_progress(
+        sequence,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_BEGIN,
+        aux0,
+    );
+    if let Some(status) = usb_hub_get_port_status_with_progress(
+        state,
+        descriptor,
+        hub,
+        interface,
+        port,
+        Some(usb_hub_port_status_progress(sequence, aux0)),
+    ) {
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
+            aux0,
+        );
+        status_seen = true;
+        if !usb_hub_port_ready_after_reset(status) {
+            usb_hub_publish_port_not_ready(sequence, aux0, status);
+        }
+        let _ = usb_hub_clear_port_change_mask_with_progress(
+            sequence,
+            aux0,
+            state,
+            descriptor,
+            hub,
+            interface,
+            port,
+            usb_hub_pre_reset_change_clear_mask(status.change),
+        );
+    } else {
+        publish_runtime_progress(
+            sequence,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_FAILED,
+            aux0,
+        );
+    }
     for attempt in 0..USB_HUB_PORT_RETRIES {
         if !usb_hub_reset_port_with_progress(
             sequence, aux0, state, descriptor, hub, interface, port,
@@ -15951,14 +16099,37 @@ fn usb_prepare_hub_port(
                 aux0,
             );
             status_seen = true;
-            let clear_mask = if usb_hub_port_ready_after_reset(status) {
-                usb_hub_ready_reset_change_clear_mask(status.status, status.change)
-            } else {
-                usb_hub_pre_reset_change_clear_mask(status.change)
-            };
-            usb_hub_clear_port_change_mask(state, descriptor, hub, interface, port, clear_mask);
             last = Some(status);
-            if !usb_hub_port_connected(status) {
+            if usb_hub_port_ready_after_reset(status) {
+                let _ = usb_hub_clear_port_change_mask_with_progress(
+                    sequence,
+                    aux0,
+                    state,
+                    descriptor,
+                    hub,
+                    interface,
+                    port,
+                    usb_hub_ready_reset_change_clear_mask(status.status, status.change),
+                );
+                publish_runtime_progress(
+                    sequence,
+                    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
+                    aux0,
+                );
+                return Some(usb_hub_speed_from_status(status.status));
+            }
+            usb_hub_publish_port_not_ready(sequence, aux0, status);
+            let _ = usb_hub_clear_port_change_mask_with_progress(
+                sequence,
+                aux0,
+                state,
+                descriptor,
+                hub,
+                interface,
+                port,
+                usb_hub_pre_reset_change_clear_mask(status.change),
+            );
+            if !usb_hub_port_connected(status) && status.status & USB_HUB_STATUS_ENABLE == 0 {
                 if let Some(recovered) = usb_recover_disconnected_hub_port(
                     sequence,
                     aux0,
@@ -15971,6 +16142,19 @@ fn usb_prepare_hub_port(
                 ) {
                     last = Some(recovered);
                     if usb_hub_port_ready_after_reset(recovered) {
+                        let _ = usb_hub_clear_port_change_mask_with_progress(
+                            sequence,
+                            aux0,
+                            state,
+                            descriptor,
+                            hub,
+                            interface,
+                            port,
+                            usb_hub_ready_reset_change_clear_mask(
+                                recovered.status,
+                                recovered.change,
+                            ),
+                        );
                         publish_runtime_progress(
                             sequence,
                             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
@@ -15978,17 +16162,10 @@ fn usb_prepare_hub_port(
                         );
                         return Some(usb_hub_speed_from_status(recovered.status));
                     }
+                    usb_hub_publish_port_not_ready(sequence, aux0, recovered);
                 } else {
                     continue;
                 }
-            }
-            if usb_hub_port_ready_after_reset(status) {
-                publish_runtime_progress(
-                    sequence,
-                    DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
-                    aux0,
-                );
-                return Some(usb_hub_speed_from_status(status.status));
             }
         } else {
             publish_runtime_progress(
@@ -18880,6 +19057,14 @@ mod tests {
         test_sdio_transfer_count(|record| record.cmd == SDIO_CMD52 && record.arg == expected_arg)
     }
 
+    fn test_sdio_cmd53_transfer_count(function: u8, write: bool) -> usize {
+        test_sdio_transfer_count(|record| {
+            record.cmd == SDIO_CMD53
+                && sdio_cmd53_arg_function(record.arg) == function
+                && sdio_cmd53_arg_write(record.arg) == write
+        })
+    }
+
     fn test_sdio_cmd53_write_addr_seen(function: u8, addr: u32) -> bool {
         let expected_addr = cyw43_backplane_function_addr(addr);
         test_sdio_transfer_seen(|record| {
@@ -19585,6 +19770,46 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_function2_write_failure_terminates_and_retries_once() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.sdpcm_seq = 4;
+        state.sdpcm_seq_max = 5;
+        let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
+        stage_bytes(payload_offset, b"cdc-control");
+        reset_test_sdio_transfer_log();
+        test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
+
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: 11,
+            flags: 0,
+        };
+
+        assert_eq!(
+            cyw43_submit_sdpcm_frame(&mut state, frame, false, false),
+            CYW43_SDPCM_HEADER_BYTES + 11
+        );
+        assert_eq!(test_sdio_cmd53_transfer_count(2, true), 2);
+        assert!(test_sdio_cmd52_write_seen(
+            0,
+            SDIO_CCCR_ABORT,
+            SDIO_FUNC_ENABLE_2
+        ));
+        assert!(test_sdio_cmd52_write_seen(
+            1,
+            SBSDIO_FUNC1_FRAMECTRL,
+            SFC_WF_TERM
+        ));
+        assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_WFRAMEBCLO) >= 1);
+        assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_WFRAMEBCHI) >= 1);
+    }
+
+    #[test]
     fn cyw43_data_tx_uses_linux_extended_header_and_eapol_priority() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -20186,6 +20411,42 @@ mod tests {
             }),
             packet
         );
+    }
+
+    #[test]
+    fn cyw43_function2_read_failure_terminates_naks_and_retries_once() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        reset_test_sdio_transfer_log();
+        test_sdio_transfer_fail_next(SDIO_CMD53, 2, false);
+
+        assert!(matches!(
+            cyw43_runtime_read_hintless_block_probe_once(
+                &mut state,
+                CYW43_RX_FRAME_FLAG_MASK_DATA,
+                94
+            ),
+            Cyw43HintlessBlockProbeResult::Empty
+        ));
+        assert_eq!(test_sdio_cmd53_transfer_count(2, false), 2);
+        assert!(test_sdio_cmd52_write_seen(
+            0,
+            SDIO_CCCR_ABORT,
+            SDIO_FUNC_ENABLE_2
+        ));
+        assert!(test_sdio_cmd52_write_seen(
+            1,
+            SBSDIO_FUNC1_FRAMECTRL,
+            SFC_RF_TERM
+        ));
+        assert!(test_sdio_cmd53_write_addr_seen(
+            1,
+            CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX
+        ));
     }
 
     #[test]
@@ -22870,6 +23131,38 @@ mod tests {
             425
         );
         assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ACK_DONE,
+            426
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_PAYLOAD_READ,
+            427
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DISCONNECTED,
+            428
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_RESET_ACTIVE,
+            429
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ENABLE_MISSING,
+            430
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_BEGIN,
+            431
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_DONE,
+            432
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_FAILED,
+            433
+        );
+        assert_eq!(
             XHCI_COMMAND_RING_BYTES,
             XHCI_COMMAND_RING_TRBS * XHCI_TRB_BYTES
         );
@@ -22891,6 +23184,10 @@ mod tests {
             status: USB_HUB_STATUS_CONNECTION | USB_HUB_STATUS_ENABLE,
             change: USB_HUB_CHANGE_RESET,
         };
+        let enabled_without_connection = UsbHubPortStatus {
+            status: USB_HUB_STATUS_ENABLE,
+            change: USB_HUB_CHANGE_RESET,
+        };
         let still_resetting = UsbHubPortStatus {
             status: USB_HUB_STATUS_CONNECTION | USB_HUB_STATUS_ENABLE | USB_HUB_STATUS_RESET,
             change: 0,
@@ -22901,6 +23198,7 @@ mod tests {
         };
 
         assert!(usb_hub_port_ready_after_reset(enabled_after_reset));
+        assert!(usb_hub_port_ready_after_reset(enabled_without_connection));
         assert!(!usb_hub_port_ready_after_reset(connected));
         assert!(!usb_hub_port_ready_after_reset(still_resetting));
         assert_eq!(
@@ -22925,6 +23223,13 @@ mod tests {
             USB_HUB_CHANGE_RESET
         );
         assert_eq!(
+            usb_hub_ready_reset_change_clear_mask(
+                enabled_without_connection.status,
+                USB_HUB_CHANGE_RESET
+            ),
+            USB_HUB_CHANGE_RESET
+        );
+        assert_eq!(
             usb_hub_ready_reset_change_clear_mask(connected.status, USB_HUB_CHANGE_RESET),
             0
         );
@@ -22933,6 +23238,18 @@ mod tests {
             0
         );
         assert!(!usb_hub_port_ready_after_reset(disconnected));
+        assert_eq!(
+            usb_hub_port_not_ready_progress(connected),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_ENABLE_MISSING
+        );
+        assert_eq!(
+            usb_hub_port_not_ready_progress(still_resetting),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_RESET_ACTIVE
+        );
+        assert_eq!(
+            usb_hub_port_not_ready_progress(disconnected),
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DISCONNECTED
+        );
         assert_eq!(USB_HUB_PORT_RESET_SETTLE_SPINS, USB_MSEC_SPINS * 20);
         assert_eq!(USB_HUB_PORT_RESET_RETRY_SETTLE_SPINS, USB_MSEC_SPINS * 200);
         assert_eq!(usb_hub_port_reset_recovery_spins(), USB_MSEC_SPINS * 10);
