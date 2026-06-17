@@ -1865,6 +1865,7 @@ CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES = frozenset(
 CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY = (
     "cyw43-data-rx-firstread-source-asserted-empty"
 )
+CYW43_ASSOCIATION_EVENT_MISSING = "cyw43-association-event-missing"
 CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL = (
     "cyw43-host-eapol-bssid-probe-tx-submit-fail"
 )
@@ -1919,6 +1920,8 @@ def summarize_host_eapol_firstread_status(
         status = fields.get("status", "").lower()
         reason = normalize_wifi_blocker(fields.get("reason", ""))
         source_asserted_empty = blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
+        if reason == CYW43_ASSOCIATION_EVENT_MISSING and not source_asserted_empty:
+            continue
         if reason == "cyw43-association-not-associated" and not source_asserted_empty:
             continue
         if (
@@ -2150,6 +2153,8 @@ def normalize_wifi_blocker(value: str) -> str:
         or "association-not-associated" in lower
     ):
         return "cyw43-association-not-associated"
+    if CYW43_ASSOCIATION_EVENT_MISSING in lower:
+        return CYW43_ASSOCIATION_EVENT_MISSING
     if CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL in lower:
         return CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL
     if (
@@ -4169,7 +4174,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             source_asserted_empty = (
                 firstread_blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
             )
-            if reason == "cyw43-association-not-associated" and not source_asserted_empty:
+            if reason == CYW43_ASSOCIATION_EVENT_MISSING and not source_asserted_empty:
+                gate = max(gate, 7)
+                post_f2_progress_seen = True
+                blocker = reason
+                host_eapol_terminal_blocker = reason
+                explicit_blocker = reason
+            elif reason == "cyw43-association-not-associated" and not source_asserted_empty:
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 blocker = reason
@@ -5496,6 +5507,18 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
             or "association"
         )
         return "cyw43-association-not-associated", phase
+    if normalize_wifi_blocker(event.raw) == CYW43_ASSOCIATION_EVENT_MISSING:
+        firstread_blocker = cyw43_host_eapol_firstread_blocker(event.fields)
+        if firstread_blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY:
+            return firstread_blocker, "runtime-rx"
+        phase = (
+            event.fields.get("stage")
+            or event.fields.get("step")
+            or event.fields.get("current")
+            or event.fields.get("focus")
+            or "association"
+        )
+        return CYW43_ASSOCIATION_EVENT_MISSING, phase
     for key in ("exact", "exact_error", "err", "cause", "detail", "reason"):
         value = event.fields.get(key)
         if value and value not in {"none", "n/a"}:
@@ -5696,6 +5719,11 @@ def summarize_wifi_failure_detail(
             and "cyw43_driver_task_host_eapol_status" in raw
             and cyw43_host_eapol_post_rescue_association_gap(fields)
             and firstread_blocker != CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
+        ):
+            candidate = wifi_blocker
+        if (
+            wifi_blocker == CYW43_ASSOCIATION_EVENT_MISSING
+            and "cyw43_driver_task_host_eapol_status" in raw
         ):
             candidate = wifi_blocker
         if wifi_blocker == firstread_blocker:

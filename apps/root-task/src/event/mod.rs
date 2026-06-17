@@ -322,6 +322,15 @@ fn net_status_needs_host_eapol_burst(status: &NetStatusReport) -> bool {
 }
 
 #[cfg(feature = "net-console")]
+const fn net_physical_input_pressure_for_status(
+    physical_input_active: bool,
+    local_seat_first_report_pending: bool,
+    host_eapol_pending: bool,
+) -> bool {
+    physical_input_active || (local_seat_first_report_pending && !host_eapol_pending)
+}
+
+#[cfg(feature = "net-console")]
 fn net_status_should_yield_to_physical_input(status: &NetStatusReport) -> bool {
     matches!(
         status.address_source,
@@ -1852,8 +1861,11 @@ where
             let should_yield_before =
                 net_status_should_yield_to_physical_input(&net.status_report());
             let host_eapol_pending_before = net_status_needs_host_eapol_burst(&net.status_report());
-            let local_seat_input_pressure =
-                physical_input_active || local_seat_first_report_pending;
+            let local_seat_input_pressure = net_physical_input_pressure_for_status(
+                physical_input_active,
+                local_seat_first_report_pending,
+                host_eapol_pending_before,
+            );
             let net_contract = net.driver_task_contract();
             let network_data_yields_to_input = net_contract
                 .validate()
@@ -15361,6 +15373,14 @@ mod tests {
         drop(pump);
 
         assert_eq!(net.polls, WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS + 1);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn host_eapol_pending_ignores_idle_usb_first_report_wait() {
+        assert!(!net_physical_input_pressure_for_status(false, true, true));
+        assert!(net_physical_input_pressure_for_status(true, true, true));
+        assert!(net_physical_input_pressure_for_status(false, true, false));
     }
 
     #[cfg(feature = "net-console")]

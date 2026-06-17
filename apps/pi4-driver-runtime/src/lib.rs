@@ -612,6 +612,7 @@ const USB_KEYBOARD_REPORT_BUFFER_BYTES: usize = 64;
 const USB_FLEXIBLE_KEYBOARD_REPORT_MIN_BYTES: usize = 4;
 const USB_KEYBOARD_OUTPUT_LIMIT: usize = 16;
 const USB_HID_CONTROL_GET_REPORT_COOLDOWN_POLLS: u8 = 7;
+const USB_HID_LED_SYNC_IDLE_POLLS: u8 = 8;
 const USB_HID_USAGE_SCROLL_LOCK: u8 = 0x47;
 const USB_HID_USAGE_RIGHT_ARROW: u8 = 0x4f;
 const USB_HID_USAGE_LEFT_ARROW: u8 = 0x50;
@@ -1547,6 +1548,9 @@ struct UsbRuntimeState {
     caps_lock_on: bool,
     num_lock_on: bool,
     scroll_lock_on: bool,
+    keyboard_led_report: u8,
+    keyboard_led_sync_pending: bool,
+    keyboard_led_sync_cooldown: u8,
     led_sync_failed: bool,
     reports: u32,
 }
@@ -1617,6 +1621,9 @@ impl UsbRuntimeState {
             caps_lock_on: false,
             num_lock_on: false,
             scroll_lock_on: false,
+            keyboard_led_report: 0,
+            keyboard_led_sync_pending: false,
+            keyboard_led_sync_cooldown: 0,
             led_sync_failed: false,
             reports: 0,
         }
@@ -3699,7 +3706,7 @@ fn usb_runtime_init(
     );
     let detail = USB_RUNTIME_STATE.with_mut(|state| {
         if state.initialized {
-            if state.keyboard_slot != 0 && state.keyboard_endpoint_id != 0 {
+            if usb_keyboard_poll_ready_state(state) {
                 state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
                 return Some(DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY);
             }
@@ -10825,10 +10832,31 @@ fn usb_reset_keyboard_interrupt_queue(state: &mut UsbRuntimeState) {
     state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
     state.keyboard_control_poll_disabled = false;
     state.keyboard_control_poll_cooldown = 0;
+    state.keyboard_led_report = usb_keyboard_led_bitmap(state);
+    state.keyboard_led_sync_pending = false;
+    state.keyboard_led_sync_cooldown = 0;
+    state.led_sync_failed = false;
+}
+
+fn usb_keyboard_poll_ready_state(state: &UsbRuntimeState) -> bool {
+    state.initialized
+        && state.init_detail == DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY
+        && state.keyboard_slot != 0
+        && state.keyboard_endpoint_id != 0
+}
+
+fn usb_keyboard_control_poll_allowed(state: &UsbRuntimeState) -> bool {
+    state.keyboard_transfer_events == 0
+        || matches!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE
+                | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_SHORT
+                | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODE_FAILED
+        )
 }
 
 fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u32) -> usize {
-    if !state.initialized || state.keyboard_slot == 0 || state.keyboard_endpoint_id == 0 {
+    if !usb_keyboard_poll_ready_state(state) {
         return 0;
     }
     RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
@@ -10878,15 +10906,18 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
             }
         }
         let _ = xhci_arm_keyboard_interrupt_queue(state, descriptor);
-        if bytes == 0 {
+        if bytes == 0 && usb_keyboard_control_poll_allowed(state) {
             bytes = usb_poll_keyboard_control_report(state, descriptor, sequence, aux0);
+        }
+        if bytes == 0 {
+            usb_keyboard_sync_pending_leds_after_idle(state, descriptor);
         }
         bytes
     })
 }
 
 fn usb_keyboard_endpoint_ready(state: &mut UsbRuntimeState) -> bool {
-    state.initialized && state.keyboard_slot != 0 && state.keyboard_endpoint_id != 0
+    usb_keyboard_poll_ready_state(state)
 }
 
 fn usb_keyboard_pending_result(state: &mut UsbRuntimeState) -> u32 {
@@ -10977,7 +11008,7 @@ fn usb_runtime_enumeration_result(state: &UsbRuntimeState) -> u32 {
         } else {
             0
         }
-        | if state.keyboard_slot != 0 && state.keyboard_endpoint_id != 0 {
+        | if usb_keyboard_poll_ready_state(state) {
             USB_ENUM_RESULT_ENDPOINT_READY
         } else {
             0
@@ -11153,7 +11184,7 @@ fn usb_runtime_retry_keyboard_enumeration(
     if !state.initialized {
         return None;
     }
-    if state.keyboard_slot != 0 && state.keyboard_endpoint_id != 0 {
+    if usb_keyboard_poll_ready_state(state) {
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
         return Some(DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY);
     }
@@ -11563,13 +11594,45 @@ fn usb_keyboard_toggle_lock(state: &mut UsbRuntimeState, code: u8) -> bool {
         USB_HID_USAGE_SCROLL_LOCK => state.scroll_lock_on = !state.scroll_lock_on,
         _ => return false,
     }
-    let leds = usb_keyboard_led_bitmap(state);
-    RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
-        state.led_sync_failed = state.keyboard_slot == 0
-            || state.keyboard_interface == 0xff
-            || !usb_set_hid_leds(state, descriptor, leds);
-    });
+    usb_keyboard_defer_led_sync(state);
     true
+}
+
+fn usb_keyboard_defer_led_sync(state: &mut UsbRuntimeState) {
+    state.keyboard_led_report = usb_keyboard_led_bitmap(state);
+    if state.led_sync_failed {
+        return;
+    }
+    state.keyboard_led_sync_pending = true;
+    state.keyboard_led_sync_cooldown = USB_HID_LED_SYNC_IDLE_POLLS;
+}
+
+fn usb_keyboard_sync_pending_leds_after_idle(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+) {
+    if !state.keyboard_led_sync_pending || state.led_sync_failed {
+        return;
+    }
+    if state.keyboard_preserved_event_count != 0 {
+        return;
+    }
+    if state.keyboard_led_sync_cooldown != 0 {
+        state.keyboard_led_sync_cooldown = state.keyboard_led_sync_cooldown.saturating_sub(1);
+        return;
+    }
+    if state.keyboard_slot == 0 || state.keyboard_interface == 0xff {
+        state.keyboard_led_sync_pending = false;
+        state.led_sync_failed = true;
+        return;
+    }
+    let leds = state.keyboard_led_report;
+    if usb_set_hid_leds(state, descriptor, leds) {
+        state.keyboard_led_sync_pending = false;
+    } else {
+        state.keyboard_led_sync_pending = false;
+        state.led_sync_failed = true;
+    }
 }
 
 fn usb_keyboard_led_bitmap(state: &UsbRuntimeState) -> u8 {
@@ -20379,6 +20442,7 @@ mod tests {
         );
         USB_RUNTIME_STATE.with_mut(|state| {
             state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
             state.keyboard_slot = 1;
             state.keyboard_endpoint_id = 3;
         });
@@ -23878,6 +23942,12 @@ mod tests {
         );
         assert!(state.caps_lock_on);
         assert_eq!(usb_keyboard_led_bitmap(&state), USB_HID_LED_CAPS_LOCK);
+        assert_eq!(state.keyboard_led_report, USB_HID_LED_CAPS_LOCK);
+        assert!(state.keyboard_led_sync_pending);
+        assert_eq!(
+            state.keyboard_led_sync_cooldown,
+            USB_HID_LED_SYNC_IDLE_POLLS
+        );
 
         let a_report = [0, 0, 0x04, 0, 0, 0, 0, 0];
         assert_eq!(usb_keyboard_report_bytes_to_frame(&mut state, a_report), 1);
@@ -23890,6 +23960,49 @@ mod tests {
             1
         );
         assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'a');
+    }
+
+    #[test]
+    fn usb_keyboard_led_sync_defers_until_idle_and_quarantines_failure() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let mut state = UsbRuntimeState::new();
+
+        let caps_report = [0, 0, USB_HID_USAGE_CAPS_LOCK, 0, 0, 0, 0, 0];
+        assert_eq!(
+            usb_keyboard_report_bytes_to_frame(&mut state, caps_report),
+            0
+        );
+        assert!(state.caps_lock_on);
+        assert_eq!(state.keyboard_led_report, USB_HID_LED_CAPS_LOCK);
+        assert!(state.keyboard_led_sync_pending);
+        assert!(!state.led_sync_failed);
+
+        for remaining in (1..=USB_HID_LED_SYNC_IDLE_POLLS).rev() {
+            assert_eq!(state.keyboard_led_sync_cooldown, remaining);
+            usb_keyboard_sync_pending_leds_after_idle(&mut state, &descriptor);
+            assert!(state.keyboard_led_sync_pending);
+            assert!(!state.led_sync_failed);
+        }
+
+        usb_keyboard_sync_pending_leds_after_idle(&mut state, &descriptor);
+        assert!(!state.keyboard_led_sync_pending);
+        assert!(state.led_sync_failed);
+
+        state.last_keys = [0; 6];
+        let num_report = [0, 0, USB_HID_USAGE_NUM_LOCK, 0, 0, 0, 0, 0];
+        assert_eq!(
+            usb_keyboard_report_bytes_to_frame(&mut state, num_report),
+            0
+        );
+        assert!(state.num_lock_on);
+        assert!(!state.keyboard_led_sync_pending);
+
+        state.last_keys = [0; 6];
+        let a_report = [0, 0, 0x04, 0, 0, 0, 0, 0];
+        assert_eq!(usb_keyboard_report_bytes_to_frame(&mut state, a_report), 1);
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'A');
     }
 
     #[test]
@@ -24019,6 +24132,38 @@ mod tests {
                 | 0x0100
                 | 0x04
         );
+    }
+
+    #[test]
+    fn usb_control_report_fallback_stops_after_decoded_interrupt_report() {
+        let mut state = UsbRuntimeState::new();
+        assert!(usb_keyboard_control_poll_allowed(&state));
+
+        state.keyboard_transfer_events = 1;
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
+        assert!(usb_keyboard_control_poll_allowed(&state));
+
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_SHORT;
+        assert!(usb_keyboard_control_poll_allowed(&state));
+
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODE_FAILED;
+        assert!(usb_keyboard_control_poll_allowed(&state));
+
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+        assert!(!usb_keyboard_control_poll_allowed(&state));
+
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE;
+        assert!(!usb_keyboard_control_poll_allowed(&state));
+
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY;
+        assert!(!usb_keyboard_control_poll_allowed(&state));
+
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY;
+        assert!(!usb_keyboard_control_poll_allowed(&state));
+
+        state.keyboard_last_report_status =
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FLEXIBLE_FALLBACK;
+        assert!(!usb_keyboard_control_poll_allowed(&state));
     }
 
     #[test]
@@ -25754,6 +25899,7 @@ mod tests {
     fn usb_enumeration_result_encodes_frontier_snapshot() {
         let mut state = UsbRuntimeState::new();
         state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
         state.command_path_proven = true;
         state.enumeration_root_powered = true;
         state.enumeration_root_scan_pass = 2;
@@ -25782,6 +25928,75 @@ mod tests {
         assert_ne!(result & USB_ENUM_RESULT_PRESERVED_EVENT, 0);
         assert_ne!(result & USB_ENUM_RESULT_TRANSFER_EVENT, 0);
         assert_ne!(result & USB_ENUM_RESULT_ENDPOINT_READY, 0);
+    }
+
+    #[test]
+    fn usb_stale_hid_endpoint_after_attach_failure_is_not_keyboard_ready() {
+        let mut state = UsbRuntimeState::new();
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_endpoint_address = 0x81;
+        state.enumeration_retry_cooldown = 1;
+
+        assert!(!usb_keyboard_endpoint_ready(&mut state));
+        assert_eq!(
+            usb_runtime_retry_keyboard_enumeration(
+                12,
+                DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+                &mut state
+            ),
+            Some(DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED)
+        );
+        assert_eq!(
+            state.init_detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+        );
+
+        let result = usb_runtime_enumeration_result(&state);
+        assert_ne!(result & USB_ENUM_RESULT_HID_ENDPOINT, 0);
+        assert_eq!(result & USB_ENUM_RESULT_ENDPOINT_READY, 0);
+    }
+
+    #[test]
+    fn usb_poll_reports_attach_failure_instead_of_polling_stale_endpoint() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED;
+            state.keyboard_slot = 4;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_endpoint_address = 0x81;
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 98,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        let completion = service_usb_keyboard(poll);
+
+        assert_eq!(completion.sequence, 98);
+        assert_eq!(completion.code, COMPLETION_PROGRESS);
+        assert_eq!(
+            completion.detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+        );
+        assert_ne!(completion.result & USB_ENUM_RESULT_HID_ENDPOINT, 0);
+        assert_eq!(completion.result & USB_ENUM_RESULT_ENDPOINT_READY, 0);
     }
 
     #[test]
@@ -25874,6 +26089,7 @@ mod tests {
         let kbd_ring = xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET).unwrap();
         USB_RUNTIME_STATE.with_mut(|state| {
             state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
             state.db_offset = 0x1000;
             state.keyboard_slot = 1;
             state.keyboard_endpoint_id = 3;
@@ -26281,6 +26497,7 @@ mod tests {
         );
         USB_RUNTIME_STATE.with_mut(|state| {
             state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
             state.keyboard_slot = 1;
             state.keyboard_endpoint_id = 3;
         });
@@ -26319,6 +26536,7 @@ mod tests {
         );
         USB_RUNTIME_STATE.with_mut(|state| {
             state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
             state.keyboard_slot = 1;
             state.keyboard_endpoint_id = 3;
             state.keyboard_reports_queued = USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u8;

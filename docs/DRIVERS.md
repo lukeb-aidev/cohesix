@@ -868,7 +868,9 @@ Device-visible address policy is not generic:
   host-EAPOL is pending or required, the generic driver-task pre-poll service
   turn and the normal smoltcp, DHCP, TCP, and self-test phases stay parked so
   data-path RX cannot submit a mismatched CYW43 descriptor over the active
-  EAPOL poll. If
+  EAPOL poll. An idle USB first-report wait is not treated as active physical
+  input while host-EAPOL is pending; actual serial or USB keyboard bytes still
+  take the event-pump turn first so console echo remains bounded. If
   that proof is missing, root skips the deferred Wi-Fi replay and leaves a
   serial-diagnostic blocker instead of printing a prompt and then monopolizing
   it. The `Cohesix console ready` banner means the serial event pump can accept
@@ -987,8 +989,8 @@ firmware/NVRAM upload, firmware release, owner-state recovery, Function 2
 readiness, split `bus:txglomalign`, matched unsupported `ulp_sdioctrl`, and
 matched `bus:rxglom`. The prior 09:55 `ulp_sdioctrl` nonmatching-reply timeout
 is therefore fixed in hardware evidence. The same boot still has no
-`cur_etheraddr`, `BRCMF_C_GET_REVINFO`, join, successful `WLC_GET_BSSID`
-association probe, association/link event, valid AP BSSID, EAPOL M1/M2/M3/M4,
+`cur_etheraddr`, `BRCMF_C_GET_REVINFO`, join, association/link event,
+post-association BSSID refresh, EAPOL M1/M2/M3/M4,
 DHCP/IP, successful `nettest`, or remote `cohsh`; prompt-side `nettest` and
 `netstats` correctly fail with `net-disabled cause=cyw43-command driver-task
 runtime init failed`. Older firmware-upload, Function 2, `txglomalign`,
@@ -999,7 +1001,7 @@ first control poll returns a 17-byte nonmatching payload parsed as
 `cmd_hex=0x5344494f`, then the real BCDC reply never arrives and root records
 `result=0x43080001` with linked progress parked at
 `cyw43-sdio-owner-wait-begin`. The first missing proof is a matched MAC query,
-then revinfo, pre-join controls, join, BSSID/association probe, association/link,
+then revinfo, pre-join controls, join, association/link event delivery,
 and EAPOL RX. DHCP remains correctly blocked until host-EAPOL security
 completes, and `join accepted` is not association proof. Pi 4 image builds now
 force a fresh `COHESIX_BUILD_STAMP`
@@ -1029,21 +1031,20 @@ spend the logical host-EAPOL proof window.
 Extended control TX and pre-TX RX draining are separate linked-runtime policy
 bits. Startup controls such as `cur_etheraddr` and `BRCMF_C_GET_REVINFO` keep
 the direct txctl-to-rxctl path that proved the control plane in prior boots,
-even when they use the Linux SDPCM hardware-extension header. Post-join probes
-such as `WLC_GET_BSSID` keep that extended-header direct TX path too: the
-fresh June 17 linked-runtime run showed the explicitly drained split TX form
-failing before the BSSID request reached firmware. Pre-TX drain remains an
-explicit descriptor flag for controls that require it; when used, it can consume
-immediately readable frames, but it does not issue the RX abort/RF_TERM/
-`SMB_NAK` retransmit sequence before the control write. That preserves
-nonmatching frames for the later control or data poll instead of treating the
-drain as association or EAPOL proof.
-If a post-join BSSID probe hits a retryable linked SDIO descriptor-transfer
-fault (`0x5103`) before the request reaches firmware, root retries the same
-control exchange once with the same BCDC id and emits `status=tx-fault-retry`.
-The retry is transport recovery only: it does not mark association, release
-DHCP/data, or spend the legacy `WLC_SET_SSID` association rescue unless a later
-firmware status or valid BSSID proof justifies that separate step.
+even when they use the Linux SDPCM hardware-extension header. `WLC_GET_BSSID`
+is not a pre-association proof source in the linked-runtime path: the May 18-19
+root-owned behavior used association/link events to prove carrier, then treated
+`WLC_GET_BSSID` only as AP-MAC metadata for the host-EAPOL path. The
+linked-runtime replay now follows that contract. A one-shot post-association
+BSSID refresh keeps the same extended-header direct TX path and may retry one
+retryable linked SDIO descriptor-transfer fault (`0x5103`) with the same BCDC
+id. That retry is transport recovery only; it does not mark association,
+release DHCP/data, submit a legacy `WLC_SET_SSID` rescue, or convert a valid
+BSSID into carrier proof. Pre-TX drain remains an explicit descriptor flag for
+controls that require it; when used, it can consume immediately readable frames,
+but it does not issue the RX abort/RF_TERM/`SMB_NAK` retransmit sequence before
+the control write. That preserves nonmatching frames for the later control or
+data poll instead of treating the drain as association or EAPOL proof.
 Root-side station setup already splits matched CYW43 controls into a
 `CONTROL_FRAME` TX turn plus bounded parent-side `CONTROL_POLL` turns;
 host-EAPOL extends that model by tracking the active CYW43 prompt poll,
@@ -1107,40 +1108,32 @@ control/event or data frames, records `event_rx`, `associated`, `link_up`,
 diagnostic EAPOL-Start after the
 post-association window reaches poll `8192`. It refreshes PAE multicast
 admission after `1024` post-association polls and runs the allmulti/promisc M1
-rescue after `4096` post-association polls or two starts. Host-EAPOL status
+rescue after `4096` post-association polls or two starts. Before association
+proof, root keeps ordinary control/event and data polling active and adds a
+sparse hintless Function 2 first-read cadence at polls `0`, `1`, `4`, `16`,
+`64`, `256`, `1024`, `4096`, and then every `8192` polls. That cadence gives
+association/link events or AP M1 a linked-runtime delivery path without
+continuously poking the RX latch. Post-association hintless first-read recovery
+still waits for the sparse post-EAPOL-start cadence. Host-EAPOL status
 records still report `rx_firstread_attempts`, `rx_firstread_empty`,
 `rx_firstread_invalid`, `rx_firstread_failed`,
 `rx_firstread_remainder_failed`, `rx_firstread_decode_miss`,
-`last_rx_idle_detail`, and `last_rx_idle_result`; the normalizer preserves
-direct `cyw43-data-rx-firstread-*` blockers over later prompt-side
-`host-eapol-required` symptoms and over the post-rescue association gap when
-`last_rx_idle_detail=0x570e` names asserted owner-side RX source with an empty
-bounded Function 2 first-read. If no post-join event/control/data frame has
-arrived by the pre-association proof window, root issues bounded linked
-`WLC_GET_BSSID` control exchanges. A transient firmware
-`BCME_NOTASSOCIATED`/`0xffffffef` result is logged as
-`status=pending reason=firmware-not-associated result=0xffffffef` and retried
-at a fixed bounded cadence; it does not consume the whole association-probe
-proof opportunity. If two matched probes report firmware still not associated,
-root issues one bounded association rescue with legacy `WLC_SET_SSID` and emits
-`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE ... status=ready action=set-ssid`.
-The Linux-shaped `bsscfg:join` remains the primary path. The rescue does not
-send EAPOL-Start, release DHCP/data, or mark association by itself; it only
-opens one additional full bounded pre-association probe window starting from the
-rescue point. That window covers the normal first post-rescue probe delay plus
-four fixed-cadence `WLC_GET_BSSID` attempts before terminal failure. If
-the one-shot rescue was already spent and firmware remains not associated, the
-terminal host-EAPOL status reports `reason=cyw43-association-not-associated`.
-After the rescue is spent, the expected terminal action is
-`next_action=inspect-cyw43-association-event-after-set-ssid-rescue`; otherwise
-it remains `next_action=inspect-cyw43-association-event-or-join-policy`. The
-normalizer preserves that Gate 7 association blocker over generic host-EAPOL
-symptoms, prompt-side DHCP policy lines, and the expected empty first-read
-counters. A valid globally
-administered AP candidate marks only `associated=yes` with
-`assoc_event=bssid-probe`, then enters the existing post-association
-EAPOL-Start/receive-admission cadence; it does not set `link_up`, mark EAPOL
-secure, release DHCP/data, or bypass the linked runtime.
+`last_rx_idle_detail`, and `last_rx_idle_result`. If the join proof window ends
+with no association/link event and no data or EAPOL frame, root reports
+`reason=cyw43-association-event-missing` with
+`next_action=inspect-cyw43-association-event-or-join-policy`; the normalizer
+keeps that Gate 7 association blocker over expected empty first-read counters
+because association/link delivery is the first missing old-good replay proof.
+Direct `cyw43-data-rx-firstread-*` blockers remain authoritative after
+association is already proven, when the missing proof has moved to AP M1 or
+later EAPOL receive. The Linux-shaped `bsscfg:join` remains the only primary
+join path after matched prejoin controls. Root no longer issues a
+pre-association `WLC_GET_BSSID` probe, no longer promotes a valid BSSID to
+`associated=yes`, and no longer spends a legacy `WLC_SET_SSID` rescue after
+`BCME_NOTASSOCIATED`. `join accepted` remains only join-submit proof; carrier
+proof must come from a Broadcom association/link event delivered by the linked
+runtime, or from a later received EAPOL frame that proves the AP is talking to
+the station.
 The next boot must show `cyw43-control-rsn-mfp` and
 `cyw43-control-rsn-wme-bss-disable` ready or tolerated-unsupported status before
 `cyw43-control-wpa-auth-final`, and it must show
@@ -1152,11 +1145,9 @@ The next boot must show `cyw43-control-rsn-mfp` and
 `cyw43-control-connect-mpc`, `cyw43-control-connect-arp-ol`,
 `cyw43-control-connect-arpoe`, and `cyw43-control-connect-ndoe` before
 host-EAPOL admission and join. After that,
-the proof must be either association/link progress,
-`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_PROBE status=associated
-reason=valid-bssid`, bounded `status=pending reason=firmware-not-associated`
-retries that expose `cyw43-association-not-associated`, or a new direct
-join/security status. Linked CYW43 station setup also preserves the May 18-19
+the proof must be association/link progress from delivered Broadcom events or a
+direct EAPOL receive edge; a valid BSSID is not association proof. Linked CYW43
+station setup also preserves the May 18-19
 global `event_msgs` interface-event subscription before scan dwell setup, then
 programs the Linux `event_msgs_ext` join-event mask before `WLC_UP` and again
 after the post-up event drain, falling back to global `event_msgs` only on
@@ -1167,21 +1158,18 @@ the old-good managed-station path: root first submits the Linux `join` iovar
 `brcmf_ext_join_params` shape. It falls back to legacy `WLC_SET_SSID` during
 join submit only for matched `BCME_UNSUPPORTED` or `BCME_BADARG` firmware
 statuses; transport faults do not fall back. After an accepted `bsscfg:join`,
-the only additional `WLC_SET_SSID` path is the one-shot host-EAPOL association
-rescue described above, and only after repeated matched `WLC_GET_BSSID`
-`BCME_NOTASSOCIATED` replies prove that the live blocker is join/association
-policy rather than SDIO/F2 readiness.
+there is no additional host-EAPOL `WLC_SET_SSID` rescue path; the next blocker
+must remain association/link event delivery or first EAPOL RX until one of those
+proofs appears.
 Repeated
 `cyw43-firmware-recover` owner-replay cycles remain progress only when
 `resume_offset` or `STREAM_PROGRESS uploaded=` advances; root keeps the
 structured `CYW43_DRIVER_TASK_FIRMWARE_RECOVERY` and stream/fault records but
 suppresses redundant human-readable `begin` / `ready` wrappers for that recovery
-stage. The next boot must either show a complete post-rescue probe window with
-four post-rescue `WLC_GET_BSSID` attempts and
-`next_action=inspect-cyw43-association-event-after-set-ssid-rescue`, show
-association/link event delivery or a valid AP BSSID after the rescue, show
-association/link event delivery from the primary `bsscfg:join` path followed by
-EAPOL data reaching the host handshake, prove the denser post-event-mask
+stage. The next boot must either show association/link event delivery from the
+primary `bsscfg:join` path followed by EAPOL data reaching the host handshake,
+show first EAPOL RX that moves the proof frontier to handshake processing, prove
+the denser post-event-mask
 block-probe window is still empty/no-reply with `last_rx_idle_detail=0x570a` and
 decoded `rxsrc_*` / `control_rxsrc_*` fields, prove malformed first-read SDPCM
 with `last_rx_idle_detail=0x570b`, prove a CMD53 first-read/remainder failure
@@ -1392,14 +1380,14 @@ context and the retry/poll window.
   control/event frames through `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL`, credit-gates
   control TX, drains a bounded Linux-style SDPCM next-frame window before RX
   returns and before explicitly flagged controls, suppresses repetitive low-level
-  breadcrumbs, and keeps non-EAPOL data blocked. The BSSID association probe is
-  intentionally not pre-drained because the drained split TX shape failed with
-  `cyw43-host-eapol-bssid-probe-tx-submit-fail` before firmware reply polling.
-  The explicit pre-TX drain flag decodes immediately available RX and preserves
-  asserted-empty source latches for the following control write; RX-proof polls
-  remain the path that can send the bounded RX retransmit request. Early iovar
-  controls do not consume pending RX before submitting their control frame unless
-  the descriptor carries the explicit pre-TX drain flag.
+  breadcrumbs, and keeps non-EAPOL data blocked. The post-association BSSID
+  refresh is intentionally not pre-drained; it is AP-MAC metadata and cannot
+  prove association or release DHCP/data. The explicit pre-TX drain flag decodes
+  immediately available RX and preserves asserted-empty source latches for the
+  following control write; RX-proof polls remain the path that can send the
+  bounded RX retransmit request. Early iovar controls do not consume pending RX
+  before submitting their control frame unless the descriptor carries the
+  explicit pre-TX drain flag.
   Prompt-side `wifi diag` and `wifi dump-state` render cached or
   linked-runtime evidence; bounded `wifi probe-ht` and stateful `wifi load-fw` /
   `wifi retry` fail closed with `pi4-wifi-driver-task-runtime-required` when no
@@ -1498,7 +1486,9 @@ context and the retry/poll window.
 - USB/local-seat and CYW43455 may both be active, but USB owns the bounded
   pre-net keyboard window. Wi-Fi must keep raw breadcrumbs out of UART/HDMI while
   USB is proving first input, then continue to rate-limit raw HAL output so
-  keyboard, serial, HDMI, and IPC turns stay responsive.
+  keyboard, serial, HDMI, and IPC turns stay responsive. After join submission,
+  a pending-but-idle USB first-report proof cannot starve the host-EAPOL burst;
+  only actual keyboard or serial input defers that Wi-Fi service turn.
 - Wi-Fi net-console bring-up must not publish an interactive serial prompt while
   deferred replay is still producing startup descriptors. With complete
   linked-runtime pointer-free proof, bounded SDIO/CYW43455 replay starts after
@@ -1974,6 +1964,9 @@ active path is Cohesix-owned cold start:
   after selecting boot protocol, the linked runtime sends `SET_IDLE` with
   duration `0` so compatible keyboards report only changes instead of generating
   periodic idle reports that can bury real key transitions behind empty events.
+  The bounded EP0 `GET_REPORT` fallback is used only before the first
+  interrupt-IN report proves Gate 9; after that proof, first-byte progress stays
+  on the interrupt-IN path so empty-control polling cannot hide key changes.
 - Periodic endpoint contexts must carry U-Boot-equivalent scheduler fields.
   For the current SINO WEALTH `258a:0f0a` keyboard interface, Linux reports a
   low-speed interrupt-IN endpoint (`0x81`) with `wMaxPacketSize=8` and
@@ -2021,11 +2014,13 @@ active path is Cohesix-owned cold start:
   fast press/release transitions during console-output stalls.
   The linked USB runtime therefore reserves a dedicated one-byte HID
   output-report DMA slot during keyboard attach and uses it for Caps Lock, Num
-  Lock, and Scroll Lock `SET_REPORT(Output)` updates after the seal. LED sync is
-  optional: if a keyboard stalls, rejects, or times out the output report,
-  Cohesix logs that the LED path is unavailable, disables later LED writes for
-  that keyboard, and keeps the software lock state and normal input path
-  running.
+  Lock, and Scroll Lock `SET_REPORT(Output)` updates after the seal. Lock-key
+  reports update software lock state immediately but defer the optional LED
+  output report until a short idle window, so EP0 traffic does not run inside
+  the interrupt-IN report decoder. If a keyboard stalls, rejects, or times out
+  the output report, Cohesix logs that the LED path is unavailable, disables
+  later LED writes for that keyboard, and keeps the software lock state and
+  normal input path running.
 - Root-port reset before Address Device follows the U-Boot retry envelope:
   retry reset/enable timeouts up to five attempts with a short first settle and
   longer subsequent settles, but do not synthesize a device when live root-port

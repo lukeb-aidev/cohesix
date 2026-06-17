@@ -5315,6 +5315,7 @@ def test_normalize_wifi_blocker_alias_table_covers_post_ht_gates() -> None:
         "wifi-association-failed": "wifi-association-failed",
         "cyw43-association-not-associated": "cyw43-association-not-associated",
         "association-not-associated": "cyw43-association-not-associated",
+        "cyw43-association-event-missing": "cyw43-association-event-missing",
         "dhcp-pending": "dhcp-pending",
         "dhcp-failed": "dhcp-failed",
         "not-ready:ipc-buffer": "net-not-ready-ipc-buffer",
@@ -6956,6 +6957,71 @@ def test_gate_summary_names_firstread_source_asserted_empty() -> None:
     assert gates.wifi_blocker == "cyw43-data-rx-firstread-source-asserted-empty"
     assert gates.wifi_exact == "cyw43-data-rx-firstread-source-asserted-empty"
     assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_preserves_source_asserted_empty_over_association_gap() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-event-missing polls=24576 "
+            "starts=0 tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 "
+            "event_rx=0 control_rx=0 empty_polls=24576 associated=no "
+            "link_up=no assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "assoc_set_ssid_rescue=no rx_firstread_attempts=24576 "
+            "rx_firstread_empty=24576 rx_firstread_invalid=0 "
+            "rx_firstread_failed=0 rx_firstread_remainder_failed=0 "
+            "rx_firstread_decode_miss=0 control_rx_firstread_attempts=24576 "
+            "control_rx_firstread_empty=24576 control_rx_firstread_failed=0 "
+            "last_rx_idle_detail=0x570e last_rx_idle_result=0xab070200 "
+            "last_control_rx_idle_detail=0x570e "
+            "last_control_rx_idle_result=0xab070200 "
+            "rxsrc_mode=owner-card-sampled rxsrc_probe_len=512 rxsrc_ien=0x07 "
+            "rxsrc_frame_ind=yes rxsrc_host_int=yes rxsrc_card_int=no "
+            "rxsrc_f2_ready=yes control_rxsrc_mode=owner-card-sampled "
+            "control_rxsrc_probe_len=512 control_rxsrc_ien=0x07 "
+            "control_rxsrc_frame_ind=yes control_rxsrc_host_int=yes "
+            "control_rxsrc_card_int=no control_rxsrc_f2_ready=yes "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no "
+            "next_action=inspect-cyw43-association-event-or-join-policy",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-source-asserted-empty"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-source-asserted-empty"
+    assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_names_association_event_missing_without_rx_source_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-event-missing polls=24576 "
+            "starts=0 tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 "
+            "event_rx=0 control_rx=0 empty_polls=24576 associated=no "
+            "link_up=no assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "assoc_set_ssid_rescue=no rx_firstread_attempts=0 "
+            "rx_firstread_empty=0 rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=0 control_rx_firstread_empty=0 "
+            "control_rx_firstread_failed=0 last_rx_idle_detail=0x0000 "
+            "last_rx_idle_result=0x00000000 last_control_rx_idle_detail=0x0000 "
+            "last_control_rx_idle_result=0x00000000 "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no "
+            "next_action=inspect-cyw43-association-event-or-join-policy",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-association-event-missing"
+    assert gates.wifi_exact == "cyw43-association-event-missing"
+    assert gates.wifi_phase == "association"
 
 
 def test_gate_summary_names_bssid_probe_tx_submit_fail_over_firstread_idle() -> None:
