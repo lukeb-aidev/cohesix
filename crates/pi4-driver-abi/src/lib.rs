@@ -741,6 +741,8 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN: u32 = 268;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY: u32 = 269;
 /// USB runtime could not arm the HID interrupt-IN transfer queue.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED: u32 = 270;
+/// USB runtime found keyboard data outside an empty boot-looking HID payload window.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK: u32 = 0x0416;
 /// USB runtime is traversing a hub after the root device had no direct keyboard endpoint.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN: u32 = 271;
 /// USB runtime is probing one hub child port for a keyboard-capable device.

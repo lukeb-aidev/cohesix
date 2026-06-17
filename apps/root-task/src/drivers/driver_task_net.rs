@@ -129,6 +129,7 @@ const CYW43_HOST_EAPOL_RX_RESCUE_AFTER_STARTS: u32 = 2;
 const CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS: u32 = CYW43_HOST_EAPOL_PRE_ASSOC_POLLS as u32;
 const CYW43_HOST_EAPOL_ASSOC_PROBE_INTERVAL_POLLS: u32 = 4_096;
 const CYW43_HOST_EAPOL_ASSOC_PROBE_MAX_ATTEMPTS: u8 = 4;
+const CYW43_HOST_EAPOL_BSSID_PROBE_PRE_TX_DRAIN: bool = false;
 const CYW43_HOST_EAPOL_ASSOC_RESCUE_POLLS: usize = (CYW43_HOST_EAPOL_ASSOC_PROBE_AFTER_POLLS
     as usize)
     + (CYW43_HOST_EAPOL_ASSOC_PROBE_MAX_ATTEMPTS as usize)
@@ -2378,7 +2379,7 @@ fn cyw43_get_bcdc_bssid(
         id,
         "cyw43-host-eapol-bssid-probe",
         Cyw43ControlHeaderMode::Extended,
-        true,
+        CYW43_HOST_EAPOL_BSSID_PROBE_PRE_TX_DRAIN,
     )
     .map_err(|err| match err {
         Cyw43CommandSubmitError::Runtime(err) => Cyw43BssidProbeError::Runtime(err),
@@ -7915,7 +7916,7 @@ mod tests {
     fn cyw43_control_frame_descriptor_uses_split_tx_op() {
         let plain = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
         let extended = cyw43_control_frame_descriptor(16, Cyw43ControlHeaderMode::Extended, false);
-        let bssid_probe =
+        let drained_extended =
             cyw43_control_frame_descriptor(16, Cyw43ControlHeaderMode::Extended, true);
 
         assert_eq!(plain.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
@@ -7924,11 +7925,26 @@ mod tests {
         assert_eq!(plain.total_len, 36);
         assert_eq!(extended.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(extended.flags, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER);
-        assert_eq!(bssid_probe.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
+        assert_eq!(drained_extended.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(
-            bssid_probe.flags,
+            drained_extended.flags,
             DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
                 | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+        );
+    }
+
+    #[test]
+    fn cyw43_bssid_probe_keeps_split_tx_undrained() {
+        let descriptor = cyw43_control_frame_descriptor(
+            16,
+            Cyw43ControlHeaderMode::Extended,
+            CYW43_HOST_EAPOL_BSSID_PROBE_PRE_TX_DRAIN,
+        );
+
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
+        assert_eq!(
+            descriptor.flags,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
         );
     }
 

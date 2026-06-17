@@ -1030,16 +1030,14 @@ Extended control TX and pre-TX RX draining are separate linked-runtime policy
 bits. Startup controls such as `cur_etheraddr` and `BRCMF_C_GET_REVINFO` keep
 the direct txctl-to-rxctl path that proved the control plane in prior boots,
 even when they use the Linux SDPCM hardware-extension header. Post-join probes
-such as `WLC_GET_BSSID` explicitly request a bounded Linux-style pre-TX receive
-drain: explicit `len_nxtfrm`/RFRAME work is decoded and queued with
-`wanted_mask=0`, then owner-sampled RX source state can trigger a single
-hintless first-read when the card asserts a pending frame without an RFRAME
-count. The pre-TX drain uses a transmit-preserving asserted-empty policy: it can
-consume immediately readable frames, but it does not issue the RX abort/RF_TERM/
-`SMB_NAK` retransmit sequence before the control write. That keeps stale
-control/event/data frames from blocking the association probe, refreshes SDPCM
-credit before TX, and preserves nonmatching frames for the later control or data
-poll instead of treating the drain as association or EAPOL proof.
+such as `WLC_GET_BSSID` keep that extended-header direct TX path too: the
+fresh June 17 linked-runtime run showed the explicitly drained split TX form
+failing before the BSSID request reached firmware. Pre-TX drain remains an
+explicit descriptor flag for controls that require it; when used, it can consume
+immediately readable frames, but it does not issue the RX abort/RF_TERM/
+`SMB_NAK` retransmit sequence before the control write. That preserves
+nonmatching frames for the later control or data poll instead of treating the
+drain as association or EAPOL proof.
 Root-side station setup already splits matched CYW43 controls into a
 `CONTROL_FRAME` TX turn plus bounded parent-side `CONTROL_POLL` turns;
 host-EAPOL extends that model by tracking the active CYW43 prompt poll,
@@ -1390,13 +1388,15 @@ context and the retry/poll window.
   keeps Ethernet RX on `DRIVER_RUNTIME_CYW43_OP_RX_POLL`, exposes SDPCM
   control/event frames through `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL`, credit-gates
   control TX, drains a bounded Linux-style SDPCM next-frame window before RX
-  returns and before explicitly flagged association probes, suppresses repetitive
-  low-level breadcrumbs, and keeps non-EAPOL data blocked. The explicit pre-TX
-  drain flag decodes immediately available RX and preserves asserted-empty source
-  latches for the following control write; RX-proof polls remain the path that
-  can send the bounded RX retransmit request. Early iovar controls do not consume
-  pending RX before submitting their control frame unless the descriptor carries
-  the explicit pre-TX drain flag.
+  returns and before explicitly flagged controls, suppresses repetitive low-level
+  breadcrumbs, and keeps non-EAPOL data blocked. The BSSID association probe is
+  intentionally not pre-drained because the drained split TX shape failed with
+  `cyw43-host-eapol-bssid-probe-tx-submit-fail` before firmware reply polling.
+  The explicit pre-TX drain flag decodes immediately available RX and preserves
+  asserted-empty source latches for the following control write; RX-proof polls
+  remain the path that can send the bounded RX retransmit request. Early iovar
+  controls do not consume pending RX before submitting their control frame unless
+  the descriptor carries the explicit pre-TX drain flag.
   Prompt-side `wifi diag` and `wifi dump-state` render cached or
   linked-runtime evidence; bounded `wifi probe-ht` and stateful `wifi load-fw` /
   `wifi retry` fail closed with `pi4-wifi-driver-task-runtime-required` when no
@@ -2425,9 +2425,9 @@ Required Cohesix shape:
   linked-runtime flexible report decoder for report-protocol keyboards that
   expose compact or bitmap reports. A key-empty boot-looking payload with
   additional non-zero report bytes emits
-  `0x0416 tag=usb-hid-report-flexible-key` before decoding via the flexible
-  path, so Gate 9 failures stay attributable to report decoding instead of
-  being misread as HAL/DMA/MMIO or SDIO contention.
+  `0x0416 tag=usb-hid-report-flexible-key-fallback` before decoding via the
+  flexible path, so Gate 9 failures stay attributable to report decoding
+  instead of being misread as HAL/DMA/MMIO or SDIO contention.
   The linked runtime requests a bounded endpoint-packet report buffer, sizes the
   decoded payload from the xHCI transfer event's remaining-length field, accepts
   report-ID-prefixed, compact, and bitmap keyboard payloads, and invalidates the

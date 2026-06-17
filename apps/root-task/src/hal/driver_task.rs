@@ -274,6 +274,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED,
@@ -5144,6 +5145,9 @@ fn driver_task_ring_progress_phase_label(phase: u32) -> &'static str {
         }
         DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED => {
             "usb-hid-interrupt-queue-failed"
+        }
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK => {
+            "usb-hid-report-flexible-key-fallback"
         }
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN => "usb-hub-scan-begin",
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_BEGIN => {
@@ -12730,6 +12734,12 @@ mod tests {
                 DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY
             ),
             "usb-hid-interrupt-queue-ready"
+        );
+        assert_eq!(
+            driver_task_ring_progress_phase_label(
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK
+            ),
+            "usb-hid-report-flexible-key-fallback"
         );
         assert_eq!(
             driver_task_ring_progress_phase_label(DRIVER_RUNTIME_RING_PROGRESS_CYW43_RELEASE_BEGIN),

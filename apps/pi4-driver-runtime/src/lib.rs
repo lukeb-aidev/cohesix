@@ -318,6 +318,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_DONE,
     DRIVER_RUNTIME_RING_PROGRESS_USB_HID_SET_CONFIGURATION_FAILED,
@@ -3909,7 +3910,8 @@ fn service_usb_keyboard(command: DriverTaskCommandRecord) -> DriverTaskCompletio
         };
     }
     if command.frame.len == 0 {
-        let produced = USB_RUNTIME_STATE.with_mut(usb_runtime_poll_keyboard);
+        let produced = USB_RUNTIME_STATE
+            .with_mut(|state| usb_runtime_poll_keyboard(state, command.sequence, command.aux0));
         return if produced == 0 {
             if USB_RUNTIME_STATE.with_mut(usb_keyboard_endpoint_ready) {
                 let result = USB_RUNTIME_STATE.with_mut(usb_keyboard_pending_result);
@@ -10813,7 +10815,7 @@ fn usb_reset_keyboard_interrupt_queue(state: &mut UsbRuntimeState) {
     state.keyboard_control_poll_cooldown = 0;
 }
 
-fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState) -> usize {
+fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u32) -> usize {
     if !state.initialized || state.keyboard_slot == 0 || state.keyboard_endpoint_id == 0 {
         return 0;
     }
@@ -10851,10 +10853,12 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState) -> usize {
             for (index, byte) in payload.iter_mut().take(payload_len).enumerate() {
                 *byte = read_dma_byte(report_vaddr + index);
             }
-            bytes = bytes.saturating_add(usb_keyboard_report_payload_to_frame_at(
+            bytes = bytes.saturating_add(usb_keyboard_report_payload_to_frame_at_with_progress(
                 state,
                 &payload[..payload_len],
                 bytes,
+                sequence,
+                aux0,
             ));
             if bytes >= USB_KEYBOARD_OUTPUT_LIMIT {
                 break;
@@ -11273,11 +11277,45 @@ fn usb_keyboard_report_payload_to_frame_at(
     payload: &[u8],
     output_offset: usize,
 ) -> usize {
-    let Some(report) =
-        usb_decode_keyboard_report_payload(payload, usb_keyboard_report_preferred_offset(state))
-    else {
+    usb_keyboard_report_payload_to_frame_at_inner(state, payload, output_offset, None)
+}
+
+fn usb_keyboard_report_payload_to_frame_at_with_progress(
+    state: &mut UsbRuntimeState,
+    payload: &[u8],
+    output_offset: usize,
+    sequence: u32,
+    aux0: u32,
+) -> usize {
+    usb_keyboard_report_payload_to_frame_at_inner(
+        state,
+        payload,
+        output_offset,
+        Some((sequence, aux0)),
+    )
+}
+
+fn usb_keyboard_report_payload_to_frame_at_inner(
+    state: &mut UsbRuntimeState,
+    payload: &[u8],
+    output_offset: usize,
+    progress: Option<(u32, u32)>,
+) -> usize {
+    let Some((report, fallback)) = usb_decode_keyboard_report_payload_with_fallback(
+        payload,
+        usb_keyboard_report_preferred_offset(state),
+    ) else {
         return 0;
     };
+    if fallback {
+        if let Some((sequence, aux0)) = progress {
+            publish_runtime_progress(
+                sequence,
+                DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK,
+                aux0,
+            );
+        }
+    }
     usb_keyboard_report_bytes_to_frame_at(state, report, output_offset)
 }
 
@@ -11293,22 +11331,89 @@ fn usb_decode_keyboard_report_payload(
     payload: &[u8],
     preferred_offset: usize,
 ) -> Option<[u8; USB_BOOT_REPORT_BYTES]> {
+    usb_decode_keyboard_report_payload_with_fallback(payload, preferred_offset)
+        .map(|(report, _)| report)
+}
+
+fn usb_decode_keyboard_report_payload_with_fallback(
+    payload: &[u8],
+    preferred_offset: usize,
+) -> Option<([u8; USB_BOOT_REPORT_BYTES], bool)> {
     if payload.len() < USB_FLEXIBLE_KEYBOARD_REPORT_MIN_BYTES {
         return None;
     }
     if let Some(report) = usb_decode_keyboard_report_at(payload, preferred_offset) {
-        return Some(report);
+        if usb_keyboard_report_has_key(&report)
+            || !usb_keyboard_payload_has_nonzero_outside_boot_window(payload, preferred_offset)
+        {
+            return Some((report, false));
+        }
+        if let Some(report) =
+            usb_decode_keyboard_report_payload_flexible_key_report(payload, preferred_offset)
+        {
+            return Some((report, true));
+        }
+        return Some((report, false));
     }
     let mut offset = 0usize;
     while offset < payload.len() {
         if offset != preferred_offset {
             if let Some(report) = usb_decode_keyboard_report_at(payload, offset) {
-                return Some(report);
+                return Some((report, false));
             }
         }
         offset += 1;
     }
     None
+}
+
+fn usb_keyboard_report_has_key(report: &[u8; USB_BOOT_REPORT_BYTES]) -> bool {
+    report[2..].iter().any(|key| *key != 0)
+}
+
+fn usb_keyboard_payload_has_nonzero_outside_boot_window(
+    payload: &[u8],
+    preferred_offset: usize,
+) -> bool {
+    let window_start = preferred_offset.min(payload.len());
+    let window_end = window_start
+        .saturating_add(USB_BOOT_REPORT_BYTES)
+        .min(payload.len());
+    payload
+        .iter()
+        .enumerate()
+        .any(|(index, byte)| *byte != 0 && (index < window_start || index >= window_end))
+}
+
+fn usb_decode_keyboard_report_payload_flexible_key_report(
+    payload: &[u8],
+    preferred_offset: usize,
+) -> Option<[u8; USB_BOOT_REPORT_BYTES]> {
+    let mut offset = 0usize;
+    while offset < payload.len() {
+        let preferred = if offset == 0 {
+            preferred_offset
+        } else if offset <= preferred_offset {
+            offset - 1
+        } else {
+            offset
+        };
+        if let Some(report) = usb_decode_keyboard_report_with_key_at(payload, preferred) {
+            return Some(report);
+        }
+        offset += 1;
+    }
+    None
+}
+
+fn usb_decode_keyboard_report_with_key_at(
+    payload: &[u8],
+    offset: usize,
+) -> Option<[u8; USB_BOOT_REPORT_BYTES]> {
+    let report = usb_decode_boot_keyboard_report_at(payload, offset)
+        .or_else(|| usb_decode_compact_keyboard_report_at(payload, offset))
+        .or_else(|| usb_decode_bitmap_keyboard_report_at(payload, offset))?;
+    usb_keyboard_report_has_key(&report).then_some(report)
 }
 
 fn usb_decode_keyboard_report_at(
@@ -23800,6 +23905,24 @@ mod tests {
     }
 
     #[test]
+    fn usb_keyboard_payload_fallback_recovers_key_after_empty_boot_prefix() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = UsbRuntimeState::new();
+        let payload = [0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0];
+
+        let (report, fallback) =
+            usb_decode_keyboard_report_payload_with_fallback(&payload, 0).expect("decode");
+
+        assert!(fallback);
+        assert!(usb_keyboard_report_has_key(&report));
+        assert_eq!(
+            usb_keyboard_report_payload_to_frame_at(&mut state, &payload, 0),
+            1
+        );
+    }
+
+    #[test]
     fn usb_keyboard_report_to_frame_emits_arrow_escape_sequences() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -24341,6 +24464,10 @@ mod tests {
         assert_eq!(
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_CLEAR_CHANGES_FAILED,
             433
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK,
+            0x0416
         );
         assert_eq!(
             XHCI_COMMAND_RING_BYTES,
@@ -25624,6 +25751,64 @@ mod tests {
         assert!(!state.keyboard_report_in_use[1]);
         assert!(state.keyboard_report_in_use[0]);
         assert_eq!(state.keyboard_reports_queued, 1);
+    }
+
+    #[test]
+    fn usb_service_frame_ready_from_non_empty_interrupt_report() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let kbd_ring = xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET).unwrap();
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.db_offset = 0x1000;
+            state.keyboard_slot = 1;
+            state.keyboard_endpoint_id = 3;
+            assert!(xhci_queue_keyboard_interrupt_in(state, &descriptor));
+            let report_vaddr = dma_range.vaddr as usize + xhci_keyboard_report_buffer_offset(0);
+            for (index, byte) in [0, 0, 0x04, 0, 0, 0, 0, 0].iter().copied().enumerate() {
+                write_dma_byte(report_vaddr + index, byte);
+            }
+            assert!(xhci_preserve_keyboard_transfer_event(
+                state,
+                XhciTrb {
+                    parameter: kbd_ring + 0x08,
+                    status: XHCI_COMPLETION_SHORT_PACKET << 24,
+                    control: (XHCI_TRB_TYPE_TRANSFER_EVENT << 10)
+                        | (u32::from(state.keyboard_endpoint_id) << 16)
+                        | (u32::from(state.keyboard_slot) << 24),
+                },
+            ));
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 97,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        let completion = service_usb_keyboard(poll);
+
+        assert_eq!(completion.sequence, 97);
+        assert_eq!(completion.code, COMPLETION_FRAME_READY);
+        assert_eq!(completion.frame.len, 1);
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'a');
     }
 
     #[test]
