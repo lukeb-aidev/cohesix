@@ -4579,14 +4579,20 @@ where
                 || linked_detail
                     == pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
             {
-                let (queued_reports, doorbell_pending, preserved_events, transfer_events) =
-                    Self::usb_runtime_queue_fields(linked_result);
+                let (
+                    queued_reports,
+                    doorbell_pending,
+                    preserved_events,
+                    transfer_events,
+                    report_status,
+                ) = Self::usb_runtime_queue_fields(linked_result);
                 let runtime_queue = format_message(format_args!(
-                    "usb: runtime_queue queued_reports={} doorbell_pending={} preserved_events={} transfer_events={}",
+                    "usb: runtime_queue queued_reports={} doorbell_pending={} preserved_events={} transfer_events={} report_status={}",
                     queued_reports,
                     Self::yes_no(doorbell_pending),
                     preserved_events,
                     transfer_events,
+                    Self::usb_runtime_keyboard_report_status_label(report_status),
                 ));
                 self.emit_console_line(runtime_queue.as_str());
             } else {
@@ -6698,13 +6704,40 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    const fn usb_runtime_queue_fields(result: u32) -> (u32, bool, u32, u32) {
+    const fn usb_runtime_queue_fields(result: u32) -> (u32, bool, u32, u32, u32) {
         (
             result & 0xff,
             ((result >> 8) & 0x1) != 0,
             (result >> 16) & 0xff,
             (result >> 24) & 0xff,
+            (result >> pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                & pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
         )
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_keyboard_report_status_label(status: u32) -> &'static str {
+        match status as u8 {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE => "none",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_SHORT => "short-payload",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE => "idle-report",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY => {
+                "decoded-empty"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODE_FAILED => {
+                "decode-failed"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FLEXIBLE_FALLBACK => {
+                "flexible-fallback"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE => {
+                "produced-byte"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY => {
+                "filtered-key"
+            }
+            _ => "unknown",
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -6938,12 +6971,17 @@ where
                 proof_gate.saturating_add(1).max(1)
             };
             let queue_result = Self::usb_runtime_detail_has_queue_result(linked_detail);
-            let (queued_reports, doorbell_pending, preserved_events, transfer_events) =
-                if queue_result {
-                    Self::usb_runtime_queue_fields(linked_result)
-                } else {
-                    (0, false, 0, 0)
-                };
+            let (
+                queued_reports,
+                doorbell_pending,
+                preserved_events,
+                transfer_events,
+                report_status,
+            ) = if queue_result {
+                Self::usb_runtime_queue_fields(linked_result)
+            } else {
+                (0, false, 0, 0, 0)
+            };
             let next_action = if proof_gate >= 10 {
                 "acceptance-complete"
             } else if keyboard_ready && !first_report {
@@ -7103,11 +7141,12 @@ where
                 "first-hid-report",
                 Self::usb_startup_gate_status(9, proof_gate, failing_gate),
                 format_args!(
-                    "first_report={} queued_reports={} doorbell={} transfer_events={}",
+                    "first_report={} queued_reports={} doorbell={} transfer_events={} report_status={}",
                     Self::yes_no(first_report),
                     queued_reports,
                     Self::yes_no(doorbell_pending),
                     transfer_events,
+                    Self::usb_runtime_keyboard_report_status_label(report_status),
                 ),
                 "first-console-byte",
             );
@@ -16920,11 +16959,22 @@ mod tests {
     fn linked_usb_runtime_queue_fields_decode_first_report_telemetry() {
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_queue_fields(0x0302_0104),
-            (4, true, 2, 3)
+            (4, true, 2, 3, 0)
+        );
+        let filtered_result = 0x0302_0104
+            | (u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY)
+                << pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT);
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_queue_fields(filtered_result),
+            (4, true, 2, 3, 7)
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_queue_fields(0x0000_0020),
-            (32, false, 0, 0)
+            (32, false, 0, 0, 0)
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(7),
+            "filtered-key"
         );
         assert!(!KernelConsoleTestPump::usb_runtime_detail_has_queue_result(
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY

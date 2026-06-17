@@ -1038,6 +1038,12 @@ immediately readable frames, but it does not issue the RX abort/RF_TERM/
 `SMB_NAK` retransmit sequence before the control write. That preserves
 nonmatching frames for the later control or data poll instead of treating the
 drain as association or EAPOL proof.
+If a post-join BSSID probe hits a retryable linked SDIO descriptor-transfer
+fault (`0x5103`) before the request reaches firmware, root retries the same
+control exchange once with the same BCDC id and emits `status=tx-fault-retry`.
+The retry is transport recovery only: it does not mark association, release
+DHCP/data, or spend the legacy `WLC_SET_SSID` association rescue unless a later
+firmware status or valid BSSID proof justifies that separate step.
 Root-side station setup already splits matched CYW43 controls into a
 `CONTROL_FRAME` TX turn plus bounded parent-side `CONTROL_POLL` turns;
 host-EAPOL extends that model by tracking the active CYW43 prompt poll,
@@ -1115,20 +1121,17 @@ arrived by the pre-association proof window, root issues bounded linked
 `BCME_NOTASSOCIATED`/`0xffffffef` result is logged as
 `status=pending reason=firmware-not-associated result=0xffffffef` and retried
 at a fixed bounded cadence; it does not consume the whole association-probe
-proof opportunity. If the bounded probes exhaust with firmware still not
-associated after owner-sampled Function 2 readiness is present (`IENx=0x07`
-and `IORx.F2` ready through the SDIO owner), root issues one bounded association
-rescue with legacy `WLC_SET_SSID` and emits
+proof opportunity. If two matched probes report firmware still not associated,
+root issues one bounded association rescue with legacy `WLC_SET_SSID` and emits
 `CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE ... status=ready action=set-ssid`.
 The Linux-shaped `bsscfg:join` remains the primary path. The rescue does not
 send EAPOL-Start, release DHCP/data, or mark association by itself; it only
 opens one additional full bounded pre-association probe window starting from the
 rescue point. That window covers the normal first post-rescue probe delay plus
 four fixed-cadence `WLC_GET_BSSID` attempts before terminal failure. If
-owner-sampled Function 2 readiness is missing, or if the one-shot rescue was
-already spent, the terminal host-EAPOL status reports
-`reason=cyw43-association-not-associated`. After the rescue is spent, the
-expected terminal action is
+the one-shot rescue was already spent and firmware remains not associated, the
+terminal host-EAPOL status reports `reason=cyw43-association-not-associated`.
+After the rescue is spent, the expected terminal action is
 `next_action=inspect-cyw43-association-event-after-set-ssid-rescue`; otherwise
 it remains `next_action=inspect-cyw43-association-event-or-join-policy`. The
 normalizer preserves that Gate 7 association blocker over generic host-EAPOL
@@ -1165,9 +1168,9 @@ the old-good managed-station path: root first submits the Linux `join` iovar
 join submit only for matched `BCME_UNSUPPORTED` or `BCME_BADARG` firmware
 statuses; transport faults do not fall back. After an accepted `bsscfg:join`,
 the only additional `WLC_SET_SSID` path is the one-shot host-EAPOL association
-rescue described above, and only after repeated `WLC_GET_BSSID`
-`BCME_NOTASSOCIATED` replies plus owner-sampled Function 2 readiness prove that
-the live blocker is join/association policy rather than SDIO/F2 readiness.
+rescue described above, and only after repeated matched `WLC_GET_BSSID`
+`BCME_NOTASSOCIATED` replies prove that the live blocker is join/association
+policy rather than SDIO/F2 readiness.
 Repeated
 `cyw43-firmware-recover` owner-replay cycles remain progress only when
 `resume_offset` or `STREAM_PROGRESS uploaded=` advances; root keeps the
@@ -2431,7 +2434,15 @@ Required Cohesix shape:
   The linked runtime requests a bounded endpoint-packet report buffer, sizes the
   decoded payload from the xHCI transfer event's remaining-length field, accepts
   report-ID-prefixed, compact, and bitmap keyboard payloads, and invalidates the
-  whole requested DMA range before decoding.
+  whole requested DMA range before decoding. The interrupt-IN queue follows the
+  May 18-19 old-good shape with 32 outstanding report reads, while the bounded
+  EP0 `GET_REPORT` fallback is diagnostic and does not count as interrupt-IN
+  first-report proof. When Gate 9 is proven but Gate 10 is still blocked, the
+  linked-runtime queue result also carries
+  `report_status=none|short-payload|idle-report|decoded-empty|decode-failed|flexible-fallback|produced-byte|filtered-key`
+  so `usb status` / `usb diag` can distinguish no keypress or idle HID reports
+  from decode failure, fallback recovery, or a key that was intentionally filtered
+  before it reached the console parser.
 - USB keyboard input is a distinct local-seat physical-console source, not a
   UART alias. The event pump clears an unfinished UART line when USB keyboard
   bytes arrive and defers concurrent UART command dispatch until the next

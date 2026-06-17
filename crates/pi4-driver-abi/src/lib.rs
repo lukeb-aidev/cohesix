@@ -743,6 +743,26 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY: u32 = 269;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED: u32 = 270;
 /// USB runtime found keyboard data outside an empty boot-looking HID payload window.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK: u32 = 0x0416;
+/// USB keyboard service result bit offset for the last HID report classification.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT: u32 = 9;
+/// USB keyboard service result mask for the last HID report classification.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK: u32 = 0x7f;
+/// USB keyboard report status: no interrupt report has been classified yet.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE: u8 = 0;
+/// USB keyboard report status: interrupt completion carried too little payload.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_SHORT: u8 = 1;
+/// USB keyboard report status: interrupt payload decoded as an idle all-zero report.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE: u8 = 2;
+/// USB keyboard report status: interrupt payload decoded but contained no key byte.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY: u8 = 3;
+/// USB keyboard report status: interrupt payload was nonzero but no supported layout decoded.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODE_FAILED: u8 = 4;
+/// USB keyboard report status: flexible-key fallback recovered a key-bearing report.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FLEXIBLE_FALLBACK: u8 = 5;
+/// USB keyboard report status: report decoded and produced at least one console byte.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE: u8 = 6;
+/// USB keyboard report status: report had a key but no new console byte was emitted.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY: u8 = 7;
 /// USB runtime is traversing a hub after the root device had no direct keyboard endpoint.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN: u32 = 271;
 /// USB runtime is probing one hub child port for a keyboard-capable device.

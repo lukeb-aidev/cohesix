@@ -6958,6 +6958,43 @@ def test_gate_summary_names_firstread_source_asserted_empty() -> None:
     assert gates.wifi_phase == "runtime-rx"
 
 
+def test_gate_summary_names_bssid_probe_tx_submit_fail_over_firstread_idle() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+            "stage=cyw43-host-eapol-bssid-probe status=tx-submit-fail "
+            "acceptance=no code=5 detail=20739 result=83888128 "
+            "frame_len=0 blocker=cyw43-host-eapol-bssid-probe-tx-submit-fail",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_PROBE contract=cyw43455 "
+            "poll=20481 attempt=4 status=failed bssid=00:00:00:00:00:00 "
+            "reason=control-error-limit result=0x05000800",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=20481 starts=0 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=0 "
+            "control_rx=0 empty_polls=20481 associated=no link_up=no "
+            "assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "assoc_set_ssid_rescue=no rx_firstread_attempts=9397 "
+            "rx_firstread_empty=0 rx_firstread_invalid=0 rx_firstread_failed=9397 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=9396 "
+            "control_rx_firstread_empty=0 control_rx_firstread_failed=9396 "
+            "last_rx_idle_detail=0x5706 last_rx_idle_result=0xab070200 "
+            "last_control_rx_idle_detail=0x5706 "
+            "last_control_rx_idle_result=0xab070200 "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no "
+            "next_action=inspect-cyw43-data-rx-cmd53-firstread",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-host-eapol-bssid-probe-tx-submit-fail"
+    assert gates.wifi_exact == "cyw43-host-eapol-bssid-probe-tx-submit-fail"
+    assert gates.wifi_phase == "control-tx"
+
+
 def test_gate_summary_names_post_rescue_association_gap_over_firstread_empty() -> None:
     events = normalizer.parse_events(
         [

@@ -1865,6 +1865,9 @@ CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES = frozenset(
 CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY = (
     "cyw43-data-rx-firstread-source-asserted-empty"
 )
+CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL = (
+    "cyw43-host-eapol-bssid-probe-tx-submit-fail"
+)
 
 
 def cyw43_host_eapol_firstread_blocker(fields: dict[str, str]) -> str | None:
@@ -1926,6 +1929,37 @@ def summarize_host_eapol_firstread_status(
             continue
         if status == "required" or reason == "host-eapol-required" or source_asserted_empty:
             latest = (blocker, "runtime-rx", event.line)
+    return latest
+
+
+def cyw43_host_eapol_bssid_tx_submit_fail(event: TraceEvent) -> bool:
+    """Return true when the post-join BSSID probe failed before reply polling."""
+
+    raw = event.raw.lower()
+    fields = event.fields
+    if CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL in raw:
+        return True
+    return (
+        "driver_task_resource_init" in raw
+        and fields.get("contract", "").lower() == "cyw43455"
+        and fields.get("stage", "").lower() == "cyw43-host-eapol-bssid-probe"
+        and fields.get("status", "").lower() == "tx-submit-fail"
+    )
+
+
+def summarize_host_eapol_bssid_tx_submit_fail(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, int] | None:
+    """Return the latest BSSID-probe TX-submit blocker, if present."""
+
+    latest: tuple[str, str, int] | None = None
+    for event in events:
+        if cyw43_host_eapol_bssid_tx_submit_fail(event):
+            latest = (
+                CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL,
+                "control-tx",
+                event.line,
+            )
     return latest
 
 
@@ -2116,6 +2150,8 @@ def normalize_wifi_blocker(value: str) -> str:
         or "association-not-associated" in lower
     ):
         return "cyw43-association-not-associated"
+    if CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL in lower:
+        return CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL
     if (
         "host-eapol-required" in lower
         or "wifi-host-eapol-required" in lower
@@ -2877,6 +2913,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-data-rx-firstread-remainder-failed",
         "cyw43-data-rx-firstread-remainder-too-large",
         "cyw43-data-rx-sdpcm-decode-miss",
+        "cyw43-host-eapol-bssid-probe-tx-submit-fail",
         "cyw43-post-release-ht-clock",
         "cyw43-post-release-function2-ready",
         "cyw43-post-release-corecontrol",
@@ -8302,6 +8339,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_gate = max(wifi_gate, 7)
         wifi_blocker = "control-plane-revinfo-badarg"
         wifi_exact, wifi_phase, wifi_blocker_line = revinfo_badarg
+    bssid_tx_submit_fail = summarize_host_eapol_bssid_tx_submit_fail(event_list)
     host_eapol_firstread = summarize_host_eapol_firstread_status(event_list)
     if host_eapol_firstread is not None and (
         wifi_gate <= 7
@@ -8312,6 +8350,22 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         }
     ):
         wifi_blocker, wifi_phase, wifi_blocker_line = host_eapol_firstread
+        wifi_exact = wifi_blocker
+        wifi_gate = max(wifi_gate, 7)
+    if (
+        bssid_tx_submit_fail is not None
+        and wifi_exact != "cyw43-association-not-associated"
+        and (
+            wifi_gate <= 7
+            or wifi_exact in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES
+            or wifi_exact in {
+                "host-eapol-required",
+                "wifi-host-eapol-pending",
+                "cyw43-sdio-descriptor-transfer-failed",
+            }
+        )
+    ):
+        wifi_blocker, wifi_phase, wifi_blocker_line = bssid_tx_submit_fail
         wifi_exact = wifi_blocker
         wifi_gate = max(wifi_gate, 7)
     if wifi_exact in {"host-eapol-required", "wifi-host-eapol-pending"}:
