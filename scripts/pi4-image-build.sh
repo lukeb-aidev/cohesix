@@ -959,7 +959,7 @@ setenv coh_runtime_cpio_file __COH_RUNTIME_CPIO_FILE__
 setenv coh_logo_addr 0x02000000
 setenv coh_logo_file __COH_LOGO_FILE__
 setenv coh_logo_bootstd_file __COH_BOOTSTD_LOGO_FILE__
-setenv coh_logo_delay 2
+setenv coh_logo_delay 1
 setenv coh_logo_x 20
 setenv coh_logo_y 20
 setenv coh_menu_input __COH_MENU_INPUT__

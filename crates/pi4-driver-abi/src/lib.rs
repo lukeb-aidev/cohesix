@@ -43,6 +43,52 @@ pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN: u16 = 0x0210;
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ENDPOINT_SEEN: u16 = 0x0211;
 /// USB runtime init detail: xHCI Enable Slot did not complete for a connected root port.
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED: u16 = 0x0212;
+/// Magic at the start of a USB hub-port diagnostic completion frame.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_MAGIC: u32 = 0x5553_4850;
+/// USB hub-port diagnostic completion frame format version.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_VERSION: u8 = 1;
+/// Byte length of the fixed USB hub-port diagnostic completion frame.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_LEN: u16 = 24;
+/// Hub-port sample captured after the initial power settle and GET_STATUS.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_INITIAL: u8 = 1;
+/// Hub-port sample captured while polling reset completion.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_RESET_POLL: u8 = 2;
+/// Hub-port sample captured after a disconnected-port power kick.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_RECOVERY_POWER: u8 = 3;
+/// Hub-port sample captured after a disconnected-port reset recovery.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_RECOVERY_RESET: u8 = 4;
+/// Hub-port sample captured when the port is ready for child probing.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_READY: u8 = 5;
+/// Hub-port sample captured when an absent/disconnected port is skipped.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_SKIP_DISCONNECTED: u8 = 6;
+/// Hub-port diagnostic flag: raw wPortStatus has PORT_CONNECTION set.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CONNECTED: u16 = 1 << 0;
+/// Hub-port diagnostic flag: raw wPortStatus has PORT_ENABLE set.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_ENABLED: u16 = 1 << 1;
+/// Hub-port diagnostic flag: raw wPortStatus has PORT_RESET set.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_RESET: u16 = 1 << 2;
+/// Hub-port diagnostic flag: raw wPortStatus reports low-speed.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_LOW_SPEED: u16 = 1 << 3;
+/// Hub-port diagnostic flag: raw wPortStatus reports high-speed.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_HIGH_SPEED: u16 = 1 << 4;
+/// Hub-port diagnostic flag: raw wPortChange has C_CONNECTION set.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_C_CONNECTION: u16 = 1 << 5;
+/// Hub-port diagnostic flag: raw wPortChange has C_ENABLE set.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_C_ENABLE: u16 = 1 << 6;
+/// Hub-port diagnostic flag: raw wPortChange has C_RESET set.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_C_RESET: u16 = 1 << 7;
+/// Hub-port diagnostic flag: the runtime will clear C_CONNECTION.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_CONNECTION: u16 = 1 << 8;
+/// Hub-port diagnostic flag: the runtime will clear C_ENABLE.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_ENABLE: u16 = 1 << 9;
+/// Hub-port diagnostic flag: the runtime will clear C_RESET.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_RESET: u16 = 1 << 10;
+/// Hub-port diagnostic flag: sample came from disconnected-port recovery.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_RECOVERY: u16 = 1 << 11;
+/// Hub-port diagnostic flag: runtime skipped reset because the port is absent.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_SKIP_RESET: u16 = 1 << 12;
+/// Hub-port diagnostic flag: runtime considers the port ready after reset.
+pub const DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_READY: u16 = 1 << 13;
 /// USB runtime init detail: xHCI Address Device did not complete after Enable Slot.
 pub const DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED: u16 = 0x0213;
 /// USB runtime init detail: device descriptor transfer failed after address.
@@ -109,6 +155,8 @@ pub const DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE: u16 = 1 << 0;
 pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER: u16 = 1 << 1;
 /// CYW43 command flag: permit a bounded Function 2 first-read on zero-RFRAME RX polls.
 pub const DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD: u16 = 1 << 2;
+/// CYW43 command flag: drain pending RX once before transmitting a control frame.
+pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN: u16 = 1 << 3;
 /// CYW43 RX idle detail: no detailed RX result was reported.
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NONE: u16 = 0;
 /// CYW43 RX idle detail: firmware/channel state is not ready for RX.
@@ -463,6 +511,22 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE: u32 = 196;
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED: u32 = 197;
 /// USB runtime published the addressed-device state and is entering descriptors.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED: u32 = 198;
+/// USB runtime is polling the Address Device command event.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_POLL_BEGIN: u32 = 341;
+/// USB runtime is peeking the event ring for Address Device command completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_PEEK_BEGIN: u32 = 342;
+/// USB runtime found no event TRB while polling Address Device completion.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_SLOT_EMPTY: u32 = 343;
+/// USB runtime found an event-ring cycle mismatch while polling Address Device.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_CYCLE_MISMATCH: u32 = 344;
+/// USB runtime saw a command-completion event while polling Address Device.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_COMMAND: u32 = 345;
+/// USB runtime saw a port-status event while polling Address Device.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_PORT_STATUS: u32 = 346;
+/// USB runtime saw a non-command event while polling Address Device.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_OTHER: u32 = 347;
+/// USB runtime is still inside the bounded Address Device command poll.
+pub const DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_POLL_PENDING: u32 = 348;
 /// USB runtime is submitting the addressed device descriptor request.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_BEGIN: u32 = 218;
 /// USB runtime published EP0 TRBs and rang the addressed device doorbell.
@@ -1507,10 +1571,16 @@ impl DriverRuntimeCyw43CommandDescriptor {
                 self.flags & !DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE == 0
             }
             DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME => {
-                self.flags & !DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER == 0
+                self.flags
+                    & !(DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                        | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN)
+                    == 0
             }
             DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => {
-                self.flags & !DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER == 0
+                self.flags
+                    & !(DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                        | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN)
+                    == 0
             }
             DRIVER_RUNTIME_CYW43_OP_RX_POLL | DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
                 self.flags & !DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD == 0
@@ -2608,6 +2678,11 @@ mod tests {
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+            | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
+        assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
+        assert!(descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         assert!(!descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
@@ -2624,6 +2699,11 @@ mod tests {
             arg1: 1,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
+        assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+            | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
+        assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
         assert!(descriptor.valid());
         descriptor.payload_len = 0;
         assert!(!descriptor.valid());

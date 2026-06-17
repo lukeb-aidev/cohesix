@@ -4854,6 +4854,14 @@ where
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_ENABLE_SLOT_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_CONTEXTS_PUBLISHED
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_COMMAND
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_CYCLE_MISMATCH
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_OTHER
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_PEEK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_PORT_STATUS
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_SLOT_EMPTY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_POLL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_POLL_PENDING
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_FAILED => 5,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE
             | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_ADDRESSED
@@ -5340,6 +5348,26 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN => {
                 "address-device-command-completion-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_COMMAND => {
+                "address-device-command-event-completion-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_CYCLE_MISMATCH => {
+                "address-device-command-event-cycle-mismatch"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_OTHER => {
+                "address-device-command-event-other"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_PEEK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_POLL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_POLL_PENDING => {
+                "address-device-command-completion-no-reply"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_PORT_STATUS => {
+                "address-device-command-event-port-status"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_SLOT_EMPTY => {
+                "address-device-command-event-slot-empty"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE => {
                 "address-device-publish-no-reply"
@@ -6050,6 +6078,26 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN => {
                 "poll-address-device-command-completion"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_COMMAND => {
+                "consume-address-device-command-completion"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_CYCLE_MISMATCH => {
+                "inspect-address-device-event-cycle-state"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_OTHER => {
+                "inspect-address-device-unexpected-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_PEEK_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_POLL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_POLL_PENDING => {
+                "poll-address-device-command-completion"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_PORT_STATUS => {
+                "preserve-port-event-and-continue-address-command"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_SLOT_EMPTY => {
+                "wait-for-address-device-command-event"
+            }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_DONE => {
                 "publish-device-addressed-detail"
             }
@@ -6706,6 +6754,11 @@ where
                 | "address-device-context-publish-no-reply"
                 | "address-device-command-submit-no-reply"
                 | "address-device-command-completion-no-reply"
+                | "address-device-command-event-completion-no-reply"
+                | "address-device-command-event-cycle-mismatch"
+                | "address-device-command-event-other"
+                | "address-device-command-event-port-status"
+                | "address-device-command-event-slot-empty"
                 | "address-device-publish-no-reply"
                 | "device-descriptor-no-reply"
                 | "device-descriptor-submit-no-reply"
@@ -13011,6 +13064,24 @@ mod tests {
                 pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_BEGIN,
             ),
             "poll-address-device-command-completion"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_gate_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_SLOT_EMPTY,
+            ),
+            5
+        );
+        assert_eq!(
+            TestPump::usb_runtime_blocker_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_SLOT_EMPTY,
+            ),
+            "address-device-command-event-slot-empty"
+        );
+        assert_eq!(
+            TestPump::usb_runtime_next_action_for_progress_phase(
+                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_SLOT_EMPTY,
+            ),
+            "wait-for-address-device-command-event"
         );
         assert_eq!(
             TestPump::usb_runtime_gate_for_progress_phase(

@@ -40,6 +40,14 @@ use pi4_driver_abi::{DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_USB_ENUM
     target_os = "none"
 ))]
 use pi4_driver_abi::{
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_LEN, DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_MAGIC,
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_VERSION,
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_INITIAL,
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_READY,
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_RECOVERY_POWER,
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_RECOVERY_RESET,
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_RESET_POLL,
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_SKIP_DISCONNECTED,
     DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED,
     DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_PENDING,
     DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY,
@@ -153,6 +161,62 @@ const USB_ENUM_RESULT_TRANSFER_EVENT: u32 = 1 << 30;
     target_os = "none"
 ))]
 const USB_ENUM_RESULT_ENDPOINT_READY: u32 = 1 << 31;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_HUB_STATUS_CONNECTION: u16 = 1 << 0;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_HUB_STATUS_ENABLE: u16 = 1 << 1;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_HUB_STATUS_RESET: u16 = 1 << 4;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_HUB_STATUS_LOW_SPEED: u16 = 1 << 9;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_HUB_STATUS_HIGH_SPEED: u16 = 1 << 10;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_HUB_CHANGE_CONNECTION: u16 = 1 << 0;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_HUB_CHANGE_ENABLE: u16 = 1 << 1;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const USB_HUB_CHANGE_RESET: u16 = 1 << 4;
 
 #[cfg(all(
     feature = "kernel",
@@ -2428,6 +2492,136 @@ fn publish_linked_local_seat_usb_first_report_event(
     target_arch = "aarch64",
     target_os = "none"
 ))]
+const fn usb_hub_port_trace_stage_label(stage: u8) -> &'static str {
+    match stage {
+        DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_INITIAL => "initial",
+        DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_RESET_POLL => "reset-poll",
+        DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_RECOVERY_POWER => "recovery-power",
+        DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_RECOVERY_RESET => "recovery-reset",
+        DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_READY => "ready",
+        DRIVER_RUNTIME_USB_HUB_PORT_STATUS_STAGE_SKIP_DISCONNECTED => "skip-disconnected",
+        _ => "unknown",
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const fn usb_hub_port_trace_speed(status: u16) -> &'static str {
+    if status & USB_HUB_STATUS_LOW_SPEED != 0 {
+        "low"
+    } else if status & USB_HUB_STATUS_HIGH_SPEED != 0 {
+        "high"
+    } else {
+        "full"
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn usb_trace_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from(bytes[offset]) | (u16::from(bytes[offset + 1]) << 8)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn usb_trace_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from(bytes[offset])
+        | (u32::from(bytes[offset + 1]) << 8)
+        | (u32::from(bytes[offset + 2]) << 16)
+        | (u32::from(bytes[offset + 3]) << 24)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn emit_linked_local_seat_usb_hub_port_trace(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) {
+    use core::fmt::Write;
+
+    if completion.frame.len != DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_LEN {
+        return;
+    }
+    let Some(bytes) =
+        crate::hal::driver_task::driver_task_ring_frame_bytes(contract, completion.frame)
+    else {
+        return;
+    };
+    if bytes.len() < usize::from(DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_LEN)
+        || usb_trace_u32(bytes, 0) != DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_MAGIC
+        || bytes[4] != DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FRAME_VERSION
+    {
+        return;
+    }
+
+    let stage = bytes[5];
+    let hub_slot = bytes[6];
+    let hub_port = bytes[7];
+    let w_index = usb_trace_u16(bytes, 8);
+    let depth = bytes[10];
+    let settle_ms = bytes[11];
+    let status = usb_trace_u16(bytes, 12);
+    let change = usb_trace_u16(bytes, 14);
+    let clear_mask = usb_trace_u16(bytes, 16);
+    let flags = usb_trace_u16(bytes, 18);
+    let route = usb_trace_u32(bytes, 20);
+    let progress = crate::hal::driver_task::latest_driver_task_ring_progress(contract);
+    let mut line = heapless::String::<640>::new();
+    let _ = write!(
+        line,
+        "USB_HUB_PORT_TRACE contract={} detail=0x{:04x} result=0x{:08x} stage={} stage_code={} hub_slot={} hub_port={} wIndex=0x{:04x} depth={} route=0x{:05x} settle_ms={} wPortStatus=0x{:04x} wPortChange=0x{:04x} clear_mask=0x{:04x} flags=0x{:04x} connected={} enabled={} reset={} speed={} c_connection={} c_enable={} c_reset={} marker_sequence={} marker_phase={} marker_phase_name={} marker_aux0=0x{:08x} source=linked-runtime",
+        contract.name,
+        completion.detail,
+        completion.result,
+        usb_hub_port_trace_stage_label(stage),
+        stage,
+        hub_slot,
+        hub_port,
+        w_index,
+        depth,
+        route,
+        settle_ms,
+        status,
+        change,
+        clear_mask,
+        flags,
+        local_seat_yes_no(status & USB_HUB_STATUS_CONNECTION != 0),
+        local_seat_yes_no(status & USB_HUB_STATUS_ENABLE != 0),
+        local_seat_yes_no(status & USB_HUB_STATUS_RESET != 0),
+        usb_hub_port_trace_speed(status),
+        local_seat_yes_no(change & USB_HUB_CHANGE_CONNECTION != 0),
+        local_seat_yes_no(change & USB_HUB_CHANGE_ENABLE != 0),
+        local_seat_yes_no(change & USB_HUB_CHANGE_RESET != 0),
+        progress.map_or(0, |progress| progress.sequence),
+        progress.map_or(0, |progress| progress.phase),
+        progress.map_or("none", |progress| progress.phase_name),
+        progress.map_or(0, |progress| progress.aux0),
+    );
+    boot_log::force_uart_line(line.as_str());
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 fn emit_linked_local_seat_usb_enumeration_snapshot(
     contract: crate::hal::driver_task::DriverTaskContract,
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
@@ -2574,6 +2768,7 @@ fn publish_local_seat_usb_enumeration_progress(
     let previous_detail = LINKED_LOCAL_SEAT_USB_LAST_DETAIL.load(Ordering::Acquire);
     let previous_result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire);
     record_linked_local_seat_usb_detail(Some(completion));
+    emit_linked_local_seat_usb_hub_port_trace(contract, completion);
     if previous_detail != completion.detail as usize
         || previous_result != completion.result as usize
     {

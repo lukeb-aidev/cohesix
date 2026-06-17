@@ -40,8 +40,8 @@ use crate::net::{
 };
 use pi4_driver_abi::{
     DriverRuntimeCyw43CommandDescriptor, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
-    DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+    DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE, DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
     DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
@@ -106,6 +106,7 @@ const CYW43_RUNTIME_STREAM_COMMAND_RETRIES: usize = 2;
 const CYW43_TRANSPORT_ADMISSION_REJECT_RETRIES: usize = 4;
 const CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES: usize = 8;
 const CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES: usize = 63;
+const CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_TRANSPORT_PHASE_ATTEMPTS: usize = 128;
 const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 192;
 const CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT: usize = 24;
@@ -190,6 +191,7 @@ const CYW43_EVENT_LINK: u8 = 16;
 const CYW43_EVENT_ROAM: u8 = 19;
 const CYW43_EVENT_MIC_ERROR: u8 = 33;
 const CYW43_EVENT_PSK_SUP: u8 = 46;
+const CYW43_EVENT_IF: u8 = 54;
 const CYW43_EVENT_FLAG_LINK: u16 = 0x0001;
 const CYW43_EVENT_STATUS_SUCCESS: u32 = 0;
 const CYW43_EVENT_MASK_LEN: usize = 27;
@@ -343,6 +345,18 @@ impl Cyw43ControlHeaderMode {
             Self::Extended => "extended",
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_control_runtime_flags(
+    header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
+) -> u16 {
+    let mut flags = header_mode.runtime_flags();
+    if pre_tx_drain {
+        flags |= DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
+    }
+    flags
 }
 
 #[cfg(feature = "kernel")]
@@ -2208,6 +2222,7 @@ fn cyw43_apply_linux_prejoin_association_policy(
         &CYW43_LINUX_JOIN_PREF_DEFAULT,
         "cyw43-control-prejoin-join-pref",
     )?;
+    cyw43_enable_linux_if_event_message(contract)?;
     cyw43_submit_bcdc_u32(
         contract,
         CYW43_WLC_SET_SCAN_CHANNEL_TIME,
@@ -2225,6 +2240,28 @@ fn cyw43_apply_linux_prejoin_association_policy(
         "txbf",
         1,
         "cyw43-control-prejoin-txbf",
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_enable_linux_if_event_message(
+    contract: DriverTaskContract,
+) -> Result<(), DriverTaskNetError> {
+    let mut mask = [0u8; CYW43_EVENT_MASK_LEN];
+    let response_len = cyw43_get_bcdc_iovar(
+        contract,
+        "event_msgs",
+        &mut mask,
+        "cyw43-control-prejoin-if-event-message",
+    )?;
+    cyw43_set_event_mask_bit(&mut mask, CYW43_EVENT_IF)?;
+    let required_len = usize::from(CYW43_EVENT_IF / 8).saturating_add(1);
+    let set_len = response_len.max(required_len).min(mask.len());
+    cyw43_submit_bcdc_iovar_bytes(
+        contract,
+        "event_msgs",
+        &mask[..set_len],
+        "cyw43-control-prejoin-if-event-message",
     )
 }
 
@@ -2334,12 +2371,14 @@ fn cyw43_get_bcdc_bssid(
         &response,
     )
     .map_err(Cyw43BssidProbeError::Runtime)?;
-    let completion = cyw43_submit_control_exchange_unmapped(
+    let completion = cyw43_submit_control_exchange_unmapped_with_options(
         contract,
         &frame[..len],
         CYW43_WLC_GET_BSSID,
         id,
         "cyw43-host-eapol-bssid-probe",
+        Cyw43ControlHeaderMode::Extended,
+        true,
     )
     .map_err(|err| match err {
         Cyw43CommandSubmitError::Runtime(err) => Cyw43BssidProbeError::Runtime(err),
@@ -4002,6 +4041,27 @@ fn cyw43_submit_control_exchange_unmapped_with_header_mode(
     stage: &'static str,
     header_mode: Cyw43ControlHeaderMode,
 ) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
+    cyw43_submit_control_exchange_unmapped_with_options(
+        contract,
+        payload,
+        cmd,
+        id,
+        stage,
+        header_mode,
+        false,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_control_exchange_unmapped_with_options(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    cmd: u32,
+    id: u16,
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
+) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
     crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
         DriverTaskHotPath::Cyw43Wifi,
@@ -4014,7 +4074,7 @@ fn cyw43_submit_control_exchange_unmapped_with_header_mode(
     let expected_response_len =
         cyw43_control_request_expected_response_len(cmd, cyw43_control_iovar_info(payload, cmd))
             as u16;
-    let tx_descriptor = cyw43_control_frame_descriptor(payload.len(), header_mode);
+    let tx_descriptor = cyw43_control_frame_descriptor(payload.len(), header_mode, pre_tx_drain);
     let Some(tx_completion) =
         run_cyw43_runtime_descriptor_command(contract, tx_descriptor, payload)
     else {
@@ -4096,6 +4156,7 @@ fn cyw43_submit_control_exchange_unmapped_with_header_mode(
         id,
         payload.len(),
         header_mode,
+        pre_tx_drain,
         expected_response_len,
         control_iovar,
     )
@@ -4107,10 +4168,11 @@ fn cyw43_control_exchange_descriptor(
     cmd: u32,
     id: u16,
     header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
 ) -> DriverRuntimeCyw43CommandDescriptor {
     DriverRuntimeCyw43CommandDescriptor {
         op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
-        flags: header_mode.runtime_flags(),
+        flags: cyw43_control_runtime_flags(header_mode, pre_tx_drain),
         payload_len: payload_len as u16,
         total_len: payload_len as u32,
         arg0: cmd,
@@ -4123,10 +4185,11 @@ fn cyw43_control_exchange_descriptor(
 fn cyw43_control_frame_descriptor(
     payload_len: usize,
     header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
 ) -> DriverRuntimeCyw43CommandDescriptor {
     DriverRuntimeCyw43CommandDescriptor {
         op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
-        flags: header_mode.runtime_flags(),
+        flags: cyw43_control_runtime_flags(header_mode, pre_tx_drain),
         payload_len: payload_len as u16,
         total_len: payload_len as u32,
         ..DriverRuntimeCyw43CommandDescriptor::empty()
@@ -4141,10 +4204,12 @@ fn cyw43_poll_control_exchange_reply(
     id: u16,
     payload_len: usize,
     header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
     expected_response_len: u16,
     control_iovar: &str,
 ) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
-    let exchange_descriptor = cyw43_control_exchange_descriptor(payload_len, cmd, id, header_mode);
+    let exchange_descriptor =
+        cyw43_control_exchange_descriptor(payload_len, cmd, id, header_mode, pre_tx_drain);
     let mut nonmatching_frames = 0u32;
     let mut malformed_frames = 0u32;
     let mut last_completion = None;
@@ -5766,6 +5831,7 @@ const fn cyw43_runtime_no_reply_resume_limit(op: u16) -> usize {
     match op {
         DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT => CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES,
         DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES,
+        DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES,
         _ => 0,
     }
 }
@@ -7061,40 +7127,93 @@ fn run_cyw43_runtime_descriptor_command(
     );
     command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
     let use_prompt_slice = cyw43_runtime_descriptor_uses_prompt_slice(descriptor.op);
-    let active_before = crate::hal::driver_task::active_driver_task_ring_request(contract)
-        .and_then(|request| u32::try_from(request).ok());
-    let completion = if payload_descriptor.is_some() {
-        let staging_segments = [
-            DriverTaskStagingSegment::ring_payload_at(
-                crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET + 512,
-                payload,
-                0,
-            ),
-            DriverTaskStagingSegment::ring_payload_at(
+    let no_reply_resume_limit = if use_prompt_slice {
+        cyw43_runtime_no_reply_resume_limit(descriptor.op)
+    } else {
+        0
+    };
+    let mut no_reply_resumes = 0usize;
+    loop {
+        let active_before = crate::hal::driver_task::active_driver_task_ring_request(contract)
+            .and_then(|request| u32::try_from(request).ok());
+        let completion = if payload_descriptor.is_some() {
+            let staging_segments = [
+                DriverTaskStagingSegment::ring_payload_at(
+                    crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET + 512,
+                    payload,
+                    0,
+                ),
+                DriverTaskStagingSegment::ring_payload_at(
+                    crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET,
+                    &scratch,
+                    0,
+                ),
+            ];
+            if use_prompt_slice {
+                run_driver_task_net_service_prompt_slice_staged(
+                    contract,
+                    command,
+                    &staging_segments,
+                )
+            } else {
+                run_driver_task_net_service_staged(contract, command, &staging_segments)
+            }
+        } else {
+            let staging_segments = [DriverTaskStagingSegment::ring_payload_at(
                 crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET,
                 &scratch,
                 0,
-            ),
-        ];
-        if use_prompt_slice {
-            run_driver_task_net_service_prompt_slice_staged(contract, command, &staging_segments)
-        } else {
-            run_driver_task_net_service_staged(contract, command, &staging_segments)
+            )];
+            if use_prompt_slice {
+                run_driver_task_net_service_prompt_slice_staged(
+                    contract,
+                    command,
+                    &staging_segments,
+                )
+            } else {
+                run_driver_task_net_service_staged(contract, command, &staging_segments)
+            }
+        };
+        record_cyw43_active_prompt_poll(contract, descriptor, active_before, completion);
+        if completion.is_some()
+            || no_reply_resumes >= no_reply_resume_limit
+            || !cyw43_prompt_poll_no_reply_resume_ready(contract, descriptor)
+        {
+            return completion;
         }
-    } else {
-        let staging_segments = [DriverTaskStagingSegment::ring_payload_at(
-            crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET,
-            &scratch,
-            0,
-        )];
-        if use_prompt_slice {
-            run_driver_task_net_service_prompt_slice_staged(contract, command, &staging_segments)
-        } else {
-            run_driver_task_net_service_staged(contract, command, &staging_segments)
-        }
+        no_reply_resumes = no_reply_resumes.saturating_add(1);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_prompt_poll_no_reply_resume_ready(
+    contract: DriverTaskContract,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || !cyw43_runtime_descriptor_uses_prompt_slice(descriptor.op)
+    {
+        return false;
+    }
+    let Some(active_request) = crate::hal::driver_task::active_driver_task_ring_request(contract)
+        .and_then(|request| u32::try_from(request).ok())
+    else {
+        return false;
     };
-    record_cyw43_active_prompt_poll(contract, descriptor, active_before, completion);
-    completion
+    if active_request == 0 {
+        return false;
+    }
+    if CYW43_ACTIVE_PROMPT_POLL_REQUEST.load(Ordering::Acquire) == active_request
+        && CYW43_ACTIVE_PROMPT_POLL_OP.load(Ordering::Acquire) as u16 == descriptor.op
+        && CYW43_ACTIVE_PROMPT_POLL_FLAGS.load(Ordering::Acquire) as u16 == descriptor.flags
+    {
+        return true;
+    }
+    let Some(active_poll) = cyw43_active_prompt_poll_from_ring(contract, active_request) else {
+        return false;
+    };
+    cyw43_host_eapol_poll_kind_for_op(descriptor.op) == Some(active_poll.kind)
+        && descriptor.flags == active_poll.flags
 }
 
 #[cfg(not(feature = "kernel"))]
@@ -7582,6 +7701,14 @@ mod tests {
 
     #[test]
     fn cyw43_prejoin_association_policy_matches_linux_values() {
+        let mut event_mask = [0u8; CYW43_EVENT_MASK_LEN];
+        cyw43_set_event_mask_bit(&mut event_mask, CYW43_EVENT_IF)
+            .expect("IF event bit should fit in event_msgs mask");
+
+        assert_eq!(CYW43_EVENT_IF, 54);
+        assert_eq!(usize::from(CYW43_EVENT_IF / 8).saturating_add(1), 7);
+        assert_ne!(event_mask[usize::from(CYW43_EVENT_IF / 8)] & 0x40, 0);
+
         let mut join_pref_payload = [0u8; 32];
         let name = "join_pref";
         let name_len = name.len();
@@ -7752,6 +7879,7 @@ mod tests {
             CYW43_WLC_SET_VAR,
             1,
             Cyw43ControlHeaderMode::Plain,
+            false,
         );
 
         assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
@@ -7769,6 +7897,7 @@ mod tests {
             CYW43_WLC_GET_REVINFO,
             4,
             Cyw43ControlHeaderMode::Extended,
+            false,
         );
 
         assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
@@ -7784,8 +7913,10 @@ mod tests {
 
     #[test]
     fn cyw43_control_frame_descriptor_uses_split_tx_op() {
-        let plain = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain);
-        let extended = cyw43_control_frame_descriptor(16, Cyw43ControlHeaderMode::Extended);
+        let plain = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
+        let extended = cyw43_control_frame_descriptor(16, Cyw43ControlHeaderMode::Extended, false);
+        let bssid_probe =
+            cyw43_control_frame_descriptor(16, Cyw43ControlHeaderMode::Extended, true);
 
         assert_eq!(plain.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(plain.flags, 0);
@@ -7793,6 +7924,12 @@ mod tests {
         assert_eq!(plain.total_len, 36);
         assert_eq!(extended.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(extended.flags, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER);
+        assert_eq!(bssid_probe.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
+        assert_eq!(
+            bssid_probe.flags,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+        );
     }
 
     #[test]
@@ -8820,9 +8957,17 @@ mod tests {
             cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE),
             CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES
         );
+        assert_eq!(
+            cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL),
+            CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES
+        );
         assert!(
             CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES
                 > CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES
+        );
+        assert!(
+            CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES
+                >= CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES
         );
         assert_eq!(
             cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_RX_POLL),

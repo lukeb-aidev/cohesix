@@ -66,7 +66,7 @@ def test_pi4_image_build_defaults_to_usb_uboot_menu_input() -> None:
     assert 'setenv coh_menu_input __COH_MENU_INPUT__' in source
     assert 'test "${coh_menu_input}" = "usb"' in source
     assert 'sed -i \'\' "s/__COH_MENU_INPUT__/${U_BOOT_MENU_INPUT}/g" "$out"' in source
-    assert "setenv coh_logo_delay 2" in source
+    assert "setenv coh_logo_delay 1" in source
 
 
 def test_pi4_image_build_keeps_dtb_policy_handoff_common() -> None:
