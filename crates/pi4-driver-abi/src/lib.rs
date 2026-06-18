@@ -763,6 +763,8 @@ pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FLEXIBLE_FALLBACK: u8 = 5;
 pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE: u8 = 6;
 /// USB keyboard report status: report had a key but no new console byte was emitted.
 pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY: u8 = 7;
+/// USB keyboard report status: endpoint-matched transfer event did not match a queued report slot.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER: u8 = 8;
 /// USB runtime is traversing a hub after the root device had no direct keyboard endpoint.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN: u32 = 271;
 /// USB runtime is probing one hub child port for a keyboard-capable device.

@@ -3049,6 +3049,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     direct_usb_progress_blocker: str | None = None
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
+    linked_runtime_gate10_seen = False
     precise_command_timeout_details = {
         "cmd-poll-only-timeout",
         "pcie-window-enable-slot-timeout",
@@ -3290,6 +3291,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, proof_gate)
                 runtime_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
                 if runtime_blocker == "none" and proof_gate >= 10:
+                    linked_runtime_gate10_seen = True
                     blocker = "none"
                 elif runtime_blocker == "none" and clamped_unlinked_gate10:
                     blocker = "keyboard-first-byte"
@@ -3533,6 +3535,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             blocker = "hid-first-report"
         if "runtime keyboard first-byte" in raw and usb_linked_hid_source(event):
             gate = max(gate, 10)
+            linked_runtime_gate10_seen = True
             blocker = "none"
         elif "runtime keyboard first-byte" in raw and blocker in {"unknown", "none"}:
             blocker = "keyboard-first-byte"
@@ -3543,6 +3546,8 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 proof_gate = 9
             if proof_gate is not None and proof_gate > 0:
                 gate = max(gate, proof_gate)
+            if proof_gate is not None and proof_gate >= 10 and linked_hid:
+                linked_runtime_gate10_seen = True
             proof_result = normalize_usb_blocker(fields.get("result", "none"))
             if proof_result == "none" and (proof_gate is None or proof_gate < 10 or linked_hid):
                 blocker = "none"
@@ -3938,6 +3943,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         ):
             gate = max(gate, direct_gate)
             blocker = direct_usb_progress_blocker
+    if linked_runtime_gate10_seen and (
+        blocker in USB_OUTCOME_BLOCKERS.union({"unknown", "keyboard-first-byte"})
+        or blocker.startswith("usb-keyboard-enumeration-")
+    ):
+        blocker = "none"
 
     return gate, blocker
 
@@ -8263,7 +8273,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     )
     if usb_driver_task_blocker is not None:
         driver_gate = usb_driver_task_blocker_gate(usb_driver_task_blocker)
-        if usb_blocker in {"unknown", "missing", "none"}:
+        if usb_blocker in {"unknown", "missing", "none"} and usb_gate < 10:
             usb_gate = max(usb_gate, driver_gate)
             usb_blocker = usb_driver_task_blocker
         elif usb_blocker == "pcie-vl805" and usb_frontier_advances_pcie(

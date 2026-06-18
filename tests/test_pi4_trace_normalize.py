@@ -5583,6 +5583,34 @@ def test_gate_summary_tracks_linked_usb_keyboard_report_and_first_byte() -> None
     assert gates.usb_blocker == "none"
 
 
+def test_gate_summary_keeps_linked_gate10_over_later_stale_hub_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb hid first report source=linked-runtime-hid "
+            "shift=0 keys=04,00,00,00,00,00",
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "usb: linked_runtime_progress marker_valid=yes sequence=8 "
+            "phase_name=usb-hub-port-status-disconnected aux0=0x55534245 "
+            "gate=7 blocker=hub-port-disconnected "
+            "next_action=inspect-hub-port-status",
+            "usb: next_action=inspect-usb-keyboard-enumeration "
+            "blocker=usb-keyboard-enumeration-no-reply proof_gate=4",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-enumeration "
+            "status=progress detail=0x0501 result=0 frame_len=0",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=usb-local-seat "
+            "endpoint=0x01 request=2 mode=nonblocking attempts=1 "
+            "opcode=1 arg0=2 aux0=0 frame_len=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 10
+    assert gates.usb_blocker == "none"
+
+
 def test_gate_summary_treats_usb_keyboard_runtime_online_as_ready() -> None:
     events = normalizer.parse_events(
         [

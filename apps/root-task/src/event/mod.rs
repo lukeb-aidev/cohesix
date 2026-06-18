@@ -2364,6 +2364,7 @@ where
             }
             for _ in 0..LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES {
                 runtime.poll_backend_keyboard();
+                runtime.drain_display_control_bytes_during_output(KEYBOARD_POLL_CHUNK_BYTES);
                 self.metrics.local_seat_output_keyboard_polls = self
                     .metrics
                     .local_seat_output_keyboard_polls
@@ -6747,6 +6748,9 @@ where
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY => {
                 "filtered-key"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER => {
+                "unmatched-transfer"
             }
             _ => "unknown",
         }
@@ -14173,6 +14177,44 @@ mod tests {
         assert_eq!(trace.queued_bytes, 1);
     }
 
+    #[test]
+    fn output_service_drains_display_controls_without_command_text() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        local_seat.enqueue_keyboard_bytes(b"\x1b[Bx");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.service_local_seat_keyboard_during_output();
+        drop(pump);
+
+        let trace = local_seat.keyboard_trace();
+        assert_eq!(trace.backend_poll_calls, 1);
+        assert_eq!(trace.drained_bytes, 3);
+        assert_eq!(trace.echoed_bytes, 3);
+        assert_eq!(trace.queued_bytes, 1);
+
+        let mut remaining = [0u8; 4];
+        assert_eq!(local_seat.drain_keyboard_bytes(&mut remaining), 1);
+        assert_eq!(remaining[0], b'x');
+    }
+
     struct NullIpc;
 
     impl IpcDispatcher for NullIpc {
@@ -17040,6 +17082,10 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(7),
             "filtered-key"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(8),
+            "unmatched-transfer"
         );
         assert!(!KernelConsoleTestPump::usb_runtime_detail_has_queue_result(
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY

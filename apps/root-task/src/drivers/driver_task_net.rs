@@ -486,6 +486,70 @@ struct Cyw43RxSourceResult {
 }
 
 #[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_MAGIC: u32 = 0x4352_5854;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_VERSION: u16 = 1;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_BYTES: usize = 40;
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cyw43RxIdleTrace {
+    valid: bool,
+    flags: u16,
+    detail: u16,
+    probe_len: u16,
+    source_result: u32,
+    prefix_signature: u32,
+    prefix_digest: u32,
+    rframe_len: u16,
+    firstread_reads: u16,
+    block_reads: u16,
+    rframe_reads: u16,
+    request_len: u16,
+    block_size: u16,
+    block_count: u16,
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
+    if bytes.len() < CYW43_RX_IDLE_TRACE_BYTES {
+        return None;
+    }
+    if cyw43_read_le_u32(bytes, 0)? != CYW43_RX_IDLE_TRACE_MAGIC {
+        return None;
+    }
+    if cyw43_read_le_u16(bytes, 4)? != CYW43_RX_IDLE_TRACE_VERSION {
+        return None;
+    }
+    Some(Cyw43RxIdleTrace {
+        valid: true,
+        flags: cyw43_read_le_u16(bytes, 6)?,
+        detail: cyw43_read_le_u16(bytes, 8)?,
+        probe_len: cyw43_read_le_u16(bytes, 10)?,
+        source_result: cyw43_read_le_u32(bytes, 12)?,
+        prefix_signature: cyw43_read_le_u32(bytes, 16)?,
+        prefix_digest: cyw43_read_le_u32(bytes, 20)?,
+        rframe_len: cyw43_read_le_u16(bytes, 24)?,
+        firstread_reads: cyw43_read_le_u16(bytes, 26)?,
+        block_reads: cyw43_read_le_u16(bytes, 28)?,
+        rframe_reads: cyw43_read_le_u16(bytes, 30)?,
+        request_len: cyw43_read_le_u16(bytes, 32)?,
+        block_size: cyw43_read_le_u16(bytes, 34)?,
+        block_count: cyw43_read_le_u16(bytes, 36)?,
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_completion_rx_idle_trace(
+    contract: DriverTaskContract,
+    completion: DriverTaskCompletionRecord,
+) -> Option<Cyw43RxIdleTrace> {
+    let bytes = crate::hal::driver_task::driver_task_ring_frame_bytes(contract, completion.frame)?;
+    cyw43_rx_idle_trace(bytes)
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_rx_source_result(result: u32) -> Option<Cyw43RxSourceResult> {
     if result & DRIVER_RUNTIME_CYW43_RX_SOURCE_RESULT_MAGIC == 0 {
         return None;
@@ -562,6 +626,8 @@ struct Cyw43HostEapolProgress {
     last_control_rx_idle_result: u32,
     last_rx_source: Option<Cyw43RxSourceResult>,
     last_control_rx_source: Option<Cyw43RxSourceResult>,
+    last_rx_trace: Cyw43RxIdleTrace,
+    last_control_rx_trace: Cyw43RxIdleTrace,
     assoc_probe_not_associated: bool,
     assoc_set_ssid_rescue_attempted: bool,
     last_flags: u16,
@@ -625,8 +691,17 @@ impl Cyw43HostEapolProgress {
     }
 
     fn record_rx_idle_completion(&mut self, completion: DriverTaskCompletionRecord) {
+        self.record_rx_idle_completion_with_trace(completion, None);
+    }
+
+    fn record_rx_idle_completion_with_trace(
+        &mut self,
+        completion: DriverTaskCompletionRecord,
+        trace: Option<Cyw43RxIdleTrace>,
+    ) {
         self.last_rx_idle_detail = completion.detail;
         self.last_rx_idle_result = completion.result;
+        self.last_rx_trace = trace.unwrap_or_default();
         self.last_rx_source = if completion.detail
             == DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY
             || completion.detail
@@ -667,8 +742,17 @@ impl Cyw43HostEapolProgress {
     }
 
     fn record_control_rx_idle_completion(&mut self, completion: DriverTaskCompletionRecord) {
+        self.record_control_rx_idle_completion_with_trace(completion, None);
+    }
+
+    fn record_control_rx_idle_completion_with_trace(
+        &mut self,
+        completion: DriverTaskCompletionRecord,
+        trace: Option<Cyw43RxIdleTrace>,
+    ) {
         self.last_control_rx_idle_detail = completion.detail;
         self.last_control_rx_idle_result = completion.result;
+        self.last_control_rx_trace = trace.unwrap_or_default();
         self.last_control_rx_source = if completion.detail
             == DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_EMPTY
             || completion.detail
@@ -3043,9 +3127,10 @@ fn process_cyw43_host_eapol_control_completion(
     } else if completion.code == DriverTaskCompletionCode::Idle.as_u16()
         && rx_poll_flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD != 0
     {
+        let trace = cyw43_completion_rx_idle_trace(contract, completion);
         session
             .progress
-            .record_control_rx_idle_completion(completion);
+            .record_control_rx_idle_completion_with_trace(completion, trace);
     }
     result
 }
@@ -3158,7 +3243,10 @@ fn process_cyw43_host_eapol_data_completion(
     } else if completion.code == DriverTaskCompletionCode::Idle.as_u16()
         && rx_poll_flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD != 0
     {
-        session.progress.record_rx_idle_completion(completion);
+        let trace = cyw43_completion_rx_idle_trace(contract, completion);
+        session
+            .progress
+            .record_rx_idle_completion_with_trace(completion, trace);
     }
     Ok(result)
 }
@@ -3584,10 +3672,12 @@ fn emit_cyw43_host_eapol_status(
     let control_rx_source_mode = cyw43_rx_source_mode(progress.last_control_rx_source);
     let rx_source = progress.last_rx_source.unwrap_or_default();
     let control_rx_source = progress.last_control_rx_source.unwrap_or_default();
-    let mut line = heapless::String::<1536>::new();
+    let rx_trace = progress.last_rx_trace;
+    let control_rx_trace = progress.last_control_rx_trace;
+    let mut line = heapless::String::<2304>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} assoc_set_ssid_rescue={} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} rxsrc_mode={} rxsrc_probe_len={} rxsrc_ien=0x{:02x} rxsrc_frame_ind={} rxsrc_host_int={} rxsrc_card_int={} rxsrc_f2_ready={} control_rxsrc_mode={} control_rxsrc_probe_len={} control_rxsrc_ien=0x{:02x} control_rxsrc_frame_ind={} control_rxsrc_host_int={} control_rxsrc_card_int={} control_rxsrc_f2_ready={} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} assoc_set_ssid_rescue={} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} rxsrc_mode={} rxsrc_probe_len={} rxsrc_ien=0x{:02x} rxsrc_frame_ind={} rxsrc_host_int={} rxsrc_card_int={} rxsrc_f2_ready={} control_rxsrc_mode={} control_rxsrc_probe_len={} control_rxsrc_ien=0x{:02x} control_rxsrc_frame_ind={} control_rxsrc_host_int={} control_rxsrc_card_int={} control_rxsrc_f2_ready={} rxtrace_valid={} rxtrace_flags=0x{:04x} rxtrace_detail=0x{:04x} rxtrace_probe_len={} rxtrace_source=0x{:08x} rxtrace_prefix=0x{:08x} rxtrace_digest=0x{:08x} rxtrace_rframe=0x{:04x} rxtrace_firstread_reads={} rxtrace_block_reads={} rxtrace_rframe_reads={} rxtrace_request_len={} rxtrace_block_size={} rxtrace_block_count={} control_rxtrace_valid={} control_rxtrace_flags=0x{:04x} control_rxtrace_detail=0x{:04x} control_rxtrace_probe_len={} control_rxtrace_source=0x{:08x} control_rxtrace_prefix=0x{:08x} control_rxtrace_digest=0x{:08x} control_rxtrace_rframe=0x{:04x} control_rxtrace_firstread_reads={} control_rxtrace_block_reads={} control_rxtrace_rframe_reads={} control_rxtrace_request_len={} control_rxtrace_block_size={} control_rxtrace_block_count={} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
         contract.name,
         status,
         reason,
@@ -3633,6 +3723,34 @@ fn emit_cyw43_host_eapol_status(
         yes_no(control_rx_source.host_interrupt),
         yes_no(control_rx_source.card_interrupt),
         yes_no(control_rx_source.function2_ready),
+        yes_no(rx_trace.valid),
+        rx_trace.flags,
+        rx_trace.detail,
+        rx_trace.probe_len,
+        rx_trace.source_result,
+        rx_trace.prefix_signature,
+        rx_trace.prefix_digest,
+        rx_trace.rframe_len,
+        rx_trace.firstread_reads,
+        rx_trace.block_reads,
+        rx_trace.rframe_reads,
+        rx_trace.request_len,
+        rx_trace.block_size,
+        rx_trace.block_count,
+        yes_no(control_rx_trace.valid),
+        control_rx_trace.flags,
+        control_rx_trace.detail,
+        control_rx_trace.probe_len,
+        control_rx_trace.source_result,
+        control_rx_trace.prefix_signature,
+        control_rx_trace.prefix_digest,
+        control_rx_trace.rframe_len,
+        control_rx_trace.firstread_reads,
+        control_rx_trace.block_reads,
+        control_rx_trace.rframe_reads,
+        control_rx_trace.request_len,
+        control_rx_trace.block_size,
+        control_rx_trace.block_count,
         progress.last_flags,
         progress.last_len,
         progress.last_ethertype,
@@ -9334,6 +9452,48 @@ mod tests {
             cyw43_host_eapol_next_action("required", &progress),
             "inspect-sdio-owner-function2-rx-source"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_firstread_decodes_rx_idle_trace() {
+        let mut frame = [0u8; CYW43_RX_IDLE_TRACE_BYTES];
+        frame[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
+        frame[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION.to_le_bytes());
+        frame[6..8].copy_from_slice(&0x0001u16.to_le_bytes());
+        frame[8..10].copy_from_slice(
+            &DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_SOURCE_ASSERTED_EMPTY.to_le_bytes(),
+        );
+        frame[10..12].copy_from_slice(&512u16.to_le_bytes());
+        frame[12..16].copy_from_slice(&0x8b07_0200u32.to_le_bytes());
+        frame[16..20].copy_from_slice(&0x4433_2211u32.to_le_bytes());
+        frame[20..24].copy_from_slice(&0x0c0b_0a09u32.to_le_bytes());
+        frame[24..26].copy_from_slice(&0u16.to_le_bytes());
+        frame[26..28].copy_from_slice(&2u16.to_le_bytes());
+        frame[28..30].copy_from_slice(&1u16.to_le_bytes());
+        frame[30..32].copy_from_slice(&6u16.to_le_bytes());
+        frame[32..34].copy_from_slice(&512u16.to_le_bytes());
+        frame[34..36].copy_from_slice(&512u16.to_le_bytes());
+        frame[36..38].copy_from_slice(&1u16.to_le_bytes());
+
+        let trace = cyw43_rx_idle_trace(&frame).expect("valid rx idle trace");
+
+        assert!(trace.valid);
+        assert_eq!(trace.flags, 0x0001);
+        assert_eq!(
+            trace.detail,
+            DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_FIRSTREAD_SOURCE_ASSERTED_EMPTY
+        );
+        assert_eq!(trace.probe_len, 512);
+        assert_eq!(trace.source_result, 0x8b07_0200);
+        assert_eq!(trace.prefix_signature, 0x4433_2211);
+        assert_eq!(trace.prefix_digest, 0x0c0b_0a09);
+        assert_eq!(trace.firstread_reads, 2);
+        assert_eq!(trace.block_reads, 1);
+        assert_eq!(trace.rframe_reads, 6);
+        assert_eq!(trace.request_len, 512);
+        assert_eq!(trace.block_size, 512);
+        assert_eq!(trace.block_count, 1);
     }
 
     #[cfg(feature = "kernel")]

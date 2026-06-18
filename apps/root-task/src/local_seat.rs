@@ -912,6 +912,31 @@ impl LocalSeatRuntime {
         written
     }
 
+    /// Drain complete display-control arrow sequences without entering commands.
+    ///
+    /// This keeps HDMI scrollback responsive while the console is emitting output,
+    /// but preserves ordinary typed bytes for the canonical parser path.
+    pub fn drain_display_control_bytes_during_output(&mut self, budget: usize) -> usize {
+        let mut drained = 0usize;
+        while drained.saturating_add(3) <= budget && self.keyboard_queue.len() >= 3 {
+            if self.keyboard_queue.get(0) != Some(&0x1b)
+                || self.keyboard_queue.get(1) != Some(&b'[')
+                || !matches!(self.keyboard_queue.get(2), Some(b'A' | b'B'))
+            {
+                break;
+            }
+            let bytes = [
+                self.keyboard_queue.pop_front().unwrap_or(0),
+                self.keyboard_queue.pop_front().unwrap_or(0),
+                self.keyboard_queue.pop_front().unwrap_or(0),
+            ];
+            self.drained_keyboard_bytes = self.drained_keyboard_bytes.saturating_add(3);
+            self.echo_input_bytes(&bytes);
+            drained = drained.saturating_add(3);
+        }
+        drained
+    }
+
     /// Mirror a console line into the bounded local-seat output ring.
     pub fn mirror_line(&mut self, line: &str) {
         #[cfg(feature = "kernel")]
@@ -4689,6 +4714,31 @@ mod tests {
         assert_eq!(trace.drained_bytes, 2);
         assert_eq!(trace.echoed_bytes, 2);
         assert_eq!(trace.dropped_bytes, 0);
+    }
+
+    #[test]
+    fn runtime_output_drain_consumes_only_complete_scrollback_arrows() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        assert_eq!(runtime.enqueue_keyboard_bytes(b"\x1b[Bx"), 4);
+        assert_eq!(runtime.drain_display_control_bytes_during_output(3), 3);
+        let trace = runtime.keyboard_trace();
+        assert_eq!(trace.queued_bytes, 1);
+        assert_eq!(trace.drained_bytes, 3);
+        assert_eq!(trace.echoed_bytes, 3);
+
+        let mut remaining = [0u8; 4];
+        assert_eq!(runtime.drain_keyboard_bytes(&mut remaining), 1);
+        assert_eq!(remaining[0], b'x');
+
+        assert_eq!(runtime.enqueue_keyboard_bytes(b"\x1b["), 2);
+        assert_eq!(runtime.drain_display_control_bytes_during_output(3), 0);
+        assert_eq!(runtime.keyboard_trace().queued_bytes, 2);
     }
 
     #[cfg(feature = "kernel")]
