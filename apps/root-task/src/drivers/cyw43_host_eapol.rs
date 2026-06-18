@@ -9,6 +9,8 @@
 //! boundary for secure carrier release: derive keys, answer AP EAPOL, and only
 //! publish DHCP/data readiness after PTK/GTK installation has succeeded.
 
+#[cfg(test)]
+use aes::cipher::BlockEncrypt;
 use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
 use aes::Aes128;
 
@@ -1031,6 +1033,126 @@ fn put_u32_le(buf: &mut [u8], offset: usize, value: u32) {
     if let Some(slot) = buf.get_mut(offset..offset + 4) {
         slot.copy_from_slice(&value.to_le_bytes());
     }
+}
+
+#[cfg(test)]
+fn test_aes128_key_wrap(
+    kek: &[u8],
+    plain: &[u8],
+    output: &mut [u8; HOST_EAPOL_KEY_DATA_MAX_LEN],
+) -> Result<usize, &'static str> {
+    if kek.len() != WPA_KEK_LEN || plain.len() < 16 || plain.len() % 8 != 0 {
+        return Err("eapol-key-data-test-wrap-shape");
+    }
+    let n = plain.len() / 8;
+    let wrapped_len = plain
+        .len()
+        .checked_add(8)
+        .ok_or("eapol-key-data-test-wrap-len")?;
+    if wrapped_len > output.len() {
+        return Err("eapol-key-data-test-wrap-large");
+    }
+    let mut a = [0xa6u8; 8];
+    output[8..wrapped_len].copy_from_slice(plain);
+    let cipher = Aes128::new(GenericArray::from_slice(kek));
+    for j in 0..6 {
+        for i in 1..=n {
+            let t = (n * j + i) as u64;
+            let mut block = [0u8; 16];
+            block[..8].copy_from_slice(&a);
+            block[8..].copy_from_slice(&output[8 + (i - 1) * 8..8 + i * 8]);
+            cipher.encrypt_block(GenericArray::from_mut_slice(&mut block));
+            a.copy_from_slice(&block[..8]);
+            xor_key_wrap_t(&mut a, t);
+            output[8 + (i - 1) * 8..8 + i * 8].copy_from_slice(&block[8..]);
+        }
+    }
+    output[..8].copy_from_slice(&a);
+    Ok(wrapped_len)
+}
+
+#[cfg(test)]
+pub(crate) fn write_test_m1_frame(
+    frame: &mut [u8; MAX_FRAME_LEN],
+    station_mac: &[u8; ETHER_ADDR_LEN],
+    ap_mac: &[u8; ETHER_ADDR_LEN],
+) -> Result<usize, &'static str> {
+    let mut replay_counter = [0u8; WPA_REPLAY_COUNTER_LEN];
+    replay_counter[WPA_REPLAY_COUNTER_LEN - 1] = 1;
+    let anonce = [
+        0x10, 0x33, 0x56, 0x79, 0x9c, 0xbf, 0xe2, 0x05, 0x28, 0x4b, 0x6e, 0x91, 0xb4, 0xd7, 0xfa,
+        0x1d, 0x40, 0x63, 0x86, 0xa9, 0xcc, 0xef, 0x12, 0x35, 0x58, 0x7b, 0x9e, 0xc1, 0xe4, 0x07,
+        0x2a, 0x4d,
+    ];
+    let key_info = EAPOL_KEY_VERSION_HMAC_SHA1_AES | EAPOL_KEY_INFO_KEY_TYPE | EAPOL_KEY_INFO_ACK;
+    let zero_kck = [0u8; WPA_KCK_LEN];
+    let len = write_eapol_key_reply_frame(
+        frame,
+        station_mac,
+        ap_mac,
+        key_info,
+        &replay_counter,
+        Some(&anonce),
+        &[],
+        &zero_kck,
+    )?;
+    let body = ETH_HEADER_LEN + EAPOL_HEADER_LEN;
+    frame[body + EAPOL_KEY_BODY_MIC_OFFSET..body + EAPOL_KEY_BODY_MIC_OFFSET + WPA_MIC_LEN].fill(0);
+    Ok(len)
+}
+
+#[cfg(test)]
+pub(crate) fn write_test_m3_frame(
+    frame: &mut [u8; MAX_FRAME_LEN],
+    station_mac: &[u8; ETHER_ADDR_LEN],
+    state: &HostEapolState,
+) -> Result<usize, &'static str> {
+    if !state.m2_sent {
+        return Err("host-eapol-test-m3-before-m2");
+    }
+    let mut plain = [0u8; 64];
+    let mut offset = 0usize;
+    plain[offset..offset + WPA2_PSK_CCMP_RSN_IE.len()].copy_from_slice(&WPA2_PSK_CCMP_RSN_IE);
+    offset += WPA2_PSK_CCMP_RSN_IE.len();
+    let gtk = [
+        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e,
+        0x7f,
+    ];
+    plain[offset] = 0xdd;
+    plain[offset + 1] = 22;
+    plain[offset + 2..offset + 5].copy_from_slice(&RSN_KDE_OUI);
+    plain[offset + 5] = RSN_KDE_TYPE_GTK;
+    plain[offset + 6] = 1;
+    plain[offset + 7] = 0;
+    plain[offset + 8..offset + 8 + gtk.len()].copy_from_slice(&gtk);
+    offset += 24;
+    let plain_len = (offset + 7) & !7;
+
+    let mut wrapped = [0u8; HOST_EAPOL_KEY_DATA_MAX_LEN];
+    let wrapped_len = test_aes128_key_wrap(
+        &state.ptk[WPA_KCK_LEN..WPA_KCK_LEN + WPA_KEK_LEN],
+        &plain[..plain_len],
+        &mut wrapped,
+    )?;
+    let mut replay_counter = state.m1_replay_counter;
+    for byte in replay_counter.iter_mut().rev() {
+        let (next, carry) = byte.overflowing_add(1);
+        *byte = next;
+        if !carry {
+            break;
+        }
+    }
+    let key_info = EAPOL_KEY_VERSION_HMAC_SHA1_AES | EAPOL_KEY_INFO_PAIRWISE_RECV_MASK;
+    write_eapol_key_reply_frame(
+        frame,
+        station_mac,
+        &state.ap_mac,
+        key_info,
+        &replay_counter,
+        Some(&state.anonce),
+        &wrapped[..wrapped_len],
+        &state.ptk[..WPA_KCK_LEN],
+    )
 }
 
 #[cfg(test)]

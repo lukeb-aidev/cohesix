@@ -8032,8 +8032,8 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
             SequenceStep("dhcp-start", wifi_dhcp_start_step),
             SequenceStep("dhcp-bound", wifi_dhcp_bound_step),
             SequenceStep("nettest", wifi_nettest_step),
-            SequenceStep("netstats-bound", wifi_netstats_bound_step),
             SequenceStep("netstats-counters", wifi_netstats_counters_step),
+            SequenceStep("netstats-bound", wifi_netstats_bound_step),
             SequenceStep("netstats-secure", wifi_netstats_secure_step),
         ],
     )

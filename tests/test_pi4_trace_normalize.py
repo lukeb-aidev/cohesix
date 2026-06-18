@@ -103,9 +103,9 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
         "server=192.168.10.1 lease_s=3600",
         "OK NETTEST detail=pass scope=serial-local",
+        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
         "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
-        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
     ]
 
@@ -197,10 +197,114 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
         "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
         "server=192.168.10.1 lease_s=3600",
         "OK NETTEST detail=pass scope=serial-local",
+        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
         "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
-        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
+    ]
+
+
+def linked_runtime_wifi_harness_replay_lines() -> list[str]:
+    """Return the offline linked-runtime WiFi replay harness proof trace."""
+
+    lines = oldgood_wifi_resource_replay_lines()
+    join_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("CYW43_DRIVER_TASK_JOIN_REQUEST")
+    )
+    return [
+        *lines[: join_index + 1],
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+        "status=event-rx reason=host-eapol-required polls=1 starts=0 "
+        "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=1 "
+        "control_rx=0 empty_polls=0 associated=no link_up=no assoc_event=none "
+        "assoc_poll=0 post_assoc_polls=0 next_action=inspect-cyw43-join-event-state",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+        "status=event-rx reason=host-eapol-required polls=2 starts=0 "
+        "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=2 "
+        "control_rx=0 empty_polls=0 associated=yes link_up=yes assoc_event=link-up "
+        "assoc_poll=2 post_assoc_polls=0 next_action=send-eapol-start-or-wait-m1",
+        *lines[join_index + 1 :],
+    ]
+
+
+def pi4_hardware_wifi_gate7_to_10_capture_lines() -> list[str]:
+    """Return the captured Pi 4 WiFi Gate 7-10 proof sequence."""
+
+    lines = oldgood_wifi_resource_replay_lines()
+    join_index = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("CYW43_DRIVER_TASK_JOIN_REQUEST")
+    )
+    return [
+        *lines[: join_index + 1],
+        "[cyw43] event type=3 flags=0x0000 status=0x00000000 "
+        "reason=0x00000000 auth=0x00000000 addr=f0-72-ea-4c-c7-a5 "
+        "src=8a-a2-9e-66-59-10",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+        "status=event-rx reason=host-eapol-required polls=704 starts=0 "
+        "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=1 "
+        "control_rx=1 empty_polls=703 associated=no link_up=no assoc_event=none "
+        "assoc_poll=0 post_assoc_polls=0 next_action=inspect-cyw43-join-event-state",
+        "[cyw43] host-eapol ap-mac seed source=event-addr-global event=assoc "
+        "mac=f0-72-ea-4c-c7-a5 event_addr=f0-72-ea-4c-c7-a5 "
+        "event_src=8a-a2-9e-66-59-10",
+        "[cyw43] event type=7 flags=0x0000 status=0x00000000 "
+        "reason=0x00000000 auth=0x00000000 addr=f0-72-ea-4c-c7-a5 "
+        "src=8a-a2-9e-66-59-10",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+        "status=event-rx reason=host-eapol-required polls=705 starts=0 "
+        "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=2 "
+        "control_rx=2 empty_polls=704 associated=yes link_up=no assoc_event=assoc "
+        "assoc_poll=705 post_assoc_polls=0 next_action=inspect-cyw43-data-rx-path",
+        "[cyw43] event type=16 flags=0x0001 status=0x00000000 "
+        "reason=0x00000000 auth=0x00000000 addr=f0-72-ea-4c-c7-a5 "
+        "src=8a-a2-9e-66-59-10",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+        "status=event-rx reason=host-eapol-required polls=706 starts=0 "
+        "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=3 "
+        "control_rx=3 empty_polls=704 associated=yes link_up=yes assoc_event=assoc "
+        "assoc_poll=705 post_assoc_polls=1 next_action=send-eapol-start-or-wait-m1",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+        "msg=m1 action=recv-m1 poll=710 len=113",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+        "msg=m2 action=send-m2 poll=710 len=135",
+        "[cyw43] event type=0 flags=0x0000 status=0x00000000 "
+        "reason=0x00000000 auth=0x00000000 addr=f0-72-ea-4c-c7-a5 "
+        "src=8a-a2-9e-66-59-10",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+        "msg=m3 action=recv-m3 poll=715 len=169",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+        "msg=m4 action=send-m4 poll=715 len=113",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=ptk "
+        "stage=cyw43-host-eapol-ptk status=ready",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=gtk "
+        "stage=cyw43-host-eapol-gtk status=ready",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 status=secure "
+        "reason=none polls=716 starts=0 tx_retries=0 data_rx=2 eapol_rx=2 "
+        "non_eapol_rx=0 event_rx=4 control_rx=3 empty_polls=704 associated=yes "
+        "link_up=yes assoc_event=assoc assoc_poll=705 post_assoc_polls=5 "
+        "next_action=release-dhcp-data",
+        JOIN_COMPLETE_HOST_EAPOL,
+        "[dhcp] start ready interface=wifi now_ms=0",
+        "[dhcp] tx queued kind=discover from=selecting to=selecting "
+        "len=259 attempts=1 tx_packets=1",
+        "[dhcp] rx transition from=selecting to=requesting action=send-queued "
+        "len=300 attempts=0 rx_packets=1 invalid=0",
+        "[dhcp] tx queued kind=request from=requesting to=requesting "
+        "len=270 attempts=1 tx_packets=2",
+        "[dhcp] rx ack ip=192.168.86.154 phase=bound len=300 rx_packets=2",
+        "[dhcp] lease bound ip=192.168.86.154/24 gateway=192.168.86.1 "
+        "server=192.168.86.1 lease_s=86400",
+        "[net-selftest] result tx_ok=true udp_echo_ok=false tcp_ok=false "
+        "console_ok=true peer_assisted_ok=true",
+        "OK NETTEST detail=started",
+        "netstats: rx_pkts=590 tx_pkts=141 rx_used=590 tx_used=141 polls=9831",
+        "netstats: mode=dhcp policy=wifi active=wifi standby=none "
+        "addr_src=dhcp-lease ip=192.168.86.154 gateway=192.168.86.1 dhcp=bound",
+        "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=0 eapol_secure=1",
     ]
 
 
@@ -8322,6 +8426,32 @@ def test_gate_summary_accepts_oldgood_wifi_resource_replay_contract() -> None:
     assert record["WIFI_OLDGOOD_MISSING"] == "none"
 
 
+def test_gate_summary_accepts_linked_runtime_wifi_harness_replay_contract() -> None:
+    events = normalizer.parse_events(linked_runtime_wifi_harness_replay_lines())
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.wifi_gate == 10
+    assert gates.wifi_blocker == "none"
+    assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
+    assert record["WIFI_OLDGOOD_LAST"] == "netstats-secure"
+    assert record["WIFI_OLDGOOD_MISSING"] == "none"
+
+
+def test_gate_summary_accepts_pi4_hardware_wifi_gate7_to_10_capture_contract() -> None:
+    events = normalizer.parse_events(pi4_hardware_wifi_gate7_to_10_capture_lines())
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.wifi_gate == 10
+    assert gates.wifi_blocker == "none"
+    assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
+    assert record["WIFI_OLDGOOD_LAST"] == "netstats-secure"
+    assert record["WIFI_OLDGOOD_MISSING"] == "none"
+
+
 def test_gate_summary_rejects_failed_function2_as_wifi_oldgood_replay() -> None:
     lines = [
         line.replace(
@@ -8393,9 +8523,9 @@ def test_gate_summary_rejects_condensed_host_eapol_as_oldgood_replay() -> None:
             "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
             "server=192.168.10.1 lease_s=3600",
             "OK NETTEST detail=pass scope=serial-local",
+            "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
             "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
             "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
-            "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
             "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 "
             "eapol_start=1 eapol_secure=1",
         ]

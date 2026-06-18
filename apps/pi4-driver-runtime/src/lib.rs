@@ -21595,6 +21595,56 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_control_poll_hintless_firstread_recovers_zero_rframe_event() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let event = *b"assoc-event";
+        let frame_len = CYW43_SDPCM_HEADER_BYTES + event.len();
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_EVENT,
+            4,
+            false,
+        );
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &event,
+        );
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+        });
+
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        });
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(83)),
+            DriverTaskCompletionRecord::frame_ready_with_descriptor(
+                83,
+                DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: event.len() as u16,
+                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 4),
+                }
+            )
+        );
+        assert_eq!(
+            read_frame_prefix::<11>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: event.len() as u16,
+                flags: 0,
+            }),
+            event
+        );
+    }
+
+    #[test]
     fn cyw43_function2_read_failure_terminates_naks_and_retries_once() {
         let _guard = test_guard();
         reset_runtime_for_test();
