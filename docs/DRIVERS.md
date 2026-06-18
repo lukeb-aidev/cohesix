@@ -54,6 +54,14 @@ behavior. Runtime progress returns only as bounded completions and breadcrumbs,
 so root can admit, observe, retry, or revoke without reclaiming steady
 physical-driver work.
 
+Performance counters are part of that contract. Linked runtimes and root-side
+ring clients expose bounded, activity-gated counter snapshots for turns, staged
+bytes, cache work, busy/backpressure, same-request resumes, timeouts, aborts,
+and RX/TX volume. These counters let benchmark runs explain contention and tune
+batching without high-volume UART logging or hidden root-side work. They remain
+diagnostic: invalid or missing counters block performance claims, but counters
+do not replace owner-state proof or a fresh same-harness Pi benchmark.
+
 The performance expectation is lower root-task contention and bounded hot-path
 latency, not an unconditional throughput claim. A well-shaped runtime can batch
 device-local work, keep cache and DMA maintenance near the driver state machine,
