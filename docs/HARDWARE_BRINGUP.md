@@ -6,8 +6,8 @@
 
 ## Scope
 - Cohesix supports two bring-up paths:
-- QEMU `aarch64/virt` (development/CI baseline).
-- Raspberry Pi 4 (`bcm2711`) via upstream-style boot chain: `Pi firmware -> U-Boot -> seL4 image -> root-task`.
+  - QEMU `aarch64/virt` (development/CI baseline).
+  - Raspberry Pi 4 (`bcm2711`) via upstream-style boot chain: `Pi firmware -> U-Boot -> seL4 image -> root-task`.
 - Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4; the historical 26b compatibility baseline adds the interactive U-Boot policy wizard, DTB `/chosen/cohesix,*` network-policy handoff, Cohesix-owned xHCI/VL805 local-seat cold start, wired DHCP, and the staged Pi 4 Wi-Fi runtime path. Reopened 26a/26b driver-task closure is not as-built until fresh captures prove dedicated driver-task isolation for the active hardware paths.
 
 ## Canonical Pi 4 boot chain
@@ -19,14 +19,14 @@
 
 ## Manifest profiles
 - Development profile: `configs/root_task.toml` (`profile.name = "virt-aarch64"`).
-- Pi 4 baseline profile (Milestone 26 no-NIC): `configs/root_task_uefi_aarch64.toml` (`profile.name = "uefi-aarch64"` migration alias).
-- Pi 4 networking profile (Milestone 26a/26b policy baseline): `configs/root_task_pi4_uboot_aarch64.toml` (`profile.name = "pi4-uboot-aarch64"`).
+- Pi 4 U-Boot profile: `configs/root_task_pi4_uboot_aarch64.toml` (`profile.name = "pi4-uboot-aarch64"`). This is the current Pi 4 baseline used by `scripts/pi4-image-build.sh`.
+- Legacy migration alias: `configs/root_task_uefi_aarch64.toml` (`profile.name = "uefi-aarch64"`). Do not treat this file as the current Pi 4 hardware baseline.
 - `coh-rtc` enforces profile gates:
-- Milestone 26 baseline: `hw.no_nic=true`, `features.net_console=false`.
-- Milestone 26a/26b networking: `hw.network.enabled=true`, `hw.network.backend=bcmgenet-v5`, bounded `hw.network.mode` (`off|static|dhcp`), bounded `hw.network.interface` (`wired|wifi|auto`), DHCP retry/timeout bounds, required `net` device declaration, and bounded non-zero static IPv4 (`prefix_len=1..32`) when `mode=static`.
-- declared `uart` + `rtc` devices
-- local-seat declarations when `hw.local_seat.enabled=true`
-- attestation policy/device requirements when `hw.attestation.enabled=true`
+  - Milestone 26 baseline: `hw.no_nic=true`, `features.net_console=false`.
+  - Milestone 26a/26b networking: `hw.network.enabled=true`, `hw.network.backend=bcmgenet-v5`, bounded `hw.network.mode` (`off|static|dhcp`), bounded `hw.network.interface` (`wired|wifi|auto`), DHCP retry/timeout bounds, required `net` device declaration, and bounded non-zero static IPv4 (`prefix_len=1..32`) when `mode=static`.
+  - declared `uart` + `rtc` devices
+  - local-seat declarations when `hw.local_seat.enabled=true`
+  - attestation policy/device requirements when `hw.attestation.enabled=true`
 
 ## Pi 4 build + boot commands
 1. Build seL4 Pi 4 image:
@@ -40,8 +40,9 @@
 - On macOS ARM64, `--clean` also injects the Homebrew OpenSSL include/lib paths into the U-Boot host-tool build so `mkimage` and the other host utilities rebuild against the expected OpenSSL installation.
 - `scripts/pi4-image-build.sh` validates that the external seL4 Pi 4 overlay and any generated `kernel/kernel.dts` expose `device-untypes@600000000` for the VL805 BAR0 window. It refuses to patch seL4 kernel sources during proof runs; missing device-untyped coverage must be fixed intentionally in the external seL4 tree and then rebuilt.
 - `scripts/pi4-image-build.sh` builds the root task with `release-pi4,bootstrap-trace` by default, strips only the root-task ELF copy injected into the seL4 archive, and keeps the flashed rootfs CPIO under `scripts/ci/size_guard.sh` while leaving the normal Cargo artifact available for local symbol inspection.
-- Runtime serial probing on this U-Boot path prefers the firmware-visible PL011
-  UART before mini-UART fallback. A trace that stops immediately after
+- Runtime serial probing on the Pi 4 U-Boot path prefers the mini-UART
+  (`serial1`) path used by the staged image; PL011 is QEMU/dev-path language
+  unless an explicit fallback profile declares it. A trace that stops immediately after
   `cold-boot keyboard probe end stage=pre-net` is treated as a UART-selection
   blocker until the next image shows `[uart] runtime init begin/end`.
 4. Prepare FAT boot partition with:

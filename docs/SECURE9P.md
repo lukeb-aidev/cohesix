@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Describe Secure9P crate layout, transport rules, and access policy hooks. -->
 <!-- Author: Lukas Bower -->
@@ -18,7 +18,7 @@ uphold so operator-facing tools (`cohsh`, `coh`, `hive-gateway`) remain protocol
 
 ## 1. Scope
 Secure9P provides the 9P2000.L codec, core request dispatcher, and transport adapters used by NineDoor. It must remain usable in `no_std + alloc` environments and cannot depend on POSIX APIs.
-It is the sole control-plane IPC surface; the TCP console path reuses the same NineDoor framing with a minimal 9P-style `attach`/auth handshake (role, optional ticket, idle/auth timeouts, reconnect-friendly) layered alongside the always-on PL011 root console rather than replacing it. The TCP console uses Secure9P-style length-prefixed frames (4-byte little-endian length including the header) to carry each console line.
+It is the sole control-plane IPC surface; the TCP console path reuses the same NineDoor framing with a minimal 9P-style `attach`/auth handshake (role, optional ticket, idle/auth timeouts, reconnect-friendly) layered alongside the platform serial root console rather than replacing it. The TCP console uses Secure9P-style length-prefixed frames (4-byte little-endian length including the header) to carry each console line.
 Secure9P sessions present the per-hive and per-role view into the namespace so queen and worker mounts expose different slices of the hive.
 
 **Non-goals**
@@ -79,7 +79,7 @@ pub trait AccessPolicy {
 ```
 - NineDoor implements the trait using role-aware mount tables.
 - Policies run before provider logic executes.
-- Role-to-namespace rules follow `docs/ROLES_AND_SCHEDULING.md` (queen = full tree, worker-heartbeat = `/proc/boot`, `/shard/<label>/worker/<id>/telemetry`, `/log/queen.log` RO, worker-gpu future `/gpu/<lease>`), and capabilities are session-scoped tickets negotiated during `attach` (single attach per `cohsh` session with optional ticket injection before remaining bound to the resulting mounts). Legacy `/worker/<id>/telemetry` aliases are available only when `sharding.legacy_worker_alias = true`.
+- Role-to-namespace rules follow `docs/ROLES_AND_SCHEDULING.md`: Queen receives the full role-scoped tree; WorkerHeartbeat receives `/proc/boot`, `/proc/lifecycle/*`, `/shard/<label>/worker/<id>/telemetry`, and `/log/queen.log` read-only; WorkerGpu receives the WorkerHeartbeat view plus scoped `/gpu/<id>/*` for its bound lease/device when GPU nodes are present. Capabilities are session-scoped tickets negotiated during `attach`. Legacy `/worker/<id>/telemetry` aliases are available only when `sharding.legacy_worker_alias = true`.
 - The AccessPolicy for queen versus worker roles enables the Queen’s ability to orchestrate many workers by controlling access to mount points and control files such as `/queen/ctl`, `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` when enabled), and `/gpu/*`.
 - AccessPolicy evaluation occurs after path validation and normalisation by secure9p-core; providers never receive unvalidated or unbounded paths.
 
@@ -125,4 +125,3 @@ NineDoor exposes telemetry and GPU file surfaces that ultimately map onto shared
   - `reject` — fail fast on short writes.
   - `retry` — bounded exponential back-off using a fixed retry budget (currently 3 attempts with a 5ms base delay).
 - Queue depth limits are the minimum of `tags_per_session` and `batch_frames`, ensuring batching never exceeds manifest-controlled concurrency.
-

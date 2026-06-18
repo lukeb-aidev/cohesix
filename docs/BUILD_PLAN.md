@@ -8,7 +8,7 @@ Cohesix targets physical ARM64 hardware with an official Raspberry Pi 4 bring-up
 **Host:** macOS 26 on Apple Silicon (M4)
 **Target:** QEMU aarch64 `virt` (GICv3)
 **Kernel:** Upstream seL4 (external build)
-**Userspace:** Pure Rust crates (`root-task`, `nine-door`, `worker-heart`, future `worker-gpu`, `gpu-bridge-host` host tool)
+**Userspace:** Pure Rust crates (`root-task`, `nine-door`, `worker-heart`, `worker-gpu` host implementation with current VM stub, `gpu-bridge-host` host tool)
 
 Physical ARM64 hardware remains the deployment target; for Raspberry Pi 4, Milestone 26 onward follows the upstream seL4 U-Boot handoff model while preserving QEMU `aarch64/virt` semantics as the reference development and CI profile.
 
@@ -18,6 +18,8 @@ and the interface contracts codified in `docs/INTERFACES.md`. Treat those docume
 preparing and executing tasks.
 
 Cohesix is a hive-style orchestrator: one Queen coordinating many workers via a shared Secure9P namespace and commanded through `cohsh`.
+
+Current terminology: a **shard** is a manifest-derived worker namespace bucket, and the canonical worker telemetry path is `/shard/<label>/worker/<id>/telemetry`. Older milestone records may mention the legacy `/worker/<id>/telemetry` alias; that alias is valid only when `sharding.legacy_worker_alias = true`.
 
 ## seL4 Reference Manual Alignment (v15.0.0)
 
@@ -5891,7 +5893,7 @@ The next planned releases target official Raspberry Pi 4 bare-metal boot (`U-Boo
 **Status:** In Progress — pivoted on February 23, 2026 from UEFI `BOOTAA64.EFI` bring-up to the official upstream seL4 Raspberry Pi 4 flow (`U-Boot + binary image`).
 
 **Why now (context):**  
-Upstream seL4 Pi 4 bring-up documentation and examples are built around loading the generated seL4 image from U-Boot (`fatload` + `go`) on `bcm2711`, not a UEFI handoff chain. Aligning Milestone 26 to this path reduces boot complexity, matches upstream behavior, and gives deterministic control at the U-Boot prompt for upcoming network milestones (26a/26b).
+Upstream seL4 Pi 4 bring-up documentation originally used direct U-Boot image loading examples on `bcm2711`, not a UEFI handoff chain. Cohesix now follows the active staged U-Boot path: `scripts/pi4-image-build.sh` builds `seL4/build_UBOOT`, stages the seL4 binary image, driver-runtime CPIO, and padded DTB, then hands off with `bootm <image> <runtime-cpio> <dtb>`. This preserves deterministic control at the U-Boot prompt while matching the linked-runtime layout used by Milestone 26a/26b.
 
 **Non-negotiable constraints:**  
 - Boot chain for Pi 4 Milestone 26 is: `Pi firmware (start4/fixup) -> U-Boot -> seL4 image -> root-task`.
@@ -5934,8 +5936,8 @@ Deliver a **Pi firmware -> U-Boot -> seL4 image -> root-task** boot path on Rasp
 - **U-Boot command path (authoritative for boot control)**
   - Document and standardize operator commands:
     - `fatls` to verify media,
-    - `fatload` to load image into RAM,
-    - `go` to transfer execution.
+    - `fatload` to load the staged image, runtime CPIO, and DTB into RAM,
+    - `bootm` to transfer execution through the staged U-Boot image contract.
   - Define the environment conventions that 26a/26b will extend (`loadaddr`, `ipaddr`, `serverip`, `ethact`, `autoload`, `bootcmd`).
 
 - **macOS debug harness for U-Boot scripts**
@@ -5966,14 +5968,16 @@ Deliver a **Pi firmware -> U-Boot -> seL4 image -> root-task** boot path on Rasp
 
 ### Commands
 - Build seL4 Pi 4 image:
-  - `cmake --build seL4/build_UEFI --target images/sel4test-driver-image-arm-bcm2711`
+  - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - Build U-Boot for Pi 4:
   - `make -C third_party/u-boot rpi_4_defconfig`
   - `make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)`
 - U-Boot boot commands on Pi 4:
   - `fatls mmc 0:1`
-  - `fatload mmc 0:1 ${loadaddr} sel4test-driver-image-arm-bcm2711`
-  - `go ${loadaddr}`
+  - `fatload mmc 0:1 ${loadaddr} cohesix-image-arm-bcm2711`
+  - `fatload mmc 0:1 0x15000000 cohesix-driver-runtimes.cpio.uimg`
+  - `fatload mmc 0:1 0x14000000 bcm2711-rpi-4-b.dtb`
+  - `bootm ${loadaddr} 0x15000000 0x14000000`
 - U-Boot pre-boot networking setup commands (for 26a/26b preparation and diagnostics):
   - `setenv autoload no`
   - `setenv ipaddr <board-ip>`
@@ -5992,7 +5996,7 @@ Deliver a **Pi firmware -> U-Boot -> seL4 image -> root-task** boot path on Rasp
 ---
 
 ### Checks (DoD)
-- Pi 4 boots through U-Boot using `fatload` + `go` into seL4/root-task with deterministic log ordering.
+- Pi 4 boots through U-Boot using the staged `bootm` image + runtime CPIO + DTB handoff into seL4/root-task with deterministic log ordering.
 - `cohesix>` prompt appears on HDMI text output and accepts USB keyboard commands (`help`, `bi`, `caps`, `ping`) with unchanged parser semantics.
 - Command responses typed on USB keyboard are visible on HDMI and match serial transcript semantics.
 - Manifest fingerprint is printed and matches packaged hash.
@@ -6015,18 +6019,18 @@ Deliver a **Pi firmware -> U-Boot -> seL4 image -> root-task** boot path on Rasp
 ## Task Breakdown
 ```
 Title/ID: m26-uboot-bootchain
-Goal: Boot Pi 4 via upstream U-Boot commands (`fatload` + `go`) into seL4/root-task with stable manifest fingerprint output.
-Inputs: `seL4/build_UEFI/images/sel4test-driver-image-arm-bcm2711`, `third_party/u-boot`, Pi firmware boot partition files, profile manifest.
+Goal: Boot Pi 4 via the staged U-Boot `bootm` handoff into seL4/root-task with stable manifest fingerprint output.
+Inputs: `seL4/build_UBOOT/images/sel4test-driver-image-arm-bcm2711`, `third_party/u-boot`, Pi firmware boot partition files, profile manifest, staged driver-runtime CPIO, padded Pi 4 DTB.
 Changes:
   - `scripts/pi4-image-build.sh` — build deterministic Pi 4 FAT payload (`u-boot.bin` + seL4 image + manifest artifacts).
   - `docs/HARDWARE_BRINGUP.md` — document canonical Pi 4 U-Boot command flow and SD layout.
   - `apps/root-task` — preserve boot fingerprint line ordering relative to serial/local seat.
 Commands:
-  - `cmake --build seL4/build_UEFI --target images/sel4test-driver-image-arm-bcm2711`
+  - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
   - `make -C third_party/u-boot rpi_4_defconfig`
   - `make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j$(sysctl -n hw.ncpu)`
 Checks:
-  - Pi 4 reaches root-task via `fatload` + `go`; missing/invalid manifest aborts before ticket publication.
+  - Pi 4 reaches root-task via staged `bootm <image> <runtime-cpio> <dtb>`; missing/invalid manifest or DTB policy aborts before ticket publication.
 Deliverables:
   - Reproducible Pi 4 U-Boot boot artifacts with documented hashes and commands.
 
@@ -10705,17 +10709,17 @@ Deliverables:
      - (Alternative) `./bin/swarmui --mint-ticket --role worker-heartbeat --ticket-subject jetson-1`
    - On Jetson, attach as the worker role over TCP (outbound only per `docs/NETWORK_CONFIG.md`):
      - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337 --role worker-heartbeat --ticket "$WORKER_TICKET"`
-   - In the Queen view (SwarmUI or cohsh), confirm workers appear under `/worker` before proceeding.
-   - If `/worker` is empty, request a queen-side heartbeat spawn to seed a visible worker entry, then re-check:
+   - In the Queen view (SwarmUI or cohsh), confirm workers appear under `/shard/<label>/worker` before proceeding. Legacy `/worker` appears only when `sharding.legacy_worker_alias = true`.
+   - If `/shard` has no worker entries, request a queen-side heartbeat spawn to seed a visible worker entry, then re-check:
      - `echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue`
      - `spawn heartbeat ticks=100`
-     - `ls /worker`
+     - `ls /shard`
 6) Keep Live Hive active (optional):
    - `echo {"id":"spawn-2","target":"/queen/ctl","decision":"approve"} > /actions/queue`
    - `spawn heartbeat ticks=100`.
 7) Host tools prove control-plane surface (Linux queen host or G5g, host tools only):
    - Live GPU bridge publish (required for `/gpu/models` and PEFT):
-     - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --auth-token changeme --interval-ms 1000 --registry demo/peft_registry`
+     - `./bin/gpu-bridge-host --publish --tcp-host <queen-host> --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN" --interval-ms 1000 --registry demo/peft_registry`
      - Optional sanity: `./bin/gpu-bridge-host --list`
    - GPU surface (live):
      - `./bin/coh --host <queen-host> --port 31337 gpu list`
@@ -10744,7 +10748,7 @@ Deliverables:
    - Verify pointer via cohsh after closing SwarmUI: `ls /gpu/models/available` and `cat /gpu/models/active`
 12) Rollback: `./bin/coh --host <queen-host> --port 31337 peft rollback --registry demo/peft_registry`
 13) Optional lifecycle control (only when no outstanding leases/workers):
-   - `ls /worker` (ensure empty) and confirm no active leases.
+   - `ls /shard` (ensure no active workers; legacy `/worker` may exist only when enabled) and confirm no active leases.
    - `lifecycle cordon`, `lifecycle drain`, `lifecycle resume`.
 
 **Checks**
@@ -10802,7 +10806,7 @@ Deliverables:
    - Attach from Jetson (outbound only):
      - `./bin/cohsh --transport tcp --tcp-host <queen-host> --tcp-port 31337 --role worker-heartbeat --ticket "$WORKER_TICKET"`
    - Verify worker presence on Queen:
-     - `ls /worker` (or `/shard/<label>/worker` if sharding enabled)
+     - `ls /shard` and then inspect the relevant `/shard/<label>/worker` entry (legacy `/worker` only if aliasing is enabled)
 5) LeJEPA training (host-side, outside Cohesix):
    - Run your LeJEPA training harness on g5g using `/home/models/vit-s16` as the base.
    - Emit bounded telemetry records that conform to `gpu-telemetry/v1` via the bridge (no schema changes).
@@ -10962,7 +10966,7 @@ To prevent drift:
    - Rule: **Documentation must describe the system “as built”** (post-codegen), not only “as intended”.
 
 4. **Red Lines**
-   - Enforced in the compiler and restated here: 9P2000.L, `msize ≤ 8192`, walk depth ≤ 8, no `..`, no fid reuse after clunk, no TCP listeners inside VM unless feature-gated and documented, CPIO < 4 MiB, no POSIX façade, maintain `no_std` for VM artefacts.
+   - Enforced in the compiler and restated here: 9P2000.L, `msize ≤ 8192`, walk depth ≤ 8, no `..`, no fid reuse after clunk, no in-VM TCP listeners except the authenticated root-task console, CPIO < 4 MiB, no POSIX façade, maintain `no_std` for VM artefacts.
 
 5. **Regression Pack (post–Milestone 7c)**
    - From Milestone 8 onward, any change that lands **MUST** re-run the shared regression pack from earlier milestones, not just new tests.

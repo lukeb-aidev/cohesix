@@ -17,7 +17,7 @@ This document is the adoption guide for Cohesix APIs introduced in Milestone 24c
 - `docs/OPERATOR_WALKTHROUGH.md` — operator lifecycle and recovery flow.
 
 ## Principles (Non-Negotiable)
-- **Authority lives in the VM**. The REST gateway is a stateless projection of `LS`, `CAT`, and `ECHO`.
+- **Authority lives in the VM**. The REST gateway is a bounded host-side projection of `LS`, `CAT`, `TAIL`, and `ECHO`, plus metadata endpoints; broker queues and small caches are not new authority.
 - **Bounds are mandatory**. All clients must respect manifest-derived limits. Discover them via `/v1/meta/bounds`.
 - **Single-line JSONL**. Control surfaces accept one JSON object per line.
 - **No new semantics**. Clients may not introduce new verbs or change error behavior.
@@ -39,8 +39,10 @@ This document is the adoption guide for Cohesix APIs introduced in Milestone 24c
 | --- | --- | --- |
 | REST | `/v1/fs/ls` | `LS` projection |
 | REST | `/v1/fs/cat` | `CAT` projection |
+| REST | `/v1/fs/tail` | `TAIL` projection |
 | REST | `/v1/fs/echo` | `ECHO` projection |
 | REST | `/v1/meta/bounds` | Manifest-derived bounds |
+| REST | `/v1/meta/status` | Gateway broker/health status |
 | REST | `/v1/openapi.yaml` | OpenAPI 3.1 spec |
 | REST | `/docs` | Swagger UI |
 
@@ -96,7 +98,8 @@ These steps both **adopt** the API and **validate connectivity**.
 1. Boot the Queen VM and start the gateway.
 ```bash
 ./qemu/run.sh
-COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
+  HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" \
   COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
   ./bin/hive-gateway
 ```
@@ -120,6 +123,7 @@ curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/lifecycle/state&max_bytes=1
 5. Optional write-path check (test VM only).
 ```bash
 curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \
+  -H "Authorization: Bearer ${HIVE_GATEWAY_REQUEST_AUTH_TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"path":"/queen/schedule/ctl","line":"{\"id\":\"conn-check\",\"role\":\"worker-gpu\",\"priority\":1,\"ticks\":1,\"budget_ms\":10}"}'
 ```
@@ -170,9 +174,10 @@ PY
 **TCP console connectivity**
 ```bash
 python3 - <<'PY'
+import os
 from cohesix.backends import TcpBackend
 
-backend = TcpBackend("127.0.0.1", 31337, "changeme", "queen", None)
+backend = TcpBackend("127.0.0.1", 31337, os.environ["COH_AUTH_TOKEN"], "queen", None)
 print(backend.list_dir("/"))
 PY
 ```

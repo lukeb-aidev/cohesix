@@ -9,6 +9,13 @@ This document summarizes the as-built role model and scheduling-control surfaces
 [docs/snippets/observability_interfaces.md](snippets/observability_interfaces.md),
 [SECURE9P.md](SECURE9P.md), and [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md).
 
+## Core Terms
+
+- **Role**: the authority class attached to a session, such as Queen or WorkerGpu. A role determines which namespace paths the session can see and which control files it may use.
+- **Worker**: a bounded Cohesix task or worker-facing session managed by the Queen. Workers report through scoped telemetry paths and may receive role-specific resources such as GPU, bus, or LoRa views.
+- **Shard**: a deterministic namespace bucket under `/shard/<label>`. Cohesix places worker telemetry below a shard label derived from the worker ID so worker paths remain bounded and evenly partitioned as the hive grows. A shard label is routing metadata, not an authority grant.
+- **Ticket**: a MACed attach credential carrying role, subject identity, budget, optional mounts, and quota claims. Tickets let host tools and workers prove which bounded view they should receive without adding an RPC path.
+
 ## Roles
 
 | Role | Purpose | Namespace view |
@@ -23,7 +30,7 @@ Exactly one Queen role owns hive-wide orchestration. Multiple worker instances m
 
 ## Worker Namespaces
 
-The generated manifest enables sharded worker namespaces:
+The generated manifest enables sharded worker namespaces. The current shard label is derived from the top `shard_bits` of `sha256(worker_id)[0]` and formatted as two hex digits.
 
 - `sharding.enabled = true`
 - `sharding.shard_bits = 8`
@@ -31,13 +38,13 @@ The generated manifest enables sharded worker namespaces:
 - canonical telemetry path: `/shard/<label>/worker/<id>/telemetry`
 - legacy telemetry alias: `/worker/<id>/telemetry`
 
-`label` is derived from the top `shard_bits` of `sha256(worker_id)[0]` and formatted as two hex digits. The checked-in manifest currently enables both canonical sharded paths and legacy `/worker` aliases; new role and namespace documentation should prefer the canonical sharded path while acknowledging generated host/UI defaults that still consume `/worker` aliases.
+The checked-in manifest currently enables both canonical sharded paths and legacy `/worker` aliases. New role and namespace documentation should prefer the canonical sharded path while acknowledging generated host/UI defaults that still consume `/worker` aliases.
 
 When the legacy alias is disabled, manifests must not reference `/worker/*` in mounts or policy rules. `coh-rtc` validates the required Secure9P walk depth for the selected sharding mode.
 
 ## Tickets and Attach
 
-Tickets use the `cohesix-ticket` format: a role, optional subject identity, budget, optional mounts, issue timestamp, optional UI scopes, and per-ticket quotas, MACed with a role secret. Host tooling can mint tickets from role secrets in the selected config; root-task and NineDoor register the generated role secrets and validate presented tickets during attach.
+Tickets use the `cohesix-ticket` format. Host tooling can mint tickets from role secrets in the selected config; root-task and NineDoor register the generated role secrets and validate presented tickets during attach.
 
 Attach rules:
 

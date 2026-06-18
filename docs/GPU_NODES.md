@@ -17,18 +17,18 @@
 - `docs/SECURE9P.md` — transport invariants and bounds.
 
 ## 1. Rationale
-CUDA/NVML stacks are large and platform-specific. Keeping them outside the seL4 guest (whether running on QEMU or physical UEFI hardware) preserves determinism and minimises the trusted computing base (TCB). The Cohesix instance interacts with GPUs exclusively through a capability-guarded 9P namespace mirrored by host workers.
-GPU workers (`worker-gpu`) are another worker type under the hive’s Queen, not standalone services.
+CUDA/NVML stacks are large and platform-specific. Keeping them outside the seL4 guest, whether the guest runs under QEMU or an authorized physical profile such as Pi 4 U-Boot, preserves determinism and minimises the trusted computing base (TCB). The Cohesix instance interacts with GPUs exclusively through a capability-guarded namespace mirrored by host workers.
+GPU workers (`worker-gpu`) are another worker type under the hive's Queen, not standalone services.
 
 ### Operational dependencies (live)
-- QEMU must be running and the TCP console reachable.
+- A QEMU or hardware target must be running and the authenticated TCP console must be reachable.
 - The host GPU bridge must publish snapshots to `/gpu/bridge/ctl`.
 - If policy gating is enabled, approvals may be required for `/queen/ctl` writes.
 - Lifecycle gates can deny host publishes when the system is not `ONLINE` or `DEGRADED`.
 
 Quick validation:
 ```bash
-./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme
+./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN"
 ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen <<'COH'
 ls /gpu
 cat /gpu/bridge/status
@@ -42,7 +42,7 @@ COH
 - Properties:
   - Manifests live on the **host filesystem**; Cohesix only sees TOML descriptors and the active pointer.
   - Activation is a host concern (reload/restart/hot-swap); no new verbs or control planes were added.
-  - WorkerGpu reads `/gpu/models/active` and annotates telemetry with `model_id` / `lora_id` but cannot upload artefacts.
+  - Host-side GPU/PEFT tooling currently annotates telemetry with `model_id` / `lora_id`. `worker-gpu` consumes tickets and lease/status files; it does not upload artifacts or implement automatic model-pointer propagation inside the VM.
   - `/gpu/models` is published into the live VM by the host GPU bridge via `/gpu/bridge/ctl`; it is absent until the publish step completes.
 
 ### Live publish sequence
@@ -60,7 +60,7 @@ sequenceDiagram
 ## 3. Host GPU Worker Architecture
 - **Process**: Rust binary running on macOS or a Linux edge node, outside the Cohesix instance, paired with the GPU bridge host.
 - **Responsibilities**:
-- Discover GPUs using NVML (Linux) with CUDA fallback on Jetson, or Metal proxies (macOS, stubbed).
+  - Discover GPUs using NVML where available, with CUDA inventory fallback on Jetson and other Linux nodes.
   - Enforce leases that cap memory (MiB), stream counts, and wall-clock TTL.
   - Mirror GPU state into the Cohesix instance by publishing bounded snapshots to `/gpu/bridge/ctl` over the TCP console (queen role); no CUDA/NVML components enter the VM profile or hardware deployment.
 - **Safety**: Validate kernel binaries via SHA-256; ensure uploads match expected byte length before dispatch.
@@ -199,12 +199,14 @@ Properties:
 Each Jetson runs a **Cohesix Worker** with a role-scoped ticket.
 
 The worker:
-- Emits bounded telemetry upstream into `/worker/<id>/telemetry`
-- Propagates `model_id` / `lora_id` from `/gpu/models/active` into every forwarded record
+- Emits bounded telemetry upstream into `/shard/<label>/worker/<id>/telemetry`
+- Carries host-provided `model_id` / `lora_id` fields when the host-side PEFT or GPU tooling includes them
 - Applies optional thinning / aggregation before forwarding to `/queen/telemetry/*`
 
-/shard/<label>/worker/<id>/telemetry/
-window_2025-01-08.cbor
+Example canonical telemetry path:
+```text
+/shard/<label>/worker/<id>/telemetry
+```
 
 Legacy aliases at `/worker/<id>/telemetry` are available only when `sharding.legacy_worker_alias = true`.
 

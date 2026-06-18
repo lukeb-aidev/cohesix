@@ -64,7 +64,7 @@ This document lists deterministic failure behavior and the required operator res
 
 **Recovery**
 - Move the node to an allowed state (typically `ONLINE` or `DEGRADED`).
-- For maintenance windows, use `cordon` → `drain` → `quiesce` instead of forcing actions in blocked states.
+- For orderly maintenance, use `cordon` -> `drain`; `drain` moves the node to `QUIESCED` when gates allow it. Use `quiesce` directly only from an allowed active state when an immediate quiet state is required.
 
 ## Policy gate failures
 
@@ -115,12 +115,23 @@ This document lists deterministic failure behavior and the required operator res
 **Recovery**
 - Verify QEMU is running and the console port matches your configuration (default `127.0.0.1:31337`).
 
-## Telemetry ingest pressure
-Telemetry ingest refusal is deterministic and policy-driven.
+## Worker telemetry ring pressure
+Worker telemetry paths use bounded rings under `/shard/<label>/worker/<id>/telemetry` (legacy `/worker/<id>/telemetry` only when enabled).
+
+**Signals**
+- `/log/queen.log` entries such as `telemetry ring wrap` indicate worker telemetry ring wrap or overwrite behavior.
+- Tails may return fewer historical records than expected when the ring has wrapped.
+
+**Recovery**
+- Reduce worker telemetry rate, increase generated worker telemetry ring sizing, or pull/tail more frequently.
+- Ring wrap is a worker telemetry condition; it is not the same as `/queen/telemetry` ingest pressure.
+
+## Queen telemetry ingest pressure
+Queen telemetry ingest refusal is deterministic and policy-driven.
 
 **Signals**
 - `ERR` on `/queen/telemetry/<device>/seg/<id>` append when over limits.
-- `/log/queen.log` entries indicate quota or wrap behavior (for example `telemetry quota reject` or `telemetry ring wrap`).
+- `/log/queen.log` entries indicate ingest quota behavior (for example `telemetry quota reject`).
 
 **Recovery**
 - Adjust `telemetry_ingest.*` quotas in the manifest and regenerate with `coh-rtc`.

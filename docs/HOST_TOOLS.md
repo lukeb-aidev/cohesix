@@ -4,7 +4,7 @@
 <!-- Author: Lukas Bower -->
 # Host Tools
 
-Host tools run outside the VM and project the same file/console semantics the VM enforces. They do not introduce new control-plane verbs or bypass Secure9P; every tool is a convenience wrapper over `LS`, `CAT`, `ECHO`, and/or mounted Secure9P namespaces.
+Host tools run outside the VM and project the same file/console semantics the VM enforces. They do not introduce new control-plane verbs or bypass Secure9P; every tool is a convenience wrapper over `LS`, `CAT`, `TAIL`, `ECHO`, metadata reads, and/or mounted Secure9P namespaces.
 
 **0.9.0-beta note**
 This release introduces `hive-gateway` as the supported multiplexing layer for host tools. When you need multiple tools or remote operators, run `hive-gateway` as the **sole** console client and point every other tool at it using REST.
@@ -158,7 +158,7 @@ coh> test --mode full --json
 ```text
 coh> pool bench path=/log/queen.log ops=50 kind=control
 coh> pool bench path=/log/queen.log ops=200 batch=4 payload_bytes=64 kind=control
-coh> pool bench path=/worker/<id>/telemetry ops=200 batch=8 kind=telemetry payload=telemetry
+coh> pool bench path=/shard/<label>/worker/<id>/telemetry ops=200 batch=8 kind=telemetry payload=telemetry
 coh> pool bench path=/log/queen.log ops=50 kind=control inject_failures=2 inject_bytes=8
 coh> pool bench path=/log/queen.log ops=20 kind=control exhaust=4
 ```
@@ -184,9 +184,9 @@ If a command exceeds these limits, the console returns `ERR ... reason=ELIMIT` (
 - reattach to reset counters after a long session.
 
 ### Tips & gotchas
-- Only one client at a time: `cohsh` and `swarmui` should not be attached simultaneously.
-- Worker IDs are dynamic: always `ls /worker` before `tail`/`kill`.
-- GPU spawns require `/gpu` entries: if `/gpu` is empty, run `./bin/gpu-bridge-host --mock --list` and retry.
+- Only one direct TCP console client at a time: `cohsh` and `swarmui` should not be attached simultaneously unless they go through one `hive-gateway`.
+- Worker IDs are dynamic: prefer `ls /shard` and canonical `/shard/<label>/worker/<id>/telemetry` paths before `tail`/`kill`. Legacy `/worker/<id>/telemetry` paths work only when `sharding.legacy_worker_alias = true`.
+- GPU spawns require `/gpu` entries: for live runs, publish with `./bin/gpu-bridge-host --publish ...`; for mock demos, use `./bin/gpu-bridge-host --mock --list`.
 - `ELIMIT` errors on `tail` indicate ticket quota limits; reattach with a queen ticket or slow the tail.
 
 ### Notes
@@ -329,7 +329,7 @@ Desktop UI (Tauri) that renders the hive view and reuses `cohsh-core` semantics.
 ./bin/swarmui
 SWARMUI_TRANSPORT=rest SWARMUI_REST_URL=http://127.0.0.1:8080 \
   SWARMUI_REST_AUTH_TOKEN="$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" ./bin/swarmui
-SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarmui
+SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarmui  # configured host/profile Secure9P endpoint only
 ./bin/swarmui --replay /path/to/demo.hive.cbor
 ./bin/swarmui --replay-trace /path/to/trace_v0.trace
 ./bin/swarmui --mint-ticket --role worker-heartbeat --ticket-subject worker-1
@@ -337,7 +337,7 @@ SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarm
 
 ### Notes
 - Transport is selected via `SWARMUI_TRANSPORT=console|tcp|9p|secure9p|rest|gateway` (default: `console`).
-- `SWARMUI_9P_HOST`/`SWARMUI_9P_PORT` supply the TCP endpoint for both console and Secure9P transports.
+- `SWARMUI_9P_HOST`/`SWARMUI_9P_PORT` supply a configured host/profile Secure9P endpoint. The live QEMU/Pi VM path remains the authenticated TCP console; Cohesix does not add an in-VM 9P/TCP listener.
 - `SWARMUI_REST_URL` (fallback `COH_REST_URL`) supplies the hive-gateway base URL for `rest|gateway`.
 - REST request-auth uses `SWARMUI_REST_AUTH_TOKEN` (fallback `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`).
 - `SWARMUI_TRANSPORT=rest|gateway` is enabled by default. Use `--no-default-features` to strip REST support and rebuild with `--features rest` when needed.
@@ -446,7 +446,7 @@ Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, 
       --rest-auth-token <TOKEN>  Request auth token for REST mutating routes
       --tcp-host <TCP_HOST>      TCP host for a live NineDoor console (non-mock) [default: 127.0.0.1]
       --tcp-port <TCP_PORT>      TCP port for a live NineDoor console (non-mock) [default: 31337]
-      --auth-token <AUTH_TOKEN>  Authentication token for the TCP console (non-mock) [default: changeme]
+      --auth-token <AUTH_TOKEN>  Authentication token for the TCP console (required in non-mock; placeholder rejected)
   -h, --help                     Print help
   -V, --version                  Print version
 ```
@@ -465,7 +465,7 @@ Publish host-side providers into `/host` (systemd, k8s, docker, nvidia, jetson, 
 - Live publishing requires TCP or REST support (enabled by default). Use `--no-default-features` to strip transports, or rebuild with `--features tcp`/`--features rest` as needed.
 - `--rest-url` publishes through hive-gateway (queen role) without attaching to the TCP console.
 - REST publish request-auth fallback order is `--rest-auth-token`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, then `COH_REST_AUTH_TOKEN`.
-- CLI help still shows `--auth-token` defaulting to `changeme` for compatibility; set a real secret via `--auth-token`/`COH_AUTH_TOKEN`/`COHSH_AUTH_TOKEN` for production.
+- Set a real TCP console secret via `--auth-token`, `COH_AUTH_TOKEN`, or `COHSH_AUTH_TOKEN`; placeholder values are rejected in live mode.
 - Providers may be `systemd`, `k8s`, `docker`, `nvidia`, `jetson`, or `net`. When no providers are specified, the defaults are `systemd`, `k8s`, `docker`, and `nvidia`.
 - `--watch` polls providers continuously using manifest-backed polling defaults (override with `--policy`). Only `systemd`, `k8s`, `docker`, and `nvidia` have live polling schedules.
 - The `/host` namespace must be enabled in `configs/root_task.toml`.
@@ -493,7 +493,7 @@ Host-only ticket executor that tails `/host/tickets/spec`, applies allowlisted a
       --rest-auth-token <TOKEN>  Request auth token for REST writes
       --tcp-host <TCP_HOST>      TCP host [default: 127.0.0.1]
       --tcp-port <TCP_PORT>      TCP port [default: 31337]
-      --auth-token <AUTH_TOKEN>  TCP auth token [default: changeme]
+      --auth-token <AUTH_TOKEN>  TCP auth token (required in non-mock; placeholder rejected)
       --policy <FILE>            Optional coh policy TOML for PEFT defaults
       --registry-root <DIR>      Optional PEFT registry root override
 ```
@@ -519,12 +519,12 @@ Host-only ticket executor that tails `/host/tickets/spec`, applies allowlisted a
 - Relay forwarding is manifest-gated (`ecosystem.host.federation.*`) and only relays intents authored by the local hive.
 - Relay envelope fields are additive and optional: `source_hive`, `target_hive`, `relay_hop`, `relay_correlation_id`.
 - Supported action adapters: `gpu.lease.*`, `peft.*`, `systemd.*`, `docker.*`, `k8s.*`.
-- CLI help still shows `--auth-token` defaulting to `changeme` for compatibility; set a real secret via `--auth-token`/`COH_AUTH_TOKEN`/`COHSH_AUTH_TOKEN` for production.
+- Set a real TCP console secret via `--auth-token`, `COH_AUTH_TOKEN`, or `COHSH_AUTH_TOKEN`; placeholder values are rejected in live mode.
 - Use REST mode when multiplexing with other tools through `hive-gateway`.
 
 ## hive-gateway
 ### Purpose
-Host-only REST gateway that maps 1:1 to Cohesix console/file semantics (`LS`, `CAT`, `ECHO`). It does not add new verbs or control-plane behavior.
+Host-only REST gateway that projects Cohesix console/file semantics (`LS`, `CAT`, `TAIL`, `ECHO`) plus metadata endpoints. It uses bounded broker/cache state for multiplexing but does not add VM authority or new control-plane behavior.
 
 ### Location
 - Source: `apps/hive-gateway`
@@ -944,7 +944,7 @@ flowchart TD
 - `Lease Renewal` (`/queen/lease/ctl`): Extension of an existing lease TTL.
 - `Lifecycle Gates`: State-driven allow/deny checks for attach, publish, telemetry, and job writes.
 - `Mock Mode`: In-process backend; no VM or TCP console required.
-- `Models Registry` (`/gpu/models/*` or `/models/*`): Host-authored model manifests and active pointers (manifest-gated).
+- `Models Registry`: Current host-published model pointers live under `/gpu/models/*`; top-level `/models/*` is a separate manifest-gated CAS/model registry surface and may be disabled.
 - `Mount`: FUSE view of Secure9P paths; long-running process.
 - `Multi-Hive Federation`: Host-side relay of allowlisted `host-ticket/v1` intents across independent hives, while preserving single-writer behavior per hive.
 - `msize`: Negotiated Secure9P max message size (≤ 8192).
@@ -966,7 +966,7 @@ flowchart TD
 - `Relay Hop` (`relay_hop`): Monotonic cross-hive forwarding counter; values are bounded to `1..=32`.
 - `REST Mount Exclusivity` (`coh mount --rest-url`): Exactly one active FUSE mount per gateway URL on a host; additional mounts must wait until unmount.
 - `Role Ticket`: Role-scoped capability token minted for queen/worker roles.
-- `Root Task`: seL4 root task hosting NineDoor, console listeners, and ticket issuance.
+- `Root Task`: seL4 root task hosting NineDoor, console listeners, and ticket validation/registration; host tools mint configured tickets.
 - `Schedule Queue` (`/queen/schedule/ctl`, `/proc/schedule/*`): Declarative scheduling requests and read-only snapshots.
 - `Secure9P`: File-shaped control plane; all interactions are paths and bounded reads/writes.
 - `Shard`: Two-hex-digit worker namespace label derived from the worker ID hash; used in `/shard/<label>/worker/<id>/telemetry`.
@@ -977,7 +977,7 @@ flowchart TD
 - `Single-Writer`: Operational rule that exactly one active writable control path/queen is used per logical hive.
 - `Source Hive` (`source_hive`): Origin hive that authored and queued a federated ticket intent.
 - `Tag Window`: Manifest-bounded limit on in-flight 9P tags per session.
-- `Telemetry`: Append-only worker data stored under `/worker/*` or `/shard/*/worker/*`.
+- `Telemetry`: Append-only worker data stored under canonical `/shard/*/worker/*` paths; `/worker/*` is a legacy alias only when enabled.
 - `Telemetry Segment`: OS-named ingest segment under `/queen/telemetry/<device_id>/seg/`.
 - `Ticket`: Capability token (`cohesix-ticket`) binding role, subject, budget, and mounts.
 - `Ticket Claims`: Structured fields inside a ticket (role, budget, subject, mounts, issued_at_ms).

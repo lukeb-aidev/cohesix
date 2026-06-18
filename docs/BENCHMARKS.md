@@ -4,10 +4,10 @@
 <!-- Author: Lukas Bower -->
 # Cohesix Benchmarks
 
-## 0.9.0-beta Benchmark Verdict (As-Built)
-- **Worker-capacity benchmark:** PASS for the `1500` hard cap in real VM/TCP/gateway mode (Milestone 25b evidence under `docs/bench/`).
-- **Large-telemetry reliability gate:** PASS for all required no-retry scenarios (`telemetry-1mb`, `telemetry-10mb`, `telemetry-100mb`, `telemetry-1gb`) with `error_budget_rate=0.01` (Milestone 25f evidence under `logs/rest_bench_20260217T*.summary.json`).
-- **Methodology alignment:** PASS against `docs/TEST_PLAN.md` section `6b` (no mock mode, no retries, fast-ramp, explicit error-budget checks).
+## Benchmark Verdicts (As-Built)
+- **Historical 25b worker-capacity benchmark:** PASS for the `1500` hard cap in real VM/TCP/gateway mode. Reviewable evidence is committed under `docs/bench/`.
+- **Historical 25f large-telemetry reliability gate:** PASS was recorded for the required no-retry scenarios (`telemetry-1mb`, `telemetry-10mb`, `telemetry-100mb`, `telemetry-1gb`) with `error_budget_rate=0.01`, but the cited summaries live under ignored `logs/`. Treat those rows as local diagnostic history unless the exact summaries are promoted into `docs/bench/`.
+- **Current 26b Pi linked-runtime parity:** no verdict yet. Closure requires fresh same-harness QEMU and Pi artifacts, comparator output, and separate serial/USB/HDMI/driver-task proof lanes.
 
 ## Hive-Gateway Worker Capacity (Milestone 25b)
 
@@ -41,16 +41,27 @@ No `--mock` mode was used for reported results.
 - A broker response deadline miss is reported as `HTTP 504`, while `HTTP 503` remains reserved for unavailable transport.
 
 ### Pi 4 Wi-Fi Benchmark Separation
-- Pi 4 Wi-Fi results must be reported in three lanes: raw direct `cohsh` over TCP/Wi-Fi, REST gateway over the same Pi backend, and QEMU REST as a semantic/capacity reference only.
-- The latest direct Pi `cohsh` artifact (`out/bench/pi4-cohsh-direct-20260519T212828Z/`) proved successful direct scripts and about `43.9 ms` average ping RTT for that run.
-- The latest repaired Pi REST gateway artifact (`out/bench/pi4-rest-gateway-repair-20260519T214321Z/`) measured about `1.447 s` average, `2.690 s` p95, `6.502 s` max, and zero errors.
-- The QEMU fixed27 reference (`out/bench/qemu-rest-fixed27-20260518T000007Z/`) measured about `0.00885 s` average and `0.0261 s` p95, making the latest Pi Wi-Fi REST run roughly `164x` slower on average and `103x` slower at p95.
-- These numbers are diagnostic baselines, not post-change proof. Any improved-performance claim requires a fresh Pi run that also proves live driver TCBs, Wi-Fi DHCP, clean serial, USB/local-seat responsiveness, and HDMI responsiveness under load.
-- The current offline performance pass changes code-level hot-path shape only: CYW43 data TX token admission is firmware-credit-gated and in-place, CYW43 deferred RX removes queued channel matches without shifting full packet buffers, GENET RX drains a bounded descriptor burst into a runtime-local staging queue while preserving the single-frame completion ABI, routine successful wired-NIC dataplane turns are not forced to UART, GENET RX/TX service turns are budget-capped, and the physical Pi bootstrap path stages linked `pi4-driver-*` runtime images in isolated child VSpaces with pointer-free `pi4-driver-abi` descriptors and fixed rings instead of shared-root service TCBs for generated Pi hot paths.
-- Seven generated Pi 4 runtime specs are now acceptance-capable (`root_context_required=false`, `hardware_state_migrated=true`). `sdio-host` now receives the HAL-declared SDHCI MMIO page and must provide its own dedicated-role and owner-state proof. Runtime budgets match the descriptor-backed layout: GENET has a 64-page DMA arena for the 32-RX/32-TX ring model, USB has 64 DMA pages, CYW43 has 64 shared pages and no direct SDHCI MMIO/DMA arena, SDIO has one MMIO page plus 32 shared pages, HDMI has 16 shared pages plus framebuffer metadata, and PCIe has 16 shared pages.
-- The linked runtime engines now contain real service code: serial owns bounded mini-UART init/RX/TX, HDMI renders to a mapped framebuffer, PCIe services bounded MMIO read/write/flush turns, USB owns a direct-root-port xHCI boot-keyboard path with command/event/EP0/interrupt-IN rings, GENET programs MDIO/MAC plus bounded RX/TX descriptor rings, SDIO services fixed-layout CMD52/CMD53/POLL_IRQ descriptors from the isolated runtime, and CYW43 owns the shared-control SDPCM command surface behind the declared CYW43/SDIO bus-link boundary.
-- `DRIVER_TASK_COUNTER` snapshots and normalized `DRIVER_TASK_COUNTER_*` fields are regression triage for backpressure, same-request resumes, timeouts, cache work, staged bytes, and RX/TX volume; they must remain valid (`DRIVER_TASK_COUNTER_INVALID=0`) but they are not a benchmark verdict or owner-state proof.
-- These changes give the Pi 4 Wi-Fi and GENET paths the best offline chance so far of reaching the 1000-worker, `<=1%` error-budget target because the slow root-task serialized control-plane shape has been replaced by bounded driver-owned service turns and larger DMA/shared arenas. They are not a benchmark result: QEMU transport-substrate and host wire-layout proof do not prove Pi 4 hardware performance. Milestone 26b owns the linked-runtime benchmark parity closure: fresh Pi measurements must use the same harness as the selected QEMU reference, exclude latency only from the pass/fail verdict, and still cite concrete `DRIVER_TASK_BOOT`, `DRIVER_TASK_OWNER_STATE_PROOF=yes`, active Wi-Fi or GENET service markers, USB keyboard responsiveness, HDMI responsiveness, and clean emergency serial.
+Pi 4 results must be reported in three lanes: raw direct `cohsh` over TCP/Wi-Fi, REST gateway over the same Pi backend, and QEMU REST as a semantic/capacity reference only.
+
+The existing `out/bench/pi4-*` and `out/bench/qemu-*` paths are local diagnostics, not committed benchmark proof. They remain useful for trend comparison, but any improved-performance claim requires a fresh Pi run that also proves live driver TCBs, Wi-Fi DHCP or GENET service, clean serial, USB/local-seat responsiveness, HDMI responsiveness, and valid driver-task counters under load.
+
+| Area | As-built status | Proof boundary |
+| --- | --- | --- |
+| Hot-path shape | CYW43, GENET, SDIO, USB, HDMI, PCIe, and serial work has moved toward bounded linked-runtime service turns with fixed rings and descriptor-backed resources. | Code-level readiness only; not a throughput verdict. |
+| Runtime specs | Seven generated Pi 4 runtime specs are acceptance-capable (`root_context_required=false`, `hardware_state_migrated=true`) with descriptor-backed MMIO/shared/DMA budgets. | Each runtime still needs target log proof for owner state and active service. |
+| Runtime engines | Serial, HDMI, PCIe, USB, GENET, SDIO, and CYW43 contain real service code behind `pi4-driver-abi`. | QEMU transport-substrate and host wire-layout proof do not prove Pi 4 hardware performance. |
+| Driver counters | `DRIVER_TASK_COUNTER` snapshots and normalized `DRIVER_TASK_COUNTER_*` fields explain turns, staged bytes, cache work, busy/backpressure, same-request resumes, timeouts, aborts, and RX/TX volume. | Counters must be valid (`DRIVER_TASK_COUNTER_INVALID=0`) for performance claims, but they do not replace owner-state proof or fresh same-harness Pi measurements. |
+
+### 26b Parity Evidence Contract
+Same-harness means the QEMU and Pi runs use matched workload, tool version, scenario, run count, and provenance fields. Mismatched or stale artifacts fail before any performance verdict.
+
+| Evidence item | Required content |
+| --- | --- |
+| Selected QEMU reference | Best eligible committed or archived QEMU artifact for the exact workload, with harness provenance and no mock mode. |
+| Matched Pi artifact | Fresh Pi linked-runtime run for the same workload, with normalized serial evidence and active Wi-Fi or GENET service markers. |
+| Comparator command | `scripts/pi4_compare_driver_models.py` or successor invoked with both artifacts and workload/provenance validation enabled. |
+| Verdict fields | Throughput and error-budget metrics decide PASS/FAIL. Latency is recorded and compared, but excluded from the pass/fail verdict for 26b. |
+| Required proof lanes | `DRIVER_TASK_BOOT`, `DRIVER_TASK_OWNER_STATE_PROOF=yes`, valid `DRIVER_TASK_COUNTER_*`, DHCP/IP or static-IP proof, USB keyboard responsiveness, HDMI responsiveness, and clean emergency serial. |
 
 ### Runtime/Config Changes Under Test
 - `apps/root-task/src/ninedoor.rs`
@@ -195,6 +206,8 @@ python3 scripts/rest_perf_harness.py \
   - `scenario` matches the preset.
 
 ### Local 0.9.0-beta Results (latest run per scenario)
+These rows summarize local historical runs. They are not reviewable benchmark artifacts until the referenced summaries are committed under `docs/bench/` or replaced by committed evidence.
+
 | Scenario | Summary Artifact | Ops | Errors | Error Rate | p95 Latency | Error Budget |
 | --- | --- | --- | --- | --- | --- | --- |
 | `telemetry-1mb` | `logs/rest_bench_20260217T223323Z.summary.json` | `7906` | `0` | `0.0000%` | `0.0277s` | `PASS` |
@@ -227,7 +240,7 @@ python3 scripts/rest_perf_harness.py --mode simulate \
   --no-retries --fast-ramp --scenario telemetry-1gb --error-budget-rate 0.01
 ```
 
-### Evidence Index (25f)
+### Local Evidence Index (25f)
 - `logs/rest_bench_20260217T222843Z.summary.json`
 - `logs/rest_bench_20260217T223323Z.summary.json`
 - `logs/rest_bench_20260217T223635Z.summary.json`
@@ -235,4 +248,4 @@ python3 scripts/rest_perf_harness.py --mode simulate \
 - `logs/rest_bench_20260217T224303Z.summary.json`
 
 Release-note corroboration:
-- `releases/RELEASE_NOTES-0.9.0-beta.md` records 25f gate PASS and the same local artifact pattern (`logs/rest_bench_20260217T*.summary.json`), plus G5g host-path evidence.
+- `releases/RELEASE_NOTES-0.9.0-beta.md` records 25f gate PASS and the same local artifact pattern (`logs/rest_bench_20260217T*.summary.json`), plus G5g host-path evidence. For new benchmark claims, commit the exact summary artifacts under `docs/bench/`.

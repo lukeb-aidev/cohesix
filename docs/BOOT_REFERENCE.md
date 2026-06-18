@@ -1,19 +1,21 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Documents the reference Cohesix boot transcript and expected sequence. -->
 <!-- Author: Lukas Bower -->
 # Cohesix Boot Reference — AArch64/virt + PL011 + virtio-net (2026-01-22)
 
-This document records the known-good bootstrap configuration for the Cohesix
-root task running on upstream seL4 with QEMU's `aarch64/virt` platform, the
-PL011 serial console, and the virtio-net TCP console.
+This document records the QEMU `aarch64/virt` bootstrap reference for the Cohesix
+root task with the PL011 serial console and virtio-net TCP console. It is a QEMU
+development/CI reference, not Raspberry Pi 4 or UEFI hardware proof; Pi 4 boot
+truth lives in `docs/HARDWARE_BRINGUP.md`.
 
 ## Reference transcript (trimmed)
 
 A successful boot is expected to reach the root task, emit the manifest
 summary, and bring up the TCP console. The transcript below is trimmed from a
-known-good QEMU serial log. Hash values are build-specific and must match
-`out/manifests/root_task_resolved.json`.
+known-good QEMU serial log. The literal hash and network line below are historical
+for the cited run; current builds must compare their own manifest summary against
+the generated `out/manifests/root_task_resolved.json` and current boot logs.
 
 ```
 ELF-loader started on CPU: ARM Ltd. Cortex-A57 r1p0
@@ -53,8 +55,8 @@ Booting all finished, dropped to user space
 - **Boot markers**: `[kernel:entry] root-task entry reached` and
   `[MARK] boot_state=COLD` must precede the manifest summary and driver bring-up.
 - **Manifest summary**: `manifest.schema`, `manifest.profile`, and
-  `manifest.sha256` are logged at boot; the hash must match the compiled manifest
-  in `out/manifests/root_task_resolved.json`.
+  `manifest.sha256` are logged at boot; the active run's hash must match the compiled
+  manifest in `out/manifests/root_task_resolved.json`.
 - **Secure9P bounds**: `manifest.secure9p.msize=8192` and
   `manifest.secure9p.walk_depth=8` must remain unchanged.
 - **Console & event pump**: `event_pump.fds=serial,timer,ipc,net-console,ninedoor`
@@ -62,7 +64,7 @@ Booting all finished, dropped to user space
 
 ## Forward requirement
 
-This configuration and the accompanying logs represent the Cohesix
-AArch64/virt + PL011 + virtio-net baseline as of **2026-01-22**. Future changes
-must preserve these invariants and keep the default boot transcript
-substantially consistent with the reference shown here.
+This configuration and the accompanying logs represent a Cohesix
+AArch64/virt + PL011 + virtio-net baseline as of **2026-01-22**. Future QEMU
+changes must preserve the invariants above or update this reference with fresh
+generated-manifest evidence.

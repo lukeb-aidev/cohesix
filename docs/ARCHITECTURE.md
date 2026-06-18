@@ -265,8 +265,8 @@ flowchart LR
 
   Cohsh -->|"TCP console"| RT
   Cohsh -->|"Secure9P client"| ND
-  GPUB -->|"Secure9P provider"| ND
-  HS -->|"Secure9P provider"| ND
+  GPUB -->|"console/REST publish to /gpu/bridge/ctl"| RT
+  HS -->|"console/REST publish to /host/*"| RT
 ```
 
 ### Linked driver runtime service turn

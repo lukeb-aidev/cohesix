@@ -133,7 +133,7 @@ with CohesixOrchestrator.from_env() as orch:
 ## Backend matrix
 | Backend | Requires | Best for | Notes |
 | --- | --- | --- | --- |
-| TcpBackend | QEMU + TCP console | Direct console automation | Single-client console. Do not run `cohsh`, `swarmui`, or `hive-gateway` concurrently. |
+| TcpBackend | QEMU + TCP console | Direct console automation | Single-client console. Do not run other direct TCP/console clients concurrently. |
 | RestBackend | QEMU + `hive-gateway` | HTTP clients and OpenAPI tooling | Gateway itself holds the console. |
 | FilesystemBackend | `coh mount` (FUSE) | Air-gapped or file-shaped integrations | Mount is long-running and stays in the foreground. |
 | MockBackend | None | CI, demos, first-run validation | No VM involved; uses an in-process backend. |
@@ -146,7 +146,7 @@ with CohesixOrchestrator.from_env() as orch:
 
 ## Operational interdependencies (read first for live runs)
 - The TCP console is single-client. If a tool already holds it, other TCP clients will block or fail.
-- The REST gateway is a console client. Do not run it concurrently with `cohsh`, `swarmui`, or TcpBackend.
+- The REST gateway is a console client. Do not run it concurrently with direct TCP/console clients; multiple REST clients may share one gateway.
 - Policy gating may require approvals in `/actions/queue` before writes to `/queen/ctl`.
 - `/gpu/*` appears only after `gpu-bridge-host --publish` runs; `/host/*` appears only after `host-sidecar-bridge` runs.
 - Mock mode does not talk to the VM. Do not mix `--mock` with live flags in the same session.
@@ -335,7 +335,7 @@ python3 -m pytest tools/cohesix-py/tests/test_playbooks.py -q
 - `auth timed out waiting for AUTH response`: AUTH frame was sent but no terminal response arrived before retries/timeout.
 - `ERR ATTACH`: your role requires a ticket; pass `--ticket` or mint one with `cohsh --mint-ticket`.
 - `ERR ECHO reason=policy ... EPERM`: policy gating requires an approval in `/actions/queue`.
-- Empty `/gpu`: ensure the host GPU bridge integration is running; use `./bin/gpu-bridge-host --mock --list` for mock demos.
+- Empty `/gpu`: for live runs, publish with `./bin/gpu-bridge-host --publish ...`; use `./bin/gpu-bridge-host --mock --list` only for mock demos.
 - Non-mock PEFT flows require `/gpu/models` to be visible; run `./bin/gpu-bridge-host --publish ...` or `coh peft import --publish` to refresh the live registry.
 - Filesystem backend mount errors: ensure FUSE is installed and `coh` was built with FUSE enabled.
 - REST errors: confirm `hive-gateway` is running and reachable at `/v1/meta/bounds`; transient `429/5xx` and short network failures are retried automatically.

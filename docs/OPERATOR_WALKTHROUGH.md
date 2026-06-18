@@ -48,7 +48,7 @@ Goal: run `hive-gateway` as the only console client and use REST for all tools.
    ```
 2. Start the gateway (queen role).
    ```bash
-   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
      HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token \
      COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
      ./bin/hive-gateway
@@ -111,7 +111,7 @@ These scenarios use `hive-gateway` as the **sole** console client and route all 
 1. On the GPU host, boot the queen (`./qemu/run.sh` in the release bundle).
 2. Start the gateway (queen role):
    ```bash
-   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
      COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
      ./bin/hive-gateway
    ```
@@ -370,7 +370,7 @@ Writes should return `OK` and `/queen/telemetry/dev-1/latest` updates determinis
 The VM does not expose `/gpu/models` until the host GPU bridge publishes it.
 Run the publish on the host (same machine that can reach the Queen TCP console):
 ```bash
-./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme \
+./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN" \
   --interval-ms 1000 --registry /home/models/peft_registry
 ```
 Validate in `cohsh` (quit SwarmUI first if it is running):
@@ -405,7 +405,7 @@ Rollback if needed:
 ## 10) Live host telemetry providers (`/host/*`)
 Publish host-side providers into the VM (systemd, k8s, docker, nvidia).
 ```bash
-./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch \
+./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN" --watch \
   --provider systemd --provider k8s --provider docker --provider nvidia
 ```
 Validate in `cohsh`:
@@ -417,25 +417,26 @@ coh> cat /host/nvidia/gpu/0/status
 Expected: bounded `status` lines; `state=unknown` when a provider is unavailable.
 
 ## 11) Live Hive telemetry text overlays (SwarmUI)
-SwarmUI is read-only and must not run concurrently with `cohsh`.
+SwarmUI is read-only. Do not run it concurrently with `cohsh` when both use direct TCP/console mode; REST clients may share one `hive-gateway`.
 1. Quit `cohsh`, launch SwarmUI:
    ```bash
    ./bin/swarmui
    ```
 2. Click **Connect** -> **Hive Start**.
 3. If you see "No telemetry yet", quit SwarmUI and seed a line:
-   - If `/worker` is empty, approve and spawn a heartbeat first, then re-run `ls /worker`:
+   - If no worker is listed under `/shard`, approve and spawn a heartbeat first, then re-run `ls /shard`:
      - `echo {"id":"spawn-1","target":"/queen/ctl","decision":"approve"} > /actions/queue`
      - `spawn heartbeat ticks=100`
    ```bash
    ./bin/cohsh --transport tcp --tcp-host 127.0.0.1 --tcp-port 31337 --role queen <<'COH'
    attach queen
-   ls /worker
-   # Replace worker-1 with the actual worker id from the ls output.
-   echo heartbeat-demo > /worker/worker-1/telemetry
-   cat /worker/worker-1/telemetry
+   ls /shard
+   # Replace <label> and worker-1 with the shard label and worker id from the ls output.
+   echo heartbeat-demo > /shard/<label>/worker/worker-1/telemetry
+   cat /shard/<label>/worker/worker-1/telemetry
    COH
    ```
+   Legacy `/worker/<id>/telemetry` paths work only when `sharding.legacy_worker_alias = true`.
 4. Relaunch SwarmUI and select a worker dot to view the bounded overlay + detail panel.
 
 ## 12) LLMOps operator flow (0.9.0-beta)
@@ -452,7 +453,7 @@ Expected: reports under `out/examples/playbooks/<playbook-id>/` with no live wri
 ### B) Keep one multiplexed control path
 1. Start `hive-gateway` as the sole console client:
    ```bash
-   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN=changeme \
+   COH_TCP_HOST=127.0.0.1 COH_TCP_PORT=31337 COH_AUTH_TOKEN="$COH_AUTH_TOKEN" \
      HIVE_GATEWAY_REQUEST_AUTH_TOKEN=replace-with-real-token \
      COH_ROLE=queen HIVE_GATEWAY_BIND=127.0.0.1:8080 \
      ./bin/hive-gateway

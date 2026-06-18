@@ -10,7 +10,7 @@ Revision: February 14, 2026
 This document enumerates concrete, high-value use cases for Cohesix across sectors. It preserves technical specifics while adding business context so stakeholders can quickly assess fit, risk, and required integrations.
 
 ## Executive Summary
-Cohesix is a control-plane operating system for secure orchestration and telemetry of edge GPU nodes. It exposes a Secure9P file namespace as the only control surface and keeps heavy ecosystems (Kubernetes, CUDA/NVML, OT protocols, model registries) on the host and outside the VM's trusted computing base. Milestone 25c now adds a world-class Python orchestration surface with typed control APIs, host-provider adapters, and ready-to-run playbooks for Mac, Jetson, and mixed 1k-worker fleets. For business stakeholders, this means smaller audit scope, safer multi-tenant GPU sharing, and faster integration into existing Python tooling.
+Cohesix is a control-plane operating system for secure orchestration and telemetry of edge GPU nodes. It exposes a bounded Secure9P file namespace as the control surface and keeps heavy ecosystems (Kubernetes, CUDA/NVML, OT protocols, model registries) on the host and outside the VM's trusted computing base. The Python orchestration surface adds typed control APIs, host-provider adapters, and playbooks for Mac, Jetson, and mixed worker fleets without adding new VM authority. For business stakeholders, this means smaller audit scope, safer multi-tenant GPU sharing, and faster integration into existing automation.
 
 ## Positioning (Business + Technical)
 **Cohesix is:**
@@ -30,7 +30,7 @@ Cohesix is a control-plane operating system for secure orchestration and telemet
 - Governed multi-tenancy with ticketed leases, bounded quotas, and explicit ownership.
 
 ## Operating Model (As-Built)
-A Cohesix hive runs inside an seL4 VM on aarch64. The Queen (root-task + NineDoor) exposes `/queen`, `/proc`, `/log`, and sharded worker telemetry under `/shard/<label>/worker/<id>/telemetry`, with optional `/gpu`, `/host`, `/policy`, `/audit`, `/replay`, `/updates`, and `/models` namespaces when enabled by the manifest. Workers run as separate roles with bounded budgets. External ecosystems live on the host; host-side bridges publish `/host/*` and `/gpu/*` views into the namespace. QEMU `aarch64/virt` is the reference dev/CI environment, and UEFI ARM64 hardware is the target deployment profile.
+A Cohesix hive runs inside an seL4 VM on aarch64. The **Queen** is the orchestration role (root-task + NineDoor); **Workers** are bounded role-scoped sessions or tasks that report telemetry and consume explicit resources. The Queen exposes `/queen`, `/proc`, `/log`, and sharded worker telemetry under `/shard/<label>/worker/<id>/telemetry`; a **shard** is a deterministic namespace bucket derived from a worker ID, not an authority grant. Optional `/gpu`, `/host`, `/policy`, `/audit`, `/replay`, `/updates`, and `/models` namespaces appear only when enabled by the manifest. External ecosystems live on the host; host-side bridges publish `/host/*` and `/gpu/*` views into the namespace. QEMU `aarch64/virt` is the reference dev/CI environment. Raspberry Pi 4 via `Pi firmware -> U-Boot -> seL4 image -> root-task` is the current physical bring-up path; UEFI/AWS targets are profile-scoped work only when admitted by `docs/BUILD_PLAN.md`.
 
 ## Python Orchestration Surface (As-Built, Milestone 25c)
 The Python SDK (`tools/cohesix-py`) is now a first-class operator path for high-scale automation while preserving Cohesix protocol boundaries.
@@ -527,5 +527,5 @@ flowchart LR
 - Protocol bridges (MODBUS, CAN, DNP3, IEC-104, DICOM, CCSDS).
 - Host-side uplinks for batch export and analytics ingestion (protocol outside the TCB).
 - Model registry, GPU bridge, and identity workflows on the host.
-- UEFI Secure Boot and TPM attestation for device identity on target hardware.
+- Pi 4 U-Boot policy handoff for current hardware bring-up; UEFI Secure Boot, TPM, and DICE identity flows only in profiles that explicitly admit them.
 - Operator tooling that speaks `cohsh` or the shared client library.
