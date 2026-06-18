@@ -163,6 +163,52 @@ Mount and bind semantics:
 - **Regression pack:** `scripts/cohsh/run_regression_batch.sh` runs the full `.coh` suite across base and gated manifests using QEMU.
 
 ## 11. Diagrams
+### Concept architecture
+This view shows the logical solution boundaries first; component-level and service-turn diagrams follow.
+
+```mermaid
+flowchart TB
+  subgraph Host["Host and operators (outside VM TCB)"]
+    Operator["operator / automation"]
+    HostTools["cohsh, coh, swarmui, hive-gateway"]
+    HostProviders["gpu-bridge-host, host-sidecar-bridge, host-ticket-agent"]
+    HostEcosystem["host GPU, sidecars, and model registry"]
+  end
+
+  subgraph Target["Cohesix target TCB"]
+    Kernel["seL4 kernel\ncaps, VSpaces, endpoints, scheduling"]
+    Root["root-task authority plane\nCSpace, HAL admission, policy, recovery"]
+    Console["authenticated console grammar\nACK / ERR / END"]
+    Namespace["Secure9P namespace\nrole-scoped files and tickets"]
+    Workers["queen and workers\nheart, gpu, bus, lora"]
+    Drivers["linked driver runtimes\nserial, USB, HDMI, GENET, CYW43, SDIO, PCIe"]
+    Evidence["evidence and observability\nlogs, proc views, driver counters"]
+  end
+
+  subgraph Board["Profile-gated board resources"]
+    Hardware["Pi 4 MMIO, DMA, IRQ, framebuffer"]
+  end
+
+  Operator --> HostTools
+  HostTools -->|"console transport"| Console
+  HostTools -->|"Secure9P client"| Namespace
+  HostProviders -->|"bounded provider writes"| Namespace
+  HostProviders --> HostEcosystem
+
+  Console --> Root
+  Namespace --> Root
+  Root -->|"seL4 invocations"| Kernel
+  Kernel -->|"capability effects"| Root
+  Root -->|"role policy and mounts"| Namespace
+  Namespace --> Workers
+  Workers -->|"telemetry and control files"| Namespace
+  Root -->|"HAL-admitted descriptors"| Drivers
+  Drivers -->|"bounded service turns"| Hardware
+  Drivers -->|"completions and DRIVER_TASK_COUNTER"| Evidence
+  Root --> Evidence
+  Evidence -->|"operator proof"| HostTools
+```
+
 ### Boundary and components
 ```mermaid
 flowchart LR
