@@ -30,182 +30,53 @@ Open-source releases are available in [releases/](releases/).
 - WinKawaks/vit-small-patch16-224 (ViT-S/16)
 - WinKawaks/vit-tiny-patch16-224 (ViT-Ti/16)
 
-## Why Cohesix?
-
-Cohesix explores a specific and deliberately narrow problem space: **how to build a small, auditable, and secure control plane for orchestrating distributed edge GPU systems**, without inheriting the complexity, opacity, and attack surface of general-purpose operating systems.
-
-Cohesix is a **research operating system** with practical goals: to test whether a **formally grounded microkernel**, a **file-shaped control plane**, and a **strictly bounded userspace** can handle real edge-orchestration workloads in hostile and unreliable environments. The project is informed by earlier work in film and broadcast systems where reliability, timing, and control mattered more than convenience.
-In practical terms, the project would not be feasible without extensive use of AI agents for architecture review, design iteration, code synthesis, debugging assistance, and documentation refinement.
-
-Cohesix is intentionally opinionated. It treats **determinism, auditability, and security** as design inputs rather than constraints, and is willing to exclude large classes of features to preserve those properties.
-
-Cohesix has a strong **MLOps** fit: model lifecycle pointers, deterministic CAS updates, and bounded telemetry streams make training, rollout, and audit pipelines reproducible without introducing in-VM ML stacks.
-
----
-
-### seL4 foundation
-
-Cohesix runs on **[seL4](https://sel4.systems/)**, a high-assurance capability-based microkernel with a machine-checked proof of correctness. seL4 provides strong isolation, explicit authority, and deterministic scheduling while keeping the kernel extremely small. This lets Cohesix place all policy and orchestration logic in a **pure Rust userspace**, minimize the trusted computing base, and enforce capability-scoped control planes without relying on POSIX semantics, in-kernel drivers, or ambient authority.
-
----
 ## What is Cohesix?
 
-Cohesix is a **minimal orchestration operating system** for secure edge management, targeting a defined set of [use cases](docs/USE_CASES.md) around AI hives and distributed GPU workloads.
+Cohesix is a research operating system for secure edge orchestration. It asks how much of an edge GPU control plane can be made small, auditable, and deterministic by building on [seL4](https://sel4.systems/), keeping userspace pure Rust, and exposing control as capability-scoped files instead of POSIX services.
 
-Technically, Cohesix is a **pure Rust userspace** running on upstream **seL4** on `aarch64/virt` (GICv3). Userspace is shipped as a static CPIO boot payload containing the root task, the NineDoor Secure9P server, and worker roles; host tools live outside the VM.
+The system is intentionally narrow:
+- upstream seL4 on QEMU `aarch64/virt` and the Raspberry Pi 4 U-Boot profile family;
+- a static CPIO userspace containing the root task, worker roles, and profile-selected linked driver-runtime images;
+- Secure9P-style namespaces for `/queen`, `/shard/<label>/worker/<id>`, `/log`, `/proc`, and host-projected `/gpu` state;
+- console-backed VM access, with no separate in-VM 9P/TCP listener or ad-hoc RPC channel;
+- host-side CUDA, NVML, sidecars, model registries, and UI tooling.
 
-Cohesix does **not include a traditional filesystem**; instead it exposes a **synthetic Secure9P namespace** where paths represent capability-scoped control and telemetry interfaces rather than persistent storage.
+The result is an orchestration environment for AI hives and distributed GPU workloads where authority, lifecycle, telemetry, and failure handling are first-class OS concerns. Detailed scope and use cases live in [docs/USE_CASES.md](docs/USE_CASES.md) and [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md).
 
-Cohesix does not provide HTTPS or TLS. Instead, it relies on an **authenticated, encrypted private network** (e.g. VPN or overlay) for transport security, keeping the Cohesix TCB small and focused. See this [example](docs/NETWORK_CONFIG.md).
+## Design Shape
 
-All control and telemetry are file-shaped and exposed via Secure9P; the console mirrors those semantics. There are **no ad-hoc RPC channels**, no background daemons, and no general in-VM networking services.
+Cohesix uses a Queen/Worker hive model. The root task owns initial authority, HAL admission, scheduling, and recovery; NineDoor presents the synthetic namespace; workers and host tools interact through bounded file-shaped control surfaces. The design inherits Plan 9's namespace discipline, but rejects the single-system illusion: namespaces are role-scoped authority views, not global storage, and operations are bounded, revocable, and auditable.
 
-For audits and incident review, the host-side `coh evidence pack` tool exports deterministic, redacted evidence bundles sourced only from existing `/proc`, `/log`, `/audit`, `/replay`, and telemetry surfaces.
+QEMU is used for bring-up, CI, and semantic regression testing. The deployment direction is physical ARM64 hardware, with Pi 4 bring-up aligned to the upstream seL4 U-Boot + binary image flow. QEMU driver-task smoke is useful transport-substrate evidence, but hardware acceptance still requires fresh board proof. See [docs/HARDWARE_BRINGUP.md](docs/HARDWARE_BRINGUP.md) and [docs/BOOT_REFERENCE.md](docs/BOOT_REFERENCE.md).
 
-Operators interact with Cohesix through two consoles:
-- a local **PL011 UART console** for early bring-up and recovery, and  
-- a **remote TCP console** consumed by the `cohsh` shell, which mirrors serial semantics and provides the primary operational interface from Unix-like hosts.
-
-The intended deployment target is **physical ARM64 hardware**, with Raspberry Pi 4 bring-up aligned to the upstream seL4 **U-Boot + binary image** flow. Today, QEMU `aarch64/virt` is used for bring-up, CI, and testing, with the expectation that QEMU behaviour closely mirrors the eventual hardware profiles where applicable. Cohesix is **not** a general-purpose operating system and deliberately avoids POSIX semantics, libc, dynamic linking, and in-VM hardware stacks to keep the system small and analyzable.
-
-In short, Cohesix treats **orchestration itself as an operating-system problem**, with authority, lifecycle, and failure handling as first-class concerns.
-
----
-
-## Plan 9 heritage and departures
-
-Cohesix is deliberately influenced by **[Plan 9 from Bell Labs](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs)**, but it is **not** a revival, clone, or generalisation of Plan 9. The influence is philosophical rather than literal, and the departures are explicit.
-
-### What Cohesix inherits
-
-**File-shaped control surfaces**  
-Cohesix exposes control and observation as file operations. Paths such as `/queen/ctl`, `/worker/<id>/telemetry`, `/log/*`, `/gpu/<id>/*`, and `/gpu/models/*` are interfaces, not storage. This yields diffable state, append-only audit logs, and a uniform operator surface.
-
-**Namespaces as authority boundaries**  
-Like Plan 9’s per-process namespaces, Cohesix uses **per-session, role-scoped namespaces**. A namespace is not global truth; it is a capability-filtered view of the system. Authority is defined by which paths are visible and writable.
-
-**Late binding of services**  
-Services are not assumed to exist. Workers, GPU providers, and auxiliary capabilities are bound into the namespace only when required, supporting air-gapped operation, fault isolation, and minimal steady-state complexity.
-
-### Where Cohesix departs
-
-**Hostile networks by default**  
-Cohesix assumes unreliable, adversarial, and partitioned networks. Every operation is bounded, authenticated, auditable, and revocable.
-
-**No single-system illusion**  
-Partial visibility and degraded operation are normal. Cohesix explicitly rejects the idea of a seamless single-system image.
-
-**Control plane only**  
-Secure9P is a control-plane protocol, not a universal IPC or data plane. Cohesix does not host applications, GUIs, or general user environments, and keeps heavy ecosystems outside the trusted computing base.
-
-**Explicit authority and revocation**  
-Cohesix enforces capability tickets, time- and operation-bounded leases, and revocation-first semantics. Failure is handled by withdrawing authority, not by retries or self-healing loops.
-
-**Determinism over flexibility**  
-Bounded memory, bounded work, and deterministic behaviour are prioritised over convenience and dynamism.
-
----
-
-## Architecture (high level)
-
-A single Cohesix deployment is a **hive**: one Queen role orchestrating multiple workers over a shared Secure9P namespace. The root task owns initial authority and scheduling, NineDoor presents the synthetic namespace, and all lifecycle actions are file-driven under `/queen`, `/worker/<id>`, `/log`, and `/gpu/<id>`.
-
-CUDA, NVML, and other heavy stacks remain host-side. The VM never touches GPU hardware directly.
-
-<!-- Concept Architecture — Cohesix (for README.md) -->
-**Figure 1:** Cohesix concept architecture (Queen/Worker hive over Secure9P, host-only GPU bridge, dual consoles)
+**Figure 1:** Cohesix concept architecture
 
 ```mermaid
-flowchart LR
-
-  subgraph HOST["Host (outside Cohesix VM/TCB)"]
-    OP["Operator or Automation"]:::ext
-    COHSH["cohsh (host-only)<br/>Canonical shell<br/>transport tcp<br/>role and ticket attach"]:::hosttool
-    GUI["SwarmUI (host-only)<br/>Speaks cohsh protocol"]:::hosttool
-    WIRE["secure9p-codec/core/transport (host)<br/>bounded framing<br/>TCP transport adapter"]:::hostlib
-    GPUB["gpu-bridge-host (host)<br/>CUDA and NVML here<br/>lease enforcement<br/>publishes gpu + models"]:::hosttool
-  end
-
-  subgraph TARGET["Target (QEMU aarch64 virt today; Pi4 U-Boot bare metal)"]
-    subgraph K["Upstream seL4 kernel"]
-      SEL4["seL4<br/>caps, IPC, scheduling<br/>formal foundation"]:::kernel
-    end
-
-    subgraph USER["Pure Rust userspace (static CPIO rootfs)"]
-      RT["root-task<br/>bootstrap caps and timers<br/>cooperative event pump<br/>spawns NineDoor and roles<br/>owns side effects"]:::vm
-      ND["NineDoor (Secure9P server)<br/>exports synthetic namespace<br/>role-aware mounts and policy"]:::vm
-
-      Q["Queen role<br/>orchestrates via queen ctl"]:::role
-      WH["worker-heart<br/>heartbeat telemetry"]:::role
-      WG["worker-gpu (VM stub)<br/>no CUDA or NVML<br/>uses gpu files"]:::role
-    end
-  end
-
-  UART["PL011 UART console<br/>bring-up and recovery"]:::console
-  TCP["TCP console<br/>remote operator surface"]:::console
-
-  subgraph NS["Hive namespace (Secure9P)"]
-    PROC["Path: /proc<br/>boot and status views"]:::path
-    QUEENCTL["Path: /queen/ctl<br/>append-only control<br/>spawn kill bind mount<br/>spawn gpu lease requests"]:::path
-    WORKTEL["Path: /worker/ID/telemetry<br/>append-only telemetry"]:::path
-    LOGS["Path: /log/*<br/>append-only streams"]:::path
-    GPUFS["Path: /gpu/ID<br/>info ctl job status<br/>host-mirrored providers"]:::path
-    GPUMODELS["Path: /gpu/models<br/>available + active pointers<br/>host-published registry"]:::path
-  end
-
-  SEL4 --> RT
-  RT --> ND
-  RT --- UART
-  RT --- TCP
-
-  OP --> COHSH
-  OP --> GUI
-  COHSH -->|tcp attach| TCP
-  GUI -->|same protocol| TCP
-
-  ND --> PROC
-  ND --> QUEENCTL
-  ND --> WORKTEL
-  ND --> LOGS
-  ND --> GPUFS
-  ND --> GPUMODELS
-
-  Q -->|Secure9P ops| ND
-  WH -->|Secure9P ops| ND
-  WG -->|Secure9P ops| ND
-
-  QUEENCTL -->|validated then internal action| RT
-
-  GPUB --> WIRE
-  WIRE -->|Secure9P transport host-only| ND
-  GPUB --> GPUFS
-  GPUB --> GPUMODELS
-
-  classDef kernel fill:#eeeeee,stroke:#555555,stroke-width:1px;
-  classDef vm fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
-  classDef role fill:#f0fdf4,stroke:#15803d,stroke-width:1px;
-  classDef console fill:#faf5ff,stroke:#7c3aed,stroke-width:1px;
-  classDef path fill:#f8fafc,stroke:#334155,stroke-dasharray: 4 3;
-  classDef hosttool fill:#fff7ed,stroke:#c2410c,stroke-width:1px;
-  classDef hostlib fill:#fffbeb,stroke:#b45309,stroke-width:1px;
-  classDef ext fill:#ffffff,stroke:#334155,stroke-width:1px;
+flowchart TB
+  OP["Operators and automation"] --> HOST["Host tools\ncohsh, coh, SwarmUI, bridges"]
+  HOST -->|"authenticated console/proxy\nSecure9P semantics"| ROOT["root-task\npolicy, HAL admission, recovery"]
+  ROOT --> SEL4["seL4\ncapabilities and scheduling"]
+  ROOT --> NS["Secure9P namespace\n/queen, /shard, /log, /proc, /gpu"]
+  NS --> ROLES["Queen and workers\ncontrol and telemetry"]
+  ROOT --> DRIVERS["Linked driver runtimes\nfixed ABI, bounded turns, counters"]
+  DRIVERS --> BOARD["Profile-gated hardware\nPi 4 MMIO, DMA, IRQ, framebuffer"]
+  ROOT --> EVIDENCE["Evidence surfaces\nlogs, proc views, driver counters"]
+  DRIVERS --> EVIDENCE
+  EVIDENCE --> HOST
+  HOST --> EXT["Host-side GPU, sidecars,\nand model registry"]
 ```
----
 
-## Components
+For the full architecture, diagrams, namespace contracts, and driver-runtime ABI, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SECURE9P.md](docs/SECURE9P.md), [docs/ROLES_AND_SCHEDULING.md](docs/ROLES_AND_SCHEDULING.md), and [docs/DRIVERS.md](docs/DRIVERS.md).
 
-- **root-task** — seL4 bootstrapper configuring capabilities, timers, and the cooperative event pump; hosts the serial and TCP consoles and owns all side effects.
-- **nine-door** — Secure9P server exporting `/proc`, `/queen`, `/worker`, `/log`, and host-mirrored `/gpu` namespaces with role-aware policy.
-- **worker-heart** — Minimal worker emitting heartbeat telemetry into `/worker/<id>/telemetry`.
-- **worker-gpu** — VM-resident stub handling GPU lease state and telemetry hooks; never touches hardware.
-- **cohsh** — Host-only CLI and canonical shell for the hive; GUI tooling is expected to speak the same protocol.
-- **gpu-bridge-host** — Host-side process that discovers or mocks GPUs, enforces leases, and publishes `/gpu/<id>/`, `/gpu/models/*`, and `/gpu/telemetry/schema.json` into the VM.
-- **host-sidecar-bridge** — Host-side publisher for `/host` providers (systemd, k8s, docker, nvidia) using existing Secure9P semantics and manifest-backed polling defaults.
-- **secure9p-codec / secure9p-core / secure9p-transport** — Secure9P codec, core policy hooks, and transport adapters for host tools.
+## Main Components
 
----
+- **root-task** — seL4 bootstrap, authority root, HAL admission, recovery, and console handling.
+- **NineDoor / Secure9P** — synthetic namespace for role-scoped control, telemetry, logs, and host-projected GPU state.
+- **Queen and workers** — file-driven orchestration roles, including heartbeat and GPU lease telemetry.
+- **linked driver runtimes** — profile-selected no-std child images for Pi 4 hardware service turns and driver counters.
+- **host tools** — `cohsh`, `coh`, SwarmUI, `gpu-bridge-host`, and sidecar bridges; heavy ecosystems stay outside the VM TCB.
 
-SwarmUI is the host-side desktop UI for Cohesix. It renders Live Hive telemetry and replays (including bounded per-worker text overlays and a detail panel), and it reuses the same console/Secure9P transports and core verbs as `cohsh` via an embedded console panel.
+SwarmUI is the host-side desktop UI for Cohesix. It renders Live Hive telemetry and replays while reusing the same console-backed path as `cohsh`.
 
 **Figure 2** SwarmUI replay (Live Hive telemetry visualization)
 ![SwarmUI replay screenshot](docs/swarmui-replay.png)
