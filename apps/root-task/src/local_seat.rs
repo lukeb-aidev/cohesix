@@ -1403,6 +1403,28 @@ impl LocalSeatRuntime {
         self.mirror_input_bytes_to_display(bytes);
     }
 
+    fn max_linked_hdmi_scrollback_offset(&self) -> usize {
+        self.mirrored_lines
+            .len()
+            .saturating_sub(linked_hdmi_scrollback_visible_lines(
+                self.status.buffer_lines,
+            ))
+    }
+
+    fn apply_linked_hdmi_scroll_delta(&mut self, delta: i32) -> bool {
+        if delta == 0 {
+            return false;
+        }
+        let previous = self.hdmi_scrollback_offset;
+        let max_offset = self.max_linked_hdmi_scrollback_offset();
+        self.hdmi_scrollback_offset = if delta > 0 {
+            previous.saturating_add(delta as usize).min(max_offset)
+        } else {
+            previous.saturating_sub(delta.saturating_neg() as usize)
+        };
+        self.hdmi_scrollback_offset != previous
+    }
+
     #[cfg(all(
         feature = "kernel",
         feature = "usb",
@@ -1417,6 +1439,7 @@ impl LocalSeatRuntime {
             let mut plain =
                 heapless::Vec::<u8, { crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES }>::new(
                 );
+            let mut scroll_delta = 0i32;
             for &byte in bytes {
                 match self.hdmi_input_escape_state {
                     0 if byte == 0x1b => {
@@ -1444,11 +1467,11 @@ impl LocalSeatRuntime {
                     }
                     2 if byte == b'A' => {
                         self.hdmi_input_escape_state = 0;
-                        self.scroll_linked_hdmi_back();
+                        scroll_delta = scroll_delta.saturating_add(1);
                     }
                     2 if byte == b'B' => {
                         self.hdmi_input_escape_state = 0;
-                        self.scroll_linked_hdmi_forward();
+                        scroll_delta = scroll_delta.saturating_sub(1);
                     }
                     _ => {
                         self.hdmi_input_escape_state = 0;
@@ -1460,6 +1483,9 @@ impl LocalSeatRuntime {
                 self.root_console_ready,
                 "keyboard-input",
             );
+            if self.apply_linked_hdmi_scroll_delta(scroll_delta) {
+                self.render_linked_hdmi_scrollback();
+            }
         }
     }
 
@@ -1470,13 +1496,9 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn scroll_linked_hdmi_back(&mut self) {
-        let visible = linked_hdmi_scrollback_visible_lines(self.status.buffer_lines);
-        let max_offset = self.mirrored_lines.len().saturating_sub(visible);
-        self.hdmi_scrollback_offset = self
-            .hdmi_scrollback_offset
-            .saturating_add(1)
-            .min(max_offset);
-        self.render_linked_hdmi_scrollback();
+        if self.apply_linked_hdmi_scroll_delta(1) {
+            self.render_linked_hdmi_scrollback();
+        }
     }
 
     #[cfg(all(
@@ -1486,8 +1508,9 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn scroll_linked_hdmi_forward(&mut self) {
-        self.hdmi_scrollback_offset = self.hdmi_scrollback_offset.saturating_sub(1);
-        self.render_linked_hdmi_scrollback();
+        if self.apply_linked_hdmi_scroll_delta(-1) {
+            self.render_linked_hdmi_scrollback();
+        }
     }
 
     #[cfg(all(
@@ -1499,7 +1522,7 @@ impl LocalSeatRuntime {
     fn render_linked_hdmi_scrollback(&mut self) {
         let visible = linked_hdmi_scrollback_visible_lines(self.status.buffer_lines);
         let total = self.mirrored_lines.len();
-        let max_offset = total.saturating_sub(visible);
+        let max_offset = self.max_linked_hdmi_scrollback_offset();
         self.hdmi_scrollback_offset = self.hdmi_scrollback_offset.min(max_offset);
         let end = total.saturating_sub(self.hdmi_scrollback_offset);
         let start = end.saturating_sub(visible);
@@ -3720,12 +3743,6 @@ fn mirror_high_impact_line_via_linked_hdmi(
     false
 }
 
-#[cfg(all(
-    feature = "kernel",
-    feature = "usb",
-    target_arch = "aarch64",
-    target_os = "none"
-))]
 fn linked_hdmi_scrollback_visible_lines(buffer_lines: u16) -> usize {
     usize::from(buffer_lines).min(32).max(1)
 }
@@ -4956,6 +4973,32 @@ mod tests {
         assert_eq!(lines[0], "abcde");
         assert_eq!(lines[1], "xyz");
         assert_eq!(runtime.dropped_mirrored_lines(), 1);
+    }
+
+    #[test]
+    fn runtime_hdmi_scrollback_delta_clamps_to_history_window() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 40,
+        });
+        for _ in 0..40 {
+            runtime.mirror_line("line");
+        }
+
+        assert_eq!(runtime.max_linked_hdmi_scrollback_offset(), 8);
+        assert!(runtime.apply_linked_hdmi_scroll_delta(3));
+        assert_eq!(runtime.hdmi_scrollback_offset, 3);
+        assert!(runtime.apply_linked_hdmi_scroll_delta(99));
+        assert_eq!(runtime.hdmi_scrollback_offset, 8);
+        assert!(!runtime.apply_linked_hdmi_scroll_delta(1));
+        assert_eq!(runtime.hdmi_scrollback_offset, 8);
+        assert!(runtime.apply_linked_hdmi_scroll_delta(-2));
+        assert_eq!(runtime.hdmi_scrollback_offset, 6);
+        assert!(runtime.apply_linked_hdmi_scroll_delta(-99));
+        assert_eq!(runtime.hdmi_scrollback_offset, 0);
+        assert!(!runtime.apply_linked_hdmi_scroll_delta(-1));
     }
 
     #[test]

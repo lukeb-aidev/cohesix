@@ -1326,6 +1326,7 @@ const FUNCTIONINTMASK: u32 = SDIO_FUNC_ENABLE_2 as u32;
 const CYW43_POST_RELEASE_MAILBOX_POLLS: usize = 1_000;
 const CYW43_RX_SOURCE_SAMPLE_INTERVAL_EMPTY_POLLS: u32 = 1024;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS: usize = 1;
+const CYW43_RX_SOURCE_ASSERTED_EMPTY_FIRSTREAD_RETRIES: usize = 1;
 const CYW43_RX_SOURCE_RECOVERY_DRAIN_POLLS: usize = 16;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_RFRAME_POLLS: usize = 4;
 const CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS: usize = 5_000;
@@ -8537,6 +8538,49 @@ fn cyw43_runtime_poll_rx_hintless_firstread(
     sequence: u32,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
 ) -> Cyw43RxPollResult {
+    match cyw43_runtime_read_hintless_firstread_once(
+        state,
+        wanted_mask,
+        sequence,
+        asserted_empty_policy,
+    ) {
+        Cyw43HintlessFirstreadResult::Frame(frame) => Cyw43RxPollResult::Frame(frame),
+        Cyw43HintlessFirstreadResult::Idle(reason) => Cyw43RxPollResult::Idle(reason),
+        Cyw43HintlessFirstreadResult::Empty => {
+            let source = cyw43_rx_source_snapshot(state, CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16);
+            if cyw43_rx_source_asserts_pending_frame(source) {
+                if let Some(result) = cyw43_runtime_retry_asserted_empty_firstread(
+                    state,
+                    wanted_mask,
+                    sequence,
+                    source,
+                    asserted_empty_policy,
+                ) {
+                    return result;
+                }
+            }
+            cyw43_runtime_poll_rx_hintless_block_probe(
+                state,
+                wanted_mask,
+                sequence,
+                asserted_empty_policy,
+            )
+        }
+    }
+}
+
+enum Cyw43HintlessFirstreadResult {
+    Frame(DriverFrameDescriptor),
+    Empty,
+    Idle(Cyw43RxIdleReason),
+}
+
+fn cyw43_runtime_read_hintless_firstread_once(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    sequence: u32,
+    asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+) -> Cyw43HintlessFirstreadResult {
     cyw43_publish_control_rx_progress(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN,
@@ -8555,7 +8599,7 @@ fn cyw43_runtime_poll_rx_hintless_firstread(
         block_count,
         asserted_empty_policy,
     ) {
-        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadFailed);
+        return Cyw43HintlessFirstreadResult::Idle(Cyw43RxIdleReason::FirstreadFailed);
     }
     cyw43_publish_control_rx_progress(
         sequence,
@@ -8567,29 +8611,81 @@ fn cyw43_runtime_poll_rx_hintless_firstread(
         CYW43_CONTROL_RX_FIRSTREAD_CAPACITY,
     ) else {
         if cyw43_sdpcm_firstread_prefix_empty(CYW43_RUNTIME_RX_BUFFER_OFFSET) {
-            return cyw43_runtime_poll_rx_hintless_block_probe(
-                state,
-                wanted_mask,
+            cyw43_publish_control_rx_progress(
                 sequence,
-                asserted_empty_policy,
+                DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY,
             );
+            return Cyw43HintlessFirstreadResult::Empty;
         }
         cyw43_publish_control_rx_progress(
             sequence,
             DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID,
         );
-        return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadInvalidSdpcm(
+        return Cyw43HintlessFirstreadResult::Idle(Cyw43RxIdleReason::FirstreadInvalidSdpcm(
             cyw43_sdpcm_firstread_prefix_signature(CYW43_RUNTIME_RX_BUFFER_OFFSET),
         ));
     };
-    cyw43_runtime_finish_hintless_firstread(
+    match cyw43_runtime_finish_hintless_firstread(
         state,
         wanted_mask,
         sequence,
         CYW43_CONTROL_RX_FIRSTREAD_BYTES,
         header,
         asserted_empty_policy,
-    )
+    ) {
+        Cyw43RxPollResult::Frame(frame) => Cyw43HintlessFirstreadResult::Frame(frame),
+        Cyw43RxPollResult::Idle(reason) => Cyw43HintlessFirstreadResult::Idle(reason),
+    }
+}
+
+fn cyw43_runtime_retry_asserted_empty_firstread(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    sequence: u32,
+    first_source: Cyw43RxSourceSnapshot,
+    asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+) -> Option<Cyw43RxPollResult> {
+    let mut source = cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16)
+        .unwrap_or(first_source);
+    if let Some(result) =
+        cyw43_runtime_read_rframe_if_present(state, wanted_mask, asserted_empty_policy)
+    {
+        return Some(result);
+    }
+    for _ in 0..CYW43_RX_SOURCE_ASSERTED_EMPTY_FIRSTREAD_RETRIES {
+        if !cyw43_rx_source_asserts_pending_frame(source)
+            && !cyw43_rx_source_asserts_pending_frame(first_source)
+        {
+            return None;
+        }
+        for _ in 0..CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS {
+            core::hint::spin_loop();
+        }
+        match cyw43_runtime_read_hintless_firstread_once(
+            state,
+            wanted_mask,
+            sequence,
+            asserted_empty_policy,
+        ) {
+            Cyw43HintlessFirstreadResult::Frame(frame) => {
+                return Some(Cyw43RxPollResult::Frame(frame));
+            }
+            Cyw43HintlessFirstreadResult::Idle(reason) => {
+                return Some(Cyw43RxPollResult::Idle(reason));
+            }
+            Cyw43HintlessFirstreadResult::Empty => {
+                source =
+                    cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16)
+                        .unwrap_or(source);
+                if let Some(result) =
+                    cyw43_runtime_read_rframe_if_present(state, wanted_mask, asserted_empty_policy)
+                {
+                    return Some(result);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn cyw43_runtime_poll_rx_hintless_block_probe(
@@ -8723,21 +8819,6 @@ fn cyw43_runtime_recover_asserted_empty_firstread(
         ) {
             return result;
         }
-        if asserted_empty_policy == Cyw43AssertedEmptyPolicy::RequestRetransmit
-            && cyw43_runtime_request_asserted_empty_retransmit(state)
-        {
-            source =
-                cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16)
-                    .unwrap_or(source);
-            if let Some(result) = cyw43_runtime_wait_for_asserted_empty_rframe(
-                state,
-                wanted_mask,
-                &mut source,
-                asserted_empty_policy,
-            ) {
-                return result;
-            }
-        }
     }
     for _ in 0..CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS {
         match cyw43_runtime_read_hintless_block_probe_once(
@@ -8778,10 +8859,6 @@ fn cyw43_runtime_recover_asserted_empty_firstread(
         }
     };
     Cyw43RxPollResult::Idle(reason)
-}
-
-fn cyw43_runtime_request_asserted_empty_retransmit(state: &mut Cyw43RuntimeState) -> bool {
-    cyw43_runtime_recover_failed_function2_transfer(state, false)
 }
 
 fn cyw43_runtime_wait_for_asserted_empty_rframe(
@@ -21790,7 +21867,83 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_asserted_empty_firstread_requests_bounded_retransmit() {
+    fn cyw43_asserted_empty_retries_linux_firstread_before_block_probe() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let event = *b"assoc-event";
+        let frame_len = CYW43_SDPCM_HEADER_BYTES + event.len();
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_EVENT,
+            4,
+            false,
+        );
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &event,
+        );
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+        });
+        reset_test_sdio_transfer_log();
+        let source = Cyw43RxSourceSnapshot {
+            probe_len: CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16,
+            interrupt_enable: SDIO_INTERRUPT_ENABLE_MASK,
+            frame_indicated: true,
+            host_interrupt: true,
+            function2_ready: true,
+            ..Cyw43RxSourceSnapshot::empty()
+        };
+
+        let result = CYW43_RUNTIME_STATE.with_mut(|state| {
+            cyw43_runtime_retry_asserted_empty_firstread(
+                state,
+                CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT,
+                93,
+                source,
+                Cyw43AssertedEmptyPolicy::RequestRetransmit,
+            )
+        });
+
+        assert_eq!(
+            result,
+            Some(Cyw43RxPollResult::Frame(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: event.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 4),
+            }))
+        );
+        assert!(test_sdio_cmd53_read_shape_seen(
+            2,
+            BACKPLANE_32BIT_FLAG,
+            CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16,
+            0,
+            CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16
+        ));
+        assert!(!test_sdio_cmd53_read_shape_seen(
+            2,
+            BACKPLANE_32BIT_FLAG,
+            CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
+            1,
+            CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16
+        ));
+        assert!(!test_sdio_cmd52_write_seen(
+            0,
+            SDIO_CCCR_ABORT,
+            SDIO_FUNC_ENABLE_2
+        ));
+        assert!(!test_sdio_cmd52_write_seen(
+            1,
+            SBSDIO_FUNC1_FRAMECTRL,
+            SFC_RF_TERM
+        ));
+    }
+
+    #[test]
+    fn cyw43_asserted_empty_firstread_waits_without_failed_transfer_recovery() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -21818,22 +21971,22 @@ mod tests {
         });
 
         assert!(matches!(result, Cyw43RxPollResult::Idle(_)));
-        assert!(test_sdio_cmd52_write_seen(
+        assert!(!test_sdio_cmd52_write_seen(
             0,
             SDIO_CCCR_ABORT,
             SDIO_FUNC_ENABLE_2
         ));
-        assert!(test_sdio_cmd52_write_seen(
+        assert!(!test_sdio_cmd52_write_seen(
             1,
             SBSDIO_FUNC1_FRAMECTRL,
             SFC_RF_TERM
         ));
-        assert!(test_sdio_cmd53_write_addr_seen(
+        assert!(!test_sdio_cmd53_write_addr_seen(
             1,
             CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX
         ));
-        assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_RFRAMEBCLO) >= 6);
-        assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_RFRAMEBCHI) >= 6);
+        assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_RFRAMEBCLO) >= 5);
+        assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_RFRAMEBCHI) >= 5);
     }
 
     #[test]
@@ -21885,7 +22038,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_asserted_empty_retransmit_requires_live_rx_source() {
+    fn cyw43_asserted_empty_without_live_rx_source_avoids_failed_transfer_recovery() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();

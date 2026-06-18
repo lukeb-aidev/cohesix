@@ -10575,17 +10575,22 @@ where
         }
     }
 
+    fn poll_local_seat_backend_for_ingress(&mut self) {
+        if let Some(runtime) = self.local_seat.as_mut() {
+            runtime.poll_backend_keyboard();
+        }
+    }
+
     fn consume_local_seat(&mut self, phase: LocalSeatConsumePhase, skip_runtime: bool) -> bool {
         if self.serial.tx_pending() {
+            self.poll_local_seat_backend_for_ingress();
             return false;
         }
         let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
         let mut empty_polls = 0usize;
         let mut consumed = false;
         for _ in 0..LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN {
-            if let Some(runtime) = self.local_seat.as_mut() {
-                runtime.poll_backend_keyboard();
-            }
+            self.poll_local_seat_backend_for_ingress();
             let read = match self.local_seat.as_mut() {
                 Some(runtime) => runtime.drain_keyboard_bytes(&mut chunk),
                 None => return consumed,
@@ -14126,6 +14131,46 @@ mod tests {
         assert!(rendered.contains("Commands:"), "{rendered}");
         drop(pump);
         assert_eq!(local_seat.keyboard_trace().backend_poll_calls, 0);
+    }
+
+    #[test]
+    fn serial_tx_pending_still_services_local_seat_backend() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        local_seat.enqueue_keyboard_bytes(b"x");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        assert_eq!(
+            pump.serial_mut()
+                .enqueue_tx_best_effort(b"pending serial output"),
+            21
+        );
+        assert!(pump.serial_mut().tx_pending());
+        assert!(!pump.consume_local_seat(LocalSeatConsumePhase::PreRuntime, true));
+        assert!(pump.serial_mut().tx_pending());
+        drop(pump);
+
+        let trace = local_seat.keyboard_trace();
+        assert_eq!(trace.backend_poll_calls, 1);
+        assert_eq!(trace.drained_bytes, 0);
+        assert_eq!(trace.queued_bytes, 1);
     }
 
     struct NullIpc;
