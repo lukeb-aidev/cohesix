@@ -45,7 +45,9 @@ The result is an orchestration environment for AI hives and distributed GPU work
 
 ## Design Shape
 
-Cohesix uses a Queen/Worker hive model. The root task owns initial authority, HAL admission, scheduling, and recovery; NineDoor presents the synthetic namespace; workers and host tools interact through bounded file-shaped control surfaces. The design inherits Plan 9's namespace discipline, but rejects the single-system illusion: namespaces are role-scoped authority views, not global storage, and operations are bounded, revocable, and auditable.
+[Plan 9 from Bell Labs](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs) was a research operating system that treated files and per-process namespaces as the common interface to local and distributed resources. Its 9P protocol carries those file operations across process and machine boundaries. Cohesix chose a 9P-derived core protocol because a small file-operation grammar maps cleanly to capability-scoped authority, deterministic bounds, audit logs, and host/VM bridges without importing POSIX or general RPC.
+
+Cohesix uses a Queen/Worker hive model. The root task owns initial authority, HAL admission, scheduling, and recovery; NineDoor presents the synthetic namespace; workers and host tools interact through bounded file-shaped control surfaces. Cohesix draws on Plan 9's namespace discipline, but rejects the single-system illusion: namespaces are role-scoped authority views, not global storage, and operations are bounded, revocable, and auditable.
 
 QEMU is used for bring-up, CI, and semantic regression testing. The deployment direction is physical ARM64 hardware, with Pi 4 bring-up aligned to the upstream seL4 U-Boot + binary image flow. QEMU driver-task smoke is useful transport-substrate evidence, but hardware acceptance still requires fresh board proof. See [docs/HARDWARE_BRINGUP.md](docs/HARDWARE_BRINGUP.md) and [docs/BOOT_REFERENCE.md](docs/BOOT_REFERENCE.md).
 
