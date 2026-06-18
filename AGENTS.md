@@ -14,7 +14,10 @@ Violations block merge. Warn of violations BEFORE completing tasks.
 ---
 
 ## Scope & Targets
-- **Host**: macOS 26 (Apple Silicon, M-series).
+- **Primary Codex/development host**: macOS 26 (Apple Silicon, M-series).
+  Linux, AWS, and release-bundle host-tool work is permitted only when
+  explicitly scoped by `docs/BUILD_PLAN.md` and the relevant surface document;
+  VM code must not assume Linux or POSIX facilities.
 - **Target VM**: QEMU `aarch64/virt` with GICv3.
 - **Target Hardware**: Raspberry Pi 4 (`bcm2711`) via Pi firmware -> U-Boot -> seL4 binary image -> root-task. UEFI/AWS targets are future/profile-scoped work only when authorized by `docs/BUILD_PLAN.md`.
 - **Kernel**: Upstream seL4 (external; never vendored).
@@ -36,20 +39,40 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
 
 1. **Canonical Sources**
    - `AGENTS.md`, `README.md`, and `/docs/*.md` are canonical.
-   - Code that diverges from these documents is invalid unless the documents are updated **in the same change**.
+   - These documents govern scope, policy, security boundaries, and public
+     claims. Code that diverges from them is invalid unless the documents are
+     updated **in the same change**.
    - Precedence is explicit:
      - `AGENTS.md` and `docs/BUILD_PLAN.md` govern scope and milestone legality.
-     - `configs/root_task.toml`, resolved manifests, and `coh-rtc` outputs govern generated interfaces, defaults, and system behavior.
+     - `configs/root_task.toml`, resolved manifests, and `coh-rtc` outputs govern generated interfaces, defaults, and generated/as-built behavior.
      - Prose documentation must describe generated/as-built truth and must be updated when that truth changes.
 
 2. **Compiler-Defined Reality**
-   - Manifests and compiler-generated artifacts (`root_task.toml`, `coh-rtc` outputs) are the **sole authority** on system behavior.
-   - Code or documentation that disagrees with generated output is **invalid by definition**.
+   - Manifests and compiler-generated artifacts (`root_task.toml`, `coh-rtc` outputs) are the **sole authority** on generated interfaces, defaults, namespace layout, bounds, and profile-selected system behavior.
+   - Code or prose documentation that disagrees with generated output is **invalid by definition**.
    - The correct fix for disagreement is to update IR, regenerate artifacts, and update docs/tests — never to hand-edit generated code.
 
 3. **No Scope Creep**
    - Only work explicitly sanctioned by the active milestone in `BUILD_PLAN.md` may be implemented.
-   - Every task or PR must cite the exact `docs/BUILD_PLAN.md` milestone and task title/ID that authorizes the change.
+   - `In Progress` milestones/submilestones are active by default. `Reopened`
+     milestones/submilestones are active only for defect, regression, and
+     evidence-closure work required to restore the reopened milestone's original
+     definition of done.
+   - When later work uncovers defects in a previously closed milestone, cite both
+     the downstream discovery milestone and the reopened milestone/submilestone
+     whose proof must be restored. Example: issues uncovered during Milestone
+     26b may reopen Milestone 26 or 26a, but the reopened scope is limited to
+     restoring the original Pi 4 bring-up or driver-task substrate guarantees
+     rather than adding unrelated 26b features.
+   - `Pending`, `Not Started`, and future/profile-scoped milestones are inactive
+     until `docs/BUILD_PLAN.md` explicitly authorizes them or the task is to
+     update the plan itself.
+   - The active milestone is the most specific `docs/BUILD_PLAN.md` milestone or
+     submilestone whose status and task text authorize the touched surface. When
+     a parent milestone and reopened/in-progress child milestone both apply, the
+     child governs. Cite the parent only for cross-cutting work that spans active
+     child scopes or when no child milestone covers the change.
+   - Every task or PR must cite the exact `docs/BUILD_PLAN.md` milestone/submilestone and task title/ID that authorizes the change.
    - If the active milestone is ambiguous, blocked, or contradicted by as-built evidence, stop and resolve scope in `docs/BUILD_PLAN.md` before implementation.
    - “Preparation”, “cleanup”, or “future-proofing” outside the milestone is prohibited.
 
@@ -90,7 +113,7 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
    - Convenience abstractions, refactors, or “cleanups” not required by the milestone are prohibited.
 
 8. **Tooling Alignment**
-   - Use the macOS ARM64 toolchain defined in `TOOLCHAIN_MAC_ARM64.md`.
+   - Use the macOS ARM64 toolchain defined in `docs/TOOLCHAIN_MAC_ARM64.md`.
    - Do not assume Linux tooling or POSIX facilities for VM code.
 
 9. **Stack Overflow and Scribbles**
@@ -102,6 +125,15 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
    - All .coh scripts MUST FOLLOW the syntax and grammar defined in docs/USERLAND_AND_CLI.md.
    - If grammar must be modified to support new functionality, you MUST UPDATE docs/USERLAND_AND_CLI.md accordingly.
 
+11. **File Headers**
+   - Every new or modified human-authored source, script, config, and
+     documentation file must retain or add file metadata in the file's native
+     comment syntax:
+     - `Author: Lukas Bower`
+     - `Purpose: <describe purpose of file>`
+     - `Copyright <current year> Lukas Bower`
+   - Do not credit OpenAI, Codex, or other tools in file headers.
+
 ---
 
 ## Worker Bring-up
@@ -109,7 +141,9 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
 - The root task may be documented as spawning **queen**, **worker-heart**, and **worker-gpu** only when current code, generated manifests, tests, and `docs/BUILD_PLAN.md` all agree.
 - If worker-spawn documentation and implementation diverge, treat the mismatch as drift: fix code, generated artifacts, tests, and docs in the same scoped change.
 - Scheduling contexts and budgets **must** follow `docs/ROLES_AND_SCHEDULING.md`.
-- Workers operate exclusively via their mounted namespaces (e.g. `/worker/<id>`).
+- Workers operate exclusively via their mounted namespaces (canonical example:
+  `/shard/<label>/worker/<id>/telemetry`; legacy `/worker/<id>/telemetry`
+  exists only when `sharding.legacy_worker_alias = true`).
 - All coordination is file- and event-driven via Secure9P.
 - Host-initiated ad-hoc RPC does not exist.
 
@@ -127,7 +161,7 @@ Goal: <one sentence>
 Inputs: <artifacts, versions, paths>
 Changes:
   - <file> — <summary>
-Commands: <exact shell commands (macOS ARM64)>
+Commands: <exact shell commands for the scoped host/target; default macOS ARM64>
 Checks: <deterministic success criteria>
 Deliverables: <files, logs, doc updates>
 ```
