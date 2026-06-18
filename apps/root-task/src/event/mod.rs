@@ -3086,11 +3086,13 @@ where
         let linked_first_byte = false;
         let metrics = self.metrics;
         let line = format_message(format_args!(
-            "[smp] activity local-seat runtime=present attached={} keyboard_device={} display={} backend_poll={} keyboard_ready={} first_report={} first_byte={} queued={} accepted={} drained={} echoed={} drop={} hdmi_drop={}",
+            "[smp] activity local-seat runtime=present attached={} keyboard_device={} display={} backend_poll={} backend_polls={} backend_bytes={} keyboard_ready={} first_report={} first_byte={} queued={} accepted={} drained={} echoed={} drop={} hdmi_drop={}",
             Self::yes_no(backend_attached),
             status.keyboard_device,
             status.display_device,
             Self::yes_no(backend_enabled),
+            trace.backend_poll_calls,
+            trace.backend_read_bytes,
             Self::yes_no(linked_keyboard_ready || backend_attached),
             Self::yes_no(linked_first_report),
             Self::yes_no(linked_first_byte),
@@ -4362,6 +4364,17 @@ where
         polling_enabled: bool,
         action_detail: Option<&str>,
     ) {
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_detail = 0u16;
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_result = 0u32;
+        let (queued_reports, doorbell_pending, preserved_events, transfer_events, report_status) =
+            Self::usb_runtime_queue_fields(linked_result);
+        let queue_valid = Self::usb_runtime_detail_has_queue_result(linked_detail);
         let mut line = format_message(format_args!(
             "usb: local-seat attached={} polling={}",
             if backend_attached { "yes" } else { "no" },
@@ -4388,6 +4401,18 @@ where
                 }
             );
         }
+        let queue_line = format_message(format_args!(
+            "usb: runtime_queue queue_valid={} detail=0x{:04x} result=0x{:08x} queued_reports={} doorbell_pending={} preserved_events={} transfer_events={} report_status={}",
+            Self::yes_no(queue_valid),
+            linked_detail,
+            linked_result,
+            queued_reports,
+            Self::yes_no(doorbell_pending),
+            preserved_events,
+            transfer_events,
+            Self::usb_runtime_keyboard_report_status_label(report_status),
+        ));
+        self.emit_console_line(queue_line.as_str());
         if let Some(action_detail) = action_detail {
             let _ = write!(line, " {action_detail}");
         }
@@ -4412,6 +4437,27 @@ where
             ));
             self.emit_console_line(trace_line.as_str());
         }
+        let local_trace = self
+            .local_seat
+            .as_ref()
+            .map(|local_seat| local_seat.keyboard_trace())
+            .unwrap_or_default();
+        let stall_line = format_message(format_args!(
+            "usb: stall_telemetry queue_valid={} queued_reports={} doorbell={} preserved={} transfer_events={} report_status={} local_queued={} local_drop={} backend_polls={} backend_bytes={} serial_tx_pending={} serial_interactive={}",
+            Self::yes_no(queue_valid),
+            queued_reports,
+            Self::yes_no(doorbell_pending),
+            preserved_events,
+            transfer_events,
+            Self::usb_runtime_keyboard_report_status_label(report_status),
+            local_trace.queued_bytes,
+            local_trace.dropped_bytes,
+            local_trace.backend_poll_calls,
+            local_trace.backend_read_bytes,
+            Self::yes_no(self.serial.tx_pending()),
+            Self::yes_no(self.serial.interactive_input_active()),
+        ));
+        self.emit_console_line(stall_line.as_str());
         let pump_line = format_message(format_args!(
             "usb: event_loop keyboard_priority={} runtime_skipped={} serial_dispatch_yielded={} post_runtime_keyboard={} output_keyboard_polls={}",
             self.metrics.local_seat_keyboard_priority_turns,
@@ -4421,6 +4467,14 @@ where
             self.metrics.local_seat_output_keyboard_polls,
         ));
         self.emit_console_line(pump_line.as_str());
+        self.emit_usb_related_driver_counter(
+            "usb-runtime",
+            crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+        );
+        self.emit_usb_related_driver_counter(
+            "hdmi-display",
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        );
         let diag_exact_issue = None;
         let (verdict, focus) =
             Self::usb_capture_verdict(backend_attached, polling_enabled, diag_exact_issue);
@@ -4600,7 +4654,9 @@ where
                     report_status,
                 ) = Self::usb_runtime_queue_fields(linked_result);
                 let runtime_queue = format_message(format_args!(
-                    "usb: runtime_queue queued_reports={} doorbell_pending={} preserved_events={} transfer_events={} report_status={}",
+                    "usb: runtime_queue queue_valid=yes detail=0x{:04x} result=0x{:08x} queued_reports={} doorbell_pending={} preserved_events={} transfer_events={} report_status={}",
+                    linked_detail,
+                    linked_result,
                     queued_reports,
                     Self::yes_no(doorbell_pending),
                     preserved_events,
@@ -4643,6 +4699,40 @@ where
             ));
             self.emit_console_line(keyboard_line.as_str());
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_usb_related_driver_counter(
+        &mut self,
+        domain: &'static str,
+        contract: crate::hal::driver_task::DriverTaskContract,
+    ) {
+        let Some(counters) = crate::hal::driver_task::driver_task_counter_snapshot(contract) else {
+            let line = format_message(format_args!(
+                "usb: stall_counter domain={domain} active=no contract={}",
+                contract.name,
+            ));
+            self.emit_console_line(line.as_str());
+            return;
+        };
+        let line = format_message(format_args!(
+            "usb: stall_counter domain={domain} contract={} submitted={} completed={} busy={} same={} timeouts={} keep_active={} aborts={} fault={} budget={} rx={}/{} tx={}/{}",
+            contract.name,
+            counters.submitted_turns,
+            counters.completed_turns,
+            counters.busy_conflicts,
+            counters.same_request_resumes,
+            counters.timeouts,
+            counters.keep_active_timeouts,
+            counters.aborts,
+            counters.fault_turns,
+            counters.budget_exhausted_turns,
+            counters.rx_frames,
+            counters.rx_bytes,
+            counters.tx_frames,
+            counters.tx_bytes,
+        ));
+        self.emit_console_line(line.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -18134,8 +18224,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_usb_debug_command_enables_local_seat_polling() {
-        let driver = LoopbackSerial::<512>::new();
-        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 512, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -18166,6 +18256,22 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
             rendered.contains("usb: local-seat attached=no polling=enabled"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: runtime_queue queue_valid=no detail=0x0000 result=0x00000000"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: stall_telemetry queue_valid=no"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: stall_counter domain=usb-runtime"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: stall_counter domain=hdmi-display"),
             "{rendered}"
         );
         assert!(

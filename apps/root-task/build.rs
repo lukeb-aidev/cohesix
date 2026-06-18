@@ -165,6 +165,7 @@ fn main() {
 }
 
 fn emit_built_info() -> io::Result<()> {
+    emit_git_rerun_triggers()?;
     let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
     let git = git_stdout(["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "nogit".to_owned());
     let git_dirty_suffix = if git_has_tracked_changes() {
@@ -181,6 +182,48 @@ fn emit_built_info() -> io::Result<()> {
     fs::write(out_dir.join("built_info.rs"), contents)?;
     println!("cargo:rerun-if-changed=build.rs");
     Ok(())
+}
+
+fn emit_git_rerun_triggers() -> io::Result<()> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(io::Error::other)?);
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(|parent| parent.parent())
+        .ok_or_else(|| io::Error::other("unable to locate repo root"))?;
+    let Some(git_dir) = resolve_git_dir(repo_root, &repo_root.join(".git")) else {
+        return Ok(());
+    };
+
+    emit_rerun_if_path_exists(&git_dir.join("HEAD"));
+    emit_rerun_if_path_exists(&git_dir.join("index"));
+    emit_rerun_if_path_exists(&git_dir.join("packed-refs"));
+
+    if let Ok(head) = fs::read_to_string(git_dir.join("HEAD")) {
+        if let Some(reference) = head.trim().strip_prefix("ref: ") {
+            emit_rerun_if_path_exists(&git_dir.join(reference));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_git_dir(repo_root: &Path, dot_git: &Path) -> Option<PathBuf> {
+    if dot_git.is_dir() {
+        return Some(dot_git.to_path_buf());
+    }
+    let gitdir = fs::read_to_string(dot_git).ok()?;
+    let raw_path = gitdir.trim().strip_prefix("gitdir:")?.trim();
+    let path = PathBuf::from(raw_path);
+    if path.is_absolute() {
+        Some(path)
+    } else {
+        Some(repo_root.join(path))
+    }
+}
+
+fn emit_rerun_if_path_exists(path: &Path) {
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
 }
 
 fn git_stdout<const N: usize>(args: [&str; N]) -> Option<String> {

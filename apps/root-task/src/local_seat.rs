@@ -255,7 +255,7 @@ static LINKED_LOCAL_SEAT_PCIE_HAL_PREP_ATTEMPTS: AtomicUsize = AtomicUsize::new(
     target_os = "none"
 ))]
 const LINKED_LOCAL_SEAT_PCIE_HAL_PREP_MAX_ATTEMPTS: usize = 8;
-const LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES: usize = 64;
+const LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES: usize = 512;
 
 #[cfg(all(
     feature = "kernel",
@@ -918,21 +918,24 @@ impl LocalSeatRuntime {
     /// but preserves ordinary typed bytes for the canonical parser path.
     pub fn drain_display_control_bytes_during_output(&mut self, budget: usize) -> usize {
         let mut drained = 0usize;
-        while drained.saturating_add(3) <= budget && self.keyboard_queue.len() >= 3 {
+        let mut bytes = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
+        let limit = budget.min(KEYBOARD_POLL_CHUNK_BYTES);
+        while drained.saturating_add(3) <= limit && self.keyboard_queue.len() >= 3 {
             if self.keyboard_queue.get(0) != Some(&0x1b)
                 || self.keyboard_queue.get(1) != Some(&b'[')
                 || !matches!(self.keyboard_queue.get(2), Some(b'A' | b'B'))
             {
                 break;
             }
-            let bytes = [
-                self.keyboard_queue.pop_front().unwrap_or(0),
-                self.keyboard_queue.pop_front().unwrap_or(0),
-                self.keyboard_queue.pop_front().unwrap_or(0),
-            ];
-            self.drained_keyboard_bytes = self.drained_keyboard_bytes.saturating_add(3);
-            self.echo_input_bytes(&bytes);
+            bytes[drained] = self.keyboard_queue.pop_front().unwrap_or(0);
+            bytes[drained + 1] = self.keyboard_queue.pop_front().unwrap_or(0);
+            bytes[drained + 2] = self.keyboard_queue.pop_front().unwrap_or(0);
             drained = drained.saturating_add(3);
+        }
+        if drained != 0 {
+            self.drained_keyboard_bytes =
+                self.drained_keyboard_bytes.saturating_add(drained as u64);
+            self.echo_input_bytes(&bytes[..drained]);
         }
         drained
     }
@@ -4725,14 +4728,24 @@ mod tests {
             buffer_lines: 4,
         });
 
+        assert_eq!(runtime.enqueue_keyboard_bytes(b"\x1b[A\x1b[B\x1b[Bx"), 10);
+        assert_eq!(runtime.drain_display_control_bytes_during_output(9), 9);
+        let trace = runtime.keyboard_trace();
+        assert_eq!(trace.queued_bytes, 1);
+        assert_eq!(trace.drained_bytes, 9);
+        assert_eq!(trace.echoed_bytes, 9);
+
+        let mut remaining = [0u8; 4];
+        assert_eq!(runtime.drain_keyboard_bytes(&mut remaining), 1);
+        assert_eq!(remaining[0], b'x');
+
         assert_eq!(runtime.enqueue_keyboard_bytes(b"\x1b[Bx"), 4);
         assert_eq!(runtime.drain_display_control_bytes_during_output(3), 3);
         let trace = runtime.keyboard_trace();
         assert_eq!(trace.queued_bytes, 1);
-        assert_eq!(trace.drained_bytes, 3);
-        assert_eq!(trace.echoed_bytes, 3);
+        assert_eq!(trace.drained_bytes, 13);
+        assert_eq!(trace.echoed_bytes, 12);
 
-        let mut remaining = [0u8; 4];
         assert_eq!(runtime.drain_keyboard_bytes(&mut remaining), 1);
         assert_eq!(remaining[0], b'x');
 
@@ -4933,6 +4946,21 @@ mod tests {
         assert!(contract.budget.max_ops_per_turn as usize >= KEYBOARD_POLL_CHUNK_BYTES);
         assert!(contract.budget.max_bytes_per_turn as usize >= KEYBOARD_POLL_CHUNK_BYTES);
         assert!(contract.budget.max_frames_per_turn as usize >= KEYBOARD_POLL_CHUNK_BYTES);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_hdmi_frame_chunks_stay_within_display_contract() {
+        let contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
+
+        assert_eq!(contract.name, "hdmi-text");
+        assert!(
+            LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES <= contract.budget.max_bytes_per_turn as usize
+        );
+        assert!(
+            LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
+                <= crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES
+        );
     }
 
     #[test]

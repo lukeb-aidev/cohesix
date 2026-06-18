@@ -1330,12 +1330,16 @@ const CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS: usize = 1;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_FIRSTREAD_RETRIES: usize = 1;
 const CYW43_RX_SOURCE_RECOVERY_DRAIN_POLLS: usize = 16;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_RFRAME_POLLS: usize = 4;
+const CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS: usize = 32;
 const CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS: usize = 5_000;
 const CYW43_RX_IDLE_TRACE_MAGIC: u32 = 0x4352_5854;
 const CYW43_RX_IDLE_TRACE_VERSION: u16 = 1;
 const CYW43_RX_IDLE_TRACE_BYTES: u16 = 40;
 const CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_REQUESTED: u16 = 1 << 0;
 const CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_SKIPPED: u16 = 1 << 1;
+const CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_FAILED: u16 = 1 << 2;
+const CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED: u16 = 1 << 3;
+const CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACK_TIMEOUT: u16 = 1 << 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43AssertedEmptyPolicy {
@@ -8277,6 +8281,9 @@ fn cyw43_function2_execute_transfer_with_policy(
     block_count: u16,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
 ) -> bool {
+    if !write && state.rx_retransmit_pending && !cyw43_runtime_wait_for_retransmit_handled(state) {
+        return false;
+    }
     let arg = sdio_cmd53_arg(
         write,
         2,
@@ -8301,6 +8308,9 @@ fn cyw43_function2_execute_transfer_with_policy(
     if !cyw43_runtime_recover_failed_function2_transfer(state, write) {
         return false;
     }
+    if !write && !cyw43_runtime_wait_for_retransmit_handled(state) {
+        return false;
+    }
     sdio_execute_transfer(SDIO_CMD53, arg, flags, frame, block_size, block_count).is_some()
 }
 
@@ -8318,11 +8328,13 @@ fn cyw43_runtime_recover_failed_function2_transfer(
     }
     let _ = cyw43_runtime_drain_function2_frame_count(write);
     if !write {
-        state.rx_retransmit_pending = cyw43_backplane_write_u32(
+        let retransmit_posted = cyw43_backplane_write_u32(
             state,
             CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX,
             SMB_NAK,
         );
+        state.rx_retransmit_pending = retransmit_posted;
+        return retransmit_posted;
     }
     true
 }
@@ -8336,7 +8348,11 @@ fn cyw43_runtime_request_asserted_empty_retransmit(
         return false;
     }
     state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_REQUESTED;
-    cyw43_runtime_recover_failed_function2_transfer(state, false)
+    let recovered = cyw43_runtime_recover_failed_function2_transfer(state, false);
+    if !recovered {
+        state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_FAILED;
+    }
+    recovered
 }
 
 fn cyw43_ram_payload_bounds(addr: u32, len: u16) -> bool {
@@ -8904,12 +8920,35 @@ fn cyw43_runtime_recover_asserted_empty_firstread(
             || cyw43_rx_source_asserts_pending_frame(first_source))
             && cyw43_runtime_request_asserted_empty_retransmit(state, asserted_empty_policy)
         {
-            for _ in 0..CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS {
-                core::hint::spin_loop();
+            if !cyw43_runtime_wait_for_retransmit_handled(state) {
+                return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::FirstreadSourceAssertedEmpty {
+                    probe_len: CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
+                    source,
+                });
             }
             source =
                 cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16)
                     .unwrap_or(source);
+            match cyw43_runtime_read_hintless_firstread_once(
+                state,
+                wanted_mask,
+                sequence,
+                asserted_empty_policy,
+            ) {
+                Cyw43HintlessFirstreadResult::Frame(frame) => {
+                    return Cyw43RxPollResult::Frame(frame);
+                }
+                Cyw43HintlessFirstreadResult::Idle(reason) => {
+                    return Cyw43RxPollResult::Idle(reason);
+                }
+                Cyw43HintlessFirstreadResult::Empty => {
+                    source = cyw43_rx_source_snapshot_force(
+                        state,
+                        CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16,
+                    )
+                    .unwrap_or(source);
+                }
+            }
             if let Some(result) =
                 cyw43_runtime_read_rframe_if_present(state, wanted_mask, asserted_empty_policy)
             {
@@ -8956,6 +8995,30 @@ fn cyw43_runtime_recover_asserted_empty_firstread(
         }
     };
     Cyw43RxPollResult::Idle(reason)
+}
+
+fn cyw43_runtime_wait_for_retransmit_handled(state: &mut Cyw43RuntimeState) -> bool {
+    for _ in 0..CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS {
+        if let Some(mailbox_data) =
+            cyw43_backplane_read_u32(state, CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOHOSTMAILBOXDATA)
+        {
+            if mailbox_data & HMB_DATA_NAKHANDLED != 0 {
+                let _ = cyw43_backplane_write_u32(
+                    state,
+                    CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX,
+                    SMB_INT_ACK,
+                );
+                state.rx_retransmit_pending = false;
+                state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED;
+                return true;
+            }
+        }
+        for _ in 0..CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS {
+            core::hint::spin_loop();
+        }
+    }
+    state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACK_TIMEOUT;
+    false
 }
 
 fn cyw43_runtime_wait_for_asserted_empty_rframe(
@@ -11121,6 +11184,7 @@ fn usb_keyboard_control_poll_allowed(state: &UsbRuntimeState) -> bool {
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE
                 | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_SHORT
                 | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODE_FAILED
+                | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER
         )
 }
 
@@ -12335,22 +12399,56 @@ struct TestSdioTransferFailure(UnsafeCell<TestSdioTransferFailureState>);
 
 #[cfg(all(not(target_os = "none"), test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TestSdioTransferFailureRule {
+    cmd: u16,
+    function: u8,
+    write: bool,
+    arg: u32,
+    match_arg: bool,
+    remaining: usize,
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TestSdioTransferLogState {
     count: usize,
     records: [TestSdioTransferRecord; TEST_SDIO_TRANSFER_LOG_CAP],
 }
 
 #[cfg(all(not(target_os = "none"), test))]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TestSdioTransferFailureState {
-    cmd: u16,
-    function: u8,
-    write: bool,
-    remaining: usize,
+    rules: [TestSdioTransferFailureRule; TEST_SDIO_TRANSFER_FAILURE_RULES],
 }
 
 #[cfg(all(not(target_os = "none"), test))]
 const TEST_SDIO_TRANSFER_LOG_CAP: usize = 256;
+
+#[cfg(all(not(target_os = "none"), test))]
+const TEST_SDIO_TRANSFER_FAILURE_RULES: usize = 4;
+
+#[cfg(all(not(target_os = "none"), test))]
+impl TestSdioTransferFailureRule {
+    const fn empty() -> Self {
+        Self {
+            cmd: 0,
+            function: 0,
+            write: false,
+            arg: 0,
+            match_arg: false,
+            remaining: 0,
+        }
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+impl Default for TestSdioTransferFailureState {
+    fn default() -> Self {
+        Self {
+            rules: [TestSdioTransferFailureRule::empty(); TEST_SDIO_TRANSFER_FAILURE_RULES],
+        }
+    }
+}
 
 #[cfg(all(not(target_os = "none"), test))]
 // SAFETY: Runtime tests serialize all access through `test_guard`, so the
@@ -12403,10 +12501,7 @@ static TEST_SDIO_TRANSFER_LOG: TestSdioTransferLog =
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_SDIO_TRANSFER_FAILURE: TestSdioTransferFailure =
     TestSdioTransferFailure(UnsafeCell::new(TestSdioTransferFailureState {
-        cmd: 0,
-        function: 0,
-        write: false,
-        remaining: 0,
+        rules: [TestSdioTransferFailureRule::empty(); TEST_SDIO_TRANSFER_FAILURE_RULES],
     }));
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -12441,15 +12536,39 @@ fn reset_test_sdio_transfer_failure() {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn test_sdio_transfer_fail_next(cmd: u16, function: u8, write: bool) {
+    test_sdio_transfer_fail_rule(TestSdioTransferFailureRule {
+        cmd,
+        function,
+        write,
+        arg: 0,
+        match_arg: false,
+        remaining: 1,
+    });
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_transfer_fail_next_arg(cmd: u16, arg: u32) {
+    test_sdio_transfer_fail_rule(TestSdioTransferFailureRule {
+        cmd,
+        function: 0,
+        write: false,
+        arg,
+        match_arg: true,
+        remaining: 1,
+    });
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_transfer_fail_rule(rule: TestSdioTransferFailureRule) {
     // SAFETY: Runtime tests hold `test_guard` before configuring shared state.
     unsafe {
-        *TEST_SDIO_TRANSFER_FAILURE.0.get() = TestSdioTransferFailureState {
-            cmd,
-            function,
-            write,
-            remaining: 1,
-        };
+        let failure = &mut *TEST_SDIO_TRANSFER_FAILURE.0.get();
+        if let Some(slot) = failure.rules.iter_mut().find(|slot| slot.remaining == 0) {
+            *slot = rule;
+            return;
+        }
     }
+    panic!("test SDIO failure rule capacity exhausted");
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -12457,18 +12576,31 @@ fn test_sdio_transfer_should_fail(record: TestSdioTransferRecord) -> bool {
     // SAFETY: Runtime tests hold `test_guard` while servicing commands.
     unsafe {
         let failure = &mut *TEST_SDIO_TRANSFER_FAILURE.0.get();
-        if failure.remaining == 0 || failure.cmd != record.cmd {
-            return false;
+        for rule in failure.rules.iter_mut() {
+            if !test_sdio_transfer_failure_rule_matches(*rule, record) {
+                continue;
+            }
+            rule.remaining -= 1;
+            return true;
         }
-        if record.cmd == SDIO_CMD53
-            && (failure.function != sdio_cmd53_arg_function(record.arg)
-                || failure.write != sdio_cmd53_arg_write(record.arg))
-        {
-            return false;
-        }
-        failure.remaining -= 1;
-        true
     }
+    false
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_transfer_failure_rule_matches(
+    rule: TestSdioTransferFailureRule,
+    record: TestSdioTransferRecord,
+) -> bool {
+    if rule.remaining == 0 || rule.cmd != record.cmd {
+        return false;
+    }
+    if rule.match_arg {
+        return rule.arg == record.arg;
+    }
+    record.cmd != SDIO_CMD53
+        || (rule.function == sdio_cmd53_arg_function(record.arg)
+            && rule.write == sdio_cmd53_arg_write(record.arg))
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -12504,6 +12636,41 @@ fn test_sdio_transfer_count(predicate: impl Fn(TestSdioTransferRecord) -> bool) 
             .copied()
             .filter(|record| predicate(*record))
             .count()
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_first_transfer_index(
+    predicate: impl Fn(TestSdioTransferRecord) -> bool,
+) -> Option<usize> {
+    // SAFETY: Runtime tests hold `test_guard` before reading shared state.
+    unsafe {
+        let log = &*TEST_SDIO_TRANSFER_LOG.0.get();
+        let count = log.count.min(TEST_SDIO_TRANSFER_LOG_CAP);
+        log.records[..count].iter().copied().position(predicate)
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_transfer_index(
+    predicate: impl Fn(TestSdioTransferRecord) -> bool,
+    ordinal: usize,
+) -> Option<usize> {
+    // SAFETY: Runtime tests hold `test_guard` before reading shared state.
+    unsafe {
+        let log = &*TEST_SDIO_TRANSFER_LOG.0.get();
+        let count = log.count.min(TEST_SDIO_TRANSFER_LOG_CAP);
+        let mut seen = 0usize;
+        for (index, record) in log.records[..count].iter().copied().enumerate() {
+            if !predicate(record) {
+                continue;
+            }
+            if seen == ordinal {
+                return Some(index);
+            }
+            seen = seen.saturating_add(1);
+        }
+        None
     }
 }
 
@@ -18334,14 +18501,7 @@ fn xhci_complete_keyboard_report_slot(
 }
 
 fn xhci_recover_unmatched_keyboard_transfer_event(state: &mut UsbRuntimeState) {
-    state.keyboard_reports_queued = 0;
-    state.keyboard_doorbell_pending = true;
-    state.keyboard_report_in_use = [false; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
-    state.keyboard_report_trb_indices = [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
-    state.keyboard_preserved_event_count = 0;
-    state.keyboard_preserved_event_parameters = [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
-    state.keyboard_preserved_event_statuses = [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
-    state.keyboard_preserved_event_controls = [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+    state.keyboard_doorbell_pending = false;
     state.keyboard_transfer_events = state.keyboard_transfer_events.saturating_add(1);
     state.keyboard_last_report_status =
         DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER;
@@ -20331,15 +20491,19 @@ mod tests {
         })
     }
 
-    fn test_sdio_cmd53_write_addr_seen(function: u8, addr: u32) -> bool {
+    fn test_sdio_cmd53_write_addr_count(function: u8, addr: u32) -> usize {
         let expected_addr = cyw43_backplane_function_addr(addr);
-        test_sdio_transfer_seen(|record| {
+        test_sdio_transfer_count(|record| {
             record.cmd == SDIO_CMD53
                 && record.flags & DRIVER_RUNTIME_SDIO_FLAG_WRITE != 0
                 && sdio_cmd53_arg_write(record.arg)
                 && sdio_cmd53_arg_function(record.arg) == function
                 && sdio_cmd53_arg_addr(record.arg) == expected_addr
         })
+    }
+
+    fn test_sdio_cmd53_write_addr_seen(function: u8, addr: u32) -> bool {
+        test_sdio_cmd53_write_addr_count(function, addr) != 0
     }
 
     fn test_sdio_cmd53_read_shape_seen(
@@ -20349,8 +20513,18 @@ mod tests {
         block_count: u16,
         len: u16,
     ) -> bool {
+        test_sdio_cmd53_read_shape_count(function, addr, block_size, block_count, len) != 0
+    }
+
+    fn test_sdio_cmd53_read_shape_count(
+        function: u8,
+        addr: u32,
+        block_size: u16,
+        block_count: u16,
+        len: u16,
+    ) -> usize {
         let expected_arg = sdio_cmd53_arg(false, function, addr, false, block_count, len);
-        test_sdio_transfer_seen(|record| {
+        test_sdio_transfer_count(|record| {
             record.cmd == SDIO_CMD53
                 && !sdio_cmd53_arg_write(record.arg)
                 && sdio_cmd53_arg_function(record.arg) == function
@@ -22021,6 +22195,73 @@ mod tests {
             1,
             CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX
         ));
+        assert_eq!(
+            test_sdio_cmd53_write_addr_count(1, CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX),
+            2
+        );
+        assert_ne!(
+            state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED,
+            0
+        );
+        assert!(!state.rx_retransmit_pending);
+    }
+
+    #[test]
+    fn cyw43_function2_read_failure_does_not_retry_when_nak_fails() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        let mailbox_addr = CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX;
+        state.backplane_window = mailbox_addr & BACKPLANE_WINDOW_MASK;
+        state.backplane_window_valid = true;
+        reset_test_sdio_transfer_log();
+        test_sdio_transfer_fail_next(SDIO_CMD53, 2, false);
+        test_sdio_transfer_fail_next_arg(
+            SDIO_CMD53,
+            sdio_cmd53_arg(
+                true,
+                1,
+                cyw43_backplane_function_addr(mailbox_addr),
+                true,
+                1,
+                4,
+            ),
+        );
+        test_sdio_transfer_fail_next_arg(
+            SDIO_CMD52,
+            sdio_cmd52_arg(
+                true,
+                1,
+                mailbox_addr & BACKPLANE_ADDRESS_MASK,
+                (SMB_NAK & 0xff) as u8,
+            ),
+        );
+
+        assert!(matches!(
+            cyw43_runtime_read_hintless_block_probe_once(
+                &mut state,
+                CYW43_RX_FRAME_FLAG_MASK_DATA,
+                96,
+                Cyw43AssertedEmptyPolicy::RequestRetransmit,
+            ),
+            Cyw43HintlessBlockProbeResult::Idle(Cyw43RxIdleReason::FirstreadFailed)
+        ));
+        assert_eq!(test_sdio_cmd53_transfer_count(2, false), 1);
+        assert!(!state.rx_retransmit_pending);
+        assert!(test_sdio_cmd52_write_seen(
+            0,
+            SDIO_CCCR_ABORT,
+            SDIO_FUNC_ENABLE_2
+        ));
+        assert!(test_sdio_cmd52_write_seen(
+            1,
+            SBSDIO_FUNC1_FRAMECTRL,
+            SFC_RF_TERM
+        ));
+        assert!(test_sdio_cmd53_write_addr_seen(1, mailbox_addr));
     }
 
     #[test]
@@ -22208,10 +22449,91 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_retransmit_wait_acks_nakhandled_mailbox() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.rx_retransmit_pending = true;
+        write_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET, HMB_DATA_NAKHANDLED);
+        reset_test_sdio_transfer_log();
+
+        assert!(cyw43_runtime_wait_for_retransmit_handled(&mut state));
+
+        assert!(!state.rx_retransmit_pending);
+        assert_ne!(
+            state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED,
+            0
+        );
+        assert_eq!(
+            state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACK_TIMEOUT,
+            0
+        );
+        assert!(test_sdio_transfer_seen(|record| {
+            record.cmd == SDIO_CMD53
+                && !sdio_cmd53_arg_write(record.arg)
+                && sdio_cmd53_arg_function(record.arg) == 1
+                && sdio_cmd53_arg_addr(record.arg)
+                    == cyw43_backplane_function_addr(
+                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOHOSTMAILBOXDATA,
+                    )
+        }));
+        assert_eq!(
+            test_sdio_cmd53_write_addr_count(1, CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX),
+            1
+        );
+    }
+
+    #[test]
+    fn cyw43_retransmit_wait_times_out_without_nakhandled_mailbox() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.rx_retransmit_pending = true;
+        write_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET, 0);
+        reset_test_sdio_transfer_log();
+
+        assert!(!cyw43_runtime_wait_for_retransmit_handled(&mut state));
+
+        assert!(state.rx_retransmit_pending);
+        assert_ne!(
+            state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACK_TIMEOUT,
+            0
+        );
+        assert_eq!(
+            state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED,
+            0
+        );
+        assert_eq!(
+            test_sdio_cmd53_write_addr_count(1, CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX),
+            0
+        );
+    }
+
+    #[test]
     fn cyw43_asserted_empty_firstread_requests_retransmit_after_rframe_wait() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
+        let event = *b"assoc-event";
+        let frame_len = CYW43_SDPCM_HEADER_BYTES + event.len();
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_EVENT,
+            4,
+            false,
+        );
+        stage_bytes(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &event,
+        );
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.firmware_released = true;
         });
@@ -22228,14 +22550,29 @@ mod tests {
         let result = CYW43_RUNTIME_STATE.with_mut(|state| {
             cyw43_runtime_recover_asserted_empty_firstread(
                 state,
-                CYW43_RX_FRAME_FLAG_MASK_DATA,
+                CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT,
                 93,
                 source,
                 Cyw43AssertedEmptyPolicy::RequestRetransmit,
             )
         });
 
-        assert!(matches!(result, Cyw43RxPollResult::Idle(_)));
+        assert_eq!(
+            result,
+            Cyw43RxPollResult::Frame(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: event.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 4),
+            })
+        );
+        assert_eq!(
+            read_frame_prefix::<11>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: event.len() as u16,
+                flags: 0,
+            }),
+            event
+        );
         assert!(test_sdio_cmd52_write_seen(
             0,
             SDIO_CCCR_ABORT,
@@ -22250,13 +22587,105 @@ mod tests {
             1,
             CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX
         ));
+        assert_eq!(
+            test_sdio_cmd53_write_addr_count(1, CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX),
+            2
+        );
         assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_RFRAMEBCLO) >= 5);
         assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_RFRAMEBCHI) >= 5);
+        let tosb_mailbox_addr = CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOSBMAILBOX;
+        let tohost_mailbox_data_addr = CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOHOSTMAILBOXDATA;
+        let rframe_index = test_sdio_first_transfer_index(|record| {
+            record.cmd == SDIO_CMD52
+                && record.arg == sdio_cmd52_arg(false, 1, SBSDIO_FUNC1_RFRAMEBCLO, 0)
+        })
+        .expect("RFRAME wait must precede retransmit");
+        let abort_index = test_sdio_first_transfer_index(|record| {
+            record.cmd == SDIO_CMD52
+                && record.arg == sdio_cmd52_arg(true, 0, SDIO_CCCR_ABORT, SDIO_FUNC_ENABLE_2)
+        })
+        .expect("ABORT must be issued");
+        let rf_term_index = test_sdio_first_transfer_index(|record| {
+            record.cmd == SDIO_CMD52
+                && record.arg == sdio_cmd52_arg(true, 1, SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM)
+        })
+        .expect("RF_TERM must be issued");
+        let nak_index = test_sdio_transfer_index(
+            |record| {
+                record.cmd == SDIO_CMD53
+                    && sdio_cmd53_arg_write(record.arg)
+                    && sdio_cmd53_arg_function(record.arg) == 1
+                    && sdio_cmd53_arg_addr(record.arg)
+                        == cyw43_backplane_function_addr(tosb_mailbox_addr)
+            },
+            0,
+        )
+        .expect("SMB_NAK mailbox write must be issued");
+        let nakhandled_index = test_sdio_first_transfer_index(|record| {
+            record.cmd == SDIO_CMD53
+                && !sdio_cmd53_arg_write(record.arg)
+                && sdio_cmd53_arg_function(record.arg) == 1
+                && sdio_cmd53_arg_addr(record.arg)
+                    == cyw43_backplane_function_addr(tohost_mailbox_data_addr)
+        })
+        .expect("NAKHANDLED mailbox poll must be issued");
+        let ack_index = test_sdio_transfer_index(
+            |record| {
+                record.cmd == SDIO_CMD53
+                    && sdio_cmd53_arg_write(record.arg)
+                    && sdio_cmd53_arg_function(record.arg) == 1
+                    && sdio_cmd53_arg_addr(record.arg)
+                        == cyw43_backplane_function_addr(tosb_mailbox_addr)
+            },
+            1,
+        )
+        .expect("SMB_INT_ACK mailbox write must be issued");
+        let firstread_index = test_sdio_first_transfer_index(|record| {
+            record.cmd == SDIO_CMD53
+                && !sdio_cmd53_arg_write(record.arg)
+                && sdio_cmd53_arg_function(record.arg) == 2
+                && sdio_cmd53_arg_addr(record.arg) == BACKPLANE_32BIT_FLAG
+                && record.block_size == CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16
+                && record.block_count == 0
+        })
+        .expect("post-retransmit first-read must be issued");
+        assert!(rframe_index < abort_index);
+        assert!(abort_index < rf_term_index);
+        assert!(rf_term_index < nak_index);
+        assert!(nak_index < nakhandled_index);
+        assert!(nakhandled_index < ack_index);
+        assert!(ack_index < firstread_index);
+        assert_eq!(
+            test_sdio_cmd53_read_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16,
+                0,
+                CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16
+            ),
+            1
+        );
+        assert!(!test_sdio_cmd53_read_shape_seen(
+            2,
+            BACKPLANE_32BIT_FLAG,
+            CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16,
+            1,
+            CYW43_CONTROL_RX_BLOCK_PROBE_BYTES as u16
+        ));
         CYW43_RUNTIME_STATE.with_mut(|state| {
             assert_ne!(
                 state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_REQUESTED,
                 0
             );
+            assert_ne!(
+                state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED,
+                0
+            );
+            assert_eq!(
+                state.rx_trace_flags & CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACK_TIMEOUT,
+                0
+            );
+            assert!(!state.rx_retransmit_pending);
         });
     }
 
@@ -24662,7 +25091,7 @@ mod tests {
 
         state.keyboard_last_report_status =
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER;
-        assert!(!usb_keyboard_control_poll_allowed(&state));
+        assert!(usb_keyboard_control_poll_allowed(&state));
     }
 
     #[test]
@@ -26649,7 +27078,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_unmatched_transfer_event_recovers_interrupt_queue() {
+    fn usb_keyboard_unmatched_transfer_event_preserves_inflight_reports() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -26668,6 +27097,9 @@ mod tests {
         state.keyboard_endpoint_id = 3;
         state.keyboard_reports_queued = USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u8;
         state.keyboard_report_in_use = [true; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+        let valid_report_slot = 5usize;
+        let valid_trb_index = 7usize;
+        state.keyboard_report_trb_indices[valid_report_slot] = valid_trb_index as u16;
         let endpoint_id = state.keyboard_endpoint_id;
         let slot = state.keyboard_slot;
         zero_dma_range(kbd_base, XHCI_COMMAND_RING_BYTES);
@@ -26681,26 +27113,58 @@ mod tests {
                     | (u32::from(slot) << 24),
             },
         ));
+        assert!(xhci_preserve_keyboard_transfer_event(
+            &mut state,
+            XhciTrb {
+                parameter: kbd_ring + (valid_trb_index * XHCI_TRB_BYTES) as u64 + 0x08,
+                status: XHCI_COMPLETION_SHORT_PACKET << 24,
+                control: (XHCI_TRB_TYPE_TRANSFER_EVENT << 10)
+                    | (u32::from(endpoint_id) << 16)
+                    | (u32::from(slot) << 24),
+            },
+        ));
 
         assert_eq!(
             xhci_next_keyboard_transfer_event(&mut state, &descriptor),
             None
         );
-        assert_eq!(state.keyboard_reports_queued, 0);
-        assert!(state.keyboard_doorbell_pending);
-        assert!(state.keyboard_report_in_use.iter().all(|in_use| !*in_use));
-        assert_eq!(state.keyboard_preserved_event_count, 0);
+        assert_eq!(
+            usize::from(state.keyboard_reports_queued),
+            USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH
+        );
+        assert!(!state.keyboard_doorbell_pending);
+        assert!(state.keyboard_report_in_use.iter().all(|in_use| *in_use));
+        assert_eq!(state.keyboard_preserved_event_count, 1);
         assert_eq!(state.keyboard_transfer_events, 1);
         assert_eq!(
             state.keyboard_last_report_status,
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER
         );
 
+        assert_eq!(
+            xhci_next_keyboard_transfer_event(&mut state, &descriptor),
+            Some((
+                XhciTrb {
+                    parameter: kbd_ring + (valid_trb_index * XHCI_TRB_BYTES) as u64 + 0x08,
+                    status: XHCI_COMPLETION_SHORT_PACKET << 24,
+                    control: (XHCI_TRB_TYPE_TRANSFER_EVENT << 10)
+                        | (u32::from(endpoint_id) << 16)
+                        | (u32::from(slot) << 24),
+                },
+                valid_report_slot
+            ))
+        );
+        assert_eq!(state.keyboard_reports_queued, 127);
+        assert!(!state.keyboard_report_in_use[valid_report_slot]);
+        assert_eq!(state.keyboard_preserved_event_count, 0);
+        assert_eq!(state.keyboard_transfer_events, 2);
+
         assert!(xhci_arm_keyboard_interrupt_queue(&mut state, &descriptor));
         assert_eq!(
             usize::from(state.keyboard_reports_queued),
             USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH
         );
+        assert!(state.keyboard_report_in_use[valid_report_slot]);
     }
 
     #[test]
