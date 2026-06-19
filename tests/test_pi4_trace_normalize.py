@@ -7314,6 +7314,18 @@ def test_host_eapol_rxtrace_blocker_names_queue_and_copy_failures() -> None:
         )
         == "cyw43-control-rx-queue-invalid-flags"
     )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker({"rxtrace_flags": "0x0010"})
+        == "cyw43-data-rx-retransmit-ack-timeout"
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker({"rxtrace_flags": "0x1830"})
+        is None
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker({"rxtrace_flags": "0xd010"})
+        is None
+    )
 
 
 def test_gate_summary_names_host_eapol_rx_queue_full() -> None:
@@ -7335,6 +7347,28 @@ def test_gate_summary_names_host_eapol_rx_queue_full() -> None:
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "cyw43-data-rx-queue-full"
     assert gates.wifi_exact == "cyw43-data-rx-queue-full"
+    assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_keeps_asserted_zero_retry_firstread_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-event-missing "
+            "polls=24576 starts=0 data_rx=0 eapol_rx=0 event_rx=0 "
+            "associated=no link_up=no assoc_event=none "
+            "last_rx_idle_detail=0x570e rxtrace_valid=yes "
+            "rxtrace_flags=0xd010 control_rxtrace_valid=yes "
+            "control_rxtrace_flags=0xd010 "
+            "next_action=inspect-cyw43-assoc-event-rx-or-sdio-owner-ienx-snapshot",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-source-asserted-empty"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-source-asserted-empty"
     assert gates.wifi_phase == "runtime-rx"
 
 

@@ -653,6 +653,26 @@ pub(crate) const fn local_seat_keyboard_poll_suspends_on_missing_reply(
     physical_pi_owner_state && root_console_ready && !keyboard_ready
 }
 
+/// Return the next bounded USB keyboard poll backoff after a missing reply.
+#[must_use]
+pub(crate) const fn local_seat_keyboard_poll_next_no_reply_backoff(
+    keyboard_ready: bool,
+    previous: u8,
+) -> u8 {
+    if keyboard_ready {
+        1
+    } else if previous == 0 {
+        LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_INITIAL_COOLDOWN
+    } else {
+        let doubled = previous.saturating_mul(2);
+        if doubled > LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_MAX_COOLDOWN {
+            LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_MAX_COOLDOWN
+        } else {
+            doubled
+        }
+    }
+}
+
 /// Return whether a display mirror miss should preserve the serial shell.
 #[must_use]
 pub(crate) const fn local_seat_display_mirror_suspends_on_missing_reply(
@@ -803,6 +823,7 @@ pub struct LocalSeatRuntime {
     status: LocalSeatStatus,
     keyboard_queue: VecDeque<u8>,
     input_echo_preview: String,
+    input_echo_escape_state: u8,
     mirrored_lines: VecDeque<String>,
     hdmi_pending_bytes: VecDeque<u8>,
     hdmi_pending_redraw: bool,
@@ -906,6 +927,7 @@ impl LocalSeatRuntime {
             status,
             keyboard_queue: VecDeque::new(),
             input_echo_preview: String::new(),
+            input_echo_escape_state: 0,
             mirrored_lines: VecDeque::new(),
             hdmi_pending_bytes: VecDeque::new(),
             hdmi_pending_redraw: false,
@@ -1014,7 +1036,11 @@ impl LocalSeatRuntime {
             {
                 if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
                     self.mirror_line_current_tcb(line);
-                    let _ = self.queue_linked_hdmi_line(line);
+                    if self.root_console_ready {
+                        self.request_linked_hdmi_snapshot_redraw();
+                    } else {
+                        let _ = self.queue_linked_hdmi_line(line);
+                    }
                     return;
                 }
             }
@@ -1096,6 +1122,10 @@ impl LocalSeatRuntime {
         {
             if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
                 self.mirror_line_current_tcb(line);
+                if self.root_console_ready {
+                    self.request_linked_hdmi_snapshot_redraw();
+                    return true;
+                }
                 return self.queue_linked_hdmi_line(line);
             }
         }
@@ -1150,7 +1180,7 @@ impl LocalSeatRuntime {
         self.queue_linked_hdmi_payload(b"\n") && queued
     }
 
-    fn queue_linked_hdmi_scrollback_redraw(&mut self) {
+    fn request_linked_hdmi_snapshot_redraw(&mut self) {
         if self.hdmi_pending_redraw {
             self.hdmi_coalesced_redraws = self.hdmi_coalesced_redraws.saturating_add(1);
         }
@@ -1163,6 +1193,35 @@ impl LocalSeatRuntime {
         self.hdmi_pending_redraw = true;
     }
 
+    fn append_linked_hdmi_snapshot_line(
+        &self,
+        payload: &mut Vec<u8>,
+        line: &str,
+        input_preview: Option<&str>,
+    ) -> bool {
+        let mut live_line = String::new();
+        let display_line = if let Some(preview) = input_preview {
+            live_line.push_str(line);
+            live_line.push_str(preview);
+            truncate_for_display(live_line.as_str(), self.status.line_bytes)
+        } else {
+            truncate_for_display(line, self.status.line_bytes)
+        };
+        let remaining = LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
+            .saturating_sub(payload.len())
+            .saturating_sub(1);
+        if remaining == 0 {
+            return false;
+        }
+        let line_bytes = display_line.as_bytes();
+        let take = line_bytes.len().min(remaining);
+        payload.extend_from_slice(&line_bytes[..take]);
+        if payload.len() < LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES {
+            payload.push(b'\n');
+        }
+        true
+    }
+
     fn build_linked_hdmi_scrollback_payload(&self) -> Vec<u8> {
         let visible =
             linked_hdmi_scrollback_visible_lines(self.status.buffer_lines, self.status.line_bytes);
@@ -1173,25 +1232,49 @@ impl LocalSeatRuntime {
         let start = end.saturating_sub(visible);
         let mut payload = Vec::new();
         payload.push(0x0c);
+        if total == 0 && offset == 0 && !self.input_echo_preview.is_empty() {
+            let _ = self.append_linked_hdmi_snapshot_line(
+                &mut payload,
+                "",
+                Some(self.input_echo_preview.as_str()),
+            );
+            return payload;
+        }
         let mut index = start;
         while index < end && payload.len() < LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES {
             if let Some(line) = self.mirrored_lines.get(index) {
-                let remaining = LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
-                    .saturating_sub(payload.len())
-                    .saturating_sub(1);
-                if remaining == 0 {
+                let input_preview = if offset == 0
+                    && index.saturating_add(1) == end
+                    && !self.input_echo_preview.is_empty()
+                {
+                    Some(self.input_echo_preview.as_str())
+                } else {
+                    None
+                };
+                if !self.append_linked_hdmi_snapshot_line(
+                    &mut payload,
+                    line.as_str(),
+                    input_preview,
+                ) {
                     break;
-                }
-                let line_bytes = line.as_bytes();
-                let take = line_bytes.len().min(remaining);
-                payload.extend_from_slice(&line_bytes[..take]);
-                if payload.len() < LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES {
-                    payload.push(b'\n');
                 }
             }
             index = index.saturating_add(1);
         }
         payload
+    }
+
+    fn restore_linked_hdmi_payload_front(&mut self, payload: &[u8]) {
+        debug_assert!(
+            self.hdmi_pending_bytes.len().saturating_add(payload.len()) <= DISPLAY_QUEUE_MAX_BYTES
+        );
+        for &byte in payload.iter().rev() {
+            if self.hdmi_pending_bytes.len() >= DISPLAY_QUEUE_MAX_BYTES {
+                self.hdmi_backpressure_bytes = self.hdmi_backpressure_bytes.saturating_add(1);
+                continue;
+            }
+            self.hdmi_pending_bytes.push_front(byte);
+        }
     }
 
     fn next_linked_hdmi_payload(&mut self) -> Option<(Vec<u8>, &'static str, bool)> {
@@ -1282,6 +1365,8 @@ impl LocalSeatRuntime {
                 self.hdmi_deferred_frames = self.hdmi_deferred_frames.saturating_add(1);
                 if redraw {
                     self.hdmi_pending_redraw = true;
+                } else {
+                    self.restore_linked_hdmi_payload_front(payload.as_slice());
                 }
                 false
             }
@@ -1495,9 +1580,11 @@ impl LocalSeatRuntime {
         self.echoed_keyboard_bytes = self
             .echoed_keyboard_bytes
             .saturating_add(bytes.len() as u64);
+        let mut preview_changed = false;
         for &byte in bytes {
-            update_input_echo_preview(
+            preview_changed |= update_input_echo_preview(
                 &mut self.input_echo_preview,
+                &mut self.input_echo_escape_state,
                 byte,
                 usize::from(self.status.line_bytes),
             );
@@ -1509,7 +1596,15 @@ impl LocalSeatRuntime {
             target_arch = "aarch64",
             target_os = "none"
         ))]
-        self.mirror_input_bytes_to_display(bytes);
+        self.mirror_input_bytes_to_display(bytes, preview_changed);
+
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
+        let _ = preview_changed;
     }
 
     fn max_linked_hdmi_scrollback_offset(&self) -> usize {
@@ -1541,28 +1636,20 @@ impl LocalSeatRuntime {
         target_arch = "aarch64",
         target_os = "none"
     ))]
-    fn mirror_input_bytes_to_display(&mut self, bytes: &[u8]) {
+    fn mirror_input_bytes_to_display(&mut self, bytes: &[u8], preview_changed: bool) {
         if bytes.is_empty() || !self.root_console_ready {
             return;
         }
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-            let mut plain =
-                heapless::Vec::<u8, { crate::hal::driver_task::MAX_DRIVER_TASK_FRAME_BYTES }>::new(
-                );
             let mut scroll_delta = 0i32;
+            let mut redraw = preview_changed;
             for &byte in bytes {
                 match self.hdmi_input_escape_state {
                     0 if byte == 0x1b => {
-                        let _ = self.queue_linked_hdmi_payload(plain.as_slice());
-                        plain.clear();
                         self.hdmi_input_escape_state = 1;
                     }
                     0 => {
-                        if plain.push(byte).is_err() {
-                            let _ = self.queue_linked_hdmi_payload(plain.as_slice());
-                            plain.clear();
-                            let _ = plain.push(byte);
-                        }
+                        redraw = redraw || !byte.is_ascii_control();
                     }
                     1 if byte == b'[' => {
                         self.hdmi_input_escape_state = 2;
@@ -1575,14 +1662,23 @@ impl LocalSeatRuntime {
                         self.hdmi_input_escape_state = 0;
                         scroll_delta = scroll_delta.saturating_sub(1);
                     }
+                    2 if byte.is_ascii_digit() || byte == b';' => {}
+                    2 if (0x40..=0x7e).contains(&byte) => {
+                        self.hdmi_input_escape_state = 0;
+                    }
                     _ => {
                         self.hdmi_input_escape_state = 0;
                     }
                 }
             }
-            let _ = self.queue_linked_hdmi_payload(plain.as_slice());
+            if redraw && self.hdmi_scrollback_offset != 0 {
+                self.hdmi_scrollback_offset = 0;
+            }
             if self.apply_linked_hdmi_scroll_delta(scroll_delta) {
-                self.queue_linked_hdmi_scrollback_redraw();
+                redraw = true;
+            }
+            if redraw {
+                self.request_linked_hdmi_snapshot_redraw();
             }
         }
     }
@@ -1595,7 +1691,7 @@ impl LocalSeatRuntime {
     ))]
     fn scroll_linked_hdmi_back(&mut self) {
         if self.apply_linked_hdmi_scroll_delta(1) {
-            self.queue_linked_hdmi_scrollback_redraw();
+            self.request_linked_hdmi_snapshot_redraw();
         }
     }
 
@@ -1607,7 +1703,7 @@ impl LocalSeatRuntime {
     ))]
     fn scroll_linked_hdmi_forward(&mut self) {
         if self.apply_linked_hdmi_scroll_delta(-1) {
-            self.queue_linked_hdmi_scrollback_redraw();
+            self.request_linked_hdmi_snapshot_redraw();
         }
     }
 
@@ -1620,7 +1716,7 @@ impl LocalSeatRuntime {
     fn render_linked_hdmi_scrollback(&mut self) {
         let max_offset = self.max_linked_hdmi_scrollback_offset();
         self.hdmi_scrollback_offset = self.hdmi_scrollback_offset.min(max_offset);
-        self.queue_linked_hdmi_scrollback_redraw();
+        self.request_linked_hdmi_snapshot_redraw();
     }
 
     fn keyboard_poll_no_reply_cooldown_active(&mut self) -> bool {
@@ -1642,15 +1738,34 @@ impl LocalSeatRuntime {
         self.clear_keyboard_poll_no_reply_backoff();
     }
 
+    fn keyboard_poll_fast_recovery_active(&self) -> bool {
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                && LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
+        }
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
+        {
+            false
+        }
+    }
+
     fn record_keyboard_poll_no_reply(&mut self) {
         self.driver_task_no_replies = self.driver_task_no_replies.saturating_add(1);
-        let next = if self.keyboard_poll_no_reply_backoff == 0 {
-            LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_INITIAL_COOLDOWN
-        } else {
-            self.keyboard_poll_no_reply_backoff
-                .saturating_mul(2)
-                .min(LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_MAX_COOLDOWN)
-        };
+        let next = local_seat_keyboard_poll_next_no_reply_backoff(
+            self.keyboard_poll_fast_recovery_active(),
+            self.keyboard_poll_no_reply_backoff,
+        );
         self.keyboard_poll_no_reply_backoff = next;
         self.keyboard_poll_no_reply_cooldown = next;
     }
@@ -4592,17 +4707,51 @@ pub fn truncate_for_display(line: &str, line_bytes: u16) -> &str {
     &line[..idx]
 }
 
-fn update_input_echo_preview(preview: &mut String, byte: u8, max_bytes: usize) {
-    match byte {
-        b'\r' | b'\n' => preview.clear(),
-        0x08 | 0x7f => {
-            let _ = preview.pop();
+fn update_input_echo_preview(
+    preview: &mut String,
+    escape_state: &mut u8,
+    byte: u8,
+    max_bytes: usize,
+) -> bool {
+    match *escape_state {
+        0 if byte == 0x1b => {
+            *escape_state = 1;
+            false
         }
-        byte if byte.is_ascii_control() => {}
-        byte => {
-            if preview.len() < max_bytes {
-                preview.push(byte as char);
+        0 => match byte {
+            b'\r' | b'\n' => {
+                let changed = !preview.is_empty();
+                preview.clear();
+                changed
             }
+            0x08 | 0x7f => preview.pop().is_some(),
+            byte if byte.is_ascii_control() => false,
+            byte => {
+                if preview.len() < max_bytes {
+                    preview.push(byte as char);
+                    true
+                } else {
+                    false
+                }
+            }
+        },
+        1 if byte == b'[' => {
+            *escape_state = 2;
+            false
+        }
+        1 => {
+            *escape_state = 0;
+            false
+        }
+        2 if byte.is_ascii_digit() || byte == b';' => false,
+        2 if (0x40..=0x7e).contains(&byte) => {
+            *escape_state = 0;
+            false
+        }
+        2 => false,
+        _ => {
+            *escape_state = 0;
+            false
         }
     }
 }
@@ -5168,7 +5317,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_hdmi_redraw_coalesces_and_supersedes_stale_bytes() {
+    fn runtime_hdmi_snapshot_redraw_coalesces_and_supersedes_stale_bytes() {
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",
@@ -5176,9 +5325,10 @@ mod tests {
             buffer_lines: 40,
         });
 
+        runtime.mirror_line_current_tcb("cohesix> ");
         assert!(runtime.queue_linked_hdmi_payload(b"stale echo"));
-        runtime.queue_linked_hdmi_scrollback_redraw();
-        runtime.queue_linked_hdmi_scrollback_redraw();
+        runtime.request_linked_hdmi_snapshot_redraw();
+        runtime.request_linked_hdmi_snapshot_redraw();
 
         let display = runtime.display_trace();
         assert_eq!(display.pending_bytes, 0);
@@ -5187,6 +5337,162 @@ mod tests {
         assert_eq!(display.superseded_bytes, b"stale echo".len() as u64);
         assert_eq!(display.backpressure_bytes, 0);
         assert_eq!(runtime.keyboard_trace().driver_task_budget_overruns, 0);
+
+        let Some((payload, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected snapshot payload");
+        };
+        assert_eq!(reason, "keyboard-scrollback");
+        assert!(redraw);
+        assert_eq!(payload.as_slice(), b"\x0ccohesix> \n");
+    }
+
+    #[test]
+    fn runtime_hdmi_snapshot_includes_input_preview_on_tail_line() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 40,
+        });
+
+        runtime.mirror_line_current_tcb("cohesix> ");
+        runtime.echo_input_bytes(b"hel");
+        runtime.request_linked_hdmi_snapshot_redraw();
+
+        let Some((payload, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected snapshot payload");
+        };
+        assert_eq!(reason, "keyboard-scrollback");
+        assert!(redraw);
+        assert_eq!(payload.as_slice(), b"\x0ccohesix> hel\n");
+    }
+
+    #[test]
+    fn runtime_input_preview_ignores_split_arrow_sequences() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 40,
+        });
+
+        runtime.echo_input_bytes(b"\x1b");
+        runtime.echo_input_bytes(b"[Ahe");
+        runtime.echo_input_bytes(b"\x1b[B");
+        runtime.echo_input_bytes(b"\x1b[1~");
+        runtime.echo_input_bytes(b"lp");
+
+        assert_eq!(runtime.input_echo_preview, "help");
+    }
+
+    #[test]
+    fn runtime_keyboard_burst_drains_and_echoes_without_drops() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 40,
+        });
+        let mut burst = Vec::new();
+        for index in 0..256 {
+            if index % 16 == 0 {
+                burst.extend_from_slice(b"\x1b[A");
+            }
+            burst.push(b'a' + (index % 26) as u8);
+        }
+
+        assert_eq!(
+            runtime.enqueue_keyboard_bytes(burst.as_slice()),
+            burst.len()
+        );
+        let mut drained_total = 0usize;
+        let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
+        loop {
+            let read = runtime.drain_keyboard_bytes(&mut chunk);
+            if read == 0 {
+                break;
+            }
+            runtime.echo_input_bytes(&chunk[..read]);
+            drained_total = drained_total.saturating_add(read);
+        }
+
+        let trace = runtime.keyboard_trace();
+        assert_eq!(drained_total, burst.len());
+        assert_eq!(trace.accepted_bytes, burst.len() as u64);
+        assert_eq!(trace.drained_bytes, burst.len() as u64);
+        assert_eq!(trace.echoed_bytes, burst.len() as u64);
+        assert_eq!(trace.dropped_bytes, 0);
+        assert!(!runtime.input_echo_preview.contains('['));
+    }
+
+    #[test]
+    fn runtime_display_control_drain_handles_repeated_arrows_without_text_preview() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 40,
+        });
+        let mut controls = Vec::new();
+        for _ in 0..32 {
+            controls.extend_from_slice(b"\x1b[A");
+            controls.extend_from_slice(b"\x1b[B");
+        }
+        controls.push(b'x');
+
+        assert_eq!(
+            runtime.enqueue_keyboard_bytes(controls.as_slice()),
+            controls.len()
+        );
+        assert_eq!(
+            runtime.drain_display_control_bytes_during_output(KEYBOARD_POLL_CHUNK_BYTES),
+            126
+        );
+        assert_eq!(
+            runtime.drain_display_control_bytes_during_output(KEYBOARD_POLL_CHUNK_BYTES),
+            66
+        );
+
+        let trace = runtime.keyboard_trace();
+        assert_eq!(trace.drained_bytes, 192);
+        assert_eq!(trace.echoed_bytes, 192);
+        assert_eq!(trace.queued_bytes, 1);
+        assert!(runtime.input_echo_preview.is_empty());
+
+        let mut remaining = [0u8; 1];
+        assert_eq!(runtime.drain_keyboard_bytes(&mut remaining), 1);
+        runtime.echo_input_bytes(&remaining);
+        assert_eq!(runtime.input_echo_preview, "x");
+    }
+
+    #[test]
+    fn runtime_hdmi_no_reply_restore_keeps_queued_payload_order() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        assert!(runtime.queue_linked_hdmi_payload(b"abcdef"));
+        let Some((payload, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected queued payload");
+        };
+        assert_eq!(payload.as_slice(), b"abcdef");
+        assert_eq!(reason, "queued-output");
+        assert!(!redraw);
+        assert_eq!(runtime.display_trace().pending_bytes, 0);
+
+        runtime.restore_linked_hdmi_payload_front(payload.as_slice());
+
+        assert_eq!(runtime.display_trace().pending_bytes, 6);
+        let Some((replayed, replay_reason, replay_redraw)) = runtime.next_linked_hdmi_payload()
+        else {
+            panic!("expected restored payload");
+        };
+        assert_eq!(replayed.as_slice(), b"abcdef");
+        assert_eq!(replay_reason, "queued-output");
+        assert!(!replay_redraw);
     }
 
     #[test]
@@ -5248,6 +5554,9 @@ mod tests {
             LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_MAX_COOLDOWN
         );
         assert_eq!(runtime.keyboard_trace().driver_task_no_replies, 9);
+
+        assert_eq!(local_seat_keyboard_poll_next_no_reply_backoff(true, 0), 1);
+        assert_eq!(local_seat_keyboard_poll_next_no_reply_backoff(true, 32), 1);
     }
 
     #[test]
