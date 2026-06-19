@@ -1025,6 +1025,8 @@ pub struct PumpMetrics {
     pub local_seat_post_runtime_hits: u64,
     /// Backend keyboard polls issued while console output was being emitted.
     pub local_seat_output_keyboard_polls: u64,
+    /// Queued HDMI mirror frames submitted during idle local-seat display turns.
+    pub local_seat_hdmi_pump_turns: u64,
     /// Physical-console output records deferred behind active keyboard input.
     pub physical_console_output_deferred: u64,
     /// Deferred physical-console output records flushed during idle turns.
@@ -1783,6 +1785,7 @@ where
             self.serial.flush_tx();
             self.flush_pending_console_output_if_idle();
             self.retry_pending_usb_debug_hdmi_frontier();
+            self.pump_local_seat_display_if_idle();
             let output_pending =
                 self.serial.tx_pending() || !self.pending_console_output.is_empty();
             self.maybe_run_post_prompt_local_seat_attach(
@@ -1806,6 +1809,7 @@ where
         self.serial.flush_tx();
         self.flush_pending_console_output_if_idle();
         self.retry_pending_usb_debug_hdmi_frontier();
+        self.pump_local_seat_display_if_idle();
         let output_pending = self.serial.tx_pending() || !self.pending_console_output.is_empty();
         self.maybe_run_post_prompt_local_seat_attach(
             serial_rx_activity
@@ -2467,6 +2471,27 @@ where
         self.console_output_flush_active = false;
     }
 
+    fn pump_local_seat_display_if_idle(&mut self) {
+        if self.serial.tx_pending()
+            || self.serial.interactive_input_active()
+            || self.console_output_flush_active
+            || !self.pending_console_output.is_empty()
+            || self.physical_console_input_pending_for_output()
+        {
+            return;
+        }
+        let Some(runtime) = self.local_seat.as_mut() else {
+            return;
+        };
+        if !runtime.linked_hdmi_pending_work() {
+            return;
+        }
+        if runtime.pump_linked_hdmi_once() {
+            self.metrics.local_seat_hdmi_pump_turns =
+                self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
+        }
+    }
+
     #[cfg(feature = "kernel")]
     fn maybe_emit_serial_input_idle_trace(&mut self, physical_input_active: bool) {
         if !self.banner_emitted {
@@ -3085,8 +3110,9 @@ where
         #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let linked_first_byte = false;
         let metrics = self.metrics;
+        let display = runtime.display_trace();
         let line = format_message(format_args!(
-            "[smp] activity local-seat runtime=present attached={} keyboard_device={} display={} backend_poll={} backend_polls={} backend_bytes={} keyboard_ready={} first_report={} first_byte={} queued={} accepted={} drained={} echoed={} drop={} hdmi_drop={}",
+            "[smp] activity local-seat runtime=present attached={} keyboard_device={} display={} backend_poll={} backend_polls={} backend_bytes={} keyboard_ready={} first_report={} first_byte={} queued={} accepted={} drained={} echoed={} drop={} no_reply={} cooldown={} cooldown_skips={} hdmi_drop={}",
             Self::yes_no(backend_attached),
             status.keyboard_device,
             status.display_device,
@@ -3101,18 +3127,35 @@ where
             trace.drained_bytes,
             trace.echoed_bytes,
             trace.dropped_bytes,
+            trace.driver_task_no_replies,
+            trace.poll_cooldown_turns,
+            trace.poll_cooldown_skips,
             mirrored_drops,
         ));
         self.emit_console_line(line.as_str());
         let turns = format_message(format_args!(
-            "[smp] activity local-seat-turns output_polls={} priority={} skipped={} serial_yield={} post_runtime={}",
+            "[smp] activity local-seat-turns output_polls={} hdmi_pump={} priority={} skipped={} serial_yield={} post_runtime={}",
             metrics.local_seat_output_keyboard_polls,
+            metrics.local_seat_hdmi_pump_turns,
             metrics.local_seat_keyboard_priority_turns,
             metrics.local_seat_runtime_skipped_turns,
             metrics.local_seat_serial_dispatch_yielded_turns,
             metrics.local_seat_post_runtime_hits,
         ));
         self.emit_console_line(turns.as_str());
+        let display_line = format_message(format_args!(
+            "[smp] activity local-seat-display pending_bytes={} pending_redraw={} submitted={} deferred={} busy={} no_reply={} coalesced={} backpressure_bytes={} superseded_bytes={}",
+            display.pending_bytes,
+            Self::yes_no(display.pending_redraw),
+            display.submitted_frames,
+            display.deferred_frames,
+            display.busy_frames,
+            display.no_reply_frames,
+            display.coalesced_redraws,
+            display.backpressure_bytes,
+            display.superseded_bytes,
+        ));
+        self.emit_console_line(display_line.as_str());
     }
 
     fn emit_smp_activity_rates(
@@ -4421,8 +4464,12 @@ where
             let keyboard_drop = local_seat.dropped_keyboard_bytes();
             let trace = local_seat.keyboard_trace();
             let drop_line = format_message(format_args!(
-                "usb: local-seat drops keyboard_drop={} driver_task_budget_overruns={}",
-                keyboard_drop, trace.driver_task_budget_overruns,
+                "usb: local-seat drops keyboard_drop={} driver_task_budget_overruns={} driver_task_no_replies={} poll_cooldown={} cooldown_skips={}",
+                keyboard_drop,
+                trace.driver_task_budget_overruns,
+                trace.driver_task_no_replies,
+                trace.poll_cooldown_turns,
+                trace.poll_cooldown_skips,
             ));
             self.emit_console_line(drop_line.as_str());
             let trace_line = format_message(format_args!(
@@ -4442,8 +4489,13 @@ where
             .as_ref()
             .map(|local_seat| local_seat.keyboard_trace())
             .unwrap_or_default();
+        let display_trace = self
+            .local_seat
+            .as_ref()
+            .map(|local_seat| local_seat.display_trace())
+            .unwrap_or_default();
         let stall_line = format_message(format_args!(
-            "usb: stall_telemetry queue_valid={} queued_reports={} doorbell={} preserved={} transfer_events={} report_status={} local_queued={} local_drop={} backend_polls={} backend_bytes={} serial_tx_pending={} serial_interactive={}",
+            "usb: stall_telemetry queue_valid={} queued_reports={} doorbell={} preserved={} transfer_events={} report_status={} local_queued={} local_drop={} backend_polls={} backend_bytes={} no_reply={} cooldown={} cooldown_skips={} serial_tx_pending={} serial_interactive={}",
             Self::yes_no(queue_valid),
             queued_reports,
             Self::yes_no(doorbell_pending),
@@ -4454,17 +4506,39 @@ where
             local_trace.dropped_bytes,
             local_trace.backend_poll_calls,
             local_trace.backend_read_bytes,
+            local_trace.driver_task_no_replies,
+            local_trace.poll_cooldown_turns,
+            local_trace.poll_cooldown_skips,
             Self::yes_no(self.serial.tx_pending()),
             Self::yes_no(self.serial.interactive_input_active()),
         ));
         self.emit_console_line(stall_line.as_str());
+        let output_pressure_line = format_message(format_args!(
+            "usb: output_pressure serial_tx_pending={} serial_interactive={} deferred={} flushed={} backpressure={} hdmi_pending_bytes={} hdmi_pending_redraw={} hdmi_submitted={} hdmi_deferred={} hdmi_busy={} hdmi_no_reply={} hdmi_coalesced={} hdmi_backpressure_bytes={} hdmi_superseded_bytes={}",
+            Self::yes_no(self.serial.tx_pending()),
+            Self::yes_no(self.serial.interactive_input_active()),
+            self.metrics.physical_console_output_deferred,
+            self.metrics.physical_console_output_flushed,
+            self.metrics.physical_console_output_backpressure,
+            display_trace.pending_bytes,
+            Self::yes_no(display_trace.pending_redraw),
+            display_trace.submitted_frames,
+            display_trace.deferred_frames,
+            display_trace.busy_frames,
+            display_trace.no_reply_frames,
+            display_trace.coalesced_redraws,
+            display_trace.backpressure_bytes,
+            display_trace.superseded_bytes,
+        ));
+        self.emit_console_line(output_pressure_line.as_str());
         let pump_line = format_message(format_args!(
-            "usb: event_loop keyboard_priority={} runtime_skipped={} serial_dispatch_yielded={} post_runtime_keyboard={} output_keyboard_polls={}",
+            "usb: event_loop keyboard_priority={} runtime_skipped={} serial_dispatch_yielded={} post_runtime_keyboard={} output_keyboard_polls={} hdmi_pump={}",
             self.metrics.local_seat_keyboard_priority_turns,
             self.metrics.local_seat_runtime_skipped_turns,
             self.metrics.local_seat_serial_dispatch_yielded_turns,
             self.metrics.local_seat_post_runtime_hits,
             self.metrics.local_seat_output_keyboard_polls,
+            self.metrics.local_seat_hdmi_pump_turns,
         ));
         self.emit_console_line(pump_line.as_str());
         self.emit_usb_related_driver_counter(
@@ -4515,6 +4589,22 @@ where
             let parser_ingress = local_trace.backend_read_bytes != 0
                 || local_trace.accepted_bytes != 0
                 || local_trace.echoed_bytes != 0;
+            let (
+                queued_reports,
+                doorbell_pending,
+                preserved_events,
+                transfer_events,
+                report_status,
+            ) = Self::usb_runtime_queue_fields(linked_result);
+            let queue_valid = Self::usb_runtime_detail_has_queue_result(linked_detail);
+            let input_observation = Self::usb_runtime_keyboard_input_observation(
+                linked_first_byte,
+                parser_ingress,
+                queue_valid,
+                queued_reports,
+                doorbell_pending,
+                report_status,
+            );
             let keyboard_ready = linked_keyboard_ready;
             let first_report = linked_first_report;
             let prompt_polling_enabled = self
@@ -4544,6 +4634,8 @@ where
                 .map(|progress| Self::usb_runtime_next_action_for_progress_phase(progress.phase));
             let next_step = if first_byte {
                 "keyboard-first-byte"
+            } else if input_observation == "idle-report-no-key-byte" {
+                "press-key-for-first-byte"
             } else if first_report {
                 "keyboard-first-byte"
             } else if keyboard_ready {
@@ -4561,6 +4653,8 @@ where
                 .map(|progress| Self::usb_runtime_blocker_for_progress_phase(progress.phase));
             let blocker = if first_byte {
                 "none"
+            } else if input_observation == "idle-report-no-key-byte" {
+                "awaiting-physical-key"
             } else if first_report {
                 "keyboard-first-byte"
             } else if keyboard_ready {
@@ -4592,13 +4686,14 @@ where
             ));
             self.emit_console_line(runtime_line.as_str());
             let acceptance_line = format_message(format_args!(
-                "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} usable={} prompt_polling={} note=hid_keyboard_requires_first_report_for_input",
+                "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} usable={} prompt_polling={} input_observation={} death_proof=no note=hid_keyboard_requires_first_byte_for_input",
                 Self::yes_no(proof_gate >= 3),
                 Self::yes_no(keyboard_ready),
                 Self::yes_no(first_report),
                 Self::yes_no(first_byte),
                 Self::yes_no(first_byte),
                 Self::yes_no(prompt_polling_enabled),
+                input_observation,
             ));
             self.emit_console_line(acceptance_line.as_str());
             let runtime_contract = format_message(format_args!(
@@ -4646,13 +4741,6 @@ where
                 || linked_detail
                     == pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
             {
-                let (
-                    queued_reports,
-                    doorbell_pending,
-                    preserved_events,
-                    transfer_events,
-                    report_status,
-                ) = Self::usb_runtime_queue_fields(linked_result);
                 let runtime_queue = format_message(format_args!(
                     "usb: runtime_queue queue_valid=yes detail=0x{:04x} result=0x{:08x} queued_reports={} doorbell_pending={} preserved_events={} transfer_events={} report_status={}",
                     linked_detail,
@@ -4673,10 +4761,11 @@ where
                 self.emit_console_line(runtime_progress.as_str());
             }
             let runtime_next_action = format_message(format_args!(
-                "usb: runtime_next_action action={} reason={} recovery_policy={} detail=0x{:04x}",
+                "usb: runtime_next_action action={} reason={} recovery_policy={} input_observation={} detail=0x{:04x}",
                 next_step,
                 blocker,
                 Self::usb_runtime_recovery_policy_for_linked_detail(linked_detail),
+                input_observation,
                 linked_detail,
             ));
             self.emit_console_line(runtime_next_action.as_str());
@@ -4686,7 +4775,7 @@ where
                 "local-seat-queue-diagnostic"
             };
             let keyboard_line = format_message(format_args!(
-                "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} accepted={} drained={} echoed={} dropped={} overruns={}",
+                "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} accepted={} drained={} echoed={} dropped={} overruns={} no_reply={} cooldown={} cooldown_skips={}",
                 keyboard_trace_source,
                 local_trace.backend_poll_calls,
                 local_trace.backend_read_bytes,
@@ -4696,6 +4785,9 @@ where
                 local_trace.echoed_bytes,
                 local_trace.dropped_bytes,
                 local_trace.driver_task_budget_overruns,
+                local_trace.driver_task_no_replies,
+                local_trace.poll_cooldown_turns,
+                local_trace.poll_cooldown_skips,
             ));
             self.emit_console_line(keyboard_line.as_str());
         }
@@ -6847,6 +6939,45 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn usb_runtime_keyboard_input_observation(
+        first_byte: bool,
+        parser_ingress: bool,
+        queue_valid: bool,
+        queued_reports: u32,
+        doorbell_pending: bool,
+        report_status: u32,
+    ) -> &'static str {
+        if first_byte {
+            "byte-produced"
+        } else if parser_ingress {
+            "parser-ingress-without-linked-byte"
+        } else if !queue_valid {
+            "queue-telemetry-unavailable"
+        } else if queued_reports == 0 {
+            "interrupt-queue-empty"
+        } else if doorbell_pending {
+            "doorbell-pending"
+        } else {
+            match report_status as u8 {
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE => {
+                    "idle-report-no-key-byte"
+                }
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_SHORT => "short-payload",
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODE_FAILED => {
+                    "decode-failed"
+                }
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER => {
+                    "unmatched-transfer"
+                }
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE => {
+                    "armed-awaiting-report"
+                }
+                _ => "awaiting-physical-key",
+            }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     const fn usb_runtime_detail_has_queue_result(detail: u16) -> bool {
         matches!(
             detail,
@@ -7041,6 +7172,22 @@ where
                 || local_trace.accepted_bytes != 0
                 || local_trace.echoed_bytes != 0;
             let first_byte = linked_first_byte;
+            let (
+                queued_reports,
+                doorbell_pending,
+                _preserved_events,
+                _transfer_events,
+                report_status,
+            ) = Self::usb_runtime_queue_fields(linked_result);
+            let queue_valid = Self::usb_runtime_detail_has_queue_result(linked_detail);
+            let input_observation = Self::usb_runtime_keyboard_input_observation(
+                linked_first_byte,
+                parser_ingress,
+                queue_valid,
+                queued_reports,
+                doorbell_pending,
+                report_status,
+            );
             let mut proof_gate = linked_gate;
             if linked_controller_ready {
                 proof_gate = proof_gate.max(3);
@@ -7261,7 +7408,7 @@ where
                 "first-console-byte",
                 Self::usb_startup_gate_status(10, proof_gate, failing_gate),
                 format_args!(
-                    "first_byte={} first_byte_source={} parser_ingress={} backend_bytes={} accepted={} echoed={}",
+                    "first_byte={} first_byte_source={} parser_ingress={} backend_bytes={} accepted={} echoed={} input_observation={}",
                     Self::yes_no(first_byte),
                     if first_byte {
                         "linked-runtime-hid"
@@ -7274,6 +7421,7 @@ where
                     local_trace.backend_read_bytes,
                     local_trace.accepted_bytes,
                     local_trace.echoed_bytes,
+                    input_observation,
                 ),
                 "acceptance-complete",
             );
@@ -17177,6 +17325,30 @@ mod tests {
             KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(8),
             "unmatched-transfer"
         );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_input_observation(
+                false, false, true, 128, false, 2
+            ),
+            "idle-report-no-key-byte"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_input_observation(
+                true, false, true, 127, false, 6
+            ),
+            "byte-produced"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_input_observation(
+                false, false, true, 0, false, 0
+            ),
+            "interrupt-queue-empty"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_input_observation(
+                false, false, true, 128, false, 8
+            ),
+            "unmatched-transfer"
+        );
         assert!(!KernelConsoleTestPump::usb_runtime_detail_has_queue_result(
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
         ));
@@ -18264,6 +18436,10 @@ mod tests {
         );
         assert!(
             rendered.contains("usb: stall_telemetry queue_valid=no"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: output_pressure serial_tx_pending="),
             "{rendered}"
         );
         assert!(

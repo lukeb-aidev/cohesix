@@ -3447,7 +3447,10 @@ const fn cyw43_host_eapol_rx_firstread_due(
     if !associated {
         return cyw43_host_eapol_pre_assoc_rx_firstread_due(poll);
     }
-    if starts_sent == 0 || poll <= CYW43_HOST_EAPOL_START_FIRST_POLL {
+    if starts_sent == 0 {
+        return cyw43_host_eapol_pre_assoc_rx_firstread_due(poll);
+    }
+    if poll <= CYW43_HOST_EAPOL_START_FIRST_POLL {
         return false;
     }
     let after_first_start = poll - CYW43_HOST_EAPOL_START_FIRST_POLL;
@@ -9509,8 +9512,13 @@ mod tests {
             false
         ));
         assert!(!cyw43_host_eapol_rx_firstread_due(4097, 0, false));
-        assert!(!cyw43_host_eapol_rx_firstread_due(
+        assert!(cyw43_host_eapol_rx_firstread_due(
             CYW43_HOST_EAPOL_START_FIRST_POLL,
+            0,
+            true
+        ));
+        assert!(!cyw43_host_eapol_rx_firstread_due(
+            CYW43_HOST_EAPOL_START_FIRST_POLL + 1,
             0,
             true
         ));

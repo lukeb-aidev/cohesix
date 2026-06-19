@@ -8987,7 +8987,7 @@ fn write_driver_task_counter_line(
 
     write!(
         line,
-        "DRIVER_TASK_COUNTER contract={} hot_path={} source=root-ring sequence={} submitted={} completed={} idle={} fault={} budget={} frame={} desc={} staged_bytes={} clean_ops={} clean_bytes={} inv_ops={} inv_bytes={} sends={} yields={} busy={} same_request={} timeouts={} keep_active={} aborts={} rx_frames={} rx_bytes={} tx_frames={} tx_bytes={}",
+        "DRIVER_TASK_COUNTER contract={} hot_path={} source=root-ring sequence={} submitted={} completed={} idle={} fault={} budget={} frame={} desc={} staged_bytes={} clean_ops={} clean_bytes={} inv_ops={} inv_bytes={} sends={} yields={} busy={} same_request={} timeouts={} keep_active={} aborts={} overruns={} drops={} rx_frames={} rx_bytes={} tx_frames={} tx_bytes={}",
         contract_name,
         DriverTaskHotPath::from_u32(counters.hot_path)
             .map_or("unknown", DriverTaskHotPath::as_str),
@@ -9011,6 +9011,8 @@ fn write_driver_task_counter_line(
         counters.timeouts,
         counters.keep_active_timeouts,
         counters.aborts,
+        counters.overruns,
+        counters.drops,
         counters.rx_frames,
         counters.rx_bytes,
         counters.tx_frames,

@@ -722,13 +722,15 @@ def test_gate_summary_tracks_driver_task_counter_snapshots() -> None:
             "source=root-ring sequence=12 submitted=3 completed=2 idle=1 "
             "fault=0 budget=0 frame=1 desc=1 staged_bytes=256 clean_ops=4 "
             "clean_bytes=512 inv_ops=3 inv_bytes=60 sends=8 yields=8 busy=1 "
-            "same_request=2 timeouts=3 keep_active=2 aborts=1 rx_frames=5 "
+            "same_request=2 timeouts=3 keep_active=2 aborts=1 overruns=6 drops=7 "
+            "rx_frames=5 "
             "rx_bytes=1500 tx_frames=4 tx_bytes=1200",
             "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
             "source=root-ring sequence=0 submitted=0 completed=0 idle=0 "
             "fault=0 budget=0 frame=0 desc=0 staged_bytes=0 clean_ops=0 "
             "clean_bytes=0 inv_ops=0 inv_bytes=0 sends=0 yields=0 busy=0 "
-            "same_request=0 timeouts=0 keep_active=0 aborts=0 rx_frames=0 "
+            "same_request=0 timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 "
+            "rx_frames=0 "
             "rx_bytes=0 tx_frames=0 tx_bytes=0",
             "DRIVER_TASK_COUNTER contract=sdio-host hot_path=sdio-host "
             "source=root-ring sequence=7 submitted=1 completed=1 idle=0 "
@@ -744,6 +746,8 @@ def test_gate_summary_tracks_driver_task_counter_snapshots() -> None:
     assert record["DRIVER_TASK_COUNTER_TIMEOUTS"] == 3
     assert record["DRIVER_TASK_COUNTER_KEEP_ACTIVE"] == 2
     assert record["DRIVER_TASK_COUNTER_ABORTS"] == 1
+    assert record["DRIVER_TASK_COUNTER_OVERRUNS"] == 6
+    assert record["DRIVER_TASK_COUNTER_DROPS"] == 7
     assert record["DRIVER_TASK_COUNTER_STAGED_BYTES"] == 256
     assert record["DRIVER_TASK_COUNTER_CACHE_OPS"] == 7
     assert record["DRIVER_TASK_COUNTER_CACHE_BYTES"] == 572
@@ -752,6 +756,49 @@ def test_gate_summary_tracks_driver_task_counter_snapshots() -> None:
     assert record["DRIVER_TASK_COUNTER_RX_BYTES"] == 1500
     assert record["DRIVER_TASK_COUNTER_TX_BYTES"] == 1200
     assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
+
+
+def test_gate_summary_splits_serial_and_hdmi_output_pressure() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: output_pressure serial_tx_pending=yes serial_interactive=no "
+            "deferred=11 flushed=7 backpressure=3 hdmi_pending_bytes=144 "
+            "hdmi_pending_redraw=yes hdmi_submitted=5 hdmi_deferred=4 "
+            "hdmi_busy=2 hdmi_no_reply=1 hdmi_coalesced=8 "
+            "hdmi_backpressure_bytes=13 hdmi_superseded_bytes=21",
+            "[smp] activity local-seat-display pending_bytes=12 "
+            "pending_redraw=no submitted=6 deferred=5 busy=3 no_reply=2 "
+            "coalesced=9 backpressure_bytes=14 superseded_bytes=22",
+            "usb: keyboard_trace source=linked-runtime polls=100 "
+            "backend_bytes=4 queued=0 accepted=4 drained=4 echoed=4 "
+            "dropped=0 overruns=2 no_reply=3 cooldown=4 cooldown_skips=5",
+            "[smp] activity local-seat runtime=present attached=yes "
+            "keyboard_device=usb-kbd0 display=hdmi0 backend_poll=yes "
+            "backend_polls=120 backend_bytes=4 keyboard_ready=yes "
+            "first_report=yes first_byte=yes queued=0 accepted=4 drained=4 "
+            "echoed=4 drop=0 no_reply=6 cooldown=7 cooldown_skips=8 "
+            "hdmi_drop=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["SERIAL_OUTPUT_TX_PENDING"] == "yes"
+    assert record["SERIAL_OUTPUT_INTERACTIVE"] == "no"
+    assert record["SERIAL_OUTPUT_DEFERRED"] == 11
+    assert record["SERIAL_OUTPUT_FLUSHED"] == 7
+    assert record["SERIAL_OUTPUT_BACKPRESSURE"] == 3
+    assert record["HDMI_DISPLAY_PENDING_BYTES"] == 12
+    assert record["HDMI_DISPLAY_PENDING_REDRAW"] == "no"
+    assert record["HDMI_DISPLAY_SUBMITTED"] == 6
+    assert record["HDMI_DISPLAY_DEFERRED"] == 5
+    assert record["HDMI_DISPLAY_BUSY"] == 3
+    assert record["HDMI_DISPLAY_NO_REPLY"] == 2
+    assert record["HDMI_DISPLAY_COALESCED"] == 9
+    assert record["HDMI_DISPLAY_BACKPRESSURE_BYTES"] == 14
+    assert record["HDMI_DISPLAY_SUPERSEDED_BYTES"] == 22
+    assert record["USB_KEYBOARD_NO_REPLIES"] == 6
+    assert record["USB_KEYBOARD_POLL_COOLDOWN"] == 7
+    assert record["USB_KEYBOARD_COOLDOWN_SKIPS"] == 8
 
 
 def test_gate_summary_treats_serial_input_trace_as_responsive_proof() -> None:
@@ -2176,6 +2223,28 @@ def test_gate_summary_preserves_linked_usb_address_failure_detail() -> None:
         record["USB_DRIVER_TASK_FRONTIER"]
         == "usb-keyboard-enumeration-retry-address-device-failed"
     )
+
+
+def test_gate_summary_labels_idle_hid_report_as_awaiting_physical_key() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_queue queue_valid=yes detail=0x0501 result=0x01000480 "
+            "queued_reports=128 doorbell_pending=no preserved_events=0 "
+            "transfer_events=1 report_status=idle-report",
+            "usb: acceptance xhci=yes hid_keyboard=yes first_report=yes "
+            "first_byte=no usable=no prompt_polling=yes "
+            "input_observation=idle-report-no-key-byte death_proof=no",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "first_byte_source=none proof_gate=9 target_gate=10 "
+            "next=press-key-for-first-byte blocker=awaiting-physical-key "
+            "detail=0x0501 result=0x01000480 progress_gate=7 "
+            "progress_phase=427 progress_phase_name=usb-hub-port-status-payload-read",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["USB_GATE"] == 9
+    assert record["USB_BLOCKER"] == "awaiting-physical-key"
 
 
 def test_gate_summary_labels_cyw43_transport_substage_faults() -> None:
@@ -5583,6 +5652,32 @@ def test_gate_summary_tracks_linked_usb_keyboard_report_and_first_byte() -> None
     assert gates.usb_blocker == "none"
 
 
+def test_gate_summary_tracks_prompt_prefixed_linked_usb_first_byte() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "first_byte_source=none proof_gate=9 target_gate=10 "
+            "blocker=keyboard-first-byte",
+            "usb: gate 10 name=first-console-byte status=fail "
+            "evidence=first_byte=no first_byte_source=none parser_ingress=no "
+            "backend_bytes=0 accepted=0 echoed=0 next=acceptance-complete",
+            "cohesix> [local-seat] usb hid first report contract=usb-local-seat "
+            "source=linked-runtime-hid tag=usb-hid-report-event len=1 accepted=1 "
+            "detail=0x0000 result=0x00000001 transfer_event=yes",
+            "cohesix> [local-seat] runtime keyboard first-byte "
+            "source=linked-runtime-hid read=1 ascii=0x54 detail=0x0000 "
+            "result=0x00000001",
+            "usb: next_action=inspect-hid-report-to-console-byte-path "
+            "blocker=keyboard-first-byte proof_gate=9 target_gate=10",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.usb_gate == 10
+    assert gates.usb_blocker == "none"
+
+
 def test_gate_summary_keeps_linked_gate10_over_later_stale_hub_blocker() -> None:
     events = normalizer.parse_events(
         [
@@ -7154,6 +7249,93 @@ def test_gate_summary_names_association_event_missing_without_rx_source_proof() 
     assert gates.wifi_blocker == "cyw43-association-event-missing"
     assert gates.wifi_exact == "cyw43-association-event-missing"
     assert gates.wifi_phase == "association"
+
+
+def test_gate_summary_names_host_eapol_retransmit_ack_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-event-missing polls=24576 "
+            "starts=0 tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 "
+            "event_rx=0 control_rx=0 empty_polls=24576 associated=no "
+            "link_up=no assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "assoc_set_ssid_rescue=no rx_firstread_attempts=9 "
+            "rx_firstread_empty=0 rx_firstread_invalid=0 rx_firstread_failed=9 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=9 control_rx_firstread_empty=1 "
+            "control_rx_firstread_failed=8 last_rx_idle_detail=0x5709 "
+            "last_rx_idle_result=0x00000000 last_control_rx_idle_detail=0x5709 "
+            "last_control_rx_idle_result=0x00000000 "
+            "rxsrc_mode=unreported rxsrc_probe_len=0 rxsrc_ien=0x00 "
+            "rxsrc_frame_ind=no rxsrc_host_int=no rxsrc_card_int=no "
+            "rxsrc_f2_ready=no control_rxsrc_mode=unreported "
+            "control_rxsrc_probe_len=0 control_rxsrc_ien=0x00 "
+            "control_rxsrc_frame_ind=no control_rxsrc_host_int=no "
+            "control_rxsrc_card_int=no control_rxsrc_f2_ready=no "
+            "rxtrace_valid=yes rxtrace_flags=0x0010 rxtrace_detail=0x5709 "
+            "rxtrace_probe_len=0 rxtrace_source=0x00000000 "
+            "rxtrace_prefix=0x00000000 rxtrace_digest=0x00000000 "
+            "rxtrace_rframe=0x0000 rxtrace_firstread_reads=0 "
+            "rxtrace_block_reads=0 rxtrace_rframe_reads=1 "
+            "rxtrace_request_len=0 rxtrace_block_size=0 rxtrace_block_count=0 "
+            "control_rxtrace_valid=yes control_rxtrace_flags=0x0010 "
+            "control_rxtrace_detail=0x5709 control_rxtrace_probe_len=0 "
+            "control_rxtrace_source=0x00000000 control_rxtrace_prefix=0x00000000 "
+            "control_rxtrace_digest=0x00000000 control_rxtrace_rframe=0x0000 "
+            "control_rxtrace_firstread_reads=0 control_rxtrace_block_reads=0 "
+            "control_rxtrace_rframe_reads=1 control_rxtrace_request_len=0 "
+            "control_rxtrace_block_size=0 control_rxtrace_block_count=0 "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no "
+            "next_action=inspect-cyw43-data-rx-cmd53-firstread",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-retransmit-ack-timeout"
+    assert gates.wifi_exact == "cyw43-data-rx-retransmit-ack-timeout"
+    assert gates.wifi_phase == "runtime-rx"
+
+
+def test_host_eapol_rxtrace_blocker_names_queue_and_copy_failures() -> None:
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker({"rxtrace_flags": "0x0400"})
+        == "cyw43-data-rx-ring-copy-failed"
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker({"rxtrace_flags": "0x00c0"})
+        == "cyw43-data-rx-queue-full"
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {"control_rxtrace_flags": "0x0240"}
+        )
+        == "cyw43-control-rx-queue-invalid-flags"
+    )
+
+
+def test_gate_summary_names_host_eapol_rx_queue_full() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-event-missing "
+            "polls=24576 starts=0 data_rx=0 eapol_rx=0 event_rx=0 "
+            "associated=no link_up=no assoc_event=none "
+            "last_rx_idle_detail=0x5709 rxtrace_valid=yes "
+            "rxtrace_flags=0x00c0 control_rxtrace_valid=yes "
+            "control_rxtrace_flags=0x0000 "
+            "next_action=inspect-cyw43-data-rx-cmd53-firstread",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-queue-full"
+    assert gates.wifi_exact == "cyw43-data-rx-queue-full"
+    assert gates.wifi_phase == "runtime-rx"
 
 
 def test_gate_summary_names_bssid_probe_tx_submit_fail_over_firstread_idle() -> None:

@@ -19,7 +19,7 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, TextIO
+from typing import Callable, Iterable, Mapping, TextIO
 
 
 KEY_VALUE_RE = re.compile(
@@ -49,6 +49,7 @@ TRACE_SEGMENT_RE = re.compile(
     r"|\[net\]"
     r"|\[cohsh-net\]"
     r"|\[net-console\]"
+    r"|\[smp\]"
     r"|(?<![A-Za-z0-9_.:-])(?:usb:|USB:|wifi:|WiFi:|WIFI:)"
     r"|(?<![A-Za-z0-9_.:-])(?:OK|ERR) NETTEST"
     r"|Kernel entry via Interrupt"
@@ -150,6 +151,7 @@ JOIN_SECURITY_EXACT_BY_BLOCKER = {
 USB_OUTCOME_BLOCKERS = {
     "address-device-failed",
     "address-failed",
+    "awaiting-physical-key",
     "config-descriptor",
     "config-descriptor-failed",
     "config-parse",
@@ -556,6 +558,8 @@ class GateSummary:
     driver_task_counter_timeouts: int = 0
     driver_task_counter_keep_active: int = 0
     driver_task_counter_aborts: int = 0
+    driver_task_counter_overruns: int = 0
+    driver_task_counter_drops: int = 0
     driver_task_counter_staged_bytes: int = 0
     driver_task_counter_cache_ops: int = 0
     driver_task_counter_cache_bytes: int = 0
@@ -563,6 +567,23 @@ class GateSummary:
     driver_task_counter_tx_frames: int = 0
     driver_task_counter_rx_bytes: int = 0
     driver_task_counter_tx_bytes: int = 0
+    serial_output_tx_pending: str = "unknown"
+    serial_output_interactive: str = "unknown"
+    serial_output_deferred: int = 0
+    serial_output_flushed: int = 0
+    serial_output_backpressure: int = 0
+    hdmi_display_pending_bytes: int = 0
+    hdmi_display_pending_redraw: str = "unknown"
+    hdmi_display_submitted: int = 0
+    hdmi_display_deferred: int = 0
+    hdmi_display_busy: int = 0
+    hdmi_display_no_reply: int = 0
+    hdmi_display_coalesced: int = 0
+    hdmi_display_backpressure_bytes: int = 0
+    hdmi_display_superseded_bytes: int = 0
+    usb_keyboard_no_replies: int = 0
+    usb_keyboard_poll_cooldown: int = 0
+    usb_keyboard_cooldown_skips: int = 0
     serial_driver_accepted: bool = False
     serial_fallback_active: bool = False
     serial_runtime_frontier: str = "none"
@@ -719,6 +740,8 @@ class GateSummary:
             "DRIVER_TASK_COUNTER_TIMEOUTS": self.driver_task_counter_timeouts,
             "DRIVER_TASK_COUNTER_KEEP_ACTIVE": self.driver_task_counter_keep_active,
             "DRIVER_TASK_COUNTER_ABORTS": self.driver_task_counter_aborts,
+            "DRIVER_TASK_COUNTER_OVERRUNS": self.driver_task_counter_overruns,
+            "DRIVER_TASK_COUNTER_DROPS": self.driver_task_counter_drops,
             "DRIVER_TASK_COUNTER_STAGED_BYTES": self.driver_task_counter_staged_bytes,
             "DRIVER_TASK_COUNTER_CACHE_OPS": self.driver_task_counter_cache_ops,
             "DRIVER_TASK_COUNTER_CACHE_BYTES": self.driver_task_counter_cache_bytes,
@@ -726,6 +749,25 @@ class GateSummary:
             "DRIVER_TASK_COUNTER_TX_FRAMES": self.driver_task_counter_tx_frames,
             "DRIVER_TASK_COUNTER_RX_BYTES": self.driver_task_counter_rx_bytes,
             "DRIVER_TASK_COUNTER_TX_BYTES": self.driver_task_counter_tx_bytes,
+            "SERIAL_OUTPUT_TX_PENDING": self.serial_output_tx_pending,
+            "SERIAL_OUTPUT_INTERACTIVE": self.serial_output_interactive,
+            "SERIAL_OUTPUT_DEFERRED": self.serial_output_deferred,
+            "SERIAL_OUTPUT_FLUSHED": self.serial_output_flushed,
+            "SERIAL_OUTPUT_BACKPRESSURE": self.serial_output_backpressure,
+            "HDMI_DISPLAY_PENDING_BYTES": self.hdmi_display_pending_bytes,
+            "HDMI_DISPLAY_PENDING_REDRAW": self.hdmi_display_pending_redraw,
+            "HDMI_DISPLAY_SUBMITTED": self.hdmi_display_submitted,
+            "HDMI_DISPLAY_DEFERRED": self.hdmi_display_deferred,
+            "HDMI_DISPLAY_BUSY": self.hdmi_display_busy,
+            "HDMI_DISPLAY_NO_REPLY": self.hdmi_display_no_reply,
+            "HDMI_DISPLAY_COALESCED": self.hdmi_display_coalesced,
+            "HDMI_DISPLAY_BACKPRESSURE_BYTES": (
+                self.hdmi_display_backpressure_bytes
+            ),
+            "HDMI_DISPLAY_SUPERSEDED_BYTES": self.hdmi_display_superseded_bytes,
+            "USB_KEYBOARD_NO_REPLIES": self.usb_keyboard_no_replies,
+            "USB_KEYBOARD_POLL_COOLDOWN": self.usb_keyboard_poll_cooldown,
+            "USB_KEYBOARD_COOLDOWN_SKIPS": self.usb_keyboard_cooldown_skips,
             "SERIAL_DRIVER_ACCEPTED": (
                 "yes" if self.serial_driver_accepted else "no"
             ),
@@ -945,6 +987,15 @@ def classify_source(line: str, domain: str) -> str:
 def classify_domain(line: str) -> str | None:
     """Classify USB/WiFi trace domain, or return None for unrelated lines."""
 
+    prompt = line.lstrip()
+    if prompt.startswith("cohesix>"):
+        prompt_payload = prompt.removeprefix("cohesix>").strip()
+        if prompt_payload:
+            prompt_domain = classify_domain(prompt_payload)
+            if prompt_domain not in {None, "console"}:
+                return prompt_domain
+        return "console"
+
     lower = line.lower()
     if (
         line.startswith("BOOTINFO_SNAPSHOT_CORRUPTED")
@@ -1027,6 +1078,8 @@ def classify_domain(line: str) -> str | None:
         or line.startswith("SERIAL_INPUT_TRACE")
         or line.startswith("USB_BURST")
         or line.startswith("HDMI_RESPONSIVE")
+        or line.startswith("[smp] activity local-seat")
+        or line.startswith("[smp] activity local-seat-display")
         or "serial echo" in lower
         or "keyboard burst" in lower
         or "hdmi stats" in lower
@@ -1297,6 +1350,8 @@ def normalize_usb_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"", "none", "ok", "online", "ready", "success"}:
         return "none"
+    if stripped == "awaiting-physical-key":
+        return "awaiting-physical-key"
     if "no-device-coverage" in lower and (
         "xhci" in lower
         or "vl805" in lower
@@ -1860,20 +1915,67 @@ CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS = {
     0x570E: "cyw43-data-rx-firstread-source-asserted-empty",
 }
 CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES = frozenset(
-    CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS.values()
+    set(CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS.values())
+    | {
+        "cyw43-control-rx-retransmit-ack-timeout",
+        "cyw43-control-rx-queue-push-failed",
+        "cyw43-control-rx-queue-full",
+        "cyw43-control-rx-queue-invalid-len",
+        "cyw43-control-rx-queue-invalid-flags",
+        "cyw43-control-rx-ring-copy-failed",
+        "cyw43-data-rx-retransmit-ack-timeout",
+        "cyw43-data-rx-queue-push-failed",
+        "cyw43-data-rx-queue-full",
+        "cyw43-data-rx-queue-invalid-len",
+        "cyw43-data-rx-queue-invalid-flags",
+        "cyw43-data-rx-ring-copy-failed",
+    }
 )
 CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY = (
     "cyw43-data-rx-firstread-source-asserted-empty"
 )
+CYW43_RXTRACE_RETRANSMIT_ACK_TIMEOUT = 0x0010
+CYW43_RXTRACE_RETRANSMIT_STALE_CLEARED = 0x0020
+CYW43_RXTRACE_QUEUE_PUSH_FAILED = 0x0040
+CYW43_RXTRACE_QUEUE_FULL = 0x0080
+CYW43_RXTRACE_QUEUE_INVALID_LEN = 0x0100
+CYW43_RXTRACE_QUEUE_INVALID_FLAGS = 0x0200
+CYW43_RXTRACE_RING_COPY_FAILED = 0x0400
 CYW43_ASSOCIATION_EVENT_MISSING = "cyw43-association-event-missing"
 CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL = (
     "cyw43-host-eapol-bssid-probe-tx-submit-fail"
 )
 
 
+def cyw43_host_eapol_rxtrace_blocker(fields: dict[str, str]) -> str | None:
+    """Return the precise host-EAPOL RX trace blocker, if present."""
+
+    for prefix, lane in (("rxtrace", "data"), ("control_rxtrace", "control")):
+        flags = parse_hex_int(fields.get(f"{prefix}_flags")) or 0
+        if flags & CYW43_RXTRACE_RING_COPY_FAILED:
+            return f"cyw43-{lane}-rx-ring-copy-failed"
+        if flags & CYW43_RXTRACE_QUEUE_FULL:
+            return f"cyw43-{lane}-rx-queue-full"
+        if flags & CYW43_RXTRACE_QUEUE_INVALID_LEN:
+            return f"cyw43-{lane}-rx-queue-invalid-len"
+        if flags & CYW43_RXTRACE_QUEUE_INVALID_FLAGS:
+            return f"cyw43-{lane}-rx-queue-invalid-flags"
+        if flags & CYW43_RXTRACE_QUEUE_PUSH_FAILED:
+            return f"cyw43-{lane}-rx-queue-push-failed"
+        if (
+            flags & CYW43_RXTRACE_RETRANSMIT_ACK_TIMEOUT
+            and flags & CYW43_RXTRACE_RETRANSMIT_STALE_CLEARED == 0
+        ):
+            return f"cyw43-{lane}-rx-retransmit-ack-timeout"
+    return None
+
+
 def cyw43_host_eapol_firstread_blocker(fields: dict[str, str]) -> str | None:
     """Return the precise host-EAPOL RX first-read blocker, if present."""
 
+    rxtrace_blocker = cyw43_host_eapol_rxtrace_blocker(fields)
+    if rxtrace_blocker is not None:
+        return rxtrace_blocker
     detail = parse_hex_int(fields.get("last_rx_idle_detail"))
     if detail in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS:
         return CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS[detail]
@@ -2122,6 +2224,8 @@ def normalize_wifi_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
+    if stripped in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES:
+        return stripped
     if "linked_runtime_progress" in lower:
         marker_blocker = parse_fields(value).get("blocker", "").lower()
         if marker_blocker.startswith(
@@ -2902,6 +3006,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-control-rx-firstread-invalid-sdpcm",
         "cyw43-control-rx-firstread-remainder-failed",
         "cyw43-control-rx-firstread-remainder-too-large",
+        "cyw43-control-rx-retransmit-ack-timeout",
         "cyw43-control-rx-invalid-rframe-len",
         "cyw43-control-rx-no-rframe",
         "cyw43-control-rx-not-ready",
@@ -2917,6 +3022,7 @@ def normalize_wifi_exact(value: str) -> str:
         "cyw43-data-rx-firstread-invalid-sdpcm",
         "cyw43-data-rx-firstread-remainder-failed",
         "cyw43-data-rx-firstread-remainder-too-large",
+        "cyw43-data-rx-retransmit-ack-timeout",
         "cyw43-data-rx-sdpcm-decode-miss",
         "cyw43-host-eapol-bssid-probe-tx-submit-fail",
         "cyw43-post-release-ht-clock",
@@ -3050,6 +3156,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     run_usbcmd_preserved_reset_bit = False
     usbcmd_controller_command_bits = 0x0000_0382
     linked_runtime_gate10_seen = False
+    usb_idle_no_key_byte_seen = False
     precise_command_timeout_details = {
         "cmd-poll-only-timeout",
         "pcie-window-enable-slot-timeout",
@@ -3281,6 +3388,21 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     startup_fail_gate = diag_gate
                     startup_fail_blocker = blocker
             continue
+        if raw.startswith("usb: runtime_queue"):
+            queued_reports = parse_hex_int(fields.get("queued_reports")) or 0
+            if (
+                field_lower(event, "queue_valid") == "yes"
+                and queued_reports > 0
+                and field_lower(event, "doorbell_pending") in {"no", "false"}
+                and field_lower(event, "report_status") == "idle-report"
+            ):
+                usb_idle_no_key_byte_seen = True
+            continue
+        if raw.startswith("usb: acceptance") and field_lower(
+            event, "input_observation"
+        ) == "idle-report-no-key-byte":
+            usb_idle_no_key_byte_seen = True
+            continue
         if raw.startswith("usb: runtime_gate"):
             proof_gate = parse_hex_int(fields.get("proof_gate"))
             linked_first_byte = field_lower(event, "first_byte_source") == "linked-runtime-hid"
@@ -3297,6 +3419,13 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     blocker = "keyboard-first-byte"
                 elif runtime_blocker == "none":
                     blocker = "none"
+                elif runtime_blocker in {
+                    "keyboard-first-byte",
+                    "first-console-byte",
+                    "awaiting-physical-key",
+                } and field_lower(event, "input_observation") == "idle-report-no-key-byte":
+                    usb_idle_no_key_byte_seen = True
+                    blocker = "awaiting-physical-key"
                 else:
                     blocker = runtime_blocker
             continue
@@ -3944,10 +4073,19 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, direct_gate)
             blocker = direct_usb_progress_blocker
     if linked_runtime_gate10_seen and (
-        blocker in USB_OUTCOME_BLOCKERS.union({"unknown", "keyboard-first-byte"})
+        blocker
+        in USB_OUTCOME_BLOCKERS.union(
+            {"unknown", "none", "keyboard-first-byte", "first-console-byte"}
+        )
         or blocker.startswith("usb-keyboard-enumeration-")
     ):
+        gate = max(gate, 10)
         blocker = "none"
+    if gate == 9 and blocker in {
+        "keyboard-first-byte",
+        "first-console-byte",
+    } and usb_idle_no_key_byte_seen:
+        blocker = "awaiting-physical-key"
 
     return gate, blocker
 
@@ -4181,16 +4319,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             status = fields.get("status", "").lower()
             reason = normalize_wifi_blocker(fields.get("reason", ""))
             firstread_blocker = cyw43_host_eapol_firstread_blocker(fields)
+            firstread_blocker_seen = firstread_blocker is not None
             source_asserted_empty = (
                 firstread_blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
             )
-            if reason == CYW43_ASSOCIATION_EVENT_MISSING and not source_asserted_empty:
+            if reason == CYW43_ASSOCIATION_EVENT_MISSING and not firstread_blocker_seen:
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 blocker = reason
                 host_eapol_terminal_blocker = reason
                 explicit_blocker = reason
-            elif reason == "cyw43-association-not-associated" and not source_asserted_empty:
+            elif reason == "cyw43-association-not-associated" and not firstread_blocker_seen:
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 blocker = reason
@@ -4199,7 +4338,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             elif (
                 status == "required"
                 and cyw43_host_eapol_post_rescue_association_gap(fields)
-                and not source_asserted_empty
+                and not firstread_blocker_seen
             ):
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
@@ -6036,6 +6175,7 @@ DRIVER_TASK_COUNTER_REQUIRED_FIELDS = (
     "tx_bytes",
 )
 DRIVER_TASK_COUNTER_ACTIVITY_FIELDS = DRIVER_TASK_COUNTER_REQUIRED_FIELDS[3:]
+DRIVER_TASK_COUNTER_OPTIONAL_ACTIVITY_FIELDS = ("overruns", "drops")
 
 
 @dataclass(frozen=True)
@@ -6049,6 +6189,8 @@ class DriverTaskCounterSummary:
     timeouts: int = 0
     keep_active: int = 0
     aborts: int = 0
+    overruns: int = 0
+    drops: int = 0
     staged_bytes: int = 0
     cache_ops: int = 0
     cache_bytes: int = 0
@@ -6056,6 +6198,136 @@ class DriverTaskCounterSummary:
     tx_frames: int = 0
     rx_bytes: int = 0
     tx_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class OutputPressureSummary:
+    """Latest serial/HDMI output pressure counters from console diagnostics."""
+
+    serial_tx_pending: str = "unknown"
+    serial_interactive: str = "unknown"
+    serial_deferred: int = 0
+    serial_flushed: int = 0
+    serial_backpressure: int = 0
+    hdmi_pending_bytes: int = 0
+    hdmi_pending_redraw: str = "unknown"
+    hdmi_submitted: int = 0
+    hdmi_deferred: int = 0
+    hdmi_busy: int = 0
+    hdmi_no_reply: int = 0
+    hdmi_coalesced: int = 0
+    hdmi_backpressure_bytes: int = 0
+    hdmi_superseded_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class UsbKeyboardPressureSummary:
+    """Latest USB local-seat no-reply pressure counters."""
+
+    no_replies: int = 0
+    poll_cooldown: int = 0
+    cooldown_skips: int = 0
+
+
+def update_usb_keyboard_pressure_field(
+    values: dict[str, int],
+    fields: Mapping[str, str],
+    out_key: str,
+    in_key: str,
+) -> None:
+    """Update one USB keyboard-pressure field when present."""
+
+    parsed = parse_hex_int(fields.get(in_key))
+    if parsed is not None:
+        values[out_key] = parsed
+
+
+def summarize_usb_keyboard_pressure(
+    events: Iterable[TraceEvent],
+) -> UsbKeyboardPressureSummary:
+    """Return latest USB local-seat no-reply/cooldown counters."""
+
+    summary = UsbKeyboardPressureSummary()
+    values = summary.__dict__.copy()
+    for event in events:
+        raw = event.raw.lower()
+        fields = event.fields
+        if (
+            raw.startswith("usb: local-seat drops")
+            or raw.startswith("usb: stall_telemetry")
+            or raw.startswith("usb: keyboard_trace")
+            or raw.startswith("[smp] activity local-seat")
+        ):
+            update_usb_keyboard_pressure_field(
+                values, fields, "no_replies", "driver_task_no_replies"
+            )
+            update_usb_keyboard_pressure_field(
+                values, fields, "no_replies", "no_reply"
+            )
+            update_usb_keyboard_pressure_field(
+                values, fields, "poll_cooldown", "poll_cooldown"
+            )
+            update_usb_keyboard_pressure_field(
+                values, fields, "poll_cooldown", "cooldown"
+            )
+            update_usb_keyboard_pressure_field(
+                values, fields, "cooldown_skips", "cooldown_skips"
+            )
+    return UsbKeyboardPressureSummary(**values)
+
+
+def summarize_output_pressure(events: Iterable[TraceEvent]) -> OutputPressureSummary:
+    """Return latest output-pressure counters split by serial and HDMI."""
+
+    summary = OutputPressureSummary()
+    values = summary.__dict__.copy()
+    for event in events:
+        raw = event.raw.lower()
+        fields = event.fields
+        if raw.startswith("usb: output_pressure"):
+            values["serial_tx_pending"] = fields.get(
+                "serial_tx_pending", values["serial_tx_pending"]
+            )
+            values["serial_interactive"] = fields.get(
+                "serial_interactive", values["serial_interactive"]
+            )
+            for out_key, in_key in (
+                ("serial_deferred", "deferred"),
+                ("serial_flushed", "flushed"),
+                ("serial_backpressure", "backpressure"),
+                ("hdmi_pending_bytes", "hdmi_pending_bytes"),
+                ("hdmi_submitted", "hdmi_submitted"),
+                ("hdmi_deferred", "hdmi_deferred"),
+                ("hdmi_busy", "hdmi_busy"),
+                ("hdmi_no_reply", "hdmi_no_reply"),
+                ("hdmi_coalesced", "hdmi_coalesced"),
+                ("hdmi_backpressure_bytes", "hdmi_backpressure_bytes"),
+                ("hdmi_superseded_bytes", "hdmi_superseded_bytes"),
+            ):
+                parsed = parse_hex_int(fields.get(in_key))
+                if parsed is not None:
+                    values[out_key] = parsed
+            values["hdmi_pending_redraw"] = fields.get(
+                "hdmi_pending_redraw", values["hdmi_pending_redraw"]
+            )
+        elif raw.startswith("[smp] activity local-seat-display"):
+            for out_key, in_key in (
+                ("hdmi_pending_bytes", "pending_bytes"),
+                ("hdmi_submitted", "submitted"),
+                ("hdmi_deferred", "deferred"),
+                ("hdmi_busy", "busy"),
+                ("hdmi_no_reply", "no_reply"),
+                ("hdmi_coalesced", "coalesced"),
+                ("hdmi_backpressure_bytes", "backpressure_bytes"),
+                ("hdmi_superseded_bytes", "superseded_bytes"),
+            ):
+                parsed = parse_hex_int(fields.get(in_key))
+                if parsed is not None:
+                    values[out_key] = parsed
+            values["hdmi_pending_redraw"] = fields.get(
+                "pending_redraw", values["hdmi_pending_redraw"]
+            )
+    return OutputPressureSummary(**values)
 
 
 def summarize_driver_task_counters(
@@ -6070,6 +6342,8 @@ def summarize_driver_task_counters(
     timeouts = 0
     keep_active = 0
     aborts = 0
+    overruns = 0
+    drops = 0
     staged_bytes = 0
     cache_ops = 0
     cache_bytes = 0
@@ -6089,9 +6363,15 @@ def summarize_driver_task_counters(
             field: parse_hex_int(fields.get(field))
             for field in DRIVER_TASK_COUNTER_ACTIVITY_FIELDS
         }
+        optional = {
+            field: parse_hex_int(fields.get(field)) or 0
+            for field in DRIVER_TASK_COUNTER_OPTIONAL_ACTIVITY_FIELDS
+        }
         bad_numeric = any(value is None for value in parsed.values())
         source = fields.get("source", "").lower()
-        no_activity = not any((value or 0) != 0 for value in parsed.values())
+        no_activity = not any((value or 0) != 0 for value in parsed.values()) and not any(
+            value != 0 for value in optional.values()
+        )
         if missing_required or bad_numeric or source != "root-ring" or no_activity:
             invalid += 1
             continue
@@ -6100,6 +6380,8 @@ def summarize_driver_task_counters(
         timeouts += parsed["timeouts"] or 0
         keep_active += parsed["keep_active"] or 0
         aborts += parsed["aborts"] or 0
+        overruns += optional["overruns"]
+        drops += optional["drops"]
         staged_bytes += parsed["staged_bytes"] or 0
         cache_ops += (parsed["clean_ops"] or 0) + (parsed["inv_ops"] or 0)
         cache_bytes += (parsed["clean_bytes"] or 0) + (parsed["inv_bytes"] or 0)
@@ -6115,6 +6397,8 @@ def summarize_driver_task_counters(
         timeouts=timeouts,
         keep_active=keep_active,
         aborts=aborts,
+        overruns=overruns,
+        drops=drops,
         staged_bytes=staged_bytes,
         cache_ops=cache_ops,
         cache_bytes=cache_bytes,
@@ -8259,6 +8543,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_resource_current_blocker,
     ) = summarize_driver_task_resource_init(event_list)
     driver_task_counter_summary = summarize_driver_task_counters(event_list)
+    output_pressure_summary = summarize_output_pressure(event_list)
+    usb_keyboard_pressure_summary = summarize_usb_keyboard_pressure(event_list)
     usb_driver_task_blocker = summarize_usb_driver_task_stall(event_list)
     net_driver_task_replay_events, net_driver_task_replay_blocker = (
         summarize_driver_task_replay_status(event_list, "net_driver_task_replay_status")
@@ -8493,6 +8779,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_counter_timeouts=driver_task_counter_summary.timeouts,
         driver_task_counter_keep_active=driver_task_counter_summary.keep_active,
         driver_task_counter_aborts=driver_task_counter_summary.aborts,
+        driver_task_counter_overruns=driver_task_counter_summary.overruns,
+        driver_task_counter_drops=driver_task_counter_summary.drops,
         driver_task_counter_staged_bytes=driver_task_counter_summary.staged_bytes,
         driver_task_counter_cache_ops=driver_task_counter_summary.cache_ops,
         driver_task_counter_cache_bytes=driver_task_counter_summary.cache_bytes,
@@ -8500,6 +8788,27 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_counter_tx_frames=driver_task_counter_summary.tx_frames,
         driver_task_counter_rx_bytes=driver_task_counter_summary.rx_bytes,
         driver_task_counter_tx_bytes=driver_task_counter_summary.tx_bytes,
+        serial_output_tx_pending=output_pressure_summary.serial_tx_pending,
+        serial_output_interactive=output_pressure_summary.serial_interactive,
+        serial_output_deferred=output_pressure_summary.serial_deferred,
+        serial_output_flushed=output_pressure_summary.serial_flushed,
+        serial_output_backpressure=output_pressure_summary.serial_backpressure,
+        hdmi_display_pending_bytes=output_pressure_summary.hdmi_pending_bytes,
+        hdmi_display_pending_redraw=output_pressure_summary.hdmi_pending_redraw,
+        hdmi_display_submitted=output_pressure_summary.hdmi_submitted,
+        hdmi_display_deferred=output_pressure_summary.hdmi_deferred,
+        hdmi_display_busy=output_pressure_summary.hdmi_busy,
+        hdmi_display_no_reply=output_pressure_summary.hdmi_no_reply,
+        hdmi_display_coalesced=output_pressure_summary.hdmi_coalesced,
+        hdmi_display_backpressure_bytes=(
+            output_pressure_summary.hdmi_backpressure_bytes
+        ),
+        hdmi_display_superseded_bytes=(
+            output_pressure_summary.hdmi_superseded_bytes
+        ),
+        usb_keyboard_no_replies=usb_keyboard_pressure_summary.no_replies,
+        usb_keyboard_poll_cooldown=usb_keyboard_pressure_summary.poll_cooldown,
+        usb_keyboard_cooldown_skips=usb_keyboard_pressure_summary.cooldown_skips,
         serial_driver_accepted=driver_task_frontiers.serial_driver_accepted,
         serial_fallback_active=driver_task_frontiers.serial_fallback_active,
         serial_runtime_frontier=driver_task_frontiers.serial_runtime_frontier,
