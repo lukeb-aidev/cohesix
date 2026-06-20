@@ -1047,22 +1047,35 @@ still waits for the sparse post-EAPOL-start cadence. Host-EAPOL status
 records still report `rx_firstread_attempts`, `rx_firstread_empty`,
 `rx_firstread_invalid`, `rx_firstread_failed`,
 `rx_firstread_remainder_failed`, `rx_firstread_decode_miss`,
-`last_rx_idle_detail`, and `last_rx_idle_result`. If the join proof window ends
-with no association/link event and no data or EAPOL frame, root reports
-`reason=cyw43-association-event-missing` with
-`next_action=inspect-cyw43-association-event-or-join-policy`; the normalizer
-keeps that Gate 7 association blocker over expected empty first-read counters
-because association/link delivery is the first missing old-good replay proof.
-Direct `cyw43-data-rx-firstread-*` blockers remain authoritative after
-association is already proven, when the missing proof has moved to AP M1 or
-later EAPOL receive. The Linux-shaped `bsscfg:join` remains the only primary
-join path after matched prejoin controls. Root no longer issues a
-pre-association `WLC_GET_BSSID` probe, no longer promotes a valid BSSID to
-`associated=yes`, and no longer spends a legacy `WLC_SET_SSID` rescue after
-`BCME_NOTASSOCIATED`. `join accepted` remains only join-submit proof; carrier
-proof must come from a Broadcom association/link event delivered by the linked
-runtime, or from a later received EAPOL frame that proves the AP is talking to
-the station.
+`last_rx_idle_detail`, and `last_rx_idle_result`. After a secure
+`primary-bsscfg:join` is accepted, root immediately spends one bounded
+join-submit service window through the same linked-runtime control/data polling
+machinery used by prompt-side host-EAPOL service. That window is progress proof,
+not gate relaxation: if it does not reach secure host-EAPOL completion, the
+session remains pending for the normal bounded service path. A
+`CYW43_DRIVER_TASK_JOIN_SUBMIT_WINDOW event=end` record with
+`focus=no-runtime-completions` means the bounded service turn saw no linked-runtime
+completion and must not be counted as association progress. If the join proof
+window lacks association/link evidence, root emits sparse
+`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_PROBE` records at bounded pre-association
+poll milestones and uses `WLC_GET_BSSID` only as firmware-state telemetry and
+admission for continued host-EAPOL probing. BSSID alone is not association or
+carrier proof, and it does not release DHCP/data without link and EAPOL secure
+proof. If the primary Linux-shaped `bsscfg:join` returned success and a bounded
+probe later returns `BCME_NOTASSOCIATED`, root may spend exactly one linked-runtime
+`WLC_SET_SSID` rescue and records it as
+`CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE`; SET_SSID success or a SET_SSID
+event is not carrier proof. Gate 7 is reported with stable sub-gates:
+`7a=join-submit`, `7b=association`, `7c=eapol-rx`,
+`7d=eapol-handshake`, and `7e=secure-release`; the normalizer keeps
+`WIFI_GATE=7` for compatibility and adds `WIFI_SUBGATE` /
+`WIFI_SUBGATE_NAME` for sharper frontier tracking. The normalizer keeps
+post-rescue no-association failures as Gate 7
+`cyw43-association-not-associated` unless direct v3 RX trace evidence proves a
+more precise Function 2 first-read/source blocker. Join acceptance remains only
+join-submit proof; carrier proof must come from a Broadcom association/link event
+delivered by the linked runtime, a valid firmware BSSID probe plus later link
+proof, or a received EAPOL frame that proves the AP is talking to the station.
 Station setup proof must preserve the Linux-shaped ordering. RSN/MFP and WME
 BSS-disable controls must be ready or tolerated-unsupported before final
 `wpa_auth`; pre-join `mpc`, `join_pref`, interface-event mask, scan dwell
@@ -1076,10 +1089,11 @@ The primary join request is Linux's `join` iovar
 (`CYW43_DRIVER_TASK_JOIN_REQUEST path=primary-bsscfg:join`) with the 68-byte
 `brcmf_ext_join_params` shape. Legacy `WLC_SET_SSID` fallback is allowed only
 for matched `BCME_UNSUPPORTED` or `BCME_BADARG` join-submit firmware statuses;
-transport faults do not fall back. After an accepted `bsscfg:join`, there is no
-additional host-EAPOL `WLC_SET_SSID` rescue path. Carrier proof must come from a
-delivered Broadcom association/link event or a direct EAPOL receive edge; a
-valid BSSID is not association proof.
+transport faults do not fall back. After an accepted `bsscfg:join`, the only
+post-join `WLC_SET_SSID` use is the single diagnostic host-EAPOL association
+rescue described above. Carrier proof must come from a delivered Broadcom
+association/link event or a direct EAPOL receive edge; a valid BSSID is not
+association proof.
 
 `cyw43-firmware-recover` owner-replay cycles remain progress only when
 `resume_offset` or `STREAM_PROGRESS uploaded=` advances; root keeps the
@@ -1927,6 +1941,13 @@ active path is Cohesix-owned cold start:
   match transfer events back to the submitted transfer TRB before decoding that
   DMA buffer; a single read requeued only after the next event-loop turn can miss
   fast press/release transitions during console-output stalls.
+  After first-byte proof, sustained acceptance additionally requires the queue to
+  remain refillable: if the linked runtime sees a low steady queue with many
+  transfer events, it treats that as post-first-byte queue collapse and runs the
+  bounded endpoint recovery ladder instead of waiting for the older full-queue
+  unmatched-transfer failure. Endpoint recovery waits for the expected Stop
+  Endpoint / Reset Endpoint / Set TR Dequeue command completions before clearing
+  software queue state or ringing the keyboard endpoint again.
   The linked USB runtime therefore reserves a dedicated one-byte HID
   output-report DMA slot during keyboard attach and uses it for Caps Lock, Num
   Lock, and Scroll Lock `SET_REPORT(Output)` updates after the seal. Lock-key
@@ -2426,6 +2447,13 @@ the full hub wait. Address command waits and hub-port status waits get finite
 same-request envelopes so root does not publish false-fresh requests while the
 child is still completing Address Device, descriptor status, or a long EP0
 hub-control turn.
+
+After the first HID report and first console byte are proven, repeated
+root-task no-reply polls are treated as a post-acceptance interrupt-IN service
+stall rather than a reason to reopen enumeration. Root may send the linked
+runtime's bounded recovery aux request only for that accepted endpoint; the
+runtime services it with the existing stop/reset/set-dequeue/re-arm ladder and
+reports endpoint recovery success or failure in the keyboard queue status.
 
 Do not use xHCI as a general USB stack. Milestone 26 local seat is keyboard
 input plus primitive HDMI text output only.

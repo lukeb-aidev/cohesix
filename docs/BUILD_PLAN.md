@@ -117,6 +117,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [28c](#28c) | Host-Side AI Coexistence: Delegated Runs, Durable Context, Provider Receipts | Pending |
 | [28d](#28d) | MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later | Pending |
 | [28e](#28e) | VM Cap-Bundle Authority + Structured Fault Lifecycle | Pending |
+| [28f](#28f) | SwarmUI Desktop Workbench: Spectrum Shell + Live Hive Continuity | Pending |
 | [29](#29) | Edge Local Status (Pi 4 Host Tool) | Pending |
 | [29b](#29b) | AI-Native Namespace Surfaces (Control-Plane Only) | Pending |
 | [30](#30) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
@@ -10096,6 +10097,253 @@ Deliverables:
   - Production fault lifecycle evidence that lets seL4 reviewers audit how Cohesix contains and recovers from faulty workers and drivers.
 ```
 
+
+## Milestone 28f — SwarmUI Desktop Workbench: Spectrum Shell + Live Hive Continuity <a id="28f"></a>
+[Milestones](#Milestones)
+
+**Why now (operator workflow):** Milestone 20c/20d proved SwarmUI as a host-only, ticket-scoped UI and PixiJS Live Hive renderer. Milestone 24e added REST/gateway mode so SwarmUI can share the sole console client through `hive-gateway`. Milestone 28 gives Cohesix the read-only inspect, trace, bundle/evidence, diff, and attest substrate operators need. The remaining UI gap is workflow shape: SwarmUI is still organized like a dense dashboard instead of a desktop operator workbench. This milestone redesigns the presentation layer around familiar desktop navigation, Spectrum Web Components, deterministic evidence workflows, and the existing PixiJS Live Hive canvas without changing Cohesix authority or protocol semantics.
+
+**As-built alignment note:** Current SwarmUI is a Tauri host UI with Rust-owned transport/session/cache/replay semantics, vendored Spectrum Web Components, and a PixiJS Live Hive renderer. Existing generated SwarmUI defaults still use `/worker` roots while the canonical worker namespace is `/shard/<label>/worker/<id>/telemetry` with `/worker/<id>/telemetry` available only when `sharding.legacy_worker_alias = true`. This milestone must present both correctly and must not hard-code legacy aliases as the future namespace shape.
+
+**Prerequisites**
+- Milestone **20c** complete for SwarmUI Tauri, ticket-scoped sessions, transcript parity, and bounded offline cache.
+- Milestone **20d** complete for PixiJS Live Hive rendering, replay fixtures, design tokens, and no UI-owned control logic.
+- Milestone **24e** complete for REST/gateway mode so desktop multi-tool workflows use `hive-gateway` rather than direct concurrent TCP clients.
+- Milestone **28** complete for shared read-only inspect, trace, evidence-pack/timeline, diff, and attest internals reused by the workbench.
+- Milestone **28b** is required before enabling any new delegated mutating REST workflow beyond existing console-projected `LS`/`CAT`/`ECHO` semantics. Before 28b, mutating desktop affordances may only render command previews, transcript proof, or existing console-compatible actions already admitted by the active profile.
+
+**Goal**
+Redesign SwarmUI into a desktop-style operator workbench that uses Spectrum for shell chrome, controls, forms, menus, dialogs, status, and workflow affordances while retaining PixiJS/Live Hive as the primary high-performance visualization surface. The UI must make Secure9P namespaces, evidence packs, replay, tickets, policy gates, and gateway state navigable through familiar desktop patterns without introducing a new authority plane.
+
+Significant frontend redesign and refactoring is explicitly in scope. The implementation may replace the current single-dashboard layout, split the large frontend controller into workbench/view/state modules, rebuild CSS around Spectrum density and layout primitives, and restructure Playwright coverage around the new desktop model. The stability boundary is the Rust-owned protocol/session/replay/evidence semantics, generated defaults, transcript grammar, and PixiJS Live Hive renderer contract, not the current HTML panel arrangement.
+
+**Non-Goals (Explicit)**
+- No new Cohesix console verbs, Secure9P verbs, in-VM TCP listeners, ad-hoc RPC, or UI-owned control semantics.
+- No replacement of PixiJS Live Hive with DOM, SVG, D3, Spectrum charts, or a generic graph library.
+- No second evidence-pack, replay, trace, or bundle format distinct from the canonical `cohsh-core` trace stack and `coh evidence pack` layout.
+- No hidden background watchers when a desktop view is closed, inactive, or offline.
+- No generalized window manager, plugin host, web browser shell, or arbitrary host filesystem explorer.
+- No CDN dependency, network font dependency, or unbounded Spectrum dependency expansion; all UI assets remain vendored/offline-safe.
+- No change to ACK/ERR/END grammar, generated path defaults, namespace roots, or ticket policy unless routed through manifest IR, `coh-rtc`, docs, fixtures, and regression tests in the same scoped change.
+
+**Desktop Model**
+- **Application frame:** compact desktop top bar with transport mode, role/ticket state, lifecycle, gateway health, pressure, replay/offline status, and active evidence target.
+- **Navigation dock:** Spectrum action buttons or tab rail for `Hive`, `Namespaces`, `Tickets`, `Policy`, `Evidence`, `Replay`, `Console`, and `Settings`.
+- **Workspace:** tabbed or split document area where each selected tool opens as a stable workbench view, not a stacked marketing/dashboard section.
+- **Inspector:** right-side details for the selected worker, namespace path, ticket receipt, evidence pack, replay frame, or policy denial.
+- **Transcript drawer:** bottom proof pane showing exact `OK`/`ERR`/`END` lines for every backend action and preserving console parity.
+- **Command palette:** bounded local launcher for existing workbench actions and known paths; it must not execute arbitrary new commands or bypass role/ticket checks.
+
+**Frontend Architecture Expectations**
+- Split the current frontend controller into small modules for workbench routing, session/transport state, transcript state, namespace explorer state, evidence/replay state, Live Hive coordination, and shared Spectrum component wrappers.
+- Keep DOM updates incremental and keyed for high-churn areas such as telemetry overlays, namespace listings, schedule/lease tables, and transcripts.
+- Keep Live Hive canvas rendering independent from Spectrum layout reflows; workbench panels may select or inspect Live Hive entities, but must not make per-frame DOM updates.
+- Preserve accessibility and keyboard efficiency: visible focus rings, keyboard navigation for dock/tabs/menus, command palette search, copy-path shortcuts, and screen-reader labels for status, transcript, and dialogs.
+- Treat performance budgets as product requirements: bounded polling, no hidden watchers, no layout thrash in high-frequency paths, nonblank canvas proof, release-bundle asset proof, and deterministic replay screenshots.
+- Existing element IDs may change when the desktop model requires it, but Playwright tests must migrate to stable user-facing roles, labels, test IDs, and replay fixtures instead of fragile dashboard layout assumptions.
+
+
+**Spectrum Design-System Use**
+- Use Spectrum components for desktop chrome and operator workflows:
+  - `sp-action-button`, `sp-action-group`, or equivalent local wrappers for dock and toolbar commands.
+  - `sp-tabs` or a Spectrum-styled tab rail for workspace switching.
+  - `sp-menu`, `sp-popover`, and context menus for namespace entries, workers, evidence files, and replay artifacts.
+  - `sp-dialog` for ticket minting, evidence export setup, policy approval preview, replay open, and risky write confirmation.
+  - `sp-field-label`, `sp-textfield`, `sp-picker`, `sp-checkbox`, and `sp-switch` for structured forms.
+  - Spectrum status/alert patterns for lifecycle, gateway health, policy denials, backpressure, offline/replay, and tamper rejection.
+- Inventory the current vendored Spectrum bundle before adding components. Any new Spectrum component must be self-hosted, tested in the release bundle, and covered by the dependency policy.
+- Spectrum tokens become the primary source for HTML UI density, spacing, focus rings, control states, and accessible contrast. PixiJS may mirror semantic colors through generated or documented tokens, but must remain a renderer over bounded telemetry state.
+
+**Live Hive Continuity**
+- PixiJS remains the owner of the Live Hive canvas, world model, LOD/degrade behavior, selection hooks, and replay rendering.
+- Spectrum frames the Live Hive as a desktop document view:
+  - toolbar controls for connect/start/stop, fit/reset, detail toggle, replay speed, and snapshot source;
+  - status strip for frame cap, polling cadence, replay/live source, and degraded mode;
+  - inspector for selected worker, canonical namespace path, role, lease, schedule state, and bounded telemetry detail;
+  - transcript drawer for the exact `tail`, `cat`, `ls`, replay, or attach proof that produced visible state.
+- Live Hive state remains reconstructable from streams, traces, and CBOR snapshots. Restarting SwarmUI must not require hidden UI state to rebuild the view.
+
+**Deliverables**
+- Desktop shell refactor for `apps/swarmui/frontend/` with Spectrum-backed app frame, dock/tab rail, workspace, inspector, and transcript drawer.
+- Namespace Explorer workbench:
+  - path breadcrumb and tree/list split for `/proc`, `/queen`, `/shard`, `/worker` when enabled, `/log`, `/gpu`, `/host`, `/policy`, `/actions`, `/audit`, and `/replay` as allowed by generated roots and role policy;
+  - explicit read-only, append-only, control-file, generated, legacy-alias, and unavailable-provider labels;
+  - bounded `cat`, `tail`, copy-path, reveal-in-transcript, and open-in-replay affordances.
+- Evidence Desk:
+  - front-end workflow over existing `coh evidence pack`, `coh evidence timeline`, CI summary, and SIEM NDJSON export;
+  - visible pack contents, manifest/policy hashes, trace references, redaction state, and deterministic output path;
+  - no second pack schema or UI-owned evidence serializer.
+- Replay Desk:
+  - open trace, Hive CBOR snapshot, and evidence pack artifacts offline;
+  - show tamper/replay validation, trace limits, frame/ACK counts, selected timeline event, and Live Hive replay source;
+  - network access remains disabled in offline/replay mode.
+- Tickets and Policy Desk:
+  - read-only ticket status/deadletter, idempotency key, relay fields, policy rules, pressure, audit, and approval queue views;
+  - optional command-preview forms for existing host-ticket or approval lines, with submit disabled unless the active milestone/profile admits the write path.
+- Live Hive desktop integration:
+  - preserve PixiJS renderer and replay fixtures;
+  - update canvas framing, toolbar, inspector, worker selection, canonical shard path display, and `No telemetry yet` remediation flow.
+- Documentation updates:
+  - `docs/USERLAND_AND_CLI.md` describes the SwarmUI desktop workbench, Spectrum/PixiJS split, namespace navigation, evidence desk, replay desk, and non-goals.
+  - `docs/INTERFACES.md` records that the UI remains a projection of existing Secure9P/console/evidence/replay semantics.
+  - `docs/TEST_PLAN.md` records Rust, generated-drift, replay, and Playwright validation.
+
+**Commands**
+- `cargo fmt --all -- --check`
+- `cargo test -p swarmui`
+- `cargo test -p swarmui --test transcript`
+- `cargo test -p swarmui --test console_parity`
+- `cargo test -p swarmui --test security`
+- `cargo test -p swarmui --test cache`
+- `cargo test -p swarmui --test trace`
+- `cargo test -p swarmui --test replay`
+- `cargo test -p coh --test evidence`
+- `cargo test -p cohsh --test trace`
+- `scripts/check-generated.sh`
+- `cd tools/swarmui-ui-tests && npm ci`
+- `cd tools/swarmui-ui-tests && npx playwright install webkit`
+- `cd tools/swarmui-ui-tests && npm test`
+- `SWARMUI_RELEASE_DIR=../../releases/<latest> npm test` from `tools/swarmui-ui-tests` during release-bundle validation.
+
+**Checks (DoD)**
+- SwarmUI uses Spectrum for desktop shell, controls, forms, menus, dialogs, status, focus, and workflow chrome while PixiJS remains the only Live Hive rendering engine.
+- The frontend is refactored into coherent workbench modules; `app.js` does not remain a monolithic controller for every view, transcript, and Live Hive interaction.
+- UI actions preserve byte-stable `OK`/`ERR`/`END` transcripts for equivalent `cohsh` operations; no ACK grammar, NineDoor error, `/proc` format, trace, or evidence-pack schema drift occurs.
+- Namespace Explorer rejects relative paths, `.`, `..`, NUL, over-depth walks, unsupported roots, and paths outside role/ticket scope before reaching provider logic.
+- Canonical `/shard/<label>/worker/<id>/telemetry` is preferred in labels and inspectors; legacy `/worker/<id>/telemetry` is shown only as a generated compatibility alias when enabled.
+- Evidence Desk invokes/reuses canonical evidence-pack and timeline internals and never serializes a UI-specific pack format or raw auth tokens/tickets.
+- Replay Desk rejects tampered traces and oversized artifacts, disables network access in offline/replay mode, and reconstructs Live Hive state from trace/CBOR/evidence artifacts only.
+- Ticket/Policy Desk shows status and denials without granting new authority; any write-capable affordance is explicitly gated by active profile/milestone state and emits transcript proof.
+- Direct TCP mode clearly warns about single-client console ownership; REST/gateway mode presents gateway health, request-auth state, and backpressure counters before operators tune publish rates.
+- No hidden polling or background watchers run when a workbench view is inactive, stopped, or offline; Live Hive polling remains bounded by generated defaults.
+- Playwright desktop and narrow screenshots are updated intentionally, with checks for nonblank PixiJS canvas, visible legends/status, text fit, no overlapping controls, keyboard/focus behavior, and accessible labels.
+- Release-bundle UI tests pass against the latest bundle assets, not only source files.
+
+**Compiler touchpoints**
+- `coh-rtc` remains the source for SwarmUI path roots, cache limits, trace limits, Live Hive frame/LOD limits, line caps, ticket scope, and any new desktop-workbench defaults.
+- If additional UI roots, Spectrum component allowlists, evidence-desk defaults, replay-desk defaults, or workbench view limits are needed, add manifest IR and regenerate `apps/swarmui/src/generated.rs`, `docs/snippets/swarmui_defaults.md`, docs snippets, and tests in the same change.
+- Generated docs must be refreshed before implementation patches land; stale embedded snippets in `docs/USERLAND_AND_CLI.md` or other canonical docs block merge.
+
+**Task Breakdown**
+```
+Title/ID: m28f-swarmui-scope-and-drift
+Goal: Establish the desktop-workbench scope and clear generated-doc/grammar drift before changing UI layout.
+Inputs: AGENTS.md, docs/BUILD_PLAN.md, docs/USERLAND_AND_CLI.md, docs/snippets/*.md, tools/coh-rtc/tests/swarmui_docs.rs, apps/swarmui/src/generated.rs, crates/cohsh-core/src/verb.rs, apps/cohsh/src/lib.rs, apps/swarmui/src/lib.rs
+Changes:
+  - docs/USERLAND_AND_CLI.md — refresh generated snippets and document the desktop-workbench non-goals.
+  - tools/coh-rtc/tests/swarmui_docs.rs — keep generated SwarmUI snippet checks authoritative.
+  - docs/INTERFACES.md — record Spectrum/PixiJS split and no-new-semantics guardrails.
+Commands:
+  - scripts/check-generated.sh
+  - cargo test -p swarmui --test transcript
+  - cargo test -p swarmui --test console_parity
+Checks:
+  - Embedded generated snippets match docs/snippets and generated Rust.
+  - Echo grammar documentation agrees with actual parser/help or the mismatch is resolved through the manifest/compiler path.
+  - No protocol, ACK, path, ticket, or evidence semantics change in this task.
+Deliverables:
+  - Clean scope baseline for the SwarmUI desktop redesign.
+
+Title/ID: m28f-spectrum-desktop-shell
+Goal: Rebuild SwarmUI chrome around Spectrum-backed desktop primitives and split the frontend into maintainable workbench modules while preserving backend protocol semantics.
+Inputs: apps/swarmui/frontend/index.html, apps/swarmui/frontend/app.js, apps/swarmui/frontend/styles/**, apps/swarmui/frontend/components/**, apps/swarmui/frontend/vendor/spectrum.bundle.js, tools/swarmui-ui-tests/**
+Changes:
+  - apps/swarmui/frontend/index.html — introduce app frame, navigation dock/tab rail, workspace, inspector, and transcript drawer.
+  - apps/swarmui/frontend/app.js — split monolithic controller behavior into workbench routing, state, transcript, namespace, evidence/replay, and Live Hive coordination modules.
+  - apps/swarmui/frontend/styles/** — align layout, density, focus, status, and form styling with Spectrum tokens and remove dashboard-specific layout assumptions.
+  - apps/swarmui/frontend/components/** — add reusable workbench, toolbar, status, dialog, menu, command-palette, and inspector wrappers around vendored Spectrum components.
+  - tools/swarmui-ui-tests/** — update UI-only desktop/narrow tests and screenshots to target stable user-facing roles, labels, test IDs, and replay fixtures.
+Commands:
+  - cargo test -p swarmui
+  - cd tools/swarmui-ui-tests && npm test
+Checks:
+  - Existing Tauri command names and backend semantics remain stable even if frontend module boundaries and DOM structure change substantially.
+  - `app.js` is no longer the owner of all workbench, transcript, namespace, evidence/replay, and Live Hive UI behavior.
+  - Spectrum components render offline from vendored assets with no CDN or network dependency.
+  - Desktop and narrow layouts have no overlapping controls, clipped text, unreachable focus targets, or keyboard traps.
+Deliverables:
+  - Spectrum-backed SwarmUI workbench shell.
+
+Title/ID: m28f-namespace-explorer
+Goal: Replace the root picker with a desktop namespace explorer that makes Secure9P paths familiar and safe.
+Inputs: apps/swarmui/src/lib.rs, apps/swarmui/src-tauri/main.rs, apps/swarmui/frontend/**, configs/root_task.toml, docs/ROLES_AND_SCHEDULING.md, docs/SECURE9P.md, tests/fixtures/traces/trace_v0.trace
+Changes:
+  - apps/swarmui/src/lib.rs — add read-only list/cat/tail helpers if needed without changing command grammar or provider semantics.
+  - apps/swarmui/frontend/** — add breadcrumb, tree/list split, preview/tail pane, path copy, transcript reveal, and path metadata labels.
+  - docs/USERLAND_AND_CLI.md — document canonical shard navigation and legacy `/worker` alias presentation.
+Commands:
+  - cargo test -p swarmui --test security
+  - cargo test -p swarmui --test trace
+  - cd tools/swarmui-ui-tests && npm test
+Checks:
+  - Absolute-path, walk-depth, role/ticket, legacy-alias, and unsupported-root behavior is enforced and visible.
+  - `ls`, `cat`, and `tail` transcript order remains byte-stable with `cohsh`.
+Deliverables:
+  - Secure9P namespace explorer suitable for day-to-day operator browsing.
+
+Title/ID: m28f-evidence-and-replay-desks
+Goal: Make evidence packs, timelines, traces, snapshots, and replay first-class desktop workbench flows using canonical artifacts only.
+Inputs: apps/coh evidence internals, apps/swarmui/src/cache.rs, apps/swarmui/src/hive.rs, apps/swarmui/src-tauri/main.rs, crates/cohsh-core/src/trace.rs, tools/cohesix-py/examples/ci_evidence_pack.py, tools/cohesix-py/examples/siem_export_ndjson.py, docs/OPERATOR_WALKTHROUGH.md
+Changes:
+  - apps/swarmui/src/** — expose host-side wrappers or shared read-only internals for evidence/timeline/replay metadata where milestone 28 provides them.
+  - apps/swarmui/frontend/** — add Evidence Desk and Replay Desk views with pack contents, hashes, validation, timeline, SIEM/CI export, and Live Hive replay source selection.
+  - docs/USERLAND_AND_CLI.md + docs/TEST_PLAN.md — document evidence/replay workflows and validation.
+Commands:
+  - cargo test -p swarmui --test cache
+  - cargo test -p swarmui --test replay
+  - cargo test -p swarmui --test trace
+  - cargo test -p coh --test evidence
+  - cd tools/swarmui-ui-tests && npm test
+Checks:
+  - Evidence Desk reuses canonical pack/timeline output and does not leak raw tickets or auth tokens.
+  - Replay Desk rejects tampered/oversized traces and keeps network disabled in offline/replay mode.
+  - Live Hive replay remains deterministic from trace-adjacent `.hive.cbor` and snapshot CBOR artifacts.
+Deliverables:
+  - Desktop evidence and replay workflows ready for audit, support, CI, and demos.
+
+Title/ID: m28f-live-hive-continuity
+Goal: Preserve PixiJS Live Hive while integrating it into the desktop workbench with Spectrum toolbar and inspector controls.
+Inputs: apps/swarmui/frontend/hive/**, apps/swarmui/frontend/app.js, apps/swarmui/frontend/styles/hive.css, apps/swarmui/tests/replay.rs, tools/swarmui-ui-tests/tests/swarmui.spec.js
+Changes:
+  - apps/swarmui/frontend/hive/** — preserve PixiJS renderer, world model, LOD, and debug hooks while accepting workbench selection/inspector events.
+  - apps/swarmui/frontend/** — add Spectrum toolbar, source status, replay speed, fit/reset, detail toggle, and selected-worker inspector.
+  - tools/swarmui-ui-tests/** — assert canvas is nonblank, responsive, and framed correctly across desktop/narrow modes.
+Commands:
+  - cargo test -p swarmui --test replay
+  - cd tools/swarmui-ui-tests && npm test
+Checks:
+  - PixiJS remains the rendering engine; Spectrum does not replace canvas rendering.
+  - Selection, overlays, details, replay, and degraded-mode indicators remain bounded and reconstructable.
+  - Canvas pixel checks and screenshots prove nonblank rendering and no UI overlap.
+Deliverables:
+  - Live Hive preserved as the high-performance visualization inside the desktop workbench.
+
+Title/ID: m28f-release-bundle-ui-regression
+Goal: Prove the redesigned workbench works from source and the latest release bundle without hidden runtime or asset assumptions.
+Inputs: tools/swarmui-ui-tests/**, releases/<latest>/ui/swarmui/**, apps/swarmui/frontend/**, docs/TEST_PLAN.md
+Changes:
+  - tools/swarmui-ui-tests/** — add desktop workbench regression coverage for dock, tabs, namespace explorer, evidence desk, replay desk, Live Hive, console, and dialogs.
+  - docs/TEST_PLAN.md — update SwarmUI UI regression commands and screenshot policy.
+Commands:
+  - cd tools/swarmui-ui-tests && npm ci
+  - cd tools/swarmui-ui-tests && npx playwright install webkit
+  - cd tools/swarmui-ui-tests && npm test
+  - cd tools/swarmui-ui-tests && SWARMUI_RELEASE_DIR=../../releases/<latest> npm test
+Checks:
+  - Source and release-bundle UI tests pass with deterministic fixtures.
+  - Screenshots are intentionally updated and stable.
+  - Release bundle includes all Spectrum, icon, font, and PixiJS assets needed for offline operation.
+Deliverables:
+  - Replay-first UI regression gate for the SwarmUI desktop workbench.
+```
+
+**Outcome**
+After Milestone 28f:
+- SwarmUI is the primary desktop operator workbench for Cohesix, not a dense single-page dashboard.
+- Operators can browse Secure9P namespaces with file-manager familiarity while still seeing exact role/ticket/path bounds.
+- Evidence packs, timelines, traces, snapshots, and Live Hive replay are first-class, deterministic desktop workflows.
+- Spectrum owns the desktop interaction language; PixiJS Live Hive remains the rendering engine for hive state.
+- Cohesix gains usability without increasing the VM TCB, adding protocols, weakening transcript parity, or creating a second evidence/replay format.
 
 ## Milestone 29 — Edge Local Status (Pi 4 Host Tool)  <a id="29"></a> 
 [Milestones](#Milestones)

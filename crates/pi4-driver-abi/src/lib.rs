@@ -765,6 +765,14 @@ pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE: u8 = 6;
 pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY: u8 = 7;
 /// USB keyboard report status: endpoint-matched transfer event did not match a queued report slot.
 pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER: u8 = 8;
+/// USB keyboard report status: post-first-byte interrupt queue collapsed below the refill floor.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE: u8 = 9;
+/// USB keyboard report status: endpoint recovery reset the interrupt-IN dequeue pointer.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS: u8 = 10;
+/// USB keyboard report status: endpoint recovery failed before the interrupt-IN queue was rearmed.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED: u8 = 11;
+/// USB keyboard service aux: request post-first-byte interrupt-IN endpoint recovery.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX: u32 = 0x5553_4252;
 /// USB runtime is traversing a hub after the root device had no direct keyboard endpoint.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN: u32 = 271;
 /// USB runtime is probing one hub child port for a keyboard-capable device.

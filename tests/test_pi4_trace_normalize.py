@@ -639,6 +639,30 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_COUNTER_TX_FRAMES": 0,
         "DRIVER_TASK_COUNTER_RX_BYTES": 0,
         "DRIVER_TASK_COUNTER_TX_BYTES": 0,
+        "DRIVER_TASK_COUNTER_OVERRUNS": 0,
+        "DRIVER_TASK_COUNTER_DROPS": 0,
+        "SERIAL_OUTPUT_TX_PENDING": "unknown",
+        "SERIAL_OUTPUT_INTERACTIVE": "unknown",
+        "SERIAL_OUTPUT_DEFERRED": 0,
+        "SERIAL_OUTPUT_FLUSHED": 0,
+        "SERIAL_OUTPUT_BACKPRESSURE": 0,
+        "HDMI_DISPLAY_PENDING_BYTES": 0,
+        "HDMI_DISPLAY_PENDING_REDRAW": "unknown",
+        "HDMI_DISPLAY_SUBMITTED": 0,
+        "HDMI_DISPLAY_DEFERRED": 0,
+        "HDMI_DISPLAY_BUSY": 0,
+        "HDMI_DISPLAY_NO_REPLY": 0,
+        "HDMI_DISPLAY_COALESCED": 0,
+        "HDMI_DISPLAY_BACKPRESSURE_BYTES": 0,
+        "HDMI_DISPLAY_SUPERSEDED_BYTES": 0,
+        "USB_KEYBOARD_NO_REPLIES": 0,
+        "USB_KEYBOARD_POLL_COOLDOWN": 0,
+        "USB_KEYBOARD_COOLDOWN_SKIPS": 0,
+        "USB_RUNTIME_QUEUED_REPORTS": 0,
+        "USB_RUNTIME_TRANSFER_EVENTS": 0,
+        "USB_RUNTIME_REPORT_STATUS": "unknown",
+        "USB_EVENT_LOOP_RUNTIME_SKIPPED": 0,
+        "USB_POST_FIRST_BYTE_BLOCKER": "none",
         "SERIAL_DRIVER_ACCEPTED": "no",
         "SERIAL_FALLBACK_ACTIVE": "no",
         "SERIAL_RUNTIME_FRONTIER": "none",
@@ -778,6 +802,9 @@ def test_gate_summary_splits_serial_and_hdmi_output_pressure() -> None:
             "first_report=yes first_byte=yes queued=0 accepted=4 drained=4 "
             "echoed=4 drop=0 no_reply=6 cooldown=7 cooldown_skips=8 "
             "hdmi_drop=0",
+            "[smp] activity local-seat-display pending_bytes=4096 "
+            "pending_redraw=no submitted=8 deferred=9 busy=0 no_reply=1280 "
+            "coalesced=10 backpressure_bytes=64 superseded_bytes=0",
         ]
     )
 
@@ -787,15 +814,15 @@ def test_gate_summary_splits_serial_and_hdmi_output_pressure() -> None:
     assert record["SERIAL_OUTPUT_DEFERRED"] == 11
     assert record["SERIAL_OUTPUT_FLUSHED"] == 7
     assert record["SERIAL_OUTPUT_BACKPRESSURE"] == 3
-    assert record["HDMI_DISPLAY_PENDING_BYTES"] == 12
+    assert record["HDMI_DISPLAY_PENDING_BYTES"] == 4096
     assert record["HDMI_DISPLAY_PENDING_REDRAW"] == "no"
-    assert record["HDMI_DISPLAY_SUBMITTED"] == 6
-    assert record["HDMI_DISPLAY_DEFERRED"] == 5
-    assert record["HDMI_DISPLAY_BUSY"] == 3
-    assert record["HDMI_DISPLAY_NO_REPLY"] == 2
-    assert record["HDMI_DISPLAY_COALESCED"] == 9
-    assert record["HDMI_DISPLAY_BACKPRESSURE_BYTES"] == 14
-    assert record["HDMI_DISPLAY_SUPERSEDED_BYTES"] == 22
+    assert record["HDMI_DISPLAY_SUBMITTED"] == 8
+    assert record["HDMI_DISPLAY_DEFERRED"] == 9
+    assert record["HDMI_DISPLAY_BUSY"] == 0
+    assert record["HDMI_DISPLAY_NO_REPLY"] == 1280
+    assert record["HDMI_DISPLAY_COALESCED"] == 10
+    assert record["HDMI_DISPLAY_BACKPRESSURE_BYTES"] == 64
+    assert record["HDMI_DISPLAY_SUPERSEDED_BYTES"] == 0
     assert record["USB_KEYBOARD_NO_REPLIES"] == 6
     assert record["USB_KEYBOARD_POLL_COOLDOWN"] == 7
     assert record["USB_KEYBOARD_COOLDOWN_SKIPS"] == 8
@@ -5706,6 +5733,26 @@ def test_gate_summary_keeps_linked_gate10_over_later_stale_hub_blocker() -> None
     assert gates.usb_blocker == "none"
 
 
+def test_gate_summary_replaces_stale_usb_first_report_frontier_after_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-first-report "
+            "status=blocked-first-report detail=0x0500 result=0 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-first-report "
+            "status=ready detail=0x0501 result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-owner-state "
+            "status=ready detail=0x0501 result=1 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_DRIVER_TASK_FRONTIER"] == "usb-owner-state-ready"
+
+
 def test_gate_summary_treats_usb_keyboard_runtime_online_as_ready() -> None:
     events = normalizer.parse_events(
         [
@@ -5739,6 +5786,154 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
 
     assert gates.usb_gate == 10
     assert gates.usb_blocker == "none"
+
+
+def test_gate_summary_reports_post_first_byte_unmatched_transfer() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "usb: runtime_queue queue_valid=yes queued_reports=73 "
+            "doorbell_pending=no preserved_events=0 transfer_events=55 "
+            "report_status=unmatched-transfer",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert (
+        record["USB_POST_FIRST_BYTE_BLOCKER"]
+        == "usb-post-first-byte-unmatched-transfer"
+    )
+
+
+def test_gate_summary_reports_post_first_byte_queue_collapse() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "usb: runtime_queue queue_valid=yes queued_reports=4 "
+            "doorbell_pending=no preserved_events=0 transfer_events=255 "
+            "report_status=queue-collapse",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert (
+        record["USB_POST_FIRST_BYTE_BLOCKER"]
+        == "usb-post-first-byte-queue-collapse"
+    )
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 4
+    assert record["USB_RUNTIME_TRANSFER_EVENTS"] == 255
+    assert record["USB_RUNTIME_REPORT_STATUS"] == "queue-collapse"
+
+
+def test_gate_summary_reports_post_first_byte_recovery_failed() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "usb: runtime_queue queue_valid=yes queued_reports=4 "
+            "doorbell_pending=no preserved_events=0 transfer_events=255 "
+            "report_status=recovery-failed",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert (
+        record["USB_POST_FIRST_BYTE_BLOCKER"]
+        == "usb-post-first-byte-recovery-failed"
+    )
+
+
+def test_gate_summary_reports_post_first_byte_queue_collapse_risk() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "usb: runtime_queue queue_valid=yes queued_reports=4 "
+            "doorbell_pending=no preserved_events=0 transfer_events=255 "
+            "report_status=produced-byte",
+            "usb: event_loop keyboard_priority=97 runtime_skipped=97 "
+            "serial_dispatch_yielded=308 post_runtime_keyboard=211 "
+            "output_keyboard_polls=435 hdmi_pump=308",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert (
+        record["USB_POST_FIRST_BYTE_BLOCKER"]
+        == "usb-post-first-byte-queue-collapse-risk"
+    )
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 4
+    assert record["USB_RUNTIME_TRANSFER_EVENTS"] == 255
+    assert record["USB_RUNTIME_REPORT_STATUS"] == "produced-byte"
+    assert record["USB_EVENT_LOOP_RUNTIME_SKIPPED"] == 97
+
+
+def test_gate_summary_prefers_sustained_input_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "usb: sustained_input queued_reports=4 transfer_events=255 "
+            "report_status=recovery-failed accepted=416 drained=416 echoed=416 "
+            "no_reply=6 runtime_skipped=97 "
+            "blocker=usb-post-first-byte-recovery-failed",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert (
+        record["USB_POST_FIRST_BYTE_BLOCKER"]
+        == "usb-post-first-byte-recovery-failed"
+    )
+    assert record["USB_RUNTIME_REPORT_STATUS"] == "recovery-failed"
+    assert record["USB_KEYBOARD_NO_REPLIES"] == 6
+    assert record["USB_EVENT_LOOP_RUNTIME_SKIPPED"] == 97
+
+
+def test_gate_summary_reports_post_first_byte_no_progress() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
+            "source=root-ring sequence=320019 submitted=320019 completed=296283 "
+            "idle=0 fault=0 budget=0 frame=27 desc=27 staged_bytes=0 "
+            "clean_ops=0 clean_bytes=0 inv_ops=0 inv_bytes=0 sends=0 yields=0 "
+            "busy=0 same_request=0 timeouts=23756 keep_active=20 aborts=0 "
+            "rx_frames=27 rx_bytes=27 tx_frames=0 tx_bytes=0",
+            "[smp] activity local-seat runtime=present attached=yes "
+            "keyboard_device=usb-kbd0 display=hdmi0 backend_poll=yes "
+            "backend_polls=320009 backend_bytes=27 keyboard_ready=yes "
+            "first_report=yes first_byte=yes queued=0 accepted=27 drained=27 "
+            "echoed=27 drop=0 no_reply=0 cooldown=0 cooldown_skips=0 hdmi_drop=0",
+            "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
+            "source=root-ring sequence=321655 submitted=321655 completed=296499 "
+            "idle=0 fault=0 budget=0 frame=27 desc=27 staged_bytes=0 "
+            "clean_ops=0 clean_bytes=0 inv_ops=0 inv_bytes=0 sends=0 yields=0 "
+            "busy=0 same_request=0 timeouts=25176 keep_active=20 aborts=0 "
+            "rx_frames=27 rx_bytes=27 tx_frames=0 tx_bytes=0",
+            "[smp] activity local-seat runtime=present attached=yes "
+            "keyboard_device=usb-kbd0 display=hdmi0 backend_poll=yes "
+            "backend_polls=321645 backend_bytes=27 keyboard_ready=yes "
+            "first_report=yes first_byte=yes queued=0 accepted=27 drained=27 "
+            "echoed=27 drop=0 no_reply=0 cooldown=0 cooldown_skips=0 hdmi_drop=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "usb-post-first-byte-no-progress"
 
 
 def test_gate_summary_rejects_runtime_gate10_without_linked_hid_source() -> None:
@@ -7119,14 +7314,15 @@ def test_gate_summary_refines_host_eapol_firstread_empty() -> None:
     assert gates.wifi_phase == "runtime-rx"
 
 
-def test_gate_summary_preserves_host_eapol_firstread_empty_with_rx_source() -> None:
+def test_gate_summary_names_quiet_preassoc_firstread_as_association_missing() -> None:
     events = normalizer.parse_events(
         [
             "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
-            "status=required reason=host-eapol-required polls=24576 starts=0 "
+            "status=required reason=cyw43-association-event-missing polls=24576 starts=0 "
             "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=0 "
             "control_rx=0 empty_polls=24576 associated=no link_up=no "
             "assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "firstread_class=preassoc-cadence-empty "
             "rx_firstread_attempts=24576 rx_firstread_empty=24576 "
             "rx_firstread_invalid=0 rx_firstread_failed=0 "
             "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
@@ -7147,8 +7343,43 @@ def test_gate_summary_preserves_host_eapol_firstread_empty_with_rx_source() -> N
     gates = normalizer.summarize_gates(events)
 
     assert gates.wifi_gate == 7
-    assert gates.wifi_blocker == "cyw43-data-rx-firstread-empty"
-    assert gates.wifi_exact == "cyw43-data-rx-firstread-empty"
+    assert gates.wifi_blocker == "cyw43-association-event-missing"
+    assert gates.wifi_exact == "cyw43-association-event-missing"
+    assert gates.wifi_phase == "association"
+
+
+def test_gate_summary_names_source_asserted_570a_as_asserted_empty() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-event-missing polls=24576 starts=0 "
+            "tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 event_rx=0 "
+            "control_rx=0 empty_polls=24576 associated=no link_up=no "
+            "assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "firstread_class=source-asserted-empty "
+            "rx_firstread_attempts=10 rx_firstread_empty=10 "
+            "rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=10 control_rx_firstread_empty=10 "
+            "control_rx_firstread_failed=0 last_rx_idle_detail=0x570a "
+            "last_rx_idle_result=0xab070040 last_control_rx_idle_detail=0x570a "
+            "last_control_rx_idle_result=0xab070040 "
+            "rxsrc_mode=owner-card-sampled rxsrc_probe_len=64 rxsrc_ien=0x07 "
+            "rxsrc_frame_ind=no rxsrc_host_int=yes rxsrc_card_int=no "
+            "rxsrc_f2_ready=yes control_rxsrc_mode=owner-card-sampled "
+            "control_rxsrc_probe_len=64 control_rxsrc_ien=0x07 "
+            "control_rxsrc_frame_ind=no control_rxsrc_host_int=yes "
+            "control_rxsrc_card_int=no control_rxsrc_f2_ready=yes "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no next_action=inspect-cyw43-rx-source-latch",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-source-asserted-empty"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-source-asserted-empty"
     assert gates.wifi_phase == "runtime-rx"
 
 
@@ -7326,6 +7557,205 @@ def test_host_eapol_rxtrace_blocker_names_queue_and_copy_failures() -> None:
         normalizer.cyw43_host_eapol_rxtrace_blocker({"rxtrace_flags": "0xd010"})
         is None
     )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {
+                "rxtrace_flags": "0x0010",
+                "rxtrace_retx_sample": "0x0121",
+                "rxtrace_retx_action": "block",
+            }
+        )
+        == "cyw43-data-rx-retransmit-live-source-rframe-unavailable"
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {
+                "control_rxtrace_flags": "0x0010",
+                "control_rxtrace_retx_sample": "0x0112",
+                "control_rxtrace_retx_action": "clear-stale",
+            }
+        )
+        is None
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {
+                "rxtrace_flags": "0x0010",
+                "rxtrace_retx_sample": "0x0125",
+                "rxtrace_retx_action": "read-source-asserted",
+            }
+        )
+        is None
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {
+                "rxtrace_flags": "0x0010",
+                "rxtrace_retx_sample": "0x0125",
+            }
+        )
+        is None
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {
+                "rxtrace_detail": "0x5709",
+                "rxtrace_request_len": "64",
+                "rxtrace_cmd53_arg": "0x11000040",
+                "rxtrace_cmd53_fn": "1",
+                "rxtrace_cmd53_addr": "0x08000",
+                "rxtrace_cmd53_write": "no",
+                "rxtrace_cmd53_mode": "byte",
+                "rxtrace_cmd53_count": "64",
+            }
+        )
+        == "cyw43-data-rx-cmd53-function-mismatch"
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {
+                "rxtrace_detail": "0x5709",
+                "rxtrace_request_len": "64",
+                "rxtrace_cmd53_arg": "0x21000020",
+                "rxtrace_cmd53_fn": "2",
+                "rxtrace_cmd53_addr": "0x08000",
+                "rxtrace_cmd53_write": "no",
+                "rxtrace_cmd53_mode": "byte",
+                "rxtrace_cmd53_count": "32",
+            }
+        )
+        == "cyw43-data-rx-firstread-cmd53-count-mismatch"
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {
+                "control_rxtrace_detail": "0x5709",
+                "control_rxtrace_request_len": "64",
+                "control_rxtrace_cmd53_arg": "0x29000001",
+                "control_rxtrace_cmd53_fn": "2",
+                "control_rxtrace_cmd53_addr": "0x08000",
+                "control_rxtrace_cmd53_write": "no",
+                "control_rxtrace_cmd53_mode": "block",
+                "control_rxtrace_cmd53_count": "1",
+            }
+        )
+        == "cyw43-control-rx-firstread-cmd53-block-mode"
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {
+                "rxtrace_detail": "0x5709",
+                "rxtrace_request_len": "64",
+                "rxtrace_cmd53_arg": "0x21000040",
+                "rxtrace_cmd53_fn": "2",
+                "rxtrace_cmd53_addr": "0x08000",
+                "rxtrace_cmd53_write": "no",
+                "rxtrace_cmd53_mode": "byte",
+                "rxtrace_cmd53_count": "64",
+                "rxtrace_transfer_result": "32",
+            }
+        )
+        == "cyw43-data-rx-firstread-short-read"
+    )
+    assert (
+        normalizer.cyw43_host_eapol_rxtrace_blocker(
+            {
+                "rxtrace_detail": "0x5709",
+                "rxtrace_request_len": "64",
+                "rxtrace_cmd53_arg": "0x21000040",
+                "rxtrace_cmd53_fn": "2",
+                "rxtrace_cmd53_addr": "0x08000",
+                "rxtrace_cmd53_write": "no",
+                "rxtrace_cmd53_mode": "byte",
+                "rxtrace_cmd53_count": "64",
+                "rxtrace_transfer_result": "0",
+                "rxtrace_payload_after": "0x00000000",
+            }
+        )
+        == "cyw43-data-rx-firstread-transfer-no-result"
+    )
+
+
+def test_gate_summary_names_host_eapol_rx_cmd53_shape_failure() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-event-missing "
+            "polls=24576 starts=0 data_rx=0 eapol_rx=0 event_rx=0 "
+            "associated=no link_up=no assoc_event=none "
+            "last_rx_idle_detail=0x5709 rxtrace_valid=yes "
+            "rxtrace_flags=0x0000 rxtrace_detail=0x5709 "
+            "rxtrace_request_len=64 rxtrace_cmd53_arg=0x21000040 "
+            "rxtrace_cmd53_fn=2 rxtrace_cmd53_addr=0x08000 "
+            "rxtrace_cmd53_write=no rxtrace_cmd53_mode=byte "
+            "rxtrace_cmd53_inc=no rxtrace_cmd53_count=64 "
+            "rxtrace_transfer_result=0x00000000 "
+            "rxtrace_payload_after=0x00000000 "
+            "control_rxtrace_valid=yes control_rxtrace_flags=0x0000 "
+            "next_action=inspect-cyw43-data-rx-cmd53-firstread",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-transfer-no-result"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-transfer-no-result"
+    assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_names_host_eapol_rx_sdio_owner_fault() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_OWNER_FAULT contract=cyw43455 "
+            "stage=cyw43-host-eapol-rx op=8 cmd=53 arg=0x21000040 "
+            "fn=2 win=0x08000 target=0x00000000 effective=0x00000000 "
+            "chunk_off=0 payload_off=0 inc=no write=no mode=byte "
+            "len=64 blksz=64 blkcnt=0 tm=0x0010 host=0x06 power=0x0f "
+            "clock=0x5007 present=0x01ff0506 int=0x00000010 "
+            "resp0=0x00000800 blkreg=0x00000040 detail=0x5103 "
+            "reason=sdio-descriptor-transfer-failed xfer_stage=response "
+            "xfer_status=0x000800 xfer_reason=sdio-r5-response "
+            "r5=0x0800 owner_window=function2-fifo retry=byte",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-sdio-owner-sdio-r5-response"
+    assert gates.wifi_exact == "cyw43-data-rx-sdio-owner-sdio-r5-response"
+    assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_names_retransmit_sample_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-event-missing "
+            "polls=24576 starts=0 data_rx=0 eapol_rx=0 event_rx=0 "
+            "associated=no link_up=no assoc_event=none "
+            "last_rx_idle_detail=0x5709 rxtrace_valid=yes "
+            "rxtrace_flags=0x0010 rxtrace_retx_sample=0x0121 "
+            "rxtrace_retx_action=block control_rxtrace_valid=yes "
+            "control_rxtrace_flags=0x0000 control_rxtrace_retx_sample=0x0000 "
+            "control_rxtrace_retx_action=none "
+            "next_action=inspect-cyw43-data-rx-cmd53-firstread",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert (
+        gates.wifi_blocker
+        == "cyw43-data-rx-retransmit-live-source-rframe-unavailable"
+    )
+    assert (
+        gates.wifi_exact
+        == "cyw43-data-rx-retransmit-live-source-rframe-unavailable"
+    )
+    assert gates.wifi_phase == "runtime-rx"
 
 
 def test_gate_summary_names_host_eapol_rx_queue_full() -> None:
@@ -7369,6 +7799,64 @@ def test_gate_summary_keeps_asserted_zero_retry_firstread_blocker() -> None:
     assert gates.wifi_gate == 7
     assert gates.wifi_blocker == "cyw43-data-rx-firstread-source-asserted-empty"
     assert gates.wifi_exact == "cyw43-data-rx-firstread-source-asserted-empty"
+    assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_preserves_v3_rxtrace_source_asserted_from_detail_line() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-not-associated "
+            "polls=24576 starts=0 data_rx=0 eapol_rx=0 event_rx=0 "
+            "associated=no link_up=no assoc_event=none assoc_probe=not-associated "
+            "assoc_probe_result=0xffffffef assoc_set_ssid_rescue=yes "
+            "firstread_class=preassoc-cadence-empty rx_firstread_attempts=4 "
+            "rx_firstread_empty=4 last_rx_idle_detail=0x570a "
+            "last_rx_idle_result=0xa8070040 next_action=inspect-cyw43-association-event-after-set-ssid-rescue",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_RXTRACE contract=cyw43455 lane=data "
+            "source_flags=0x0042 pre_source=0xa8070040 post_source=0x88070040 "
+            "pre_fresh=yes pre_asserted=yes pre_failed=no post_fresh=yes "
+            "post_asserted=no post_failed=no source_asserted_ever=yes "
+            "pre_int=0x00000000 post_int=0x00000000 pre_sdhci=0x00000000 "
+            "post_sdhci=0x00000000 first_nonzero=none first_nonzero_off=65535 "
+            "first_nonzero_byte=0x00 fifo_window_req=0x18000000 "
+            "fifo_window_programmed=0x18000000 fifo_window_readback=0x18000000 "
+            "fifo_window_flags=0x0007 fifo_window_ok=yes source_empty_polls=19",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-source-asserted-empty"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-source-asserted-empty"
+    assert gates.wifi_phase == "runtime-rx"
+
+
+def test_gate_summary_preserves_v3_rxtrace_shape_from_detail_line() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-not-associated "
+            "polls=24576 starts=0 data_rx=0 eapol_rx=0 event_rx=0 "
+            "associated=no link_up=no assoc_event=none assoc_probe=not-associated "
+            "assoc_probe_result=0xffffffef assoc_set_ssid_rescue=yes "
+            "firstread_class=preassoc-cadence-empty rx_firstread_attempts=4 "
+            "rx_firstread_empty=4 last_rx_idle_detail=0x5709 "
+            "last_rx_idle_result=0x00000000 next_action=inspect-cyw43-association-event-after-set-ssid-rescue",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_RXTRACE contract=cyw43455 lane=data "
+            "flags=0x0000 detail=0x5709 request_len=64 "
+            "cmd53_arg=0x21000040 cmd53_fn=2 cmd53_addr=0x08000 "
+            "cmd53_write=no cmd53_mode=byte cmd53_inc=no cmd53_count=64 "
+            "transfer_result=0x00000000 payload_after=0x00000000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-data-rx-firstread-transfer-no-result"
+    assert gates.wifi_exact == "cyw43-data-rx-firstread-transfer-no-result"
     assert gates.wifi_phase == "runtime-rx"
 
 
@@ -7524,6 +8012,46 @@ def test_gate_summary_preserves_not_associated_probe_over_firstread_empty() -> N
             "control_rxsrc_host_int=yes control_rxsrc_card_int=no "
             "control_rxsrc_f2_ready=yes last_flags=0x0000 last_len=0 "
             "last_ethertype=0x0000 last_ethertype_valid=no "
+            "next_action=inspect-cyw43-association-event-or-join-policy",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-association-not-associated"
+    assert gates.wifi_exact == "cyw43-association-not-associated"
+    assert gates.wifi_phase == "association"
+
+
+def test_gate_summary_names_not_associated_from_probe_status_fields() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-not-associated polls=8192 "
+            "starts=0 tx_retries=0 data_rx=0 eapol_rx=0 non_eapol_rx=0 "
+            "event_rx=0 control_rx=0 empty_polls=8192 associated=no "
+            "link_up=no assoc_event=none assoc_poll=0 post_assoc_polls=0 "
+            "assoc_probe=not-associated assoc_probe_result=0xffffffef "
+            "assoc_set_ssid_rescue=no firstread_class=preassoc-cadence-empty "
+            "rx_probe_poll=8192 rx_probe_flags=0x0004 "
+            "control_rx_probe_poll=8192 control_rx_probe_flags=0x0004 "
+            "rx_firstread_attempts=10 rx_firstread_empty=10 "
+            "rx_firstread_invalid=0 rx_firstread_failed=0 "
+            "rx_firstread_remainder_failed=0 rx_firstread_decode_miss=0 "
+            "control_rx_firstread_attempts=10 control_rx_firstread_empty=10 "
+            "control_rx_firstread_failed=0 last_rx_idle_detail=0x570a "
+            "last_rx_idle_result=0xa8070040 last_control_rx_idle_detail=0x570a "
+            "last_control_rx_idle_result=0xa8070040 "
+            "rxsrc_mode=owner-card-sampled-cached rxsrc_probe_len=64 "
+            "rxsrc_ien=0x07 rxsrc_frame_ind=no rxsrc_host_int=no "
+            "rxsrc_card_int=no rxsrc_f2_ready=yes "
+            "control_rxsrc_mode=owner-card-sampled-cached "
+            "control_rxsrc_probe_len=64 control_rxsrc_ien=0x07 "
+            "control_rxsrc_frame_ind=no control_rxsrc_host_int=no "
+            "control_rxsrc_card_int=no control_rxsrc_f2_ready=yes "
+            "last_flags=0x0000 last_len=0 last_ethertype=0x0000 "
+            "last_ethertype_valid=no "
             "next_action=inspect-cyw43-association-event-or-join-policy",
         ]
     )
@@ -8445,6 +8973,60 @@ def test_gate_summary_reports_runtime_rx_host_latch_spam_before_eapol() -> None:
     assert gates.wifi_exact == "cyw43-runtime-rx-host-latch-spam"
     assert gates.wifi_phase == "runtime-rx"
     assert gates.wifi_blocker_line > 0
+
+
+def test_gate_summary_reports_explicit_wifi_gate7_subgate() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+            "path=primary-bsscfg:join action=ready ssid_len=12 result=0x00000000",
+            "CYW43_DRIVER_TASK_WIFI_GATE7 contract=cyw43455 "
+            "source=join-request subgate=7a name=join-submit status=ready "
+            "reason=primary-bsscfg:join polls=0 associated=no link_up=no "
+            "event_rx=0 eapol_rx=0 data_rx=0 result=0x00000000",
+            "CYW43_DRIVER_TASK_WIFI_GATE7 contract=cyw43455 "
+            "source=host-eapol-status subgate=7b name=wrong-producer-name "
+            "status=required reason=cyw43-association-not-associated "
+            "polls=8193 associated=no link_up=no event_rx=0 eapol_rx=0 "
+            "data_rx=0 result=0xffffffef",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-not-associated "
+            "polls=8193 data_rx=0 eapol_rx=0 event_rx=0 empty_polls=8193 "
+            "associated=no link_up=no assoc_event=none "
+            "assoc_probe=not-associated assoc_probe_result=0xffffffef "
+            "assoc_set_ssid_rescue=yes firstread_class=preassoc-cadence-empty "
+            "rx_firstread_empty=1 control_rx_firstread_empty=0",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.wifi_gate == 7
+    assert gates.wifi_blocker == "cyw43-association-not-associated"
+    assert record["WIFI_SUBGATE"] == "7b"
+    assert record["WIFI_SUBGATE_NAME"] == "association"
+
+
+def test_gate_summary_infers_wifi_gate7_subgate_for_old_association_logs() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=cyw43-association-not-associated "
+            "polls=24576 data_rx=0 eapol_rx=0 event_rx=0 empty_polls=24576 "
+            "associated=no link_up=no assoc_event=none "
+            "assoc_probe=not-associated assoc_probe_result=0xffffffef "
+            "assoc_set_ssid_rescue=yes firstread_class=preassoc-cadence-empty "
+            "rx_firstread_empty=9 control_rx_firstread_empty=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE"] == 7
+    assert record["WIFI_BLOCKER"] == "cyw43-association-not-associated"
+    assert record["WIFI_SUBGATE"] == "7b"
+    assert record["WIFI_SUBGATE_NAME"] == "association"
 
 
 def test_gate_summary_reports_wpa_auth_initial_join_security_loop() -> None:

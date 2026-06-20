@@ -50,6 +50,7 @@ TRACE_SEGMENT_RE = re.compile(
     r"|\[cohsh-net\]"
     r"|\[net-console\]"
     r"|\[smp\]"
+    r"|CYW43_"
     r"|(?<![A-Za-z0-9_.:-])(?:usb:|USB:|wifi:|WiFi:|WIFI:)"
     r"|(?<![A-Za-z0-9_.:-])(?:OK|ERR) NETTEST"
     r"|Kernel entry via Interrupt"
@@ -478,6 +479,8 @@ class GateSummary:
     usb_blocker: str
     wifi_gate: int
     wifi_blocker: str
+    wifi_subgate: str = "none"
+    wifi_subgate_name: str = "none"
     usb_oldgood_replay: bool = False
     usb_oldgood_last: str = "none"
     usb_oldgood_missing: str = "not-run"
@@ -584,6 +587,11 @@ class GateSummary:
     usb_keyboard_no_replies: int = 0
     usb_keyboard_poll_cooldown: int = 0
     usb_keyboard_cooldown_skips: int = 0
+    usb_runtime_queued_reports: int = 0
+    usb_runtime_transfer_events: int = 0
+    usb_runtime_report_status: str = "unknown"
+    usb_event_loop_runtime_skipped: int = 0
+    usb_post_first_byte_blocker: str = "none"
     serial_driver_accepted: bool = False
     serial_fallback_active: bool = False
     serial_runtime_frontier: str = "none"
@@ -610,6 +618,8 @@ class GateSummary:
             "USB_BLOCKER": self.usb_blocker,
             "WIFI_GATE": self.wifi_gate,
             "WIFI_BLOCKER": self.wifi_blocker,
+            "WIFI_SUBGATE": self.wifi_subgate,
+            "WIFI_SUBGATE_NAME": self.wifi_subgate_name,
             "USB_OLDGOOD_REPLAY": "yes" if self.usb_oldgood_replay else "no",
             "USB_OLDGOOD_LAST": self.usb_oldgood_last,
             "USB_OLDGOOD_MISSING": self.usb_oldgood_missing,
@@ -768,6 +778,11 @@ class GateSummary:
             "USB_KEYBOARD_NO_REPLIES": self.usb_keyboard_no_replies,
             "USB_KEYBOARD_POLL_COOLDOWN": self.usb_keyboard_poll_cooldown,
             "USB_KEYBOARD_COOLDOWN_SKIPS": self.usb_keyboard_cooldown_skips,
+            "USB_RUNTIME_QUEUED_REPORTS": self.usb_runtime_queued_reports,
+            "USB_RUNTIME_TRANSFER_EVENTS": self.usb_runtime_transfer_events,
+            "USB_RUNTIME_REPORT_STATUS": self.usb_runtime_report_status,
+            "USB_EVENT_LOOP_RUNTIME_SKIPPED": self.usb_event_loop_runtime_skipped,
+            "USB_POST_FIRST_BYTE_BLOCKER": self.usb_post_first_byte_blocker,
             "SERIAL_DRIVER_ACCEPTED": (
                 "yes" if self.serial_driver_accepted else "no"
             ),
@@ -1029,6 +1044,7 @@ def classify_domain(line: str) -> str | None:
         line.startswith("wifi:")
         or line.startswith("WiFi:")
         or line.startswith("WIFI:")
+        or line.startswith("CYW43_")
         or line.startswith("OK NETTEST")
         or line.startswith("ERR NETTEST")
         or (
@@ -1918,12 +1934,30 @@ CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES = frozenset(
     set(CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS.values())
     | {
         "cyw43-control-rx-retransmit-ack-timeout",
+        "cyw43-control-rx-retransmit-live-source-rframe-unavailable",
+        "cyw43-control-rx-retransmit-sample-block",
+        "cyw43-control-rx-cmd53-fifo-window-mismatch",
+        "cyw43-control-rx-cmd53-function-mismatch",
+        "cyw43-control-rx-cmd53-write",
+        "cyw43-control-rx-firstread-cmd53-block-mode",
+        "cyw43-control-rx-firstread-cmd53-count-mismatch",
+        "cyw43-control-rx-firstread-short-read",
+        "cyw43-control-rx-firstread-transfer-no-result",
         "cyw43-control-rx-queue-push-failed",
         "cyw43-control-rx-queue-full",
         "cyw43-control-rx-queue-invalid-len",
         "cyw43-control-rx-queue-invalid-flags",
         "cyw43-control-rx-ring-copy-failed",
         "cyw43-data-rx-retransmit-ack-timeout",
+        "cyw43-data-rx-retransmit-live-source-rframe-unavailable",
+        "cyw43-data-rx-retransmit-sample-block",
+        "cyw43-data-rx-cmd53-fifo-window-mismatch",
+        "cyw43-data-rx-cmd53-function-mismatch",
+        "cyw43-data-rx-cmd53-write",
+        "cyw43-data-rx-firstread-cmd53-block-mode",
+        "cyw43-data-rx-firstread-cmd53-count-mismatch",
+        "cyw43-data-rx-firstread-short-read",
+        "cyw43-data-rx-firstread-transfer-no-result",
         "cyw43-data-rx-queue-push-failed",
         "cyw43-data-rx-queue-full",
         "cyw43-data-rx-queue-invalid-len",
@@ -1946,34 +1980,433 @@ CYW43_RXTRACE_RETRANSMIT_RFRAME_ZERO = 0x1000
 CYW43_RXTRACE_RETRANSMIT_RFRAME_READY = 0x2000
 CYW43_RXTRACE_RETRANSMIT_SOURCE_ASSERTED = 0x4000
 CYW43_RXTRACE_RETRANSMIT_ASSERTED_ZERO_READ = 0x8000
+CYW43_RXTRACE_RETX_ACTION_MASK = 0x000F
+CYW43_RXTRACE_RETX_ACTION_BLOCK = 1
+CYW43_RXTRACE_RETX_ACTION_CLEAR_STALE = 2
+CYW43_RXTRACE_RETX_ACTION_READ_ASSERTED_ZERO = 3
+CYW43_RXTRACE_RETX_ACTION_READ_RFRAME_READY = 4
+CYW43_RXTRACE_RETX_ACTION_READ_SOURCE_ASSERTED = 5
+CYW43_RXTRACE_RETX_SOURCE_SHIFT = 4
+CYW43_RXTRACE_RETX_SOURCE_MASK = 0x000F
+CYW43_RXTRACE_RETX_SOURCE_ASSERTED = 2
+CYW43_RXTRACE_RETX_RFRAME_SHIFT = 8
+CYW43_RXTRACE_RETX_RFRAME_MASK = 0x000F
+CYW43_RXTRACE_RETX_RFRAME_UNAVAILABLE = 1
+CYW43_RXTRACE_SOURCE_PRE_ASSERTED = 0x0002
+CYW43_RXTRACE_SOURCE_POST_ASSERTED = 0x0008
+CYW43_CMD53_BYTE_MODE_MAX = 512
+CYW43_CMD53_FUNCTION2 = 2
+CYW43_FUNCTION2_FIFO_WINDOW = 0x8000
+CYW43_HOST_EAPOL_RX_OWNER_BLOCKER_PREFIXES = (
+    "cyw43-control-rx-sdio-owner-",
+    "cyw43-data-rx-sdio-owner-",
+)
+CYW43_HOST_EAPOL_FIRSTREAD_DETAILS = frozenset(
+    {
+        0x5709,
+        0x570A,
+        0x570B,
+        0x570E,
+    }
+)
+CYW43_HOST_EAPOL_RX_CMD53_DETAILS = CYW43_HOST_EAPOL_FIRSTREAD_DETAILS | {
+    0x5706,
+    0x570C,
+    0x570D,
+}
 CYW43_ASSOCIATION_EVENT_MISSING = "cyw43-association-event-missing"
 CYW43_HOST_EAPOL_BSSID_TX_SUBMIT_FAIL = (
     "cyw43-host-eapol-bssid-probe-tx-submit-fail"
 )
+WIFI_GATE7_SUBGATE_NAMES = {
+    "7a": "join-submit",
+    "7b": "association",
+    "7c": "eapol-rx",
+    "7d": "eapol-handshake",
+    "7e": "secure-release",
+}
+
+
+def cyw43_host_eapol_rx_blocker_name(value: str) -> bool:
+    """Return true for host-EAPOL RX blockers, including owner-fault variants."""
+
+    return value in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES or value.startswith(
+        CYW43_HOST_EAPOL_RX_OWNER_BLOCKER_PREFIXES
+    )
+
+
+def normalize_wifi_gate7_subgate(value: str | None) -> str:
+    """Return a stable Gate 7 sub-gate label."""
+
+    if value is None:
+        return "none"
+    subgate = value.lower().strip()
+    return subgate if subgate in WIFI_GATE7_SUBGATE_NAMES else "none"
+
+
+def summarize_wifi_gate7_subgate(
+    events: Iterable[TraceEvent], wifi_gate: int, wifi_blocker: str
+) -> tuple[str, str]:
+    """Return the latest WiFi Gate 7 sub-gate frontier."""
+
+    latest: tuple[str, str] | None = None
+    for event in events:
+        raw = event.raw.lower()
+        if (
+            "cyw43_driver_task_wifi_gate7" not in raw
+            and "cyw43_driver_task_join_submit_window" not in raw
+        ):
+            continue
+        subgate = normalize_wifi_gate7_subgate(event.fields.get("subgate"))
+        if subgate == "none":
+            continue
+        latest = (subgate, WIFI_GATE7_SUBGATE_NAMES[subgate])
+    if latest is not None:
+        return latest
+    if wifi_gate != 7:
+        return "none", "none"
+    if wifi_blocker in {
+        "cyw43-association-event-missing",
+        "cyw43-association-not-associated",
+    }:
+        return "7b", "association"
+    if wifi_blocker in {"host-eapol-required", "wifi-host-eapol-pending"}:
+        return "7c", "eapol-rx"
+    if wifi_blocker in {
+        "join-pending",
+        "join-completion-unproven",
+        "firmware-supplicant-unsupported",
+        "wsec-pmk-bad-argument",
+    } or wifi_blocker.startswith("join-security-"):
+        return "7a", "join-submit"
+    if cyw43_host_eapol_rx_blocker_name(wifi_blocker):
+        return "7c", "eapol-rx"
+    return "7a", "join-submit"
+
+
+def cyw43_field_yes(fields: dict[str, str], key: str) -> bool:
+    """Return true when a decoded trace field carries a yes/true value."""
+
+    return fields.get(key, "").lower() in {"yes", "true", "1"}
+
+
+def cyw43_trace_field(fields: dict[str, str], prefix: str, suffix: str) -> str | None:
+    """Return a prefixed trace field, or an unprefixed standalone field."""
+
+    key = f"{prefix}_{suffix}" if prefix else suffix
+    return fields.get(key)
+
+
+def cyw43_host_eapol_rx_source_asserted(fields: dict[str, str], prefix: str) -> bool:
+    """Return true when a host-EAPOL source lane reports pending RX source bits."""
+
+    return (
+        cyw43_field_yes(fields, f"{prefix}_f2_ready")
+        and (
+            cyw43_field_yes(fields, f"{prefix}_frame_ind")
+            or cyw43_field_yes(fields, f"{prefix}_host_int")
+            or cyw43_field_yes(fields, f"{prefix}_card_int")
+        )
+    )
+
+
+def cyw43_host_eapol_rxtrace_source_asserted(
+    fields: dict[str, str], prefix: str
+) -> bool:
+    """Return true when v3 RX trace source flags show asserted source bits."""
+
+    def field_name(suffix: str) -> str:
+        return f"{prefix}_{suffix}" if prefix else suffix
+
+    source_flags = parse_hex_int(fields.get(field_name("source_flags"))) or 0
+    if source_flags & (
+        CYW43_RXTRACE_SOURCE_PRE_ASSERTED | CYW43_RXTRACE_SOURCE_POST_ASSERTED
+    ):
+        return True
+    if fields.get(field_name("source_asserted_ever"), "").lower() == "yes":
+        return True
+    if fields.get(field_name("pre_asserted"), "").lower() == "yes":
+        return True
+    if fields.get(field_name("post_asserted"), "").lower() == "yes":
+        return True
+    flags = parse_hex_int(fields.get(field_name("flags"))) or 0
+    return bool(
+        flags
+        & (
+            CYW43_RXTRACE_RETRANSMIT_SOURCE_ASSERTED
+            | CYW43_RXTRACE_RETRANSMIT_ASSERTED_ZERO_READ
+        )
+    )
+
+
+def cyw43_host_eapol_any_rx_source_asserted(fields: dict[str, str]) -> bool:
+    """Return true when status fields prove live RX source assertion."""
+
+    firstread_class = fields.get("firstread_class", "").lower()
+    return (
+        firstread_class == "source-asserted-empty"
+        or cyw43_host_eapol_rx_source_asserted(fields, "rxsrc")
+        or cyw43_host_eapol_rx_source_asserted(fields, "control_rxsrc")
+        or cyw43_host_eapol_rxtrace_source_asserted(fields, "rxtrace")
+        or cyw43_host_eapol_rxtrace_source_asserted(fields, "control_rxtrace")
+    )
+
+
+def cyw43_host_eapol_quiet_preassoc_firstread(fields: dict[str, str]) -> bool:
+    """Return true when an empty firstread is only pre-association cadence evidence."""
+
+    firstread_class = fields.get("firstread_class", "").lower()
+    if firstread_class == "preassoc-cadence-empty":
+        return True
+    if firstread_class == "source-asserted-empty":
+        return False
+    reason = normalize_wifi_blocker(fields.get("reason", ""))
+    detail = parse_hex_int(fields.get("last_rx_idle_detail")) or 0
+    if detail == 0x570E:
+        return False
+    if (
+        reason == "cyw43-association-not-associated"
+        or cyw43_host_eapol_post_rescue_association_gap(fields)
+    ):
+        return True
+    return (
+        reason in {CYW43_ASSOCIATION_EVENT_MISSING, "cyw43-association-not-associated"}
+        and fields.get("associated", "").lower() in {"", "no"}
+        and not cyw43_host_eapol_any_rx_source_asserted(fields)
+    )
+
+
+def cyw43_host_eapol_retx_sample(fields: dict[str, str], prefix: str) -> int:
+    """Return the decoded host-EAPOL retransmit sample word."""
+
+    return parse_hex_int(cyw43_trace_field(fields, prefix, "retx_sample")) or 0
+
+
+def cyw43_host_eapol_retx_action(fields: dict[str, str], prefix: str) -> int:
+    """Return the retransmit sample action for a host-EAPOL trace lane."""
+
+    action = cyw43_trace_field(fields, prefix, "retx_action")
+    if action == "block":
+        return CYW43_RXTRACE_RETX_ACTION_BLOCK
+    if action == "clear-stale":
+        return CYW43_RXTRACE_RETX_ACTION_CLEAR_STALE
+    if action == "read-asserted-zero":
+        return CYW43_RXTRACE_RETX_ACTION_READ_ASSERTED_ZERO
+    if action == "read-rframe-ready":
+        return CYW43_RXTRACE_RETX_ACTION_READ_RFRAME_READY
+    if action == "read-source-asserted":
+        return CYW43_RXTRACE_RETX_ACTION_READ_SOURCE_ASSERTED
+    return cyw43_host_eapol_retx_sample(fields, prefix) & CYW43_RXTRACE_RETX_ACTION_MASK
+
+
+def cyw43_host_eapol_retx_blocker(fields: dict[str, str], prefix: str, lane: str) -> str | None:
+    """Return the precise retransmit sample blocker for a host-EAPOL lane."""
+
+    sample = cyw43_host_eapol_retx_sample(fields, prefix)
+    if cyw43_host_eapol_retx_action(fields, prefix) != CYW43_RXTRACE_RETX_ACTION_BLOCK:
+        return None
+    source = (sample >> CYW43_RXTRACE_RETX_SOURCE_SHIFT) & CYW43_RXTRACE_RETX_SOURCE_MASK
+    rframe = (sample >> CYW43_RXTRACE_RETX_RFRAME_SHIFT) & CYW43_RXTRACE_RETX_RFRAME_MASK
+    if (
+        source == CYW43_RXTRACE_RETX_SOURCE_ASSERTED
+        and rframe == CYW43_RXTRACE_RETX_RFRAME_UNAVAILABLE
+    ):
+        return f"cyw43-{lane}-rx-retransmit-live-source-rframe-unavailable"
+    return f"cyw43-{lane}-rx-retransmit-sample-block"
+
+
+def cyw43_host_eapol_cmd53_arg(fields: dict[str, str], prefix: str) -> int:
+    """Return the raw CMD53 argument recorded by a host-EAPOL trace lane."""
+
+    return parse_hex_int(cyw43_trace_field(fields, prefix, "cmd53_arg")) or 0
+
+
+def cyw43_host_eapol_cmd53_bool(
+    fields: dict[str, str], prefix: str, suffix: str, arg: int
+) -> bool:
+    """Return a decoded CMD53 boolean field, falling back to the raw argument."""
+
+    value = (cyw43_trace_field(fields, prefix, suffix) or "").lower()
+    if value in {"yes", "true", "1"}:
+        return True
+    if value in {"no", "false", "0"}:
+        return False
+    if suffix == "cmd53_write":
+        return arg & (1 << 31) != 0
+    if suffix == "cmd53_inc":
+        return arg & (1 << 26) != 0
+    return False
+
+
+def cyw43_host_eapol_cmd53_function(
+    fields: dict[str, str], prefix: str, arg: int
+) -> int:
+    """Return the CMD53 function for a host-EAPOL trace lane."""
+
+    return parse_hex_int(cyw43_trace_field(fields, prefix, "cmd53_fn")) or (
+        (arg >> 28) & 0x7
+    )
+
+
+def cyw43_host_eapol_cmd53_addr(fields: dict[str, str], prefix: str, arg: int) -> int:
+    """Return the CMD53 address/window for a host-EAPOL trace lane."""
+
+    return parse_hex_int(cyw43_trace_field(fields, prefix, "cmd53_addr")) or (
+        (arg >> 9) & 0x1FFFF
+    )
+
+
+def cyw43_host_eapol_cmd53_mode(fields: dict[str, str], prefix: str, arg: int) -> str:
+    """Return the CMD53 transfer mode for a host-EAPOL trace lane."""
+
+    mode = (cyw43_trace_field(fields, prefix, "cmd53_mode") or "").lower()
+    if mode:
+        return mode
+    if arg == 0:
+        return "none"
+    if arg & (1 << 27):
+        return "block"
+    if cyw43_host_eapol_cmd53_count(fields, prefix, arg) == CYW43_CMD53_BYTE_MODE_MAX:
+        return "byte512"
+    return "byte"
+
+
+def cyw43_host_eapol_cmd53_count(fields: dict[str, str], prefix: str, arg: int) -> int:
+    """Return the decoded CMD53 byte or block count for a host-EAPOL trace lane."""
+
+    decoded = parse_hex_int(cyw43_trace_field(fields, prefix, "cmd53_count"))
+    if decoded is not None:
+        return decoded
+    if arg == 0:
+        return 0
+    raw_count = arg & 0x1FF
+    if arg & (1 << 27) == 0 and raw_count == 0:
+        return CYW43_CMD53_BYTE_MODE_MAX
+    return raw_count
+
+
+def cyw43_host_eapol_rxtrace_shape_blocker(
+    fields: dict[str, str], prefix: str, lane: str
+) -> str | None:
+    """Return a CMD53 shape or transfer-result blocker for a host-EAPOL lane."""
+
+    detail = parse_hex_int(cyw43_trace_field(fields, prefix, "detail")) or 0
+    if detail not in CYW43_HOST_EAPOL_RX_CMD53_DETAILS:
+        return None
+    arg = cyw43_host_eapol_cmd53_arg(fields, prefix)
+    if arg == 0:
+        return None
+    function = cyw43_host_eapol_cmd53_function(fields, prefix, arg)
+    if function != CYW43_CMD53_FUNCTION2:
+        return f"cyw43-{lane}-rx-cmd53-function-mismatch"
+    if cyw43_host_eapol_cmd53_bool(fields, prefix, "cmd53_write", arg):
+        return f"cyw43-{lane}-rx-cmd53-write"
+    addr = cyw43_host_eapol_cmd53_addr(fields, prefix, arg)
+    if addr & CYW43_FUNCTION2_FIFO_WINDOW == 0:
+        return f"cyw43-{lane}-rx-cmd53-fifo-window-mismatch"
+
+    if detail in CYW43_HOST_EAPOL_FIRSTREAD_DETAILS:
+        mode = cyw43_host_eapol_cmd53_mode(fields, prefix, arg)
+        request_len = parse_hex_int(cyw43_trace_field(fields, prefix, "request_len")) or 0
+        count = cyw43_host_eapol_cmd53_count(fields, prefix, arg)
+        if mode == "block":
+            return f"cyw43-{lane}-rx-firstread-cmd53-block-mode"
+        if request_len != 0 and count != 0 and count != request_len:
+            return f"cyw43-{lane}-rx-firstread-cmd53-count-mismatch"
+        transfer_result = (
+            parse_hex_int(cyw43_trace_field(fields, prefix, "transfer_result")) or 0
+        )
+        if request_len != 0 and 0 < transfer_result < request_len:
+            return f"cyw43-{lane}-rx-firstread-short-read"
+        payload_after = (
+            parse_hex_int(cyw43_trace_field(fields, prefix, "payload_after")) or 0
+        )
+        if detail == 0x5709 and transfer_result == 0 and payload_after == 0:
+            return f"cyw43-{lane}-rx-firstread-transfer-no-result"
+    return None
+
+
+def cyw43_host_eapol_rxtrace_lane_blocker(
+    fields: dict[str, str], prefix: str, lane: str
+) -> str | None:
+    """Return the precise blocker for one host-EAPOL RX trace lane."""
+
+    flags = parse_hex_int(cyw43_trace_field(fields, prefix, "flags")) or 0
+    if flags & CYW43_RXTRACE_RING_COPY_FAILED:
+        return f"cyw43-{lane}-rx-ring-copy-failed"
+    if flags & CYW43_RXTRACE_QUEUE_FULL:
+        return f"cyw43-{lane}-rx-queue-full"
+    if flags & CYW43_RXTRACE_QUEUE_INVALID_LEN:
+        return f"cyw43-{lane}-rx-queue-invalid-len"
+    if flags & CYW43_RXTRACE_QUEUE_INVALID_FLAGS:
+        return f"cyw43-{lane}-rx-queue-invalid-flags"
+    if flags & CYW43_RXTRACE_QUEUE_PUSH_FAILED:
+        return f"cyw43-{lane}-rx-queue-push-failed"
+    retx_blocker = cyw43_host_eapol_retx_blocker(fields, prefix, lane)
+    if retx_blocker is not None:
+        return retx_blocker
+    shape_blocker = cyw43_host_eapol_rxtrace_shape_blocker(fields, prefix, lane)
+    if shape_blocker is not None:
+        return shape_blocker
+    retx_action = cyw43_host_eapol_retx_action(fields, prefix)
+    if retx_action in {
+        CYW43_RXTRACE_RETX_ACTION_CLEAR_STALE,
+        CYW43_RXTRACE_RETX_ACTION_READ_ASSERTED_ZERO,
+        CYW43_RXTRACE_RETX_ACTION_READ_RFRAME_READY,
+        CYW43_RXTRACE_RETX_ACTION_READ_SOURCE_ASSERTED,
+    }:
+        return None
+    if (
+        flags & CYW43_RXTRACE_RETRANSMIT_ACK_TIMEOUT
+        and flags & CYW43_RXTRACE_RETRANSMIT_STALE_CLEARED == 0
+        and flags & CYW43_RXTRACE_RETRANSMIT_ASSERTED_ZERO_READ == 0
+    ):
+        return f"cyw43-{lane}-rx-retransmit-ack-timeout"
+    return None
 
 
 def cyw43_host_eapol_rxtrace_blocker(fields: dict[str, str]) -> str | None:
     """Return the precise host-EAPOL RX trace blocker, if present."""
 
     for prefix, lane in (("rxtrace", "data"), ("control_rxtrace", "control")):
-        flags = parse_hex_int(fields.get(f"{prefix}_flags")) or 0
-        if flags & CYW43_RXTRACE_RING_COPY_FAILED:
-            return f"cyw43-{lane}-rx-ring-copy-failed"
-        if flags & CYW43_RXTRACE_QUEUE_FULL:
-            return f"cyw43-{lane}-rx-queue-full"
-        if flags & CYW43_RXTRACE_QUEUE_INVALID_LEN:
-            return f"cyw43-{lane}-rx-queue-invalid-len"
-        if flags & CYW43_RXTRACE_QUEUE_INVALID_FLAGS:
-            return f"cyw43-{lane}-rx-queue-invalid-flags"
-        if flags & CYW43_RXTRACE_QUEUE_PUSH_FAILED:
-            return f"cyw43-{lane}-rx-queue-push-failed"
-        if (
-            flags & CYW43_RXTRACE_RETRANSMIT_ACK_TIMEOUT
-            and flags & CYW43_RXTRACE_RETRANSMIT_STALE_CLEARED == 0
-            and flags & CYW43_RXTRACE_RETRANSMIT_ASSERTED_ZERO_READ == 0
-        ):
-            return f"cyw43-{lane}-rx-retransmit-ack-timeout"
+        blocker = cyw43_host_eapol_rxtrace_lane_blocker(fields, prefix, lane)
+        if blocker is not None:
+            return blocker
     return None
+
+
+def cyw43_host_eapol_rxtrace_line_blocker(fields: dict[str, str]) -> str | None:
+    """Return the precise blocker from one standalone v3 RXTRACE line."""
+
+    lane = fields.get("lane", "data").lower()
+    if lane not in {"data", "control"}:
+        lane = "data"
+    return cyw43_host_eapol_rxtrace_lane_blocker(fields, "", lane)
+
+
+def cyw43_sdio_owner_fault_reason_slug(value: str) -> str:
+    """Return a stable suffix for a CYW43 SDIO owner fault reason."""
+
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "fault"
+
+
+def cyw43_host_eapol_sdio_owner_fault_blocker(fields: dict[str, str]) -> str | None:
+    """Return the host-EAPOL RX owner-fault blocker, if a line carries one."""
+
+    owner_window = fields.get("owner_window", "").lower()
+    function = parse_hex_int(fields.get("fn")) or 0
+    if owner_window != "function2-fifo" and function != CYW43_CMD53_FUNCTION2:
+        return None
+    if fields.get("write", "").lower() == "yes":
+        return None
+    op = parse_hex_int(fields.get("op")) or 0
+    stage = fields.get("stage", "").lower()
+    if op not in {8, 10} and "eapol" not in stage and "rx" not in stage:
+        return None
+    lane = "control" if op == 10 or "control" in stage else "data"
+    reason = fields.get("xfer_reason") or fields.get("reason") or "fault"
+    return f"cyw43-{lane}-rx-sdio-owner-{cyw43_sdio_owner_fault_reason_slug(reason)}"
 
 
 def cyw43_host_eapol_firstread_blocker(fields: dict[str, str]) -> str | None:
@@ -1982,6 +2415,11 @@ def cyw43_host_eapol_firstread_blocker(fields: dict[str, str]) -> str | None:
     rxtrace_blocker = cyw43_host_eapol_rxtrace_blocker(fields)
     if rxtrace_blocker is not None:
         return rxtrace_blocker
+    firstread_class = fields.get("firstread_class", "").lower()
+    if firstread_class == "source-asserted-empty":
+        return CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
+    if cyw43_host_eapol_quiet_preassoc_firstread(fields):
+        return None
     detail = parse_hex_int(fields.get("last_rx_idle_detail"))
     if detail in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS:
         return CYW43_HOST_EAPOL_FIRSTREAD_BLOCKERS[detail]
@@ -2019,7 +2457,21 @@ def summarize_host_eapol_firstread_status(
 
     latest: tuple[str, str, int] | None = None
     for event in events:
-        if "cyw43_driver_task_host_eapol_status" not in event.raw.lower():
+        raw = event.raw.lower()
+        if "cyw43_sdio_owner_fault" in raw:
+            owner_blocker = cyw43_host_eapol_sdio_owner_fault_blocker(event.fields)
+            if owner_blocker is not None:
+                latest = (owner_blocker, "runtime-rx", event.line)
+            continue
+        if "cyw43_driver_task_host_eapol_rxtrace" in raw:
+            rxtrace_blocker = cyw43_host_eapol_rxtrace_line_blocker(event.fields)
+            if rxtrace_blocker is not None:
+                latest = (rxtrace_blocker, "runtime-rx", event.line)
+                continue
+            if cyw43_host_eapol_rxtrace_source_asserted(event.fields, ""):
+                latest = (CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY, "runtime-rx", event.line)
+            continue
+        if "cyw43_driver_task_host_eapol_status" not in raw:
             continue
         fields = event.fields
         blocker = cyw43_host_eapol_firstread_blocker(fields)
@@ -2027,14 +2479,24 @@ def summarize_host_eapol_firstread_status(
             continue
         status = fields.get("status", "").lower()
         reason = normalize_wifi_blocker(fields.get("reason", ""))
+        rxtrace_blocker = cyw43_host_eapol_rxtrace_blocker(fields)
         source_asserted_empty = blocker == CYW43_HOST_EAPOL_SOURCE_ASSERTED_EMPTY
-        if reason == CYW43_ASSOCIATION_EVENT_MISSING and not source_asserted_empty:
+        if (
+            reason == CYW43_ASSOCIATION_EVENT_MISSING
+            and rxtrace_blocker is None
+            and not source_asserted_empty
+        ):
             continue
-        if reason == "cyw43-association-not-associated" and not source_asserted_empty:
+        if (
+            reason == "cyw43-association-not-associated"
+            and rxtrace_blocker is None
+            and not source_asserted_empty
+        ):
             continue
         if (
             status == "required"
             and cyw43_host_eapol_post_rescue_association_gap(fields)
+            and rxtrace_blocker is None
             and not source_asserted_empty
         ):
             continue
@@ -2230,7 +2692,11 @@ def normalize_wifi_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
-    if stripped in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES:
+    if "cyw43-transport-command-admission" in lower:
+        return "cyw43-runtime-command-rejected"
+    if stripped in {"21259", "0x530b"}:
+        return "control-plane-reply-idle-loop"
+    if cyw43_host_eapol_rx_blocker_name(stripped):
         return stripped
     if "linked_runtime_progress" in lower:
         marker_blocker = parse_fields(value).get("blocker", "").lower()
@@ -4386,7 +4852,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             explicit_blocker = raw_contract_blocker
         if (
             raw_contract_blocker in precise_control_plane_blockers
-            and explicit_blocker not in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES
+            and not cyw43_host_eapol_rx_blocker_name(explicit_blocker or "")
         ):
             explicit_blocker = raw_contract_blocker
         if raw_contract_blocker == "runtime-rx-host-latch-spam":
@@ -6106,7 +6572,7 @@ def summarize_wifi_failure_detail(
                 exact = "cyw43-join-programming-host-latch-loop"
             if candidate == "runtime-rx-host-latch-spam":
                 exact = "cyw43-runtime-rx-host-latch-spam"
-            if candidate in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES:
+            if cyw43_host_eapol_rx_blocker_name(candidate):
                 exact = candidate
             if candidate in JOIN_SECURITY_EXACT_BY_BLOCKER:
                 exact = JOIN_SECURITY_EXACT_BY_BLOCKER[candidate]
@@ -6127,7 +6593,7 @@ def summarize_wifi_failure_detail(
                 else
                 "runtime-rx"
                 if candidate == "runtime-rx-host-latch-spam"
-                or candidate in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES
+                or cyw43_host_eapol_rx_blocker_name(candidate)
                 else
                 socram_core_ctrl_stage
                 or (
@@ -6235,6 +6701,16 @@ class UsbKeyboardPressureSummary:
     cooldown_skips: int = 0
 
 
+@dataclass(frozen=True)
+class UsbRuntimeQueueSummary:
+    """Latest USB runtime queue and sustained-input counters."""
+
+    queued_reports: int = 0
+    transfer_events: int = 0
+    report_status: str = "unknown"
+    runtime_skipped: int = 0
+
+
 def update_usb_keyboard_pressure_field(
     values: dict[str, int],
     fields: Mapping[str, str],
@@ -6262,7 +6738,8 @@ def summarize_usb_keyboard_pressure(
             raw.startswith("usb: local-seat drops")
             or raw.startswith("usb: stall_telemetry")
             or raw.startswith("usb: keyboard_trace")
-            or raw.startswith("[smp] activity local-seat")
+            or raw.startswith("usb: sustained_input")
+            or raw.startswith("[smp] activity local-seat ")
         ):
             update_usb_keyboard_pressure_field(
                 values, fields, "no_replies", "driver_task_no_replies"
@@ -6280,6 +6757,35 @@ def summarize_usb_keyboard_pressure(
                 values, fields, "cooldown_skips", "cooldown_skips"
             )
     return UsbKeyboardPressureSummary(**values)
+
+
+def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueueSummary:
+    """Return latest USB runtime queue and event-loop counters."""
+
+    summary = UsbRuntimeQueueSummary()
+    values = summary.__dict__.copy()
+    for event in events:
+        raw = event.raw.lower()
+        fields = event.fields
+        if (
+            raw.startswith("usb: runtime_queue")
+            or raw.startswith("usb: stall_telemetry")
+            or raw.startswith("usb: sustained_input")
+        ):
+            queued_reports = parse_hex_int(fields.get("queued_reports"))
+            if queued_reports is not None:
+                values["queued_reports"] = queued_reports
+            transfer_events = parse_hex_int(fields.get("transfer_events"))
+            if transfer_events is not None:
+                values["transfer_events"] = transfer_events
+            report_status = field_lower(event, "report_status")
+            if report_status:
+                values["report_status"] = report_status.replace("_", "-")
+        if raw.startswith("usb: event_loop") or raw.startswith("usb: sustained_input"):
+            runtime_skipped = parse_hex_int(fields.get("runtime_skipped"))
+            if runtime_skipped is not None:
+                values["runtime_skipped"] = runtime_skipped
+    return UsbRuntimeQueueSummary(**values)
 
 
 def summarize_output_pressure(events: Iterable[TraceEvent]) -> OutputPressureSummary:
@@ -7872,6 +8378,107 @@ def usb_runtime_gate10_step(event: TraceEvent) -> bool:
     )
 
 
+def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
+    """Return sustained-input blocker after linked first-byte proof."""
+
+    first_byte_seen = False
+    last_usb_counter: tuple[int, int, int, int] | None = None
+    last_local_seat: tuple[int, int, int, int, int] | None = None
+    saw_keyboard_no_reply = False
+    for event in events:
+        raw = event.raw.lower()
+        if usb_first_byte_step(event) or usb_runtime_gate10_step(event):
+            first_byte_seen = True
+        if not first_byte_seen:
+            continue
+
+        report_status = event.fields.get("report_status", "").lower().replace("_", "-")
+        if raw.startswith("usb: sustained_input"):
+            sustained_blocker = field_lower(event, "blocker").replace("_", "-")
+            if sustained_blocker and sustained_blocker != "none":
+                return sustained_blocker
+        if report_status == "queue-collapse" or "queue-collapse" in raw:
+            return "usb-post-first-byte-queue-collapse"
+        if report_status == "recovery-failed" or "recovery-failed" in raw:
+            return "usb-post-first-byte-recovery-failed"
+        if report_status == "recovery-success" or "recovery-success" in raw:
+            saw_keyboard_no_reply = False
+            continue
+        if report_status == "unmatched-transfer" or "unmatched-transfer" in raw:
+            return "usb-post-first-byte-unmatched-transfer"
+        if raw.startswith("usb: stall_telemetry") or raw.startswith("usb: runtime_queue"):
+            queued_reports = parse_hex_int(event.fields.get("queued_reports"))
+            transfer_events = parse_hex_int(event.fields.get("transfer_events"))
+            if (
+                queued_reports is not None
+                and transfer_events is not None
+                and queued_reports <= 4
+                and transfer_events >= 32
+            ):
+                return "usb-post-first-byte-queue-collapse-risk"
+        if raw.startswith("usb: event_loop"):
+            runtime_skipped = parse_hex_int(event.fields.get("runtime_skipped")) or 0
+            if runtime_skipped > 0:
+                saw_keyboard_no_reply = True
+
+        if raw.startswith("driver_task_counter "):
+            fields = event.fields
+            if (
+                field_lower(event, "contract") == "usb-local-seat"
+                and field_lower(event, "hot_path") == "usb-keyboard"
+                and field_lower(event, "source") == "root-ring"
+            ):
+                submitted = parse_hex_int(fields.get("submitted"))
+                timeouts = parse_hex_int(fields.get("timeouts"))
+                rx_frames = parse_hex_int(fields.get("rx_frames"))
+                rx_bytes = parse_hex_int(fields.get("rx_bytes"))
+                if None not in {submitted, timeouts, rx_frames, rx_bytes}:
+                    snapshot = (
+                        submitted or 0,
+                        timeouts or 0,
+                        rx_frames or 0,
+                        rx_bytes or 0,
+                    )
+                    if (
+                        last_usb_counter is not None
+                        and snapshot[1] > last_usb_counter[1]
+                        and snapshot[2] == last_usb_counter[2]
+                        and snapshot[3] == last_usb_counter[3]
+                    ):
+                        return "usb-post-first-byte-no-progress"
+                    last_usb_counter = snapshot
+
+        if raw.startswith("[smp] activity local-seat "):
+            fields = event.fields
+            backend_polls = parse_hex_int(fields.get("backend_polls"))
+            backend_bytes = parse_hex_int(fields.get("backend_bytes"))
+            accepted = parse_hex_int(fields.get("accepted"))
+            drained = parse_hex_int(fields.get("drained"))
+            echoed = parse_hex_int(fields.get("echoed"))
+            no_reply = parse_hex_int(fields.get("no_reply"))
+            if (no_reply or 0) > 0:
+                saw_keyboard_no_reply = True
+            if None not in {backend_polls, backend_bytes, accepted, drained, echoed}:
+                snapshot = (
+                    backend_polls or 0,
+                    backend_bytes or 0,
+                    accepted or 0,
+                    drained or 0,
+                    echoed or 0,
+                )
+                if (
+                    last_local_seat is not None
+                    and snapshot[0] > last_local_seat[0]
+                    and snapshot[1:] == last_local_seat[1:]
+                ):
+                    return "usb-post-first-byte-no-progress"
+                last_local_seat = snapshot
+
+    if saw_keyboard_no_reply:
+        return "usb-post-first-byte-no-reply"
+    return "none"
+
+
 def summarize_usb_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResult:
     """Validate the reopened 26b USB hub-keyboard old-good replay profile."""
 
@@ -8551,6 +9158,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     driver_task_counter_summary = summarize_driver_task_counters(event_list)
     output_pressure_summary = summarize_output_pressure(event_list)
     usb_keyboard_pressure_summary = summarize_usb_keyboard_pressure(event_list)
+    usb_runtime_queue_summary = summarize_usb_runtime_queue(event_list)
+    usb_post_first_byte_blocker = summarize_usb_post_first_byte_blocker(event_list)
     usb_driver_task_blocker = summarize_usb_driver_task_stall(event_list)
     net_driver_task_replay_events, net_driver_task_replay_blocker = (
         summarize_driver_task_replay_status(event_list, "net_driver_task_replay_status")
@@ -8687,7 +9296,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         and wifi_exact != "cyw43-association-not-associated"
         and (
             wifi_gate <= 7
-            or wifi_exact in CYW43_HOST_EAPOL_FIRSTREAD_BLOCKER_NAMES
+            or cyw43_host_eapol_rx_blocker_name(wifi_exact)
             or wifi_exact in {
                 "host-eapol-required",
                 "wifi-host-eapol-pending",
@@ -8702,11 +9311,19 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_gate = max(wifi_gate, 7)
         wifi_blocker = wifi_exact
         wifi_phase = "join-security"
+    if wifi_blocker == "cyw43-transport-command-admission":
+        wifi_gate = max(wifi_gate, 6)
+        wifi_blocker = "cyw43-runtime-command-rejected"
+    wifi_subgate, wifi_subgate_name = summarize_wifi_gate7_subgate(
+        event_list, wifi_gate, wifi_blocker
+    )
     return GateSummary(
         usb_gate=usb_gate,
         usb_blocker=usb_blocker,
         wifi_gate=wifi_gate,
         wifi_blocker=wifi_blocker,
+        wifi_subgate=wifi_subgate,
+        wifi_subgate_name=wifi_subgate_name,
         usb_oldgood_replay=usb_oldgood.replay,
         usb_oldgood_last=usb_oldgood.last,
         usb_oldgood_missing=usb_oldgood.missing,
@@ -8815,6 +9432,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_keyboard_no_replies=usb_keyboard_pressure_summary.no_replies,
         usb_keyboard_poll_cooldown=usb_keyboard_pressure_summary.poll_cooldown,
         usb_keyboard_cooldown_skips=usb_keyboard_pressure_summary.cooldown_skips,
+        usb_runtime_queued_reports=usb_runtime_queue_summary.queued_reports,
+        usb_runtime_transfer_events=usb_runtime_queue_summary.transfer_events,
+        usb_runtime_report_status=usb_runtime_queue_summary.report_status,
+        usb_event_loop_runtime_skipped=usb_runtime_queue_summary.runtime_skipped,
+        usb_post_first_byte_blocker=usb_post_first_byte_blocker,
         serial_driver_accepted=driver_task_frontiers.serial_driver_accepted,
         serial_fallback_active=driver_task_frontiers.serial_fallback_active,
         serial_runtime_frontier=driver_task_frontiers.serial_runtime_frontier,
@@ -9046,6 +9668,12 @@ def summarize_driver_task_frontiers(
                 usb_frontier = f"{stage}-{status}"
             elif usb_frontier == "none" and stage == "runtime-descriptor-bootstrap":
                 usb_frontier = "usb-runtime-descriptor-bootstrap-ready"
+            elif stage in {
+                "usb-owner-state",
+                "usb-keyboard-first-report",
+                "usb-runtime-gate10",
+            } and status in {"ready", "preserved-ready"}:
+                usb_frontier = f"{stage}-{status}"
             elif usb_frontier == "none" and stage.startswith("usb-"):
                 usb_frontier = f"{stage}-{status}"
 

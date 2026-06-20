@@ -1054,6 +1054,9 @@ struct SmpLocalSeatActivitySnapshot {
     dropped_bytes: u64,
     mirrored_line_drops: u64,
     budget_overruns: u64,
+    no_replies: u64,
+    display_no_reply_frames: u64,
+    display_backpressure_bytes: u64,
 }
 
 #[cfg(feature = "net-console")]
@@ -1068,6 +1071,10 @@ struct SmpActivityRates {
     line_per_s: u64,
     tick_per_s: u64,
     serial_drop_per_s: u64,
+    seat_drop_per_s: u64,
+    seat_no_reply_per_s: u64,
+    hdmi_drop_per_s: u64,
+    net_drop_per_s: u64,
     seat_poll_per_s: u64,
     keyboard_bytes_per_s: u64,
     display_bytes_per_s: u64,
@@ -1158,7 +1165,7 @@ impl SmpActivityRates {
                     .saturating_sub(previous_local.echoed_bytes),
                 window_ms,
             );
-            rates.drop_per_s = rates.drop_per_s.saturating_add(rate_per_second(
+            rates.seat_drop_per_s = rate_per_second(
                 current_local
                     .dropped_bytes
                     .saturating_sub(previous_local.dropped_bytes)
@@ -1173,7 +1180,28 @@ impl SmpActivityRates {
                             .saturating_sub(previous_local.budget_overruns),
                     ),
                 window_ms,
-            ));
+            );
+            rates.seat_no_reply_per_s = rate_per_second(
+                current_local
+                    .no_replies
+                    .saturating_sub(previous_local.no_replies),
+                window_ms,
+            );
+            rates.hdmi_drop_per_s = rate_per_second(
+                current_local
+                    .display_no_reply_frames
+                    .saturating_sub(previous_local.display_no_reply_frames)
+                    .saturating_add(
+                        current_local
+                            .display_backpressure_bytes
+                            .saturating_sub(previous_local.display_backpressure_bytes),
+                    ),
+                window_ms,
+            );
+            rates.drop_per_s = rates
+                .drop_per_s
+                .saturating_add(rates.seat_drop_per_s)
+                .saturating_add(rates.hdmi_drop_per_s);
         }
         if include_net {
             #[cfg(feature = "net-console")]
@@ -1205,7 +1233,7 @@ impl SmpActivityRates {
                         ),
                     window_ms,
                 );
-                rates.drop_per_s = rates.drop_per_s.saturating_add(rate_per_second(
+                rates.net_drop_per_s = rate_per_second(
                     current_net
                         .counters
                         .dropped_zero_len_tx
@@ -1217,7 +1245,8 @@ impl SmpActivityRates {
                                 .saturating_sub(previous_net.counters.tx_double_submit),
                         ),
                     window_ms,
-                ));
+                );
+                rates.drop_per_s = rates.drop_per_s.saturating_add(rates.net_drop_per_s);
             }
         }
         rates
@@ -2146,7 +2175,7 @@ where
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();
             runtime.mirror_line("Cohesix console ready");
-            runtime.mirror_line(CONSOLE_PROMPT);
+            runtime.mirror_prompt(CONSOLE_PROMPT);
         }
         self.schedule_post_prompt_local_seat_attach();
         #[cfg(feature = "kernel")]
@@ -2573,6 +2602,20 @@ where
         }
     }
 
+    fn mirror_local_seat_prompt_if_ready(&mut self) {
+        if self.local_seat_mirror_suppressed {
+            return;
+        }
+        if self.serial.interactive_input_active() {
+            return;
+        }
+        if let Some(runtime) = self.local_seat.as_mut() {
+            if runtime.root_console_ready() {
+                runtime.mirror_prompt(CONSOLE_PROMPT);
+            }
+        }
+    }
+
     fn with_local_seat_mirror_suppressed(&mut self, f: impl FnOnce(&mut Self)) {
         let previous = self.local_seat_mirror_suppressed;
         self.local_seat_mirror_suppressed = true;
@@ -2857,7 +2900,7 @@ where
             self.emit_serial_bytes_cooperative(CONSOLE_PROMPT.as_bytes());
         }
         self.service_local_seat_keyboard_during_output();
-        self.mirror_local_seat_line_if_ready(CONSOLE_PROMPT);
+        self.mirror_local_seat_prompt_if_ready();
         self.service_local_seat_keyboard_during_output();
     }
 
@@ -3021,6 +3064,14 @@ where
     #[allow(unsafe_code)]
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     fn emit_smp_snapshot(&mut self) -> bool {
+        if let Some(reason) = self.smp_debug_dump_pressure_reason() {
+            let line = format_message(format_args!(
+                "[smp] debug scheduler dump skipped reason={} use=smp-activity raw=pressure-gated",
+                reason
+            ));
+            self.emit_console_line(line.as_str());
+            return true;
+        }
         self.emit_console_line("[smp] debug scheduler dump begin");
         self.serial.flush_tx();
         let policy = crate::affinity::policy();
@@ -3032,6 +3083,20 @@ where
         self.emit_console_line("[smp] debug scheduler dump end");
         self.serial.flush_tx();
         true
+    }
+
+    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
+    fn smp_debug_dump_pressure_reason(&self) -> Option<&'static str> {
+        if self.serial.tx_pending() || !self.pending_console_output.is_empty() {
+            return Some("serial-output-pending");
+        }
+        if let Some(runtime) = self.local_seat.as_ref() {
+            let display = runtime.display_trace();
+            if display.pending_bytes != 0 || display.pending_redraw {
+                return Some("local-seat-display-pending");
+            }
+        }
+        None
     }
 
     #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
@@ -3059,6 +3124,7 @@ where
     fn smp_activity_snapshot(&self) -> SmpActivitySnapshot {
         let local_seat = self.local_seat.as_ref().map(|runtime| {
             let trace = runtime.keyboard_trace();
+            let display = runtime.display_trace();
             SmpLocalSeatActivitySnapshot {
                 backend_poll_calls: trace.backend_poll_calls,
                 drained_bytes: trace.drained_bytes,
@@ -3066,6 +3132,9 @@ where
                 dropped_bytes: trace.dropped_bytes,
                 mirrored_line_drops: runtime.dropped_mirrored_lines(),
                 budget_overruns: trace.driver_task_budget_overruns,
+                no_replies: trace.driver_task_no_replies,
+                display_no_reply_frames: display.no_reply_frames,
+                display_backpressure_bytes: display.backpressure_bytes,
             }
         });
         #[cfg(feature = "net-console")]
@@ -3087,7 +3156,7 @@ where
         let metrics = self.metrics;
         let serial = self.serial_telemetry();
         let line = format_message(format_args!(
-            "[smp] activity pump now_ms={} input={} lines={} ok={} denied={} ticks={} serial_rx_drop={} serial_tx_drop={} utf8_drop={} serial_budget_overruns={}",
+            "[smp] activity pump now_ms={} input={} lines={} ok={} denied={} ticks={} serial_rx_drop={} serial_tx_drop={} utf8_drop={} serial_budget_overruns={} serial_rx_backpressure={} serial_tx_backpressure={} serial_pressure_source=uart-output",
             self.now_ms,
             self.last_input_source.label(),
             metrics.console_lines,
@@ -3098,6 +3167,8 @@ where
             serial.tx_backpressure,
             serial.utf8_dropped,
             serial.driver_task_budget_overruns,
+            serial.rx_backpressure,
+            serial.tx_backpressure,
         ));
         self.emit_console_line(line.as_str());
     }
@@ -3254,7 +3325,7 @@ where
                 previous, current, window_ms, authority, serial, local_seat, net,
             );
             let line = format_message(format_args!(
-                "[smp] activity core c={} tasks={} win={} cmd_s={} line_s={} tick_s={} serial_drop_s={} seatPoll_s={} kbdB_s={} hdmiB_s={} netRx_s={} netTx_s={} tcpB_s={} drop_s={}",
+                "[smp] activity core c={} tasks={} win={} cmd_s={} line_s={} tick_s={} serial_drop_s={} seat_drop_s={} seat_no_reply_s={} hdmi_drop_s={} net_drop_s={} seatPoll_s={} kbdB_s={} hdmiB_s={} netRx_s={} netTx_s={} tcpB_s={} drop_s={}",
                 core,
                 tasks.as_str(),
                 window_ms,
@@ -3262,6 +3333,10 @@ where
                 rates.line_per_s,
                 rates.tick_per_s,
                 rates.serial_drop_per_s,
+                rates.seat_drop_per_s,
+                rates.seat_no_reply_per_s,
+                rates.hdmi_drop_per_s,
+                rates.net_drop_per_s,
                 rates.seat_poll_per_s,
                 rates.keyboard_bytes_per_s,
                 rates.display_bytes_per_s,
@@ -3441,13 +3516,17 @@ where
             true,
         );
         let line = format_message(format_args!(
-            "[smp] activity core c=n/a tasks={} win={} cmd_s={} line_s={} tick_s={} serial_drop_s={} seatPoll_s={} kbdB_s={} hdmiB_s={} netRx_s={} netTx_s={} tcpB_s={} drop_s={}",
+            "[smp] activity core c=n/a tasks={} win={} cmd_s={} line_s={} tick_s={} serial_drop_s={} seat_drop_s={} seat_no_reply_s={} hdmi_drop_s={} net_drop_s={} seatPoll_s={} kbdB_s={} hdmiB_s={} netRx_s={} netTx_s={} tcpB_s={} drop_s={}",
             tasks,
             window_ms,
             rates.command_per_s,
             rates.line_per_s,
             rates.tick_per_s,
             rates.serial_drop_per_s,
+            rates.seat_drop_per_s,
+            rates.seat_no_reply_per_s,
+            rates.hdmi_drop_per_s,
+            rates.net_drop_per_s,
             rates.seat_poll_per_s,
             rates.keyboard_bytes_per_s,
             rates.display_bytes_per_s,
@@ -3579,8 +3658,6 @@ where
             ("sdio", SDIO_HOST_DRIVER_TASK_CONTRACT),
             ("pcie", PCIE_ROOT_DRIVER_TASK_CONTRACT),
         ]);
-        #[cfg(feature = "kernel")]
-        crate::hal::driver_task::emit_boot_contract_proof();
     }
 
     fn emit_smp_activity_contract_group(
@@ -4277,31 +4354,10 @@ where
                     this.emit_usb_status(
                         backend_attached,
                         polling_enabled,
-                        Some("action=diag-before-probe"),
+                        Some("action=diag-passive"),
                     );
                     this.emit_console_line(
                         "usb: diag action=probe-skipped reason=linked-runtime-only use=usb-status",
-                    );
-                    let (backend_attached, polling_enabled) = {
-                        let local_seat = match this.local_seat.as_mut() {
-                            Some(local_seat) => local_seat,
-                            None => {
-                                this.emit_usb_debug_unavailable(
-                                    subcommand,
-                                    "local-seat-unavailable",
-                                );
-                                return;
-                            }
-                        };
-                        (
-                            local_seat.backend_attached(),
-                            local_seat.backend_keyboard_polling_enabled(),
-                        )
-                    };
-                    this.emit_usb_status(
-                        backend_attached,
-                        polling_enabled,
-                        Some("action=diag-after-probe"),
                     );
                     this.emit_usb_startup_blackbox(backend_attached, polling_enabled);
                 });
@@ -4528,6 +4584,27 @@ where
             Self::yes_no(self.serial.interactive_input_active()),
         ));
         self.emit_console_line(stall_line.as_str());
+        let sustained_blocker = Self::usb_runtime_sustained_input_blocker(
+            queue_valid,
+            queued_reports,
+            transfer_events,
+            report_status,
+            local_trace.driver_task_no_replies,
+            self.metrics.local_seat_runtime_skipped_turns,
+        );
+        let sustained_line = format_message(format_args!(
+            "usb: sustained_input queued_reports={} transfer_events={} report_status={} accepted={} drained={} echoed={} no_reply={} runtime_skipped={} blocker={}",
+            queued_reports,
+            transfer_events,
+            Self::usb_runtime_keyboard_report_status_label(report_status),
+            local_trace.accepted_bytes,
+            local_trace.drained_bytes,
+            local_trace.echoed_bytes,
+            local_trace.driver_task_no_replies,
+            self.metrics.local_seat_runtime_skipped_turns,
+            sustained_blocker,
+        ));
+        self.emit_console_line(sustained_line.as_str());
         let output_pressure_line = format_message(format_args!(
             "usb: output_pressure serial_tx_pending={} serial_interactive={} deferred={} flushed={} backpressure={} hdmi_pending_bytes={} hdmi_pending_redraw={} hdmi_submitted={} hdmi_deferred={} hdmi_busy={} hdmi_no_reply={} hdmi_coalesced={} hdmi_backpressure_bytes={} hdmi_superseded_bytes={}",
             Self::yes_no(self.serial.tx_pending()),
@@ -6949,6 +7026,15 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER => {
                 "unmatched-transfer"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE => {
+                "queue-collapse"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS => {
+                "recovery-success"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED => {
+                "recovery-failed"
+            }
             _ => "unknown",
         }
     }
@@ -6984,11 +7070,56 @@ where
                 pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER => {
                     "unmatched-transfer"
                 }
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE => {
+                    "queue-collapse"
+                }
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS => {
+                    "recovery-success"
+                }
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED => {
+                    "recovery-failed"
+                }
                 pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE => {
                     "armed-awaiting-report"
                 }
                 _ => "awaiting-physical-key",
             }
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_sustained_input_blocker(
+        queue_valid: bool,
+        queued_reports: u32,
+        transfer_events: u32,
+        report_status: u32,
+        no_replies: u64,
+        runtime_skipped: u64,
+    ) -> &'static str {
+        if !queue_valid {
+            "queue-telemetry-unavailable"
+        } else if report_status
+            == pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED as u32
+        {
+            "usb-post-first-byte-recovery-failed"
+        } else if report_status
+            == pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE as u32
+        {
+            "usb-post-first-byte-queue-collapse"
+        } else if report_status
+            == pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER as u32
+        {
+            "usb-post-first-byte-unmatched-transfer"
+        } else if queued_reports == 0 {
+            "usb-post-first-byte-queue-empty"
+        } else if queued_reports <= 8 && transfer_events >= 32 {
+            "usb-post-first-byte-queue-collapse-risk"
+        } else if no_replies != 0 {
+            "usb-post-first-byte-no-reply"
+        } else if runtime_skipped != 0 {
+            "usb-post-first-byte-runtime-skipped"
+        } else {
+            "none"
         }
     }
 
@@ -15248,6 +15379,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered.contains("serial_rx_backpressure=")
+                && rendered.contains("serial_tx_backpressure="),
+            "{rendered}"
+        );
+        assert!(
             rendered.contains(
                 "[smp] activity local-seat runtime=present attached=no keyboard_device=usb-kbd0 display=hdmi0"
             ),
@@ -15270,6 +15406,10 @@ mod tests {
         assert!(rendered.contains("OK SMP mode=activity"), "{rendered}");
         assert!(
             !rendered.contains("debug scheduler dump begin"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("DRIVER_TASK_DEFAULT requested="),
             "{rendered}"
         );
         drop(pump);
@@ -15385,6 +15525,10 @@ mod tests {
         assert!(rendered.contains("cmd_s=3"), "{rendered}");
         assert!(rendered.contains("line_s=4"), "{rendered}");
         assert!(rendered.contains("tick_s=2"), "{rendered}");
+        assert!(rendered.contains("seat_drop_s="), "{rendered}");
+        assert!(rendered.contains("seat_no_reply_s="), "{rendered}");
+        assert!(rendered.contains("hdmi_drop_s="), "{rendered}");
+        assert!(rendered.contains("net_drop_s="), "{rendered}");
         assert!(rendered.contains("cpu_pct=unavailable"), "{rendered}");
     }
 
@@ -17434,6 +17578,18 @@ mod tests {
             "unmatched-transfer"
         );
         assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(9),
+            "queue-collapse"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(10),
+            "recovery-success"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(11),
+            "recovery-failed"
+        );
+        assert_eq!(
             KernelConsoleTestPump::usb_runtime_keyboard_input_observation(
                 false, false, true, 128, false, 2
             ),
@@ -17456,6 +17612,38 @@ mod tests {
                 false, false, true, 128, false, 8
             ),
             "unmatched-transfer"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_input_observation(
+                false, false, true, 4, false, 9
+            ),
+            "queue-collapse"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_input_observation(
+                false, false, true, 4, false, 11
+            ),
+            "recovery-failed"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 4, 255, 6, 6, 97),
+            "usb-post-first-byte-queue-collapse-risk"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 8, 255, 6, 0, 0),
+            "usb-post-first-byte-queue-collapse-risk"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 9, 255, 6, 0, 0),
+            "none"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 4, 255, 9, 0, 0),
+            "usb-post-first-byte-queue-collapse"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 4, 255, 11, 0, 0),
+            "usb-post-first-byte-recovery-failed"
         );
         assert!(!KernelConsoleTestPump::usb_runtime_detail_has_queue_result(
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
@@ -18699,8 +18887,7 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered
-                .contains("usb: local-seat attached=no polling=deferred action=diag-before-probe"),
+            rendered.contains("usb: local-seat attached=no polling=deferred action=diag-passive"),
             "{rendered}"
         );
         assert!(
@@ -18709,11 +18896,8 @@ mod tests {
             ),
             "{rendered}"
         );
-        assert!(
-            rendered
-                .contains("usb: local-seat attached=no polling=deferred action=diag-after-probe"),
-            "{rendered}"
-        );
+        assert!(!rendered.contains("action=diag-before-probe"), "{rendered}");
+        assert!(!rendered.contains("action=diag-after-probe"), "{rendered}");
         assert!(
             rendered.contains("usb: diag recorder=startup-blackbox mode=passive source=cached"),
             "{rendered}"
