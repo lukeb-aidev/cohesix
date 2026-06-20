@@ -607,8 +607,8 @@ const LINKED_LOCAL_SEAT_HDMI_FALLBACK_SNAPSHOT_COLS: usize = 77;
 /// Fallback Pi 4 HDMI text height after linked-runtime overscan clipping.
 const LINKED_LOCAL_SEAT_HDMI_FALLBACK_SNAPSHOT_ROWS: usize = 28;
 
-/// Bytes in `ESC[H`, used to re-home redraws without a full-frame blink.
-const LINKED_LOCAL_SEAT_HDMI_CURSOR_HOME_BYTES: usize = 3;
+/// Bytes in `ESC[H` + `ESC[J`, used to clear stale text before a snapshot redraw.
+const LINKED_LOCAL_SEAT_HDMI_SNAPSHOT_CLEAR_BYTES: usize = 6;
 
 /// Bytes in `ESC[K`, used to clear stale text to the physical right edge.
 const LINKED_LOCAL_SEAT_HDMI_CLEAR_EOL_BYTES: usize = 3;
@@ -780,9 +780,17 @@ const fn local_seat_keyboard_poll_aux(keyboard_ready: bool, request_recovery: bo
     }
 }
 
-const fn local_seat_keyboard_recovery_aux_allowed(queue_empty: bool, no_reply_streak: u64) -> bool {
+const fn local_seat_keyboard_recovery_aux_allowed(
+    queue_empty: bool,
+    no_reply_streak: u64,
+    recovery_pending: bool,
+) -> bool {
     queue_empty
-        && no_reply_streak == LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+        && !recovery_pending
+        && no_reply_streak >= LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+        && (no_reply_streak - LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD)
+            % LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+            == 0
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -883,6 +891,10 @@ pub struct LocalSeatKeyboardTrace {
     pub driver_task_no_replies: u64,
     /// Consecutive no-reply polls since the last driver-task completion.
     pub driver_task_no_reply_streak: u64,
+    /// Post-first-byte recovery aux polls submitted by root.
+    pub recovery_aux_requests: u64,
+    /// Whether a recovery aux poll is still waiting for a reply or retry window.
+    pub recovery_aux_pending: bool,
     /// Current adaptive cooldown before the next steady USB keyboard poll.
     pub poll_cooldown_turns: u8,
     /// Poll turns intentionally skipped while the no-reply cooldown was active.
@@ -951,6 +963,8 @@ pub struct LocalSeatRuntime {
     keyboard_poll_no_reply_streak: u64,
     keyboard_poll_no_reply_cooldown: u8,
     keyboard_poll_no_reply_backoff: u8,
+    keyboard_recovery_aux_pending: bool,
+    keyboard_recovery_aux_requests: u64,
     keyboard_poll_cooldown_skips: u64,
     backend_keyboard_polling_enabled: bool,
     backend_keyboard_poll_deferred_logged: bool,
@@ -1060,6 +1074,8 @@ impl LocalSeatRuntime {
             keyboard_poll_no_reply_streak: 0,
             keyboard_poll_no_reply_cooldown: 0,
             keyboard_poll_no_reply_backoff: 0,
+            keyboard_recovery_aux_pending: false,
+            keyboard_recovery_aux_requests: 0,
             keyboard_poll_cooldown_skips: 0,
             // Keep boot fail-open: the root shell must stay reachable even if
             // a platform keyboard backend can still wedge during first probe.
@@ -1444,7 +1460,7 @@ impl LocalSeatRuntime {
         let end = total.saturating_sub(offset);
         let start = self.linked_hdmi_snapshot_start(end, geometry);
         let mut payload = Vec::new();
-        payload.extend_from_slice(b"\x1b[H");
+        payload.extend_from_slice(b"\x1b[H\x1b[J");
         if start == end {
             let input_preview = if offset == 0
                 && total == 0
@@ -1668,6 +1684,8 @@ impl LocalSeatRuntime {
             driver_task_budget_overruns: self.driver_task_budget_overruns,
             driver_task_no_replies: self.driver_task_no_replies,
             driver_task_no_reply_streak: self.keyboard_poll_no_reply_streak,
+            recovery_aux_requests: self.keyboard_recovery_aux_requests,
+            recovery_aux_pending: self.keyboard_recovery_aux_pending,
             poll_cooldown_turns: self.keyboard_poll_no_reply_cooldown,
             poll_cooldown_skips: self.keyboard_poll_cooldown_skips,
         }
@@ -1697,6 +1715,7 @@ impl LocalSeatRuntime {
     pub fn enable_backend_keyboard_polling(&mut self) {
         self.backend_keyboard_polling_enabled = true;
         self.backend_keyboard_poll_deferred_logged = false;
+        self.keyboard_recovery_aux_pending = false;
         self.clear_keyboard_poll_no_reply_backoff();
     }
 
@@ -2038,6 +2057,7 @@ impl LocalSeatRuntime {
 
     fn record_keyboard_poll_completion(&mut self) {
         self.keyboard_poll_no_reply_streak = 0;
+        self.keyboard_recovery_aux_pending = false;
         self.clear_keyboard_poll_no_reply_backoff();
     }
 
@@ -2104,6 +2124,7 @@ impl LocalSeatRuntime {
         local_seat_keyboard_recovery_aux_allowed(
             self.keyboard_queue.is_empty(),
             self.keyboard_poll_no_reply_streak,
+            self.keyboard_recovery_aux_pending,
         ) && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
             && LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire)
@@ -2113,6 +2134,13 @@ impl LocalSeatRuntime {
     fn record_keyboard_poll_no_reply(&mut self) {
         self.driver_task_no_replies = self.driver_task_no_replies.saturating_add(1);
         self.keyboard_poll_no_reply_streak = self.keyboard_poll_no_reply_streak.saturating_add(1);
+        if self.keyboard_recovery_aux_pending
+            && self.keyboard_poll_no_reply_streak
+                % LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+                == 0
+        {
+            self.keyboard_recovery_aux_pending = false;
+        }
         let steady_queue_idle = self.keyboard_poll_steady_queue_idle();
         let next = local_seat_keyboard_poll_next_no_reply_backoff_for_queue(
             self.keyboard_poll_fast_recovery_active(),
@@ -2249,6 +2277,11 @@ impl LocalSeatRuntime {
                     LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire),
                     self.keyboard_poll_recovery_aux_requested(),
                 );
+                if command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX {
+                    self.keyboard_recovery_aux_pending = true;
+                    self.keyboard_recovery_aux_requests =
+                        self.keyboard_recovery_aux_requests.saturating_add(1);
+                }
                 if let Some(completion) = run_local_seat_driver_task_ring_service(contract, command)
                 {
                     self.record_keyboard_poll_completion();
@@ -5746,7 +5779,7 @@ mod tests {
                         .saturating_add(1),
                 )
                 .saturating_add(
-                    LINKED_LOCAL_SEAT_HDMI_CURSOR_HOME_BYTES
+                    LINKED_LOCAL_SEAT_HDMI_SNAPSHOT_CLEAR_BYTES
                         .saturating_add(LINKED_LOCAL_SEAT_HDMI_CLEAR_TO_END_BYTES),
                 )
                 <= LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
@@ -5786,7 +5819,7 @@ mod tests {
 
         let payload = runtime.build_linked_hdmi_scrollback_payload_for_geometry(geometry);
 
-        assert!(payload.starts_with(b"\x1b[H"));
+        assert!(payload.starts_with(b"\x1b[H\x1b[J"));
         assert!(payload.ends_with(b"\x1b[J"));
         assert_eq!(payload.iter().filter(|&&byte| byte == b'\n').count(), 58);
         assert!(payload.len() > LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES);
@@ -5811,7 +5844,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_hdmi_snapshot_redraw_rehomes_without_form_feed_clear() {
+    fn runtime_hdmi_snapshot_redraw_clears_before_repaint() {
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",
@@ -5837,8 +5870,7 @@ mod tests {
         };
         assert_eq!(reason, "keyboard-scrollback");
         assert!(redraw);
-        assert!(!payload.contains(&0x0c));
-        assert_eq!(payload.as_slice(), b"\x1b[Hcohesix> \x1b[K\x1b[J");
+        assert_eq!(payload.as_slice(), b"\x1b[H\x1b[Jcohesix> \x1b[K\x1b[J");
     }
 
     #[test]
@@ -5859,7 +5891,7 @@ mod tests {
         };
         assert_eq!(reason, "keyboard-scrollback");
         assert!(redraw);
-        assert_eq!(payload.as_slice(), b"\x1b[Hcohesix> hel\x1b[K\x1b[J");
+        assert_eq!(payload.as_slice(), b"\x1b[H\x1b[Jcohesix> hel\x1b[K\x1b[J");
     }
 
     #[test]
@@ -5924,7 +5956,7 @@ mod tests {
         };
         assert_eq!(reason, "keyboard-scrollback");
         assert!(redraw);
-        assert_eq!(payload.as_slice(), b"\x1b[Hcohesix> help\x1b[K\x1b[J");
+        assert_eq!(payload.as_slice(), b"\x1b[H\x1b[Jcohesix> help\x1b[K\x1b[J");
     }
 
     #[test]
@@ -5948,7 +5980,7 @@ mod tests {
         };
         assert_eq!(reason, "keyboard-scrollback");
         assert!(redraw);
-        assert!(payload.starts_with(b"\x1b[H"));
+        assert!(payload.starts_with(b"\x1b[H\x1b[J"));
         assert!(payload.ends_with(b"\x1b[J"));
         assert_eq!(payload.iter().filter(|&&byte| byte == b'\n').count(), 27);
         assert!(payload.windows(3).any(|window| window == b"\x1b[K"));
@@ -6109,7 +6141,40 @@ mod tests {
         };
         assert_eq!(snapshot_reason, "keyboard-scrollback");
         assert!(snapshot_redraw);
-        assert!(snapshot.starts_with(b"\x1b[H"));
+        assert!(snapshot.starts_with(b"\x1b[H\x1b[J"));
+    }
+
+    #[test]
+    fn runtime_hdmi_help_snapshot_supersedes_stale_netstats_bytes() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let stale = b"netstats rx=old tx=old\nnetstats drops=old\n";
+
+        runtime.mirror_line_current_tcb("help");
+        assert!(runtime.queue_linked_hdmi_payload(stale));
+        runtime.request_linked_hdmi_snapshot_redraw();
+
+        let display = runtime.display_trace();
+        assert_eq!(display.pending_bytes, 0);
+        assert_eq!(display.superseded_bytes, stale.len() as u64);
+        assert!(display.pending_redraw);
+
+        let Some((snapshot, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected help snapshot");
+        };
+        assert_eq!(reason, "keyboard-scrollback");
+        assert!(redraw);
+        assert!(snapshot.starts_with(b"\x1b[H\x1b[J"));
+        assert!(snapshot
+            .windows(b"help".len())
+            .any(|window| window == b"help"));
+        assert!(!snapshot
+            .windows(b"netstats".len())
+            .any(|window| window == b"netstats"));
     }
 
     #[test]
@@ -6196,23 +6261,59 @@ mod tests {
     fn runtime_keyboard_recovery_aux_waits_for_root_queue_drain() {
         assert!(!local_seat_keyboard_recovery_aux_allowed(
             false,
-            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD,
+            false
         ));
         assert!(!local_seat_keyboard_recovery_aux_allowed(
             true,
-            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD - 1
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD - 1,
+            false
         ));
         assert!(local_seat_keyboard_recovery_aux_allowed(
             true,
-            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD,
+            false
         ));
         assert!(!local_seat_keyboard_recovery_aux_allowed(
             true,
-            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD + 1
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD + 1,
+            false
+        ));
+        assert!(local_seat_keyboard_recovery_aux_allowed(
+            true,
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD * 2,
+            false
         ));
         assert!(!local_seat_keyboard_recovery_aux_allowed(
             true,
-            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD * 2
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD,
+            true
+        ));
+    }
+
+    #[test]
+    fn runtime_keyboard_recovery_aux_latch_clears_after_no_reply_window() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+        runtime.keyboard_recovery_aux_pending = true;
+        runtime.keyboard_poll_no_reply_streak =
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD;
+
+        runtime.record_keyboard_poll_no_reply();
+        assert!(runtime.keyboard_recovery_aux_pending);
+
+        runtime.keyboard_poll_no_reply_streak =
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD * 2 - 1;
+        runtime.record_keyboard_poll_no_reply();
+        assert!(!runtime.keyboard_recovery_aux_pending);
+        assert!(local_seat_keyboard_recovery_aux_allowed(
+            true,
+            runtime.keyboard_poll_no_reply_streak,
+            runtime.keyboard_recovery_aux_pending
         ));
     }
 

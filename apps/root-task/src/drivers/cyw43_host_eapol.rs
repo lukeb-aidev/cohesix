@@ -36,7 +36,7 @@ const EAPOL_KEY_BODY_KEY_INFO_OFFSET: usize = 1;
 const EAPOL_KEY_BODY_KEY_LEN_OFFSET: usize = 3;
 const EAPOL_KEY_BODY_REPLAY_OFFSET: usize = 5;
 const EAPOL_KEY_BODY_NONCE_OFFSET: usize = 13;
-const EAPOL_KEY_BODY_RSC_OFFSET: usize = 45;
+const EAPOL_KEY_BODY_RSC_OFFSET: usize = 61;
 const EAPOL_KEY_BODY_MIC_OFFSET: usize = 77;
 const EAPOL_KEY_BODY_DATA_LEN_OFFSET: usize = 93;
 const EAPOL_KEY_BODY_DATA_OFFSET: usize = 95;
@@ -46,6 +46,7 @@ const EAPOL_KEY_INFO_ACK: u16 = 1 << 7;
 const EAPOL_KEY_INFO_MIC: u16 = 1 << 8;
 const EAPOL_KEY_INFO_SECURE: u16 = 1 << 9;
 const EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA: u16 = 1 << 12;
+const EAPOL_KEY_INFO_KEY_VERSION_MASK: u16 = 0x0007;
 const EAPOL_KEY_VERSION_HMAC_SHA1_AES: u16 = 2;
 const EAPOL_KEY_INFO_M2: u16 =
     EAPOL_KEY_VERSION_HMAC_SHA1_AES | EAPOL_KEY_INFO_KEY_TYPE | EAPOL_KEY_INFO_MIC;
@@ -53,13 +54,12 @@ const EAPOL_KEY_INFO_M4: u16 = EAPOL_KEY_VERSION_HMAC_SHA1_AES
     | EAPOL_KEY_INFO_KEY_TYPE
     | EAPOL_KEY_INFO_MIC
     | EAPOL_KEY_INFO_SECURE;
-const EAPOL_KEY_INFO_PAIRWISE_RECV_MASK: u16 = EAPOL_KEY_INFO_KEY_TYPE
-    | EAPOL_KEY_INFO_INSTALL
-    | EAPOL_KEY_INFO_ACK
-    | EAPOL_KEY_INFO_MIC
-    | EAPOL_KEY_INFO_SECURE
-    | EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA;
-const WPA_EAPOL_REPLY_KEY_LEN: u16 = 16;
+const EAPOL_KEY_INFO_GROUP_M2: u16 =
+    EAPOL_KEY_VERSION_HMAC_SHA1_AES | EAPOL_KEY_INFO_MIC | EAPOL_KEY_INFO_SECURE;
+const EAPOL_KEY_INFO_PAIRWISE_RECV_MASK: u16 =
+    EAPOL_KEY_INFO_KEY_TYPE | EAPOL_KEY_INFO_INSTALL | EAPOL_KEY_INFO_ACK | EAPOL_KEY_INFO_MIC;
+const PAE_GROUP_ADDR: [u8; ETHER_ADDR_LEN] = [0x01, 0x80, 0xc2, 0x00, 0x00, 0x03];
+const WPA_EAPOL_REPLY_KEY_LEN: u16 = 0;
 const WPA_REPLAY_COUNTER_LEN: usize = 8;
 const WPA_NONCE_LEN: usize = 32;
 const WPA_KCK_LEN: usize = 16;
@@ -87,8 +87,8 @@ const WPA2_PSK_PBKDF2_ROUNDS: u16 = 4096;
 const WPA2_PSK_BLOCK_COUNT: u32 = 2;
 const SHA1_BLOCK_LEN: usize = 64;
 const SHA1_DIGEST_LEN: usize = 20;
-const WPA_PTK_PRF_LABEL: &[u8] = b"Pairwise key expansion";
-const WPA_SNONCE_LABEL_PREFIX: &[u8] = b"Cohesix host SNonce";
+const WPA_PTK_PRF_LABEL: &[u8] = b"Pairwise key expansion\0";
+const WPA_SNONCE_LABEL_PREFIX: &[u8] = b"Cohesix host WPA SNonce ";
 const HOST_EAPOL_KEY_DATA_MAX_LEN: usize = 256;
 const RSN_IE_ID: u8 = 48;
 const RSN_VERSION_1: u16 = 1;
@@ -109,6 +109,12 @@ pub struct HostGtkKey {
 pub struct HostEapolInstallKeys {
     pub ap_mac: [u8; ETHER_ADDR_LEN],
     pub pairwise_tk: [u8; WPA_TK_LEN],
+    pub gtk: Option<HostGtkKey>,
+    pub rsc: [u8; 6],
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HostEapolGroupKeys {
     pub gtk: HostGtkKey,
     pub rsc: [u8; 6],
 }
@@ -116,12 +122,19 @@ pub struct HostEapolInstallKeys {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostEapolAction {
     None,
+    Inspect {
+        proof: HostEapolFrameProof,
+    },
     SendM2 {
         len: usize,
     },
     SendM4InstallKeys {
         len: usize,
         keys: HostEapolInstallKeys,
+    },
+    SendGroupM2InstallGtk {
+        len: usize,
+        keys: HostEapolGroupKeys,
     },
 }
 
@@ -133,8 +146,12 @@ pub struct HostEapolState {
     snonce: [u8; WPA_NONCE_LEN],
     m1_replay_counter: [u8; WPA_REPLAY_COUNTER_LEN],
     m3_replay_counter: [u8; WPA_REPLAY_COUNTER_LEN],
+    group_replay_counter: [u8; WPA_REPLAY_COUNTER_LEN],
     ap_mac: [u8; ETHER_ADDR_LEN],
     rx_packets: u32,
+    group_replay_counter_valid: bool,
+    ptk_installed: bool,
+    gtk_installed: bool,
     m2_sent: bool,
     m4_sent: bool,
 }
@@ -150,8 +167,12 @@ impl HostEapolState {
             snonce: [0; WPA_NONCE_LEN],
             m1_replay_counter: [0; WPA_REPLAY_COUNTER_LEN],
             m3_replay_counter: [0; WPA_REPLAY_COUNTER_LEN],
+            group_replay_counter: [0; WPA_REPLAY_COUNTER_LEN],
             ap_mac: [0; ETHER_ADDR_LEN],
             rx_packets: 0,
+            group_replay_counter_valid: false,
+            ptk_installed: false,
+            gtk_installed: false,
             m2_sent: false,
             m4_sent: false,
         })
@@ -162,7 +183,7 @@ impl HostEapolState {
     }
 
     pub const fn secure_complete(&self) -> bool {
-        self.m2_sent && self.m4_sent
+        self.m2_sent && self.m4_sent && self.ptk_installed && self.gtk_installed
     }
 
     pub fn handle_packet(
@@ -182,7 +203,8 @@ impl HostEapolState {
         match proof.message.as_bytes() {
             b"m1" => self.handle_m1(station_mac, packet, proof, tx_frame),
             b"m3" => self.handle_m3(station_mac, packet, proof, tx_frame),
-            _ => Ok(HostEapolAction::None),
+            b"group-key" => self.handle_group_key(station_mac, packet, proof, tx_frame),
+            _ => Ok(HostEapolAction::Inspect { proof }),
         }
     }
 
@@ -197,28 +219,39 @@ impl HostEapolState {
             return Err("host-eapol-m1-shape");
         }
         let body = host_eapol_key_body(packet).ok_or("host-eapol-m1-body")?;
-        self.ap_mac = ethernet_src(packet).ok_or("host-eapol-m1-src")?;
-        self.anonce.copy_from_slice(
+        let ap_mac = ethernet_src(packet).ok_or("host-eapol-m1-src")?;
+        let mut anonce = [0u8; WPA_NONCE_LEN];
+        anonce.copy_from_slice(
             &body[EAPOL_KEY_BODY_NONCE_OFFSET..EAPOL_KEY_BODY_NONCE_OFFSET + WPA_NONCE_LEN],
         );
-        self.m1_replay_counter.copy_from_slice(
+        let mut replay_counter = [0u8; WPA_REPLAY_COUNTER_LEN];
+        replay_counter.copy_from_slice(
             &body[EAPOL_KEY_BODY_REPLAY_OFFSET
                 ..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN],
         );
-        self.snonce = derive_host_snonce(
-            &self.pmk,
-            &self.ap_mac,
-            &station_mac,
-            &self.anonce,
-            self.rx_packets,
-        );
-        self.ptk = derive_wpa2_pairwise_ptk(
-            &self.pmk,
-            &self.ap_mac,
-            &station_mac,
-            &self.anonce,
-            &self.snonce,
-        );
+        let retransmitted_m1 = self.m2_sent
+            && self.ap_mac == ap_mac
+            && self.anonce == anonce
+            && self.m1_replay_counter == replay_counter;
+        if !retransmitted_m1 {
+            self.ap_mac = ap_mac;
+            self.anonce = anonce;
+            self.m1_replay_counter = replay_counter;
+            self.snonce = derive_host_snonce(
+                &self.pmk,
+                &self.ap_mac,
+                &station_mac,
+                &self.anonce,
+                &self.m1_replay_counter,
+            );
+            self.ptk = derive_wpa2_pairwise_ptk(
+                &self.pmk,
+                &self.ap_mac,
+                &station_mac,
+                &self.anonce,
+                &self.snonce,
+            );
+        }
         let len = write_eapol_key_reply_frame(
             tx_frame,
             &self.ap_mac,
@@ -277,7 +310,11 @@ impl HostEapolState {
         if !eapol_key_data_contains_compatible_rsn_ie(&unwrapped[..unwrapped_len]) {
             return Err("host-eapol-m3-rsn-ie");
         }
-        let gtk = find_gtk_kde(&unwrapped[..unwrapped_len])?;
+        let gtk = match find_gtk_kde(&unwrapped[..unwrapped_len]) {
+            Ok(gtk) => Some(gtk),
+            Err("eapol-gtk-kde-missing") => None,
+            Err(err) => return Err(err),
+        };
         let mut rsc = [0u8; 6];
         rsc.copy_from_slice(&body[EAPOL_KEY_BODY_RSC_OFFSET..EAPOL_KEY_BODY_RSC_OFFSET + 6]);
         let len = write_eapol_key_reply_frame(
@@ -295,6 +332,9 @@ impl HostEapolState {
             &self.ptk[WPA_KCK_LEN + WPA_KEK_LEN..WPA_KCK_LEN + WPA_KEK_LEN + WPA_TK_LEN],
         );
         self.m4_sent = true;
+        self.group_replay_counter_valid = false;
+        self.ptk_installed = true;
+        self.gtk_installed = gtk.is_some();
         Ok(HostEapolAction::SendM4InstallKeys {
             len,
             keys: HostEapolInstallKeys {
@@ -303,6 +343,59 @@ impl HostEapolState {
                 gtk,
                 rsc,
             },
+        })
+    }
+
+    fn handle_group_key(
+        &mut self,
+        station_mac: [u8; ETHER_ADDR_LEN],
+        packet: &[u8],
+        proof: HostEapolFrameProof,
+        tx_frame: &mut [u8; MAX_FRAME_LEN],
+    ) -> Result<HostEapolAction, &'static str> {
+        if !self.m4_sent {
+            return Err("host-eapol-group-before-m4");
+        }
+        if proof.pairwise || !proof.mic || !proof.secure || !proof.encrypted_key_data {
+            return Err("host-eapol-group-shape");
+        }
+        let body = host_eapol_key_body(packet).ok_or("host-eapol-group-body")?;
+        let replay_counter = &body
+            [EAPOL_KEY_BODY_REPLAY_OFFSET..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN];
+        if !group_replay_counter_increases(replay_counter, self) {
+            return Err("host-eapol-group-replay");
+        }
+        if !verify_eapol_key_mic(packet, &self.ptk[..WPA_KCK_LEN])? {
+            return Err("host-eapol-group-mic");
+        }
+        let key_data = host_eapol_key_data(body).ok_or("host-eapol-group-key-data")?;
+        let mut unwrapped = [0u8; HOST_EAPOL_KEY_DATA_MAX_LEN];
+        let unwrapped_len = aes128_key_unwrap(
+            &self.ptk[WPA_KCK_LEN..WPA_KCK_LEN + WPA_KEK_LEN],
+            key_data,
+            &mut unwrapped,
+        )?;
+        let gtk = find_gtk_kde(&unwrapped[..unwrapped_len])?;
+        let mut rsc = [0u8; 6];
+        rsc.copy_from_slice(&body[EAPOL_KEY_BODY_RSC_OFFSET..EAPOL_KEY_BODY_RSC_OFFSET + 6]);
+        let mut replay = [0u8; WPA_REPLAY_COUNTER_LEN];
+        replay.copy_from_slice(replay_counter);
+        let len = write_eapol_key_reply_frame(
+            tx_frame,
+            &self.ap_mac,
+            &station_mac,
+            EAPOL_KEY_INFO_GROUP_M2,
+            &replay,
+            None,
+            &[],
+            &self.ptk[..WPA_KCK_LEN],
+        )?;
+        self.group_replay_counter.copy_from_slice(replay_counter);
+        self.group_replay_counter_valid = true;
+        self.gtk_installed = true;
+        Ok(HostEapolAction::SendGroupM2InstallGtk {
+            len,
+            keys: HostEapolGroupKeys { gtk, rsc },
         })
     }
 }
@@ -568,17 +661,22 @@ impl Sha1State {
     }
 }
 
-#[derive(Clone, Copy)]
-struct HostEapolFrameProof {
-    key_info: u16,
-    key_len: u16,
-    pairwise: bool,
-    ack: bool,
-    mic: bool,
-    install: bool,
-    secure: bool,
-    encrypted_key_data: bool,
-    message: &'static str,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HostEapolFrameProof {
+    pub key_info: u16,
+    pub key_len: u16,
+    pub key_version: u16,
+    pub key_data_len: u16,
+    pub pairwise: bool,
+    pub ack: bool,
+    pub mic: bool,
+    pub install: bool,
+    pub secure: bool,
+    pub encrypted_key_data: bool,
+    pub nonce_present: bool,
+    pub replay_counter_nonzero: bool,
+    pub message: &'static str,
+    pub next_action: &'static str,
 }
 
 impl HostEapolFrameProof {
@@ -608,24 +706,72 @@ impl HostEapolFrameProof {
         let install = key_info & EAPOL_KEY_INFO_INSTALL != 0;
         let secure = key_info & EAPOL_KEY_INFO_SECURE != 0;
         let encrypted_key_data = key_info & EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA != 0;
-        let message = if pairwise && ack && !mic {
-            "m1"
-        } else if pairwise && ack && mic && install && encrypted_key_data {
-            "m3"
-        } else {
-            "unknown"
-        };
+        let nonce_present = body
+            [EAPOL_KEY_BODY_NONCE_OFFSET..EAPOL_KEY_BODY_NONCE_OFFSET + WPA_NONCE_LEN]
+            .iter()
+            .any(|byte| *byte != 0);
+        let replay_counter_nonzero = body
+            [EAPOL_KEY_BODY_REPLAY_OFFSET..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN]
+            .iter()
+            .any(|byte| *byte != 0);
+        let message = classify_eapol_key_message(key_info);
         Ok(Self {
             key_info,
             key_len: get_u16_be(body, EAPOL_KEY_BODY_KEY_LEN_OFFSET).ok_or("host-eapol-key-len")?,
+            key_version: key_info & EAPOL_KEY_INFO_KEY_VERSION_MASK,
+            key_data_len: get_u16_be(body, EAPOL_KEY_BODY_DATA_LEN_OFFSET)
+                .ok_or("host-eapol-key-data-len")?,
             pairwise,
             ack,
             mic,
             install,
             secure,
             encrypted_key_data,
+            nonce_present,
+            replay_counter_nonzero,
             message,
+            next_action: host_eapol_next_action(message),
         })
+    }
+}
+
+pub fn inspect_host_eapol_frame(packet: &[u8]) -> Option<HostEapolFrameProof> {
+    if ethernet_ethertype(packet) == Some(ETH_P_EAPOL) {
+        HostEapolFrameProof::parse(packet).ok()
+    } else {
+        None
+    }
+}
+
+const fn classify_eapol_key_message(key_info: u16) -> &'static str {
+    let pairwise = key_info & EAPOL_KEY_INFO_KEY_TYPE != 0;
+    let ack = key_info & EAPOL_KEY_INFO_ACK != 0;
+    let mic = key_info & EAPOL_KEY_INFO_MIC != 0;
+    let install = key_info & EAPOL_KEY_INFO_INSTALL != 0;
+    let secure = key_info & EAPOL_KEY_INFO_SECURE != 0;
+    let encrypted = key_info & EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA != 0;
+    if pairwise && ack && !mic {
+        "m1"
+    } else if pairwise && !ack && mic && !secure {
+        "m2"
+    } else if pairwise && ack && mic && install && encrypted {
+        "m3"
+    } else if pairwise && !ack && mic && secure {
+        "m4"
+    } else if !pairwise && mic {
+        "group-key"
+    } else {
+        "unknown"
+    }
+}
+
+fn host_eapol_next_action(message: &str) -> &'static str {
+    match message.as_bytes() {
+        b"m1" => "derive-ptk-send-m2",
+        b"m3" => "verify-mic-send-m4-install-keys",
+        b"group-key" => "verify-mic-install-gtk",
+        b"m2" | b"m4" => "unexpected-sta-message",
+        _ => "inspect-host-eapol",
     }
 }
 
@@ -890,13 +1036,13 @@ fn derive_host_snonce(
     ap_mac: &[u8; ETHER_ADDR_LEN],
     sta_mac: &[u8; ETHER_ADDR_LEN],
     anonce: &[u8; WPA_NONCE_LEN],
-    rx_count: u32,
+    replay_counter: &[u8; WPA_REPLAY_COUNTER_LEN],
 ) -> [u8; WPA_NONCE_LEN] {
-    let mut seed = [0u8; ETHER_ADDR_LEN + ETHER_ADDR_LEN + WPA_NONCE_LEN + 4];
+    let mut seed = [0u8; ETHER_ADDR_LEN + ETHER_ADDR_LEN + WPA_NONCE_LEN + WPA_REPLAY_COUNTER_LEN];
     seed[..ETHER_ADDR_LEN].copy_from_slice(ap_mac);
     seed[ETHER_ADDR_LEN..ETHER_ADDR_LEN * 2].copy_from_slice(sta_mac);
     seed[ETHER_ADDR_LEN * 2..ETHER_ADDR_LEN * 2 + WPA_NONCE_LEN].copy_from_slice(anonce);
-    seed[ETHER_ADDR_LEN * 2 + WPA_NONCE_LEN..].copy_from_slice(&rx_count.to_be_bytes());
+    seed[ETHER_ADDR_LEN * 2 + WPA_NONCE_LEN..].copy_from_slice(replay_counter);
     let first = hmac_sha1_three(pmk, WPA_SNONCE_LABEL_PREFIX, &seed, &[0]);
     let second = hmac_sha1_three(pmk, WPA_SNONCE_LABEL_PREFIX, &seed, &[1]);
     let mut snonce = [0u8; WPA_NONCE_LEN];
@@ -941,8 +1087,9 @@ fn derive_wpa2_pairwise_ptk(
 }
 
 fn packet_dst_allowed(packet: &[u8], station_mac: [u8; ETHER_ADDR_LEN]) -> bool {
-    ethernet_dst(packet)
-        .is_some_and(|dst| dst == station_mac || mac_is_station_local_alias(dst, station_mac))
+    ethernet_dst(packet).is_some_and(|dst| {
+        dst == station_mac || dst == PAE_GROUP_ADDR || mac_is_station_local_alias(dst, station_mac)
+    })
 }
 
 fn mac_is_station_local_alias(
@@ -962,6 +1109,15 @@ fn replay_counter_increases(current: &[u8], previous: &[u8; WPA_REPLAY_COUNTER_L
         }
     }
     false
+}
+
+fn group_replay_counter_increases(current: &[u8], state: &HostEapolState) -> bool {
+    let previous = if state.group_replay_counter_valid {
+        &state.group_replay_counter
+    } else {
+        &state.m3_replay_counter
+    };
+    replay_counter_increases(current, previous)
 }
 
 fn bytes_less<const N: usize>(left: &[u8; N], right: &[u8; N]) -> bool {
@@ -1107,6 +1263,25 @@ pub(crate) fn write_test_m3_frame(
     station_mac: &[u8; ETHER_ADDR_LEN],
     state: &HostEapolState,
 ) -> Result<usize, &'static str> {
+    write_test_m3_frame_with_gtk(frame, station_mac, state, true)
+}
+
+#[cfg(test)]
+pub(crate) fn write_test_m3_frame_without_gtk(
+    frame: &mut [u8; MAX_FRAME_LEN],
+    station_mac: &[u8; ETHER_ADDR_LEN],
+    state: &HostEapolState,
+) -> Result<usize, &'static str> {
+    write_test_m3_frame_with_gtk(frame, station_mac, state, false)
+}
+
+#[cfg(test)]
+fn write_test_m3_frame_with_gtk(
+    frame: &mut [u8; MAX_FRAME_LEN],
+    station_mac: &[u8; ETHER_ADDR_LEN],
+    state: &HostEapolState,
+    include_gtk: bool,
+) -> Result<usize, &'static str> {
     if !state.m2_sent {
         return Err("host-eapol-test-m3-before-m2");
     }
@@ -1114,18 +1289,9 @@ pub(crate) fn write_test_m3_frame(
     let mut offset = 0usize;
     plain[offset..offset + WPA2_PSK_CCMP_RSN_IE.len()].copy_from_slice(&WPA2_PSK_CCMP_RSN_IE);
     offset += WPA2_PSK_CCMP_RSN_IE.len();
-    let gtk = [
-        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e,
-        0x7f,
-    ];
-    plain[offset] = 0xdd;
-    plain[offset + 1] = 22;
-    plain[offset + 2..offset + 5].copy_from_slice(&RSN_KDE_OUI);
-    plain[offset + 5] = RSN_KDE_TYPE_GTK;
-    plain[offset + 6] = 1;
-    plain[offset + 7] = 0;
-    plain[offset + 8..offset + 8 + gtk.len()].copy_from_slice(&gtk);
-    offset += 24;
+    if include_gtk {
+        write_test_gtk_kde(&mut plain, &mut offset)?;
+    }
     let plain_len = (offset + 7) & !7;
 
     let mut wrapped = [0u8; HOST_EAPOL_KEY_DATA_MAX_LEN];
@@ -1142,7 +1308,10 @@ pub(crate) fn write_test_m3_frame(
             break;
         }
     }
-    let key_info = EAPOL_KEY_VERSION_HMAC_SHA1_AES | EAPOL_KEY_INFO_PAIRWISE_RECV_MASK;
+    let key_info = EAPOL_KEY_VERSION_HMAC_SHA1_AES
+        | EAPOL_KEY_INFO_PAIRWISE_RECV_MASK
+        | EAPOL_KEY_INFO_SECURE
+        | EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA;
     write_eapol_key_reply_frame(
         frame,
         station_mac,
@@ -1153,6 +1322,74 @@ pub(crate) fn write_test_m3_frame(
         &wrapped[..wrapped_len],
         &state.ptk[..WPA_KCK_LEN],
     )
+}
+
+#[cfg(test)]
+pub(crate) fn write_test_group_key_frame(
+    frame: &mut [u8; MAX_FRAME_LEN],
+    station_mac: &[u8; ETHER_ADDR_LEN],
+    state: &HostEapolState,
+) -> Result<usize, &'static str> {
+    if !state.m4_sent || !state.ptk_installed {
+        return Err("host-eapol-test-group-before-ptk");
+    }
+    let mut plain = [0u8; 64];
+    let mut offset = 0usize;
+    write_test_gtk_kde(&mut plain, &mut offset)?;
+    let plain_len = (offset + 7) & !7;
+    let mut wrapped = [0u8; HOST_EAPOL_KEY_DATA_MAX_LEN];
+    let wrapped_len = test_aes128_key_wrap(
+        &state.ptk[WPA_KCK_LEN..WPA_KCK_LEN + WPA_KEK_LEN],
+        &plain[..plain_len],
+        &mut wrapped,
+    )?;
+    let mut replay_counter = if state.group_replay_counter_valid {
+        state.group_replay_counter
+    } else {
+        state.m3_replay_counter
+    };
+    for byte in replay_counter.iter_mut().rev() {
+        let (next, carry) = byte.overflowing_add(1);
+        *byte = next;
+        if !carry {
+            break;
+        }
+    }
+    let key_info = EAPOL_KEY_VERSION_HMAC_SHA1_AES
+        | EAPOL_KEY_INFO_ACK
+        | EAPOL_KEY_INFO_MIC
+        | EAPOL_KEY_INFO_SECURE
+        | EAPOL_KEY_INFO_ENCRYPTED_KEY_DATA;
+    write_eapol_key_reply_frame(
+        frame,
+        station_mac,
+        &state.ap_mac,
+        key_info,
+        &replay_counter,
+        None,
+        &wrapped[..wrapped_len],
+        &state.ptk[..WPA_KCK_LEN],
+    )
+}
+
+#[cfg(test)]
+fn write_test_gtk_kde(plain: &mut [u8], offset: &mut usize) -> Result<(), &'static str> {
+    if plain.len().saturating_sub(*offset) < 24 {
+        return Err("host-eapol-test-gtk-kde-len");
+    }
+    let gtk = [
+        0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78, 0x79, 0x7a, 0x7b, 0x7c, 0x7d, 0x7e,
+        0x7f,
+    ];
+    plain[*offset] = 0xdd;
+    plain[*offset + 1] = 22;
+    plain[*offset + 2..*offset + 5].copy_from_slice(&RSN_KDE_OUI);
+    plain[*offset + 5] = RSN_KDE_TYPE_GTK;
+    plain[*offset + 6] = 1;
+    plain[*offset + 7] = 0;
+    plain[*offset + 8..*offset + 8 + gtk.len()].copy_from_slice(&gtk);
+    *offset += 24;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1190,6 +1427,25 @@ mod tests {
                 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b,
                 0x1c, 0x1d, 0x1e, 0x1f,
             ]
+        );
+    }
+
+    #[test]
+    fn host_eapol_pairwise_shapes_match_old_good_rsn_path() {
+        assert_eq!(WPA_PTK_PRF_LABEL, b"Pairwise key expansion\0");
+        assert_eq!(WPA_SNONCE_LABEL_PREFIX, b"Cohesix host WPA SNonce ");
+        assert_eq!(WPA_EAPOL_REPLY_KEY_LEN, 0);
+        assert_eq!(EAPOL_KEY_BODY_RSC_OFFSET, 61);
+        assert_eq!(
+            EAPOL_KEY_INFO_PAIRWISE_RECV_MASK,
+            EAPOL_KEY_INFO_KEY_TYPE
+                | EAPOL_KEY_INFO_INSTALL
+                | EAPOL_KEY_INFO_ACK
+                | EAPOL_KEY_INFO_MIC
+        );
+        assert_eq!(
+            EAPOL_KEY_INFO_GROUP_M2,
+            EAPOL_KEY_VERSION_HMAC_SHA1_AES | EAPOL_KEY_INFO_MIC | EAPOL_KEY_INFO_SECURE
         );
     }
 
@@ -1294,6 +1550,95 @@ mod tests {
             u16::from_be_bytes([frame[ETH_HEADER_LEN + 2], frame[ETH_HEADER_LEN + 3]]),
             0
         );
+    }
+
+    #[test]
+    fn retransmitted_m1_replays_identical_m2() {
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len = write_test_m1_frame(&mut m1, &station, &ap).expect("m1");
+        let mut first_m2 = [0u8; MAX_FRAME_LEN];
+        let mut second_m2 = [0u8; MAX_FRAME_LEN];
+
+        let first = state
+            .handle_packet(station, &m1[..m1_len], &mut first_m2)
+            .expect("first m1");
+        let first_len = match first {
+            HostEapolAction::SendM2 { len } => len,
+            _ => panic!("first m1 should produce m2"),
+        };
+        let first_snonce = state.snonce;
+        let first_ptk = state.ptk;
+
+        let second = state
+            .handle_packet(station, &m1[..m1_len], &mut second_m2)
+            .expect("retransmitted m1");
+        let second_len = match second {
+            HostEapolAction::SendM2 { len } => len,
+            _ => panic!("retransmitted m1 should produce m2"),
+        };
+
+        assert_eq!(state.rx_packets(), 2);
+        assert_eq!(second_len, first_len);
+        assert_eq!(state.snonce, first_snonce);
+        assert_eq!(state.ptk, first_ptk);
+        assert_eq!(&second_m2[..second_len], &first_m2[..first_len]);
+    }
+
+    #[test]
+    fn pae_group_destination_is_admitted_for_host_eapol() {
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len = write_test_m1_frame(&mut m1, &PAE_GROUP_ADDR, &ap).expect("m1");
+
+        assert!(packet_dst_allowed(&m1[..m1_len], station));
+    }
+
+    #[test]
+    fn ptk_only_m3_waits_for_group_key_before_secure_complete() {
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len = write_test_m1_frame(&mut m1, &station, &ap).expect("m1");
+        let mut tx = [0u8; MAX_FRAME_LEN];
+        let m1_action = state
+            .handle_packet(station, &m1[..m1_len], &mut tx)
+            .expect("m1");
+        assert!(matches!(m1_action, HostEapolAction::SendM2 { .. }));
+
+        let mut m3 = [0u8; MAX_FRAME_LEN];
+        let m3_len =
+            write_test_m3_frame_without_gtk(&mut m3, &station, &state).expect("ptk-only m3");
+        let m3_action = state
+            .handle_packet(station, &m3[..m3_len], &mut tx)
+            .expect("m3 without gtk");
+        match m3_action {
+            HostEapolAction::SendM4InstallKeys { keys, .. } => {
+                assert!(keys.gtk.is_none());
+            }
+            _ => panic!("ptk-only m3 should send m4"),
+        }
+        assert!(state.m4_sent);
+        assert!(state.ptk_installed);
+        assert!(!state.gtk_installed);
+        assert!(!state.secure_complete());
+
+        let mut group = [0u8; MAX_FRAME_LEN];
+        let group_len =
+            write_test_group_key_frame(&mut group, &station, &state).expect("group key");
+        let group_action = state
+            .handle_packet(station, &group[..group_len], &mut tx)
+            .expect("group key");
+
+        assert!(matches!(
+            group_action,
+            HostEapolAction::SendGroupM2InstallGtk { .. }
+        ));
+        assert!(state.secure_complete());
     }
 
     #[test]

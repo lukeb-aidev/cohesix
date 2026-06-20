@@ -1181,22 +1181,25 @@ context and the retry/poll window.
   still fit CMD53 byte mode are four-byte aligned, while larger frames are
   padded to the 512-byte Function 2 block size so the HAL emits block-mode
   CMD53 rather than an unencodable byte-mode count.
-- CLM upload is not yet credited as a linked-runtime proof gate in the current
-  physical-Pi Wi-Fi path. When the linked runtime enables CLM, it must follow the
+- CLM upload is part of the linked-runtime attach proof. After the initial
+  small Linux-shaped iovars and `BRCMF_C_GET_REVINFO`, root streams the bundled
+  CLM blob through bounded CYW43 driver-task BCDC control exchanges using the
   captured Linux `clmload` cadence: 1400-byte payload chunks (`len=1412` after
   `download_hdr`), 20-byte SDPCM control headers, padded CMD53 request lengths,
-  and `ver` / `clmver` queries after upload. Until then, `clmver` is comparison
-  evidence only and cannot close DHCP or remote-`cohsh` readiness.
+  and `ver` / `clmver` queries after upload. Fresh Pi logs must show
+  `CYW43_DRIVER_TASK_CLM ... action=ready`, `cyw43-control-firmware-version`,
+  and `cyw43-control-clm-version` before association evidence can close DHCP or
+  remote-`cohsh` readiness.
 - CLM must not be the first meaningful BCDC/iovar exchange. Linux proves the
   initial control-plane path with small iovars first: set
   `bus:txglomalign=8`, query `ulp_sdioctrl` while accepting the captured
   `BCME_UNSUPPORTED` result, set `bus:rxglom=1`, query `cur_etheraddr`, then
   issue Linux's mandatory `BRCMF_C_GET_REVINFO` (`cmd=98`) before CLM. Cohesix
-  follows that order before CLM so the first Function 2 replies are small
-  Linux-shaped 64-byte first-read transactions rather than a large CLM
-  transfer. After that attach proof, Cohesix keeps the
-  `bus:txglom`/`bus:rxglom` state established by the Linux-style SDIO preinit
-  path through firmware `ver`, `clmver`, `mpc`, `event_msgs_ext`, and `WLC_UP`.
+  follows that order so the first Function 2 replies are small Linux-shaped
+  64-byte first-read transactions rather than a large CLM transfer. After that
+  attach proof, Cohesix keeps the `bus:txglom`/`bus:rxglom` state established by
+  the Linux-style SDIO preinit path through CLM upload, firmware `ver`,
+  `clmver`, `mpc`, `event_msgs_ext`, and `WLC_UP`.
   Disabling `bus:rxglom` during control-plane attach is not Linux-equivalent and
   can move a working control plane into a host-`CARD_INT`/no-dongle-source stall.
   Cohesix therefore defers any runtime `bus:rxglom=0` transition until after
@@ -1954,12 +1957,22 @@ active path is Cohesix-owned cold start:
   DMA buffer; a single read requeued only after the next event-loop turn can miss
   fast press/release transitions during console-output stalls.
   After first-byte proof, sustained acceptance additionally requires the queue to
-  remain refillable: if the linked runtime sees a low steady queue with many
-  transfer events, it treats that as post-first-byte queue collapse and runs the
-  bounded endpoint recovery ladder instead of waiting for the older full-queue
-  unmatched-transfer failure. Endpoint recovery waits for the expected Stop
-  Endpoint / Reset Endpoint / Set TR Dequeue command completions before clearing
-  software queue state or ringing the keyboard endpoint again.
+  remain refillable and loss-resistant: an unmatched transfer event is treated as
+  stale evidence unless it maps back to a submitted keyboard TRB, and it must not
+  reclaim a report slot that already has a pending valid completion. This lets
+  stale capacity be recovered without cascading into dropped fast-typing reports.
+  If the linked runtime instead sees a low steady queue with many transfer
+  events, it treats that as post-first-byte queue collapse and runs the bounded
+  endpoint recovery ladder. A full steady queue whose recent completions are
+  repeatedly unmatched is also a post-first-byte stall: the runtime bounds each
+  event-ring scan, preserves live matched completions, and escalates to the
+  same endpoint recovery ladder only after the hard unmatched threshold proves
+  the accepted endpoint is no longer making matched progress. The bounded scan
+  window is large enough to find matched key events behind noisy ring traffic
+  without letting stale unmatched events reclaim live report slots. Endpoint
+  recovery waits for the expected Stop Endpoint / Reset Endpoint / Set TR
+  Dequeue command completions before clearing software queue state or ringing
+  the keyboard endpoint again.
   The linked USB runtime therefore reserves a dedicated one-byte HID
   output-report DMA slot during keyboard attach and uses it for Caps Lock, Num
   Lock, and Scroll Lock `SET_REPORT(Output)` updates after the seal. Lock-key
@@ -2399,9 +2412,11 @@ Required Cohesix shape:
   first-frame owner proof before HDMI engine-init owner state is attached, but
   root still never writes the framebuffer directly. Slow or verbose console
   output remains chunked so display rendering cannot starve xHCI polling.
-  Up/down keyboard scrollback redraws only the bounded high-impact HDMI history
-  through linked `SubmitFrame` commands. `usb status` reports local-seat
-  keyboard-drop counters without deferred HDMI queue/drop counters.
+  Up/down keyboard scrollback redraws clear the linked HDMI text surface before
+  repainting the bounded high-impact HDMI history through linked `SubmitFrame`
+  commands, so stale lower-screen lines cannot remain visible while a split
+  redraw is arriving. `usb status` reports local-seat keyboard-drop counters
+  without deferred HDMI queue/drop counters.
 - Operator proof uses a single 10-gate USB ladder: 1 controller candidate, 2 live
   PCIe/VL805 ownership, 3 controller-ready, 4 command-ring completion, 5
   root-port connection, 6 device address, 7 descriptors/configuration, 8 HID
@@ -2462,10 +2477,27 @@ hub-control turn.
 
 After the first HID report and first console byte are proven, repeated
 root-task no-reply polls are treated as a post-acceptance interrupt-IN service
-stall rather than a reason to reopen enumeration. Root may send the linked
-runtime's bounded recovery aux request only for that accepted endpoint; the
-runtime services it with the existing stop/reset/set-dequeue/re-arm ladder and
-reports endpoint recovery success or failure in the keyboard queue status.
+stall rather than a reason to reopen enumeration. Root may send a recovery aux
+request after each bounded post-first-byte no-reply window, and only for that
+accepted endpoint; the latch clears on either a normal keyboard poll completion
+or the next bounded no-reply window so one lost recovery turn cannot silence
+later recovery attempts. The runtime still polls/drains the interrupt-IN queue
+first, and it uses the stop/reset/set-dequeue/re-arm ladder only when
+queue-collapse or unmatched-transfer evidence proves the accepted endpoint is
+stuck. Repeated unmatched transfer events on the accepted endpoint use the same
+bounded recovery ladder once they prove the transfer ring is no longer making
+matched progress. USB diagnostics include the root-side recovery-aux request
+count and pending latch state, so a capture can distinguish recovery not yet
+requested from recovery requested but not replied.
+
+Serial diagnostics retain detailed USB enumeration replay status, including
+begin/no-reply retries, timeout progress, and hub-port traces. HDMI boot-progress
+mirroring is intentionally quieter: it mirrors only high-impact USB milestones
+such as descriptor replay ready, xHCI ready, command-ring ready,
+root-port-connected, device-addressed, descriptor/HID frontiers, first-report
+ready, owner-state ready, and real failure/blocker states. Routine
+enumeration-resume begin/no-reply churn remains serial-only so HDMI feedback
+stays fluid while USB is being proven.
 
 Do not use xHCI as a general USB stack. Milestone 26 local seat is keyboard
 input plus primitive HDMI text output only.

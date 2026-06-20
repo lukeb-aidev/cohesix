@@ -1829,16 +1829,12 @@ where
             self.flush_pending_console_output_if_idle();
             self.retry_pending_usb_debug_hdmi_frontier();
             self.pump_local_seat_display_if_idle();
-            let output_pending =
-                self.serial.tx_pending() || !self.pending_console_output.is_empty();
             self.maybe_run_post_prompt_local_seat_attach(
                 serial_rx_activity
                     || serial_input
                     || followup_serial_input
                     || local_input
-                    || post_runtime_local_input
-                    || serial_output_pending
-                    || output_pending,
+                    || post_runtime_local_input,
             );
             self.maybe_emit_serial_input_idle_trace(
                 serial_rx_activity
@@ -1853,14 +1849,8 @@ where
         self.flush_pending_console_output_if_idle();
         self.retry_pending_usb_debug_hdmi_frontier();
         self.pump_local_seat_display_if_idle();
-        let output_pending = self.serial.tx_pending() || !self.pending_console_output.is_empty();
         self.maybe_run_post_prompt_local_seat_attach(
-            serial_rx_activity
-                || serial_input
-                || local_input
-                || post_runtime_local_input
-                || serial_output_pending
-                || output_pending,
+            serial_rx_activity || serial_input || local_input || post_runtime_local_input,
         );
         self.maybe_emit_serial_input_idle_trace(
             serial_rx_activity || serial_input || local_input || post_runtime_local_input,
@@ -2671,8 +2661,6 @@ where
                 Some("physical-input-active")
             } else if self.serial.interactive_input_active() {
                 Some("serial-input-active")
-            } else if self.serial.tx_pending() {
-                Some("serial-tx-pending")
             } else if self.now_ms < self.post_prompt_local_seat_attach_not_before_ms {
                 Some("idle-grace")
             } else {
@@ -4890,7 +4878,7 @@ where
                 "local-seat-queue-diagnostic"
             };
             let keyboard_line = format_message(format_args!(
-                "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} accepted={} drained={} echoed={} dropped={} overruns={} no_reply={} cooldown={} cooldown_skips={}",
+                "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} accepted={} drained={} echoed={} dropped={} overruns={} no_reply={} recovery_aux={} recovery_pending={} cooldown={} cooldown_skips={}",
                 keyboard_trace_source,
                 local_trace.backend_poll_calls,
                 local_trace.backend_read_bytes,
@@ -4901,6 +4889,8 @@ where
                 local_trace.dropped_bytes,
                 local_trace.driver_task_budget_overruns,
                 local_trace.driver_task_no_replies,
+                local_trace.recovery_aux_requests,
+                Self::yes_no(local_trace.recovery_aux_pending),
                 local_trace.poll_cooldown_turns,
                 local_trace.poll_cooldown_skips,
             ));
@@ -14401,6 +14391,72 @@ mod tests {
         assert_eq!(pump.post_prompt_local_seat_attach_retry_turns, 0);
         assert_eq!(pump.post_prompt_local_seat_attach_not_before_ms, 0);
         assert!(pump.post_prompt_local_seat_attach_active_usb_traced);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn post_prompt_local_seat_attach_does_not_wait_for_serial_output_drain() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1_000);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.post_prompt_local_seat_attach_pending = true;
+        pump.post_prompt_local_seat_attach_not_before_ms = 0;
+        pump.serial_mut()
+            .enqueue_tx_best_effort(b"pending serial output that cannot fully drain");
+
+        pump.maybe_run_post_prompt_local_seat_attach(false);
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+        assert!(pump.serial.tx_pending());
+
+        pump.maybe_run_post_prompt_local_seat_attach(false);
+        assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn poll_runs_post_prompt_local_seat_attach_with_serial_output_pending() {
+        let driver = LoopbackSerial::<4>::new();
+        let serial = SerialPort::<_, 32, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1_000);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.post_prompt_local_seat_attach_pending = true;
+        pump.post_prompt_local_seat_attach_not_before_ms = 0;
+        assert!(
+            pump.serial_mut()
+                .enqueue_tx_best_effort(&[b'x'; DEFAULT_LINE_CAPACITY])
+                > 0
+        );
+
+        pump.poll();
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+        assert!(pump.serial.tx_pending());
+
+        pump.poll();
+        assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+        assert!(pump.serial.tx_pending());
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

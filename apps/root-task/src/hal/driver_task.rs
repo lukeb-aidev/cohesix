@@ -372,7 +372,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
-    DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -5648,6 +5648,17 @@ fn driver_task_ring_call_trace_enabled(
     {
         return false;
     }
+    if matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
+        && matches!(
+            mode,
+            DriverTaskRingCommandMode::Steady
+                | DriverTaskRingCommandMode::NonBlocking
+                | DriverTaskRingCommandMode::PromptSlice
+        )
+    {
+        return false;
+    }
     if command.aux0 != 0
         || command.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE != 0
         || command.frame.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE != 0
@@ -5737,6 +5748,12 @@ fn driver_task_ring_attempt_limit(
     }
     if mode == DriverTaskRingCommandMode::NonBlocking
         && command.aux0 == 0
+        && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+    {
+        return DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::NonBlocking
+        && command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
         && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
     {
         return DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS;
@@ -7072,6 +7089,9 @@ fn driver_task_resource_status_mirrors_to_hdmi(
     if hot_path == DriverTaskHotPath::HdmiText {
         return false;
     }
+    if hot_path == DriverTaskHotPath::UsbKeyboard {
+        return driver_task_usb_resource_status_mirrors_to_hdmi(stage, status);
+    }
     if stage == "cyw43-firmware-chunk" && status == "ready" {
         return false;
     }
@@ -7087,6 +7107,56 @@ fn driver_task_resource_status_mirrors_to_hdmi(
         || status == "descriptor-rejected"
         || status.ends_with("failed")
         || status.starts_with("blocked")
+}
+
+fn driver_task_usb_resource_status_mirrors_to_hdmi(stage: &str, status: &str) -> bool {
+    if status == "fault"
+        || status == "failed"
+        || status == "invalid-contract"
+        || status == "slot-missing"
+        || status == "no-endpoint"
+        || status == "ring-missing"
+        || status == "busy"
+        || status == "poll-timeout"
+        || status == "tx-no-reply"
+        || status == "tx-submit-fail"
+        || status == "unexpected-completion"
+        || status == "descriptor-rejected"
+        || status.ends_with("failed")
+        || status.starts_with("blocked")
+    {
+        return true;
+    }
+    if matches!(
+        stage,
+        "usb-runtime-descriptor-replay"
+            | "runtime-descriptor-replay"
+            | "usb-engine-init"
+            | "usb-xhci-init"
+            | "usb-owner-state"
+            | "usb-keyboard-first-report"
+    ) {
+        return matches!(status, "ready" | "resumed");
+    }
+    if matches!(
+        stage,
+        "usb-keyboard-enumeration"
+            | "usb-keyboard-enumeration-resume"
+            | "usb-keyboard-enumeration-retry"
+    ) {
+        return matches!(
+            status,
+            "command-ring-ready"
+                | "root-port-connected"
+                | "device-addressed"
+                | "device-descriptor"
+                | "config-descriptor"
+                | "hid-endpoint-not-ready"
+                | "hub-topology-no-keyboard"
+                | "ready"
+        );
+    }
+    false
 }
 
 const fn driver_task_hdmi_progress_label(hot_path: DriverTaskHotPath) -> &'static str {
@@ -10558,7 +10628,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn usb_keyboard_poll_uses_prompt_window_without_timeout_spam() {
-        let command = DriverTaskCommandRecord::pi4_hot_path(
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
             0,
             DriverTaskHotPath::UsbKeyboard,
             DriverTaskBudgetGrant::from_contract(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT),
@@ -10569,6 +10639,21 @@ mod tests {
             },
         );
 
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS
+        );
+        assert!(!driver_task_ring_call_trace_enabled(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+
+        command.aux0 = DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX;
         assert_eq!(
             driver_task_ring_attempt_limit(
                 USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
@@ -12081,15 +12166,82 @@ mod tests {
 
     #[test]
     fn hdmi_progress_lines_cover_driver_start_without_recursive_display_spam() {
-        let progress = driver_task_resource_hdmi_progress_line(
+        assert!(driver_task_resource_hdmi_progress_line(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::UsbKeyboard,
             "usb-engine-init",
             "begin",
             None,
         )
+        .is_none());
+
+        let progress = driver_task_resource_hdmi_progress_line(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "ready",
+            Some(DriverTaskCompletionRecord {
+                sequence: 6,
+                code: DriverTaskCompletionCode::Progress.as_u16(),
+                detail: 0x0201,
+                result: 1,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            }),
+        )
         .unwrap();
-        assert_eq!(progress.as_str(), "[drivers] USB usb-engine-init begin");
+        assert_eq!(
+            progress.as_str(),
+            "[drivers] USB usb-engine-init ready detail=0x0201 result=1"
+        );
+
+        assert!(driver_task_resource_hdmi_progress_line(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-enumeration-resume",
+            "no-reply",
+            None,
+        )
+        .is_none());
+
+        let milestone = driver_task_resource_hdmi_progress_line(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-enumeration-resume",
+            "device-addressed",
+            Some(DriverTaskCompletionRecord {
+                sequence: 7,
+                code: DriverTaskCompletionCode::Progress.as_u16(),
+                detail: 0x0206,
+                result: 1,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            milestone.as_str(),
+            "[drivers] USB usb-keyboard-enumeration-resume device-addressed detail=0x0206 result=1"
+        );
+
+        let blocker = driver_task_resource_hdmi_progress_line(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "runtime-ring-submit",
+            "ring-missing",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            blocker.as_str(),
+            "[drivers] USB runtime-ring-submit ring-missing"
+        );
 
         assert!(driver_task_resource_hdmi_progress_line(
             HDMI_TEXT_DRIVER_TASK_CONTRACT,
