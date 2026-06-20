@@ -213,6 +213,7 @@ const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 #[cfg(feature = "net-console")]
 const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
+const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
 const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 32;
@@ -238,6 +239,19 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS: u64 = 0;
 const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS: u16 = 0;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS: u16 = 1;
+
+const fn local_seat_usb_burst_proof(
+    accepted_bytes: u64,
+    drained_bytes: u64,
+    echoed_bytes: u64,
+    dropped_bytes: u64,
+) -> bool {
+    let burst_floor = (LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN * KEYBOARD_POLL_CHUNK_BYTES) as u64;
+    accepted_bytes >= burst_floor
+        && accepted_bytes == drained_bytes
+        && accepted_bytes == echoed_bytes
+        && dropped_bytes == 0
+}
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
 const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 32;
 
@@ -278,9 +292,10 @@ enum LocalSeatEscapeState {
 }
 
 #[cfg(test)]
-const fn local_seat_input_drain_contract_for_test() -> (usize, usize, usize, usize, usize) {
+const fn local_seat_input_drain_contract_for_test() -> (usize, usize, usize, usize, usize, usize) {
     (
         LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN,
+        LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN,
         LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD,
         LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES,
         LOCAL_SEAT_SERIAL_LINES_PER_TURN,
@@ -4592,8 +4607,14 @@ where
             local_trace.driver_task_no_replies,
             self.metrics.local_seat_runtime_skipped_turns,
         );
+        let usb_burst = local_seat_usb_burst_proof(
+            local_trace.accepted_bytes,
+            local_trace.drained_bytes,
+            local_trace.echoed_bytes,
+            local_trace.dropped_bytes,
+        );
         let sustained_line = format_message(format_args!(
-            "usb: sustained_input queued_reports={} transfer_events={} report_status={} accepted={} drained={} echoed={} no_reply={} runtime_skipped={} blocker={}",
+            "usb: sustained_input queued_reports={} transfer_events={} report_status={} accepted={} drained={} echoed={} no_reply={} runtime_skipped={} blocker={} usb_burst={} drops={}",
             queued_reports,
             transfer_events,
             Self::usb_runtime_keyboard_report_status_label(report_status),
@@ -4603,6 +4624,8 @@ where
             local_trace.driver_task_no_replies,
             self.metrics.local_seat_runtime_skipped_turns,
             sustained_blocker,
+            Self::yes_no(usb_burst),
+            local_trace.dropped_bytes,
         ));
         self.emit_console_line(sustained_line.as_str());
         let output_pressure_line = format_message(format_args!(
@@ -10977,7 +11000,14 @@ where
         let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
         let mut empty_polls = 0usize;
         let mut consumed = false;
-        for _ in 0..LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN {
+        let mut passes = 0usize;
+        let mut burst_allowed = self.local_seat.as_ref().is_some_and(|runtime| {
+            runtime.keyboard_trace().queued_bytes >= KEYBOARD_POLL_CHUNK_BYTES
+        });
+        while passes < LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN
+            || (burst_allowed && passes < LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN)
+        {
+            passes = passes.saturating_add(1);
             self.poll_local_seat_backend_for_ingress();
             let read = match self.local_seat.as_mut() {
                 Some(runtime) => runtime.drain_keyboard_bytes(&mut chunk),
@@ -10998,6 +11028,14 @@ where
             self.last_input_source = ConsoleInputSource::LocalSeat;
             if let Some(runtime) = self.local_seat.as_mut() {
                 runtime.echo_input_bytes(&chunk[..read]);
+            }
+            if read == KEYBOARD_POLL_CHUNK_BYTES
+                || self
+                    .local_seat
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
+            {
+                burst_allowed = true;
             }
             if self.serial.clear_partial_line() {
                 self.audit
@@ -14661,7 +14699,9 @@ mod tests {
             buffer_lines: 4,
         });
         local_seat.mark_root_console_ready();
-        let payload = [b'a'; KEYBOARD_POLL_CHUNK_BYTES + 64];
+        let burst_bytes = LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN * KEYBOARD_POLL_CHUNK_BYTES;
+        let mut payload = Vec::new();
+        payload.resize(burst_bytes + 64, b'a');
         assert_eq!(local_seat.enqueue_keyboard_bytes(&payload), payload.len());
         let mut pump =
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
@@ -14673,8 +14713,8 @@ mod tests {
             .expect("local seat attached")
             .keyboard_trace();
         assert_eq!(trace.queued_bytes, 64);
-        assert_eq!(trace.drained_bytes, KEYBOARD_POLL_CHUNK_BYTES as u64);
-        assert_eq!(trace.echoed_bytes, KEYBOARD_POLL_CHUNK_BYTES as u64);
+        assert_eq!(trace.drained_bytes, burst_bytes as u64);
+        assert_eq!(trace.echoed_bytes, burst_bytes as u64);
         assert!(pump.physical_console_input_pending_for_display_pump());
 
         assert!(pump.consume_local_seat(LocalSeatConsumePhase::PriorityFollowup, false));
@@ -14690,6 +14730,83 @@ mod tests {
         assert_eq!(trace.dropped_bytes, 0);
         assert!(!pump.physical_console_input_pending_for_display_pump());
         assert!(pump.physical_console_input_pending_for_output());
+    }
+
+    #[test]
+    fn local_seat_small_input_keeps_single_pass_drain_contract() {
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        assert_eq!(local_seat.enqueue_keyboard_bytes(b"abc"), 3);
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        assert!(pump.consume_local_seat(LocalSeatConsumePhase::PreRuntime, true));
+        let trace = pump
+            .local_seat
+            .as_ref()
+            .expect("local seat attached")
+            .keyboard_trace();
+
+        assert_eq!(
+            trace.backend_poll_calls,
+            LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN as u64
+        );
+        assert_eq!(trace.drained_bytes, 3);
+        assert_eq!(trace.echoed_bytes, 3);
+        assert_eq!(trace.queued_bytes, 0);
+    }
+
+    #[test]
+    fn local_seat_usb_burst_proof_requires_caught_up_zero_drop_echo() {
+        let burst_bytes =
+            (LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN * KEYBOARD_POLL_CHUNK_BYTES) as u64;
+
+        assert!(local_seat_usb_burst_proof(
+            burst_bytes,
+            burst_bytes,
+            burst_bytes,
+            0
+        ));
+        assert!(!local_seat_usb_burst_proof(
+            burst_bytes - 1,
+            burst_bytes - 1,
+            burst_bytes - 1,
+            0
+        ));
+        assert!(!local_seat_usb_burst_proof(
+            burst_bytes,
+            burst_bytes - 1,
+            burst_bytes,
+            0
+        ));
+        assert!(!local_seat_usb_burst_proof(
+            burst_bytes,
+            burst_bytes,
+            burst_bytes - 1,
+            0
+        ));
+        assert!(!local_seat_usb_burst_proof(
+            burst_bytes,
+            burst_bytes,
+            burst_bytes,
+            1
+        ));
     }
 
     struct NullIpc;
@@ -17070,14 +17187,22 @@ mod tests {
 
     #[test]
     fn local_seat_input_drain_contract_keeps_serial_latency_bounded() {
-        let (poll_passes, empty_polls, output_polls, serial_lines, serial_chunk_bytes) =
-            local_seat_input_drain_contract_for_test();
+        let (
+            poll_passes,
+            burst_passes,
+            empty_polls,
+            output_polls,
+            serial_lines,
+            serial_chunk_bytes,
+        ) = local_seat_input_drain_contract_for_test();
         assert_eq!(poll_passes, 1);
+        assert_eq!(burst_passes, 4);
         assert_eq!(empty_polls, 1);
         assert!(output_polls >= 1);
         assert!(output_polls <= empty_polls);
         assert_eq!(serial_lines, 1);
         assert_eq!(serial_chunk_bytes, 32);
+        assert!(burst_passes * KEYBOARD_POLL_CHUNK_BYTES <= 512);
         assert!(serial_chunk_bytes <= crate::serial::DEFAULT_TX_CAPACITY / 2);
     }
 

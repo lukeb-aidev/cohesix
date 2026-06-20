@@ -1069,7 +1069,12 @@ event is not carrier proof. Gate 7 is reported with stable sub-gates:
 `7a=join-submit`, `7b=association`, `7c=eapol-rx`,
 `7d=eapol-handshake`, and `7e=secure-release`; the normalizer keeps
 `WIFI_GATE=7` for compatibility and adds `WIFI_SUBGATE` /
-`WIFI_SUBGATE_NAME` for sharper frontier tracking. The normalizer keeps
+`WIFI_SUBGATE_NAME` plus `WIFI_SUBGATE_SOURCE`, `WIFI_SUBGATE_STATUS`,
+`WIFI_SUBGATE_REASON`, and `WIFI_SUBGATE_LINE` for sharper frontier tracking.
+Explicit `CYW43_DRIVER_TASK_WIFI_GATE7` records are preferred when present, and
+the normalizer can recover the same 7b-through-7e frontier from later
+`CYW43_DRIVER_TASK_HOST_EAPOL_STATUS` records if a serial capture drops the
+dedicated sub-gate breadcrumb. The normalizer keeps
 post-rescue no-association failures as Gate 7
 `cyw43-association-not-associated` unless direct v3 RX trace evidence proves a
 more precise Function 2 first-read/source blocker. Join acceptance remains only
@@ -1230,7 +1235,8 @@ context and the retry/poll window.
   issues `BRCMF_C_GET_REVINFO` (`cmd=98`) with a 68-byte zeroed response window,
   then records the current `mpc=0` compatibility edge and applies the Linux
   prejoin association defaults before matched CDC exchanges for `WLC_UP`,
-  `WLC_SET_INFRA`, WPA2 setup, PAE multicast admission, and `WLC_SET_SSID`.
+  `WLC_SET_INFRA`, WPA2 setup, firmware-supplicant probing, PAE multicast
+  admission, and `WLC_SET_SSID`/primary-BSS join.
   The prejoin association sequence is linked-runtime only:
   `cyw43-control-prejoin-mpc` sends `mpc=1`,
   `cyw43-control-prejoin-join-pref` sends the captured
@@ -1256,16 +1262,22 @@ context and the retry/poll window.
   `join-programming-host-latch-loop`.
 - WPA2 setup is fail-closed and Linux-shaped: `wpaie`, initial
   `wpa_auth=0x00c0`, `auth=0`, `wsec=0x0004`, RSN side effects, final
-  `wpa_auth=0x0080`, connect-time station policy, then host-EAPOL proof before
-  data release. Station setup uses
+  `wpa_auth=0x0080`, the old-good `sup_wpa` probe followed by the
+  `bsscfg:sup_wpa` wrapper probe, host-EAPOL PMK/session preparation,
+  connect-time station policy, PAE multicast admission, and only then primary
+  join submission. Host-EAPOL proof is required before data release. Station
+  setup uses
   `DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE`, not fire-and-forget control
   frames: the runtime must match CDC command plus ioctl id, reject nonzero CDC
   status, and return the CDC response body for reads such as `cur_etheraddr`.
   Primary-BSS commands use plain iovar names; do not invent BSSCFG wrappers on
   this path.
 - Firmware supplicant offload must prove `sup_wpa`, valid PMK programming, and
-  `PSK_SUP` plus carrier confirmation before DHCP/data. If firmware rejects that
-  path, Cohesix derives the host PMK locally and reports
+  `PSK_SUP` plus carrier confirmation before DHCP/data. The linked-runtime
+  host-EAPOL path still performs the May 18-19 old-good `sup_wpa` and
+  `bsscfg:sup_wpa` probes before join; matched `BCME_UNSUPPORTED` replies are
+  treated as the expected handoff to host-EAPOL rather than as DHCP/data proof.
+  If firmware rejects that path, Cohesix derives the host PMK locally and reports
   `wifi-host-eapol-pending`; DHCP and normal data stay blocked until M1/M2/M3/M4
   plus PTK/GTK `wsec_key` install complete. `SET_SSID` alone never releases a
   secure network.

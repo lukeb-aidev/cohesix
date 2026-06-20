@@ -163,6 +163,9 @@ const CYW43_WME_BSS_DISABLE_RSN_DEFAULT: u32 = 1;
 const CYW43_LINUX_PREJOIN_MPC_ENABLED: u32 = 1;
 const CYW43_LINUX_SCAN_CHANNEL_TIME_MS: u32 = 40;
 const CYW43_LINUX_SCAN_UNASSOC_TIME_MS: u32 = 40;
+const CYW43_BSSCFG_PRIMARY_INDEX: u32 = 0;
+const CYW43_SUP_WPA2_EAPVER_ANY: u32 = u32::MAX;
+const CYW43_SUP_WPA_TIMEOUT_MS: u32 = 2500;
 const CYW43_CONNECT_STATION_POLICY_DISABLED: u32 = 0;
 const CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS: [(&str, u32); 4] = [
     ("mpc", CYW43_CONNECT_STATION_POLICY_DISABLED),
@@ -1936,6 +1939,8 @@ where
             CYW43_WPA2_AUTH_PSK,
             "cyw43-control-wpa-auth-final",
         )?;
+        let firmware_supplicant = cyw43_probe_wpa2_firmware_supplicant(contract)?;
+        let host_eapol_session = prepare_cyw43_host_eapol_session(contract, credentials)?;
         cyw43_apply_linux_connect_station_policy(contract)?;
         cyw43_configure_host_eapol_rx(contract)?;
         emit_cyw43_join_policy_trace(
@@ -1944,11 +1949,11 @@ where
             "wpa2-psk",
             "host-eapol-required",
             "primary-bsscfg:join",
-            "skipped-host-eapol",
+            firmware_supplicant.label(),
             "host-eapol-deferred",
         );
         cyw43_submit_join_request(contract, credentials)?;
-        arm_cyw43_host_eapol_pending(contract, credentials, mac)?;
+        arm_cyw43_host_eapol_pending(contract, host_eapol_session, mac)?;
         service_cyw43_host_eapol_join_submit_window(
             contract,
             credentials,
@@ -2036,6 +2041,170 @@ fn cyw43_apply_linux_connect_station_policy(
         ndoe_value,
         "cyw43-control-connect-ndoe",
     )
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43FirmwareSupplicantProbe {
+    Unsupported,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43FirmwareSupplicantProbe {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Unsupported => "sup_wpa-or-bsscfg_sup_wpa-host-eapol",
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_probe_wpa2_firmware_supplicant(
+    contract: DriverTaskContract,
+) -> Result<Cyw43FirmwareSupplicantProbe, DriverTaskNetError> {
+    emit_cyw43_firmware_supplicant_trace(
+        contract,
+        "primary-plain",
+        "probe",
+        "probe",
+        "linux-brcmfmac-psk-offload-gate",
+        0,
+    );
+    let primary_data = 1u32.to_le_bytes();
+    if cyw43_probe_wpa2_firmware_supplicant_iovar(
+        contract,
+        "sup_wpa",
+        &primary_data,
+        "cyw43-join-security-sup-wpa",
+    )? {
+        emit_cyw43_firmware_supplicant_trace(
+            contract,
+            "primary-plain",
+            "enabled",
+            "fail-secure",
+            "firmware-offload-unproved",
+            0,
+        );
+        return Err(DriverTaskNetError::RuntimeInit(
+            "firmware-supplicant-offload-unproved",
+        ));
+    }
+    emit_cyw43_firmware_supplicant_trace(
+        contract,
+        "primary-plain",
+        "unsupported",
+        "try-bsscfg-wrapper",
+        "known-good-cyw43-fwsup-shape",
+        CYW43_BCME_UNSUPPORTED_STATUS,
+    );
+
+    let mut wrapper_data = [0u8; 8];
+    wrapper_data[..4].copy_from_slice(&CYW43_BSSCFG_PRIMARY_INDEX.to_le_bytes());
+    wrapper_data[4..8].copy_from_slice(&1u32.to_le_bytes());
+    if cyw43_probe_wpa2_firmware_supplicant_iovar(
+        contract,
+        "bsscfg:sup_wpa",
+        &wrapper_data,
+        "cyw43-join-security-bsscfg-sup-wpa",
+    )? {
+        emit_cyw43_firmware_supplicant_trace(
+            contract,
+            "bsscfg-wrapper",
+            "enabled",
+            "fail-secure",
+            "firmware-offload-unproved",
+            0,
+        );
+        return Err(DriverTaskNetError::RuntimeInit(
+            "firmware-supplicant-offload-unproved",
+        ));
+    }
+    emit_cyw43_firmware_supplicant_trace(
+        contract,
+        "bsscfg-wrapper",
+        "unsupported",
+        "continue-host-eapol-required",
+        "firmware-offload-unavailable",
+        CYW43_BCME_UNSUPPORTED_STATUS,
+    );
+    Ok(Cyw43FirmwareSupplicantProbe::Unsupported)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_probe_wpa2_firmware_supplicant_iovar(
+    contract: DriverTaskContract,
+    name: &str,
+    data: &[u8],
+    stage: &'static str,
+) -> Result<bool, DriverTaskNetError> {
+    match cyw43_submit_bcdc_iovar_bytes_unmapped_with_header_mode(
+        contract,
+        name,
+        data,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+    ) {
+        Ok(completion) if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() => {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "ready",
+                Some(completion),
+            );
+            Ok(true)
+        }
+        Ok(completion) => {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "fail",
+                Some(completion),
+            );
+            Err(DriverTaskNetError::RuntimeInit(stage))
+        }
+        Err(Cyw43CommandSubmitError::Completion(completion))
+            if cyw43_control_exchange_completion_is_unsupported(completion) =>
+        {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "unsupported",
+                Some(completion),
+            );
+            Ok(false)
+        }
+        Err(err) => Err(err.into_net_error()),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_firmware_supplicant_trace(
+    contract: DriverTaskContract,
+    path: &'static str,
+    status: &'static str,
+    action: &'static str,
+    reason: &'static str,
+    result: u32,
+) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<256>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_FIRMWARE_SUPPLICANT contract={} path={} status={} action={} reason={} eapver=0x{:08x} timeout_ms={} result=0x{:08x}",
+        contract.name,
+        path,
+        status,
+        action,
+        reason,
+        CYW43_SUP_WPA2_EAPVER_ANY,
+        CYW43_SUP_WPA_TIMEOUT_MS,
+        result,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -3212,12 +3381,21 @@ fn cyw43_install_wsec_key(
 }
 
 #[cfg(feature = "kernel")]
-fn arm_cyw43_host_eapol_pending(
+fn prepare_cyw43_host_eapol_session(
     contract: DriverTaskContract,
     credentials: WifiCredentials,
+) -> Result<Cyw43HostEapolSession, DriverTaskNetError> {
+    let session = Cyw43HostEapolSession::new(credentials)?;
+    emit_cyw43_host_eapol_pmk_ready(contract, credentials);
+    Ok(session)
+}
+
+#[cfg(feature = "kernel")]
+fn arm_cyw43_host_eapol_pending(
+    contract: DriverTaskContract,
+    mut session: Cyw43HostEapolSession,
     _station_mac: EthernetAddress,
 ) -> Result<(), DriverTaskNetError> {
-    let mut session = Cyw43HostEapolSession::new(credentials)?;
     cyw43_apply_pending_host_eapol_event(contract, &mut session, 0);
     let progress = session.progress;
     *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
@@ -3236,6 +3414,22 @@ fn arm_cyw43_host_eapol_pending(
     );
     emit_cyw43_host_eapol_status(contract, "pending", &progress);
     Ok(())
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_host_eapol_pmk_ready(contract: DriverTaskContract, credentials: WifiCredentials) {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<192>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_HOST_EAPOL_PMK contract={} status=ready kind={} ssid_len={} psk_len={} action=derive-host-ptk-on-m1",
+        contract.name,
+        cyw43_credentials_psk_kind(credentials),
+        credentials.ssid_len,
+        credentials.psk_len,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -3678,7 +3872,7 @@ fn process_cyw43_host_eapol_data_completion(
                         CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
                         emit_cyw43_host_eapol_message(contract, "m4", "send-m4", poll, len);
                         let pairwise_rsc = [0u8; 6];
-                        cyw43_install_wsec_key(
+                        if let Err(err) = cyw43_install_wsec_key(
                             contract,
                             0,
                             &keys.pairwise_tk,
@@ -3686,11 +3880,19 @@ fn process_cyw43_host_eapol_data_completion(
                             Some(&pairwise_rsc),
                             false,
                             "cyw43-host-eapol-ptk",
-                        )?;
+                        ) {
+                            emit_cyw43_host_eapol_key(
+                                contract,
+                                "ptk",
+                                "cyw43-host-eapol-ptk",
+                                "failed",
+                            );
+                            return Err(err);
+                        }
                         CYW43_HOST_EAPOL_PTK.fetch_add(1, Ordering::AcqRel);
                         emit_cyw43_host_eapol_key(contract, "ptk", "cyw43-host-eapol-ptk", "ready");
                         let group_ea = [0u8; 6];
-                        cyw43_install_wsec_key(
+                        if let Err(err) = cyw43_install_wsec_key(
                             contract,
                             u32::from(keys.gtk.index),
                             &keys.gtk.key[..keys.gtk.key_len],
@@ -3698,15 +3900,37 @@ fn process_cyw43_host_eapol_data_completion(
                             Some(&keys.rsc),
                             true,
                             "cyw43-host-eapol-gtk",
-                        )?;
+                        ) {
+                            emit_cyw43_host_eapol_key(
+                                contract,
+                                "gtk",
+                                "cyw43-host-eapol-gtk",
+                                "failed",
+                            );
+                            return Err(err);
+                        }
                         CYW43_HOST_EAPOL_GTK.fetch_add(1, Ordering::AcqRel);
                         emit_cyw43_host_eapol_key(contract, "gtk", "cyw43-host-eapol-gtk", "ready");
-                        cyw43_submit_bcdc_u32(
+                        if let Err(err) = cyw43_submit_bcdc_u32(
                             contract,
                             CYW43_WLC_SET_WSEC,
                             CYW43_WSEC_AES,
                             "cyw43-host-eapol-reassert-wsec",
-                        )?;
+                        ) {
+                            emit_cyw43_host_eapol_key(
+                                contract,
+                                "wsec",
+                                "cyw43-host-eapol-reassert-wsec",
+                                "failed",
+                            );
+                            return Err(err);
+                        }
+                        emit_cyw43_host_eapol_key(
+                            contract,
+                            "wsec",
+                            "cyw43-host-eapol-reassert-wsec",
+                            "ready",
+                        );
                         result.secure = true;
                     }
                 }
@@ -8916,6 +9140,53 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_firmware_supplicant_probe_payloads_match_old_good_shape() {
+        assert_eq!(
+            Cyw43FirmwareSupplicantProbe::Unsupported.label(),
+            "sup_wpa-or-bsscfg_sup_wpa-host-eapol"
+        );
+        assert_eq!(CYW43_BSSCFG_PRIMARY_INDEX, 0);
+        assert_eq!(CYW43_SUP_WPA2_EAPVER_ANY, u32::MAX);
+        assert_eq!(CYW43_SUP_WPA_TIMEOUT_MS, 2500);
+
+        let mut primary_data = [0u8; 8];
+        primary_data[..4].copy_from_slice(&1u32.to_le_bytes());
+        let mut wrapper_data = [0u8; 8];
+        wrapper_data[..4].copy_from_slice(&CYW43_BSSCFG_PRIMARY_INDEX.to_le_bytes());
+        wrapper_data[4..8].copy_from_slice(&1u32.to_le_bytes());
+
+        for (name, data_len, data) in [
+            ("sup_wpa", 4usize, primary_data),
+            ("bsscfg:sup_wpa", 8usize, wrapper_data),
+        ] {
+            let name_len = name.len();
+            let payload_len = name_len + 1 + data_len;
+            let mut payload = [0u8; 32];
+            payload[..name_len].copy_from_slice(name.as_bytes());
+            payload[name_len] = 0;
+            payload[name_len + 1..payload_len].copy_from_slice(&data[..data_len]);
+
+            let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+            let len = cyw43_write_bcdc_frame(
+                &mut frame,
+                CYW43_WLC_SET_VAR,
+                CYW43_BCDC_FLAG_SET,
+                1,
+                &payload[..payload_len],
+            )
+            .expect("supplicant probe frame should fit");
+            let info = cyw43_control_iovar_info(&frame[..len], CYW43_WLC_SET_VAR)
+                .expect("supplicant iovar should decode");
+            let data_start = CYW43_BCDC_HEADER_BYTES + name_len + 1;
+
+            assert_eq!(info.name, name);
+            assert_eq!(info.data_len, data_len);
+            assert_eq!(&frame[data_start..data_start + data_len], &data[..data_len]);
+        }
+    }
+
     #[test]
     fn cyw43_prejoin_association_policy_matches_linux_values() {
         let mut event_mask = [0u8; CYW43_EVENT_MASK_LEN];
@@ -9383,6 +9654,39 @@ mod tests {
         assert_eq!(CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 1);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_session_is_prepared_before_join_arm() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status-label tests must serialize");
+        reset_cyw43_status_flags();
+
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let session =
+            prepare_cyw43_host_eapol_session(CYW43_WIFI_DRIVER_TASK_CONTRACT, credentials)
+                .expect("host eapol session prepares before join");
+
+        assert_eq!(session.progress.polls, 0);
+        assert_eq!(session.progress.eapol_rx, 0);
+        assert_eq!(CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire), 0);
+        assert!(CYW43_HOST_EAPOL_SESSION.lock().is_none());
+
+        arm_cyw43_host_eapol_pending(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            session,
+            EthernetAddress([0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]),
+        )
+        .expect("prepared host eapol session arms after join");
+
+        assert_eq!(CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire), 0);
+        assert!(CYW43_HOST_EAPOL_SESSION.lock().is_some());
 
         reset_cyw43_status_flags();
     }

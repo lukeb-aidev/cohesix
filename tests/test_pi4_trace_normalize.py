@@ -554,6 +554,12 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_BLOCKER": "cmd-poll-only-timeout",
         "WIFI_GATE": 4,
         "WIFI_BLOCKER": "ht-clock-timeout",
+        "WIFI_SUBGATE": "none",
+        "WIFI_SUBGATE_NAME": "none",
+        "WIFI_SUBGATE_SOURCE": "none",
+        "WIFI_SUBGATE_STATUS": "none",
+        "WIFI_SUBGATE_REASON": "none",
+        "WIFI_SUBGATE_LINE": 0,
         "USB_OLDGOOD_REPLAY": "no",
         "USB_OLDGOOD_LAST": "none",
         "USB_OLDGOOD_MISSING": "cold-boot-unseeded",
@@ -735,6 +741,27 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["USB_BURST_PROOF"] == "yes"
     assert record["USB_BURST_DROPS"] == 0
     assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_gate_summary_accepts_sustained_input_usb_burst_field() -> None:
+    """The root-task sustained-input line may carry USB burst proof directly."""
+
+    events = normalizer.parse_events(
+        [
+            "usb: sustained_input queued_reports=24 transfer_events=128 "
+            "report_status=produced-byte accepted=512 drained=512 echoed=512 "
+            "no_reply=0 runtime_skipped=8 blocker=none usb_burst=yes drops=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_BURST_PROOF"] == "yes"
+    assert record["USB_BURST_DROPS"] == 0
+    assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 24
+    assert record["USB_RUNTIME_REPORT_STATUS"] == "produced-byte"
+    assert record["USB_EVENT_LOOP_RUNTIME_SKIPPED"] == 8
 
 
 def test_gate_summary_tracks_driver_task_counter_snapshots() -> None:
@@ -9006,6 +9033,124 @@ def test_gate_summary_reports_explicit_wifi_gate7_subgate() -> None:
     assert gates.wifi_blocker == "cyw43-association-not-associated"
     assert record["WIFI_SUBGATE"] == "7b"
     assert record["WIFI_SUBGATE_NAME"] == "association"
+    assert record["WIFI_SUBGATE_SOURCE"] == "host-eapol-status"
+    assert record["WIFI_SUBGATE_STATUS"] == "required"
+    assert record["WIFI_SUBGATE_REASON"] == "cyw43-association-not-associated"
+    assert record["WIFI_SUBGATE_LINE"] == 4
+
+
+def test_gate_summary_tracks_oldgood_prejoin_probe_and_pmk_evidence() -> None:
+    lines = [
+        "CYW43_DRIVER_TASK_FIRMWARE_SUPPLICANT contract=cyw43455 "
+        "path=primary-plain status=unsupported action=try-bsscfg-wrapper "
+        "reason=known-good-cyw43-fwsup-shape eapver=0xffffffff "
+        "timeout_ms=2500 result=0xffffffe2",
+        "CYW43_DRIVER_TASK_FIRMWARE_SUPPLICANT contract=cyw43455 "
+        "path=bsscfg-wrapper status=unsupported "
+        "action=continue-host-eapol-required reason=firmware-offload-unavailable "
+        "eapver=0xffffffff timeout_ms=2500 result=0xffffffe2",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_PMK contract=cyw43455 "
+        "status=ready kind=passphrase ssid_len=12 psk_len=12 "
+        "action=derive-host-ptk-on-m1",
+        "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+        "path=primary-bsscfg:join action=ready ssid_len=12 result=0x00000000",
+        "CYW43_DRIVER_TASK_WIFI_GATE7 contract=cyw43455 "
+        "source=join-request subgate=7a name=join-submit status=ready "
+        "reason=primary-bsscfg:join polls=0 associated=no link_up=no "
+        "event_rx=0 eapol_rx=0 data_rx=0 result=0x00000000",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+        "status=required reason=cyw43-association-not-associated "
+        "polls=8193 data_rx=0 eapol_rx=0 event_rx=0 empty_polls=8193 "
+        "associated=no link_up=no assoc_event=none "
+        "assoc_probe=not-associated assoc_probe_result=0xffffffef "
+        "assoc_set_ssid_rescue=yes firstread_class=preassoc-cadence-empty "
+        "rx_firstread_empty=1 control_rx_firstread_empty=0",
+        "CYW43_DRIVER_TASK_WIFI_GATE7 contract=cyw43455 "
+        "source=host-eapol-status subgate=7b name=association "
+        "status=required reason=cyw43-association-not-associated "
+        "polls=8193 associated=no link_up=no event_rx=0 eapol_rx=0 "
+        "data_rx=0 result=0xffffffef",
+    ]
+
+    primary_probe = next(i for i, line in enumerate(lines) if "path=primary-plain" in line)
+    wrapper_probe = next(i for i, line in enumerate(lines) if "path=bsscfg-wrapper" in line)
+    pmk_ready = next(i for i, line in enumerate(lines) if "HOST_EAPOL_PMK" in line)
+    join_request = next(i for i, line in enumerate(lines) if "JOIN_REQUEST" in line)
+
+    assert primary_probe < wrapper_probe < pmk_ready < join_request
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_GATE"] == 7
+    assert record["WIFI_BLOCKER"] == "cyw43-association-not-associated"
+    assert record["WIFI_SUBGATE"] == "7b"
+    assert record["WIFI_SUBGATE_NAME"] == "association"
+    assert record["WIFI_SUBGATE_SOURCE"] == "host-eapol-status"
+    assert record["WIFI_SUBGATE_STATUS"] == "required"
+    assert record["WIFI_SUBGATE_REASON"] == "cyw43-association-not-associated"
+    assert record["WIFI_SUBGATE_LINE"] == 7
+
+
+def test_gate_summary_accepts_explicit_wifi_gate7_7b_plus_frontiers() -> None:
+    for subgate, name in [
+        ("7b", "association"),
+        ("7c", "eapol-rx"),
+        ("7d", "eapol-handshake"),
+        ("7e", "secure-release"),
+    ]:
+        events = normalizer.parse_events(
+            [
+                "CYW43_DRIVER_TASK_WIFI_GATE7 contract=cyw43455 "
+                f"source=host-eapol-status subgate={subgate} name={name} "
+                "status=pending reason=test-frontier polls=1 "
+                "associated=yes link_up=yes event_rx=1 eapol_rx=1 data_rx=1 "
+                "result=0x00000000",
+            ]
+        )
+
+        assert normalizer.summarize_wifi_gate7_subgate(
+            events, 7, "wifi-host-eapol-pending"
+        ) == (subgate, name)
+
+
+def test_gate_summary_infers_wifi_gate7_7b_plus_from_host_eapol_status() -> None:
+    cases = [
+        (
+            "status=required reason=cyw43-association-not-associated "
+            "polls=8193 associated=no link_up=no event_rx=0 eapol_rx=0 data_rx=0",
+            "7b",
+            "association",
+        ),
+        (
+            "status=event-rx reason=none polls=12 associated=yes link_up=yes "
+            "event_rx=1 eapol_rx=0 data_rx=0",
+            "7c",
+            "eapol-rx",
+        ),
+        (
+            "status=eapol-rx reason=none polls=13 associated=yes link_up=yes "
+            "event_rx=1 eapol_rx=1 data_rx=1 next_action=inspect-host-eapol-handshake-state",
+            "7d",
+            "eapol-handshake",
+        ),
+        (
+            "status=secure reason=none polls=14 associated=yes link_up=yes "
+            "event_rx=1 eapol_rx=2 data_rx=2 next_action=release-dhcp-data",
+            "7e",
+            "secure-release",
+        ),
+    ]
+
+    for status_line, subgate, name in cases:
+        events = normalizer.parse_events(
+            [f"CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 {status_line}"]
+        )
+        record = normalizer.summarize_gates(events).to_record()
+
+        assert record["WIFI_SUBGATE"] == subgate
+        assert record["WIFI_SUBGATE_NAME"] == name
+        assert record["WIFI_SUBGATE_SOURCE"] == "host-eapol-status"
+        assert record["WIFI_SUBGATE_LINE"] == 1
 
 
 def test_gate_summary_infers_wifi_gate7_subgate_for_old_association_logs() -> None:
@@ -9240,6 +9385,8 @@ def test_gate_summary_accepts_oldgood_wifi_replay_contract() -> None:
     assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
     assert record["WIFI_OLDGOOD_LAST"] == "netstats-secure"
     assert record["WIFI_OLDGOOD_MISSING"] == "none"
+    assert record["WIFI_SUBGATE"] == "7e"
+    assert record["WIFI_SUBGATE_NAME"] == "secure-release"
 
 
 def test_gate_summary_accepts_oldgood_wifi_resource_replay_contract() -> None:
@@ -9250,6 +9397,8 @@ def test_gate_summary_accepts_oldgood_wifi_resource_replay_contract() -> None:
     assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
     assert record["WIFI_OLDGOOD_LAST"] == "netstats-secure"
     assert record["WIFI_OLDGOOD_MISSING"] == "none"
+    assert record["WIFI_SUBGATE"] == "7e"
+    assert record["WIFI_SUBGATE_NAME"] == "secure-release"
 
 
 def test_gate_summary_accepts_linked_runtime_wifi_harness_replay_contract() -> None:
@@ -9379,6 +9528,26 @@ def test_gate_summary_rejects_wifi_dhcp_before_secure_replay() -> None:
     assert record["WIFI_OLDGOOD_REPLAY"] == "no"
     assert record["WIFI_OLDGOOD_LAST"] == "secure-release"
     assert record["WIFI_OLDGOOD_MISSING"] == "dhcp-start"
+
+
+def test_gate_summary_keeps_dhcp_before_secure_below_release_subgate() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=eapol-rx reason=none polls=13 associated=yes link_up=yes "
+            "event_rx=1 eapol_rx=1 data_rx=1 "
+            "next_action=inspect-host-eapol-handshake-state",
+            "[dhcp] start ready interface=wifi",
+            "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
+            "server=192.168.10.1 lease_s=3600",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_SUBGATE"] == "7d"
+    assert record["WIFI_SUBGATE_NAME"] == "eapol-handshake"
+    assert record["WIFI_SUBGATE_REASON"] == "inspect-host-eapol-handshake-state"
 
 
 def test_gate_summary_tracks_wifi_nettest_readiness_blocker() -> None:

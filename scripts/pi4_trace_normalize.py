@@ -472,6 +472,18 @@ class SequenceResult:
 
 
 @dataclass(frozen=True)
+class WifiGate7Subgate:
+    """Gate 7 sub-gate frontier with source detail for WiFi bring-up."""
+
+    subgate: str
+    name: str
+    source: str = "none"
+    status: str = "none"
+    reason: str = "none"
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class GateSummary:
     """Current USB/WiFi hardware bring-up gate state."""
 
@@ -481,6 +493,10 @@ class GateSummary:
     wifi_blocker: str
     wifi_subgate: str = "none"
     wifi_subgate_name: str = "none"
+    wifi_subgate_source: str = "none"
+    wifi_subgate_status: str = "none"
+    wifi_subgate_reason: str = "none"
+    wifi_subgate_line: int = 0
     usb_oldgood_replay: bool = False
     usb_oldgood_last: str = "none"
     usb_oldgood_missing: str = "not-run"
@@ -620,6 +636,10 @@ class GateSummary:
             "WIFI_BLOCKER": self.wifi_blocker,
             "WIFI_SUBGATE": self.wifi_subgate,
             "WIFI_SUBGATE_NAME": self.wifi_subgate_name,
+            "WIFI_SUBGATE_SOURCE": self.wifi_subgate_source,
+            "WIFI_SUBGATE_STATUS": self.wifi_subgate_status,
+            "WIFI_SUBGATE_REASON": self.wifi_subgate_reason,
+            "WIFI_SUBGATE_LINE": self.wifi_subgate_line,
             "USB_OLDGOOD_REPLAY": "yes" if self.usb_oldgood_replay else "no",
             "USB_OLDGOOD_LAST": self.usb_oldgood_last,
             "USB_OLDGOOD_MISSING": self.usb_oldgood_missing,
@@ -2044,44 +2064,114 @@ def normalize_wifi_gate7_subgate(value: str | None) -> str:
     return subgate if subgate in WIFI_GATE7_SUBGATE_NAMES else "none"
 
 
-def summarize_wifi_gate7_subgate(
-    events: Iterable[TraceEvent], wifi_gate: int, wifi_blocker: str
-) -> tuple[str, str]:
-    """Return the latest WiFi Gate 7 sub-gate frontier."""
+def summarize_wifi_gate7_status_subgate(event: TraceEvent) -> WifiGate7Subgate | None:
+    """Infer a Gate 7 sub-gate from a host-EAPOL status record."""
 
-    latest: tuple[str, str] | None = None
+    if "cyw43_driver_task_host_eapol_status" not in event.raw.lower():
+        return None
+
+    fields = event.fields
+    status = fields.get("status", "none").lower()
+    reason = normalize_wifi_blocker(fields.get("reason", ""))
+    next_action = fields.get("next_action", "none").lower()
+    associated = cyw43_field_yes(fields, "associated")
+    link_up = cyw43_field_yes(fields, "link_up")
+    event_rx = parse_hex_int(fields.get("event_rx")) or 0
+    eapol_rx = parse_hex_int(fields.get("eapol_rx")) or 0
+    data_rx = parse_hex_int(fields.get("data_rx")) or 0
+    polls = parse_hex_int(fields.get("polls")) or 0
+    detail = next_action if next_action != "none" else reason
+    if detail in {"none", "unknown"}:
+        detail = status if status else "none"
+
+    if status == "secure" or next_action == "release-dhcp-data":
+        return WifiGate7Subgate(
+            "7e", "secure-release", "host-eapol-status", status, detail, event.line
+        )
+    if associated and link_up and eapol_rx > 0:
+        return WifiGate7Subgate(
+            "7d", "eapol-handshake", "host-eapol-status", status, detail, event.line
+        )
+    if associated and link_up:
+        return WifiGate7Subgate(
+            "7c", "eapol-rx", "host-eapol-status", status, detail, event.line
+        )
+    if status == "pending" and polls == 0 and event_rx == 0 and data_rx == 0:
+        return WifiGate7Subgate(
+            "7a", "join-submit", "host-eapol-status", status, "join-accepted", event.line
+        )
+    if status in {"pending", "required", "event-rx", "rx-observed", "eapol-rx"} or (
+        polls != 0 or event_rx != 0 or data_rx != 0
+    ):
+        return WifiGate7Subgate(
+            "7b", "association", "host-eapol-status", status, detail, event.line
+        )
+    return None
+
+
+def summarize_wifi_gate7_subgate_detail(
+    events: Iterable[TraceEvent], wifi_gate: int, wifi_blocker: str
+) -> WifiGate7Subgate:
+    """Return the latest WiFi Gate 7 sub-gate frontier with source detail."""
+
+    latest: WifiGate7Subgate | None = None
     for event in events:
         raw = event.raw.lower()
         if (
-            "cyw43_driver_task_wifi_gate7" not in raw
-            and "cyw43_driver_task_join_submit_window" not in raw
+            "cyw43_driver_task_wifi_gate7" in raw
+            or "cyw43_driver_task_join_submit_window" in raw
         ):
-            continue
-        subgate = normalize_wifi_gate7_subgate(event.fields.get("subgate"))
-        if subgate == "none":
-            continue
-        latest = (subgate, WIFI_GATE7_SUBGATE_NAMES[subgate])
+            subgate = normalize_wifi_gate7_subgate(event.fields.get("subgate"))
+            if subgate != "none":
+                source = event.fields.get("source") or "join-submit-window"
+                reason = (
+                    event.fields.get("reason")
+                    or event.fields.get("focus")
+                    or event.fields.get("name")
+                    or "none"
+                )
+                latest = WifiGate7Subgate(
+                    subgate,
+                    WIFI_GATE7_SUBGATE_NAMES[subgate],
+                    source,
+                    event.fields.get("status", "none"),
+                    reason,
+                    event.line,
+                )
+                continue
+        status_subgate = summarize_wifi_gate7_status_subgate(event)
+        if status_subgate is not None:
+            latest = status_subgate
     if latest is not None:
         return latest
     if wifi_gate != 7:
-        return "none", "none"
+        return WifiGate7Subgate("none", "none")
     if wifi_blocker in {
         "cyw43-association-event-missing",
         "cyw43-association-not-associated",
     }:
-        return "7b", "association"
+        return WifiGate7Subgate("7b", "association", reason=wifi_blocker)
     if wifi_blocker in {"host-eapol-required", "wifi-host-eapol-pending"}:
-        return "7c", "eapol-rx"
+        return WifiGate7Subgate("7c", "eapol-rx", reason=wifi_blocker)
     if wifi_blocker in {
         "join-pending",
         "join-completion-unproven",
         "firmware-supplicant-unsupported",
         "wsec-pmk-bad-argument",
     } or wifi_blocker.startswith("join-security-"):
-        return "7a", "join-submit"
+        return WifiGate7Subgate("7a", "join-submit", reason=wifi_blocker)
     if cyw43_host_eapol_rx_blocker_name(wifi_blocker):
-        return "7c", "eapol-rx"
-    return "7a", "join-submit"
+        return WifiGate7Subgate("7c", "eapol-rx", reason=wifi_blocker)
+    return WifiGate7Subgate("7a", "join-submit", reason=wifi_blocker)
+
+
+def summarize_wifi_gate7_subgate(
+    events: Iterable[TraceEvent], wifi_gate: int, wifi_blocker: str
+) -> tuple[str, str]:
+    """Return the latest WiFi Gate 7 sub-gate frontier."""
+
+    detail = summarize_wifi_gate7_subgate_detail(events, wifi_gate, wifi_blocker)
+    return detail.subgate, detail.name
 
 
 def cyw43_field_yes(fields: dict[str, str], key: str) -> bool:
@@ -4828,6 +4918,16 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     host_eapol_firstread_blocker_seen = firstread_blocker
                 explicit_blocker = firstread_blocker or "host-eapol-required"
             elif status == "pending":
+                gate = max(gate, 7)
+                post_f2_progress_seen = True
+                explicit_blocker = "wifi-host-eapol-pending"
+            elif status in {
+                "event-rx",
+                "rx-observed",
+                "eapol-rx",
+                "rx-admission-refresh",
+                "rx-admission-rescue",
+            }:
                 gate = max(gate, 7)
                 post_f2_progress_seen = True
                 explicit_blocker = "wifi-host-eapol-pending"
@@ -9314,7 +9414,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     if wifi_blocker == "cyw43-transport-command-admission":
         wifi_gate = max(wifi_gate, 6)
         wifi_blocker = "cyw43-runtime-command-rejected"
-    wifi_subgate, wifi_subgate_name = summarize_wifi_gate7_subgate(
+    wifi_subgate = summarize_wifi_gate7_subgate_detail(
         event_list, wifi_gate, wifi_blocker
     )
     return GateSummary(
@@ -9322,8 +9422,12 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_blocker=usb_blocker,
         wifi_gate=wifi_gate,
         wifi_blocker=wifi_blocker,
-        wifi_subgate=wifi_subgate,
-        wifi_subgate_name=wifi_subgate_name,
+        wifi_subgate=wifi_subgate.subgate,
+        wifi_subgate_name=wifi_subgate.name,
+        wifi_subgate_source=wifi_subgate.source,
+        wifi_subgate_status=wifi_subgate.status,
+        wifi_subgate_reason=wifi_subgate.reason,
+        wifi_subgate_line=wifi_subgate.line,
         usb_oldgood_replay=usb_oldgood.replay,
         usb_oldgood_last=usb_oldgood.last,
         usb_oldgood_missing=usb_oldgood.missing,

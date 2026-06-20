@@ -780,6 +780,11 @@ const fn local_seat_keyboard_poll_aux(keyboard_ready: bool, request_recovery: bo
     }
 }
 
+const fn local_seat_keyboard_recovery_aux_allowed(queue_empty: bool, no_reply_streak: u64) -> bool {
+    queue_empty
+        && no_reply_streak == LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+}
+
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const fn linked_local_seat_usb_attach_probe_required(
     controller_attached: bool,
@@ -2096,12 +2101,10 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn keyboard_poll_recovery_aux_requested(&self) -> bool {
-        self.keyboard_poll_no_reply_streak
-            >= LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
-            && self.keyboard_poll_no_reply_streak
-                % LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
-                == 0
-            && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+        local_seat_keyboard_recovery_aux_allowed(
+            self.keyboard_queue.is_empty(),
+            self.keyboard_poll_no_reply_streak,
+        ) && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
             && LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire)
             && LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.load(Ordering::Acquire)
@@ -6187,6 +6190,30 @@ mod tests {
             ),
             LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_MAX_COOLDOWN
         );
+    }
+
+    #[test]
+    fn runtime_keyboard_recovery_aux_waits_for_root_queue_drain() {
+        assert!(!local_seat_keyboard_recovery_aux_allowed(
+            false,
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+        ));
+        assert!(!local_seat_keyboard_recovery_aux_allowed(
+            true,
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD - 1
+        ));
+        assert!(local_seat_keyboard_recovery_aux_allowed(
+            true,
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+        ));
+        assert!(!local_seat_keyboard_recovery_aux_allowed(
+            true,
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD + 1
+        ));
+        assert!(!local_seat_keyboard_recovery_aux_allowed(
+            true,
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD * 2
+        ));
     }
 
     #[test]
