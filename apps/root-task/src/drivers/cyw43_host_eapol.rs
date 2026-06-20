@@ -78,6 +78,7 @@ const WSEC_KEY_IV_INITIALIZED_OFFSET: usize = 132;
 const WSEC_KEY_RXIV_HI_OFFSET: usize = 140;
 const WSEC_KEY_RXIV_LO_OFFSET: usize = 144;
 const WSEC_KEY_EA_OFFSET: usize = 156;
+const HOST_EAPOL_PTK_CANDIDATES: usize = 4;
 const CRYPTO_ALGO_AES_CCM: u32 = 4;
 const BRCMF_PRIMARY_KEY: u32 = 1 << 1;
 const WPA2_PSK_MIN_PASSPHRASE_LEN: usize = 8;
@@ -120,6 +121,29 @@ pub struct HostEapolGroupKeys {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HostPtkCandidate {
+    valid: bool,
+    ap_mac: [u8; ETHER_ADDR_LEN],
+    anonce: [u8; WPA_NONCE_LEN],
+    snonce: [u8; WPA_NONCE_LEN],
+    m1_replay_counter: [u8; WPA_REPLAY_COUNTER_LEN],
+    ptk: [u8; WPA_PTK_LEN],
+}
+
+impl HostPtkCandidate {
+    const fn empty() -> Self {
+        Self {
+            valid: false,
+            ap_mac: [0; ETHER_ADDR_LEN],
+            anonce: [0; WPA_NONCE_LEN],
+            snonce: [0; WPA_NONCE_LEN],
+            m1_replay_counter: [0; WPA_REPLAY_COUNTER_LEN],
+            ptk: [0; WPA_PTK_LEN],
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HostEapolAction {
     None,
     Inspect {
@@ -154,6 +178,9 @@ pub struct HostEapolState {
     gtk_installed: bool,
     m2_sent: bool,
     m4_sent: bool,
+    ptk_candidates: [HostPtkCandidate; HOST_EAPOL_PTK_CANDIDATES],
+    ptk_candidate_count: usize,
+    ptk_candidate_next: usize,
 }
 
 impl HostEapolState {
@@ -175,6 +202,9 @@ impl HostEapolState {
             gtk_installed: false,
             m2_sent: false,
             m4_sent: false,
+            ptk_candidates: [HostPtkCandidate::empty(); HOST_EAPOL_PTK_CANDIDATES],
+            ptk_candidate_count: 0,
+            ptk_candidate_next: 0,
         })
     }
 
@@ -252,6 +282,7 @@ impl HostEapolState {
                 &self.snonce,
             );
         }
+        self.record_current_ptk_candidate();
         let len = write_eapol_key_reply_frame(
             tx_frame,
             &self.ap_mac,
@@ -288,17 +319,21 @@ impl HostEapolState {
         let body = host_eapol_key_body(packet).ok_or("host-eapol-m3-body")?;
         let anonce =
             &body[EAPOL_KEY_BODY_NONCE_OFFSET..EAPOL_KEY_BODY_NONCE_OFFSET + WPA_NONCE_LEN];
-        if anonce != self.anonce {
+        let ap_mac = ethernet_src(packet).ok_or("host-eapol-m3-src")?;
+        if !self.ptk_candidate_matches_m3_identity(ap_mac, anonce) {
             return Err("host-eapol-m3-anonce");
         }
         let replay_counter = &body
             [EAPOL_KEY_BODY_REPLAY_OFFSET..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN];
-        if !replay_counter_increases(replay_counter, &self.m1_replay_counter) {
-            return Err("host-eapol-m3-replay");
-        }
-        if !verify_eapol_key_mic(packet, &self.ptk[..WPA_KCK_LEN])? {
+        let Some(matched_candidate) =
+            self.select_m3_ptk_candidate(packet, ap_mac, anonce, replay_counter)?
+        else {
+            if !self.ptk_candidate_has_replay_window(ap_mac, anonce, replay_counter) {
+                return Err("host-eapol-m3-replay");
+            }
             return Err("host-eapol-m3-mic");
-        }
+        };
+        self.apply_ptk_candidate(matched_candidate);
         self.m3_replay_counter.copy_from_slice(replay_counter);
         let key_data = host_eapol_key_data(body).ok_or("host-eapol-m3-key-data")?;
         let mut unwrapped = [0u8; HOST_EAPOL_KEY_DATA_MAX_LEN];
@@ -344,6 +379,84 @@ impl HostEapolState {
                 rsc,
             },
         })
+    }
+
+    fn record_current_ptk_candidate(&mut self) {
+        let candidate = HostPtkCandidate {
+            valid: true,
+            ap_mac: self.ap_mac,
+            anonce: self.anonce,
+            snonce: self.snonce,
+            m1_replay_counter: self.m1_replay_counter,
+            ptk: self.ptk,
+        };
+        if let Some(slot) = self.ptk_candidates.iter_mut().find(|slot| {
+            slot.valid
+                && slot.ap_mac == candidate.ap_mac
+                && slot.anonce == candidate.anonce
+                && slot.m1_replay_counter == candidate.m1_replay_counter
+        }) {
+            *slot = candidate;
+            return;
+        }
+        self.ptk_candidates[self.ptk_candidate_next] = candidate;
+        self.ptk_candidate_next = (self.ptk_candidate_next + 1) % HOST_EAPOL_PTK_CANDIDATES;
+        self.ptk_candidate_count =
+            core::cmp::min(self.ptk_candidate_count + 1, HOST_EAPOL_PTK_CANDIDATES);
+    }
+
+    fn ptk_candidate_matches_m3_identity(
+        &self,
+        ap_mac: [u8; ETHER_ADDR_LEN],
+        anonce: &[u8],
+    ) -> bool {
+        self.ptk_candidates.iter().any(|candidate| {
+            candidate.valid && candidate.ap_mac == ap_mac && candidate.anonce.as_slice() == anonce
+        })
+    }
+
+    fn ptk_candidate_has_replay_window(
+        &self,
+        ap_mac: [u8; ETHER_ADDR_LEN],
+        anonce: &[u8],
+        replay_counter: &[u8],
+    ) -> bool {
+        self.ptk_candidates.iter().any(|candidate| {
+            candidate.valid
+                && candidate.ap_mac == ap_mac
+                && candidate.anonce.as_slice() == anonce
+                && replay_counter_increases(replay_counter, &candidate.m1_replay_counter)
+        })
+    }
+
+    fn select_m3_ptk_candidate(
+        &self,
+        packet: &[u8],
+        ap_mac: [u8; ETHER_ADDR_LEN],
+        anonce: &[u8],
+        replay_counter: &[u8],
+    ) -> Result<Option<HostPtkCandidate>, &'static str> {
+        for candidate in self.ptk_candidates {
+            if !candidate.valid
+                || candidate.ap_mac != ap_mac
+                || candidate.anonce.as_slice() != anonce
+                || !replay_counter_increases(replay_counter, &candidate.m1_replay_counter)
+            {
+                continue;
+            }
+            if verify_eapol_key_mic(packet, &candidate.ptk[..WPA_KCK_LEN])? {
+                return Ok(Some(candidate));
+            }
+        }
+        Ok(None)
+    }
+
+    fn apply_ptk_candidate(&mut self, candidate: HostPtkCandidate) {
+        self.ap_mac = candidate.ap_mac;
+        self.anonce = candidate.anonce;
+        self.snonce = candidate.snonce;
+        self.m1_replay_counter = candidate.m1_replay_counter;
+        self.ptk = candidate.ptk;
     }
 
     fn handle_group_key(
@@ -1585,6 +1698,52 @@ mod tests {
         assert_eq!(state.snonce, first_snonce);
         assert_eq!(state.ptk, first_ptk);
         assert_eq!(&second_m2[..second_len], &first_m2[..first_len]);
+    }
+
+    #[test]
+    fn m3_can_match_earlier_m2_after_later_m1_updates_current_ptk() {
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
+        let mut first_m1 = [0u8; MAX_FRAME_LEN];
+        let first_m1_len = write_test_m1_frame(&mut first_m1, &station, &ap).expect("m1");
+        let mut tx = [0u8; MAX_FRAME_LEN];
+
+        assert!(matches!(
+            state
+                .handle_packet(station, &first_m1[..first_m1_len], &mut tx)
+                .expect("first m1"),
+            HostEapolAction::SendM2 { .. }
+        ));
+        let first_ptk = state.ptk;
+        let first_snonce = state.snonce;
+        let mut m3_for_first_m2 = [0u8; MAX_FRAME_LEN];
+        let m3_len =
+            write_test_m3_frame(&mut m3_for_first_m2, &station, &state).expect("m3 for first m2");
+
+        let mut later_m1 = first_m1;
+        let body = ETH_HEADER_LEN + EAPOL_HEADER_LEN;
+        later_m1[body + EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN - 1] = 2;
+        assert!(matches!(
+            state
+                .handle_packet(station, &later_m1[..first_m1_len], &mut tx)
+                .expect("later m1"),
+            HostEapolAction::SendM2 { .. }
+        ));
+        assert_ne!(state.snonce, first_snonce);
+        assert_ne!(state.ptk, first_ptk);
+        assert_eq!(state.ptk_candidate_count, 2);
+
+        let m3_action = state
+            .handle_packet(station, &m3_for_first_m2[..m3_len], &mut tx)
+            .expect("m3 should match earlier m2 candidate");
+        assert!(matches!(
+            m3_action,
+            HostEapolAction::SendM4InstallKeys { .. }
+        ));
+        assert_eq!(state.ptk, first_ptk);
+        assert_eq!(state.snonce, first_snonce);
+        assert!(state.secure_complete());
     }
 
     #[test]

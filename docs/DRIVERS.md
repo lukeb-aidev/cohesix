@@ -1287,8 +1287,10 @@ context and the retry/poll window.
 - Host-EAPOL admits the PAE group multicast, sends bounded EAPOL-Start frames
   through the linked CYW43 `ETH_TX` descriptor while waiting for AP M1, derives
   PMK/PTK locally, writes M2/M4 in WPA2-PSK order, verifies M3 MIC/replay state,
-  unwraps GTK with AES-128 key unwrap, installs pairwise and group `wsec_key`
-  iovars, and only then reports secure completion. EAPOL TX uses the extended
+  drains the submitted M4 before PTK/GTK `wsec_key` install, unwraps GTK with
+  AES-128 key unwrap, waits after Group M2 before secure release when the GTK
+  arrives in the group-key handshake, restores the Linux-unicast-M1 RX admission
+  mode, and only then reports secure completion. EAPOL TX uses the extended
   SDPCM data shape with BDC priority `6`; control writes may wait for CDC
   replies, but data/event writes must not inherit a control-plane reply wait.
   `eapol_start` counts only the bounded linked-runtime 802.1X start frames; it
@@ -2484,11 +2486,11 @@ or the next bounded no-reply window so one lost recovery turn cannot silence
 later recovery attempts. The runtime still polls/drains the interrupt-IN queue
 first, and it uses the stop/reset/set-dequeue/re-arm ladder only when
 queue-collapse or unmatched-transfer evidence proves the accepted endpoint is
-stuck. Repeated unmatched transfer events on the accepted endpoint use the same
-bounded recovery ladder once they prove the transfer ring is no longer making
-matched progress. USB diagnostics include the root-side recovery-aux request
-count and pending latch state, so a capture can distinguish recovery not yet
-requested from recovery requested but not replied.
+stuck. After first-byte proof, a no-byte poll ending in unmatched-transfer
+status uses the same bounded recovery ladder immediately instead of waiting for
+another enumeration pass or a long no-reply window. USB diagnostics include the
+root-side recovery-aux request count and pending latch state, so a capture can
+distinguish recovery not yet requested from recovery requested but not replied.
 
 Serial diagnostics retain detailed USB enumeration replay status, including
 begin/no-reply retries, timeout progress, and hub-port traces. HDMI boot-progress

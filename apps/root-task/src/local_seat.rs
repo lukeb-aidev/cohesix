@@ -70,6 +70,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED, DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE,
+    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER,
     DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
     DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT,
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
@@ -785,12 +786,30 @@ const fn local_seat_keyboard_recovery_aux_allowed(
     no_reply_streak: u64,
     recovery_pending: bool,
 ) -> bool {
+    local_seat_keyboard_recovery_aux_allowed_for_status(
+        queue_empty,
+        no_reply_streak,
+        recovery_pending,
+        false,
+    )
+}
+
+const fn local_seat_keyboard_recovery_aux_allowed_for_status(
+    queue_empty: bool,
+    no_reply_streak: u64,
+    recovery_pending: bool,
+    cached_unmatched_transfer: bool,
+) -> bool {
     queue_empty
         && !recovery_pending
-        && no_reply_streak >= LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
-        && (no_reply_streak - LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD)
-            % LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
-            == 0
+        && (cached_unmatched_transfer
+            || (no_reply_streak
+                >= LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+                && (no_reply_streak
+                    - LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD)
+                    .is_multiple_of(
+                        LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD,
+                    )))
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -1133,7 +1152,7 @@ impl LocalSeatRuntime {
         let mut bytes = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
         let limit = budget.min(KEYBOARD_POLL_CHUNK_BYTES);
         while drained.saturating_add(3) <= limit && self.keyboard_queue.len() >= 3 {
-            if self.keyboard_queue.get(0) != Some(&0x1b)
+            if self.keyboard_queue.front() != Some(&0x1b)
                 || self.keyboard_queue.get(1) != Some(&b'[')
                 || !matches!(self.keyboard_queue.get(2), Some(b'A' | b'B'))
             {
@@ -1471,16 +1490,16 @@ impl LocalSeatRuntime {
             } else {
                 None
             };
-            if input_preview.is_some() {
-                if !self.append_linked_hdmi_snapshot_line(
+            if input_preview.is_some()
+                && !self.append_linked_hdmi_snapshot_line(
                     &mut payload,
                     "",
                     input_preview,
                     geometry,
                     false,
-                ) {
-                    return payload;
-                }
+                )
+            {
+                return payload;
             }
         } else {
             for index in start..end {
@@ -1939,6 +1958,17 @@ impl LocalSeatRuntime {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn queue_linked_hdmi_input_echo_or_redraw(&mut self, terminal_echo: &[u8]) {
+        if terminal_echo.is_empty() || self.hdmi_scrollback_offset != 0 {
+            return;
+        }
+        let needs_redraw = self.linked_hdmi_redraw_pending() || !self.hdmi_pending_bytes.is_empty();
+        if needs_redraw || !self.queue_linked_hdmi_payload(terminal_echo) {
+            self.request_linked_hdmi_snapshot_redraw();
+        }
+    }
+
     #[cfg(all(
         feature = "kernel",
         feature = "usb",
@@ -1984,13 +2014,8 @@ impl LocalSeatRuntime {
                     }
                 }
             }
-            if !terminal_echo.is_empty()
-                && self.hdmi_scrollback_offset == 0
-                && !self.linked_hdmi_redraw_pending()
-            {
-                if !self.queue_linked_hdmi_payload(terminal_echo.as_slice()) {
-                    self.request_linked_hdmi_snapshot_redraw();
-                }
+            if !terminal_echo.is_empty() && self.hdmi_scrollback_offset == 0 {
+                self.queue_linked_hdmi_input_echo_or_redraw(terminal_echo.as_slice());
             } else if preview_changed && self.hdmi_scrollback_offset != 0 {
                 self.hdmi_scrollback_offset = 0;
                 redraw = true;
@@ -2121,10 +2146,16 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn keyboard_poll_recovery_aux_requested(&self) -> bool {
-        local_seat_keyboard_recovery_aux_allowed(
+        let result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32;
+        let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+            & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
+        let cached_unmatched_transfer = report_status
+            == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER);
+        local_seat_keyboard_recovery_aux_allowed_for_status(
             self.keyboard_queue.is_empty(),
             self.keyboard_poll_no_reply_streak,
             self.keyboard_recovery_aux_pending,
+            cached_unmatched_transfer,
         ) && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
             && LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire)
@@ -2135,9 +2166,9 @@ impl LocalSeatRuntime {
         self.driver_task_no_replies = self.driver_task_no_replies.saturating_add(1);
         self.keyboard_poll_no_reply_streak = self.keyboard_poll_no_reply_streak.saturating_add(1);
         if self.keyboard_recovery_aux_pending
-            && self.keyboard_poll_no_reply_streak
-                % LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
-                == 0
+            && self
+                .keyboard_poll_no_reply_streak
+                .is_multiple_of(LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD)
         {
             self.keyboard_recovery_aux_pending = false;
         }
@@ -6178,6 +6209,40 @@ mod tests {
     }
 
     #[test]
+    fn runtime_hdmi_input_echo_supersedes_stale_queued_output() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let stale = b"netstats rx=old tx=old\n";
+
+        runtime.mirror_line_current_tcb("cohesix> ");
+        runtime.open_linked_hdmi_prompt_line("cohesix> ");
+        assert!(runtime.queue_linked_hdmi_payload(stale));
+        runtime.record_linked_hdmi_input_echo_byte(b'h');
+        runtime.queue_linked_hdmi_input_echo_or_redraw(b"h");
+
+        let display = runtime.display_trace();
+        assert_eq!(display.pending_bytes, 0);
+        assert_eq!(display.superseded_bytes, stale.len() as u64);
+        assert!(display.pending_redraw);
+
+        let Some((snapshot, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected input snapshot");
+        };
+        assert_eq!(reason, "keyboard-scrollback");
+        assert!(redraw);
+        assert!(snapshot
+            .windows(b"cohesix> h".len())
+            .any(|window| window == b"cohesix> h"));
+        assert!(!snapshot
+            .windows(b"netstats".len())
+            .any(|window| window == b"netstats"));
+    }
+
+    #[test]
     fn runtime_hdmi_line_queue_is_bounded_and_nonblocking() {
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
@@ -6288,6 +6353,15 @@ mod tests {
             true,
             LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD,
             true
+        ));
+        assert!(local_seat_keyboard_recovery_aux_allowed_for_status(
+            true, 0, false, true
+        ));
+        assert!(!local_seat_keyboard_recovery_aux_allowed_for_status(
+            false, 0, false, true
+        ));
+        assert!(!local_seat_keyboard_recovery_aux_allowed_for_status(
+            true, 0, true, true
         ));
     }
 

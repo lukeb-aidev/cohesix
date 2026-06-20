@@ -5901,31 +5901,11 @@ fn driver_task_ring_timeout_keep_active_limit_for_progress(
         && cached_driver_task_ring_progress_matches_request(slot, request, command.aux0)
     {
         let phase = slot.last_progress_phase.load(Ordering::Acquire);
-        if driver_task_ring_usb_enum_address_phase(phase) {
-            DRIVER_TASK_USB_ENUM_ADDRESS_TIMEOUT_KEEP_ACTIVE_LIMIT
-        } else if driver_task_ring_usb_enum_controller_reset_phase(phase)
-            || driver_task_ring_usb_enum_root_reset_phase(phase)
-        {
-            DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT
-        } else if driver_task_ring_usb_enum_status_wait_phase(phase) {
-            DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT
-        } else if driver_task_ring_usb_enum_transfer_wait_phase(phase) {
-            DRIVER_TASK_USB_ENUM_TRANSFER_TIMEOUT_KEEP_ACTIVE_LIMIT
-        } else if driver_task_ring_usb_enum_hub_event_phase(phase) {
-            DRIVER_TASK_USB_ENUM_HUB_EVENT_TIMEOUT_KEEP_ACTIVE_LIMIT
-        } else if driver_task_ring_usb_enum_hub_wait_phase(phase) {
-            DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT
-        } else {
-            limit
-        }
+        driver_task_ring_usb_enum_timeout_limit_for_phase(phase, limit)
     } else if limit == DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT {
         if cached_driver_task_ring_usb_enum_logical_turn_matches(slot, request, command.aux0) {
             let phase = slot.last_progress_phase.load(Ordering::Acquire);
-            if driver_task_ring_usb_enum_address_phase(phase) {
-                DRIVER_TASK_USB_ENUM_ADDRESS_TIMEOUT_KEEP_ACTIVE_LIMIT
-            } else {
-                DRIVER_TASK_USB_ENUM_HUB_EVENT_TIMEOUT_KEEP_ACTIVE_LIMIT
-            }
+            driver_task_ring_usb_enum_timeout_limit_for_phase(phase, limit)
         } else {
             limit
         }
@@ -5947,8 +5927,37 @@ fn driver_task_ring_timeout_keep_active_limit_for_progress(
 
 #[cfg(feature = "kernel")]
 const fn driver_task_ring_usb_enum_cross_request_phase(phase: u32) -> bool {
-    driver_task_ring_usb_enum_address_phase(phase)
+    driver_task_ring_usb_enum_controller_reset_phase(phase)
+        || driver_task_ring_usb_enum_root_reset_phase(phase)
+        || driver_task_ring_usb_enum_address_phase(phase)
+        || driver_task_ring_usb_enum_transfer_wait_phase(phase)
+        || driver_task_ring_usb_enum_status_wait_phase(phase)
+        || driver_task_ring_usb_enum_hub_wait_phase(phase)
         || driver_task_ring_usb_enum_hub_event_phase(phase)
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_usb_enum_timeout_limit_for_phase(
+    phase: u32,
+    fallback_limit: usize,
+) -> usize {
+    if driver_task_ring_usb_enum_address_phase(phase) {
+        DRIVER_TASK_USB_ENUM_ADDRESS_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if driver_task_ring_usb_enum_controller_reset_phase(phase)
+        || driver_task_ring_usb_enum_root_reset_phase(phase)
+    {
+        DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if driver_task_ring_usb_enum_status_wait_phase(phase) {
+        DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if driver_task_ring_usb_enum_transfer_wait_phase(phase) {
+        DRIVER_TASK_USB_ENUM_TRANSFER_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if driver_task_ring_usb_enum_hub_event_phase(phase) {
+        DRIVER_TASK_USB_ENUM_HUB_EVENT_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if driver_task_ring_usb_enum_hub_wait_phase(phase) {
+        DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else {
+        fallback_limit
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -12078,6 +12087,52 @@ mod tests {
                 false,
             ),
             (true, DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT + 1,)
+        );
+
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN,
+                aux0: command.aux0,
+            },
+        );
+        assert!(!driver_task_ring_progress_advanced_for_request(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_RESET_BEGIN,
+                aux0: command.aux0,
+            },
+            next_request,
+            command.aux0,
+        ));
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                next_request,
+            ),
+            DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        slot.timeout_resumes.store(
+            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                contract,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                next_request,
+                false,
+            ),
+            (true, DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT + 1,)
         );
     }
 
