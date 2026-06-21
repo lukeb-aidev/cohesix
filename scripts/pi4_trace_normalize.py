@@ -526,6 +526,11 @@ class GateSummary:
     net_active: str = "unknown"
     net_addr_src: str = "unknown"
     net_dhcp: str = "unknown"
+    wifi_data_path_tx: int = 0
+    wifi_data_path_rx_preserved: int = 0
+    wifi_data_path_rx_delivered: int = 0
+    wifi_data_path_rx_dropped: int = 0
+    wifi_data_path_last: str = "none"
     driver_task_default_requested: bool = False
     driver_task_live_hot_paths: bool = False
     driver_task_contracts: int = 0
@@ -606,6 +611,13 @@ class GateSummary:
     usb_runtime_queued_reports: int = 0
     usb_runtime_transfer_events: int = 0
     usb_runtime_report_status: str = "unknown"
+    usb_runtime_recovery_diag_valid: str = "unknown"
+    usb_runtime_endpoint_recoveries: int = 0
+    usb_runtime_endpoint_recovery_failures: int = 0
+    usb_runtime_queue_collapse_recoveries: int = 0
+    usb_runtime_recovery_stage: str = "unknown"
+    usb_runtime_recovery_reason: str = "unknown"
+    usb_runtime_command_completion_blocked: int = 0
     usb_event_loop_runtime_skipped: int = 0
     usb_post_first_byte_blocker: str = "none"
     serial_driver_accepted: bool = False
@@ -673,6 +685,11 @@ class GateSummary:
             "NET_ACTIVE": self.net_active,
             "NET_ADDR_SRC": self.net_addr_src,
             "NET_DHCP": self.net_dhcp,
+            "WIFI_DATA_PATH_TX": self.wifi_data_path_tx,
+            "WIFI_DATA_PATH_RX_PRESERVED": self.wifi_data_path_rx_preserved,
+            "WIFI_DATA_PATH_RX_DELIVERED": self.wifi_data_path_rx_delivered,
+            "WIFI_DATA_PATH_RX_DROPPED": self.wifi_data_path_rx_dropped,
+            "WIFI_DATA_PATH_LAST": self.wifi_data_path_last,
             "DRIVER_TASK_DEFAULT_REQUESTED": (
                 "yes" if self.driver_task_default_requested else "no"
             ),
@@ -801,6 +818,19 @@ class GateSummary:
             "USB_RUNTIME_QUEUED_REPORTS": self.usb_runtime_queued_reports,
             "USB_RUNTIME_TRANSFER_EVENTS": self.usb_runtime_transfer_events,
             "USB_RUNTIME_REPORT_STATUS": self.usb_runtime_report_status,
+            "USB_RUNTIME_RECOVERY_DIAG_VALID": self.usb_runtime_recovery_diag_valid,
+            "USB_RUNTIME_ENDPOINT_RECOVERIES": self.usb_runtime_endpoint_recoveries,
+            "USB_RUNTIME_ENDPOINT_RECOVERY_FAILURES": (
+                self.usb_runtime_endpoint_recovery_failures
+            ),
+            "USB_RUNTIME_QUEUE_COLLAPSE_RECOVERIES": (
+                self.usb_runtime_queue_collapse_recoveries
+            ),
+            "USB_RUNTIME_RECOVERY_STAGE": self.usb_runtime_recovery_stage,
+            "USB_RUNTIME_RECOVERY_REASON": self.usb_runtime_recovery_reason,
+            "USB_RUNTIME_COMMAND_COMPLETION_BLOCKED": (
+                self.usb_runtime_command_completion_blocked
+            ),
             "USB_EVENT_LOOP_RUNTIME_SKIPPED": self.usb_event_loop_runtime_skipped,
             "USB_POST_FIRST_BYTE_BLOCKER": self.usb_post_first_byte_blocker,
             "SERIAL_DRIVER_ACCEPTED": (
@@ -1054,6 +1084,20 @@ def classify_domain(line: str) -> str | None:
         or line.startswith("USB:")
         or line.startswith("USB_RUNTIME_")
         or "[local-seat]" in lower
+        or (
+            "[pi4-platform]" in lower
+            and (
+                "mmio preseed" in lower
+                or "vl805-usb-hcd-power" in lower
+                or "xhci-reset-notify" in lower
+                or "owner=vl805-usb-hcd-power" in lower
+                or "owner=xhci-reset-notify" in lower
+                or (
+                    "mailbox power-on" in lower
+                    and "module=0x00000003" in lower
+                )
+            )
+        )
     ):
         return "usb"
     if line == "halting...":
@@ -1132,6 +1176,8 @@ def classify_domain(line: str) -> str | None:
             and "module=0x00000003" in lower
         )
     ):
+        return "usb"
+    if "[pi4-platform]" in lower:
         return "usb"
     if (
         line.startswith("wifi:")
@@ -5028,6 +5074,26 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
                 blocker = "none"
+            if fields.get("active") == "wifi" and (
+                wifi_address_source(fields) == "dhcp-pending"
+                or wifi_dhcp_phase(fields) == "selecting"
+            ):
+                dhcp_started_seen = wifi_dhcp_phase(fields) != "disabled"
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+                blocker = (
+                    "dhcp-not-started"
+                    if wifi_dhcp_phase(fields) == "disabled"
+                    else "dhcp-pending"
+                )
+            if fields.get("active") == "wifi" and (
+                wifi_address_source(fields) == "dhcp-failed"
+                or wifi_dhcp_phase(fields) == "failed"
+            ):
+                dhcp_started_seen = True
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+                blocker = "dhcp-failed"
             if (
                 fields.get("wifi_assoc") == "1"
                 and fields.get("wifi_link") == "1"
@@ -5052,6 +5118,28 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             ):
                 gate = max(gate, 10)
                 blocker = "none"
+            continue
+        if wifi_fields_active(fields) and (
+            wifi_address_source(fields) == "dhcp-pending"
+            or wifi_dhcp_phase(fields) == "selecting"
+        ):
+            dhcp_started_seen = wifi_dhcp_phase(fields) != "disabled"
+            gate = max(gate, 9)
+            post_f2_progress_seen = True
+            blocker = (
+                "dhcp-not-started"
+                if wifi_dhcp_phase(fields) == "disabled"
+                else "dhcp-pending"
+            )
+            continue
+        if wifi_fields_active(fields) and (
+            wifi_address_source(fields) == "dhcp-failed"
+            or wifi_dhcp_phase(fields) == "failed"
+        ):
+            dhcp_started_seen = True
+            gate = max(gate, 9)
+            post_f2_progress_seen = True
+            blocker = "dhcp-failed"
             continue
         if "[dhcp] start ready" in raw:
             dhcp_started_seen = True
@@ -5427,8 +5515,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if (
             "dhcp] lease bound" in raw
-            or fields.get("addr_src") == "dhcp-lease"
-            or fields.get("src") == "dhcp-lease"
+            or wifi_address_source(fields) == "dhcp-lease"
         ):
             gate = max(gate, 9)
             post_f2_progress_seen = True
@@ -6709,6 +6796,81 @@ def summarize_wifi_failure_detail(
     return exact, phase, line
 
 
+def wifi_address_source(fields: Mapping[str, str]) -> str | None:
+    """Return the Wi-Fi address-source field across log schema variants."""
+
+    return fields.get("addr_src") or fields.get("address_source") or fields.get("src")
+
+
+def wifi_dhcp_phase(fields: Mapping[str, str]) -> str | None:
+    """Return the DHCP phase field across log schema variants."""
+
+    return fields.get("dhcp") or fields.get("dhcp_phase")
+
+
+def wifi_fields_active(fields: Mapping[str, str]) -> bool:
+    """Return whether a parsed event describes the active Wi-Fi interface."""
+
+    return fields.get("active") == "wifi" or fields.get("evidence") == "active=wifi"
+
+
+def summarize_wifi_dhcp_frontier(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, int] | None:
+    """Return the latest explicit Wi-Fi DHCP blocker after secure release."""
+
+    frontier: tuple[str, str, int] | None = None
+    for event in events:
+        fields = event.fields
+        if not wifi_fields_active(fields):
+            continue
+        addr_src = wifi_address_source(fields)
+        dhcp = wifi_dhcp_phase(fields)
+        if addr_src == "dhcp-pending" and dhcp == "disabled":
+            frontier = ("dhcp-not-started", "dhcp", event.line)
+        elif addr_src == "dhcp-pending" or dhcp == "selecting":
+            frontier = ("dhcp-pending", "dhcp", event.line)
+        elif addr_src == "dhcp-failed" or dhcp == "failed":
+            frontier = ("dhcp-failed", "dhcp", event.line)
+    return frontier
+
+
+def summarize_wifi_data_path(
+    events: Iterable[TraceEvent],
+) -> tuple[int, int, int, int, str]:
+    """Return CYW43 DHCP/ARP data-path trace counts."""
+
+    tx = 0
+    rx_preserved = 0
+    rx_delivered = 0
+    rx_dropped = 0
+    last = "none"
+    for event in events:
+        raw = event.raw.lower()
+        if "cyw43_driver_task_data_path" not in raw:
+            continue
+        data_event = field_lower(event, "event")
+        action = field_lower(event, "action")
+        dhcp = field_lower(event, "dhcp")
+        arp = field_lower(event, "arp")
+        label = "none"
+        if dhcp and dhcp != "none":
+            label = f"dhcp-{dhcp}"
+        elif arp and arp != "none":
+            label = f"arp-{arp}"
+        if label != "none":
+            last = f"{data_event}:{action}:{label}"
+        if data_event.startswith("tx"):
+            tx += 1
+        elif data_event == "rx-preserve":
+            rx_preserved += 1
+        elif data_event == "rx-deliver":
+            rx_delivered += 1
+        elif "drop" in data_event:
+            rx_dropped += 1
+    return tx, rx_preserved, rx_delivered, rx_dropped, last
+
+
 def _truthy_field(value: str | None) -> bool:
     """Return whether a normalized field value represents true/non-zero."""
 
@@ -6808,6 +6970,13 @@ class UsbRuntimeQueueSummary:
     queued_reports: int = 0
     transfer_events: int = 0
     report_status: str = "unknown"
+    recovery_diag_valid: str = "unknown"
+    endpoint_recoveries: int = 0
+    endpoint_recovery_failures: int = 0
+    queue_collapse_recoveries: int = 0
+    recovery_stage: str = "unknown"
+    recovery_reason: str = "unknown"
+    command_completion_blocked: int = 0
     runtime_skipped: int = 0
 
 
@@ -6881,6 +7050,28 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
             report_status = field_lower(event, "report_status")
             if report_status:
                 values["report_status"] = report_status.replace("_", "-")
+        if raw.startswith("usb: runtime_recovery"):
+            diag_valid = field_lower(event, "diag_valid")
+            if diag_valid:
+                values["recovery_diag_valid"] = diag_valid
+            recoveries = parse_hex_int(fields.get("recoveries"))
+            if recoveries is not None:
+                values["endpoint_recoveries"] = recoveries
+            failures = parse_hex_int(fields.get("failures"))
+            if failures is not None:
+                values["endpoint_recovery_failures"] = failures
+            queue_collapse = parse_hex_int(fields.get("queue_collapse"))
+            if queue_collapse is not None:
+                values["queue_collapse_recoveries"] = queue_collapse
+            stage = field_lower(event, "stage")
+            if stage:
+                values["recovery_stage"] = stage.replace("_", "-")
+            reason = field_lower(event, "reason")
+            if reason:
+                values["recovery_reason"] = reason.replace("_", "-")
+            blocked = parse_hex_int(fields.get("command_completion_blocked"))
+            if blocked is not None:
+                values["command_completion_blocked"] = blocked
         if raw.startswith("usb: event_loop") or raw.startswith("usb: sustained_input"):
             runtime_skipped = parse_hex_int(fields.get("runtime_skipped"))
             if runtime_skipped is not None:
@@ -9060,6 +9251,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     wifi_exact, wifi_phase, wifi_blocker_line = summarize_wifi_failure_detail(
         event_list, wifi_blocker
     )
+    initial_wifi_subgate = summarize_wifi_gate7_subgate_detail(
+        event_list, wifi_gate, wifi_blocker
+    )
+    wifi_dhcp_frontier = summarize_wifi_dhcp_frontier(event_list)
+    if wifi_dhcp_frontier is not None and (
+        wifi_gate >= 9 or initial_wifi_subgate.subgate == "7e"
+    ):
+        wifi_gate = max(wifi_gate, 9)
+        wifi_blocker, wifi_phase, wifi_blocker_line = wifi_dhcp_frontier
+        wifi_exact = wifi_blocker
     wifi_deferred_resume_start = next(
         (
             event
@@ -9155,6 +9356,13 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         any(root_console_ready_evidence(event) for event in event_list) or root_prompt_seen
     )
     net_active, net_addr_src, net_dhcp = summarize_net_state(event_list)
+    (
+        wifi_data_path_tx,
+        wifi_data_path_rx_preserved,
+        wifi_data_path_rx_delivered,
+        wifi_data_path_rx_dropped,
+        wifi_data_path_last,
+    ) = summarize_wifi_data_path(event_list)
     (
         driver_task_default_requested,
         driver_task_live_hot_paths,
@@ -9414,6 +9622,17 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     if wifi_blocker == "cyw43-transport-command-admission":
         wifi_gate = max(wifi_gate, 6)
         wifi_blocker = "cyw43-runtime-command-rejected"
+    if driver_task_active_net == "genet" or net_active == "wired":
+        wifi_gate = 0
+        wifi_blocker = "not-selected"
+        wifi_exact = "none"
+        wifi_phase = "none"
+        wifi_blocker_line = 0
+        wifi_oldgood = SequenceResult(
+            replay=False,
+            last="none",
+            missing="not-selected",
+        )
     wifi_subgate = summarize_wifi_gate7_subgate_detail(
         event_list, wifi_gate, wifi_blocker
     )
@@ -9457,6 +9676,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         net_active=net_active,
         net_addr_src=net_addr_src,
         net_dhcp=net_dhcp,
+        wifi_data_path_tx=wifi_data_path_tx,
+        wifi_data_path_rx_preserved=wifi_data_path_rx_preserved,
+        wifi_data_path_rx_delivered=wifi_data_path_rx_delivered,
+        wifi_data_path_rx_dropped=wifi_data_path_rx_dropped,
+        wifi_data_path_last=wifi_data_path_last,
         driver_task_default_requested=driver_task_default_requested,
         driver_task_live_hot_paths=driver_task_live_hot_paths,
         driver_task_contracts=driver_task_contracts,
@@ -9539,6 +9763,23 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_runtime_queued_reports=usb_runtime_queue_summary.queued_reports,
         usb_runtime_transfer_events=usb_runtime_queue_summary.transfer_events,
         usb_runtime_report_status=usb_runtime_queue_summary.report_status,
+        usb_runtime_recovery_diag_valid=(
+            usb_runtime_queue_summary.recovery_diag_valid
+        ),
+        usb_runtime_endpoint_recoveries=(
+            usb_runtime_queue_summary.endpoint_recoveries
+        ),
+        usb_runtime_endpoint_recovery_failures=(
+            usb_runtime_queue_summary.endpoint_recovery_failures
+        ),
+        usb_runtime_queue_collapse_recoveries=(
+            usb_runtime_queue_summary.queue_collapse_recoveries
+        ),
+        usb_runtime_recovery_stage=usb_runtime_queue_summary.recovery_stage,
+        usb_runtime_recovery_reason=usb_runtime_queue_summary.recovery_reason,
+        usb_runtime_command_completion_blocked=(
+            usb_runtime_queue_summary.command_completion_blocked
+        ),
         usb_event_loop_runtime_skipped=usb_runtime_queue_summary.runtime_skipped,
         usb_post_first_byte_blocker=usb_post_first_byte_blocker,
         serial_driver_accepted=driver_task_frontiers.serial_driver_accepted,

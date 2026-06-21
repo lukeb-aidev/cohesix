@@ -773,6 +773,54 @@ pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS: u8 = 10;
 pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED: u8 = 11;
 /// USB keyboard service aux: request post-first-byte interrupt-IN endpoint recovery.
 pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX: u32 = 0x5553_4252;
+/// USB keyboard diagnostic frame magic packed into `DriverFrameDescriptor.offset[31:16]`.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_DIAG_MAGIC: u16 = 0x554b;
+/// USB keyboard recovery stage: no recovery state has been recorded.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_NONE: u8 = 0;
+/// USB keyboard recovery stage: endpoint recovery was entered.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_BEGIN: u8 = 1;
+/// USB keyboard recovery stage: endpoint was not in a ready polling state.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_NOT_READY: u8 = 2;
+/// USB keyboard recovery stage: bounded hard-recovery limit was reached.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_LIMIT: u8 = 3;
+/// USB keyboard recovery stage: stop-endpoint command was submitted.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_STOP_ENDPOINT: u8 = 4;
+/// USB keyboard recovery stage: reset-endpoint command was submitted.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_RESET_ENDPOINT: u8 = 5;
+/// USB keyboard recovery stage: interrupt-IN transfer ring was rebuilt.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_RESET_RING: u8 = 6;
+/// USB keyboard recovery stage: Set TR Dequeue Pointer command was submitted.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_SET_DEQUEUE: u8 = 7;
+/// USB keyboard recovery stage: interrupt-IN queue was rearmed.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_REARM: u8 = 8;
+/// USB keyboard recovery stage: recovery finished and the endpoint queue is ready.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_READY: u8 = 9;
+/// USB keyboard recovery reason: no recovery trigger has been recorded.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_NONE: u8 = 0;
+/// USB keyboard recovery reason: root requested recovery after the hard limit.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_REENUMERATION_LIMIT: u8 = 1;
+/// USB keyboard recovery reason: post-first-byte interrupt queue collapsed.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_QUEUE_COLLAPSE: u8 = 2;
+/// USB keyboard recovery reason: full queue produced no fresh event on a recovery poll.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_FULL_QUEUE_NO_EVENT: u8 = 3;
+/// USB keyboard recovery reason: steady queue only produced idle reports.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_STEADY_IDLE: u8 = 4;
+/// USB keyboard recovery reason: queue depth exceeded the steady target.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_OVERQUEUE: u8 = 5;
+/// USB keyboard recovery reason: first-report queue fell below target.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_PRE_FIRST_UNDERFILLED: u8 = 6;
+/// USB keyboard recovery reason: root-requested recovery saw an underfilled queue.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_AUX_UNDERFILLED: u8 = 7;
+/// USB keyboard recovery reason: steady transfer event did not match an armed report.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_STEADY_UNMATCHED: u8 = 8;
+/// USB keyboard recovery reason: root-requested recovery saw an unmatched transfer.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_AUX_UNMATCHED: u8 = 9;
+/// USB keyboard recovery reason: unmatched transfer streak crossed the hard threshold.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_HARD_UNMATCHED: u8 = 10;
+/// USB keyboard recovery reason: endpoint rearm failed after a matched completion.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_REARM_COLLAPSE: u8 = 11;
+/// USB keyboard recovery reason: matched transfer completed with a fault status.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_MATCHED_TRANSFER_FAULT: u8 = 12;
 /// USB runtime is traversing a hub after the root device had no direct keyboard endpoint.
 pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SCAN_BEGIN: u32 = 271;
 /// USB runtime is probing one hub child port for a keyboard-capable device.

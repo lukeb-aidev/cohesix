@@ -315,7 +315,12 @@ run_normalizer() {
     require_file "${TRACE_NORMALIZER}"
     require_file "${LOG_PATH}"
     if [[ "${ALLOW_SUMMARY_ONLY}" -eq 0 ]]; then
-        args+=("--expect-min" "USB_GATE=3" "--expect-min" "WIFI_GATE=1")
+        args+=("--expect-min" "USB_GATE=3")
+        if [[ "${REQUIRE_WIRED_READY}" -eq 1 && "${REQUIRE_WIFI_READY}" -eq 0 ]]; then
+            args+=("--expect" "WIFI_BLOCKER=not-selected")
+        else
+            args+=("--expect-min" "WIFI_GATE=1")
+        fi
         args+=("--expect" "SERIAL_CLEAN=yes")
         args+=("--expect" "BOOT_HALTED=no")
         args+=("--expect" "PANIC_SEEN=no")

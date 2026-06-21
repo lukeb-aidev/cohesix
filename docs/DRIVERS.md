@@ -1974,7 +1974,12 @@ active path is Cohesix-owned cold start:
   without letting stale unmatched events reclaim live report slots. Endpoint
   recovery waits for the expected Stop Endpoint / Reset Endpoint / Set TR
   Dequeue command completions before clearing software queue state or ringing
-  the keyboard endpoint again.
+  the keyboard endpoint again. After first-byte proof, a root no-reply recovery
+  request may also run that ladder when the steady interrupt queue remains full
+  but no matched completions are reaching the local-seat poller. Stop Endpoint
+  or Set TR Dequeue failure is a hard recovery failure; live report slots,
+  completion bookkeeping, and the published transfer ring stay intact until the
+  controller has accepted the new dequeue pointer.
   The linked USB runtime therefore reserves a dedicated one-byte HID
   output-report DMA slot during keyboard attach and uses it for Caps Lock, Num
   Lock, and Scroll Lock `SET_REPORT(Output)` updates after the seal. Lock-key
@@ -2413,12 +2418,21 @@ Required Cohesix shape:
   High-impact progress lines and real-time local-seat input feedback may submit
   first-frame owner proof before HDMI engine-init owner state is attached, but
   root still never writes the framebuffer directly. Slow or verbose console
-  output remains chunked so display rendering cannot starve xHCI polling.
+  output remains chunked so display rendering cannot starve xHCI polling. When
+  serial TX is already backlogged, USB keyboard bytes are still drained and
+  echoed into the local-seat parser; the command output they produce is queued
+  behind the active serial backlog rather than blocking input service or
+  interleaving stale serial text with the new local-seat response. The linked
+  HDMI mirror still receives the new local-seat line and prompt immediately;
+  delayed UART flushing suppresses duplicate HDMI mirroring for those queued
+  records.
   Up/down keyboard scrollback redraws clear the linked HDMI text surface before
   repainting the bounded high-impact HDMI history through linked `SubmitFrame`
   commands, so stale lower-screen lines cannot remain visible while a split
-  redraw is arriving. `usb status` reports local-seat keyboard-drop counters
-  without deferred HDMI queue/drop counters.
+  redraw is arriving. If a linked HDMI redraw frame gets no reply, root retries
+  that exact redraw chunk on the next display turn instead of coalescing a fresh
+  snapshot and briefly showing stale lower-screen content. `usb status` reports
+  local-seat keyboard-drop counters without deferred HDMI queue/drop counters.
 - Operator proof uses a single 10-gate USB ladder: 1 controller candidate, 2 live
   PCIe/VL805 ownership, 3 controller-ready, 4 command-ring completion, 5
   root-port connection, 6 device address, 7 descriptors/configuration, 8 HID

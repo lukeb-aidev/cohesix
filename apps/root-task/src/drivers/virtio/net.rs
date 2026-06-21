@@ -8965,6 +8965,8 @@ impl NetDevice for VirtioNet {
             tx_in_flight,
             tx_double_submit,
             tx_zero_len_attempt,
+            driver_rx_last_len: 0,
+            driver_rx_last_ethertype: 0,
             dropped_zero_len_tx: self.dropped_zero_len_tx,
             tx_dup_publish_blocked: self.tx_dup_publish_blocked as u64,
             tx_dup_used_ignored: self.tx_dup_used_ignored as u64,

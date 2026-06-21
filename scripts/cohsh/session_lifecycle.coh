@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Validate /proc/9p/session observability nodes and lifecycle drain command.
+# Copyright 2026 Lukas Bower
 attach queen
 EXPECT OK
 cat /proc/9p/session/active
@@ -10,5 +11,7 @@ EXPECT OK
 cat /proc/9p/session/active
 EXPECT OK
 EXPECT SUBSTR path=/proc/9p/session/active
+lifecycle resume
+EXPECT OK
 quit
 EXPECT OK

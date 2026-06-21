@@ -522,16 +522,34 @@ role = "worker-lora"
 secret = "worker-lora"
 
 [sidecars.modbus]
-enable = false
+enable = true
 mount_at = "/bus"
+
+[[sidecars.modbus.adapters]]
+id = "modbus-main"
+mount = "modbus-main"
+scope = "modbus-main"
+link = "serial"
+baud = 19200
+spool = { max_entries = 8, max_bytes = 512 }
 
 [sidecars.dnp3]
 enable = false
 mount_at = "/bus"
 
 [sidecars.lora]
-enable = false
+enable = true
 mount_at = "/lora"
+
+[[sidecars.lora.adapters]]
+id = "lora-main"
+mount = "lora-main"
+scope = "lora-main"
+region = "us915"
+duty_cycle_percent = 1
+window_ms = 1000
+max_payload_bytes = 64
+tamper_log_max_entries = 8
 
 [ecosystem.host]
 enable = true
@@ -601,10 +619,10 @@ rest_url = "http://127.0.0.1:8082"
 auth_ref = "COHESIX_RELAY_HIVE_C_TOKEN"
 
 [ecosystem.audit]
-enable = false
+enable = true
 journal_max_bytes = 8192
 decisions_max_bytes = 4096
-replay_enable = false
+replay_enable = true
 replay_max_entries = 64
 replay_ctl_max_bytes = 1024
 replay_status_max_bytes = 1024
@@ -625,4 +643,4 @@ id = "systemd-restart"
 target = "/host/systemd/*/restart"
 
 [ecosystem.models]
-enable = false
+enable = true

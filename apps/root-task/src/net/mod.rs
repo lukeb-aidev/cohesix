@@ -539,6 +539,10 @@ pub struct NetDeviceCounters {
     pub tx_double_submit: u64,
     /// TX zero-length submit attempts detected.
     pub tx_zero_len_attempt: u64,
+    /// Last hardware RX frame length reported by the driver task.
+    pub driver_rx_last_len: u64,
+    /// Last hardware RX Ethernet type reported by the driver task.
+    pub driver_rx_last_ethertype: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
     /// TX publishes rejected due to duplicate or busy slot state.
@@ -602,6 +606,10 @@ pub struct NetCounters {
     pub tx_double_submit: u64,
     /// TX zero-length submit attempts detected.
     pub tx_zero_len_attempt: u64,
+    /// Last hardware RX frame length reported by the driver task.
+    pub driver_rx_last_len: u64,
+    /// Last hardware RX Ethernet type reported by the driver task.
+    pub driver_rx_last_ethertype: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
     /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.

@@ -92,6 +92,11 @@ const UDP_METADATA_CAPACITY: usize = 8;
 const UDP_PAYLOAD_CAPACITY: usize = 512;
 const DHCP_PAYLOAD_CAPACITY: usize = 576;
 const DHCP_METADATA_CAPACITY: usize = 4;
+const DHCP_RESTART_BACKOFF_MS: u64 = if cfg!(feature = "timers-arch-counter") {
+    4_000
+} else {
+    64_000
+};
 const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
@@ -161,6 +166,14 @@ fn dhcp_phase_for_bringup_status(status: &'static str) -> &'static str {
     }
 }
 
+fn dhcp_restart_required_after_mac_sync(
+    mode: NetMode,
+    ip: Ipv4Address,
+    dhcp_started: bool,
+) -> bool {
+    dhcp_started && matches!(mode, NetMode::Dhcp) && ip == Ipv4Address::UNSPECIFIED
+}
+
 fn console_listener_defer_reason_for(
     mode: NetMode,
     ip: Ipv4Address,
@@ -190,6 +203,13 @@ fn wifi_host_eapol_blocks_data_path(bringup_status: Option<&'static str>) -> boo
 
 fn wifi_host_eapol_blocks_driver_task_pre_poll(bringup_status: Option<&'static str>) -> bool {
     wifi_host_eapol_blocks_data_path(bringup_status)
+}
+
+fn dhcp_start_defer_reason_for(bringup_status: Option<&'static str>) -> Option<&'static str> {
+    match bringup_status {
+        Some("dhcp-pending" | "dhcp-failed") | None => None,
+        Some(status) => Some(status),
+    }
 }
 
 #[cfg(feature = "net-backend-virtio")]
@@ -1121,6 +1141,7 @@ pub struct NetStack<D: NetDevice> {
     dhcp_handle: Option<SocketHandle>,
     dhcp: Option<DhcpClient>,
     dhcp_started: bool,
+    dhcp_restart_after_ms: Option<u64>,
     udp_beacon_handle: Option<SocketHandle>,
     udp_echo_handle: Option<SocketHandle>,
     tcp_smoke_handle: Option<SocketHandle>,
@@ -2736,6 +2757,7 @@ impl<D: NetDevice> NetStack<D> {
             dhcp_handle: None,
             dhcp: dhcp_enabled.then(|| DhcpClient::new(console_config.policy.dhcp)),
             dhcp_started: false,
+            dhcp_restart_after_ms: None,
             udp_beacon_handle: None,
             udp_echo_handle: None,
             tcp_smoke_handle: None,
@@ -3011,6 +3033,47 @@ impl<D: NetDevice> NetStack<D> {
         activity
     }
 
+    fn sync_interface_hardware_addr_value(
+        interface: &mut Interface,
+        device_mac: EthernetAddress,
+    ) -> Option<HardwareAddress> {
+        let current = interface.hardware_addr();
+        let target = HardwareAddress::Ethernet(device_mac);
+        if current == target {
+            return None;
+        }
+        interface.set_hardware_addr(target);
+        Some(current)
+    }
+
+    fn sync_interface_hardware_addr(&mut self, now_ms: u64) -> bool {
+        let device_mac = self.device.mac();
+        let previous = Self::sync_interface_hardware_addr_value(&mut self.interface, device_mac);
+        let Some(previous) = previous else {
+            return false;
+        };
+        info!(
+            "[net-console] hardware address sync interface={} old={} new={} now_ms={}",
+            self.device.interface_label(),
+            previous,
+            device_mac,
+            now_ms
+        );
+        if dhcp_restart_required_after_mac_sync(self.mode, self.ip, self.dhcp_started) {
+            if let Some(client) = self.dhcp.as_mut() {
+                client.start(device_mac.0, now_ms);
+                self.dhcp_restart_after_ms = None;
+                info!(
+                    "[dhcp] restart reason=hardware-address-sync interface={} mac={} now_ms={}",
+                    self.device.interface_label(),
+                    device_mac,
+                    now_ms
+                );
+            }
+        }
+        true
+    }
+
     /// Polls the network stack using a host-supplied monotonic timestamp in milliseconds.
     pub fn poll_with_time(&mut self, now_ms: u64) -> bool {
         let timestamp = self.begin_poll_turn(now_ms);
@@ -3020,8 +3083,9 @@ impl<D: NetDevice> NetStack<D> {
             return true;
         }
 
+        let mut activity = self.sync_interface_hardware_addr(now_ms);
         if self.stage_policy.tx_only && !self.tx_only_sent {
-            let activity = self.send_udp_beacon();
+            activity |= self.send_udp_beacon();
             if activity {
                 let _ = self.poll_smoltcp_once(timestamp, now_ms, "tx-only");
             }
@@ -3030,7 +3094,8 @@ impl<D: NetDevice> NetStack<D> {
             return activity;
         }
 
-        let mut activity = self.service_wifi_host_eapol_slice();
+        activity |= self.service_wifi_host_eapol_slice();
+        activity |= self.sync_interface_hardware_addr(now_ms);
         if wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
             self.finish_poll_turn(now_ms, activity);
             return activity;
@@ -3088,7 +3153,8 @@ impl<D: NetDevice> NetStack<D> {
                 return Ok(true);
             }
 
-            let activity = self.send_udp_beacon();
+            let mut activity = self.sync_interface_hardware_addr(now_ms);
+            activity |= self.send_udp_beacon();
             if activity {
                 let _ = self.poll_smoltcp_once(timestamp, now_ms, "budgeted-tx-only");
             }
@@ -3104,7 +3170,13 @@ impl<D: NetDevice> NetStack<D> {
                 self.finish_poll_turn(now_ms, false);
                 return Ok(true);
             }
-            let activity = self.service_wifi_host_eapol_slice();
+            let mut activity = self.sync_interface_hardware_addr(now_ms);
+            activity |= self.service_wifi_host_eapol_slice();
+            activity |= self.sync_interface_hardware_addr(now_ms);
+            if !wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
+                activity |= self.start_dhcp_if_ready(now_ms);
+                self.budgeted_phase = BudgetedNetPhase::Dhcp;
+            }
             self.finish_poll_turn(now_ms, activity);
             return Ok(activity);
         }
@@ -3140,36 +3212,37 @@ impl<D: NetDevice> NetStack<D> {
             return Ok(true);
         }
 
-        let host_eapol_activity = self.service_wifi_host_eapol_slice();
-        let activity = host_eapol_activity
-            | match phase {
-                BudgetedNetPhase::Interface => {
-                    self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
+        let mut activity = self.sync_interface_hardware_addr(now_ms);
+        activity |= self.service_wifi_host_eapol_slice();
+        activity |= self.sync_interface_hardware_addr(now_ms);
+        activity |= match phase {
+            BudgetedNetPhase::Interface => {
+                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
+            }
+            BudgetedNetPhase::Dhcp => {
+                let start_activity = self.start_dhcp_if_ready(now_ms);
+                let service_activity = self.service_dhcp(now_ms);
+                start_activity || service_activity
+            }
+            BudgetedNetPhase::Tcp => self.stage_policy.allow_tcp && self.process_tcp(now_ms),
+            BudgetedNetPhase::InterfaceFlush => {
+                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
+            }
+            BudgetedNetPhase::SelfTest => {
+                let selftest_activity =
+                    self.stage_policy.allow_selftest && self.service_self_test(now_ms, timestamp);
+                #[cfg(feature = "net-outbound-probe")]
+                {
+                    let outbound_activity = self.stage_policy.allow_outbound_probe
+                        && self.service_outbound_probe(now_ms, timestamp);
+                    selftest_activity || outbound_activity
                 }
-                BudgetedNetPhase::Dhcp => {
-                    let start_activity = self.start_dhcp_if_ready(now_ms);
-                    let service_activity = self.service_dhcp(now_ms);
-                    start_activity || service_activity
+                #[cfg(not(feature = "net-outbound-probe"))]
+                {
+                    selftest_activity
                 }
-                BudgetedNetPhase::Tcp => self.stage_policy.allow_tcp && self.process_tcp(now_ms),
-                BudgetedNetPhase::InterfaceFlush => {
-                    self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
-                }
-                BudgetedNetPhase::SelfTest => {
-                    let selftest_activity = self.stage_policy.allow_selftest
-                        && self.service_self_test(now_ms, timestamp);
-                    #[cfg(feature = "net-outbound-probe")]
-                    {
-                        let outbound_activity = self.stage_policy.allow_outbound_probe
-                            && self.service_outbound_probe(now_ms, timestamp);
-                        selftest_activity || outbound_activity
-                    }
-                    #[cfg(not(feature = "net-outbound-probe"))]
-                    {
-                        selftest_activity
-                    }
-                }
-            };
+            }
+        };
 
         self.budgeted_phase = phase.next();
         self.finish_poll_turn(now_ms, activity);
@@ -3283,14 +3356,14 @@ impl<D: NetDevice> NetStack<D> {
                 }
                 DhcpEvent::None => {}
             }
-            activity |= self.apply_dhcp_event(event);
+            activity |= self.apply_dhcp_event(event, now_ms);
         }
 
         let timer_event = client.on_timer(now_ms);
         if let DhcpEvent::Failed(reason) = timer_event {
             warn!("[dhcp] timer failure reason={}", reason.as_str());
         }
-        activity |= self.apply_dhcp_event(timer_event);
+        activity |= self.apply_dhcp_event(timer_event, now_ms);
 
         if let Some(socket) = self.dhcp_handle {
             let mut tx_packet = [0u8; DHCP_PAYLOAD_CAPACITY];
@@ -3348,10 +3421,16 @@ impl<D: NetDevice> NetStack<D> {
         if self.dhcp_started || self.dhcp_handle.is_none() {
             return false;
         }
+        if let Some(restart_after_ms) = self.dhcp_restart_after_ms {
+            if now_ms < restart_after_ms {
+                return false;
+            }
+            self.dhcp_restart_after_ms = None;
+        }
         let Some(client) = self.dhcp.as_mut() else {
             return false;
         };
-        if let Some(status) = self.device.bringup_status_label() {
+        if let Some(status) = dhcp_start_defer_reason_for(self.device.bringup_status_label()) {
             log::debug!(
                 "[dhcp] start deferred reason=device-bringup status={} now_ms={}",
                 status,
@@ -3361,6 +3440,7 @@ impl<D: NetDevice> NetStack<D> {
         }
         client.start(self.device.mac().0, now_ms);
         self.dhcp_started = true;
+        self.dhcp_restart_after_ms = None;
         info!(
             "[dhcp] start ready interface={} now_ms={}",
             self.device.interface_label(),
@@ -3369,7 +3449,7 @@ impl<D: NetDevice> NetStack<D> {
         true
     }
 
-    fn apply_dhcp_event(&mut self, event: DhcpEvent) -> bool {
+    fn apply_dhcp_event(&mut self, event: DhcpEvent, now_ms: u64) -> bool {
         match event {
             DhcpEvent::None => false,
             DhcpEvent::SendQueued => true,
@@ -3378,17 +3458,21 @@ impl<D: NetDevice> NetStack<D> {
                 true
             }
             DhcpEvent::Failed(reason) => {
+                let restart_after_ms = now_ms.saturating_add(DHCP_RESTART_BACKOFF_MS);
                 warn!(
-                    "[dhcp] failed reason={} action=restart-armed",
-                    reason.as_str()
+                    "[dhcp] failed reason={} action=restart-armed restart_after_ms={}",
+                    reason.as_str(),
+                    restart_after_ms
                 );
                 self.dhcp_started = false;
+                self.dhcp_restart_after_ms = Some(restart_after_ms);
                 true
             }
         }
     }
 
     fn apply_dhcp_lease(&mut self, lease: DhcpLease) {
+        self.dhcp_restart_after_ms = None;
         let ip = Ipv4Address::new(lease.ip[0], lease.ip[1], lease.ip[2], lease.ip[3]);
         let gateway = lease
             .gateway
@@ -3431,6 +3515,8 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.tx_in_flight = device_counters.tx_in_flight;
         self.counters.tx_double_submit = device_counters.tx_double_submit;
         self.counters.tx_zero_len_attempt = device_counters.tx_zero_len_attempt;
+        self.counters.driver_rx_last_len = device_counters.driver_rx_last_len;
+        self.counters.driver_rx_last_ethertype = device_counters.driver_rx_last_ethertype;
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
         self.counters.wifi_assoc = device_counters.wifi_assoc;
         self.counters.wifi_link_up = device_counters.wifi_link_up;
@@ -3461,6 +3547,8 @@ impl<D: NetDevice> NetStack<D> {
             tx_in_flight: device_counters.tx_in_flight,
             tx_double_submit: device_counters.tx_double_submit,
             tx_zero_len_attempt: device_counters.tx_zero_len_attempt,
+            driver_rx_last_len: device_counters.driver_rx_last_len,
+            driver_rx_last_ethertype: device_counters.driver_rx_last_ethertype,
             dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
             wifi_assoc: device_counters.wifi_assoc,
             wifi_link_up: device_counters.wifi_link_up,
@@ -5769,13 +5857,16 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         },
                     );
                     if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
-                        let ring_progress = completion.code
-                            == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                            && completion.result != 0;
+                        let ring_progress =
+                            crate::drivers::driver_task_net::preserve_driver_task_pre_poll_completion(
+                                contract,
+                                hot_path,
+                                completion,
+                            );
                         return self.poll_with_time(now_ms) || ring_progress;
                     }
                     if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-                        return false;
+                        return self.poll_with_time(now_ms);
                     }
                     return self.poll_with_time(now_ms);
                 }
@@ -5838,15 +5929,18 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         },
                     );
                     if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
-                        let ring_progress = completion.code
-                            == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                            && completion.result != 0;
+                        let ring_progress =
+                            crate::drivers::driver_task_net::preserve_driver_task_pre_poll_completion(
+                                contract,
+                                hot_path,
+                                completion,
+                            );
                         return self
                             .poll_budgeted_with_time(now_ms, budget)
                             .map(|root_progress| root_progress || ring_progress);
                     }
                     if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-                        return Err(DriverServiceBudgetError::OperationsExhausted);
+                        return self.poll_budgeted_with_time(now_ms, budget);
                     }
                     return self.poll_budgeted_with_time(now_ms, budget);
                 }
@@ -6519,6 +6613,7 @@ mod tests {
     use core::convert::Infallible;
 
     use super::*;
+    use smoltcp::phy::{Loopback, Medium};
 
     static NET_STACK_STORAGE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -6606,6 +6701,21 @@ mod tests {
     }
 
     #[test]
+    fn dhcp_start_defer_reason_ignores_dhcp_frontier_labels() {
+        assert_eq!(dhcp_start_defer_reason_for(None), None);
+        assert_eq!(dhcp_start_defer_reason_for(Some("dhcp-pending")), None);
+        assert_eq!(dhcp_start_defer_reason_for(Some("dhcp-failed")), None);
+        assert_eq!(
+            dhcp_start_defer_reason_for(Some("wifi-host-eapol-pending")),
+            Some("wifi-host-eapol-pending")
+        );
+        assert_eq!(
+            dhcp_start_defer_reason_for(Some("wifi-link-down")),
+            Some("wifi-link-down")
+        );
+    }
+
+    #[test]
     fn console_listener_gate_waits_for_dhcp_lease() {
         assert_eq!(
             console_listener_defer_reason_for(NetMode::Dhcp, Ipv4Address::UNSPECIFIED, None),
@@ -6631,6 +6741,57 @@ mod tests {
             console_listener_defer_reason_for(NetMode::Static, Ipv4Address::UNSPECIFIED, None),
             Some("ip-unconfigured")
         );
+    }
+
+    #[test]
+    fn interface_hardware_addr_sync_updates_smoltcp_mac() {
+        let initial = EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x32]);
+        let runtime = EthernetAddress([0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
+        let mut device = Loopback::new(Medium::Ethernet);
+        let config = IfaceConfig::new(HardwareAddress::Ethernet(initial));
+        let mut interface = Interface::new(config, &mut device, Instant::from_millis(0));
+
+        let previous = NetStack::<DefaultNetDevice>::sync_interface_hardware_addr_value(
+            &mut interface,
+            runtime,
+        );
+
+        assert_eq!(previous, Some(HardwareAddress::Ethernet(initial)));
+        assert_eq!(
+            interface.hardware_addr(),
+            HardwareAddress::Ethernet(runtime)
+        );
+        assert_eq!(
+            NetStack::<DefaultNetDevice>::sync_interface_hardware_addr_value(
+                &mut interface,
+                runtime
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn dhcp_restart_after_mac_sync_is_limited_to_pending_dhcp() {
+        assert!(dhcp_restart_required_after_mac_sync(
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            true
+        ));
+        assert!(!dhcp_restart_required_after_mac_sync(
+            NetMode::Dhcp,
+            Ipv4Address::new(192, 168, 50, 23),
+            true
+        ));
+        assert!(!dhcp_restart_required_after_mac_sync(
+            NetMode::Static,
+            Ipv4Address::UNSPECIFIED,
+            true
+        ));
+        assert!(!dhcp_restart_required_after_mac_sync(
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            false
+        ));
     }
 
     #[test]
@@ -6672,6 +6833,15 @@ mod tests {
         assert!(MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL <= 4);
         assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 16);
         assert!(MAX_CONSOLE_BYTES_PER_POLL <= 8_192);
+    }
+
+    #[test]
+    fn dhcp_restart_backoff_scales_with_timebase() {
+        if cfg!(feature = "timers-arch-counter") {
+            assert_eq!(DHCP_RESTART_BACKOFF_MS, 4_000);
+        } else {
+            assert!(DHCP_RESTART_BACKOFF_MS >= 64_000);
+        }
     }
 
     #[cfg(feature = "kernel")]

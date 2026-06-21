@@ -107,6 +107,8 @@ const CYW43_TRANSPORT_ADMISSION_REJECT_RETRIES: usize = 4;
 const CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES: usize = 8;
 const CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES: usize = 63;
+const CYW43_RUNTIME_DATA_POLL_NO_REPLY_RESUMES: usize = 63;
+const CYW43_RUNTIME_DATA_TX_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_TRANSPORT_PHASE_ATTEMPTS: usize = 128;
 const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 192;
 const CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT: usize = 24;
@@ -114,6 +116,7 @@ const CYW43_BACKPLANE_ADDRESS_MASK: u32 = 0x7fff;
 const CYW43_BACKPLANE_WINDOW_MASK: u32 = 0xffff_8000;
 const CYW43_BACKPLANE_32BIT_FLAG: u32 = 0x8000;
 const CYW43_CONTROL_PLANE_POLL_ATTEMPTS: usize = 256;
+const CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS: usize = 8_000;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC: u32 = 0x4300_0000;
 const CYW43_HOST_EAPOL_PRE_ASSOC_POLLS: usize = 8_192;
 const CYW43_HOST_EAPOL_POST_ASSOC_POLLS: usize = 16_384;
@@ -123,6 +126,8 @@ const CYW43_HOST_EAPOL_JOIN_SUBMIT_POLLS: usize = CYW43_HOST_EAPOL_PRE_ASSOC_POL
 const CYW43_HOST_EAPOL_START_FIRST_POLL: usize = 8_192;
 const CYW43_HOST_EAPOL_START_INTERVAL_POLLS: usize = 8192;
 const CYW43_HOST_EAPOL_START_MAX: u32 = 12;
+const CYW43_DATA_TX_ATTEMPTS: usize = 8;
+const CYW43_DATA_RX_STEADY_POLL_FLAGS: u16 = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD;
 const CYW43_HOST_EAPOL_TX_ATTEMPTS: usize = 8;
 const CYW43_HOST_EAPOL_TX_DRAIN_POLLS: usize = 2_000;
 const CYW43_HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS: u32 = 1_024;
@@ -137,6 +142,16 @@ const CYW43_BCDC_HEADER_BYTES: usize = 16;
 const CYW43_BDC_HEADER_BYTES: usize = 4;
 const CYW43_BDC_VERSION: u8 = 2;
 const CYW43_BDC_VERSION_SHIFT: u8 = 4;
+const CYW43_SDPCM_HEADER_BYTES: usize = 12;
+const CYW43_SDPCM_HWEXT_BYTES: usize = 8;
+const CYW43_SDPCM_DATA_TX_HEADER_BYTES: usize = CYW43_SDPCM_HEADER_BYTES + CYW43_SDPCM_HWEXT_BYTES;
+const CYW43_SDPCM_DATA_TX_PADDING_BYTES: usize = 6;
+const CYW43_SDPCM_DATA_TX_BDC_OFFSET: usize =
+    CYW43_SDPCM_DATA_TX_HEADER_BYTES + CYW43_SDPCM_DATA_TX_PADDING_BYTES;
+const CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES: usize =
+    CYW43_SDPCM_DATA_TX_BDC_OFFSET + CYW43_BDC_HEADER_BYTES;
+const CYW43_FUNCTION2_BLOCK_BYTES: usize = 64;
+const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_REVINFO_RESPONSE_BYTES: usize = 68;
 const CYW43_CLM_IOVAR_NAME: &str = "clmload";
 const CYW43_CLM_IOVAR_NAME_WITH_NUL_BYTES: usize = 8;
@@ -187,6 +202,13 @@ const CYW43_WPA_AUTH_DISABLED: u32 = 0;
 const CYW43_WPA2_AUTH_PSK_OR_UNSPECIFIED: u32 = 0x00c0;
 const CYW43_WPA2_AUTH_PSK: u32 = 0x0080;
 const CYW43_ETH_P_LINK_CTL: u16 = 0x886c;
+const CYW43_ETH_P_IPV4: u16 = 0x0800;
+const CYW43_ETH_P_ARP: u16 = 0x0806;
+const CYW43_IP_PROTO_UDP: u8 = 17;
+const CYW43_DHCP_SERVER_PORT: u16 = 67;
+const CYW43_DHCP_CLIENT_PORT: u16 = 68;
+const CYW43_DHCP_MAGIC_COOKIE: [u8; 4] = [99, 130, 83, 99];
+const CYW43_DHCP_FIXED_BYTES: usize = 236;
 const CYW43_PAE_GROUP_ADDR: [u8; 6] = [0x01, 0x80, 0xc2, 0x00, 0x00, 0x03];
 const CYW43_EVENT_SET_SSID: u8 = 0;
 const CYW43_EVENT_AUTH: u8 = 3;
@@ -274,6 +296,12 @@ const SDIO_FAULT_TELEMETRY_PAYLOAD_SUM_OFFSET: usize = 52;
 static GENET_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
+static GENET_TX_HW_COMPLETED: AtomicU32 = AtomicU32::new(0);
+static GENET_TX_HW_FREE: AtomicU32 = AtomicU32::new(0);
+static GENET_TX_HW_IN_FLIGHT: AtomicU32 = AtomicU32::new(0);
+static GENET_RX_HW_FRAMES: AtomicU32 = AtomicU32::new(0);
+static GENET_RX_LAST_ETHERTYPE: AtomicU32 = AtomicU32::new(0);
+static GENET_RX_LAST_LEN: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -293,8 +321,15 @@ static CYW43_HOST_EAPOL_GTK: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_ACTIVE: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_REQUIRED: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_SECURE: AtomicU32 = AtomicU32::new(0);
+static CYW43_DATA_TX_RETRIES: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_TX_RETRIES: AtomicU32 = AtomicU32::new(0);
 static CYW43_PRIMARY_BSSCFG_JOIN_READY: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_DATA_TX_TEST_STUB: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_DATA_TX_TEST_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_IO_STUB: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
@@ -4195,15 +4230,32 @@ fn process_cyw43_host_eapol_data_completion(
                     HostEapolAction::SendM2 { len } => {
                         CYW43_HOST_EAPOL_M1.fetch_add(1, Ordering::AcqRel);
                         emit_cyw43_host_eapol_message(contract, "m1", "recv-m1", poll, frame.len());
-                        if !submit_cyw43_host_eapol_payload_bounded(
-                            contract,
-                            &tx_frame[..len],
-                            "cyw43-host-eapol-m2",
-                        ) {
+                        let Some(m2_completion) =
+                            submit_cyw43_host_eapol_payload_bounded_completion(
+                                contract,
+                                &tx_frame[..len],
+                                "cyw43-host-eapol-m2",
+                            )
+                        else {
+                            session.progress.record_eapol_error("host-eapol-m2-tx");
                             return Err(DriverTaskNetError::RuntimeInit("host-eapol-m2-tx"));
-                        }
+                        };
                         CYW43_HOST_EAPOL_M2.fetch_add(1, Ordering::AcqRel);
+                        emit_cyw43_host_eapol_tx_shape(
+                            contract,
+                            "cyw43-host-eapol-m2",
+                            poll,
+                            &tx_frame[..len],
+                            Some(m2_completion),
+                        );
                         emit_cyw43_host_eapol_message(contract, "m2", "send-m2", poll, len);
+                        wait_cyw43_host_eapol_tx_drain(
+                            contract,
+                            session,
+                            "m2-before-m3",
+                            poll,
+                            m2_completion,
+                        );
                         result.activity = true;
                     }
                     HostEapolAction::SendM4InstallKeys { len, keys } => {
@@ -4216,6 +4268,7 @@ fn process_cyw43_host_eapol_data_completion(
                                 "cyw43-host-eapol-m4",
                             )
                         else {
+                            session.progress.record_eapol_error("host-eapol-m4-tx");
                             return Err(DriverTaskNetError::RuntimeInit("host-eapol-m4-tx"));
                         };
                         CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
@@ -4238,6 +4291,9 @@ fn process_cyw43_host_eapol_data_completion(
                             "cyw43-host-eapol-ptk",
                             true,
                         ) {
+                            session
+                                .progress
+                                .record_eapol_error("host-eapol-ptk-install");
                             emit_cyw43_host_eapol_key(
                                 contract,
                                 "ptk",
@@ -4259,6 +4315,9 @@ fn process_cyw43_host_eapol_data_completion(
                                 true,
                                 "cyw43-host-eapol-gtk",
                             ) {
+                                session
+                                    .progress
+                                    .record_eapol_error("host-eapol-gtk-install");
                                 emit_cyw43_host_eapol_key(
                                     contract,
                                     "gtk",
@@ -4280,6 +4339,9 @@ fn process_cyw43_host_eapol_data_completion(
                                 CYW43_WSEC_AES,
                                 "cyw43-host-eapol-reassert-wsec",
                             ) {
+                                session
+                                    .progress
+                                    .record_eapol_error("host-eapol-wsec-reassert");
                                 emit_cyw43_host_eapol_key(
                                     contract,
                                     "wsec",
@@ -4327,6 +4389,9 @@ fn process_cyw43_host_eapol_data_completion(
                             true,
                             "cyw43-host-eapol-gtk",
                         ) {
+                            session
+                                .progress
+                                .record_eapol_error("host-eapol-gtk-install");
                             emit_cyw43_host_eapol_key(
                                 contract,
                                 "gtk",
@@ -4343,6 +4408,9 @@ fn process_cyw43_host_eapol_data_completion(
                             CYW43_WSEC_AES,
                             "cyw43-host-eapol-reassert-wsec",
                         ) {
+                            session
+                                .progress
+                                .record_eapol_error("host-eapol-wsec-reassert");
                             emit_cyw43_host_eapol_key(
                                 contract,
                                 "wsec",
@@ -4364,6 +4432,9 @@ fn process_cyw43_host_eapol_data_completion(
                                 "cyw43-host-eapol-group-m2",
                             )
                         else {
+                            session
+                                .progress
+                                .record_eapol_error("host-eapol-group-m2-tx");
                             return Err(DriverTaskNetError::RuntimeInit("host-eapol-group-m2-tx"));
                         };
                         emit_cyw43_host_eapol_message(
@@ -4830,9 +4901,19 @@ fn cyw43_try_send_host_eapol_start(
             return;
         }
     };
-    if submit_cyw43_host_eapol_payload_bounded(contract, &frame[..len], "cyw43-host-eapol-start") {
+    if let Some(start_completion) = submit_cyw43_host_eapol_payload_bounded_completion(
+        contract,
+        &frame[..len],
+        "cyw43-host-eapol-start",
+    ) {
         CYW43_HOST_EAPOL_START.fetch_add(1, Ordering::AcqRel);
-        emit_cyw43_host_eapol_tx_shape(contract, "cyw43-host-eapol-start", poll, &frame[..len]);
+        emit_cyw43_host_eapol_tx_shape(
+            contract,
+            "cyw43-host-eapol-start",
+            poll,
+            &frame[..len],
+            Some(start_completion),
+        );
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             contract,
             DriverTaskHotPath::Cyw43Wifi,
@@ -5129,6 +5210,210 @@ fn cyw43_get_u16_be(buf: &[u8], offset: usize) -> Option<u16> {
 fn cyw43_get_u32_be(buf: &[u8], offset: usize) -> Option<u32> {
     let bytes = buf.get(offset..offset + 4)?;
     Some(u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43DataPathInfo {
+    ethertype: u16,
+    ip_proto: u8,
+    udp_src: u16,
+    udp_dst: u16,
+    dhcp: &'static str,
+    arp: &'static str,
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_path_info(frame: &[u8]) -> Option<Cyw43DataPathInfo> {
+    match cyw43_ethertype(frame)? {
+        CYW43_ETH_P_ARP => Some(cyw43_arp_data_path_info(frame)),
+        CYW43_ETH_P_IPV4 => cyw43_ipv4_dhcp_data_path_info(frame),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_arp_data_path_info(frame: &[u8]) -> Cyw43DataPathInfo {
+    Cyw43DataPathInfo {
+        ethertype: CYW43_ETH_P_ARP,
+        ip_proto: 0,
+        udp_src: 0,
+        udp_dst: 0,
+        dhcp: "none",
+        arp: cyw43_arp_operation_label(frame),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_arp_operation_label(frame: &[u8]) -> &'static str {
+    let Some(op) = cyw43_get_u16_be(frame, ETH_HEADER_LEN + 6) else {
+        return "malformed";
+    };
+    match op {
+        1 => "request",
+        2 => "reply",
+        _ => "other",
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_ipv4_dhcp_data_path_info(frame: &[u8]) -> Option<Cyw43DataPathInfo> {
+    let version_ihl = *frame.get(ETH_HEADER_LEN)?;
+    if version_ihl >> 4 != 4 {
+        return None;
+    }
+    let ip_header_len = usize::from(version_ihl & 0x0f) * 4;
+    if ip_header_len < 20 {
+        return None;
+    }
+    let ip_proto = *frame.get(ETH_HEADER_LEN + 9)?;
+    if ip_proto != CYW43_IP_PROTO_UDP {
+        return None;
+    }
+    let udp_offset = ETH_HEADER_LEN.checked_add(ip_header_len)?;
+    let udp_src = cyw43_get_u16_be(frame, udp_offset)?;
+    let udp_dst = cyw43_get_u16_be(frame, udp_offset + 2)?;
+    if !cyw43_udp_ports_are_dhcp(udp_src, udp_dst) {
+        return None;
+    }
+    let dhcp_offset = udp_offset.checked_add(8)?;
+    let dhcp_payload = frame.get(dhcp_offset..).unwrap_or(&[]);
+    Some(Cyw43DataPathInfo {
+        ethertype: CYW43_ETH_P_IPV4,
+        ip_proto,
+        udp_src,
+        udp_dst,
+        dhcp: cyw43_dhcp_message_label(dhcp_payload),
+        arp: "none",
+    })
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_udp_ports_are_dhcp(src: u16, dst: u16) -> bool {
+    (src == CYW43_DHCP_CLIENT_PORT && dst == CYW43_DHCP_SERVER_PORT)
+        || (src == CYW43_DHCP_SERVER_PORT && dst == CYW43_DHCP_CLIENT_PORT)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_dhcp_message_label(payload: &[u8]) -> &'static str {
+    let options_offset = CYW43_DHCP_FIXED_BYTES + CYW43_DHCP_MAGIC_COOKIE.len();
+    if payload.len() < options_offset {
+        return "malformed";
+    }
+    if payload.get(CYW43_DHCP_FIXED_BYTES..options_offset)
+        != Some(CYW43_DHCP_MAGIC_COOKIE.as_slice())
+    {
+        return "malformed";
+    }
+
+    let mut cursor = options_offset;
+    while cursor < payload.len() {
+        let option = payload[cursor];
+        cursor += 1;
+        match option {
+            0 => continue,
+            255 => return "unknown",
+            53 => {
+                let Some(len) = payload.get(cursor).copied().map(usize::from) else {
+                    return "malformed";
+                };
+                cursor += 1;
+                if len == 0 {
+                    return "malformed";
+                }
+                return match payload.get(cursor).copied() {
+                    Some(1) => "discover",
+                    Some(2) => "offer",
+                    Some(3) => "request",
+                    Some(5) => "ack",
+                    Some(6) => "nak",
+                    Some(_) => "other",
+                    None => "malformed",
+                };
+            }
+            _ => {
+                let Some(len) = payload.get(cursor).copied().map(usize::from) else {
+                    return "malformed";
+                };
+                cursor += 1;
+                let Some(next) = cursor.checked_add(len) else {
+                    return "malformed";
+                };
+                if next > payload.len() {
+                    return "malformed";
+                }
+                cursor = next;
+            }
+        }
+    }
+    "unknown"
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_data_path_trace(
+    contract: DriverTaskContract,
+    event: &'static str,
+    action: &'static str,
+    attempt: usize,
+    frame: &[u8],
+    completion: Option<DriverTaskCompletionRecord>,
+    frame_flags: u16,
+    pending_before: bool,
+    pending_after: bool,
+) {
+    use core::fmt::Write;
+
+    let Some(info) = cyw43_data_path_info(frame) else {
+        return;
+    };
+    let tx_total_len = cyw43_data_tx_total_len(frame.len()).unwrap_or(0);
+    let tx_request_len = if tx_total_len == 0 {
+        0
+    } else {
+        cyw43_data_tx_request_len(tx_total_len)
+    };
+    let (block_size, block_count) = cyw43_function2_cmd53_shape(tx_request_len);
+    let cmd53_mode = if tx_request_len == 0 {
+        "none"
+    } else if block_count == 0 {
+        "byte"
+    } else {
+        "block"
+    };
+    let completion_code = completion.map_or(0, |completion| completion.code);
+    let completion_detail = completion.map_or(0, |completion| completion.detail);
+    let completion_result = completion.map_or(0, |completion| completion.result);
+    let completion_flags = completion.map_or(frame_flags, |completion| completion.frame.flags);
+    let completion_len = completion.map_or(0, |completion| completion.frame.len);
+    let mut line = heapless::String::<768>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_DATA_PATH contract={} event={} action={} attempt={} len={} ethertype=0x{:04x} ip_proto={} udp_src={} udp_dst={} dhcp={} arp={} tx_total_len={} tx_request_len={} cmd53_mode={} block_size={} block_count={} completion_code={} completion_detail=0x{:04x} completion_result=0x{:08x} completion_flags=0x{:04x} completion_len={} pending_before={} pending_after={}",
+        contract.name,
+        event,
+        action,
+        attempt,
+        frame.len(),
+        info.ethertype,
+        info.ip_proto,
+        info.udp_src,
+        info.udp_dst,
+        info.dhcp,
+        info.arp,
+        tx_total_len,
+        tx_request_len,
+        cmd53_mode,
+        block_size,
+        block_count,
+        completion_code,
+        completion_detail,
+        completion_result,
+        completion_flags,
+        completion_len,
+        yes_no(pending_before),
+        yes_no(pending_after),
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -5637,6 +5922,7 @@ fn emit_cyw43_host_eapol_tx_shape(
     stage: &'static str,
     poll: usize,
     frame: &[u8],
+    completion: Option<DriverTaskCompletionRecord>,
 ) {
     use core::fmt::Write;
 
@@ -5644,14 +5930,49 @@ fn emit_cyw43_host_eapol_tx_shape(
         return;
     }
     let ethertype = cyw43_ethertype(frame).unwrap_or(0);
-    let mut line = heapless::String::<256>::new();
+    let tx_result = completion.map_or(0, |completion| completion.result);
+    let tx_detail = completion.map_or(0, |completion| completion.detail);
+    let tx_code = completion.map_or(0, |completion| completion.code);
+    let total_len = usize::try_from(tx_result)
+        .ok()
+        .filter(|result| *result != 0)
+        .unwrap_or_else(|| cyw43_data_tx_total_len(frame.len()).unwrap_or(0));
+    let derived_request_len = if total_len == 0 {
+        0
+    } else {
+        cyw43_data_tx_request_len(total_len)
+    };
+    let request_len = if tx_detail != 0 {
+        usize::from(tx_detail)
+    } else {
+        derived_request_len
+    };
+    let request_source = if tx_detail != 0 {
+        "completion"
+    } else {
+        "derived"
+    };
+    let (block_size, block_count) = cyw43_function2_cmd53_shape(request_len);
+    let cmd53_mode = if block_count == 0 { "byte" } else { "block" };
+    let bdc_priority = cyw43_bdc_priority_for_ethertype(ethertype);
+    let mut line = heapless::String::<512>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_HOST_EAPOL_TX contract={} stage={} poll={} len={} dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ethertype=0x{:04x} bdc_priority=6",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_TX contract={} stage={} poll={} len={} total_len={} request_len={} request_source={} derived_request_len={} cmd53_mode={} block_size={} block_count={} tx_code={} tx_detail=0x{:04x} tx_result=0x{:08x} dst={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} src={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} ethertype=0x{:04x} bdc_priority={}",
         contract.name,
         stage,
         poll,
         frame.len(),
+        total_len,
+        request_len,
+        request_source,
+        derived_request_len,
+        cmd53_mode,
+        block_size,
+        block_count,
+        tx_code,
+        tx_detail,
+        tx_result,
         frame[0],
         frame[1],
         frame[2],
@@ -5665,8 +5986,57 @@ fn emit_cyw43_host_eapol_tx_shape(
         frame[10],
         frame[11],
         ethertype,
+        bdc_priority,
     );
     crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_tx_total_len(payload_len: usize) -> Option<usize> {
+    payload_len.checked_add(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES)
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_data_tx_request_len(unpadded_len: usize) -> usize {
+    let aligned = align4(unpadded_len);
+    if aligned <= SDIO_CMD53_BYTE_MODE_MAX as usize {
+        aligned
+    } else {
+        let remainder = aligned % CYW43_FUNCTION2_BLOCK_BYTES;
+        if remainder == 0 {
+            aligned
+        } else {
+            aligned + (CYW43_FUNCTION2_BLOCK_BYTES - remainder)
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_function2_cmd53_shape(request_len: usize) -> (u16, u16) {
+    if request_len > SDIO_CMD53_BYTE_MODE_MAX as usize
+        && request_len % CYW43_FUNCTION2_BLOCK_BYTES == 0
+    {
+        (
+            CYW43_FUNCTION2_BLOCK_BYTES as u16,
+            (request_len / CYW43_FUNCTION2_BLOCK_BYTES) as u16,
+        )
+    } else {
+        (request_len as u16, 0)
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_bdc_priority_for_ethertype(ethertype: u16) -> u8 {
+    if ethertype == ETH_P_EAPOL {
+        CYW43_HOST_EAPOL_BDC_PRIORITY
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn align4(value: usize) -> usize {
+    (value + 3) & !3
 }
 
 #[cfg(feature = "kernel")]
@@ -6177,6 +6547,19 @@ fn cyw43_submit_control_exchange_unmapped_with_options(
     let expected_response_len =
         cyw43_control_request_expected_response_len(cmd, cyw43_control_iovar_info(payload, cmd))
             as u16;
+    if cyw43_control_uses_runtime_exchange(stage, control_iovar) {
+        return cyw43_submit_runtime_control_exchange(
+            contract,
+            payload,
+            cmd,
+            id,
+            stage,
+            header_mode,
+            pre_tx_drain,
+            expected_response_len,
+            control_iovar,
+        );
+    }
     let tx_descriptor = cyw43_control_frame_descriptor(payload.len(), header_mode, pre_tx_drain);
     let Some(tx_completion) =
         run_cyw43_runtime_descriptor_command(contract, tx_descriptor, payload)
@@ -6266,6 +6649,78 @@ fn cyw43_submit_control_exchange_unmapped_with_options(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_submit_runtime_control_exchange(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    cmd: u32,
+    id: u16,
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
+    expected_response_len: u16,
+    control_iovar: &str,
+) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
+    let descriptor =
+        cyw43_control_exchange_descriptor(payload.len(), cmd, id, header_mode, pre_tx_drain);
+    let Some(completion) = run_cyw43_runtime_descriptor_command(contract, descriptor, payload)
+    else {
+        record_cyw43_runtime_command_no_reply(contract, stage, descriptor, 0);
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "no-reply",
+            None,
+        );
+        return Err(Cyw43CommandSubmitError::Runtime(
+            DriverTaskNetError::RuntimeInit("cyw43-command-completion"),
+        ));
+    };
+    emit_cyw43_control_split_completion(
+        contract,
+        stage,
+        "runtime-exchange-complete",
+        0,
+        0,
+        completion,
+        cmd,
+        id,
+        header_mode,
+        expected_response_len,
+        control_iovar,
+        0,
+        0,
+    );
+    if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            DriverTaskHotPath::Cyw43Wifi,
+            stage,
+            "ready",
+            Some(completion),
+        );
+        return Ok(completion);
+    }
+    if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
+        emit_cyw43_runtime_command_fault(contract, stage, descriptor, completion, None);
+    }
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        DriverTaskHotPath::Cyw43Wifi,
+        stage,
+        "fail",
+        Some(completion),
+    );
+    Err(Cyw43CommandSubmitError::Completion(completion))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_uses_runtime_exchange(stage: &'static str, control_iovar: &str) -> bool {
+    control_iovar == "wsec_key"
+        && (stage == "cyw43-host-eapol-ptk" || stage == "cyw43-host-eapol-gtk")
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_control_exchange_descriptor(
     payload_len: usize,
     cmd: u32,
@@ -6316,13 +6771,15 @@ fn cyw43_poll_control_exchange_reply(
     let mut nonmatching_frames = 0u32;
     let mut malformed_frames = 0u32;
     let mut last_completion = None;
-    for poll in 1..=CYW43_CONTROL_PLANE_POLL_ATTEMPTS {
+    let poll_attempts = cyw43_control_exchange_poll_attempts(stage, control_iovar);
+    for poll in 1..=poll_attempts {
         let flags = cyw43_control_split_poll_flags(poll);
         let Some(completion) = poll_cyw43_driver_task_control_completion(flags) else {
             continue;
         };
         last_completion = Some(completion);
-        if cyw43_control_split_poll_completion_should_trace(poll, flags, completion) {
+        if cyw43_control_split_poll_completion_should_trace(poll, poll_attempts, flags, completion)
+        {
             emit_cyw43_control_split_completion(
                 contract,
                 stage,
@@ -6698,6 +7155,9 @@ fn cyw43_control_reply_from_token(token: &DriverTaskNetRxToken) -> Option<Cyw43C
         return None;
     }
     let bytes = &token.buffer[..token.len];
+    if le_u32_at(bytes, 0)? == SDIO_FAULT_TELEMETRY_MAGIC {
+        return None;
+    }
     Some(Cyw43ControlReply {
         cmd: le_u32_at(bytes, 0)?,
         response_len: le_u32_at(bytes, 4)?,
@@ -6759,14 +7219,26 @@ const fn cyw43_control_split_poll_flags(poll: usize) -> u16 {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_control_exchange_poll_attempts(stage: &'static str, control_iovar: &str) -> usize {
+    if control_iovar == "wsec_key"
+        && (stage == "cyw43-host-eapol-ptk" || stage == "cyw43-host-eapol-gtk")
+    {
+        CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS
+    } else {
+        CYW43_CONTROL_PLANE_POLL_ATTEMPTS
+    }
+}
+
+#[cfg(feature = "kernel")]
 const fn cyw43_control_split_poll_completion_should_trace(
     poll: usize,
+    poll_attempts: usize,
     flags: u16,
     completion: DriverTaskCompletionRecord,
 ) -> bool {
     flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD != 0
         || completion.code != DriverTaskCompletionCode::Idle.as_u16()
-        || poll == CYW43_CONTROL_PLANE_POLL_ATTEMPTS
+        || poll == poll_attempts
 }
 
 #[cfg(feature = "kernel")]
@@ -7660,10 +8132,20 @@ const fn cyw43_runtime_command_uses_shared_payload(op: u16) -> bool {
 #[cfg(feature = "kernel")]
 fn submit_cyw43_runtime_command_checked(
     contract: DriverTaskContract,
-    mut descriptor: DriverRuntimeCyw43CommandDescriptor,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
     payload: &[u8],
 ) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
     let stage = cyw43_runtime_command_stage(descriptor.op);
+    submit_cyw43_runtime_command_checked_with_stage(contract, descriptor, payload, stage)
+}
+
+#[cfg(feature = "kernel")]
+fn submit_cyw43_runtime_command_checked_with_stage(
+    contract: DriverTaskContract,
+    mut descriptor: DriverRuntimeCyw43CommandDescriptor,
+    payload: &[u8],
+    stage: &'static str,
+) -> Result<DriverTaskCompletionRecord, Cyw43CommandSubmitError> {
     let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
     let ring_payload_limit = MAX_DRIVER_TASK_FRAME_BYTES.checked_sub(desc_size).ok_or(
         Cyw43CommandSubmitError::Runtime(DriverTaskNetError::RuntimeInit("cyw43-command-budget")),
@@ -7936,6 +8418,8 @@ const fn cyw43_runtime_no_reply_resume_limit(op: u16) -> usize {
         DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT => CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES,
         DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES,
         DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES,
+        DRIVER_RUNTIME_CYW43_OP_RX_POLL => CYW43_RUNTIME_DATA_POLL_NO_REPLY_RESUMES,
+        DRIVER_RUNTIME_CYW43_OP_ETH_TX => CYW43_RUNTIME_DATA_TX_NO_REPLY_RESUMES,
         _ => 0,
     }
 }
@@ -7944,7 +8428,9 @@ const fn cyw43_runtime_no_reply_resume_limit(op: u16) -> usize {
 const fn cyw43_runtime_descriptor_uses_prompt_slice(op: u16) -> bool {
     matches!(
         op,
-        DRIVER_RUNTIME_CYW43_OP_RX_POLL | DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
+        DRIVER_RUNTIME_CYW43_OP_ETH_TX
+            | DRIVER_RUNTIME_CYW43_OP_RX_POLL
+            | DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
     )
 }
 
@@ -9038,6 +9524,11 @@ pub struct DriverTaskNetRxToken {
     buffer: [u8; MAX_FRAME_LEN],
 }
 
+#[cfg(feature = "kernel")]
+static CYW43_PENDING_RX_TOKEN: Mutex<Option<DriverTaskNetRxToken>> = Mutex::new(None);
+#[cfg(feature = "kernel")]
+static GENET_PENDING_RX_TOKEN: Mutex<Option<DriverTaskNetRxToken>> = Mutex::new(None);
+
 impl phy::RxToken for DriverTaskNetRxToken {
     fn consume<R, F>(self, f: F) -> R
     where
@@ -9092,8 +9583,13 @@ fn submit_driver_task_frame(
         descriptor,
     );
     let staging_segments = [DriverTaskStagingSegment::ring_frame(frame, 0)];
-    run_driver_task_net_service_staged(contract, command, &staging_segments)
-        .is_some_and(driver_task_tx_completion_submitted)
+    let completion = run_driver_task_net_service_staged(contract, command, &staging_segments);
+    if hot_path == DriverTaskHotPath::GenetNic {
+        if let Some(completion) = completion {
+            record_genet_runtime_completion(completion);
+        }
+    }
+    completion.is_some_and(driver_task_tx_completion_submitted)
 }
 
 #[cfg(feature = "kernel")]
@@ -9104,9 +9600,138 @@ fn driver_task_tx_completion_submitted(
 }
 
 #[cfg(feature = "kernel")]
+fn record_genet_runtime_completion(completion: DriverTaskCompletionRecord) {
+    if completion.code == DriverTaskCompletionCode::Progress.as_u16() {
+        record_genet_tx_window(
+            completion.detail,
+            completion.frame.len,
+            completion.frame.flags,
+        );
+    } else if completion.code == DriverTaskCompletionCode::Idle.as_u16() {
+        record_genet_tx_window(
+            completion.detail,
+            completion.frame.len,
+            completion.frame.flags,
+        );
+    } else if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
+        if let Some((tx_free, tx_in_flight)) = genet_frame_ready_tx_window(completion) {
+            record_genet_tx_window(completion.detail, tx_free, tx_in_flight);
+        }
+        GENET_RX_HW_FRAMES.fetch_add(1, Ordering::AcqRel);
+        GENET_RX_LAST_ETHERTYPE.store(u32::from(completion.frame.flags), Ordering::Release);
+        GENET_RX_LAST_LEN.store(u32::from(completion.frame.len), Ordering::Release);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn record_genet_tx_window(completed: u16, tx_free: u16, tx_in_flight: u16) {
+    if completed != 0 {
+        GENET_TX_HW_COMPLETED.fetch_add(u32::from(completed), Ordering::AcqRel);
+    }
+    GENET_TX_HW_FREE.store(u32::from(tx_free), Ordering::Release);
+    GENET_TX_HW_IN_FLIGHT.store(u32::from(tx_in_flight), Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+fn genet_frame_ready_tx_window(completion: DriverTaskCompletionRecord) -> Option<(u16, u16)> {
+    let tx_free = (completion.result >> 16) as u16;
+    let tx_in_flight = completion.result as u16;
+    let ring_window = tx_free.saturating_add(tx_in_flight);
+    if ring_window <= 64 {
+        Some((tx_free, tx_in_flight))
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn preserve_driver_task_pre_poll_completion(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    if hot_path == DriverTaskHotPath::GenetNic {
+        record_genet_runtime_completion(completion);
+    }
+    if completion.code == DriverTaskCompletionCode::Progress.as_u16() {
+        return completion.result != 0;
+    }
+    if completion.code != DriverTaskCompletionCode::FrameReady.as_u16() {
+        return false;
+    }
+    let preserved = match hot_path {
+        DriverTaskHotPath::GenetNic => driver_task_rx_token_from_completion(contract, completion)
+            .is_some_and(store_genet_pending_rx_token),
+        DriverTaskHotPath::Cyw43Wifi => {
+            if let Some((flags, token)) =
+                cyw43_driver_task_data_frame_with_flags_from_completion(contract, completion)
+            {
+                let pending_before = cyw43_pending_rx_token_occupied();
+                let stored = !pending_before;
+                let pending_after = pending_before || stored;
+                let event = if stored {
+                    "rx-preserve"
+                } else {
+                    "rx-preserve-drop"
+                };
+                emit_cyw43_data_path_trace(
+                    contract,
+                    event,
+                    "pre-poll",
+                    0,
+                    &token.buffer[..token.len],
+                    Some(completion),
+                    flags,
+                    pending_before,
+                    pending_after,
+                );
+                if stored {
+                    let _ = store_cyw43_pending_rx_token(token);
+                }
+                stored
+            } else {
+                false
+            }
+        }
+        _ => false,
+    };
+    preserved
+}
+
+#[cfg(feature = "kernel")]
 fn submit_cyw43_driver_task_eth_frame(contract: DriverTaskContract, frame: &[u8]) -> bool {
-    submit_cyw43_driver_task_eth_frame_completion(contract, frame)
-        .is_some_and(driver_task_tx_completion_submitted)
+    for attempt in 0..CYW43_DATA_TX_ATTEMPTS {
+        let completion = submit_cyw43_driver_task_eth_frame_completion(contract, frame);
+        let submitted = completion.is_some_and(driver_task_tx_completion_submitted);
+        let pending_rx = cyw43_pending_rx_token_occupied();
+        let action = if submitted {
+            "submitted"
+        } else if completion.is_some() {
+            "retry"
+        } else {
+            "no-completion"
+        };
+        emit_cyw43_data_path_trace(
+            contract,
+            "tx-result",
+            action,
+            attempt + 1,
+            frame,
+            completion,
+            0,
+            pending_rx,
+            pending_rx,
+        );
+        if submitted {
+            return true;
+        }
+        if attempt + 1 != CYW43_DATA_TX_ATTEMPTS {
+            CYW43_DATA_TX_RETRIES.fetch_add(1, Ordering::AcqRel);
+            resume_cyw43_active_prompt_poll_for_tx_retry(contract);
+            core::hint::spin_loop();
+        }
+    }
+    false
 }
 
 #[cfg(feature = "kernel")]
@@ -9114,6 +9739,15 @@ fn submit_cyw43_driver_task_eth_frame_completion(
     contract: DriverTaskContract,
     frame: &[u8],
 ) -> Option<DriverTaskCompletionRecord> {
+    #[cfg(test)]
+    if CYW43_DATA_TX_TEST_STUB.load(Ordering::Acquire) != 0 {
+        let _ = contract;
+        let attempt = CYW43_DATA_TX_TEST_ATTEMPTS.fetch_add(1, Ordering::AcqRel);
+        if attempt < CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.load(Ordering::Acquire) {
+            return Some(DriverTaskCompletionRecord::progress(0, 0));
+        }
+        return Some(DriverTaskCompletionRecord::progress(0, frame.len() as u32));
+    }
     run_cyw43_runtime_descriptor_command(
         contract,
         DriverRuntimeCyw43CommandDescriptor {
@@ -9366,6 +10000,11 @@ fn receive_driver_task_frame(
     if hot_path == DriverTaskHotPath::Cyw43Wifi {
         return receive_cyw43_driver_task_frame(contract);
     }
+    if hot_path == DriverTaskHotPath::GenetNic {
+        if let Some(token) = take_genet_pending_rx_token() {
+            return Some(token);
+        }
+    }
     let command = DriverTaskCommandRecord::pi4_hot_path(
         0,
         hot_path,
@@ -9377,34 +10016,106 @@ fn receive_driver_task_frame(
         },
     );
     let completion = run_driver_task_net_service(contract, command)?;
+    if hot_path == DriverTaskHotPath::GenetNic {
+        record_genet_runtime_completion(completion);
+    }
     if completion.code != DriverTaskCompletionCode::FrameReady.as_u16() {
         return None;
     }
-    let bytes = crate::hal::driver_task::driver_task_ring_frame_bytes(contract, completion.frame)?;
-    let len = bytes.len().min(MAX_FRAME_LEN);
-    let mut buffer = [0u8; MAX_FRAME_LEN];
-    buffer[..len].copy_from_slice(&bytes[..len]);
-    Some(DriverTaskNetRxToken { len, buffer })
+    driver_task_rx_token_from_completion(contract, completion)
 }
 
 #[cfg(feature = "kernel")]
 fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<DriverTaskNetRxToken> {
+    if let Some(token) = take_cyw43_pending_rx_token() {
+        emit_cyw43_data_path_trace(
+            contract,
+            "rx-deliver",
+            "pending",
+            0,
+            &token.buffer[..token.len],
+            None,
+            0,
+            true,
+            false,
+        );
+        return Some(token);
+    }
+    if let Some((flags, token)) = resume_cyw43_active_prompt_poll_for_data_path(contract) {
+        emit_cyw43_data_path_trace(
+            contract,
+            "rx-deliver",
+            "resume",
+            0,
+            &token.buffer[..token.len],
+            None,
+            flags,
+            false,
+            false,
+        );
+        return Some(token);
+    }
+    if cyw43_active_prompt_poll(contract).is_some() {
+        return None;
+    }
     let completion = run_cyw43_runtime_descriptor_command(
         contract,
         DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         },
         &[],
     )?;
-    if completion.code != DriverTaskCompletionCode::FrameReady.as_u16() {
-        return None;
+    let (flags, token) =
+        cyw43_driver_task_data_frame_with_flags_from_completion(contract, completion)?;
+    emit_cyw43_data_path_trace(
+        contract,
+        "rx-deliver",
+        "poll",
+        0,
+        &token.buffer[..token.len],
+        Some(completion),
+        flags,
+        false,
+        false,
+    );
+    Some(token)
+}
+
+#[cfg(feature = "kernel")]
+fn take_cyw43_pending_rx_token() -> Option<DriverTaskNetRxToken> {
+    CYW43_PENDING_RX_TOKEN.lock().take()
+}
+
+#[cfg(feature = "kernel")]
+fn store_cyw43_pending_rx_token(token: DriverTaskNetRxToken) -> bool {
+    let mut pending = CYW43_PENDING_RX_TOKEN.lock();
+    if pending.is_some() {
+        return false;
     }
-    let bytes = crate::hal::driver_task::driver_task_ring_frame_bytes(contract, completion.frame)?;
-    let len = bytes.len().min(MAX_FRAME_LEN);
-    let mut buffer = [0u8; MAX_FRAME_LEN];
-    buffer[..len].copy_from_slice(&bytes[..len]);
-    Some(DriverTaskNetRxToken { len, buffer })
+    *pending = Some(token);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn take_genet_pending_rx_token() -> Option<DriverTaskNetRxToken> {
+    GENET_PENDING_RX_TOKEN.lock().take()
+}
+
+#[cfg(feature = "kernel")]
+fn store_genet_pending_rx_token(token: DriverTaskNetRxToken) -> bool {
+    let mut pending = GENET_PENDING_RX_TOKEN.lock();
+    if pending.is_some() {
+        return false;
+    }
+    *pending = Some(token);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pending_rx_token_occupied() -> bool {
+    CYW43_PENDING_RX_TOKEN.lock().is_some()
 }
 
 #[cfg(feature = "kernel")]
@@ -9438,7 +10149,7 @@ fn poll_cyw43_driver_task_control_completion(flags: u16) -> Option<DriverTaskCom
 
 #[cfg(feature = "kernel")]
 pub(crate) fn poll_cyw43_driver_task_data_frame() -> Option<(u16, DriverTaskNetRxToken)> {
-    let completion = poll_cyw43_driver_task_data_completion(0)?;
+    let completion = poll_cyw43_driver_task_data_completion(CYW43_DATA_RX_STEADY_POLL_FLAGS)?;
     cyw43_driver_task_frame_from_completion(CYW43_WIFI_DRIVER_TASK_CONTRACT, completion)
 }
 
@@ -9461,6 +10172,15 @@ fn cyw43_driver_task_frame_from_completion(
     contract: DriverTaskContract,
     completion: DriverTaskCompletionRecord,
 ) -> Option<(u16, DriverTaskNetRxToken)> {
+    let token = driver_task_rx_token_from_completion(contract, completion)?;
+    Some((completion.frame.flags, token))
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_rx_token_from_completion(
+    contract: DriverTaskContract,
+    completion: DriverTaskCompletionRecord,
+) -> Option<DriverTaskNetRxToken> {
     if completion.code != DriverTaskCompletionCode::FrameReady.as_u16() {
         return None;
     }
@@ -9468,7 +10188,103 @@ fn cyw43_driver_task_frame_from_completion(
     let len = bytes.len().min(MAX_FRAME_LEN);
     let mut buffer = [0u8; MAX_FRAME_LEN];
     buffer[..len].copy_from_slice(&bytes[..len]);
-    Some((completion.frame.flags, DriverTaskNetRxToken { len, buffer }))
+    Some(DriverTaskNetRxToken { len, buffer })
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_driver_task_data_frame_from_completion(
+    contract: DriverTaskContract,
+    completion: DriverTaskCompletionRecord,
+) -> Option<DriverTaskNetRxToken> {
+    cyw43_driver_task_data_frame_with_flags_from_completion(contract, completion)
+        .map(|(_flags, token)| token)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_driver_task_data_frame_with_flags_from_completion(
+    contract: DriverTaskContract,
+    completion: DriverTaskCompletionRecord,
+) -> Option<(u16, DriverTaskNetRxToken)> {
+    let (flags, token) = cyw43_driver_task_frame_from_completion(contract, completion)?;
+    if cyw43_frame_channel(flags) == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA {
+        Some((flags, token))
+    } else {
+        emit_cyw43_data_path_trace(
+            contract,
+            "rx-channel-drop",
+            "non-data",
+            0,
+            &token.buffer[..token.len],
+            Some(completion),
+            flags,
+            cyw43_pending_rx_token_occupied(),
+            cyw43_pending_rx_token_occupied(),
+        );
+        None
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn resume_cyw43_active_prompt_poll_for_data_path(
+    contract: DriverTaskContract,
+) -> Option<(u16, DriverTaskNetRxToken)> {
+    let active_poll = cyw43_active_prompt_poll(contract)?;
+    let completion = match active_poll.kind {
+        Cyw43HostEapolPollKind::Control => {
+            poll_cyw43_driver_task_control_completion(active_poll.flags)
+        }
+        Cyw43HostEapolPollKind::Data => poll_cyw43_driver_task_data_completion(active_poll.flags),
+    }?;
+    cyw43_driver_task_data_frame_with_flags_from_completion(contract, completion)
+}
+
+#[cfg(feature = "kernel")]
+fn resume_cyw43_active_prompt_poll_for_tx_retry(contract: DriverTaskContract) {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT || cyw43_pending_rx_token_occupied() {
+        return;
+    }
+    let Some(active_poll) = cyw43_active_prompt_poll(contract) else {
+        if let Some((flags, token)) = poll_cyw43_driver_task_control_frame() {
+            if cyw43_frame_channel(flags) == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA {
+                emit_cyw43_data_path_trace(
+                    contract,
+                    "rx-preserve",
+                    "tx-retry-control-fallback",
+                    0,
+                    &token.buffer[..token.len],
+                    None,
+                    flags,
+                    false,
+                    true,
+                );
+                let _ = store_cyw43_pending_rx_token(token);
+            }
+        }
+        return;
+    };
+    let completion = match active_poll.kind {
+        Cyw43HostEapolPollKind::Control => {
+            poll_cyw43_driver_task_control_completion(active_poll.flags)
+        }
+        Cyw43HostEapolPollKind::Data => poll_cyw43_driver_task_data_completion(active_poll.flags),
+    };
+    if let Some((completion, flags, token)) = completion.and_then(|completion| {
+        cyw43_driver_task_data_frame_with_flags_from_completion(contract, completion)
+            .map(|(flags, token)| (completion, flags, token))
+    }) {
+        emit_cyw43_data_path_trace(
+            contract,
+            "rx-preserve",
+            "tx-retry",
+            0,
+            &token.buffer[..token.len],
+            Some(completion),
+            flags,
+            false,
+            true,
+        );
+        let _ = store_cyw43_pending_rx_token(token);
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -9628,11 +10444,45 @@ macro_rules! driver_task_nic {
             fn debug_snapshot(&mut self) {}
 
             fn counters(&self) -> NetDeviceCounters {
+                let tx_submit = $tx_submitted.load(Ordering::Acquire) as u64;
+                let (rx_used_advances, tx_used_advances, tx_complete, tx_free, tx_in_flight) =
+                    if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::GenetNic) {
+                        let tx_complete = GENET_TX_HW_COMPLETED.load(Ordering::Acquire) as u64;
+                        (
+                            GENET_RX_HW_FRAMES.load(Ordering::Acquire) as u64,
+                            tx_complete,
+                            tx_complete,
+                            GENET_TX_HW_FREE.load(Ordering::Acquire) as u64,
+                            GENET_TX_HW_IN_FLIGHT.load(Ordering::Acquire) as u64,
+                        )
+                    } else {
+                        (0, 0, tx_submit, 0, 0)
+                    };
                 NetDeviceCounters {
                     rx_packets: $rx_frames.load(Ordering::Acquire) as u64,
-                    tx_packets: $tx_submitted.load(Ordering::Acquire) as u64,
-                    tx_submit: $tx_submitted.load(Ordering::Acquire) as u64,
-                    tx_complete: $tx_submitted.load(Ordering::Acquire) as u64,
+                    tx_packets: tx_submit,
+                    rx_used_advances,
+                    tx_used_advances,
+                    tx_submit,
+                    tx_complete,
+                    tx_free,
+                    tx_in_flight,
+                    driver_rx_last_len: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::GenetNic
+                    ) {
+                        GENET_RX_LAST_LEN.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
+                    driver_rx_last_ethertype: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::GenetNic
+                    ) {
+                        GENET_RX_LAST_ETHERTYPE.load(Ordering::Acquire) as u64
+                    } else {
+                        0
+                    },
                     wifi_assoc: if matches!(
                         DriverTaskHotPath::$hot_path,
                         DriverTaskHotPath::Cyw43Wifi
@@ -9710,7 +10560,7 @@ driver_task_nic!(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use smoltcp::phy::{Device, TxToken};
+    use smoltcp::phy::{Device, RxToken, TxToken};
     use smoltcp::time::Instant;
 
     static CYW43_STATUS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -9731,7 +10581,11 @@ mod tests {
         CYW43_HOST_EAPOL_ACTIVE.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+        CYW43_DATA_TX_RETRIES.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
+        CYW43_DATA_TX_TEST_STUB.store(0, Ordering::Release);
+        CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(0, Ordering::Release);
+        CYW43_DATA_TX_TEST_ATTEMPTS.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_IO_STUB.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_TX_SUBMITTED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_PTK_INSTALLED.store(0, Ordering::Release);
@@ -9742,6 +10596,7 @@ mod tests {
         CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_SECURE.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_RX_RESTORED.store(0, Ordering::Release);
+        *CYW43_PENDING_RX_TOKEN.lock() = None;
         *CYW43_HOST_EAPOL_SESSION.lock() = None;
         *CYW43_HOST_EAPOL_PENDING_EVENT.lock() = None;
         clear_cyw43_active_prompt_poll();
@@ -9777,6 +10632,52 @@ mod tests {
         let mut frame = [0u8; CYW43_BDC_HEADER_BYTES + CYW43_BRCMF_EVENT_MIN_PACKET_LEN];
         frame[0] = CYW43_BDC_VERSION << CYW43_BDC_VERSION_SHIFT;
         frame[CYW43_BDC_HEADER_BYTES..].copy_from_slice(packet);
+        frame
+    }
+
+    fn test_cyw43_arp_frame(op: u16) -> [u8; 42] {
+        let mut frame = [0u8; 42];
+        frame[..6].copy_from_slice(&[0xff; 6]);
+        frame[6..12].copy_from_slice(&CYW43_DRIVER_TASK_MAC.0);
+        frame[12..14].copy_from_slice(&CYW43_ETH_P_ARP.to_be_bytes());
+        frame[ETH_HEADER_LEN..ETH_HEADER_LEN + 2].copy_from_slice(&1u16.to_be_bytes());
+        frame[ETH_HEADER_LEN + 2..ETH_HEADER_LEN + 4]
+            .copy_from_slice(&CYW43_ETH_P_IPV4.to_be_bytes());
+        frame[ETH_HEADER_LEN + 4] = 6;
+        frame[ETH_HEADER_LEN + 5] = 4;
+        frame[ETH_HEADER_LEN + 6..ETH_HEADER_LEN + 8].copy_from_slice(&op.to_be_bytes());
+        frame
+    }
+
+    fn test_cyw43_dhcp_frame(message_type: u8, src_port: u16, dst_port: u16) -> [u8; 286] {
+        const IPV4_HEADER_LEN: usize = 20;
+        const UDP_HEADER_LEN: usize = 8;
+        const DHCP_PAYLOAD_LEN: usize = 244;
+        let mut frame = [0u8; ETH_HEADER_LEN + IPV4_HEADER_LEN + UDP_HEADER_LEN + DHCP_PAYLOAD_LEN];
+        frame[..6].copy_from_slice(&[0xff; 6]);
+        frame[6..12].copy_from_slice(&CYW43_DRIVER_TASK_MAC.0);
+        frame[12..14].copy_from_slice(&CYW43_ETH_P_IPV4.to_be_bytes());
+        let ip = ETH_HEADER_LEN;
+        frame[ip] = 0x45;
+        frame[ip + 2..ip + 4].copy_from_slice(
+            &((IPV4_HEADER_LEN + UDP_HEADER_LEN + DHCP_PAYLOAD_LEN) as u16).to_be_bytes(),
+        );
+        frame[ip + 9] = CYW43_IP_PROTO_UDP;
+        frame[ip + 12..ip + 16].copy_from_slice(&[0, 0, 0, 0]);
+        frame[ip + 16..ip + 20].copy_from_slice(&[255, 255, 255, 255]);
+        let udp = ip + IPV4_HEADER_LEN;
+        frame[udp..udp + 2].copy_from_slice(&src_port.to_be_bytes());
+        frame[udp + 2..udp + 4].copy_from_slice(&dst_port.to_be_bytes());
+        frame[udp + 4..udp + 6]
+            .copy_from_slice(&((UDP_HEADER_LEN + DHCP_PAYLOAD_LEN) as u16).to_be_bytes());
+        let dhcp = udp + UDP_HEADER_LEN;
+        frame[dhcp] = 1;
+        frame[dhcp + CYW43_DHCP_FIXED_BYTES..dhcp + CYW43_DHCP_FIXED_BYTES + 4]
+            .copy_from_slice(&CYW43_DHCP_MAGIC_COOKIE);
+        frame[dhcp + CYW43_DHCP_FIXED_BYTES + 4] = 53;
+        frame[dhcp + CYW43_DHCP_FIXED_BYTES + 5] = 1;
+        frame[dhcp + CYW43_DHCP_FIXED_BYTES + 6] = message_type;
+        frame[dhcp + CYW43_DHCP_FIXED_BYTES + 7] = 255;
         frame
     }
 
@@ -10321,6 +11222,44 @@ mod tests {
     }
 
     #[test]
+    fn host_eapol_wsec_key_descriptor_uses_runtime_pre_tx_drain_exchange() {
+        let descriptor = cyw43_control_exchange_descriptor(
+            189,
+            CYW43_WLC_SET_VAR,
+            41,
+            Cyw43ControlHeaderMode::Extended,
+            true,
+        );
+
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+        assert_eq!(
+            descriptor.flags,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+        );
+        assert_eq!(descriptor.payload_len, 189);
+        assert_eq!(descriptor.total_len, 189);
+        assert_eq!(descriptor.arg0, CYW43_WLC_SET_VAR);
+        assert_eq!(descriptor.arg1, 41);
+        assert!(cyw43_control_uses_runtime_exchange(
+            "cyw43-host-eapol-ptk",
+            "wsec_key"
+        ));
+        assert!(cyw43_control_uses_runtime_exchange(
+            "cyw43-host-eapol-gtk",
+            "wsec_key"
+        ));
+        assert!(!cyw43_control_uses_runtime_exchange(
+            "cyw43-control-security-wpa2-psk",
+            "wsec"
+        ));
+        assert_eq!(
+            cyw43_control_exchange_poll_attempts("cyw43-host-eapol-ptk", "wsec_key"),
+            CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS
+        );
+    }
+
+    #[test]
     fn cyw43_control_frame_descriptor_uses_split_tx_op() {
         let plain = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
         let extended = cyw43_control_frame_descriptor(16, Cyw43ControlHeaderMode::Extended, false);
@@ -10374,6 +11313,18 @@ mod tests {
         assert_eq!(reply.status, 0);
         assert_eq!(reply.response_len, 4);
         assert_eq!(reply.payload_available, 4);
+    }
+
+    #[test]
+    fn cyw43_control_reply_parser_rejects_sdio_telemetry_prefix() {
+        let mut buffer = [0u8; MAX_FRAME_LEN];
+        buffer[0..4].copy_from_slice(&SDIO_FAULT_TELEMETRY_MAGIC.to_le_bytes());
+        buffer[4..8].copy_from_slice(&1u32.to_le_bytes());
+        buffer[10..12].copy_from_slice(&40320u16.to_le_bytes());
+        buffer[12..16].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+        let token = DriverTaskNetRxToken { len: 17, buffer };
+
+        assert!(cyw43_control_reply_from_token(&token).is_none());
     }
 
     #[test]
@@ -10822,6 +11773,15 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_steady_data_rx_uses_hintless_firstread_rescue() {
+        assert_eq!(
+            CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn host_eapol_active_prompt_poll_recovers_descriptor_flags() {
         let progress = crate::hal::driver_task::DriverTaskRingProgressSnapshot {
             marker_valid: true,
@@ -10872,6 +11832,83 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_device_receive_delivers_only_data_channel_frames() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring = test_publish_cyw43_ring(&mut ring_page);
+        let payload = [0xa5u8; 32];
+
+        let data_completion =
+            test_stage_cyw43_completion(&payload, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA, 1);
+        let token = cyw43_driver_task_data_frame_from_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            data_completion,
+        )
+        .expect("data-channel frame is delivered to smoltcp");
+        assert_eq!(token.len, payload.len());
+        assert_eq!(&token.buffer[..token.len], &payload);
+
+        let control_completion = test_stage_cyw43_completion(
+            &payload,
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL,
+            2,
+        );
+        assert!(cyw43_driver_task_data_frame_from_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            control_completion
+        )
+        .is_none());
+
+        let event_completion =
+            test_stage_cyw43_completion(&payload, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, 3);
+        assert!(cyw43_driver_task_data_frame_from_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            event_completion
+        )
+        .is_none());
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_data_path_info_identifies_gate9_arp_and_dhcp() {
+        let arp_request = test_cyw43_arp_frame(1);
+        let arp_info = cyw43_data_path_info(&arp_request).expect("ARP is tracked");
+        assert_eq!(arp_info.ethertype, CYW43_ETH_P_ARP);
+        assert_eq!(arp_info.arp, "request");
+        assert_eq!(arp_info.dhcp, "none");
+
+        let dhcp_discover =
+            test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
+        let discover_info = cyw43_data_path_info(&dhcp_discover).expect("DHCP discover is tracked");
+        assert_eq!(discover_info.ethertype, CYW43_ETH_P_IPV4);
+        assert_eq!(discover_info.ip_proto, CYW43_IP_PROTO_UDP);
+        assert_eq!(discover_info.udp_src, CYW43_DHCP_CLIENT_PORT);
+        assert_eq!(discover_info.udp_dst, CYW43_DHCP_SERVER_PORT);
+        assert_eq!(discover_info.dhcp, "discover");
+
+        let dhcp_offer = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);
+        let offer_info = cyw43_data_path_info(&dhcp_offer).expect("DHCP offer is tracked");
+        assert_eq!(offer_info.udp_src, CYW43_DHCP_SERVER_PORT);
+        assert_eq!(offer_info.udp_dst, CYW43_DHCP_CLIENT_PORT);
+        assert_eq!(offer_info.dhcp, "offer");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_data_path_info_ignores_non_dhcp_ipv4() {
+        let mut frame = test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
+        let udp = ETH_HEADER_LEN + 20;
+        frame[udp..udp + 2].copy_from_slice(&12345u16.to_be_bytes());
+        frame[udp + 2..udp + 4].copy_from_slice(&54321u16.to_be_bytes());
+
+        assert!(cyw43_data_path_info(&frame).is_none());
     }
 
     #[cfg(feature = "kernel")]
@@ -11448,6 +12485,7 @@ mod tests {
             CYW43_HOST_EAPOL_TEST_TX_SUBMITTED.load(Ordering::Acquire),
             1
         );
+        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 1);
 
         let mut m3 = [0u8; MAX_FRAME_LEN];
         let m3_len = cyw43_host_eapol::write_test_m3_frame(&mut m3, &station, &session.eapol)
@@ -11491,7 +12529,7 @@ mod tests {
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
             1
         );
-        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.load(Ordering::Acquire),
             1
@@ -11639,6 +12677,7 @@ mod tests {
         assert_eq!(CYW43_HOST_EAPOL_RX.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_HOST_EAPOL_M1.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_HOST_EAPOL_M2.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 1);
 
         let set_ssid_packet =
             test_cyw43_event_packet(CYW43_EVENT_SET_SSID, CYW43_EVENT_STATUS_SUCCESS, 0);
@@ -11709,7 +12748,7 @@ mod tests {
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
             0
         );
-        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.load(Ordering::Acquire),
             1
@@ -11765,7 +12804,7 @@ mod tests {
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.load(Ordering::Acquire),
             1
         );
-        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
+        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 3);
         assert_eq!(
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_SECURE.load(Ordering::Acquire),
             1
@@ -12366,6 +13405,14 @@ mod tests {
             cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL),
             CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES
         );
+        assert_eq!(
+            cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            CYW43_RUNTIME_DATA_POLL_NO_REPLY_RESUMES
+        );
+        assert_eq!(
+            cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
+            CYW43_RUNTIME_DATA_TX_NO_REPLY_RESUMES
+        );
         assert!(
             CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES
                 > CYW43_RUNTIME_TRANSPORT_NO_REPLY_RESUMES
@@ -12374,15 +13421,14 @@ mod tests {
             CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES
                 >= CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES
         );
-        assert_eq!(
-            cyw43_runtime_no_reply_resume_limit(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
-            0
-        );
         assert!(cyw43_runtime_descriptor_uses_prompt_slice(
             DRIVER_RUNTIME_CYW43_OP_RX_POLL
         ));
         assert!(cyw43_runtime_descriptor_uses_prompt_slice(
             DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
+        ));
+        assert!(cyw43_runtime_descriptor_uses_prompt_slice(
+            DRIVER_RUNTIME_CYW43_OP_ETH_TX
         ));
         assert!(!cyw43_runtime_descriptor_uses_prompt_slice(
             DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
@@ -12862,6 +13908,63 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn host_eapol_wsec_key_uses_oldgood_control_reply_window() {
+        assert_eq!(CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS, 8_000);
+        assert_eq!(
+            cyw43_control_exchange_poll_attempts("cyw43-host-eapol-ptk", "wsec_key"),
+            CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS
+        );
+        assert_eq!(
+            cyw43_control_exchange_poll_attempts("cyw43-host-eapol-gtk", "wsec_key"),
+            CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS
+        );
+        assert_eq!(
+            cyw43_control_exchange_poll_attempts("cyw43-control-security-wpa2-psk", "wsec"),
+            CYW43_CONTROL_PLANE_POLL_ATTEMPTS
+        );
+        assert_eq!(
+            cyw43_control_exchange_poll_attempts("cyw43-control-wpa-auth-final", "wpa_auth"),
+            CYW43_CONTROL_PLANE_POLL_ATTEMPTS
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn control_split_terminal_trace_uses_selected_poll_limit() {
+        let idle = DriverTaskCompletionRecord {
+            sequence: 0,
+            code: DriverTaskCompletionCode::Idle.as_u16(),
+            detail: 0,
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+
+        assert!(cyw43_control_split_poll_completion_should_trace(
+            CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS,
+            CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS,
+            0,
+            idle
+        ));
+        assert!(!cyw43_control_split_poll_completion_should_trace(
+            CYW43_CONTROL_PLANE_POLL_ATTEMPTS,
+            CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS,
+            0,
+            idle
+        ));
+        assert!(cyw43_control_split_poll_completion_should_trace(
+            16,
+            CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS,
+            DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+            idle
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_control_request_iovar_info_extracts_txglomalign_value() {
         let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
         let mut payload = [0u8; 20];
@@ -13196,6 +14299,204 @@ mod tests {
             DriverTaskCompletionCode::Progress.as_u16(),
             DriverTaskCompletionRecord::progress(11, 1).code
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_runtime_completion_updates_hardware_netstats() {
+        use crate::hal::driver_task::{
+            DriverFrameDescriptor, DriverTaskCompletionCode, DriverTaskCompletionRecord,
+        };
+
+        GENET_TX_HW_COMPLETED.store(0, Ordering::Release);
+        GENET_TX_HW_FREE.store(0, Ordering::Release);
+        GENET_TX_HW_IN_FLIGHT.store(0, Ordering::Release);
+        GENET_RX_HW_FRAMES.store(0, Ordering::Release);
+        GENET_RX_LAST_ETHERTYPE.store(0, Ordering::Release);
+        GENET_RX_LAST_LEN.store(0, Ordering::Release);
+
+        record_genet_runtime_completion(DriverTaskCompletionRecord {
+            sequence: 1,
+            code: DriverTaskCompletionCode::Progress.as_u16(),
+            detail: 2,
+            result: 300,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 30,
+                flags: 2,
+            },
+        });
+        record_genet_runtime_completion(DriverTaskCompletionRecord {
+            sequence: 2,
+            code: DriverTaskCompletionCode::FrameReady.as_u16(),
+            detail: 0,
+            result: 342,
+            frame: DriverFrameDescriptor {
+                offset: 1024,
+                len: 342,
+                flags: 0x0800,
+            },
+        });
+        record_genet_runtime_completion(DriverTaskCompletionRecord {
+            sequence: 3,
+            code: DriverTaskCompletionCode::Idle.as_u16(),
+            detail: 1,
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 31,
+                flags: 1,
+            },
+        });
+        record_genet_runtime_completion(DriverTaskCompletionRecord {
+            sequence: 4,
+            code: DriverTaskCompletionCode::FrameReady.as_u16(),
+            detail: 1,
+            result: (32u32 << 16),
+            frame: DriverFrameDescriptor {
+                offset: 1024,
+                len: 60,
+                flags: 0x0806,
+            },
+        });
+
+        let counters = GenetDriverTaskDevice::default().counters();
+        assert_eq!(counters.tx_complete, 4);
+        assert_eq!(counters.tx_used_advances, 4);
+        assert_eq!(counters.tx_free, 32);
+        assert_eq!(counters.tx_in_flight, 0);
+        assert_eq!(counters.rx_used_advances, 2);
+        assert_eq!(counters.driver_rx_last_len, 60);
+        assert_eq!(counters.driver_rx_last_ethertype, 0x0806);
+
+        GENET_TX_HW_COMPLETED.store(0, Ordering::Release);
+        GENET_TX_HW_FREE.store(0, Ordering::Release);
+        GENET_TX_HW_IN_FLIGHT.store(0, Ordering::Release);
+        GENET_RX_HW_FRAMES.store(0, Ordering::Release);
+        GENET_RX_LAST_ETHERTYPE.store(0, Ordering::Release);
+        GENET_RX_LAST_LEN.store(0, Ordering::Release);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_prepoll_frame_ready_is_preserved_for_receive() {
+        use crate::hal::driver_task::{DriverTaskCompletionCode, DriverTaskHotPath};
+
+        let contract = GENET_DRIVER_TASK_CONTRACT;
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        crate::hal::driver_task::publish_driver_task_ring(
+            contract,
+            ring_page.as_mut_ptr() as usize,
+        );
+        let _ = take_genet_pending_rx_token();
+        GENET_RX_HW_FRAMES.store(0, Ordering::Release);
+        GENET_RX_LAST_ETHERTYPE.store(0, Ordering::Release);
+        GENET_RX_LAST_LEN.store(0, Ordering::Release);
+
+        let payload = b"dhcp-offer";
+        let frame =
+            crate::hal::driver_task::stage_driver_task_ring_frame(contract, payload, 0x0800)
+                .expect("test ring has room for one RX frame");
+        let completion = DriverTaskCompletionRecord {
+            sequence: 71,
+            code: DriverTaskCompletionCode::FrameReady.as_u16(),
+            detail: 0,
+            result: payload.len() as u32,
+            frame,
+        };
+
+        assert!(preserve_driver_task_pre_poll_completion(
+            contract,
+            DriverTaskHotPath::GenetNic,
+            completion
+        ));
+        assert_eq!(GENET_RX_HW_FRAMES.load(Ordering::Acquire), 1);
+        assert_eq!(
+            GENET_RX_LAST_LEN.load(Ordering::Acquire),
+            payload.len() as u32
+        );
+        assert_eq!(GENET_RX_LAST_ETHERTYPE.load(Ordering::Acquire), 0x0800);
+
+        let token = receive_driver_task_frame(contract, DriverTaskHotPath::GenetNic)
+            .expect("pre-poll Genet RX token is delivered before a fresh poll");
+        token.consume(|bytes| assert_eq!(bytes, payload));
+        assert!(take_genet_pending_rx_token().is_none());
+
+        crate::hal::driver_task::publish_driver_task_ring(contract, 0);
+        GENET_RX_HW_FRAMES.store(0, Ordering::Release);
+        GENET_RX_LAST_ETHERTYPE.store(0, Ordering::Release);
+        GENET_RX_LAST_LEN.store(0, Ordering::Release);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_data_tx_retries_transient_no_credit_completion() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(3, Ordering::Release);
+
+        assert!(submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"dhcp-discover"
+        ));
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 4);
+        assert_eq!(CYW43_DATA_TX_RETRIES.load(Ordering::Acquire), 3);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_tx_retry_pending_rx_token_is_delivered_to_receive() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+        let mut buffer = [0u8; MAX_FRAME_LEN];
+        buffer[..4].copy_from_slice(b"dhcP");
+        assert!(store_cyw43_pending_rx_token(DriverTaskNetRxToken {
+            len: 4,
+            buffer,
+        }));
+
+        let token = receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+            .expect("pending RX token is delivered before a fresh poll");
+        token.consume(|bytes| assert_eq!(bytes, b"dhcP"));
+        assert!(take_cyw43_pending_rx_token().is_none());
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_data_tx_retry_window_remains_bounded() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS
+            .store(CYW43_DATA_TX_ATTEMPTS as u32, Ordering::Release);
+
+        assert!(!submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"dhcp-discover"
+        ));
+        assert_eq!(
+            CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
+            CYW43_DATA_TX_ATTEMPTS as u32
+        );
+        assert_eq!(
+            CYW43_DATA_TX_RETRIES.load(Ordering::Acquire),
+            CYW43_DATA_TX_ATTEMPTS.saturating_sub(1) as u32
+        );
+
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]

@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Provide HAL-owned Pi 4 mailbox and SDIO host support for the CYW43455 Wi-Fi path.
+// Purpose: Provide HAL-owned Pi 4 platform mailbox and SDIO support for Pi networking paths.
 // Author: Lukas Bower
 
 #![allow(unsafe_code)]
@@ -346,6 +346,14 @@ pub(crate) fn pinned_mailbox_regs() -> Option<(usize, usize)> {
     cloned_pinned_regs(&PINNED_MAILBOX_REGS).map(|regs| (regs.paddr(), regs.vaddr()))
 }
 
+fn mailbox_request_log_prefix(action: &str) -> &'static str {
+    if action.contains("xhci-reset-notify") || action.contains("vl805-usb-hcd-power") {
+        "[pi4-platform]"
+    } else {
+        "[pi4-wifi]"
+    }
+}
+
 fn pinned_mailbox_request_page<H>(
     hal: &mut H,
     slot: &Mutex<Option<MappedRegs>>,
@@ -357,8 +365,9 @@ where
 {
     let mut shared_request = slot.lock();
     if let Some(frame) = shared_request.as_ref() {
+        let prefix = mailbox_request_log_prefix(reuse_action);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] mailbox request page paddr=0x{:08x} action={reuse_action}",
+            "{prefix} mailbox request page paddr=0x{:08x} action={reuse_action}",
             frame.paddr()
         ));
         return Ok(*frame);
@@ -371,8 +380,9 @@ where
         paddr: frame.paddr(),
         vaddr: frame.ptr().as_ptr() as usize,
     };
+    let prefix = mailbox_request_log_prefix(alloc_action);
     emit_breadcrumb(format_args!(
-        "[pi4-wifi] mailbox request page paddr=0x{:08x} action={alloc_action}",
+        "{prefix} mailbox request page paddr=0x{:08x} action={alloc_action}",
         mapped.paddr()
     ));
     core::mem::forget(frame);
@@ -5367,9 +5377,9 @@ where
 {
     let mailbox = preseed_register_block(hal, &MAILBOX_PAGE_PADDR_CANDIDATES, &PINNED_MAILBOX_REGS);
     boot_log::force_uart_line(if mailbox {
-        "[pi4-wifi] mmio preseeded mailbox=yes"
+        "[pi4-platform] mmio preseeded mailbox=yes"
     } else {
-        "[pi4-wifi] mmio preseeded mailbox=no"
+        "[pi4-platform] mmio preseeded mailbox=no"
     });
     mailbox
 }
@@ -5380,9 +5390,9 @@ where
 {
     let gpio = preseed_register_block(hal, &GPIO_PAGE_PADDR_CANDIDATES, &PINNED_GPIO_REGS);
     boot_log::force_uart_line(if gpio {
-        "[pi4-wifi] mmio preseeded gpio=yes"
+        "[pi4-platform] mmio preseeded gpio=yes"
     } else {
-        "[pi4-wifi] mmio preseeded gpio=no"
+        "[pi4-platform] mmio preseeded gpio=no"
     });
     gpio
 }
@@ -5393,9 +5403,9 @@ where
 {
     let sdhci = preseed_register_block(hal, &SDHCI_PAGE_PADDR_CANDIDATES, &PINNED_SDHCI_REGS);
     boot_log::force_uart_line(if sdhci {
-        "[pi4-wifi] mmio preseeded sdhci=yes"
+        "[pi4-platform] mmio preseeded sdhci=yes"
     } else {
-        "[pi4-wifi] mmio preseeded sdhci=no"
+        "[pi4-platform] mmio preseeded sdhci=no"
     });
     sdhci
 }
@@ -5409,29 +5419,29 @@ where
     let sdhci = preseed_sdhci_mmio(hal);
     match (mailbox, gpio, sdhci) {
         (true, true, true) => boot_log::force_uart_line(
-            "[pi4-wifi] mmio preseed summary mailbox=yes gpio=yes sdhci=yes",
+            "[pi4-platform] mmio preseed summary mailbox=yes gpio=yes sdhci=yes",
         ),
         (true, true, false) => boot_log::force_uart_line(
-            "[pi4-wifi] mmio preseed summary mailbox=yes gpio=yes sdhci=no",
+            "[pi4-platform] mmio preseed summary mailbox=yes gpio=yes sdhci=no",
         ),
         (true, false, true) => boot_log::force_uart_line(
-            "[pi4-wifi] mmio preseed summary mailbox=yes gpio=no sdhci=yes",
+            "[pi4-platform] mmio preseed summary mailbox=yes gpio=no sdhci=yes",
         ),
         (true, false, false) => boot_log::force_uart_line(
-            "[pi4-wifi] mmio preseed summary mailbox=yes gpio=no sdhci=no",
+            "[pi4-platform] mmio preseed summary mailbox=yes gpio=no sdhci=no",
         ),
         (false, true, true) => boot_log::force_uart_line(
-            "[pi4-wifi] mmio preseed summary mailbox=no gpio=yes sdhci=yes",
+            "[pi4-platform] mmio preseed summary mailbox=no gpio=yes sdhci=yes",
         ),
         (false, true, false) => boot_log::force_uart_line(
-            "[pi4-wifi] mmio preseed summary mailbox=no gpio=yes sdhci=no",
+            "[pi4-platform] mmio preseed summary mailbox=no gpio=yes sdhci=no",
         ),
         (false, false, true) => boot_log::force_uart_line(
-            "[pi4-wifi] mmio preseed summary mailbox=no gpio=no sdhci=yes",
+            "[pi4-platform] mmio preseed summary mailbox=no gpio=no sdhci=yes",
         ),
-        (false, false, false) => {
-            boot_log::force_uart_line("[pi4-wifi] mmio preseed summary mailbox=no gpio=no sdhci=no")
-        }
+        (false, false, false) => boot_log::force_uart_line(
+            "[pi4-platform] mmio preseed summary mailbox=no gpio=no sdhci=no",
+        ),
     }
 }
 
@@ -7866,6 +7876,7 @@ const fn runtime_rx_invalid_firstread_should_clear_latch(
 struct Mailbox {
     regs: MappedRegs,
     request: MappedRegs,
+    log_prefix: &'static str,
 }
 
 impl Mailbox {
@@ -7874,6 +7885,7 @@ impl Mailbox {
         request_slot: &Mutex<Option<MappedRegs>>,
         reuse_action: &str,
         alloc_action: &str,
+        log_prefix: &'static str,
     ) -> Result<Self, HalError>
     where
         H: DeviceHal<Error = HalError>,
@@ -7889,7 +7901,11 @@ impl Mailbox {
         // calls so Wi-Fi bring-up reuses a stable VC mailbox buffer address
         // instead of racing stale replies from short-lived per-call pages.
         let request = pinned_mailbox_request_page(hal, request_slot, reuse_action, alloc_action)?;
-        Ok(Self { regs, request })
+        Ok(Self {
+            regs,
+            request,
+            log_prefix,
+        })
     }
 
     fn new<H>(hal: &mut H) -> Result<Self, HalError>
@@ -7897,7 +7913,13 @@ impl Mailbox {
         H: DeviceHal<Error = HalError>,
     {
         let (reuse_action, alloc_action) = mailbox_request_page_actions();
-        Self::new_with_request_slot(hal, &PINNED_MAILBOX_REQUEST, reuse_action, alloc_action)
+        Self::new_with_request_slot(
+            hal,
+            &PINNED_MAILBOX_REQUEST,
+            reuse_action,
+            alloc_action,
+            "[pi4-wifi]",
+        )
     }
 
     fn new_xhci_reset<H>(hal: &mut H) -> Result<Self, HalError>
@@ -7912,6 +7934,7 @@ impl Mailbox {
             &PINNED_MAILBOX_REQUEST,
             "reuse-shared owner=xhci-reset-notify",
             "alloc-shared owner=xhci-reset-notify",
+            "[pi4-platform]",
         )
     }
 
@@ -7924,12 +7947,18 @@ impl Mailbox {
             &PINNED_MAILBOX_REQUEST,
             "reuse-shared owner=vl805-usb-hcd-power",
             "alloc-shared owner=vl805-usb-hcd-power",
+            "[pi4-platform]",
         )
     }
 
     fn power_on_module(&mut self, module: u32) -> Result<(), HalError> {
+        let prefix = if module == POWER_DEVID_USB_HCD {
+            "[pi4-platform]"
+        } else {
+            self.log_prefix
+        };
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] mailbox power-on module=0x{module:08x}"
+            "{prefix} mailbox power-on module=0x{module:08x}"
         ));
         let mut payload = [module, POWER_STATE_REQ_ON | POWER_STATE_REQ_WAIT];
         self.call_tag(TAG_SET_POWER_STATE, 8, &mut payload)?;
@@ -8076,14 +8105,16 @@ impl Mailbox {
                     }
                     MAILBOX_TRANSPORT_READY.store(true, Ordering::Release);
                     if !MAILBOX_TRANSPORT_READY_LOGGED.swap(true, Ordering::AcqRel) {
+                        let prefix = self.log_prefix;
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] mailbox transport ready tag={}",
+                            "{prefix} mailbox transport ready tag={}",
                             mailbox_tag_name(tag)
                         ));
                     }
                     if alias_index > 0 {
+                        let prefix = self.log_prefix;
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] mailbox alias fallback tag={} alias=0x{alias_base:08x}",
+                            "{prefix} mailbox alias fallback tag={} alias=0x{alias_base:08x}",
                             mailbox_tag_name(tag)
                         ));
                     }
@@ -8094,14 +8125,15 @@ impl Mailbox {
                 | Err(err @ HalError::Unsupported("mailbox-protocol")) => {
                     fence(Ordering::SeqCst);
                     if tag == TAG_NOTIFY_XHCI_RESET && mailbox_response_words_complete(tag, words) {
+                        let prefix = self.log_prefix;
                         emit_breadcrumb(format_args!(
-                            "[pi4-wifi] mailbox late-buffer-complete tag={} alias=0x{alias_base:08x}",
+                            "{prefix} mailbox late-buffer-complete tag={} alias=0x{alias_base:08x}",
                             mailbox_tag_name(tag)
                         ));
                         MAILBOX_TRANSPORT_READY.store(true, Ordering::Release);
                         if !MAILBOX_TRANSPORT_READY_LOGGED.swap(true, Ordering::AcqRel) {
                             emit_breadcrumb(format_args!(
-                                "[pi4-wifi] mailbox transport ready tag={}",
+                                "{prefix} mailbox transport ready tag={}",
                                 mailbox_tag_name(tag)
                             ));
                         }
@@ -8204,7 +8236,8 @@ impl Mailbox {
                 if !mailbox_reply_matches_request_page(expected, actual) {
                     stray_replies = stray_replies.saturating_add(1);
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] mailbox stray reply expected=0x{expected:08x} actual=0x{value:08x} count={stray_replies}/{} action=ignored",
+                        "{} mailbox stray reply expected=0x{expected:08x} actual=0x{value:08x} count={stray_replies}/{} action=ignored",
+                        self.log_prefix,
                         MAILBOX_DRAIN_LIMIT,
                     ));
                     if stray_replies >= MAILBOX_DRAIN_LIMIT {
@@ -8215,7 +8248,8 @@ impl Mailbox {
                 }
                 if actual != expected {
                     emit_breadcrumb(format_args!(
-                        "[pi4-wifi] mailbox alias reply accepted expected=0x{expected:08x} actual=0x{value:08x}",
+                        "{} mailbox alias reply accepted expected=0x{expected:08x} actual=0x{value:08x}",
+                        self.log_prefix,
                     ));
                 }
                 return Ok(());
@@ -8232,11 +8266,13 @@ impl Mailbox {
         let value1 = words.get(6).copied().unwrap_or_default();
         let reason = mailbox_protocol_reason(tag, status, reply_tag, value_status);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] mailbox protocol fail tag={} alias=0x{alias_base:08x} reason={reason}",
+            "{} mailbox protocol fail tag={} alias=0x{alias_base:08x} reason={reason}",
+            self.log_prefix,
             mailbox_tag_name(tag),
         ));
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] mailbox protocol data st=0x{status:08x} tag=0x{reply_tag:08x} len=0x{value_len:08x} val=0x{value_status:08x} v0=0x{value0:08x} v1=0x{value1:08x}",
+            "{} mailbox protocol data st=0x{status:08x} tag=0x{reply_tag:08x} len=0x{value_len:08x} val=0x{value_status:08x} v0=0x{value0:08x} v1=0x{value1:08x}",
+            self.log_prefix,
         ));
     }
 
@@ -8248,7 +8284,8 @@ impl Mailbox {
         let value0 = words.get(5).copied().unwrap_or_default();
         let value1 = words.get(6).copied().unwrap_or_default();
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] mailbox timeout-buffer tag={} alias=0x{alias_base:08x} st=0x{status:08x} reply_tag=0x{reply_tag:08x} len=0x{value_len:08x} val=0x{value_status:08x} v0=0x{value0:08x} v1=0x{value1:08x}",
+            "{} mailbox timeout-buffer tag={} alias=0x{alias_base:08x} st=0x{status:08x} reply_tag=0x{reply_tag:08x} len=0x{value_len:08x} val=0x{value_status:08x} v0=0x{value0:08x} v1=0x{value1:08x}",
+            self.log_prefix,
             mailbox_tag_name(tag),
         ));
     }
@@ -8257,7 +8294,8 @@ impl Mailbox {
         let status0 = self.read_reg(MAILBOX_STATUS0_OFFSET);
         let status1 = self.read_reg(MAILBOX_STATUS1_OFFSET);
         emit_breadcrumb(format_args!(
-            "[pi4-wifi] mailbox timeout phase={phase} regs=0x{regs:08x} status0=0x{status0:08x} status1=0x{status1:08x}",
+            "{} mailbox timeout phase={phase} regs=0x{regs:08x} status0=0x{status0:08x} status1=0x{status1:08x}",
+            self.log_prefix,
             regs = self.regs.paddr()
         ));
     }
@@ -8282,14 +8320,14 @@ where
     H: DeviceHal<Error = HalError>,
 {
     emit_breadcrumb(format_args!(
-        "[pi4-wifi] mailbox xhci-reset-notify device=0x{VL805_MAILBOX_RESET_DEV_ADDR:08x}"
+        "[pi4-platform] mailbox xhci-reset-notify device=0x{VL805_MAILBOX_RESET_DEV_ADDR:08x}"
     ));
     let mut mailbox = Mailbox::new_xhci_reset(hal)?;
     let mut payload = [VL805_MAILBOX_RESET_DEV_ADDR];
     match mailbox.call_tag(TAG_NOTIFY_XHCI_RESET, 4, &mut payload) {
         Ok(()) => {
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] mailbox xhci-reset-notify complete"
+                "[pi4-platform] mailbox xhci-reset-notify complete"
             ));
             Ok(Vl805ResetNotifyResult::Acked)
         }
@@ -8303,7 +8341,7 @@ where
                 _ => unreachable!(),
             };
             emit_breadcrumb(format_args!(
-                "[pi4-wifi] mailbox xhci-reset-notify {no_ack_reason} action=fail-closed"
+                "[pi4-platform] mailbox xhci-reset-notify {no_ack_reason} action=fail-closed"
             ));
             Err(err)
         }
@@ -8316,12 +8354,12 @@ where
     H: DeviceHal<Error = HalError>,
 {
     emit_breadcrumb(format_args!(
-        "[pi4-wifi] mailbox vl805-usb-hcd-power action=begin module=0x{POWER_DEVID_USB_HCD:08x}"
+        "[pi4-platform] mailbox vl805-usb-hcd-power action=begin module=0x{POWER_DEVID_USB_HCD:08x}"
     ));
     let mut mailbox = Mailbox::new_vl805_power(hal)?;
     mailbox.power_on_module(POWER_DEVID_USB_HCD)?;
     emit_breadcrumb(format_args!(
-        "[pi4-wifi] mailbox vl805-usb-hcd-power action=complete"
+        "[pi4-platform] mailbox vl805-usb-hcd-power action=complete"
     ));
     Ok(())
 }
@@ -24067,6 +24105,7 @@ impl MailboxRef<'_> {
         let mut cloned = Mailbox {
             regs: self.0.regs.clone(),
             request: self.0.request.clone(),
+            log_prefix: self.0.log_prefix,
         };
         cloned.power_on_module(POWER_DEVID_SDHCI)?;
         cloned

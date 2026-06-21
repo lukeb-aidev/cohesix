@@ -197,9 +197,9 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
         "server=192.168.10.1 lease_s=3600",
         "OK NETTEST detail=pass scope=serial-local",
+        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
         "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
-        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
     ]
 

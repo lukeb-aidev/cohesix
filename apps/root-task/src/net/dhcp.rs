@@ -13,6 +13,7 @@ pub const DHCP_SERVER_PORT: u16 = 67;
 const BOOTP_HEADER_LEN: usize = 236;
 const DHCP_COOKIE_OFFSET: usize = BOOTP_HEADER_LEN;
 const DHCP_FIXED_LEN: usize = BOOTP_HEADER_LEN + 4;
+const DHCP_MIN_PACKET_LEN: usize = 300;
 const DHCP_MAGIC_COOKIE: [u8; 4] = [99, 130, 83, 99];
 const DHCP_OP_BOOTREQUEST: u8 = 1;
 const DHCP_OP_BOOTREPLY: u8 = 2;
@@ -21,13 +22,18 @@ const DHCP_HLEN_ETHERNET: u8 = 6;
 const DHCP_FLAGS_BROADCAST: u16 = 0x8000;
 const OPT_SUBNET_MASK: u8 = 1;
 const OPT_ROUTER: u8 = 3;
+const OPT_DOMAIN_NAME_SERVER: u8 = 6;
+const OPT_HOST_NAME: u8 = 12;
 const OPT_REQUESTED_IP: u8 = 50;
 const OPT_LEASE_TIME: u8 = 51;
 const OPT_MESSAGE_TYPE: u8 = 53;
 const OPT_SERVER_ID: u8 = 54;
+const OPT_MAX_MESSAGE_SIZE: u8 = 57;
 const OPT_PARAMETER_REQUEST_LIST: u8 = 55;
 const OPT_CLIENT_ID: u8 = 61;
 const OPT_END: u8 = 255;
+const DHCP_MAX_MESSAGE_SIZE: u16 = 576;
+const DHCP_HOST_NAME: &[u8] = b"cohesix-pi4";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DhcpLease {
@@ -190,7 +196,7 @@ impl DhcpClient {
         self.metrics = DhcpMetrics::default();
         self.state = DhcpState::Selecting {
             next_tx_ms: now_ms,
-            deadline_ms: now_ms.saturating_add(u64::from(self.config.discover_timeout_ms)),
+            deadline_ms: now_ms.saturating_add(dhcp_timeout_ms(self.config.discover_timeout_ms)),
             attempts: 0,
         };
     }
@@ -324,7 +330,8 @@ impl DhcpClient {
                 self.state = DhcpState::Requesting {
                     offer: PendingOffer { lease },
                     next_tx_ms: now_ms,
-                    deadline_ms: now_ms.saturating_add(u64::from(self.config.request_timeout_ms)),
+                    deadline_ms: now_ms
+                        .saturating_add(dhcp_timeout_ms(self.config.request_timeout_ms)),
                     attempts: 0,
                 };
                 DhcpEvent::SendQueued
@@ -361,7 +368,8 @@ impl DhcpClient {
         } else {
             self.state = DhcpState::Selecting {
                 next_tx_ms: now_ms,
-                deadline_ms: now_ms.saturating_add(u64::from(self.config.discover_timeout_ms)),
+                deadline_ms: now_ms
+                    .saturating_add(dhcp_timeout_ms(self.config.discover_timeout_ms)),
                 attempts,
             };
             DhcpEvent::SendQueued
@@ -379,11 +387,20 @@ impl DhcpClient {
             self.state = DhcpState::Requesting {
                 offer,
                 next_tx_ms: now_ms,
-                deadline_ms: now_ms.saturating_add(u64::from(self.config.request_timeout_ms)),
+                deadline_ms: now_ms.saturating_add(dhcp_timeout_ms(self.config.request_timeout_ms)),
                 attempts,
             };
             DhcpEvent::SendQueued
         }
+    }
+}
+
+fn dhcp_timeout_ms(configured_ms: u32) -> u64 {
+    let base = u64::from(configured_ms);
+    if cfg!(feature = "timers-arch-counter") {
+        base
+    } else {
+        base.saturating_mul(16)
     }
 }
 
@@ -428,9 +445,17 @@ fn encode_discover(xid: u32, mac: [u8; 6], buffer: &mut [u8]) -> Result<usize, D
             mac[5],
         ],
     )?;
+    cursor.push_option_bytes(OPT_HOST_NAME, DHCP_HOST_NAME)?;
+    cursor.push_option_bytes(OPT_MAX_MESSAGE_SIZE, &DHCP_MAX_MESSAGE_SIZE.to_be_bytes())?;
     cursor.push_option_bytes(
         OPT_PARAMETER_REQUEST_LIST,
-        &[OPT_SUBNET_MASK, OPT_ROUTER, OPT_LEASE_TIME, OPT_SERVER_ID],
+        &[
+            OPT_SUBNET_MASK,
+            OPT_ROUTER,
+            OPT_DOMAIN_NAME_SERVER,
+            OPT_LEASE_TIME,
+            OPT_SERVER_ID,
+        ],
     )?;
     cursor.finish()
 }
@@ -458,9 +483,16 @@ fn encode_request(
     )?;
     cursor.push_option_bytes(OPT_REQUESTED_IP, &lease.ip)?;
     cursor.push_option_bytes(OPT_SERVER_ID, &lease.server_id)?;
+    cursor.push_option_bytes(OPT_HOST_NAME, DHCP_HOST_NAME)?;
+    cursor.push_option_bytes(OPT_MAX_MESSAGE_SIZE, &DHCP_MAX_MESSAGE_SIZE.to_be_bytes())?;
     cursor.push_option_bytes(
         OPT_PARAMETER_REQUEST_LIST,
-        &[OPT_SUBNET_MASK, OPT_ROUTER, OPT_LEASE_TIME],
+        &[
+            OPT_SUBNET_MASK,
+            OPT_ROUTER,
+            OPT_DOMAIN_NAME_SERVER,
+            OPT_LEASE_TIME,
+        ],
     )?;
     cursor.finish()
 }
@@ -618,7 +650,12 @@ impl<'a> DhcpWriter<'a> {
         }
         self.buffer[self.cursor] = OPT_END;
         self.cursor += 1;
-        Ok(self.cursor)
+        let final_len = self.cursor.max(DHCP_MIN_PACKET_LEN);
+        if final_len > self.buffer.len() {
+            return Err(DhcpFailureReason::BufferTooSmall);
+        }
+        self.buffer[self.cursor..final_len].fill(0);
+        Ok(final_len)
     }
 }
 
@@ -695,7 +732,7 @@ mod tests {
     fn dhcp_discover_encodes_message_type() {
         let mut packet = [0u8; 300];
         let len = encode_discover(0x1234_5678, MAC, &mut packet).expect("discover");
-        assert!(len > DHCP_FIXED_LEN);
+        assert_eq!(len, DHCP_MIN_PACKET_LEN);
         assert_eq!(packet[0], DHCP_OP_BOOTREQUEST);
         assert_eq!(
             packet[DHCP_COOKIE_OFFSET..DHCP_FIXED_LEN],
@@ -711,8 +748,25 @@ mod tests {
         );
         assert_eq!(
             option_value(&packet[..len], OPT_PARAMETER_REQUEST_LIST),
-            Some(&[OPT_SUBNET_MASK, OPT_ROUTER, OPT_LEASE_TIME, OPT_SERVER_ID][..])
+            Some(
+                &[
+                    OPT_SUBNET_MASK,
+                    OPT_ROUTER,
+                    OPT_DOMAIN_NAME_SERVER,
+                    OPT_LEASE_TIME,
+                    OPT_SERVER_ID,
+                ][..]
+            )
         );
+        assert_eq!(
+            option_value(&packet[..len], OPT_HOST_NAME),
+            Some(DHCP_HOST_NAME)
+        );
+        assert_eq!(
+            option_value(&packet[..len], OPT_MAX_MESSAGE_SIZE),
+            Some(&DHCP_MAX_MESSAGE_SIZE.to_be_bytes()[..])
+        );
+        assert_eq!(packet[len - 1], 0);
     }
 
     #[test]
@@ -726,6 +780,7 @@ mod tests {
         };
         let mut packet = [0u8; 300];
         let len = encode_request(0x1234_5678, MAC, lease, &mut packet).expect("request");
+        assert_eq!(len, DHCP_MIN_PACKET_LEN);
         assert_eq!(
             option_value(&packet[..len], OPT_MESSAGE_TYPE),
             Some(&[DhcpMessageType::Request.code()][..])
@@ -737,6 +792,30 @@ mod tests {
         assert_eq!(
             option_value(&packet[..len], OPT_SERVER_ID),
             Some(&lease.server_id[..])
+        );
+        assert_eq!(
+            option_value(&packet[..len], OPT_HOST_NAME),
+            Some(DHCP_HOST_NAME)
+        );
+        assert_eq!(
+            option_value(&packet[..len], OPT_PARAMETER_REQUEST_LIST),
+            Some(
+                &[
+                    OPT_SUBNET_MASK,
+                    OPT_ROUTER,
+                    OPT_DOMAIN_NAME_SERVER,
+                    OPT_LEASE_TIME,
+                ][..]
+            )
+        );
+    }
+
+    #[test]
+    fn dhcp_encode_requires_minimum_bootp_packet_capacity() {
+        let mut packet = [0u8; DHCP_MIN_PACKET_LEN - 1];
+        assert_eq!(
+            encode_discover(0x1234_5678, MAC, &mut packet),
+            Err(DhcpFailureReason::BufferTooSmall)
         );
     }
 
@@ -815,13 +894,14 @@ mod tests {
 
         let mut frame = [0u8; 300];
         assert!(client.build_outbound(MAC, &mut frame, 0).unwrap().is_some());
-        assert_eq!(client.on_timer(10), DhcpEvent::SendQueued);
+        let discover_timeout = dhcp_timeout_ms(config().discover_timeout_ms);
+        assert_eq!(client.on_timer(discover_timeout), DhcpEvent::SendQueued);
         assert!(client
-            .build_outbound(MAC, &mut frame, 10)
+            .build_outbound(MAC, &mut frame, discover_timeout)
             .unwrap()
             .is_some());
         assert_eq!(
-            client.on_timer(20),
+            client.on_timer(discover_timeout.saturating_mul(2)),
             DhcpEvent::Failed(DhcpFailureReason::TimeoutExhausted)
         );
         assert_eq!(client.status().phase, DhcpPhase::Failed);
@@ -829,5 +909,14 @@ mod tests {
             client.status().failure,
             Some(DhcpFailureReason::TimeoutExhausted)
         );
+    }
+
+    #[test]
+    fn dhcp_timeout_scales_for_dummy_timebase() {
+        if cfg!(feature = "timers-arch-counter") {
+            assert_eq!(dhcp_timeout_ms(1_000), 1_000);
+        } else {
+            assert!(dhcp_timeout_ms(1_000) >= 16_000);
+        }
     }
 }

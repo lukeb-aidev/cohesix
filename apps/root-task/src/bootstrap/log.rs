@@ -431,6 +431,21 @@ pub fn force_uart_line_raw(line: &str) {
     emit_uart_payload(line.as_bytes(), true);
 }
 
+/// Emit a diagnostic line to raw UART and retain it in `/log/queen.log`.
+///
+/// Use this for hardware-fault telemetry that must survive log-channel handoff
+/// without losing the audit trail available to 9P/TCP clients.
+pub fn force_uart_line_raw_and_log(line: &str) {
+    if line.trim().is_empty() {
+        return;
+    }
+
+    if log_buffer::log_channel_active() {
+        log_buffer::append_log_line(line);
+    }
+    emit_uart_payload(line.as_bytes(), true);
+}
+
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
     #[cfg(feature = "kernel")]
     {
@@ -681,6 +696,15 @@ mod tests {
             captured.as_slice(),
             b"[bootstrap-test] compact uart summary\r\n"
         );
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    #[test]
+    fn force_uart_line_raw_and_log_routes_via_raw_helper() {
+        sel4::clear_debug_uart_capture();
+        force_uart_line_raw_and_log("[bootstrap-test] hdmi diagnostic");
+        let captured = sel4::take_debug_uart_capture();
+        assert_eq!(captured.as_slice(), b"[bootstrap-test] hdmi diagnostic\r\n");
     }
 
     #[test]

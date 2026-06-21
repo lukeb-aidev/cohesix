@@ -2083,12 +2083,15 @@ pub const DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS: usize = 4096;
 const DRIVER_TASK_PROMPT_RING_ATTEMPTS: usize = 128;
 const DRIVER_TASK_HDMI_FRAME_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 16;
 const DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS;
+const DRIVER_TASK_USB_PROMPT_RECOVERY_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS * 4;
 const DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS;
 const DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_PROMPT_RING_ATTEMPTS * 4;
 const DRIVER_TASK_LONG_INIT_RING_ATTEMPTS: usize = 262_144;
 const DRIVER_TASK_CYW43_TRANSPORT_RING_ATTEMPTS: usize = 1_048_576;
 const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRAP_RING_ATTEMPTS * 4;
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
+const DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize =
+    DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT;
 const DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
 const DRIVER_TASK_USB_ENUM_ADDRESS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
 const DRIVER_TASK_USB_ENUM_TRANSFER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
@@ -5739,6 +5742,12 @@ fn driver_task_ring_attempt_limit(
     }
     if mode == DriverTaskRingCommandMode::PromptSlice
         && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
+    {
+        return DRIVER_TASK_USB_PROMPT_RECOVERY_RING_ATTEMPTS;
+    }
+    if mode == DriverTaskRingCommandMode::PromptSlice
+        && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
         && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
     {
         return DRIVER_TASK_USB_PROMPT_INIT_RING_ATTEMPTS;
@@ -5756,7 +5765,7 @@ fn driver_task_ring_attempt_limit(
         && command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
         && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
     {
-        return DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS;
+        return DRIVER_TASK_USB_PROMPT_RECOVERY_RING_ATTEMPTS;
     }
     if mode == DriverTaskRingCommandMode::NonBlocking
         && command.aux0 == 0
@@ -5827,6 +5836,13 @@ fn driver_task_ring_timeout_keep_active_limit(
         && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
     {
         DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if matches!(
+        mode,
+        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
+    ) && matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
+    {
+        DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT
     } else if matches!(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
@@ -10656,11 +10672,54 @@ mod tests {
             ),
             DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS
         );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            0
+        );
         assert!(!driver_task_ring_call_trace_enabled(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             command,
             DriverTaskRingCommandMode::NonBlocking
         ));
+
+        let slot = DriverTaskCommandSlot::new();
+        let request = 17;
+        record_driver_task_ring_progress(
+            &slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB,
+                aux0: command.aux0,
+            },
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &slot,
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking,
+                request,
+            ),
+            0
+        );
+        slot.timeout_resumes.store(7, Ordering::Release);
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking,
+                request,
+                false,
+            ),
+            (false, 0)
+        );
+        assert_eq!(slot.timeout_resumes.load(Ordering::Acquire), 7);
 
         command.aux0 = DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX;
         assert_eq!(
@@ -10669,7 +10728,86 @@ mod tests {
                 command,
                 DriverTaskRingCommandMode::NonBlocking
             ),
-            DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS
+            DRIVER_TASK_USB_PROMPT_RECOVERY_RING_ATTEMPTS
+        );
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice
+            ),
+            DRIVER_TASK_USB_PROMPT_RECOVERY_RING_ATTEMPTS
+        );
+        assert_eq!(
+            DRIVER_TASK_USB_PROMPT_RECOVERY_RING_ATTEMPTS,
+            DRIVER_TASK_USB_PROMPT_ENUM_RING_ATTEMPTS
+        );
+        assert!(
+            DRIVER_TASK_USB_PROMPT_RECOVERY_RING_ATTEMPTS
+                > DRIVER_TASK_USB_PROMPT_POLL_RING_ATTEMPTS
+        );
+        assert!(driver_task_ring_timeout_keeps_active(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+        assert!(driver_task_ring_timeout_keeps_active(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::PromptSlice
+        ));
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        assert_eq!(
+            DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT,
+            DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        assert!(
+            DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT
+                > DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        let recovery_slot = DriverTaskCommandSlot::new();
+        let recovery_request = 41;
+        record_driver_task_ring_progress(
+            &recovery_slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: recovery_request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_SERVICE_DISPATCH_USB,
+                aux0: command.aux0,
+            },
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &recovery_slot,
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                recovery_request,
+                true,
+            ),
+            (true, 0)
+        );
+        recovery_slot.timeout_resumes.store(
+            DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &recovery_slot,
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                recovery_request,
+                false,
+            ),
+            (false, DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT)
         );
         assert!(!driver_task_ring_call_trace_enabled(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,

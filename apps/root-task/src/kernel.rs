@@ -4437,19 +4437,30 @@ fn bootstrap<P: Platform>(
                 Pi4BootNetPolicySource::DtbApplied => "dtb",
                 Pi4BootNetPolicySource::DtbRejected(_) => "dtb-rejected",
             };
-            let _ = write!(
-                line,
-                "[net-policy] source={} mode={} interface={} wifi_creds={} pre_root_selection={:?}",
-                source,
-                config.policy.mode.as_str(),
-                config.policy.interface.as_str(),
-                if boot_policy.wifi_credentials_present {
-                    "yes"
-                } else {
-                    "no"
-                },
-                selection,
-            );
+            if matches!(config.policy.interface.as_str(), "wifi" | "auto") {
+                let _ = write!(
+                    line,
+                    "[net-policy] source={} mode={} interface={} wifi_creds={} pre_root_selection={:?}",
+                    source,
+                    config.policy.mode.as_str(),
+                    config.policy.interface.as_str(),
+                    if boot_policy.wifi_credentials_present {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                    selection,
+                );
+            } else {
+                let _ = write!(
+                    line,
+                    "[net-policy] source={} mode={} interface={} pre_root_selection={:?}",
+                    source,
+                    config.policy.mode.as_str(),
+                    config.policy.interface.as_str(),
+                    selection,
+                );
+            }
             boot_log::force_uart_line(line.as_str());
         }
         boot_policy
@@ -4890,44 +4901,72 @@ fn bootstrap<P: Platform>(
             let rejected_policy_reason = dtb_rejected_net_policy_reason(boot_policy.source);
             if hardware.network.enabled && !config.backend.uses_dev_virt_defaults() {
                 let mut policy_line = heapless::String::<192>::new();
+                let wifi_policy_relevant =
+                    matches!(config.policy.interface.as_str(), "wifi" | "auto");
                 match boot_policy.source {
                     Pi4BootNetPolicySource::Manifest => {
-                        let _ = write!(
-                            policy_line,
-                            "[net-policy] source=manifest mode={} interface={} wifi_creds={}",
-                            config.policy.mode.as_str(),
-                            config.policy.interface.as_str(),
-                            if boot_policy.wifi_credentials_present {
-                                "yes"
-                            } else {
-                                "no"
-                            }
-                        );
+                        if wifi_policy_relevant {
+                            let _ = write!(
+                                policy_line,
+                                "[net-policy] source=manifest mode={} interface={} wifi_creds={}",
+                                config.policy.mode.as_str(),
+                                config.policy.interface.as_str(),
+                                if boot_policy.wifi_credentials_present {
+                                    "yes"
+                                } else {
+                                    "no"
+                                }
+                            );
+                        } else {
+                            let _ = write!(
+                                policy_line,
+                                "[net-policy] source=manifest mode={} interface={}",
+                                config.policy.mode.as_str(),
+                                config.policy.interface.as_str(),
+                            );
+                        }
                     }
                     Pi4BootNetPolicySource::DtbApplied => {
-                        let _ = write!(
-                            policy_line,
-                            "[net-policy] source=dtb mode={} interface={} wifi_creds={}",
-                            config.policy.mode.as_str(),
-                            config.policy.interface.as_str(),
-                            if boot_policy.wifi_credentials_present {
-                                "yes"
-                            } else {
-                                "no"
-                            }
-                        );
+                        if wifi_policy_relevant {
+                            let _ = write!(
+                                policy_line,
+                                "[net-policy] source=dtb mode={} interface={} wifi_creds={}",
+                                config.policy.mode.as_str(),
+                                config.policy.interface.as_str(),
+                                if boot_policy.wifi_credentials_present {
+                                    "yes"
+                                } else {
+                                    "no"
+                                }
+                            );
+                        } else {
+                            let _ = write!(
+                                policy_line,
+                                "[net-policy] source=dtb mode={} interface={}",
+                                config.policy.mode.as_str(),
+                                config.policy.interface.as_str(),
+                            );
+                        }
                     }
                     Pi4BootNetPolicySource::DtbRejected(reason) => {
-                        let _ = write!(
-                            policy_line,
-                            "[net-policy] source=dtb rejected reason={} wifi_creds={}",
-                            reason,
-                            if boot_policy.wifi_credentials_present {
-                                "yes"
-                            } else {
-                                "no"
-                            }
-                        );
+                        if wifi_policy_relevant {
+                            let _ = write!(
+                                policy_line,
+                                "[net-policy] source=dtb rejected reason={} wifi_creds={}",
+                                reason,
+                                if boot_policy.wifi_credentials_present {
+                                    "yes"
+                                } else {
+                                    "no"
+                                }
+                            );
+                        } else {
+                            let _ = write!(
+                                policy_line,
+                                "[net-policy] source=dtb rejected reason={}",
+                                reason,
+                            );
+                        }
                     }
                 }
                 console.writeln_prefixed(policy_line.as_str());

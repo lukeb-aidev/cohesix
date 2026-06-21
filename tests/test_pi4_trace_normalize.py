@@ -368,7 +368,7 @@ def test_parse_events_filters_unrelated_lines() -> None:
 
 def test_pi4_wifi_mailbox_usb_power_lines_are_usb_platform_evidence() -> None:
     event = normalizer.parse_line(
-        "[pi4-wifi] mailbox vl805-usb-hcd-power action=begin module=0x00000003",
+        "[pi4-platform] mailbox vl805-usb-hcd-power action=begin module=0x00000003",
         31,
     )
 
@@ -380,7 +380,7 @@ def test_pi4_wifi_mailbox_usb_power_lines_are_usb_platform_evidence() -> None:
 
 def test_pi4_wifi_mailbox_module3_power_on_line_is_usb_platform_evidence() -> None:
     event = normalizer.parse_line(
-        "[pi4-wifi] mailbox power-on module=0x00000003",
+        "[pi4-platform] mailbox power-on module=0x00000003",
         32,
     )
 
@@ -589,6 +589,11 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "NET_ACTIVE": "unknown",
         "NET_ADDR_SRC": "unknown",
         "NET_DHCP": "unknown",
+        "WIFI_DATA_PATH_TX": 0,
+        "WIFI_DATA_PATH_RX_PRESERVED": 0,
+        "WIFI_DATA_PATH_RX_DELIVERED": 0,
+        "WIFI_DATA_PATH_RX_DROPPED": 0,
+        "WIFI_DATA_PATH_LAST": "none",
         "DRIVER_TASK_DEFAULT_REQUESTED": "no",
         "DRIVER_TASK_LIVE_HOT_PATHS": "no",
         "DRIVER_TASK_CONTRACTS": 0,
@@ -667,6 +672,13 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_RUNTIME_QUEUED_REPORTS": 0,
         "USB_RUNTIME_TRANSFER_EVENTS": 0,
         "USB_RUNTIME_REPORT_STATUS": "unknown",
+        "USB_RUNTIME_RECOVERY_DIAG_VALID": "unknown",
+        "USB_RUNTIME_ENDPOINT_RECOVERIES": 0,
+        "USB_RUNTIME_ENDPOINT_RECOVERY_FAILURES": 0,
+        "USB_RUNTIME_QUEUE_COLLAPSE_RECOVERIES": 0,
+        "USB_RUNTIME_RECOVERY_STAGE": "unknown",
+        "USB_RUNTIME_RECOVERY_REASON": "unknown",
+        "USB_RUNTIME_COMMAND_COMPLETION_BLOCKED": 0,
         "USB_EVENT_LOOP_RUNTIME_SKIPPED": 0,
         "USB_POST_FIRST_BYTE_BLOCKER": "none",
         "SERIAL_DRIVER_ACCEPTED": "no",
@@ -741,6 +753,47 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["USB_BURST_PROOF"] == "yes"
     assert record["USB_BURST_DROPS"] == 0
     assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_gate_summary_tracks_cyw43_data_path_trace_counts() -> None:
+    """Gate summaries surface CYW43 DHCP/ARP TX and RX handoff telemetry."""
+
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_DATA_PATH contract=cyw43455 event=tx-result "
+            "action=submitted attempt=1 len=286 ethertype=0x0800 ip_proto=17 "
+            "udp_src=68 udp_dst=67 dhcp=discover arp=none tx_total_len=328 "
+            "tx_request_len=328 cmd53_mode=block block_size=64 block_count=6 "
+            "completion_code=1 completion_detail=0x0148 completion_result=0x00000148 "
+            "completion_flags=0x0000 completion_len=0 pending_before=no pending_after=no",
+            "CYW43_DRIVER_TASK_DATA_PATH contract=cyw43455 event=rx-preserve "
+            "action=pre-poll attempt=0 len=286 ethertype=0x0800 ip_proto=17 "
+            "udp_src=67 udp_dst=68 dhcp=offer arp=none tx_total_len=328 "
+            "tx_request_len=328 cmd53_mode=block block_size=64 block_count=6 "
+            "completion_code=2 completion_detail=0x0000 completion_result=0x0000011e "
+            "completion_flags=0x0001 completion_len=286 pending_before=no pending_after=yes",
+            "CYW43_DRIVER_TASK_DATA_PATH contract=cyw43455 event=rx-deliver "
+            "action=pending attempt=0 len=42 ethertype=0x0806 ip_proto=0 "
+            "udp_src=0 udp_dst=0 dhcp=none arp=reply tx_total_len=84 "
+            "tx_request_len=84 cmd53_mode=byte block_size=84 block_count=0 "
+            "completion_code=0 completion_detail=0x0000 completion_result=0x00000000 "
+            "completion_flags=0x0000 completion_len=0 pending_before=yes pending_after=no",
+            "CYW43_DRIVER_TASK_DATA_PATH contract=cyw43455 event=rx-preserve-drop "
+            "action=pre-poll attempt=0 len=286 ethertype=0x0800 ip_proto=17 "
+            "udp_src=67 udp_dst=68 dhcp=ack arp=none tx_total_len=328 "
+            "tx_request_len=328 cmd53_mode=block block_size=64 block_count=6 "
+            "completion_code=2 completion_detail=0x0000 completion_result=0x0000011e "
+            "completion_flags=0x0001 completion_len=286 pending_before=yes pending_after=yes",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DATA_PATH_TX"] == 1
+    assert record["WIFI_DATA_PATH_RX_PRESERVED"] == 1
+    assert record["WIFI_DATA_PATH_RX_DELIVERED"] == 1
+    assert record["WIFI_DATA_PATH_RX_DROPPED"] == 1
+    assert record["WIFI_DATA_PATH_LAST"] == "rx-preserve-drop:pre-poll:dhcp-ack"
 
 
 def test_gate_summary_accepts_sustained_input_usb_burst_field() -> None:
@@ -1093,6 +1146,29 @@ def test_gate_summary_owner_state_follows_selected_pi4_network_profile() -> None
     wired_record = normalizer.summarize_gates(wired_events).to_record()
     assert wired_record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
     assert wired_record["DRIVER_TASK_ACTIVE_NET"] == "genet"
+
+
+def test_gate_summary_masks_wifi_gates_when_genet_is_selected() -> None:
+    """A wired DHCP failure must not be scored as a WiFi bring-up failure."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wired active_net=genet",
+            "[net-console] root console bounded-wait reason=net-not-ready active=wired action=wait-for-net",
+            "[dhcp] start backend=bcmgenet-v5 mode=dhcp interface=wired",
+            "[dhcp] failed reason=timeout-exhausted discovers=4 active=wired",
+            "netstats: mode=dhcp policy=wired active=wired standby=none "
+            "addr_src=dhcp-failed ip=0.0.0.0 gateway=0.0.0.0 dhcp=failed",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_ACTIVE_NET"] == "genet"
+    assert record["NET_ACTIVE"] == "wired"
+    assert record["WIFI_GATE"] == 0
+    assert record["WIFI_BLOCKER"] == "not-selected"
+    assert record["WIFI_EXACT"] == "none"
+    assert record["WIFI_OLDGOOD_MISSING"] == "not-selected"
 
 
 def test_gate_summary_explicit_pointer_free_ipc_no_overrides_abi_label() -> None:
@@ -5860,6 +5936,32 @@ def test_gate_summary_reports_post_first_byte_queue_collapse() -> None:
     assert record["USB_RUNTIME_REPORT_STATUS"] == "queue-collapse"
 
 
+def test_gate_summary_reports_usb_runtime_recovery_diagnostics() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "usb: runtime_queue queue_valid=yes queued_reports=32 "
+            "doorbell_pending=no preserved_events=0 transfer_events=0 "
+            "report_status=none",
+            "usb: runtime_recovery diag_valid=yes recoveries=1 failures=0 "
+            "queue_collapse=0 stage=ready stage_code=9 "
+            "reason=full-queue-no-event reason_code=3 "
+            "command_completion_blocked=2",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_RUNTIME_RECOVERY_DIAG_VALID"] == "yes"
+    assert record["USB_RUNTIME_ENDPOINT_RECOVERIES"] == 1
+    assert record["USB_RUNTIME_ENDPOINT_RECOVERY_FAILURES"] == 0
+    assert record["USB_RUNTIME_QUEUE_COLLAPSE_RECOVERIES"] == 0
+    assert record["USB_RUNTIME_RECOVERY_STAGE"] == "ready"
+    assert record["USB_RUNTIME_RECOVERY_REASON"] == "full-queue-no-event"
+    assert record["USB_RUNTIME_COMMAND_COMPLETION_BLOCKED"] == 2
+
+
 def test_gate_summary_reports_post_first_byte_recovery_failed() -> None:
     events = normalizer.parse_events(
         [
@@ -9372,6 +9474,67 @@ def test_gate_summary_accepts_host_eapol_secure_join_proof() -> None:
 
     assert gates.wifi_gate == 8
     assert gates.wifi_blocker == "none"
+
+
+def test_gate_summary_promotes_dhcp_pending_after_secure_release() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=required reason=host-eapol-required polls=8193 "
+            "associated=yes link_up=no event_rx=1 eapol_rx=1 data_rx=1 "
+            "firstread_class=source-asserted-empty",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=secure reason=none polls=8194 associated=yes link_up=yes "
+            "event_rx=1 eapol_rx=4 data_rx=4 next_action=release-dhcp-data",
+            "CYW43_DRIVER_TASK_WIFI_GATE7 contract=cyw43455 "
+            "source=host-eapol-status subgate=7e name=secure-release "
+            "status=secure reason=passed polls=8194 associated=yes link_up=yes "
+            "event_rx=1 eapol_rx=4 data_rx=4 result=0x00000000",
+            "ERR NETTEST reason=policy detail=dhcp-pending",
+            "netstats: mode=dhcp policy=wifi active=wifi standby=none "
+            "addr_src=dhcp-pending ip=0.0.0.0 gateway=0.0.0.0 dhcp=selecting",
+            "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=4 eapol_start=0 eapol_secure=1",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert record["WIFI_GATE"] == 9
+    assert record["WIFI_BLOCKER"] == "dhcp-pending"
+    assert record["WIFI_EXACT"] == "dhcp-pending"
+    assert record["WIFI_PHASE"] == "dhcp"
+    assert record["WIFI_SUBGATE"] == "7e"
+    assert record["WIFI_SUBGATE_NAME"] == "secure-release"
+
+
+def test_gate_summary_reports_dhcp_not_started_after_secure_release() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=secure reason=none polls=8194 associated=yes link_up=yes "
+            "event_rx=1 eapol_rx=4 data_rx=4 next_action=release-dhcp-data",
+            "CYW43_DRIVER_TASK_WIFI_GATE7 contract=cyw43455 "
+            "source=host-eapol-status subgate=7e name=secure-release "
+            "status=secure reason=passed polls=8194 associated=yes link_up=yes "
+            "event_rx=1 eapol_rx=4 data_rx=4 result=0x00000000",
+            "wifi: gate 9 name=dhcp-bound status=fail "
+            "evidence=active=wifi address_source=dhcp-pending "
+            "dhcp_phase=disabled ip=0.0.0.0 "
+            "dependency=ready-for-direct-evidence next=nettest-netstats-cohsh",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert record["WIFI_GATE"] == 9
+    assert record["WIFI_BLOCKER"] == "dhcp-not-started"
+    assert record["WIFI_EXACT"] == "dhcp-not-started"
+    assert record["WIFI_PHASE"] == "dhcp"
+    assert record["WIFI_BLOCKER_LINE"] == 3
+    assert record["WIFI_SUBGATE"] == "7e"
+    assert record["WIFI_SUBGATE_NAME"] == "secure-release"
 
 
 def test_gate_summary_accepts_oldgood_wifi_replay_contract() -> None:

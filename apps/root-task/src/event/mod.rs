@@ -155,6 +155,18 @@ fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<DEFAULT_LINE_CAPAC
     buf
 }
 
+#[cfg(feature = "kernel")]
+#[derive(Clone)]
+struct WifiLiveNetFrontier {
+    active_interface: &'static str,
+    address_source: &'static str,
+    dhcp_phase: &'static str,
+    ip: HeaplessString<32>,
+    wifi_assoc: u64,
+    wifi_link_up: u64,
+    wifi_host_eapol_secure: u64,
+}
+
 /// Trait used by the event pump to emit audit records.
 pub trait AuditSink {
     /// Informational message emitted during pump initialisation or state changes.
@@ -216,6 +228,7 @@ const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
 const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
+const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 3;
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 32;
 const CONSOLE_OUTPUT_LINES_PER_IDLE_TURN: usize = 2;
 const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
@@ -292,12 +305,14 @@ enum LocalSeatEscapeState {
 }
 
 #[cfg(test)]
-const fn local_seat_input_drain_contract_for_test() -> (usize, usize, usize, usize, usize, usize) {
+const fn local_seat_input_drain_contract_for_test(
+) -> (usize, usize, usize, usize, usize, usize, usize) {
     (
         LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN,
         LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN,
         LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD,
         LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES,
+        LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN,
         LOCAL_SEAT_SERIAL_LINES_PER_TURN,
         LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES,
     )
@@ -323,15 +338,22 @@ fn net_status_terminal_failure_reason(status: &NetStatusReport) -> Option<&'stat
 
 #[cfg(feature = "net-console")]
 fn net_status_pre_root_serial_release_reason(status: &NetStatusReport) -> Option<&'static str> {
-    match status.address_source {
-        "wifi-host-eapol-pending" => Some("wifi-host-eapol-pending"),
-        _ => net_status_terminal_failure_reason(status),
-    }
+    net_status_terminal_failure_reason(status)
 }
 
 #[cfg(feature = "net-console")]
 fn net_status_needs_host_eapol_burst(status: &NetStatusReport) -> bool {
     status.address_source == "wifi-host-eapol-pending"
+}
+
+#[cfg(feature = "net-console")]
+fn net_status_active_interface_is_wifi(status: &NetStatusReport) -> bool {
+    status.active_interface == "wifi"
+}
+
+#[cfg(feature = "net-console")]
+fn net_status_active_interface_is_wired(status: &NetStatusReport) -> bool {
+    status.active_interface == "wired"
 }
 
 #[cfg(feature = "net-console")]
@@ -2329,6 +2351,14 @@ where
         }
     }
 
+    /// Returns the selected network interface label for net-console status messages.
+    #[cfg(feature = "net-console")]
+    pub fn net_console_active_interface(&self) -> Option<&'static str> {
+        self.net
+            .as_ref()
+            .map(|net| net.status_report().active_interface)
+    }
+
     /// Returns whether the active network transport is ready to carry the root console.
     #[cfg(feature = "net-console")]
     pub fn net_console_ready_for_root(&self) -> bool {
@@ -2451,7 +2481,13 @@ where
     }
 
     fn should_defer_physical_console_output(&mut self) -> bool {
-        if self.console_output_flush_active || !self.physical_console_input_pending_for_output() {
+        if self.console_output_flush_active {
+            return false;
+        }
+        if self.serial.tx_pending() && self.last_input_source == ConsoleInputSource::LocalSeat {
+            return true;
+        }
+        if !self.physical_console_input_pending_for_output() {
             return false;
         }
         if self.console_input_turn_active && self.console_input_turn_output_budget != 0 {
@@ -2498,10 +2534,10 @@ where
             && !self.physical_console_input_pending_for_output()
         {
             let output = self.pending_console_output.remove(0);
-            match output.kind {
-                PendingConsoleOutputKind::Line => self.emit_serial_line_now(output.text.as_str()),
-                PendingConsoleOutputKind::Prompt => self.emit_prompt_now(),
-            }
+            self.with_local_seat_mirror_suppressed(|this| match output.kind {
+                PendingConsoleOutputKind::Line => this.emit_serial_line_now(output.text.as_str()),
+                PendingConsoleOutputKind::Prompt => this.emit_prompt_now(),
+            });
             self.metrics.physical_console_output_flushed = self
                 .metrics
                 .physical_console_output_flushed
@@ -2539,12 +2575,14 @@ where
         let Some(runtime) = self.local_seat.as_mut() else {
             return;
         };
-        if !runtime.linked_hdmi_pending_work() {
-            return;
-        }
-        if runtime.pump_linked_hdmi_once() {
+        let mut passes = 0usize;
+        while passes < LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN && runtime.linked_hdmi_pending_work() {
+            if !runtime.pump_linked_hdmi_once() {
+                break;
+            }
             self.metrics.local_seat_hdmi_pump_turns =
                 self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
+            passes = passes.saturating_add(1);
         }
     }
 
@@ -2758,6 +2796,8 @@ where
         {
             #[cfg(feature = "net-console")]
             let wifi_detail = self.net_disabled_refusal_detail();
+            #[cfg(feature = "net-console")]
+            let wifi_debug_enabled = self.wifi_debug_commands_enabled();
             if let Some(runtime) = self.local_seat.as_mut() {
                 let attempt = self.post_prompt_local_seat_attach_attempts;
                 self.post_prompt_local_seat_attach_attempts = self
@@ -2786,7 +2826,7 @@ where
                 }
                 #[cfg(feature = "net-console")]
                 {
-                    if verbose_attempt {
+                    if verbose_attempt && wifi_debug_enabled {
                         let wifi_frontier = format_message(format_args!(
                             "[drivers] WiFi frontier: driver-task replay state preserved {}",
                             wifi_detail
@@ -2862,6 +2902,7 @@ where
         if self.should_defer_physical_console_output()
             && self.queue_physical_console_output(PendingConsoleOutputKind::Line, line)
         {
+            self.mirror_local_seat_line_if_ready(line);
             return;
         }
         self.emit_serial_line_now(line);
@@ -2887,6 +2928,7 @@ where
         if self.should_defer_physical_console_output()
             && self.queue_physical_console_output(PendingConsoleOutputKind::Prompt, CONSOLE_PROMPT)
         {
+            self.mirror_local_seat_prompt_if_ready();
             return;
         }
         self.emit_prompt_now();
@@ -3054,27 +3096,20 @@ where
         false
     }
 
-    fn emit_smp(&mut self, mode: SmpMode) -> bool {
+    fn emit_smp(&mut self, mode: SmpMode) -> Option<&'static str> {
         match mode {
             SmpMode::Snapshot => self.emit_smp_snapshot(),
             SmpMode::Activity => {
                 self.emit_smp_activity();
-                true
+                Some("mode=activity")
             }
         }
     }
 
     #[allow(unsafe_code)]
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-    fn emit_smp_snapshot(&mut self) -> bool {
-        if let Some(reason) = self.smp_debug_dump_pressure_reason() {
-            let line = format_message(format_args!(
-                "[smp] debug scheduler dump skipped reason={} use=smp-activity raw=pressure-gated",
-                reason
-            ));
-            self.emit_console_line(line.as_str());
-            return true;
-        }
+    fn emit_smp_snapshot(&mut self) -> Option<&'static str> {
+        self.preflush_serial_before_raw_uart();
         self.emit_console_line("[smp] debug scheduler dump begin");
         self.serial.flush_tx();
         let policy = crate::affinity::policy();
@@ -3085,27 +3120,13 @@ where
         self.serial.flush_tx();
         self.emit_console_line("[smp] debug scheduler dump end");
         self.serial.flush_tx();
-        true
-    }
-
-    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
-    fn smp_debug_dump_pressure_reason(&self) -> Option<&'static str> {
-        if self.serial.tx_pending() || !self.pending_console_output.is_empty() {
-            return Some("serial-output-pending");
-        }
-        if let Some(runtime) = self.local_seat.as_ref() {
-            let display = runtime.display_trace();
-            if display.pending_bytes != 0 || display.pending_redraw {
-                return Some("local-seat-display-pending");
-            }
-        }
-        None
+        Some("mode=snapshot")
     }
 
     #[cfg(not(all(feature = "kernel", sel4_config_debug_build)))]
-    fn emit_smp_snapshot(&mut self) -> bool {
+    fn emit_smp_snapshot(&mut self) -> Option<&'static str> {
         self.emit_console_line("ERR reason=unsupported");
-        false
+        None
     }
 
     fn emit_smp_activity(&mut self) {
@@ -3233,13 +3254,17 @@ where
         ));
         self.emit_console_line(turns.as_str());
         let display_line = format_message(format_args!(
-            "[smp] activity local-seat-display pending_bytes={} pending_redraw={} submitted={} deferred={} busy={} no_reply={} coalesced={} backpressure_bytes={} superseded_bytes={}",
+            "[smp] activity local-seat-display pending_bytes={} redraw_bytes={} pending_redraw={} scrollback={} open_line={} submitted={} deferred={} busy={} no_reply={} redraw_no_reply={} coalesced={} backpressure_bytes={} superseded_bytes={}",
             display.pending_bytes,
+            display.redraw_bytes,
             Self::yes_no(display.pending_redraw),
+            display.scrollback_offset,
+            Self::yes_no(display.open_line),
             display.submitted_frames,
             display.deferred_frames,
             display.busy_frames,
             display.no_reply_frames,
+            display.redraw_no_reply_streak,
             display.coalesced_redraws,
             display.backpressure_bytes,
             display.superseded_bytes,
@@ -3594,15 +3619,17 @@ where
             counters.tcp_smoke_outbound_failures,
         ));
         self.emit_console_line(tcp.as_str());
-        let wifi = format_message(format_args!(
-            "[smp] activity net-wifi assoc={} link={} eapol_rx={} eapol_start={} eapol_secure={}",
-            counters.wifi_assoc,
-            counters.wifi_link_up,
-            counters.wifi_host_eapol_rx,
-            counters.wifi_host_eapol_start,
-            counters.wifi_host_eapol_secure,
-        ));
-        self.emit_console_line(wifi.as_str());
+        if net_status_active_interface_is_wifi(&status) {
+            let wifi = format_message(format_args!(
+                "[smp] activity net-wifi assoc={} link={} eapol_rx={} eapol_start={} eapol_secure={}",
+                counters.wifi_assoc,
+                counters.wifi_link_up,
+                counters.wifi_host_eapol_rx,
+                counters.wifi_host_eapol_start,
+                counters.wifi_host_eapol_secure,
+            ));
+            self.emit_console_line(wifi.as_str());
+        }
     }
 
     #[cfg(not(feature = "net-console"))]
@@ -3974,7 +4001,16 @@ where
             return true;
         }
 
-        Self::hardware_has_device_kind(crate::generated::HardwareDeviceKind::Wifi)
+        if !Self::hardware_has_device_kind(crate::generated::HardwareDeviceKind::Wifi) {
+            return false;
+        }
+
+        #[cfg(feature = "net-console")]
+        if let Some(net) = self.net.as_ref() {
+            return net_status_active_interface_is_wifi(&net.status_report());
+        }
+
+        true
     }
 
     #[cfg(feature = "kernel")]
@@ -4475,12 +4511,46 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn emit_usb_runtime_recovery(&mut self, frame: crate::hal::driver_task::DriverFrameDescriptor) {
+        let (
+            diag_valid,
+            stage,
+            command_completion_blocked,
+            recoveries,
+            failures,
+            queue_collapse,
+            reason,
+        ) = Self::usb_runtime_keyboard_recovery_diag_fields(frame);
+        let line = format_message(format_args!(
+            "usb: runtime_recovery diag_valid={} recoveries={} failures={} queue_collapse={} stage={} stage_code={} reason={} reason_code={} command_completion_blocked={}",
+            Self::yes_no(diag_valid),
+            recoveries,
+            failures,
+            queue_collapse,
+            Self::usb_runtime_keyboard_recovery_stage_label(stage),
+            stage,
+            Self::usb_runtime_keyboard_recovery_reason_label(reason),
+            reason,
+            command_completion_blocked,
+        ));
+        self.emit_console_line(line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_usb_status(
         &mut self,
         backend_attached: bool,
         polling_enabled: bool,
         action_detail: Option<&str>,
     ) {
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        {
+            if polling_enabled {
+                if let Some(local_seat) = self.local_seat.as_mut() {
+                    local_seat.poll_backend_keyboard();
+                }
+            }
+        }
         #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
         #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
@@ -4489,6 +4559,14 @@ where
         let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
         #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let linked_result = 0u32;
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_frame = crate::local_seat::linked_local_seat_usb_runtime_frame();
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_frame = crate::hal::driver_task::DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        };
         let (queued_reports, doorbell_pending, preserved_events, transfer_events, report_status) =
             Self::usb_runtime_queue_fields(linked_result);
         let queue_valid = Self::usb_runtime_detail_has_queue_result(linked_detail);
@@ -4530,6 +4608,7 @@ where
             Self::usb_runtime_keyboard_report_status_label(report_status),
         ));
         self.emit_console_line(queue_line.as_str());
+        self.emit_usb_runtime_recovery(linked_frame);
         if let Some(action_detail) = action_detail {
             let _ = write!(line, " {action_detail}");
         }
@@ -4617,18 +4696,22 @@ where
         ));
         self.emit_console_line(sustained_line.as_str());
         let output_pressure_line = format_message(format_args!(
-            "usb: output_pressure serial_tx_pending={} serial_interactive={} deferred={} flushed={} backpressure={} hdmi_pending_bytes={} hdmi_pending_redraw={} hdmi_submitted={} hdmi_deferred={} hdmi_busy={} hdmi_no_reply={} hdmi_coalesced={} hdmi_backpressure_bytes={} hdmi_superseded_bytes={}",
+            "usb: output_pressure serial_tx_pending={} serial_interactive={} deferred={} flushed={} backpressure={} hdmi_pending_bytes={} hdmi_redraw_bytes={} hdmi_pending_redraw={} hdmi_scrollback={} hdmi_open_line={} hdmi_submitted={} hdmi_deferred={} hdmi_busy={} hdmi_no_reply={} hdmi_redraw_no_reply={} hdmi_coalesced={} hdmi_backpressure_bytes={} hdmi_superseded_bytes={}",
             Self::yes_no(self.serial.tx_pending()),
             Self::yes_no(self.serial.interactive_input_active()),
             self.metrics.physical_console_output_deferred,
             self.metrics.physical_console_output_flushed,
             self.metrics.physical_console_output_backpressure,
             display_trace.pending_bytes,
+            display_trace.redraw_bytes,
             Self::yes_no(display_trace.pending_redraw),
+            display_trace.scrollback_offset,
+            Self::yes_no(display_trace.open_line),
             display_trace.submitted_frames,
             display_trace.deferred_frames,
             display_trace.busy_frames,
             display_trace.no_reply_frames,
+            display_trace.redraw_no_reply_streak,
             display_trace.coalesced_redraws,
             display_trace.backpressure_bytes,
             display_trace.superseded_bytes,
@@ -4664,8 +4747,6 @@ where
             let linked_keyboard_ready = crate::local_seat::linked_local_seat_usb_keyboard_ready();
             let linked_first_report = crate::local_seat::linked_local_seat_usb_first_report_ready();
             let linked_first_byte = crate::local_seat::linked_local_seat_usb_first_byte_ready();
-            let linked_detail = crate::local_seat::linked_local_seat_usb_runtime_detail();
-            let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
             let linked_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
                 crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             );
@@ -4822,21 +4903,43 @@ where
             ));
             self.emit_console_line(linked_runtime_snapshot.as_str());
             if let Some(progress) = linked_progress {
+                let raw_progress_gate = Self::usb_runtime_gate_for_progress_phase(progress.phase);
+                let progress_superseded = Self::usb_runtime_progress_superseded_by_keyboard(
+                    first_byte,
+                    proof_gate,
+                    raw_progress_gate,
+                );
+                let progress_line_gate = if progress_superseded {
+                    proof_gate
+                } else {
+                    raw_progress_gate
+                };
+                let progress_line_blocker = if progress_superseded {
+                    "none"
+                } else {
+                    Self::usb_runtime_blocker_for_progress_phase(progress.phase)
+                };
+                let progress_line_next = if progress_superseded {
+                    "keyboard-first-byte"
+                } else {
+                    Self::usb_runtime_next_action_for_progress_phase(progress.phase)
+                };
                 let progress_line = format_message(format_args!(
-                    "usb: linked_runtime_progress marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} gate={} blocker={} next_action={}",
+                    "usb: linked_runtime_progress marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} gate={} blocker={} next_action={} superseded={}",
                     Self::yes_no(progress.marker_valid),
                     progress.sequence,
                     progress.phase,
                     progress.phase_name,
                     progress.aux0,
-                    Self::usb_runtime_gate_for_progress_phase(progress.phase),
-                    Self::usb_runtime_blocker_for_progress_phase(progress.phase),
-                    Self::usb_runtime_next_action_for_progress_phase(progress.phase),
+                    progress_line_gate,
+                    progress_line_blocker,
+                    progress_line_next,
+                    Self::yes_no(progress_superseded),
                 ));
                 self.emit_console_line(progress_line.as_str());
             } else {
                 self.emit_console_line(
-                    "usb: linked_runtime_progress marker_valid=no sequence=0 phase=0 phase_name=none aux0=0x00000000 gate=0 blocker=none next_action=submit-linked-runtime-command",
+                    "usb: linked_runtime_progress marker_valid=no sequence=0 phase=0 phase_name=none aux0=0x00000000 gate=0 blocker=none next_action=submit-linked-runtime-command superseded=no",
                 );
             }
             if linked_detail
@@ -4855,6 +4958,7 @@ where
                     Self::usb_runtime_keyboard_report_status_label(report_status),
                 ));
                 self.emit_console_line(runtime_queue.as_str());
+                self.emit_usb_runtime_recovery(linked_frame);
             } else {
                 let runtime_progress = format_message(format_args!(
                     "usb: runtime_progress phase=enumeration detail=0x{:04x} result=0x{:08x} queue=not-applicable",
@@ -7016,6 +7120,89 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn usb_runtime_keyboard_recovery_diag_fields(
+        frame: crate::hal::driver_task::DriverFrameDescriptor,
+    ) -> (bool, u32, u32, u32, u32, u32, u32) {
+        let valid =
+            ((frame.offset >> 16) as u16) == pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_DIAG_MAGIC;
+        if !valid {
+            return (false, 0, 0, 0, 0, 0, 0);
+        }
+        (
+            true,
+            frame.offset & 0xff,
+            (frame.offset >> 8) & 0xff,
+            (frame.len & 0xff) as u32,
+            ((frame.len >> 8) & 0xff) as u32,
+            (frame.flags & 0xff) as u32,
+            ((frame.flags >> 8) & 0xff) as u32,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_keyboard_recovery_stage_label(stage: u32) -> &'static str {
+        match stage as u8 {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_NONE => "none",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_BEGIN => "begin",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_NOT_READY => "not-ready",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_LIMIT => "limit",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_STOP_ENDPOINT => {
+                "stop-endpoint"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_RESET_ENDPOINT => {
+                "reset-endpoint"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_RESET_RING => "reset-ring",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_SET_DEQUEUE => "set-dequeue",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_REARM => "rearm",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_READY => "ready",
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_keyboard_recovery_reason_label(reason: u32) -> &'static str {
+        match reason as u8 {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_NONE => "none",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_REENUMERATION_LIMIT => {
+                "reenumeration-limit"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_QUEUE_COLLAPSE => {
+                "queue-collapse"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_FULL_QUEUE_NO_EVENT => {
+                "full-queue-no-event"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_STEADY_IDLE => {
+                "steady-idle"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_OVERQUEUE => "overqueue",
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_PRE_FIRST_UNDERFILLED => {
+                "pre-first-underfilled"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_AUX_UNDERFILLED => {
+                "aux-underfilled"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_STEADY_UNMATCHED => {
+                "steady-unmatched"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_AUX_UNMATCHED => {
+                "aux-unmatched"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_HARD_UNMATCHED => {
+                "hard-unmatched"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_REARM_COLLAPSE => {
+                "rearm-collapse"
+            }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_MATCHED_TRANSFER_FAULT => {
+                "matched-transfer-fault"
+            }
+            _ => "unknown",
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     const fn usb_runtime_keyboard_report_status_label(status: u32) -> &'static str {
         match status as u8 {
             pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE => "none",
@@ -7143,6 +7330,14 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
                 | pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
         )
+    }
+
+    const fn usb_runtime_progress_superseded_by_keyboard(
+        first_byte: bool,
+        proof_gate: u8,
+        progress_gate: u8,
+    ) -> bool {
+        first_byte && progress_gate < proof_gate
     }
 
     #[cfg(feature = "kernel")]
@@ -7774,13 +7969,15 @@ where
         if !Self::wifi_command_supports_driver_task_snapshot(command) {
             return false;
         }
+        let live_net_frontier = self.wifi_live_net_frontier();
+        let live_net_supersedes_runtime = live_net_frontier.is_some();
         let host_eapol_exact = self
             .net_unavailable_detail
             .as_ref()
             .and_then(|cause| Self::wifi_host_eapol_exact_from_cause(cause.as_str()));
         let host_eapol_exact =
             host_eapol_exact.or_else(|| self.wifi_host_eapol_exact_from_current_net_status());
-        let fault = if host_eapol_exact.is_some() {
+        let fault = if live_net_supersedes_runtime || host_eapol_exact.is_some() {
             None
         } else {
             crate::drivers::driver_task_net::latest_cyw43_runtime_command_fault_status()
@@ -7793,6 +7990,7 @@ where
             && fault.is_none()
             && sdio_status.is_none()
             && !progress_present
+            && !live_net_supersedes_runtime
         {
             return false;
         }
@@ -7801,11 +7999,24 @@ where
             && fault.is_none()
             && sdio_status.is_none()
             && !progress_present
+            && !live_net_supersedes_runtime
         {
             return false;
         }
 
-        if let Some(cause) = self.net_unavailable_detail.as_ref() {
+        if let Some(frontier) = live_net_frontier.as_ref() {
+            let detail = format_message(format_args!(
+                "wifi: driver-task replay state detail=live-net-frontier source={source} active={} address_source={} dhcp_phase={} ip={} assoc={} link={} eapol_secure={}",
+                frontier.active_interface,
+                frontier.address_source,
+                frontier.dhcp_phase,
+                frontier.ip,
+                frontier.wifi_assoc,
+                frontier.wifi_link_up,
+                frontier.wifi_host_eapol_secure,
+            ));
+            self.emit_console_line(detail.as_str());
+        } else if let Some(cause) = self.net_unavailable_detail.as_ref() {
             let detail = format_message(format_args!(
                 "wifi: driver-task replay failure detail=net-disabled cause={cause}"
             ));
@@ -7816,7 +8027,12 @@ where
             ));
             self.emit_console_line(detail.as_str());
         }
-        self.emit_wifi_driver_task_startup_blackbox(fault, host_eapol_exact, source);
+        let evidence_source = if live_net_supersedes_runtime {
+            "live-net-status"
+        } else {
+            source
+        };
+        self.emit_wifi_driver_task_startup_blackbox(fault, host_eapol_exact, evidence_source);
         if let Some(fault) = fault {
             let fault_line = format_message(format_args!(
                 "wifi: cyw43 fault stage={} op={} target=0x{:08x} payload_off={} payload_len={} total_len={} control_cmd={} control_cmd_hex=0x{:08x} control_id={} control_header_mode={} control_response_len={} detail=0x{:04x} reason={} result=0x{:08x}",
@@ -7843,16 +8059,25 @@ where
             ));
             self.emit_console_line(next_line.as_str());
         }
-        if Self::wifi_command_accepts_driver_task_snapshot_success(command) {
+        if live_net_supersedes_runtime
+            || Self::wifi_command_accepts_driver_task_snapshot_success(command)
+        {
+            let completion_source = if live_net_supersedes_runtime {
+                "live-net-status"
+            } else {
+                "linked-runtime-replay-failure"
+            };
+            let status_detail =
+                format_message(format_args!("result=ok source={completion_source}"));
             self.emit_wifi_debug_status(
                 subcommand,
                 "complete",
                 profile,
-                Some("result=ok source=linked-runtime-replay-failure"),
+                Some(status_detail.as_str()),
             );
             self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
             let detail = format_message(format_args!(
-                "detail=subcommand={subcommand} scope=serial-local source=linked-runtime-replay-failure"
+                "detail=subcommand={subcommand} scope=serial-local source={completion_source}"
             ));
             self.emit_ack_ok(WIFI_DEBUG_ACK_LABEL, Some(detail.as_str()));
         } else {
@@ -7908,6 +8133,63 @@ where
         #[cfg(not(feature = "net-console"))]
         {
             None
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_live_net_frontier(&self) -> Option<WifiLiveNetFrontier> {
+        #[cfg(feature = "net-console")]
+        {
+            self.net.as_ref().and_then(|net| {
+                let status = net.status_report();
+                let counters = net.stats();
+                let frontier = WifiLiveNetFrontier {
+                    active_interface: status.active_interface,
+                    address_source: status.address_source,
+                    dhcp_phase: status.dhcp_phase,
+                    ip: status.ip.clone(),
+                    wifi_assoc: counters.wifi_assoc,
+                    wifi_link_up: counters.wifi_link_up,
+                    wifi_host_eapol_secure: counters.wifi_host_eapol_secure,
+                };
+                Self::wifi_live_net_status_supersedes_runtime(&frontier).then_some(frontier)
+            })
+        }
+        #[cfg(not(feature = "net-console"))]
+        {
+            None
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_live_net_status_supersedes_runtime(frontier: &WifiLiveNetFrontier) -> bool {
+        if frontier.active_interface != "wifi" {
+            return false;
+        }
+        let dhcp_frontier = matches!(
+            frontier.address_source,
+            "dhcp-pending" | "dhcp-lease" | "dhcp-failed"
+        ) || matches!(frontier.dhcp_phase, "selecting" | "bound" | "failed");
+        let secure_counters = frontier.wifi_assoc != 0
+            && frontier.wifi_link_up != 0
+            && frontier.wifi_host_eapol_secure != 0;
+        dhcp_frontier || secure_counters
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_live_net_dhcp_bound(frontier: &WifiLiveNetFrontier) -> bool {
+        frontier.active_interface == "wifi"
+            && frontier.address_source == "dhcp-lease"
+            && frontier.dhcp_phase == "bound"
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_live_net_blocker(frontier: &WifiLiveNetFrontier) -> &'static str {
+        match (frontier.address_source, frontier.dhcp_phase) {
+            ("dhcp-lease", "bound") => "nettest-netstats-cohsh",
+            ("dhcp-failed", _) | (_, "failed") => "dhcp-failed",
+            ("dhcp-pending", _) | (_, "selecting") => "dhcp-pending",
+            _ => "dhcp-bound",
         }
     }
 
@@ -8509,9 +8791,10 @@ where
         explicit_exact_error: Option<&str>,
         source: &str,
     ) {
-        self.emit_console_line(
-            "wifi: diag recorder=startup-blackbox mode=passive source=linked-runtime-replay",
-        );
+        let recorder = format_message(format_args!(
+            "wifi: diag recorder=startup-blackbox mode=passive source={source}"
+        ));
+        self.emit_console_line(recorder.as_str());
         let sdio_runtime_status =
             crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
         self.emit_wifi_startup_gates_from_evidence(
@@ -8536,9 +8819,25 @@ where
         explicit_exact_error: Option<&str>,
         source: &str,
     ) {
-        let explicit_exact_error = explicit_exact_error.unwrap_or("");
+        let live_net_frontier = self.wifi_live_net_frontier();
+        let live_net_supersedes_runtime = live_net_frontier.is_some();
+        let explicit_exact_error = if live_net_supersedes_runtime {
+            ""
+        } else {
+            explicit_exact_error.unwrap_or("")
+        };
         let explicit_join_security =
             Self::wifi_exact_error_is_join_security_blocker(explicit_exact_error);
+        let fault = if live_net_supersedes_runtime {
+            None
+        } else {
+            fault
+        };
+        let sdio_runtime_status = if live_net_supersedes_runtime {
+            None
+        } else {
+            sdio_runtime_status
+        };
         let cyw43_fault_gate: Option<u8> = if explicit_join_security {
             None
         } else {
@@ -8546,12 +8845,20 @@ where
         };
         let sdio_replay_gate: Option<u8> =
             sdio_runtime_status.and_then(Self::wifi_sdio_runtime_replay_gate);
-        let sdio_runtime_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
-            crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
-        );
-        let cyw43_runtime_progress = crate::hal::driver_task::latest_driver_task_ring_progress(
-            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
-        );
+        let sdio_runtime_progress = if live_net_supersedes_runtime {
+            None
+        } else {
+            crate::hal::driver_task::latest_driver_task_ring_progress(
+                crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+            )
+        };
+        let cyw43_runtime_progress = if live_net_supersedes_runtime {
+            None
+        } else {
+            crate::hal::driver_task::latest_driver_task_ring_progress(
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        };
         let sdio_progress_gate = sdio_runtime_progress
             .and_then(|progress| Self::wifi_sdio_runtime_progress_gate(progress.phase));
         let cyw43_progress_gate = cyw43_runtime_progress
@@ -8564,58 +8871,78 @@ where
                 .or(sdio_replay_gate)
                 .or(sdio_progress_gate)
         };
-        let power_ready = snapshot.is_some_and(|snapshot| {
-            matches!(snapshot.power_state, WifiPowerState::On)
-                && matches!(snapshot.reset_state, WifiResetState::Deasserted)
-        }) || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready);
-        let card_selected =
-            snapshot.is_some_and(|snapshot| snapshot.card_ready && snapshot.card_rca != 0);
-        let f1_ready = snapshot.is_some_and(|snapshot| {
-            snapshot.io_enable.is_some_and(|value| (value & 0x02) != 0)
-                && snapshot.io_ready.is_some_and(|value| (value & 0x02) != 0)
-        }) || control_trace.is_some_and(|trace| {
-            trace
-                .cccr_io_enable
-                .is_some_and(|value| (value & 0x02) != 0)
-                && trace.cccr_io_ready.is_some_and(|value| (value & 0x02) != 0)
-        });
-        let ht_ready = snapshot.is_some_and(Self::wifi_snapshot_ht_avail)
+        let live_net_channel_ready = live_net_supersedes_runtime;
+        let power_ready = live_net_channel_ready
+            || snapshot.is_some_and(|snapshot| {
+                matches!(snapshot.power_state, WifiPowerState::On)
+                    && matches!(snapshot.reset_state, WifiResetState::Deasserted)
+            })
+            || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready);
+        let card_selected = live_net_channel_ready
+            || snapshot.is_some_and(|snapshot| snapshot.card_ready && snapshot.card_rca != 0);
+        let f1_ready = live_net_channel_ready
+            || snapshot.is_some_and(|snapshot| {
+                snapshot.io_enable.is_some_and(|value| (value & 0x02) != 0)
+                    && snapshot.io_ready.is_some_and(|value| (value & 0x02) != 0)
+            })
+            || control_trace.is_some_and(|trace| {
+                trace
+                    .cccr_io_enable
+                    .is_some_and(|value| (value & 0x02) != 0)
+                    && trace.cccr_io_ready.is_some_and(|value| (value & 0x02) != 0)
+            });
+        let ht_ready = live_net_channel_ready
+            || snapshot.is_some_and(Self::wifi_snapshot_ht_avail)
             || firmware_trace.is_some_and(|trace| trace.sr_kso_clock_ready);
-        let backplane_ready = snapshot.is_some_and(|snapshot| {
-            snapshot.programmed_backplane_window.is_some()
-                || snapshot.shadow_backplane_window.is_some()
-                || snapshot.shadow_backplane_fn_addr.is_some()
-        }) || control_trace.is_some_and(|trace| {
-            trace.backplane_window_low != 0
-                || trace.backplane_window_mid != 0
-                || trace.backplane_window_high != 0
-        });
-        let firmware_uploaded = firmware_trace
-            .and_then(|trace| trace.proof)
-            .is_some_and(|proof| proof.upload_state == "uploaded" || proof.verified);
-        let firmware_verified = firmware_trace
-            .is_some_and(|trace| trace.firmware_download_verified)
+        let backplane_ready = live_net_channel_ready
+            || snapshot.is_some_and(|snapshot| {
+                snapshot.programmed_backplane_window.is_some()
+                    || snapshot.shadow_backplane_window.is_some()
+                    || snapshot.shadow_backplane_fn_addr.is_some()
+            })
+            || control_trace.is_some_and(|trace| {
+                trace.backplane_window_low != 0
+                    || trace.backplane_window_mid != 0
+                    || trace.backplane_window_high != 0
+            });
+        let firmware_uploaded = live_net_channel_ready
+            || firmware_trace
+                .and_then(|trace| trace.proof)
+                .is_some_and(|proof| proof.upload_state == "uploaded" || proof.verified);
+        let firmware_verified = live_net_channel_ready
+            || firmware_trace.is_some_and(|trace| trace.firmware_download_verified)
             || firmware_trace
                 .and_then(|trace| trace.proof)
                 .is_some_and(|proof| proof.verified);
-        let f2_enabled = snapshot
-            .is_some_and(|snapshot| snapshot.io_enable.is_some_and(|value| (value & 0x04) != 0))
+        let f2_enabled = live_net_channel_ready
+            || snapshot.is_some_and(|snapshot| {
+                snapshot.io_enable.is_some_and(|value| (value & 0x04) != 0)
+            })
             || control_trace.is_some_and(|trace| {
                 trace
                     .cccr_io_enable
                     .is_some_and(|value| (value & 0x04) != 0)
             });
-        let f2_ready = snapshot
-            .is_some_and(|snapshot| snapshot.io_ready.is_some_and(|value| (value & 0x04) != 0))
+        let f2_ready = live_net_channel_ready
+            || snapshot
+                .is_some_and(|snapshot| snapshot.io_ready.is_some_and(|value| (value & 0x04) != 0))
             || control_trace
                 .is_some_and(|trace| trace.cccr_io_ready.is_some_and(|value| (value & 0x04) != 0));
         let exact_error = snapshot.map_or(explicit_exact_error, |snapshot| {
-            snapshot.control_plane_exact_error
+            if live_net_supersedes_runtime {
+                ""
+            } else {
+                snapshot.control_plane_exact_error
+            }
         });
-        let channel_ready =
-            exact_error.is_empty() || Self::wifi_exact_error_is_join_security_blocker(exact_error);
+        let channel_ready = live_net_channel_ready
+            || exact_error.is_empty()
+            || Self::wifi_exact_error_is_join_security_blocker(exact_error);
 
-        let dhcp_pass = self.wifi_diag_dhcp_bound();
+        let dhcp_pass = live_net_frontier.as_ref().map_or_else(
+            || self.wifi_diag_dhcp_bound(),
+            Self::wifi_live_net_dhcp_bound,
+        );
         let proof_gate: u8 = Self::wifi_startup_proof_gate(
             power_ready,
             card_selected,
@@ -8640,7 +8967,13 @@ where
         } else {
             proof_gate
         };
-        let active_blocker = if explicit_join_security {
+        let active_blocker = if let Some(frontier) = live_net_frontier.as_ref() {
+            if Self::wifi_live_net_dhcp_bound(frontier) {
+                Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
+            } else {
+                Self::wifi_live_net_blocker(frontier)
+            }
+        } else if explicit_join_security {
             exact_error
         } else if let Some(fault) = fault {
             fault.reason
@@ -8653,7 +8986,13 @@ where
         } else {
             Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
         };
-        let next_action = if explicit_join_security {
+        let next_action = if let Some(frontier) = live_net_frontier.as_ref() {
+            if Self::wifi_live_net_dhcp_bound(frontier) {
+                Self::wifi_startup_next_action_for_gate(failing_gate, exact_error)
+            } else {
+                "run-dhcp-and-report-lease-state"
+            }
+        } else if explicit_join_security {
             "inspect-host-eapol-rx-path"
         } else if let Some(fault) = fault {
             Self::wifi_runtime_fault_next_action(fault)
@@ -10983,10 +11322,6 @@ where
     }
 
     fn consume_local_seat(&mut self, phase: LocalSeatConsumePhase, skip_runtime: bool) -> bool {
-        if self.serial.tx_pending() {
-            self.poll_local_seat_backend_for_ingress();
-            return false;
-        }
         let mut chunk = [0u8; KEYBOARD_POLL_CHUNK_BYTES];
         let mut empty_polls = 0usize;
         let mut consumed = false;
@@ -11279,15 +11614,9 @@ where
                 }
             }
             Command::Smp { mode } => {
-                if self.emit_smp(mode) {
+                if let Some(detail) = self.emit_smp(mode) {
                     self.metrics.accepted_commands += 1;
-                    self.emit_ack_ok(
-                        verb_label,
-                        Some(match mode {
-                            SmpMode::Snapshot => "mode=snapshot",
-                            SmpMode::Activity => "mode=activity",
-                        }),
-                    );
+                    self.emit_ack_ok(verb_label, Some(detail));
                 } else {
                     self.metrics.denied_commands += 1;
                     cmd_status = "err";
@@ -11438,6 +11767,12 @@ where
                             stats.wifi_host_eapol_start,
                             stats.wifi_host_eapol_secure,
                         ));
+                        let line_wired = format_message(format_args!(
+                            "netstats: genet_rx_hw={} genet_rx_last_len={} genet_rx_last_ethertype=0x{:04x}",
+                            stats.rx_used_advances,
+                            stats.driver_rx_last_len,
+                            stats.driver_rx_last_ethertype,
+                        ));
                         let line_six = format_message(format_args!(
                             "netstatus: ip={} gateway={} src={} dhcp={}",
                             status.ip, status.gateway, status.address_source, status.dhcp_phase
@@ -11456,7 +11791,12 @@ where
                         self.emit_console_line(line_three.as_str());
                         self.emit_console_line(line_four.as_str());
                         self.emit_console_line(line_five.as_str());
-                        self.emit_console_line(line_wifi.as_str());
+                        if net_status_active_interface_is_wifi(&status) {
+                            self.emit_console_line(line_wifi.as_str());
+                        }
+                        if net_status_active_interface_is_wired(&status) {
+                            self.emit_console_line(line_wired.as_str());
+                        }
                         self.emit_console_line(line_six.as_str());
                         self.emit_console_line(status_line.as_str());
                         self.metrics.accepted_commands += 1;
@@ -14173,13 +14513,17 @@ mod tests {
         status.address_source = "dhcp-pending";
         status.dhcp_phase = "selecting";
         assert!(!super::net_status_allows_root_console(&status));
+        assert_eq!(
+            super::net_status_pre_root_serial_release_reason(&status),
+            None
+        );
         status.address_source = "wifi-host-eapol-pending";
         status.dhcp_phase = "host-eapol-pending";
         assert!(!super::net_status_allows_root_console(&status));
         assert_eq!(super::net_status_terminal_failure_reason(&status), None);
         assert_eq!(
             super::net_status_pre_root_serial_release_reason(&status),
-            Some("wifi-host-eapol-pending")
+            None
         );
         status.address_source = "wifi-host-eapol-required";
         status.dhcp_phase = "host-eapol-required";
@@ -14639,14 +14983,64 @@ mod tests {
             21
         );
         assert!(pump.serial_mut().tx_pending());
-        assert!(!pump.consume_local_seat(LocalSeatConsumePhase::PreRuntime, true));
+        assert!(pump.consume_local_seat(LocalSeatConsumePhase::PreRuntime, true));
         assert!(pump.serial_mut().tx_pending());
         drop(pump);
 
         let trace = local_seat.keyboard_trace();
         assert_eq!(trace.backend_poll_calls, 1);
-        assert_eq!(trace.drained_bytes, 0);
-        assert_eq!(trace.queued_bytes, 1);
+        assert_eq!(trace.drained_bytes, 1);
+        assert_eq!(trace.echoed_bytes, 1);
+        assert_eq!(trace.queued_bytes, 0);
+    }
+
+    #[test]
+    fn local_seat_output_defers_behind_serial_tx_pressure() {
+        let driver = LoopbackSerial::<128>::new();
+        let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        assert_eq!(
+            pump.serial_mut()
+                .enqueue_tx_best_effort(b"pending serial output"),
+            21
+        );
+        pump.last_input_source = ConsoleInputSource::LocalSeat;
+        pump.console_input_turn_active = true;
+        pump.console_input_turn_output_budget = CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES;
+        assert!(pump.serial_mut().tx_pending());
+        assert!(pump.should_defer_physical_console_output());
+
+        pump.emit_serial_line("PONG");
+        pump.emit_prompt();
+
+        assert_eq!(pump.pending_console_output.len(), 2);
+        assert!(pump.pending_console_output.iter().any(|output| {
+            output.kind == PendingConsoleOutputKind::Line && output.text.as_str() == "PONG"
+        }));
+        assert!(pump.pending_console_output.iter().any(|output| {
+            output.kind == PendingConsoleOutputKind::Prompt
+                && output.text.as_str() == CONSOLE_PROMPT
+        }));
+        assert_eq!(pump.metrics().physical_console_output_deferred, 2);
+        assert!(pump.serial_mut().tx_pending());
     }
 
     #[test]
@@ -14869,6 +15263,16 @@ mod tests {
 
     impl IpcDispatcher for NullIpc {
         fn dispatch(&mut self, _now_ms: u64) {}
+    }
+
+    #[test]
+    fn usb_runtime_progress_supersession_requires_keyboard_byte() {
+        type ConsoleTestPump =
+            EventPump<'static, LoopbackSerial<32>, TestTimer, NullIpc, TicketTable<4>, 32, 32, 32>;
+
+        assert!(ConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(true, 10, 7));
+        assert!(!ConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(false, 10, 7));
+        assert!(!ConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(true, 10, 10));
     }
 
     #[cfg(feature = "kernel")]
@@ -15627,6 +16031,51 @@ mod tests {
 
     #[cfg(all(feature = "kernel", sel4_config_debug_build))]
     #[test]
+    fn smp_snapshot_preflushes_pending_serial_and_dumps() {
+        let driver = LoopbackSerial::<4>::new();
+        let serial = SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 42,
+        });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        assert!(
+            pump.serial_mut()
+                .enqueue_tx_best_effort(b"pending serial output")
+                > 0
+        );
+        assert!(pump.serial_mut().tx_pending());
+
+        let detail = pump.emit_smp(SmpMode::Snapshot);
+
+        assert_eq!(detail, Some("mode=snapshot"));
+        assert!(pump.last_smp_activity_snapshot.is_none());
+        let mut transcript = Vec::new();
+        for _ in 0..64 {
+            pump.serial_mut().flush_tx();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+            if !pump.serial_mut().tx_pending() {
+                break;
+            }
+        }
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("[smp] debug scheduler dump begin"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("[smp] debug scheduler dump end"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("[smp] activity begin"), "{rendered}");
+        assert!(!rendered.contains("raw=pressure-gated"), "{rendered}");
+    }
+
+    #[cfg(all(feature = "kernel", sel4_config_debug_build))]
+    #[test]
     fn smp_snapshot_emits_debug_dump_without_activity_telemetry() {
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 512, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -15749,11 +16198,45 @@ mod tests {
             rendered.contains("[smp] activity net-tcp accepts=2 auth=1"),
             "{rendered}"
         );
+        assert!(!rendered.contains("[smp] activity net-wifi"), "{rendered}");
+        assert!(rendered.contains("OK SMP mode=activity"), "{rendered}");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn smp_activity_includes_wifi_telemetry_when_wifi_active() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 7 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.backend = "cyw43";
+        net.status.mode = "dhcp";
+        net.status.active_interface = "wifi";
+        net.status.standby_interface = "wired";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.counters.wifi_assoc = 1;
+        net.counters.wifi_link_up = 1;
+        net.counters.wifi_host_eapol_rx = 2;
+        net.counters.wifi_host_eapol_start = 1;
+        net.counters.wifi_host_eapol_secure = 1;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().driver_mut().push_rx(b"smp activity\n");
+
+        pump.poll();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
         assert!(
-            rendered.contains("[smp] activity net-wifi assoc=0 link=0 eapol_rx=0 eapol_start=1"),
+            rendered.contains(
+                "[smp] activity net-wifi assoc=1 link=1 eapol_rx=2 eapol_start=1 eapol_secure=1"
+            ),
             "{rendered}"
         );
-        assert!(rendered.contains("OK SMP mode=activity"), "{rendered}");
     }
 
     #[test]
@@ -16297,10 +16780,11 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "netstats: wifi_assoc=0 wifi_link=0 eapol_rx=0 eapol_start=0 eapol_secure=0"
+                "netstats: genet_rx_hw=0 genet_rx_last_len=0 genet_rx_last_ethertype=0x0000"
             ),
             "{rendered}"
         );
+        assert!(!rendered.contains("netstats: wifi_assoc="), "{rendered}");
     }
 
     #[cfg(feature = "net-console")]
@@ -16366,6 +16850,7 @@ mod tests {
             rendered.contains("netstats: udp_rx=1 udp_tx=2 tcp_accepts=1 tcp_auth=1"),
             "{rendered}"
         );
+        assert!(!rendered.contains("netstats: genet_rx_hw="), "{rendered}");
     }
 
     #[test]
@@ -17248,6 +17733,7 @@ mod tests {
             burst_passes,
             empty_polls,
             output_polls,
+            hdmi_pump_passes,
             serial_lines,
             serial_chunk_bytes,
         ) = local_seat_input_drain_contract_for_test();
@@ -17256,6 +17742,8 @@ mod tests {
         assert_eq!(empty_polls, 1);
         assert!(output_polls >= 1);
         assert!(output_polls <= empty_polls);
+        assert!(hdmi_pump_passes >= output_polls);
+        assert!(hdmi_pump_passes <= burst_passes);
         assert_eq!(serial_lines, 1);
         assert_eq!(serial_chunk_bytes, 32);
         assert!(burst_passes * KEYBOARD_POLL_CHUNK_BYTES <= 512);
@@ -17770,6 +18258,28 @@ mod tests {
             KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(11),
             "recovery-failed"
         );
+        let diag_frame = crate::hal::driver_task::DriverFrameDescriptor {
+            offset: (u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_DIAG_MAGIC) << 16)
+                | u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_SET_DEQUEUE)
+                | (3 << 8),
+            len: 1 | (2 << 8),
+            flags: 4
+                | (u16::from(
+                    pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_FULL_QUEUE_NO_EVENT,
+                ) << 8),
+        };
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_recovery_diag_fields(diag_frame),
+            (true, 7, 3, 1, 2, 4, 3)
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_recovery_stage_label(7),
+            "set-dequeue"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_recovery_reason_label(3),
+            "full-queue-no-event"
+        );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_keyboard_input_observation(
                 false, false, true, 128, false, 2
@@ -17832,6 +18342,9 @@ mod tests {
         assert!(KernelConsoleTestPump::usb_runtime_detail_has_queue_result(
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
         ));
+        assert!(KernelConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(true, 10, 7));
+        assert!(!KernelConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(false, 10, 7));
+        assert!(!KernelConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(true, 10, 10));
     }
 
     #[cfg(feature = "kernel")]
@@ -18362,7 +18875,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: diag recorder=startup-blackbox mode=passive source=linked-runtime-replay"
+                "wifi: diag recorder=startup-blackbox mode=passive source=debug-handle-unavailable"
             ),
             "{rendered}"
         );
@@ -18590,6 +19103,156 @@ mod tests {
         );
         assert!(!rendered.contains("wifi: cyw43 fault stage="), "{rendered}");
         assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_diag_prefers_live_dhcp_frontier_after_secure_release() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let sdio = crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT;
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(cyw43);
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(sdio);
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            cyw43,
+            77,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
+            0x4359_5734,
+        );
+
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.active_interface = "wifi";
+        net.status.interface_policy = "wifi";
+        net.status.address_source = "dhcp-pending";
+        net.status.dhcp_phase = "selecting";
+        let _ = net.status.ip.push_str("0.0.0.0");
+        net.counters.wifi_assoc = 1;
+        net.counters.wifi_link_up = 1;
+        net.counters.wifi_host_eapol_rx = 4;
+        net.counters.wifi_host_eapol_secure = 1;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
+        let mut transcript = Vec::new();
+        for _ in 0..128 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        }
+
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        drop(pump);
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(cyw43);
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(sdio);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "wifi: driver-task replay state detail=live-net-frontier source=debug-handle-unavailable active=wifi address_source=dhcp-pending dhcp_phase=selecting ip=0.0.0.0 assoc=1 link=1 eapol_secure=1"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: diag recorder=startup-blackbox mode=passive source=live-net-status"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 8 name=firmware-channel status=pass"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: gate 9 name=dhcp-bound status=fail evidence=active=wifi address_source=dhcp-pending dhcp_phase=selecting ip=0.0.0.0"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: next_action=run-dhcp-and-report-lease-state blocker=dhcp-pending proof_gate=8 target_gate=10 source=live-net-status"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("wifi: driver-task replay failure detail=net-state-unavailable"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("wifi: cyw43 linked_runtime_progress"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("wifi: gate 8 name=control-exchange status=fail"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn serial_wifi_probe_ht_prefers_live_dhcp_frontier_after_secure_release() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeWifiDebug::new();
+        wifi.runtime_required = true;
+        let mut net = FakeNet::new();
+        net.status.active_interface = "wifi";
+        net.status.interface_policy = "wifi";
+        net.status.address_source = "dhcp-pending";
+        net.status.dhcp_phase = "selecting";
+        let _ = net.status.ip.push_str("0.0.0.0");
+        net.counters.wifi_assoc = 1;
+        net.counters.wifi_link_up = 1;
+        net.counters.wifi_host_eapol_rx = 4;
+        net.counters.wifi_host_eapol_secure = 1;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_wifi_debug(&mut wifi)
+            .with_test_pi4_debug_commands();
+
+        pump.serial_mut().driver_mut().push_rx(b"wifi probe-ht\n");
+        let mut transcript = Vec::new();
+        for _ in 0..64 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        }
+
+        transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+        drop(pump);
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "wifi: driver-task replay state detail=live-net-frontier source=hal-runtime-required active=wifi address_source=dhcp-pending dhcp_phase=selecting ip=0.0.0.0 assoc=1 link=1 eapol_secure=1"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=ok source=live-net-status"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "OK WIFI detail=subcommand=probe-ht scope=serial-local source=live-net-status"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("ERR WIFI reason=policy detail=subcommand=probe-ht"),
+            "{rendered}"
+        );
+        assert_eq!(wifi.calls.as_slice(), &["probe-ht"]);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

@@ -286,11 +286,12 @@ pub fn main(ctx: BootContext) -> ! {
                             pump = attach_network(pump, Some(&mut stack), None);
                             if pump.net_console_enabled() {
                                 log::info!(
-                                    target: "net-console",
-                                    "[net-console] listening on 0.0.0.0:{}",
+                                target: "net-console",
+                                "[net-console] listening on 0.0.0.0:{}",
                                     crate::net::CONSOLE_TCP_PORT
                                 );
                             }
+                            wait_for_net_console_before_root_console(&mut pump);
                             publish_root_console_ready(&mut pump);
                             enter_root_console_loop(pump);
                         }
@@ -702,16 +703,34 @@ fn wait_for_net_console_before_root_console<
     let start_ms = crate::hal::timebase().now_ms();
     let mut next_status_ms = PRE_ROOT_NET_CONSOLE_WAIT_STATUS_MS;
     let mut polls = 0u32;
-    boot_log::force_uart_line(
-        "[net-console] root console bounded-wait reason=wifi-not-ready action=wait-for-wifi",
-    );
-    pump.publish_pre_root_boot_progress(
-        "[boot] bounded Wi-Fi release before root console action=driver-settle",
-    );
-    log::info!(
-        target: "net-console",
-        "[net-console] root console running bounded Wi-Fi release before prompt"
-    );
+    let active_interface = pump.net_console_active_interface().unwrap_or("net");
+    let wifi_wait = active_interface == "wifi";
+    if wifi_wait {
+        boot_log::force_uart_line(
+            "[net-console] root console bounded-wait reason=wifi-not-ready action=wait-for-wifi",
+        );
+        pump.publish_pre_root_boot_progress(
+            "[boot] bounded Wi-Fi release before root console action=driver-settle",
+        );
+        log::info!(
+            target: "net-console",
+            "[net-console] root console running bounded Wi-Fi release before prompt"
+        );
+    } else {
+        let mut line = HeaplessString::<160>::new();
+        let _ = write!(
+            line,
+            "[net-console] root console bounded-wait reason=net-not-ready active={active_interface} action=wait-for-net",
+        );
+        boot_log::force_uart_line(line.as_str());
+        pump.publish_pre_root_boot_progress(
+            "[boot] bounded network release before root console action=driver-settle",
+        );
+        log::info!(
+            target: "net-console",
+            "[net-console] root console running bounded network release before prompt active={active_interface}"
+        );
+    }
 
     loop {
         if pump.net_console_ready_for_root() {
@@ -755,9 +774,14 @@ fn wait_for_net_console_before_root_console<
             || polls >= PRE_ROOT_NET_CONSOLE_WAIT_POLL_LIMIT
         {
             let mut line = HeaplessString::<192>::new();
+            let reason = if wifi_wait {
+                "wifi-not-ready-timeout"
+            } else {
+                "net-not-ready-timeout"
+            };
             let _ = write!(
                 line,
-                "[net-console] root console wait ended reason=wifi-not-ready-timeout action=start-serial-root-console elapsed_ms={elapsed_ms} polls={polls}",
+                "[net-console] root console wait ended reason={reason} action=start-serial-root-console elapsed_ms={elapsed_ms} polls={polls}",
             );
             boot_log::force_uart_line(line.as_str());
             log::warn!(target: "net-console", "{}", line.as_str());

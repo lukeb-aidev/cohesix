@@ -34,7 +34,13 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 #[cfg(all(feature = "kernel", feature = "usb"))]
 use pi4_driver_abi::{
     DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
-    DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
+    DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX, DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE,
+    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE,
+    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED,
+    DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
+    DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT,
+    DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
+    DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
 };
 #[cfg(all(
     feature = "kernel",
@@ -69,12 +75,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN,
     DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED, DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
-    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE,
+    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE,
+    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER,
-    DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
-    DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT,
-    DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
-    DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
 };
 #[cfg(all(
     feature = "kernel",
@@ -500,6 +503,22 @@ static LINKED_LOCAL_SEAT_USB_LAST_RESULT: AtomicUsize = AtomicUsize::new(0);
     target_arch = "aarch64",
     target_os = "none"
 ))]
+static LINKED_LOCAL_SEAT_USB_LAST_FRAME_OFFSET: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_USB_LAST_FRAME_META: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LINKED_LOCAL_SEAT_USB_ENUM_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(
@@ -591,7 +610,10 @@ pub const KEYBOARD_POLL_CHUNK_BYTES: usize = 128;
 const DISPLAY_QUEUE_MAX_BYTES: usize = 4_096;
 
 /// Maximum bytes submitted to the HDMI linked runtime in one local-seat pump.
-const LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES: usize = 4_096;
+const LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES: usize = 512;
+
+/// Redraw retries after a missed HDMI completion before yielding the mirror.
+const LINKED_LOCAL_SEAT_HDMI_REDRAW_NO_REPLY_RETRY_LIMIT: u8 = 2;
 
 /// Text cell width used by the linked HDMI runtime.
 const LINKED_LOCAL_SEAT_HDMI_CHAR_WIDTH: usize = 8;
@@ -638,17 +660,27 @@ const LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_INITIAL_COOLDOWN: u8 = 4;
 /// Maximum adaptive cooldown for repeated steady USB keyboard poll misses.
 const LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_MAX_COOLDOWN: u8 = 32;
 
-/// First cooldown after a post-first-byte steady poll misses while the runtime
+/// Short cooldown after a post-first-byte steady poll misses while the runtime
 /// still reports a fully armed, idle interrupt-IN queue.
-const LINKED_LOCAL_SEAT_USB_POLL_READY_IDLE_COOLDOWN: u8 = 16;
+const LINKED_LOCAL_SEAT_USB_POLL_READY_IDLE_COOLDOWN: u8 = 2;
 
 /// A healthy steady interrupt-IN queue should stay near the runtime queue
 /// target. Below this floor, keep the faster recovery cadence.
 const LINKED_LOCAL_SEAT_USB_READY_IDLE_MIN_QUEUED_REPORTS: u32 = 16;
 
+/// The linked USB runtime's steady interrupt-IN target after first HID proof.
+const LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS: u32 = 32;
+
+/// A nonzero one-entry post-first-byte queue is a stalled recovery probe.
+const LINKED_LOCAL_SEAT_USB_RECOVERY_PROBE_MAX_QUEUED_REPORTS: u32 = 1;
+
 /// Consecutive post-first-byte no-reply polls before asking the runtime to
 /// recover the already accepted interrupt-IN endpoint.
 const LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD: u64 = 64;
+
+/// A full, idle steady interrupt-IN queue that stops replying after first byte
+/// proof is already accepted is a live input stall, so recover sooner.
+const LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_IDLE_RECOVERY_NO_REPLY_THRESHOLD: u64 = 8;
 
 /// Repeated raw HDMI frame no-reply logs are throttled after this many misses.
 const LINKED_LOCAL_SEAT_HDMI_NO_REPLY_VERBOSE_LIMIT: usize = 4;
@@ -739,10 +771,10 @@ pub(crate) const fn local_seat_keyboard_poll_next_no_reply_backoff_for_queue(
     steady_queue_idle: bool,
     previous: u8,
 ) -> u8 {
-    if keyboard_ready && !steady_queue_idle {
-        1
-    } else if steady_queue_idle && previous < LINKED_LOCAL_SEAT_USB_POLL_READY_IDLE_COOLDOWN {
+    if steady_queue_idle {
         LINKED_LOCAL_SEAT_USB_POLL_READY_IDLE_COOLDOWN
+    } else if keyboard_ready {
+        1
     } else if previous == 0 {
         LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_INITIAL_COOLDOWN
     } else {
@@ -791,6 +823,7 @@ const fn local_seat_keyboard_recovery_aux_allowed(
         no_reply_streak,
         recovery_pending,
         false,
+        false,
     )
 }
 
@@ -799,17 +832,26 @@ const fn local_seat_keyboard_recovery_aux_allowed_for_status(
     no_reply_streak: u64,
     recovery_pending: bool,
     cached_unmatched_transfer: bool,
+    cached_stale_runtime_queue: bool,
 ) -> bool {
-    queue_empty
-        && !recovery_pending
-        && (cached_unmatched_transfer
-            || (no_reply_streak
-                >= LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
-                && (no_reply_streak
-                    - LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD)
-                    .is_multiple_of(
-                        LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD,
-                    )))
+    if recovery_pending {
+        return false;
+    }
+    if cached_unmatched_transfer || cached_stale_runtime_queue {
+        return true;
+    }
+    if !queue_empty {
+        return false;
+    }
+    let threshold = LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD;
+    no_reply_streak >= threshold && no_reply_streak.is_multiple_of(threshold)
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn local_seat_keyboard_steady_queue_stalled(queued_reports: u32, report_status: u32) -> bool {
+    queued_reports >= LINKED_LOCAL_SEAT_USB_READY_IDLE_MIN_QUEUED_REPORTS
+        && (report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE as u32
+            || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE as u32)
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -925,8 +967,14 @@ pub struct LocalSeatKeyboardTrace {
 pub struct LocalSeatDisplayTrace {
     /// Queued display bytes waiting for an idle HDMI pump turn.
     pub pending_bytes: usize,
+    /// Queued redraw bytes waiting for chunked snapshot submission.
+    pub redraw_bytes: usize,
     /// Whether a coalesced scrollback redraw is waiting.
     pub pending_redraw: bool,
+    /// Current root-owned scrollback offset from the live tail.
+    pub scrollback_offset: usize,
+    /// Whether HDMI is holding an open prompt/input line.
+    pub open_line: bool,
     /// HDMI frames submitted by the deferred display pump.
     pub submitted_frames: u64,
     /// Display frames intentionally deferred because HDMI was not idle.
@@ -935,6 +983,8 @@ pub struct LocalSeatDisplayTrace {
     pub busy_frames: u64,
     /// Pump attempts that did not receive a driver-task reply.
     pub no_reply_frames: u64,
+    /// Consecutive redraw chunks that missed a driver-task reply.
+    pub redraw_no_reply_streak: u8,
     /// Scrollback redraw requests collapsed into an already pending redraw.
     pub coalesced_redraws: u64,
     /// Display bytes dropped because the bounded mirror queue was full.
@@ -969,6 +1019,7 @@ pub struct LocalSeatRuntime {
     hdmi_deferred_frames: u64,
     hdmi_busy_frames: u64,
     hdmi_no_reply_frames: u64,
+    hdmi_redraw_no_reply_streak: u8,
     hdmi_coalesced_redraws: u64,
     hdmi_backpressure_bytes: u64,
     hdmi_superseded_bytes: u64,
@@ -1080,6 +1131,7 @@ impl LocalSeatRuntime {
             hdmi_deferred_frames: 0,
             hdmi_busy_frames: 0,
             hdmi_no_reply_frames: 0,
+            hdmi_redraw_no_reply_streak: 0,
             hdmi_coalesced_redraws: 0,
             hdmi_backpressure_bytes: 0,
             hdmi_superseded_bytes: 0,
@@ -1567,15 +1619,35 @@ impl LocalSeatRuntime {
         ))
     }
 
-    fn record_linked_hdmi_submit_miss(&mut self, payload_len: usize, redraw: bool) {
+    fn restore_linked_hdmi_redraw_chunk(&mut self, payload: &[u8]) {
+        for &byte in payload.iter().rev() {
+            self.hdmi_redraw_bytes.push_front(byte);
+        }
+    }
+
+    fn record_linked_hdmi_submit_miss(&mut self, payload: &[u8], redraw: bool) {
         self.hdmi_no_reply_frames = self.hdmi_no_reply_frames.saturating_add(1);
         self.hdmi_deferred_frames = self.hdmi_deferred_frames.saturating_add(1);
-        if !redraw {
+        if redraw {
+            self.hdmi_redraw_no_reply_streak = self.hdmi_redraw_no_reply_streak.saturating_add(1);
+            if self.hdmi_redraw_no_reply_streak
+                <= LINKED_LOCAL_SEAT_HDMI_REDRAW_NO_REPLY_RETRY_LIMIT
+            {
+                self.restore_linked_hdmi_redraw_chunk(payload);
+            } else {
+                let superseded = payload.len().saturating_add(self.hdmi_redraw_bytes.len());
+                self.hdmi_superseded_bytes =
+                    self.hdmi_superseded_bytes.saturating_add(superseded as u64);
+                self.hdmi_redraw_bytes.clear();
+                self.hdmi_pending_redraw = false;
+            }
+        } else {
+            self.hdmi_redraw_no_reply_streak = 0;
             self.hdmi_superseded_bytes = self
                 .hdmi_superseded_bytes
-                .saturating_add(payload_len as u64);
+                .saturating_add(payload.len() as u64);
+            self.request_linked_hdmi_snapshot_redraw();
         }
-        self.request_linked_hdmi_snapshot_redraw();
     }
 
     /// Return whether local-seat HDMI has queued work waiting for an idle turn.
@@ -1635,16 +1707,20 @@ impl LocalSeatRuntime {
             let Some((payload, reason, redraw)) = self.next_linked_hdmi_payload() else {
                 return false;
             };
+            let display_trace = self.display_trace();
             let submitted = submit_linked_hdmi_payload_via_linked_hdmi(
                 payload.as_slice(),
                 self.root_console_ready,
                 reason,
+                redraw,
+                Some(display_trace),
             );
             if submitted {
                 self.hdmi_submitted_frames = self.hdmi_submitted_frames.saturating_add(1);
+                self.hdmi_redraw_no_reply_streak = 0;
                 true
             } else {
-                self.record_linked_hdmi_submit_miss(payload.len(), redraw);
+                self.record_linked_hdmi_submit_miss(payload.as_slice(), redraw);
                 false
             }
         }
@@ -1718,11 +1794,15 @@ impl LocalSeatRuntime {
                 .hdmi_pending_bytes
                 .len()
                 .saturating_add(self.hdmi_redraw_bytes.len()),
+            redraw_bytes: self.hdmi_redraw_bytes.len(),
             pending_redraw: self.linked_hdmi_redraw_pending(),
+            scrollback_offset: self.hdmi_scrollback_offset,
+            open_line: self.hdmi_open_line,
             submitted_frames: self.hdmi_submitted_frames,
             deferred_frames: self.hdmi_deferred_frames,
             busy_frames: self.hdmi_busy_frames,
             no_reply_frames: self.hdmi_no_reply_frames,
+            redraw_no_reply_streak: self.hdmi_redraw_no_reply_streak,
             coalesced_redraws: self.hdmi_coalesced_redraws,
             backpressure_bytes: self.hdmi_backpressure_bytes,
             superseded_bytes: self.hdmi_superseded_bytes,
@@ -1742,6 +1822,17 @@ impl LocalSeatRuntime {
     pub fn mark_root_console_ready(&mut self) {
         self.root_console_ready = true;
         self.backend_keyboard_poll_deferred_logged = false;
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+                self.render_linked_hdmi_scrollback();
+            }
+        }
     }
 
     /// Try the linked HDMI runtime after the serial prompt.
@@ -2125,8 +2216,49 @@ impl LocalSeatRuntime {
             let queued_reports = result & 0xff;
             let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
                 & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
-            queued_reports >= LINKED_LOCAL_SEAT_USB_READY_IDLE_MIN_QUEUED_REPORTS
-                && report_status == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE)
+            local_seat_keyboard_steady_queue_stalled(queued_reports, report_status)
+        }
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
+        {
+            false
+        }
+    }
+
+    fn keyboard_poll_stale_runtime_queue(&self) -> bool {
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                || !LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.load(Ordering::Acquire)
+            {
+                return false;
+            }
+            let result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32;
+            let queued_reports = result & 0xff;
+            let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
+            let recovery_probe_stalled = queued_reports != 0
+                && queued_reports <= LINKED_LOCAL_SEAT_USB_RECOVERY_PROBE_MAX_QUEUED_REPORTS
+                && (report_status == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE)
+                    || report_status == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE)
+                    || report_status
+                        == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE)
+                    || report_status
+                        == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED)
+                    || report_status
+                        == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS));
+            queued_reports > LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS
+                || local_seat_keyboard_steady_queue_stalled(queued_reports, report_status)
+                || recovery_probe_stalled
         }
         #[cfg(not(all(
             feature = "kernel",
@@ -2151,11 +2283,13 @@ impl LocalSeatRuntime {
             & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
         let cached_unmatched_transfer = report_status
             == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER);
+        let cached_stale_runtime_queue = self.keyboard_poll_stale_runtime_queue();
         local_seat_keyboard_recovery_aux_allowed_for_status(
             self.keyboard_queue.is_empty(),
             self.keyboard_poll_no_reply_streak,
             self.keyboard_recovery_aux_pending,
             cached_unmatched_transfer,
+            cached_stale_runtime_queue,
         ) && crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
             && LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
             && LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire)
@@ -2165,14 +2299,19 @@ impl LocalSeatRuntime {
     fn record_keyboard_poll_no_reply(&mut self) {
         self.driver_task_no_replies = self.driver_task_no_replies.saturating_add(1);
         self.keyboard_poll_no_reply_streak = self.keyboard_poll_no_reply_streak.saturating_add(1);
+        let steady_queue_idle = self.keyboard_poll_steady_queue_idle();
+        let recovery_pending_clear_threshold = if steady_queue_idle {
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_IDLE_RECOVERY_NO_REPLY_THRESHOLD
+        } else {
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD
+        };
         if self.keyboard_recovery_aux_pending
             && self
                 .keyboard_poll_no_reply_streak
-                .is_multiple_of(LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD)
+                .is_multiple_of(recovery_pending_clear_threshold)
         {
             self.keyboard_recovery_aux_pending = false;
         }
-        let steady_queue_idle = self.keyboard_poll_steady_queue_idle();
         let next = local_seat_keyboard_poll_next_no_reply_backoff_for_queue(
             self.keyboard_poll_fast_recovery_active(),
             steady_queue_idle,
@@ -2193,7 +2332,8 @@ impl LocalSeatRuntime {
             ))]
             {
                 if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
-                    && LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
+                    && (LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
+                        || LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire))
                 {
                     self.backend_keyboard_polling_enabled = true;
                     self.backend_keyboard_poll_deferred_logged = false;
@@ -2270,7 +2410,7 @@ impl LocalSeatRuntime {
                     if local_seat_keyboard_poll_suspends_on_missing_reply(
                         true,
                         self.root_console_ready,
-                        keyboard_ready,
+                        keyboard_ready || enumeration_pending,
                     ) {
                         self.backend_keyboard_polling_enabled = false;
                         if !self.backend_keyboard_poll_deferred_logged {
@@ -2350,6 +2490,12 @@ impl LocalSeatRuntime {
                         == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
                         && completion.result != 0
                     {
+                        if local_seat_usb_first_report_requires_reenumeration(completion) {
+                            mark_linked_local_seat_usb_keyboard_reenumeration_pending(
+                                contract, completion,
+                            );
+                            return;
+                        }
                         if completion.detail == DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
                         {
                             record_linked_local_seat_usb_detail(Some(completion));
@@ -2437,7 +2583,8 @@ impl LocalSeatRuntime {
                 if local_seat_keyboard_poll_suspends_on_missing_reply(
                     true,
                     self.root_console_ready,
-                    LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire),
+                    LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
+                        || LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire),
                 ) {
                     self.backend_keyboard_polling_enabled = false;
                     if !self.backend_keyboard_poll_deferred_logged {
@@ -2639,7 +2786,7 @@ fn adopt_linked_display_runtime_owner_state(reason: &'static str) -> bool {
                 "[local-seat] linked HDMI runtime adopted source=boot-owner-state reason={reason}"
             ),
         );
-        boot_log::force_uart_line(line.as_str());
+        emit_hdmi_diagnostic_line(line.as_str());
     }
     true
 }
@@ -2912,6 +3059,51 @@ fn local_seat_usb_keyboard_enum_status(
     }
 }
 
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn local_seat_usb_keyboard_report_status_from_result(result: u32) -> u32 {
+    (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+        & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn local_seat_usb_first_report_requires_reenumeration(
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) -> bool {
+    completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+        && matches!(
+            completion.detail,
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+                | DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+        )
+        && local_seat_usb_keyboard_report_status_from_result(completion.result)
+            == u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn local_seat_usb_ready_invalidated_by_progress(
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) -> bool {
+    if !local_seat_usb_keyboard_enumeration_progress(completion) {
+        return false;
+    }
+    let first_report_logged =
+        LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire);
+    let first_byte_logged = LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.load(Ordering::Acquire);
+    let keyboard_ready = LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire);
+    if !(keyboard_ready || first_report_logged || first_byte_logged) {
+        return false;
+    }
+    if first_byte_logged {
+        return completion.detail == DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED;
+    }
+    linked_local_seat_usb_detail_warrants_recovery(completion.detail)
+}
+
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
@@ -3006,6 +3198,25 @@ const fn linked_local_seat_usb_detail_warrants_recovery(detail: u16) -> bool {
     target_arch = "aarch64",
     target_os = "none"
 ))]
+fn store_linked_local_seat_usb_completion(
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) {
+    LINKED_LOCAL_SEAT_USB_LAST_DETAIL.store(completion.detail as usize, Ordering::Release);
+    LINKED_LOCAL_SEAT_USB_LAST_RESULT.store(completion.result as usize, Ordering::Release);
+    LINKED_LOCAL_SEAT_USB_LAST_FRAME_OFFSET
+        .store(completion.frame.offset as usize, Ordering::Release);
+    LINKED_LOCAL_SEAT_USB_LAST_FRAME_META.store(
+        usize::from(completion.frame.len) | (usize::from(completion.frame.flags) << 16),
+        Ordering::Release,
+    );
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 fn record_linked_local_seat_usb_detail(
     completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
 ) {
@@ -3021,13 +3232,35 @@ fn record_linked_local_seat_usb_detail(
                     )
                     && linked_local_seat_usb_detail_warrants_recovery(completion.detail))
             {
-                LINKED_LOCAL_SEAT_USB_LAST_DETAIL
-                    .store(completion.detail as usize, Ordering::Release);
-                LINKED_LOCAL_SEAT_USB_LAST_RESULT
-                    .store(completion.result as usize, Ordering::Release);
+                store_linked_local_seat_usb_completion(completion);
             }
         }
     }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn mark_linked_local_seat_usb_keyboard_reenumeration_pending(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) {
+    store_linked_local_seat_usb_completion(completion);
+    LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(false, Ordering::Release);
+    LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(true, Ordering::Release);
+    LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.store(false, Ordering::Release);
+    LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.store(false, Ordering::Release);
+    LINKED_LOCAL_SEAT_USB_OWNER_READY_LOGGED.store(false, Ordering::Release);
+    crate::hal::driver_task::emit_driver_task_resource_init_status(
+        contract,
+        crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+        "usb-keyboard-recovery",
+        "reenumerate",
+        Some(completion),
+    );
 }
 
 #[cfg(all(
@@ -3041,8 +3274,7 @@ fn publish_local_seat_usb_keyboard_ready(
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
 ) {
     LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
-    LINKED_LOCAL_SEAT_USB_LAST_DETAIL.store(completion.detail as usize, Ordering::Release);
-    LINKED_LOCAL_SEAT_USB_LAST_RESULT.store(completion.result as usize, Ordering::Release);
+    store_linked_local_seat_usb_completion(completion);
     if !LINKED_LOCAL_SEAT_USB_ENUM_READY_LOGGED.swap(true, Ordering::AcqRel) {
         crate::hal::driver_task::emit_driver_task_resource_init_status(
             contract,
@@ -3264,7 +3496,7 @@ fn emit_linked_local_seat_usb_hub_port_trace(
         progress.map_or("none", |progress| progress.phase_name),
         progress.map_or(0, |progress| progress.aux0),
     );
-    boot_log::force_uart_line(line.as_str());
+    emit_hdmi_diagnostic_line(line.as_str());
 }
 
 #[cfg(all(
@@ -3416,6 +3648,10 @@ fn publish_local_seat_usb_enumeration_progress(
     contract: crate::hal::driver_task::DriverTaskContract,
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
 ) {
+    if local_seat_usb_ready_invalidated_by_progress(completion) {
+        mark_linked_local_seat_usb_keyboard_reenumeration_pending(contract, completion);
+        return;
+    }
     let previous_detail = LINKED_LOCAL_SEAT_USB_LAST_DETAIL.load(Ordering::Acquire);
     let previous_result = LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire);
     record_linked_local_seat_usb_detail(Some(completion));
@@ -3493,6 +3729,8 @@ fn emit_hdmi_text_final_state(
 fn emit_hdmi_frame_submit_state(
     reason: &'static str,
     bytes_len: usize,
+    chunk_redraw: bool,
+    display_trace: Option<LocalSeatDisplayTrace>,
     root_console_ready: bool,
     completion: Option<crate::hal::driver_task::DriverTaskCompletionRecord>,
     ready: bool,
@@ -3500,6 +3738,20 @@ fn emit_hdmi_frame_submit_state(
 ) {
     use core::fmt::Write;
 
+    let contract = crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT;
+    let active_request = crate::hal::driver_task::active_driver_task_ring_request(contract);
+    let progress = crate::hal::driver_task::latest_driver_task_ring_progress(contract);
+    let progress_request_match = match (active_request, progress) {
+        (Some(request), Some(progress))
+            if progress.marker_valid && progress.sequence == request as u32 =>
+        {
+            "yes"
+        }
+        (Some(_), Some(_)) => "no",
+        (Some(_), None) => "no-progress",
+        (None, Some(_)) => "no-active-request",
+        (None, None) => "none",
+    };
     let status = local_seat_completion_status(completion, ready);
     let no_reply = completion.is_none() && !ready;
     if no_reply {
@@ -3514,19 +3766,12 @@ fn emit_hdmi_frame_submit_state(
     if let Some(completion) = completion {
         let _ = write!(
             line,
-            "HDMI_FRAME_SUBMIT reason={reason} status={status} root_console_ready={} attached={} failed={} fatal={} bytes={} code={} detail={} result={} frame_len={}",
-            if root_console_ready { "yes" } else { "no" },
-            if LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire) {
-                "yes"
-            } else {
-                "no"
-            },
-            if LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire) {
-                "yes"
-            } else {
-                "no"
-            },
-            if fatal { "yes" } else { "no" },
+            "HDMI_FRAME_SUBMIT reason={reason} status={status} root_console_ready={} attached={} failed={} fatal={} redraw={} bytes={} code={} detail={} result={} frame_len={}",
+            local_seat_yes_no(root_console_ready),
+            local_seat_yes_no(LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire)),
+            local_seat_yes_no(LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire)),
+            local_seat_yes_no(fatal),
+            local_seat_yes_no(chunk_redraw),
             bytes_len,
             completion.code,
             completion.detail,
@@ -3536,39 +3781,83 @@ fn emit_hdmi_frame_submit_state(
     } else {
         let _ = write!(
             line,
-            "HDMI_FRAME_SUBMIT reason={reason} status={status} root_console_ready={} attached={} failed={} fatal={} bytes={} code=none detail=none result=none frame_len=0",
-            if root_console_ready { "yes" } else { "no" },
-            if LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire) {
-                "yes"
-            } else {
-                "no"
-            },
-            if LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire) {
-                "yes"
-            } else {
-                "no"
-            },
-            if fatal { "yes" } else { "no" },
+            "HDMI_FRAME_SUBMIT reason={reason} status={status} root_console_ready={} attached={} failed={} fatal={} redraw={} bytes={} code=none detail=none result=none frame_len=0",
+            local_seat_yes_no(root_console_ready),
+            local_seat_yes_no(LINKED_LOCAL_SEAT_DISPLAY_ATTACHED.load(Ordering::Acquire)),
+            local_seat_yes_no(LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire)),
+            local_seat_yes_no(fatal),
+            local_seat_yes_no(chunk_redraw),
             bytes_len,
         );
     }
-    boot_log::force_uart_line(line.as_str());
+    emit_hdmi_diagnostic_line(line.as_str());
 
-    if let Some(progress) = crate::hal::driver_task::latest_driver_task_ring_progress(
-        crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
-    ) {
+    let mut ring_line = heapless::String::<160>::new();
+    let _ = write!(
+        ring_line,
+        "HDMI_FRAME_RING reason={reason} active_request={} progress_present={} progress_match={}",
+        active_request.unwrap_or(0),
+        local_seat_yes_no(progress.is_some()),
+        progress_request_match,
+    );
+    emit_hdmi_diagnostic_line(ring_line.as_str());
+
+    if let Some(trace) = display_trace {
+        let mut queue_line = heapless::String::<256>::new();
+        let _ = write!(
+            queue_line,
+            "HDMI_FRAME_QUEUE reason={reason} chunk_bytes={} chunk_redraw={} pending_bytes={} redraw_bytes={} pending_redraw={} scrollback={} open_line={} submitted={} deferred={} busy={} no_reply={}",
+            bytes_len,
+            local_seat_yes_no(chunk_redraw),
+            trace.pending_bytes,
+            trace.redraw_bytes,
+            local_seat_yes_no(trace.pending_redraw),
+            trace.scrollback_offset,
+            local_seat_yes_no(trace.open_line),
+            trace.submitted_frames,
+            trace.deferred_frames,
+            trace.busy_frames,
+            trace.no_reply_frames,
+        );
+        emit_hdmi_diagnostic_line(queue_line.as_str());
+
+        let mut counters_line = heapless::String::<192>::new();
+        let _ = write!(
+            counters_line,
+            "HDMI_FRAME_COUNTERS reason={reason} coalesced={} backpressure_bytes={} superseded_bytes={} redraw_no_reply_streak={}",
+            trace.coalesced_redraws,
+            trace.backpressure_bytes,
+            trace.superseded_bytes,
+            trace.redraw_no_reply_streak,
+        );
+        emit_hdmi_diagnostic_line(counters_line.as_str());
+    }
+
+    if let Some(progress) = progress {
         let mut progress_line = heapless::String::<224>::new();
         let _ = write!(
             progress_line,
-            "HDMI_FRAME_PROGRESS reason={reason} marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x}",
-            if progress.marker_valid { "yes" } else { "no" },
+            "HDMI_FRAME_PROGRESS reason={reason} marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} active_request={} progress_match={}",
+            local_seat_yes_no(progress.marker_valid),
             progress.sequence,
             progress.phase,
             progress.phase_name,
             progress.aux0,
+            active_request.unwrap_or(0),
+            progress_request_match,
         );
-        boot_log::force_uart_line(progress_line.as_str());
+        emit_hdmi_diagnostic_line(progress_line.as_str());
     }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn emit_hdmi_diagnostic_line(line: &str) {
+    boot_log::force_uart_line_raw_and_log(line);
 }
 
 #[cfg(all(
@@ -3707,7 +3996,7 @@ fn try_attach_linked_display_runtime(root_console_ready: bool) -> bool {
             attempt,
             hdmi_completion,
         );
-        boot_log::force_uart_line(
+        emit_hdmi_diagnostic_line(
             "[local-seat] linked HDMI runtime active action=serial-safe-mirror",
         );
         return true;
@@ -3723,7 +4012,7 @@ fn try_attach_linked_display_runtime(root_console_ready: bool) -> bool {
         );
     }
     if !LINKED_LOCAL_SEAT_DISPLAY_INIT_DEFERRED_LOGGED.swap(true, Ordering::AcqRel) {
-        boot_log::force_uart_line(
+        emit_hdmi_diagnostic_line(
             "[local-seat] linked HDMI runtime pending reason=driver-task-init-no-reply action=serial-shell",
         );
     }
@@ -4201,6 +4490,22 @@ pub(crate) fn linked_local_seat_usb_runtime_result() -> u32 {
     target_arch = "aarch64",
     target_os = "none"
 ))]
+pub(crate) fn linked_local_seat_usb_runtime_frame() -> crate::hal::driver_task::DriverFrameDescriptor
+{
+    let meta = LINKED_LOCAL_SEAT_USB_LAST_FRAME_META.load(Ordering::Acquire);
+    crate::hal::driver_task::DriverFrameDescriptor {
+        offset: LINKED_LOCAL_SEAT_USB_LAST_FRAME_OFFSET.load(Ordering::Acquire) as u32,
+        len: (meta & 0xffff) as u16,
+        flags: ((meta >> 16) & 0xffff) as u16,
+    }
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 pub(crate) fn linked_local_seat_usb_frontier_label() -> &'static str {
     if LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire) {
         return "usb-keyboard-ready";
@@ -4280,7 +4585,7 @@ fn mirror_high_impact_line_via_linked_hdmi(
         LINKED_LOCAL_SEAT_DISPLAY_FAILED.load(Ordering::Acquire),
     ) {
         if !LINKED_LOCAL_SEAT_DISPLAY_DEFERRED_LOGGED.swap(true, Ordering::AcqRel) {
-            boot_log::force_uart_line(
+            emit_hdmi_diagnostic_line(
                 "[local-seat] high-impact HDMI route deferred reason=linked-hdmi-not-ready action=serial-log-only",
             );
         }
@@ -4328,6 +4633,8 @@ fn mirror_high_impact_line_via_linked_hdmi(
     emit_hdmi_frame_submit_state(
         reason,
         payload.len(),
+        false,
+        None,
         root_console_ready,
         completion,
         ready,
@@ -4472,6 +4779,8 @@ fn submit_linked_hdmi_payload_via_linked_hdmi(
     bytes: &[u8],
     root_console_ready: bool,
     reason: &'static str,
+    redraw_chunk: bool,
+    display_trace: Option<LocalSeatDisplayTrace>,
 ) -> bool {
     if bytes.is_empty()
         || !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
@@ -4532,6 +4841,8 @@ fn submit_linked_hdmi_payload_via_linked_hdmi(
         emit_hdmi_frame_submit_state(
             reason,
             end.saturating_sub(offset),
+            redraw_chunk,
+            display_trace,
             root_console_ready,
             completion,
             ready,
@@ -4542,7 +4853,7 @@ fn submit_linked_hdmi_payload_via_linked_hdmi(
                 && local_seat_display_mirror_suspends_on_missing_reply(true, root_console_ready)
             {
                 if !LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOGGED.swap(true, Ordering::AcqRel) {
-                    boot_log::force_uart_line(
+                    emit_hdmi_diagnostic_line(
                         "[local-seat] runtime display mirror deferred reason=driver-task-no-reply action=retry-next-frame",
                     );
                 }
@@ -4735,7 +5046,9 @@ const fn local_seat_driver_task_prompt_slice_required(aux0: u32, root_console_re
     {
         matches!(
             aux0,
-            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX | DRIVER_RUNTIME_USB_ENUMERATE_AUX
+            DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
+                | DRIVER_RUNTIME_USB_ENUMERATE_AUX
+                | DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
         )
     }
     #[cfg(not(feature = "usb"))]
@@ -4769,7 +5082,7 @@ fn init_local_seat_driver_runtime_on_service(
             hal_ptr: hal as *mut crate::hal::KernelHal<'_> as usize,
             _hints: hints,
         });
-        boot_log::force_uart_line(
+        emit_hdmi_diagnostic_line(
             "[local-seat] linked HDMI runtime init deferred reason=serial-shell-first action=steady-call-after-root",
         );
         boot_log::force_uart_line(
@@ -5699,12 +6012,20 @@ mod tests {
             DRIVER_RUNTIME_USB_ENUMERATE_AUX,
             false
         ));
+        assert!(!local_seat_driver_task_prompt_slice_required(
+            DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
+            false
+        ));
         assert!(local_seat_driver_task_prompt_slice_required(
             DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
             true
         ));
         assert!(local_seat_driver_task_prompt_slice_required(
             DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+            true
+        ));
+        assert!(local_seat_driver_task_prompt_slice_required(
+            DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
             true
         ));
         assert!(!local_seat_driver_task_prompt_slice_required(0, true));
@@ -5802,19 +6123,17 @@ mod tests {
         let fallback = LinkedHdmiSnapshotGeometry::fallback();
         assert_eq!(linked_hdmi_snapshot_line_width(160, fallback), 77);
         assert_eq!(linked_hdmi_scrollback_visible_lines(128, 160), 28);
-        assert!(
-            linked_hdmi_scrollback_visible_lines(128, 160)
-                .saturating_mul(
-                    linked_hdmi_snapshot_line_width(160, fallback)
-                        .saturating_add(LINKED_LOCAL_SEAT_HDMI_CLEAR_EOL_BYTES)
-                        .saturating_add(1),
-                )
-                .saturating_add(
-                    LINKED_LOCAL_SEAT_HDMI_SNAPSHOT_CLEAR_BYTES
-                        .saturating_add(LINKED_LOCAL_SEAT_HDMI_CLEAR_TO_END_BYTES),
-                )
-                <= LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES
-        );
+        let full_viewport_bytes = linked_hdmi_scrollback_visible_lines(128, 160)
+            .saturating_mul(
+                linked_hdmi_snapshot_line_width(160, fallback)
+                    .saturating_add(LINKED_LOCAL_SEAT_HDMI_CLEAR_EOL_BYTES)
+                    .saturating_add(1),
+            )
+            .saturating_add(
+                LINKED_LOCAL_SEAT_HDMI_SNAPSHOT_CLEAR_BYTES
+                    .saturating_add(LINKED_LOCAL_SEAT_HDMI_CLEAR_TO_END_BYTES),
+            );
+        assert!(full_viewport_bytes > LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES);
     }
 
     #[test]
@@ -6155,12 +6474,16 @@ mod tests {
         assert!(!redraw);
         assert_eq!(runtime.display_trace().pending_bytes, 0);
 
-        runtime.record_linked_hdmi_submit_miss(submitted.len(), redraw);
+        runtime.record_linked_hdmi_submit_miss(submitted.as_slice(), redraw);
 
         let display = runtime.display_trace();
         assert_eq!(display.pending_bytes, 0);
+        assert_eq!(display.redraw_bytes, 0);
         assert!(display.pending_redraw);
+        assert_eq!(display.scrollback_offset, 0);
+        assert!(!display.open_line);
         assert_eq!(display.no_reply_frames, 1);
+        assert_eq!(display.redraw_no_reply_streak, 0);
         assert_eq!(display.deferred_frames, 1);
         assert_eq!(
             display.superseded_bytes,
@@ -6173,6 +6496,82 @@ mod tests {
         assert_eq!(snapshot_reason, "keyboard-scrollback");
         assert!(snapshot_redraw);
         assert!(snapshot.starts_with(b"\x1b[H\x1b[J"));
+    }
+
+    #[test]
+    fn runtime_hdmi_redraw_no_reply_retries_existing_snapshot_chunk() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        runtime.mirror_line_current_tcb("cohesix> help");
+        runtime.request_linked_hdmi_snapshot_redraw();
+        let Some((submitted, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected redraw payload");
+        };
+        assert_eq!(reason, "keyboard-scrollback");
+        assert!(redraw);
+
+        runtime.record_linked_hdmi_submit_miss(submitted.as_slice(), redraw);
+
+        let display = runtime.display_trace();
+        assert_eq!(display.no_reply_frames, 1);
+        assert_eq!(display.deferred_frames, 1);
+        assert!(display.pending_redraw);
+        assert_eq!(display.redraw_bytes, submitted.len());
+        assert_eq!(display.coalesced_redraws, 0);
+        assert_eq!(display.superseded_bytes, 0);
+        assert_eq!(display.redraw_no_reply_streak, 1);
+
+        let Some((retry, retry_reason, retry_redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected retried redraw payload");
+        };
+        assert_eq!(retry_reason, "keyboard-scrollback");
+        assert!(retry_redraw);
+        assert_eq!(retry, submitted);
+    }
+
+    #[test]
+    fn runtime_hdmi_redraw_no_reply_stops_replay_loop() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        runtime.mirror_line_current_tcb("cohesix> help");
+        runtime.request_linked_hdmi_snapshot_redraw();
+
+        for _ in 0..=LINKED_LOCAL_SEAT_HDMI_REDRAW_NO_REPLY_RETRY_LIMIT {
+            let Some((submitted, _, redraw)) = runtime.next_linked_hdmi_payload() else {
+                panic!("expected redraw payload before retry limit");
+            };
+            assert!(redraw);
+            runtime.record_linked_hdmi_submit_miss(submitted.as_slice(), redraw);
+        }
+
+        let display = runtime.display_trace();
+        assert_eq!(
+            display.no_reply_frames,
+            u64::from(LINKED_LOCAL_SEAT_HDMI_REDRAW_NO_REPLY_RETRY_LIMIT) + 1
+        );
+        assert_eq!(
+            display.deferred_frames,
+            u64::from(LINKED_LOCAL_SEAT_HDMI_REDRAW_NO_REPLY_RETRY_LIMIT) + 1
+        );
+        assert!(!display.pending_redraw);
+        assert_eq!(display.redraw_bytes, 0);
+        assert_eq!(display.pending_bytes, 0);
+        assert!(display.superseded_bytes != 0);
+        assert_eq!(
+            display.redraw_no_reply_streak,
+            LINKED_LOCAL_SEAT_HDMI_REDRAW_NO_REPLY_RETRY_LIMIT + 1
+        );
+        assert!(!runtime.linked_hdmi_pending_work());
     }
 
     #[test]
@@ -6272,6 +6671,7 @@ mod tests {
 
         let display = runtime.display_trace();
         assert_eq!(display.pending_bytes, 0);
+        assert_eq!(display.redraw_bytes, 0);
         assert_eq!(display.backpressure_bytes, payload.len() as u64);
         assert_eq!(runtime.keyboard_trace().driver_task_budget_overruns, 0);
     }
@@ -6318,12 +6718,27 @@ mod tests {
                 true,
                 LINKED_LOCAL_SEAT_USB_POLL_READY_IDLE_COOLDOWN
             ),
-            LINKED_LOCAL_SEAT_USB_POLL_NO_REPLY_MAX_COOLDOWN
+            LINKED_LOCAL_SEAT_USB_POLL_READY_IDLE_COOLDOWN
         );
+        #[cfg(all(feature = "kernel", feature = "usb"))]
+        {
+            assert!(local_seat_keyboard_steady_queue_stalled(
+                LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS,
+                u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE)
+            ));
+            assert!(local_seat_keyboard_steady_queue_stalled(
+                LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS,
+                u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE)
+            ));
+            assert!(!local_seat_keyboard_steady_queue_stalled(
+                LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS,
+                u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE)
+            ));
+        }
     }
 
     #[test]
-    fn runtime_keyboard_recovery_aux_waits_for_root_queue_drain() {
+    fn runtime_keyboard_recovery_aux_waits_for_root_queue_drain_unless_runtime_is_stale() {
         assert!(!local_seat_keyboard_recovery_aux_allowed(
             false,
             LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_RECOVERY_NO_REPLY_THRESHOLD,
@@ -6355,13 +6770,33 @@ mod tests {
             true
         ));
         assert!(local_seat_keyboard_recovery_aux_allowed_for_status(
-            true, 0, false, true
+            true, 0, false, true, false
+        ));
+        assert!(local_seat_keyboard_recovery_aux_allowed_for_status(
+            false, 0, false, true, false
         ));
         assert!(!local_seat_keyboard_recovery_aux_allowed_for_status(
-            false, 0, false, true
+            true, 0, true, true, false
         ));
-        assert!(!local_seat_keyboard_recovery_aux_allowed_for_status(
-            true, 0, true, true
+        assert!(local_seat_keyboard_recovery_aux_allowed_for_status(
+            true, 0, false, false, true
+        ));
+        assert!(local_seat_keyboard_recovery_aux_allowed_for_status(
+            false, 0, false, false, true
+        ));
+        assert!(local_seat_keyboard_recovery_aux_allowed_for_status(
+            true,
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_IDLE_RECOVERY_NO_REPLY_THRESHOLD,
+            false,
+            false,
+            true
+        ));
+        assert!(local_seat_keyboard_recovery_aux_allowed_for_status(
+            true,
+            LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_IDLE_RECOVERY_NO_REPLY_THRESHOLD * 2,
+            false,
+            false,
+            true
         ));
     }
 
@@ -6559,6 +6994,55 @@ mod tests {
             local_seat_keyboard_poll_aux(true, true),
             DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn linked_usb_recovery_failed_first_report_reenters_enumeration() {
+        let recovery_failed = crate::hal::driver_task::DriverTaskCompletionRecord {
+            sequence: 7,
+            code: crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16(),
+            detail: DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
+            result: u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED)
+                << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT,
+            frame: crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+        assert!(local_seat_usb_first_report_requires_reenumeration(
+            recovery_failed
+        ));
+
+        let pending_failed = crate::hal::driver_task::DriverTaskCompletionRecord {
+            sequence: 8,
+            code: crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16(),
+            detail: DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
+            result: u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED)
+                << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT,
+            frame: crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+        assert!(local_seat_usb_first_report_requires_reenumeration(
+            pending_failed
+        ));
+
+        let ready = crate::hal::driver_task::DriverTaskCompletionRecord {
+            sequence: 9,
+            code: crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16(),
+            detail: DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
+            result: 1,
+            frame: crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+        assert!(!local_seat_usb_first_report_requires_reenumeration(ready));
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

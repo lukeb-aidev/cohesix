@@ -709,6 +709,7 @@ const PCIE_MMIO_ACCESS_BYTES: usize = core::mem::size_of::<u32>();
 const GENET_SYS_OFF: usize = 0x0000;
 const GENET_EXT_OFF: usize = 0x0080;
 const GENET_RBUF_OFF: usize = 0x0300;
+const GENET_TBUF_OFF: usize = 0x0600;
 const GENET_UMAC_OFF: usize = 0x0800;
 const GENET_RX_OFF: usize = 0x2000;
 const GENET_TX_OFF: usize = 0x4000;
@@ -717,6 +718,7 @@ const GENET_SYS_RBUF_FLUSH_CTRL: usize = GENET_SYS_OFF + 0x08;
 const GENET_EXT_RGMII_OOB_CTRL: usize = GENET_EXT_OFF + 0x0c;
 const GENET_RBUF_CTRL: usize = GENET_RBUF_OFF;
 const GENET_RBUF_TBUF_SIZE_CTRL: usize = GENET_RBUF_OFF + 0xb4;
+const GENET_TBUF_CTRL: usize = GENET_TBUF_OFF;
 const GENET_UMAC_CMD: usize = GENET_UMAC_OFF + 0x08;
 const GENET_UMAC_MAC0: usize = GENET_UMAC_OFF + 0x0c;
 const GENET_UMAC_MAC1: usize = GENET_UMAC_OFF + 0x10;
@@ -735,7 +737,9 @@ const GENET_OOB_DISABLE: u32 = 1 << 5;
 const GENET_RGMII_LINK: u32 = 1 << 4;
 const GENET_RGMII_MODE_EN: u32 = 1 << 6;
 const GENET_ID_MODE_DIS: u32 = 1 << 16;
+const GENET_RBUF_64B_EN: u32 = 1 << 0;
 const GENET_RBUF_ALIGN_2B: u32 = 1 << 1;
+const GENET_TBUF_64B_EN: u32 = 1 << 0;
 const GENET_MIB_RESET_RX: u32 = 1 << 0;
 const GENET_MIB_RESET_RUNT: u32 = 1 << 1;
 const GENET_MIB_RESET_TX: u32 = 1 << 2;
@@ -786,9 +790,10 @@ const GENET_DMA_MAX_BURST_LENGTH: u32 = 0x8;
 const GENET_DMA_DESC_SIZE: usize = 12;
 const GENET_DMA_RING_SIZE: usize = 0x40;
 const GENET_DEFAULT_Q: u32 = 16;
-const GENET_HW_TOTAL_DESCS: usize = 32;
-const GENET_RDMA_REG_OFF: usize = GENET_RX_OFF + GENET_HW_TOTAL_DESCS * GENET_DMA_DESC_SIZE;
-const GENET_TDMA_REG_OFF: usize = GENET_TX_OFF + GENET_HW_TOTAL_DESCS * GENET_DMA_DESC_SIZE;
+const GENET_MMIO_TOTAL_DESCS: usize = 256;
+const GENET_ACTIVE_RING_DESCS: usize = 32;
+const GENET_RDMA_REG_OFF: usize = GENET_RX_OFF + GENET_MMIO_TOTAL_DESCS * GENET_DMA_DESC_SIZE;
+const GENET_TDMA_REG_OFF: usize = GENET_TX_OFF + GENET_MMIO_TOTAL_DESCS * GENET_DMA_DESC_SIZE;
 const GENET_DMA_RINGS_SIZE: usize = GENET_DMA_RING_SIZE * ((GENET_DEFAULT_Q as usize) + 1);
 const GENET_RDMA_RING_REG_BASE: usize =
     GENET_RDMA_REG_OFF + (GENET_DEFAULT_Q as usize) * GENET_DMA_RING_SIZE;
@@ -815,11 +820,14 @@ const GENET_RDMA_XON_XOFF_THRESH: usize = GENET_RDMA_RING_REG_BASE + 0x28;
 const GENET_RDMA_READ_PTR: usize = GENET_RDMA_RING_REG_BASE + 0x2c;
 const GENET_DMA_FC_THRESH_LO: u32 = 5;
 const GENET_RX_BUF_LENGTH: usize = 2048;
-const GENET_RX_BUF_OFFSET: usize = 2;
+const GENET_STATUS_BLOCK_BYTES: usize = 64;
+const GENET_RX_PAD_BYTES: usize = 2;
+const GENET_RX_BUF_OFFSET: usize = GENET_STATUS_BLOCK_BYTES + GENET_RX_PAD_BYTES;
+const GENET_TX_BUF_OFFSET: usize = GENET_STATUS_BLOCK_BYTES;
 const GENET_MAX_FRAME_LEN: usize = 1536;
 const GENET_RX_DRAIN_BUDGET: usize = 8;
 const GENET_RX_QUEUE_CAP: usize = GENET_RX_DRAIN_BUDGET;
-const GENET_TX_COMPLETION_RECLAIM_BUDGET: usize = 32;
+const GENET_TX_COMPLETION_RECLAIM_BUDGET: usize = GENET_ACTIVE_RING_DESCS;
 const GENET_DRIVER_TASK_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x31];
 
 const PCIE_MISC_PCIE_STATUS: usize = 0x4068;
@@ -895,13 +903,15 @@ const USB_CONFIG_BUFFER_BYTES: usize = 512;
 const USB_HUB_DESCRIPTOR_BYTES: usize = 16;
 const USB_HUB_BLIND_PREPARE_PORT_LIMIT: u8 = 4;
 const USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH: usize = 128;
-const USB_KEYBOARD_FIRST_REPORT_QUEUE_DEPTH: usize = USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH;
 const USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH: usize = 32;
+const USB_KEYBOARD_FIRST_REPORT_QUEUE_DEPTH: usize = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH;
 const USB_KEYBOARD_HARD_RECOVERY_UNMATCHED_THRESHOLD: u8 = 16;
 const USB_KEYBOARD_STEADY_UNMATCHED_RECOVERY_THRESHOLD: u8 = 1;
 const USB_KEYBOARD_QUEUE_COLLAPSE_RECOVERY_DEPTH: usize = 8;
 const USB_KEYBOARD_QUEUE_COLLAPSE_RECOVERY_EVENTS: u32 = 32;
+const USB_KEYBOARD_STEADY_IDLE_RECOVERY_EVENTS: u32 = 128;
 const USB_KEYBOARD_HARD_RECOVERY_LIMIT: u8 = 8;
+const USB_KEYBOARD_RECOVERY_REENUMERATE_FAILURES: u8 = 1;
 const USB_KEYBOARD_EVENT_SCAN_LIMIT: usize = 256;
 const USB_KEYBOARD_RECOVERY_EVENT_DRAIN_LIMIT: usize = 64;
 const XHCI_PORTSC_BASE: usize = 0x400;
@@ -1008,6 +1018,8 @@ const USB_COMMAND_COMPLETION_SPINS: usize = 20_000_000;
 const USB_COMMAND_COMPLETION_SLICE_SPINS: usize = 128;
 const USB_COMMAND_COMPLETION_EVENTS_PER_SLICE: usize = 4;
 const USB_COMMAND_COMPLETION_PROGRESS_SPINS: usize = 4096;
+const USB_ENDPOINT_RECOVERY_COMMAND_SPINS: usize = USB_COMMAND_COMPLETION_SPINS;
+const USB_ENDPOINT_RECOVERY_COMMAND_EVENTS_PER_SLICE: usize = XHCI_EVENT_RING_TRBS;
 const USB_COMMAND_PROOF_MAX_POLL_SLICES: u8 = 192;
 const USB_COMMAND_PROOF_RERINGS_PENDING_DOORBELL: bool = true;
 const USB_COMMAND_PROOF_RERING_INTERVAL_SLICES: u8 = 8;
@@ -1169,6 +1181,7 @@ const CYW43_SDPCM_CHANNEL_DATA: u8 = 2;
 const CYW43_SDPCM_CHANNEL_GLOM: u8 = 3;
 const CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES: usize = 16;
 const CYW43_RX_DRAIN_BUDGET: usize = 4;
+const CYW43_TX_CREDIT_WAIT_LOOPS: usize = 2_000;
 const CYW43_RX_FRAME_FLAG_MASK_DATA: u16 = 1 << CYW43_SDPCM_CHANNEL_DATA;
 const CYW43_RX_FRAME_FLAG_MASK_CONTROL: u16 = 1 << CYW43_SDPCM_CHANNEL_CONTROL;
 const CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT: u16 =
@@ -1500,8 +1513,13 @@ struct GenetRuntimeState {
     rx_queue_head: u8,
     rx_queue_count: u8,
     rx_queue_lens: [u16; GENET_RX_QUEUE_CAP],
+    rx_queue_flags: [u16; GENET_RX_QUEUE_CAP],
     rx_queue_frames: [[u8; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
     tx_packets: u32,
+    tx_completions: u32,
+    tx_last_reclaim: u16,
+    tx_last_free: u16,
+    tx_last_in_flight: u16,
     rx_packets: u32,
     tx_drops: u32,
 }
@@ -1519,8 +1537,13 @@ impl GenetRuntimeState {
             rx_queue_head: 0,
             rx_queue_count: 0,
             rx_queue_lens: [0; GENET_RX_QUEUE_CAP],
+            rx_queue_flags: [0; GENET_RX_QUEUE_CAP],
             rx_queue_frames: [[0; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
             tx_packets: 0,
+            tx_completions: 0,
+            tx_last_reclaim: 0,
+            tx_last_free: GENET_ACTIVE_RING_DESCS as u16,
+            tx_last_in_flight: 0,
             rx_packets: 0,
             tx_drops: 0,
         }
@@ -1613,6 +1636,9 @@ struct UsbRuntimeState {
     keyboard_endpoint_recoveries: u8,
     keyboard_endpoint_recovery_failures: u8,
     keyboard_queue_collapse_recoveries: u8,
+    keyboard_last_recovery_stage: u8,
+    keyboard_last_recovery_reason: u8,
+    keyboard_command_completion_blocked: u8,
     keyboard_endpoint_reset_required: bool,
     keyboard_control_poll_disabled: bool,
     keyboard_control_poll_cooldown: u8,
@@ -1696,6 +1722,11 @@ impl UsbRuntimeState {
             keyboard_endpoint_recoveries: 0,
             keyboard_endpoint_recovery_failures: 0,
             keyboard_queue_collapse_recoveries: 0,
+            keyboard_last_recovery_stage:
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_NONE,
+            keyboard_last_recovery_reason:
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_NONE,
+            keyboard_command_completion_blocked: 0,
             keyboard_endpoint_reset_required: false,
             keyboard_control_poll_disabled: false,
             keyboard_control_poll_cooldown: 0,
@@ -3752,6 +3783,26 @@ const fn genet_decode_rx_len(len_status: u32) -> usize {
     ((len_status >> GENET_DMA_BUFLENGTH_SHIFT) & GENET_DMA_BUFLENGTH_MASK) as usize
 }
 
+const fn genet_rx_payload_len(len_status: u32) -> Option<usize> {
+    let length = genet_decode_rx_len(len_status);
+    if length <= GENET_RX_BUF_OFFSET || length > GENET_RX_BUF_OFFSET + GENET_MAX_FRAME_LEN {
+        None
+    } else {
+        Some(length - GENET_RX_BUF_OFFSET)
+    }
+}
+
+const fn genet_tx_dma_len(frame_len: usize) -> Option<usize> {
+    let Some(total) = frame_len.checked_add(GENET_TX_BUF_OFFSET) else {
+        return None;
+    };
+    if frame_len == 0 || frame_len > GENET_MAX_FRAME_LEN || total > DRIVER_TASK_RING_PAGE_BYTES {
+        None
+    } else {
+        Some(total)
+    }
+}
+
 const fn genet_ring_end_addr(ring_descs: usize) -> u32 {
     let words = ring_descs.saturating_mul(GENET_DMA_DESC_SIZE) / 4;
     words.saturating_sub(1) as u32
@@ -3954,14 +4005,30 @@ fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
     if command.frame.len == 0 {
-        return match GENET_RUNTIME_STATE
-            .with_mut(|state| genet_runtime_poll_rx(state, command.budget))
-        {
-            GenetRxPoll::Idle => DriverTaskCompletionRecord::idle(command.sequence),
-            GenetRxPoll::Frame(read) => {
+        let (poll, completed, tx_free, in_flight) = GENET_RUNTIME_STATE.with_mut(|state| {
+            let poll = genet_runtime_poll_rx(state, command.budget);
+            (
+                poll,
+                state.tx_last_reclaim,
+                state.tx_last_free,
+                state.tx_last_in_flight,
+            )
+        });
+        return match poll {
+            GenetRxPoll::Idle => {
+                genet_tx_idle_completion(command.sequence, completed, tx_free, in_flight)
+            }
+            GenetRxPoll::Frame { len, flags } => {
                 GENET_RX_COUNT.fetch_add(1, Ordering::AcqRel);
                 GENET_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_RX_PROGRESS, Ordering::AcqRel);
-                DriverTaskCompletionRecord::frame_ready(command.sequence, read as u16)
+                genet_rx_frame_ready_completion(
+                    command.sequence,
+                    len as u16,
+                    flags,
+                    completed,
+                    tx_free,
+                    in_flight,
+                )
             }
             GenetRxPoll::BudgetExhausted(detail) => {
                 DriverTaskCompletionRecord::budget_exhausted(command.sequence, detail)
@@ -3974,14 +4041,27 @@ fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
     if let Err(detail) = genet_tx_budget_allows_frame(command.budget, command.frame.len) {
         return DriverTaskCompletionRecord::budget_exhausted(command.sequence, detail);
     }
-    let written =
-        GENET_RUNTIME_STATE.with_mut(|state| genet_runtime_submit_tx(state, command.frame));
+    let (written, completed, tx_free, in_flight) = GENET_RUNTIME_STATE.with_mut(|state| {
+        let written = genet_runtime_submit_tx(state, command.frame);
+        (
+            written,
+            state.tx_last_reclaim,
+            state.tx_last_free,
+            state.tx_last_in_flight,
+        )
+    });
     if written == 0 {
-        DriverTaskCompletionRecord::idle(command.sequence)
+        genet_tx_idle_completion(command.sequence, completed, tx_free, in_flight)
     } else {
         GENET_TX_COUNT.fetch_add(1, Ordering::AcqRel);
         GENET_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_TX_PROGRESS, Ordering::AcqRel);
-        DriverTaskCompletionRecord::progress(command.sequence, written as u32)
+        genet_tx_progress_completion(
+            command.sequence,
+            written as u32,
+            completed,
+            tx_free,
+            in_flight,
+        )
     }
 }
 
@@ -4122,16 +4202,23 @@ fn service_usb_keyboard(command: DriverTaskCommandRecord) -> DriverTaskCompletio
             .with_mut(|state| usb_runtime_poll_keyboard(state, command.sequence, command.aux0));
         return if produced == 0 {
             if USB_RUNTIME_STATE.with_mut(usb_keyboard_endpoint_ready) {
-                let (detail, result) = USB_RUNTIME_STATE.with_mut(|state| {
+                let (detail, result, frame) = USB_RUNTIME_STATE.with_mut(|state| {
                     let result = usb_keyboard_pending_result(state);
                     let detail = if usb_keyboard_has_first_valid_report(state) {
                         DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
                     } else {
                         DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
                     };
-                    (detail, result)
+                    let frame = usb_keyboard_diagnostic_frame(state);
+                    (detail, result, frame)
                 });
-                DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, result)
+                let mut completion = DriverTaskCompletionRecord::progress_with_detail(
+                    command.sequence,
+                    detail,
+                    result,
+                );
+                completion.frame = frame;
+                completion
             } else if let Some((detail, result)) =
                 USB_RUNTIME_STATE.with_mut(usb_runtime_enumeration_status)
             {
@@ -4556,7 +4643,10 @@ fn cyw43_descriptor_invalid_result(desc: DriverRuntimeCyw43CommandDescriptor) ->
             desc.flags & !DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE == 0
         }
         DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME | DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => {
-            desc.flags & !DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER == 0
+            desc.flags
+                & !(DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                    | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN)
+                == 0
         }
         DRIVER_RUNTIME_CYW43_OP_RX_POLL | DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
             desc.flags & !DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD == 0
@@ -4881,7 +4971,11 @@ fn service_cyw43_descriptor_command(
                 len: desc.payload_len,
                 flags: 0,
             };
-            cyw43_submit_sdpcm_frame(state, frame, true, false) as u32
+            let written = cyw43_submit_sdpcm_frame(state, frame, true, false);
+            if written != 0 {
+                progress_detail = u16::try_from(cyw43_data_tx_request_len(written)).ok();
+            }
+            written as u32
         }
         DRIVER_RUNTIME_CYW43_OP_RX_POLL => {
             match cyw43_runtime_poll_rx_detailed(
@@ -8712,12 +8806,12 @@ fn cyw43_submit_sdpcm_frame(
         return 0;
     }
     let total_len = payload_len + header_len;
-    let seq = state.sdpcm_seq;
-    if !has_sdpcm_credit(state.sdpcm_seq, state.sdpcm_seq_max) {
+    if !cyw43_wait_for_sdpcm_tx_credit(state) {
         return 0;
     }
+    let seq = state.sdpcm_seq;
     let request_len = if data_frame {
-        align_to(total_len, CYW43_FUNCTION2_BLOCK_BYTES)
+        cyw43_data_tx_request_len(total_len)
     } else if control_ext_header {
         cyw43_control_tx_request_len(total_len)
     } else {
@@ -8732,8 +8826,13 @@ fn cyw43_submit_sdpcm_frame(
         return 0;
     }
     if data_frame {
-        cyw43_write_sdpcm_data_tx_header(DRIVER_TASK_RING_FRAME_OFFSET, total_len, seq);
         let bdc_priority = cyw43_bdc_priority_for_ring_packet(frame.offset as usize, payload_len);
+        copy_ring_range(
+            frame.offset as usize,
+            DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES,
+            payload_len,
+        );
+        cyw43_write_sdpcm_data_tx_header(DRIVER_TASK_RING_FRAME_OFFSET, total_len, seq);
         write_ring_byte(
             DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_DATA_TX_BDC_OFFSET,
             CYW43_BDC_VERSION << CYW43_BDC_VERSION_SHIFT,
@@ -8749,11 +8848,6 @@ fn cyw43_submit_sdpcm_frame(
         write_ring_byte(
             DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_DATA_TX_BDC_OFFSET + 3,
             0,
-        );
-        copy_ring_range(
-            frame.offset as usize,
-            DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES,
-            payload_len,
         );
     } else {
         cyw43_write_sdpcm_control_tx_header(
@@ -8786,6 +8880,21 @@ fn cyw43_submit_sdpcm_frame(
     state.sdpcm_seq = state.sdpcm_seq.wrapping_add(1);
     state.tx_frames = state.tx_frames.saturating_add(1);
     total_len
+}
+
+fn cyw43_wait_for_sdpcm_tx_credit(state: &mut Cyw43RuntimeState) -> bool {
+    for _ in 0..CYW43_TX_CREDIT_WAIT_LOOPS {
+        if has_sdpcm_credit(state.sdpcm_seq, state.sdpcm_seq_max) {
+            return true;
+        }
+        let _ = cyw43_runtime_read_rframe_if_present(
+            state,
+            0,
+            Cyw43AssertedEmptyPolicy::RequestRetransmit,
+        );
+        core::hint::spin_loop();
+    }
+    has_sdpcm_credit(state.sdpcm_seq, state.sdpcm_seq_max)
 }
 
 fn cyw43_runtime_poll_rx(
@@ -10107,7 +10216,7 @@ fn cyw43_drain_startup_status_frames(state: &mut Cyw43RuntimeState, sequence: u3
 fn cyw43_drain_rx_before_control_tx(state: &mut Cyw43RuntimeState, sequence: u32) {
     match cyw43_runtime_poll_rx_detailed_with_policy(
         state,
-        0,
+        CYW43_RX_FRAME_FLAG_MASK_CONTROL,
         sequence,
         false,
         Cyw43AssertedEmptyPolicy::PreserveForTx,
@@ -10127,7 +10236,7 @@ fn cyw43_drain_rx_before_control_tx(state: &mut Cyw43RuntimeState, sequence: u32
     if cyw43_rx_source_asserts_pending_frame(source) {
         let _ = cyw43_runtime_poll_rx_detailed_with_policy(
             state,
-            0,
+            CYW43_RX_FRAME_FLAG_MASK_CONTROL,
             sequence,
             true,
             Cyw43AssertedEmptyPolicy::PreserveForTx,
@@ -10322,6 +10431,9 @@ fn cyw43_control_reply_from_frame(frame: DriverFrameDescriptor) -> Option<Cyw43C
     let offset = frame.offset as usize;
     let len = usize::from(frame.len);
     if len < CYW43_CDC_HEADER_BYTES {
+        return None;
+    }
+    if read_ring_u32(offset) == SDIO_FAULT_TELEMETRY_MAGIC {
         return None;
     }
     Some(Cyw43ControlReply {
@@ -11120,6 +11232,20 @@ const fn cyw43_control_tx_request_len(unpadded_len: usize) -> usize {
     }
 }
 
+const fn cyw43_data_tx_request_len(unpadded_len: usize) -> usize {
+    let aligned = align4(unpadded_len);
+    if aligned <= SDIO_CMD53_BYTE_MODE_MAX {
+        aligned
+    } else {
+        let remainder = aligned % CYW43_FUNCTION2_BLOCK_BYTES;
+        if remainder == 0 {
+            aligned
+        } else {
+            aligned + (CYW43_FUNCTION2_BLOCK_BYTES - remainder)
+        }
+    }
+}
+
 const fn cyw43_control_rx_request_len(unpadded_len: usize) -> usize {
     let aligned = (unpadded_len + 3) & !3;
     if aligned <= SDIO_CMD53_BYTE_MODE_MAX {
@@ -11210,23 +11336,23 @@ const fn align4(value: usize) -> usize {
     (value + 3) & !3
 }
 
-fn align_to(value: usize, alignment: usize) -> usize {
-    value.div_ceil(alignment) * alignment
-}
-
 #[inline]
 const fn has_sdpcm_credit(sdpcm_seq: u8, sdpcm_seq_max: u8) -> bool {
     sdpcm_seq != sdpcm_seq_max && (sdpcm_seq_max.wrapping_sub(sdpcm_seq) & 0x80) == 0
 }
 
 fn genet_runtime_submit_tx(state: &mut GenetRuntimeState, frame: DriverFrameDescriptor) -> usize {
-    if !state.initialized || frame.len == 0 || frame.len as usize > GENET_MAX_FRAME_LEN {
+    let Some(dma_len) = genet_tx_dma_len(frame.len as usize) else {
+        state.tx_drops = state.tx_drops.saturating_add(1);
+        return 0;
+    };
+    if !state.initialized {
         state.tx_drops = state.tx_drops.saturating_add(1);
         return 0;
     }
     genet_runtime_poll_tx_completions(state);
     let in_flight = ring_distance(state.tx_prod_index, state.tx_cons_index) as usize;
-    if in_flight >= GENET_HW_TOTAL_DESCS {
+    if in_flight >= GENET_ACTIVE_RING_DESCS {
         state.tx_drops = state.tx_drops.saturating_add(1);
         return 0;
     }
@@ -11238,8 +11364,8 @@ fn genet_runtime_submit_tx(state: &mut GenetRuntimeState, frame: DriverFrameDesc
     ) else {
         return 0;
     };
-    let slot = ring_slot(state.tx_prod_index, GENET_HW_TOTAL_DESCS);
-    let dma_slot = GENET_HW_TOTAL_DESCS + slot;
+    let slot = ring_slot(state.tx_prod_index, GENET_ACTIVE_RING_DESCS);
+    let dma_slot = GENET_ACTIVE_RING_DESCS + slot;
     let Some(dma_vaddr) =
         (dma_range.vaddr as usize).checked_add(dma_slot * DRIVER_TASK_RING_PAGE_BYTES)
     else {
@@ -11252,25 +11378,85 @@ fn genet_runtime_submit_tx(state: &mut GenetRuntimeState, frame: DriverFrameDesc
     ) else {
         return 0;
     };
+    for index in 0..GENET_TX_BUF_OFFSET {
+        write_dma_byte(dma_vaddr + index, 0);
+    }
     for index in 0..frame.len as usize {
         write_dma_byte(
-            dma_vaddr + index,
+            dma_vaddr + GENET_TX_BUF_OFFSET + index,
             read_ring_byte(frame.offset as usize + index),
         );
     }
     dma_store_barrier();
-    genet_write_tx_desc(slot, dma_bus_addr, genet_tx_len_status(frame.len as usize));
+    genet_write_tx_desc(slot, dma_bus_addr, genet_tx_len_status(dma_len));
     dma_store_barrier();
     state.tx_prod_index = state.tx_prod_index.wrapping_add(1);
     genet_write32(GENET_TDMA_PROD_INDEX, state.tx_prod_index as u32);
     state.tx_packets = state.tx_packets.saturating_add(1);
+    genet_record_tx_window(state);
     frame.len as usize
+}
+
+fn genet_tx_progress_completion(
+    sequence: u32,
+    written: u32,
+    completed: u16,
+    tx_free: u16,
+    in_flight: u16,
+) -> DriverTaskCompletionRecord {
+    let mut completion =
+        DriverTaskCompletionRecord::progress_with_detail(sequence, completed, written);
+    completion.frame = DriverFrameDescriptor {
+        offset: 0,
+        len: tx_free,
+        flags: in_flight,
+    };
+    completion
+}
+
+fn genet_tx_idle_completion(
+    sequence: u32,
+    completed: u16,
+    tx_free: u16,
+    in_flight: u16,
+) -> DriverTaskCompletionRecord {
+    DriverTaskCompletionRecord::idle_with_detail_and_frame(
+        sequence,
+        completed,
+        0,
+        DriverFrameDescriptor {
+            offset: 0,
+            len: tx_free,
+            flags: in_flight,
+        },
+    )
+}
+
+fn genet_rx_frame_ready_completion(
+    sequence: u32,
+    len: u16,
+    flags: u16,
+    completed: u16,
+    tx_free: u16,
+    in_flight: u16,
+) -> DriverTaskCompletionRecord {
+    DriverTaskCompletionRecord {
+        sequence,
+        code: COMPLETION_FRAME_READY,
+        detail: completed,
+        result: (u32::from(tx_free) << 16) | u32::from(in_flight),
+        frame: DriverFrameDescriptor {
+            offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len,
+            flags,
+        },
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GenetRxPoll {
     Idle,
-    Frame(usize),
+    Frame { len: usize, flags: u16 },
     BudgetExhausted(u16),
 }
 
@@ -11320,11 +11506,14 @@ fn genet_runtime_poll_rx(
         if payload_len > budget.max_bytes as usize {
             return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_BYTES);
         }
-        let Some(payload_len) = genet_rx_queue_pop_to_ring(state) else {
+        let Some((payload_len, flags)) = genet_rx_queue_pop_to_ring(state) else {
             return GenetRxPoll::Idle;
         };
         state.rx_packets = state.rx_packets.saturating_add(1);
-        return GenetRxPoll::Frame(payload_len);
+        return GenetRxPoll::Frame {
+            len: payload_len,
+            flags,
+        };
     }
     genet_runtime_poll_tx_completions(state);
     let descriptor = RUNTIME_DESCRIPTOR.load();
@@ -11335,46 +11524,45 @@ fn genet_runtime_poll_rx(
     ) else {
         return GenetRxPoll::Idle;
     };
-    let mut first_payload_len = 0usize;
     for _ in 0..drain_budget {
         let prod = genet_read32(GENET_RDMA_PROD_INDEX) as u16;
         if prod == state.rx_cons_index {
             break;
         }
-        let slot = ring_slot(state.rx_cons_index, GENET_HW_TOTAL_DESCS);
-        let desc = genet_read_rx_desc(slot);
-        if desc.0 & GENET_DMA_OWN != 0 {
-            break;
-        }
-        let length = genet_decode_rx_len(desc.0);
-        let payload_len = length
-            .saturating_sub(GENET_RX_BUF_OFFSET)
-            .min(MAX_DRIVER_TASK_FRAME_BYTES);
+        let slot = ring_slot(state.rx_cons_index, GENET_ACTIVE_RING_DESCS);
         let dma_vaddr = dma_range.vaddr as usize + slot * DRIVER_TASK_RING_PAGE_BYTES;
         dma_load_barrier();
-        if payload_len != 0 {
-            if payload_len > budget.max_bytes as usize {
-                if first_payload_len == 0 {
-                    return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_BYTES);
-                }
-                break;
-            }
-            if first_payload_len == 0 {
-                genet_copy_dma_frame_to_ring(dma_vaddr, payload_len);
-                first_payload_len = payload_len;
-            } else if !genet_rx_queue_push_from_dma(state, dma_vaddr, payload_len) {
-                break;
-            }
+        let desc = genet_read_rx_desc(slot);
+        let len_status = genet_rx_len_status_from_dma(dma_vaddr, desc.0);
+        let Some(payload_len) = genet_rx_payload_len(len_status) else {
+            genet_rearm_rx_slot(&descriptor, dma_range, slot);
+            state.rx_cons_index = state.rx_cons_index.wrapping_add(1);
+            genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
+            continue;
+        };
+        if payload_len > budget.max_bytes as usize {
+            return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_BYTES);
         }
+        genet_copy_dma_frame_to_ring(dma_vaddr, payload_len);
+        let flags = genet_dma_frame_ethertype(dma_vaddr, payload_len);
         genet_rearm_rx_slot(&descriptor, dma_range, slot);
         state.rx_cons_index = state.rx_cons_index.wrapping_add(1);
         genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
-    }
-    if first_payload_len != 0 {
         state.rx_packets = state.rx_packets.saturating_add(1);
-        GenetRxPoll::Frame(first_payload_len)
+        return GenetRxPoll::Frame {
+            len: payload_len,
+            flags,
+        };
+    }
+    GenetRxPoll::Idle
+}
+
+fn genet_rx_len_status_from_dma(dma_vaddr: usize, descriptor_len_status: u32) -> u32 {
+    let status_len = read_dma_u32(dma_vaddr);
+    if genet_rx_payload_len(status_len).is_some() {
+        status_len
     } else {
-        GenetRxPoll::Idle
+        descriptor_len_status
     }
 }
 
@@ -11385,25 +11573,13 @@ fn genet_copy_dma_frame_to_ring(dma_vaddr: usize, payload_len: usize) {
     }
 }
 
-fn genet_rx_queue_push_from_dma(
-    state: &mut GenetRuntimeState,
-    dma_vaddr: usize,
-    payload_len: usize,
-) -> bool {
-    if payload_len == 0
-        || payload_len > GENET_MAX_FRAME_LEN
-        || usize::from(state.rx_queue_count) >= GENET_RX_QUEUE_CAP
-    {
-        return false;
+fn genet_dma_frame_ethertype(dma_vaddr: usize, payload_len: usize) -> u16 {
+    if payload_len < 14 {
+        return 0;
     }
-    let slot =
-        (usize::from(state.rx_queue_head) + usize::from(state.rx_queue_count)) % GENET_RX_QUEUE_CAP;
-    for index in 0..payload_len {
-        state.rx_queue_frames[slot][index] = read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index);
-    }
-    state.rx_queue_lens[slot] = payload_len as u16;
-    state.rx_queue_count = state.rx_queue_count.saturating_add(1);
-    true
+    let high = u16::from(read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + 12));
+    let low = u16::from(read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + 13));
+    (high << 8) | low
 }
 
 #[cfg(test)]
@@ -11418,11 +11594,16 @@ fn genet_rx_queue_push_for_test(state: &mut GenetRuntimeState, payload: &[u8]) -
         (usize::from(state.rx_queue_head) + usize::from(state.rx_queue_count)) % GENET_RX_QUEUE_CAP;
     state.rx_queue_frames[slot][..payload.len()].copy_from_slice(payload);
     state.rx_queue_lens[slot] = payload.len() as u16;
+    state.rx_queue_flags[slot] = if payload.len() >= 14 {
+        u16::from_be_bytes([payload[12], payload[13]])
+    } else {
+        0
+    };
     state.rx_queue_count = state.rx_queue_count.saturating_add(1);
     true
 }
 
-fn genet_rx_queue_pop_to_ring(state: &mut GenetRuntimeState) -> Option<usize> {
+fn genet_rx_queue_pop_to_ring(state: &mut GenetRuntimeState) -> Option<(usize, u16)> {
     if state.rx_queue_count == 0 {
         return None;
     }
@@ -11438,8 +11619,9 @@ fn genet_rx_queue_pop_to_ring(state: &mut GenetRuntimeState) -> Option<usize> {
             state.rx_queue_frames[slot][index],
         );
     }
+    let flags = state.rx_queue_flags[slot];
     genet_rx_queue_drop_head(state);
-    Some(payload_len)
+    Some((payload_len, flags))
 }
 
 fn genet_rx_queue_peek_len(state: &GenetRuntimeState) -> Option<usize> {
@@ -11460,6 +11642,7 @@ fn genet_rx_queue_drop_head(state: &mut GenetRuntimeState) {
     }
     let slot = usize::from(state.rx_queue_head);
     state.rx_queue_lens[slot] = 0;
+    state.rx_queue_flags[slot] = 0;
     state.rx_queue_head = ((slot + 1) % GENET_RX_QUEUE_CAP) as u8;
     state.rx_queue_count = state.rx_queue_count.saturating_sub(1);
     if state.rx_queue_count == 0 {
@@ -11473,7 +11656,19 @@ fn genet_runtime_poll_tx_completions(state: &mut GenetRuntimeState) {
     if completed != 0 {
         let reclaim = completed.min(GENET_TX_COMPLETION_RECLAIM_BUDGET);
         state.tx_cons_index = state.tx_cons_index.wrapping_add(reclaim as u16);
+        state.tx_completions = state.tx_completions.saturating_add(reclaim as u32);
+        state.tx_last_reclaim = reclaim as u16;
+    } else {
+        state.tx_last_reclaim = 0;
     }
+    genet_record_tx_window(state);
+}
+
+fn genet_record_tx_window(state: &mut GenetRuntimeState) {
+    let in_flight =
+        ring_distance(state.tx_prod_index, state.tx_cons_index).min(GENET_ACTIVE_RING_DESCS as u16);
+    state.tx_last_in_flight = in_flight;
+    state.tx_last_free = (GENET_ACTIVE_RING_DESCS as u16).saturating_sub(in_flight);
 }
 
 fn genet_runtime_init_hw(
@@ -11501,8 +11696,9 @@ fn genet_runtime_init_hw(
     }
     state.tx_cons_index = genet_read32(GENET_TDMA_CONS_INDEX) as u16;
     state.tx_prod_index = state.tx_cons_index;
+    genet_record_tx_window(state);
     state.rx_cons_index = genet_read32(GENET_RDMA_PROD_INDEX) as u16;
-    for slot in 0..GENET_HW_TOTAL_DESCS {
+    for slot in 0..GENET_ACTIVE_RING_DESCS {
         genet_rearm_rx_slot(descriptor, dma_range, slot);
         genet_write_tx_desc(slot, 0, 0);
     }
@@ -11519,6 +11715,8 @@ fn genet_hw_init_registers() {
     runtime_spin(10_000);
     genet_write32(GENET_SYS_RBUF_FLUSH_CTRL, flush & !(1 << 1));
     runtime_spin(10_000);
+    genet_write32(GENET_SYS_RBUF_FLUSH_CTRL, 0);
+    runtime_spin(10_000);
     genet_write32(GENET_UMAC_CMD, 0);
     genet_write32(GENET_UMAC_CMD, GENET_CMD_SW_RESET | GENET_CMD_LCL_LOOP_EN);
     runtime_spin(2_000);
@@ -11530,8 +11728,12 @@ fn genet_hw_init_registers() {
     genet_write32(GENET_UMAC_MIB_CTRL, 0);
     genet_write32(GENET_UMAC_MAX_FRAME_LEN, GENET_RX_BUF_LENGTH as u32);
     genet_write32(
+        GENET_TBUF_CTRL,
+        genet_read32(GENET_TBUF_CTRL) | GENET_TBUF_64B_EN,
+    );
+    genet_write32(
         GENET_RBUF_CTRL,
-        genet_read32(GENET_RBUF_CTRL) | GENET_RBUF_ALIGN_2B,
+        genet_read32(GENET_RBUF_CTRL) | GENET_RBUF_ALIGN_2B | GENET_RBUF_64B_EN,
     );
     genet_write32(GENET_RBUF_TBUF_SIZE_CTRL, 1);
     genet_write32(GENET_SYS_PORT_CTRL, GENET_PORT_MODE_EXT_GPHY);
@@ -11738,16 +11940,16 @@ fn genet_init_rx_ring() {
     genet_write32(GENET_RDMA_WRITE_PTR, 0);
     genet_write32(
         GENET_RDMA_RING_REG_BASE + GENET_DMA_END_ADDR,
-        genet_ring_end_addr(GENET_HW_TOTAL_DESCS),
+        genet_ring_end_addr(GENET_ACTIVE_RING_DESCS),
     );
     genet_write32(GENET_RDMA_CONS_INDEX, genet_read32(GENET_RDMA_PROD_INDEX));
     genet_write32(
         GENET_RDMA_RING_REG_BASE + GENET_DMA_RING_BUF_SIZE,
-        genet_ring_buffer_size(GENET_HW_TOTAL_DESCS),
+        genet_ring_buffer_size(GENET_ACTIVE_RING_DESCS),
     );
     genet_write32(
         GENET_RDMA_XON_XOFF_THRESH,
-        genet_dma_fc_thresh_value(GENET_HW_TOTAL_DESCS),
+        genet_dma_fc_thresh_value(GENET_ACTIVE_RING_DESCS),
     );
     genet_write32(
         GENET_RDMA_REG_BASE + GENET_DMA_RING_CFG,
@@ -11765,14 +11967,14 @@ fn genet_init_tx_ring() {
     genet_write32(GENET_TDMA_WRITE_PTR, 0);
     genet_write32(
         GENET_TDMA_RING_REG_BASE + GENET_DMA_END_ADDR,
-        genet_ring_end_addr(GENET_HW_TOTAL_DESCS),
+        genet_ring_end_addr(GENET_ACTIVE_RING_DESCS),
     );
     genet_write32(GENET_TDMA_PROD_INDEX, genet_read32(GENET_TDMA_CONS_INDEX));
     genet_write32(GENET_TDMA_RING_REG_BASE + GENET_DMA_MBUF_DONE_THRESH, 1);
     genet_write32(GENET_TDMA_FLOW_PERIOD, 0);
     genet_write32(
         GENET_TDMA_RING_REG_BASE + GENET_DMA_RING_BUF_SIZE,
-        genet_ring_buffer_size(GENET_HW_TOTAL_DESCS),
+        genet_ring_buffer_size(GENET_ACTIVE_RING_DESCS),
     );
     genet_write32(
         GENET_TDMA_REG_BASE + GENET_DMA_RING_CFG,
@@ -11793,6 +11995,7 @@ fn genet_rearm_rx_slot(
         return;
     };
     genet_write_rx_desc(slot, dma_bus_addr, genet_rx_owned_len_status());
+    dma_store_barrier();
 }
 
 fn genet_write_tx_desc(slot: usize, paddr: u64, len_status: u32) {
@@ -11800,6 +12003,19 @@ fn genet_write_tx_desc(slot: usize, paddr: u64, len_status: u32) {
         genet_write32(base + 0x04, paddr as u32);
         genet_write32(base + 0x08, (paddr >> 32) as u32);
         genet_write32(base, len_status);
+    }
+}
+
+#[cfg(test)]
+fn genet_read_tx_desc(slot: usize) -> (u32, u32, u32) {
+    if let Some(base) = genet_tx_desc_offset(slot) {
+        (
+            genet_read32(base),
+            genet_read32(base + 0x04),
+            genet_read32(base + 0x08),
+        )
+    } else {
+        (0, 0, 0)
     }
 }
 
@@ -11863,6 +12079,11 @@ fn usb_reset_keyboard_interrupt_queue(state: &mut UsbRuntimeState) {
     state.keyboard_endpoint_recoveries = 0;
     state.keyboard_endpoint_recovery_failures = 0;
     state.keyboard_queue_collapse_recoveries = 0;
+    state.keyboard_last_recovery_stage =
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_NONE;
+    state.keyboard_last_recovery_reason =
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_NONE;
+    state.keyboard_command_completion_blocked = 0;
     state.keyboard_endpoint_reset_required = false;
     state.keyboard_control_poll_disabled = false;
     state.keyboard_control_poll_cooldown = 0;
@@ -11890,6 +12111,10 @@ fn usb_keyboard_poll_ready_state(state: &UsbRuntimeState) -> bool {
         && state.keyboard_endpoint_id != 0
 }
 
+fn usb_keyboard_interrupt_queue_underfilled(state: &UsbRuntimeState) -> bool {
+    usize::from(state.keyboard_reports_queued) < xhci_keyboard_interrupt_queue_target(state)
+}
+
 fn usb_keyboard_control_poll_allowed(state: &UsbRuntimeState) -> bool {
     if state.keyboard_preserved_event_count != 0 {
         return false;
@@ -11913,23 +12138,148 @@ fn usb_keyboard_control_poll_allowed(state: &UsbRuntimeState) -> bool {
         )
 }
 
+#[cfg(test)]
 fn usb_keyboard_recover_endpoint_if_due(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
     recovery_aux: bool,
 ) -> bool {
+    usb_keyboard_recover_endpoint_if_due_with_progress(state, descriptor, recovery_aux, None)
+}
+
+fn usb_keyboard_recovery_due_reason(
+    state: &UsbRuntimeState,
+    recovery_aux: bool,
+    full_recovery_queue: bool,
+) -> u8 {
+    if full_recovery_queue {
+        return pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_FULL_QUEUE_NO_EVENT;
+    }
+    if usb_keyboard_steady_idle_recovery_due(state) {
+        return pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_STEADY_IDLE;
+    }
+    if usb_keyboard_steady_overqueue_recovery_due(state) {
+        return pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_OVERQUEUE;
+    }
+    if usb_keyboard_pre_first_report_underfilled_queue_recovery_due(state) {
+        return pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_PRE_FIRST_UNDERFILLED;
+    }
+    if usb_keyboard_recovery_aux_underfilled_queue_recovery_due(state, recovery_aux) {
+        return pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_AUX_UNDERFILLED;
+    }
+    if usb_keyboard_steady_unmatched_recovery_due(state) {
+        return pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_STEADY_UNMATCHED;
+    }
+    if usb_keyboard_recovery_aux_unmatched_recovery_due(state, recovery_aux) {
+        return pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_AUX_UNMATCHED;
+    }
+    if usb_keyboard_endpoint_hard_recovery_due(state) {
+        return pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_HARD_UNMATCHED;
+    }
+    pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_NONE
+}
+
+fn usb_keyboard_recover_endpoint_if_due_with_progress(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    recovery_aux: bool,
+    progress: Option<(u32, u32)>,
+) -> bool {
+    if usb_keyboard_recovery_aux_reenumeration_due(state, recovery_aux) {
+        state.keyboard_last_recovery_reason =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_REENUMERATION_LIMIT;
+        state.keyboard_last_recovery_stage =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_LIMIT;
+        xhci_mark_keyboard_endpoint_recovery_failed(state);
+        return false;
+    }
     if usb_keyboard_queue_collapse_recovery_due(state) {
+        state.keyboard_last_recovery_reason =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_QUEUE_COLLAPSE;
         state.keyboard_queue_collapse_recoveries =
             state.keyboard_queue_collapse_recoveries.saturating_add(1);
         state.keyboard_last_report_status =
             pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE;
-        return xhci_recover_keyboard_interrupt_endpoint(state, descriptor);
+        return xhci_recover_keyboard_interrupt_endpoint_with_progress(state, descriptor, progress);
     }
-    if usb_keyboard_steady_unmatched_recovery_due(state)
+    let full_recovery_queue =
+        usb_keyboard_recovery_aux_full_queue_recovery_due(state, recovery_aux);
+    if full_recovery_queue
+        && state.keyboard_last_report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE
+    {
+        state.keyboard_last_report_status =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE;
+    }
+    if usb_keyboard_steady_idle_recovery_due(state)
+        || usb_keyboard_steady_overqueue_recovery_due(state)
+        || usb_keyboard_pre_first_report_underfilled_queue_recovery_due(state)
+        || usb_keyboard_recovery_aux_underfilled_queue_recovery_due(state, recovery_aux)
+        || usb_keyboard_steady_unmatched_recovery_due(state)
         || usb_keyboard_recovery_aux_unmatched_recovery_due(state, recovery_aux)
+        || full_recovery_queue
         || usb_keyboard_endpoint_hard_recovery_due(state)
     {
-        return xhci_recover_keyboard_interrupt_endpoint(state, descriptor);
+        state.keyboard_last_recovery_reason =
+            usb_keyboard_recovery_due_reason(state, recovery_aux, full_recovery_queue);
+        return xhci_recover_keyboard_interrupt_endpoint_with_progress(state, descriptor, progress);
+    }
+    false
+}
+
+const fn usb_keyboard_stale_without_fresh_event_status(status: u8) -> bool {
+    matches!(
+        status,
+        DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE
+            | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY
+            | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FLEXIBLE_FALLBACK
+            | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS
+    )
+}
+
+fn usb_keyboard_mark_recovery_needed_if_due(state: &mut UsbRuntimeState) -> bool {
+    if usb_keyboard_queue_collapse_recovery_due(state) {
+        state.keyboard_last_recovery_reason =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_QUEUE_COLLAPSE;
+        state.keyboard_last_report_status =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE;
+        return true;
+    }
+    let reason = usb_keyboard_recovery_due_reason(state, false, false);
+    if reason != pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_NONE {
+        state.keyboard_last_recovery_reason = reason;
+        state.keyboard_last_report_status =
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED;
+        return true;
+    }
+    false
+}
+
+fn usb_keyboard_pre_first_report_underfilled_queue_recovery_due(state: &UsbRuntimeState) -> bool {
+    usb_keyboard_poll_ready_state(state)
+        && !usb_keyboard_has_first_valid_report(state)
+        && state.keyboard_endpoint_recoveries < USB_KEYBOARD_HARD_RECOVERY_LIMIT
+        && state.keyboard_preserved_event_count == 0
+        && usb_keyboard_interrupt_queue_underfilled(state)
+}
+
+fn usb_keyboard_rearm_after_completed_interrupt_in(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    recover_now: bool,
+) -> bool {
+    if xhci_arm_keyboard_interrupt_queue(state, descriptor) {
+        return true;
+    }
+    if usb_keyboard_poll_ready_state(state) {
+        state.keyboard_last_recovery_reason =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_REARM_COLLAPSE;
+        state.keyboard_last_report_status =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE;
+        if recover_now {
+            state.keyboard_queue_collapse_recoveries =
+                state.keyboard_queue_collapse_recoveries.saturating_add(1);
+            let _ = xhci_recover_keyboard_interrupt_endpoint(state, descriptor);
+        }
     }
     false
 }
@@ -11939,17 +12289,25 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
         return 0;
     }
     RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
+        let recovery_aux = aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX;
         let mut bytes = usb_keyboard_drain_pending_output(state, 0);
         if bytes >= USB_KEYBOARD_OUTPUT_LIMIT || state.keyboard_output_pending_len != 0 {
             return bytes;
         }
         if !xhci_arm_keyboard_interrupt_queue(state, descriptor) {
-            if bytes == 0 {
-                let _ = usb_keyboard_recover_endpoint_if_due(
-                    state,
-                    descriptor,
-                    aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
-                );
+            if bytes == 0
+                && if recovery_aux {
+                    usb_keyboard_recover_endpoint_if_due_with_progress(
+                        state,
+                        descriptor,
+                        true,
+                        Some((sequence, aux0)),
+                    )
+                } else {
+                    usb_keyboard_mark_recovery_needed_if_due(state)
+                }
+            {
+                return bytes;
             }
             return bytes;
         }
@@ -11960,20 +12318,34 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
         ) else {
             return bytes;
         };
+        let mut recovery_attempted = false;
+        let mut saw_keyboard_transfer_event = false;
         for _ in 0..USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH {
             let Some((event, report_slot)) = xhci_next_keyboard_transfer_event(state, descriptor)
             else {
                 break;
             };
+            saw_keyboard_transfer_event = true;
             let code = xhci_completion_code(event.status);
             if code != XHCI_COMPLETION_SUCCESS && code != XHCI_COMPLETION_SHORT_PACKET {
-                continue;
+                if recovery_aux {
+                    usb_keyboard_handle_matched_transfer_fault(state, descriptor, code);
+                } else {
+                    usb_keyboard_mark_matched_transfer_fault(state, code);
+                }
+                recovery_attempted = true;
+                break;
             }
             let report_len = usb_keyboard_report_request_len(state);
             let remaining = xhci_transfer_event_remaining(event.status).min(report_len);
             let payload_len = report_len.saturating_sub(remaining);
             if payload_len < USB_FLEXIBLE_KEYBOARD_REPORT_MIN_BYTES {
                 state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_SHORT;
+                if !usb_keyboard_rearm_after_completed_interrupt_in(state, descriptor, recovery_aux)
+                {
+                    recovery_attempted = true;
+                    break;
+                }
                 continue;
             }
             let report_vaddr =
@@ -11990,22 +12362,46 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
                 sequence,
                 aux0,
             ));
+            if usb_keyboard_report_status_counts_as_valid_report(state.keyboard_last_report_status)
+            {
+                state.keyboard_valid_report_events =
+                    state.keyboard_valid_report_events.saturating_add(1);
+            }
+            if !usb_keyboard_rearm_after_completed_interrupt_in(state, descriptor, recovery_aux) {
+                recovery_attempted = true;
+                break;
+            }
             if bytes >= USB_KEYBOARD_OUTPUT_LIMIT || state.keyboard_output_pending_len != 0 {
                 break;
             }
         }
-        if bytes == 0 {
-            let _ = usb_keyboard_recover_endpoint_if_due(
-                state,
-                descriptor,
-                aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
-            );
+        if bytes == 0
+            && !recovery_attempted
+            && !saw_keyboard_transfer_event
+            && usb_keyboard_has_first_valid_report(state)
+            && usize::from(state.keyboard_reports_queued)
+                >= xhci_keyboard_interrupt_queue_target(state)
+            && usb_keyboard_stale_without_fresh_event_status(state.keyboard_last_report_status)
+        {
+            state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
+        }
+        if bytes == 0 && !recovery_attempted {
+            if recovery_aux {
+                let _ = usb_keyboard_recover_endpoint_if_due_with_progress(
+                    state,
+                    descriptor,
+                    true,
+                    Some((sequence, aux0)),
+                );
+            } else {
+                let _ = usb_keyboard_mark_recovery_needed_if_due(state);
+            }
         }
         let _ = xhci_arm_keyboard_interrupt_queue(state, descriptor);
-        if bytes == 0 && usb_keyboard_control_poll_allowed(state) {
+        if bytes == 0 && recovery_aux && usb_keyboard_control_poll_allowed(state) {
             bytes = usb_poll_keyboard_control_report(state, descriptor, sequence, aux0);
         }
-        if bytes == 0 {
+        if bytes == 0 && recovery_aux {
             usb_keyboard_sync_pending_leds_after_idle(state, descriptor);
         }
         bytes
@@ -12014,6 +12410,28 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
 
 fn usb_keyboard_endpoint_ready(state: &mut UsbRuntimeState) -> bool {
     usb_keyboard_poll_ready_state(state)
+}
+
+fn usb_keyboard_diagnostic_frame(state: &UsbRuntimeState) -> DriverFrameDescriptor {
+    let stage = state.keyboard_last_recovery_stage;
+    let reason = state.keyboard_last_recovery_reason;
+    let has_diag = stage != pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_NONE
+        || reason != pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_NONE
+        || state.keyboard_command_completion_blocked != 0
+        || state.keyboard_endpoint_recoveries != 0
+        || state.keyboard_endpoint_recovery_failures != 0
+        || state.keyboard_queue_collapse_recoveries != 0;
+    if !has_diag {
+        return DriverFrameDescriptor::empty();
+    }
+    DriverFrameDescriptor {
+        offset: (u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_DIAG_MAGIC) << 16)
+            | u32::from(stage)
+            | (u32::from(state.keyboard_command_completion_blocked) << 8),
+        len: u16::from(state.keyboard_endpoint_recoveries)
+            | (u16::from(state.keyboard_endpoint_recovery_failures) << 8),
+        flags: u16::from(state.keyboard_queue_collapse_recoveries) | (u16::from(reason) << 8),
+    }
 }
 
 fn usb_keyboard_pending_result(state: &mut UsbRuntimeState) -> u32 {
@@ -12032,6 +12450,17 @@ fn usb_keyboard_pending_result(state: &mut UsbRuntimeState) -> u32 {
 
 const fn usb_keyboard_has_first_valid_report(state: &UsbRuntimeState) -> bool {
     state.keyboard_valid_report_events != 0
+}
+
+const fn usb_keyboard_report_status_counts_as_valid_report(status: u8) -> bool {
+    matches!(
+        status,
+        DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
+            | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY
+            | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FLEXIBLE_FALLBACK
+            | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE
+            | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY
+    )
 }
 
 const fn usb_keyboard_post_first_report_unmatched(state: &UsbRuntimeState) -> bool {
@@ -13180,10 +13609,6 @@ impl HdmiRenderState {
     }
 
     fn clear_full_framebuffer(&mut self) {
-        let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
-            self.clear_text_area();
-            return;
-        };
         if self.framebuffer_width == 0
             || self.framebuffer_height == 0
             || self.pitch == 0
@@ -13191,18 +13616,13 @@ impl HdmiRenderState {
         {
             return;
         }
-        for y in 0..self.framebuffer_height {
-            for x in 0..self.framebuffer_width {
-                let Some(byte_off) = self.framebuffer_offset(x, y, bytes_per_pixel) else {
-                    continue;
-                };
-                write_framebuffer_pixel(
-                    self.framebuffer + byte_off,
-                    HDMI_BG_COLOR,
-                    bytes_per_pixel,
-                );
-            }
-        }
+        self.fill_physical_rect(
+            0,
+            0,
+            self.framebuffer_width,
+            self.framebuffer_height,
+            HDMI_BG_COLOR,
+        );
     }
 
     fn draw_char(&mut self, byte: u8) {
@@ -13229,9 +13649,51 @@ impl HdmiRenderState {
         if x >= x_end || y >= y_end {
             return;
         }
+        let Some(abs_x) = self.safe_x.checked_add(x) else {
+            return;
+        };
+        let Some(abs_y) = self.safe_y.checked_add(y) else {
+            return;
+        };
+        self.fill_physical_rect(abs_x, abs_y, x_end - x, y_end - y, color);
+    }
+
+    fn fill_physical_rect(&mut self, x: usize, y: usize, w: usize, h: usize, color: u32) {
+        let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
+            return;
+        };
+        let x_end = self.framebuffer_width.min(x.saturating_add(w));
+        let y_end = self.framebuffer_height.min(y.saturating_add(h));
+        if x >= x_end || y >= y_end {
+            return;
+        }
+        let pixels = x_end - x;
         for yy in y..y_end {
-            for xx in x..x_end {
-                self.put_pixel(xx, yy, color);
+            let Some(byte_off) = self.framebuffer_offset(x, yy, bytes_per_pixel) else {
+                continue;
+            };
+            let Some(row_bytes) = pixels.checked_mul(bytes_per_pixel) else {
+                continue;
+            };
+            let Some(row_end) = byte_off.checked_add(row_bytes) else {
+                continue;
+            };
+            if row_end > self.framebuffer_len {
+                continue;
+            }
+            let row_addr = self.framebuffer.saturating_add(byte_off);
+            match bytes_per_pixel {
+                4 => fill_framebuffer_u32(row_addr, color, pixels),
+                3 => {
+                    for index in 0..pixels {
+                        write_framebuffer_pixel(
+                            row_addr + index.saturating_mul(bytes_per_pixel),
+                            color,
+                            bytes_per_pixel,
+                        );
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -13347,6 +13809,14 @@ struct TestFramebuffer(UnsafeCell<[u8; TEST_FRAMEBUFFER_BYTES]>);
 struct TestDmaBuffer(UnsafeCell<[u8; XHCI_DMA_ZERO_BYTES]>);
 
 #[cfg(all(not(target_os = "none"), test))]
+const TEST_GENET_MMIO_WORDS: usize = (DRIVER_TASK_RING_PAGE_BYTES
+    * GENET_REQUIRED_MMIO_PAGES as usize)
+    / core::mem::size_of::<u32>();
+
+#[cfg(all(not(target_os = "none"), test))]
+struct TestGenetMmio(UnsafeCell<[u32; TEST_GENET_MMIO_WORDS]>);
+
+#[cfg(all(not(target_os = "none"), test))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct TestSdioTransferRecord {
     cmd: u16,
@@ -13437,6 +13907,11 @@ unsafe impl Sync for TestDmaBuffer {}
 
 #[cfg(all(not(target_os = "none"), test))]
 // SAFETY: Runtime tests serialize all access through `test_guard`, so the
+// process-local GENET MMIO shadow is never concurrently mutated.
+unsafe impl Sync for TestGenetMmio {}
+
+#[cfg(all(not(target_os = "none"), test))]
+// SAFETY: Runtime tests serialize all access through `test_guard`, so the
 // process-local SDIO transfer log is never concurrently mutated.
 unsafe impl Sync for TestSdioTransferLog {}
 
@@ -13458,6 +13933,9 @@ static TEST_FRAMEBUFFER: TestFramebuffer =
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_DMA_BUFFER: TestDmaBuffer = TestDmaBuffer(UnsafeCell::new([0; XHCI_DMA_ZERO_BYTES]));
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_GENET_MMIO: TestGenetMmio = TestGenetMmio(UnsafeCell::new([0; TEST_GENET_MMIO_WORDS]));
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_SDIO_TRANSFER_LOG: TestSdioTransferLog =
@@ -13503,6 +13981,7 @@ fn reset_test_ring() {
         (*TEST_SHARED_BUFFER.0.get()).fill(0);
         (*TEST_FRAMEBUFFER.0.get()).fill(0);
         (*TEST_DMA_BUFFER.0.get()).fill(0);
+        (*TEST_GENET_MMIO.0.get()).fill(0);
     }
     reset_test_sdio_transfer_log();
     reset_test_sdio_transfer_failure();
@@ -14078,6 +14557,15 @@ fn write_framebuffer_u32(addr: usize, value: u32) {
     }
 }
 
+#[cfg(all(not(target_os = "none"), not(test)))]
+fn write_framebuffer_u32(_addr: usize, _value: u32) {}
+
+fn fill_framebuffer_u32(addr: usize, value: u32, words: usize) {
+    for index in 0..words {
+        write_framebuffer_u32(addr.saturating_add(index.saturating_mul(4)), value);
+    }
+}
+
 #[cfg(target_os = "none")]
 fn write_framebuffer_u64(addr: usize, value: u64) {
     // SAFETY: The caller selects this path only for 64-bit aligned ranges that
@@ -14142,6 +14630,15 @@ fn test_framebuffer_offset(addr: usize) -> Option<usize> {
 fn test_dma_offset(addr: usize) -> Option<usize> {
     let offset = addr.checked_sub(DRIVER_TASK_DMA_BUFFER_VADDR)?;
     (offset < XHCI_DMA_ZERO_BYTES).then_some(offset)
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_genet_mmio_word(offset: usize) -> Option<usize> {
+    if offset % core::mem::size_of::<u32>() != 0 {
+        return None;
+    }
+    let word = offset / core::mem::size_of::<u32>();
+    (word < TEST_GENET_MMIO_WORDS).then_some(word)
 }
 
 #[cfg(target_os = "none")]
@@ -14335,7 +14832,17 @@ fn genet_read32(offset: usize) -> u32 {
     unsafe { core::ptr::read_volatile((DRIVER_TASK_DEVICE_MMIO_VADDR + offset) as *const u32) }
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), test))]
+fn genet_read32(offset: usize) -> u32 {
+    let Some(word) = test_genet_mmio_word(offset) else {
+        return 0;
+    };
+    // SAFETY: Runtime tests hold `test_guard`; `test_genet_mmio_word` bounds
+    // the offset inside the process-local GENET MMIO shadow.
+    unsafe { (*TEST_GENET_MMIO.0.get())[word] }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
 fn genet_read32(_offset: usize) -> u32 {
     0
 }
@@ -14349,7 +14856,19 @@ fn genet_write32(offset: usize, value: u32) {
     }
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), test))]
+fn genet_write32(offset: usize, value: u32) {
+    let Some(word) = test_genet_mmio_word(offset) else {
+        return;
+    };
+    // SAFETY: Runtime tests hold `test_guard`; `test_genet_mmio_word` bounds
+    // the offset inside the process-local GENET MMIO shadow.
+    unsafe {
+        (*TEST_GENET_MMIO.0.get())[word] = value;
+    }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
 fn genet_write32(_offset: usize, _value: u32) {}
 
 #[cfg(target_os = "none")]
@@ -14970,6 +15489,7 @@ enum XhciCommandCompletionPending {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum XhciEventAckMode {
     Readback,
+    EndpointRecovery,
     PromptSafe { sequence: u32, aux0: u32 },
     AddressCommand { sequence: u32, aux0: u32 },
 }
@@ -15005,7 +15525,7 @@ fn xhci_publish_command_proof_event_progress(ack_mode: XhciEventAckMode, event: 
             };
             (sequence, aux0, phase)
         }
-        XhciEventAckMode::Readback => return,
+        XhciEventAckMode::Readback | XhciEventAckMode::EndpointRecovery => return,
     };
     publish_runtime_progress(sequence, phase, aux0);
 }
@@ -15050,7 +15570,7 @@ fn xhci_publish_command_poll_begin(ack_mode: XhciEventAckMode) {
             DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_POLL_BEGIN,
             aux0,
         ),
-        XhciEventAckMode::Readback => {}
+        XhciEventAckMode::Readback | XhciEventAckMode::EndpointRecovery => {}
     }
 }
 
@@ -15105,7 +15625,7 @@ fn xhci_publish_command_proof_pending_progress(
             xhci_address_command_pending_progress_phase(pending),
             aux0,
         ),
-        XhciEventAckMode::Readback => {}
+        XhciEventAckMode::Readback | XhciEventAckMode::EndpointRecovery => {}
     };
 }
 
@@ -15121,7 +15641,7 @@ fn xhci_publish_command_proof_event_peek_begin(ack_mode: XhciEventAckMode) {
             DRIVER_RUNTIME_RING_PROGRESS_USB_ADDRESS_COMMAND_EVENT_PEEK_BEGIN,
             aux0,
         ),
-        XhciEventAckMode::Readback => {}
+        XhciEventAckMode::Readback | XhciEventAckMode::EndpointRecovery => {}
     };
 }
 
@@ -15171,12 +15691,27 @@ fn xhci_ack_command_poll_event(
     ack_mode: XhciEventAckMode,
 ) -> bool {
     match ack_mode {
-        XhciEventAckMode::Readback => xhci_ack_event_dequeue(state, descriptor),
+        XhciEventAckMode::Readback | XhciEventAckMode::EndpointRecovery => {
+            xhci_ack_event_dequeue(state, descriptor)
+        }
         XhciEventAckMode::PromptSafe { sequence, aux0 } => {
             xhci_ack_event_dequeue_prompt_safe(sequence, aux0, state, descriptor)
         }
         XhciEventAckMode::AddressCommand { .. } => xhci_ack_event_dequeue(state, descriptor),
     }
+}
+
+fn xhci_command_completion_events_per_slice(ack_mode: XhciEventAckMode) -> usize {
+    match ack_mode {
+        XhciEventAckMode::EndpointRecovery => USB_ENDPOINT_RECOVERY_COMMAND_EVENTS_PER_SLICE,
+        XhciEventAckMode::Readback
+        | XhciEventAckMode::PromptSafe { .. }
+        | XhciEventAckMode::AddressCommand { .. } => USB_COMMAND_COMPLETION_EVENTS_PER_SLICE,
+    }
+}
+
+const fn xhci_command_poll_preserves_keyboard_transfer_events(ack_mode: XhciEventAckMode) -> bool {
+    !matches!(ack_mode, XhciEventAckMode::EndpointRecovery)
 }
 
 fn xhci_poll_command_completion(
@@ -15190,6 +15725,7 @@ fn xhci_poll_command_completion(
     let mut pending = XhciCommandCompletionPending::PollBudget;
     let mut published_pending = None;
     let mut peek_begin_published = false;
+    let events_per_slice = xhci_command_completion_events_per_slice(ack_mode);
     xhci_publish_command_poll_begin(ack_mode);
     for spin in 0..spins {
         if !peek_begin_published {
@@ -15209,7 +15745,7 @@ fn xhci_poll_command_completion(
                 if expected_command_trb_bus.is_some_and(|expected| {
                     xhci_command_completion_pointer(event.parameter) != expected
                 }) {
-                    if events >= USB_COMMAND_COMPLETION_EVENTS_PER_SLICE {
+                    if events >= events_per_slice {
                         return XhciCommandCompletionPoll::Pending(
                             XhciCommandCompletionPending::PollBudget,
                         );
@@ -15224,12 +15760,22 @@ fn xhci_poll_command_completion(
             }
             if xhci_trb_type(event.control) == XHCI_TRB_TYPE_PORT_STATUS_CHANGE_EVENT {
                 xhci_preserve_port_status_change_event(state, event);
-            } else if xhci_keyboard_transfer_event_matches(state, event)
-                && !xhci_preserve_keyboard_transfer_event(state, event)
-            {
-                return XhciCommandCompletionPoll::Failed;
+            } else if xhci_keyboard_transfer_event_matches(state, event) {
+                if xhci_command_poll_preserves_keyboard_transfer_events(ack_mode) {
+                    if !xhci_preserve_keyboard_transfer_event(state, event) {
+                        return XhciCommandCompletionPoll::Failed;
+                    }
+                } else {
+                    state.keyboard_transfer_events =
+                        state.keyboard_transfer_events.saturating_add(1);
+                    state.keyboard_unmatched_streak =
+                        state.keyboard_unmatched_streak.saturating_add(1);
+                    if xhci_completion_code(event.status) == XHCI_COMPLETION_STALL_ERROR {
+                        state.keyboard_endpoint_reset_required = true;
+                    }
+                }
             }
-            if events >= USB_COMMAND_COMPLETION_EVENTS_PER_SLICE {
+            if events >= events_per_slice {
                 return XhciCommandCompletionPoll::Pending(
                     XhciCommandCompletionPending::PollBudget,
                 );
@@ -15347,8 +15893,8 @@ fn xhci_enqueue_endpoint_recovery_command(
     match xhci_poll_command_completion(
         state,
         descriptor,
-        USB_COMMAND_COMPLETION_SPINS,
-        XhciEventAckMode::Readback,
+        USB_ENDPOINT_RECOVERY_COMMAND_SPINS,
+        XhciEventAckMode::EndpointRecovery,
         Some(command_trb_bus),
     ) {
         XhciCommandCompletionPoll::Complete(event)
@@ -19670,6 +20216,9 @@ fn xhci_arm_keyboard_interrupt_queue(
             return false;
         }
     }
+    if usize::from(state.keyboard_reports_queued) < target_depth {
+        return false;
+    }
     queued_any || state.keyboard_reports_queued != 0
 }
 
@@ -19720,21 +20269,97 @@ fn xhci_reset_keyboard_transfer_ring(
     Some(ring_bus)
 }
 
+fn usb_keyboard_mark_matched_transfer_fault(state: &mut UsbRuntimeState, completion_code: u32) {
+    if completion_code == XHCI_COMPLETION_STALL_ERROR {
+        state.keyboard_endpoint_reset_required = true;
+    }
+    state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED;
+}
+
+fn usb_keyboard_handle_matched_transfer_fault(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    completion_code: u32,
+) {
+    state.keyboard_last_recovery_reason =
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_MATCHED_TRANSFER_FAULT;
+    usb_keyboard_mark_matched_transfer_fault(state, completion_code);
+    let _ = xhci_recover_keyboard_interrupt_endpoint(state, descriptor);
+}
+
 fn xhci_mark_keyboard_endpoint_recovery_failed(state: &mut UsbRuntimeState) {
     state.keyboard_endpoint_recovery_failures =
         state.keyboard_endpoint_recovery_failures.saturating_add(1);
     state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED;
+    if state.keyboard_endpoint_recovery_failures >= USB_KEYBOARD_RECOVERY_REENUMERATE_FAILURES {
+        usb_clear_keyboard_interrupt_transfer_state(state);
+        state.kbd_enqueue = 0;
+        state.kbd_cycle = true;
+        state.keyboard_slot = 0;
+        state.keyboard_endpoint_id = 0;
+        state.keyboard_endpoint_address = 0;
+        state.keyboard_interface = 0xff;
+        state.keyboard_attach_rank = USB_KEYBOARD_ATTACH_RANK_NONE;
+        state.keyboard_attach_awaiting_idle = true;
+        state.keyboard_control_poll_disabled = false;
+        state.keyboard_control_poll_cooldown = 0;
+        state.keyboard_led_sync_pending = false;
+        state.keyboard_led_sync_cooldown = 0;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED;
+        state.enumeration_retry_cooldown = 0;
+        state.enumeration_retry_window_exhausted = false;
+    }
+}
+
+fn publish_usb_keyboard_endpoint_recovery_progress(progress: Option<(u32, u32)>, phase: u32) {
+    if let Some((sequence, aux0)) = progress {
+        publish_runtime_progress(sequence, phase, aux0);
+    }
+}
+
+fn xhci_mark_keyboard_endpoint_recovery_failed_with_progress(
+    state: &mut UsbRuntimeState,
+    progress: Option<(u32, u32)>,
+) -> bool {
+    xhci_mark_keyboard_endpoint_recovery_failed(state);
+    publish_usb_keyboard_endpoint_recovery_progress(
+        progress,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED,
+    );
+    false
 }
 
 fn xhci_recover_keyboard_interrupt_endpoint(
     state: &mut UsbRuntimeState,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> bool {
-    if !usb_keyboard_poll_ready_state(state)
-        || !usb_keyboard_has_first_valid_report(state)
-        || state.keyboard_endpoint_recoveries >= USB_KEYBOARD_HARD_RECOVERY_LIMIT
-    {
+    xhci_recover_keyboard_interrupt_endpoint_with_progress(state, descriptor, None)
+}
+
+fn xhci_recover_keyboard_interrupt_endpoint_with_progress(
+    state: &mut UsbRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    progress: Option<(u32, u32)>,
+) -> bool {
+    state.keyboard_last_recovery_stage =
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_BEGIN;
+    publish_usb_keyboard_endpoint_recovery_progress(
+        progress,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN,
+    );
+    if !usb_keyboard_poll_ready_state(state) {
+        state.keyboard_last_recovery_stage =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_NOT_READY;
+        publish_usb_keyboard_endpoint_recovery_progress(
+            progress,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED,
+        );
         return false;
+    }
+    if state.keyboard_endpoint_recoveries >= USB_KEYBOARD_HARD_RECOVERY_LIMIT {
+        state.keyboard_last_recovery_stage =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_LIMIT;
+        return xhci_mark_keyboard_endpoint_recovery_failed_with_progress(state, progress);
     }
     let slot = state.keyboard_slot;
     let endpoint_id = state.keyboard_endpoint_id;
@@ -19742,13 +20367,20 @@ fn xhci_recover_keyboard_interrupt_endpoint(
     state.keyboard_led_sync_cooldown = USB_HID_LED_SYNC_RETRY_POLLS;
     let reset_required = state.keyboard_endpoint_reset_required;
 
+    state.keyboard_last_recovery_stage =
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_STOP_ENDPOINT;
     let stopped = xhci_enqueue_endpoint_recovery_command(
         state,
         descriptor,
         xhci_stop_endpoint_command(slot, endpoint_id),
         true,
     );
+    if !stopped {
+        return xhci_mark_keyboard_endpoint_recovery_failed_with_progress(state, progress);
+    }
     let reset = if reset_required {
+        state.keyboard_last_recovery_stage =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_RESET_ENDPOINT;
         xhci_enqueue_endpoint_recovery_command(
             state,
             descriptor,
@@ -19758,39 +20390,46 @@ fn xhci_recover_keyboard_interrupt_endpoint(
     } else {
         true
     };
-    if !stopped && !reset_required {
-        xhci_mark_keyboard_endpoint_recovery_failed(state);
-        return false;
-    }
     if !reset {
-        xhci_mark_keyboard_endpoint_recovery_failed(state);
-        return false;
+        return xhci_mark_keyboard_endpoint_recovery_failed_with_progress(state, progress);
     }
 
+    state.keyboard_last_recovery_stage =
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_RESET_RING;
     let Some(kbd_ring_bus) = xhci_reset_keyboard_transfer_ring(state, descriptor) else {
-        xhci_mark_keyboard_endpoint_recovery_failed(state);
-        return false;
+        return xhci_mark_keyboard_endpoint_recovery_failed_with_progress(state, progress);
     };
+    state.keyboard_last_recovery_stage =
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_SET_DEQUEUE;
     if !xhci_enqueue_endpoint_recovery_command(
         state,
         descriptor,
         xhci_set_tr_dequeue_pointer_command(slot, endpoint_id, kbd_ring_bus, true),
         false,
     ) {
-        xhci_mark_keyboard_endpoint_recovery_failed(state);
-        return false;
+        return xhci_mark_keyboard_endpoint_recovery_failed_with_progress(state, progress);
     }
     xhci_drain_keyboard_recovery_events(state, descriptor);
     usb_clear_keyboard_interrupt_transfer_state(state);
     state.keyboard_endpoint_recoveries = state.keyboard_endpoint_recoveries.saturating_add(1);
     state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS;
+    state.keyboard_transfer_events = 0;
     state.keyboard_unmatched_streak = 0;
     state.keyboard_endpoint_reset_required = false;
-    if xhci_arm_keyboard_interrupt_queue(state, descriptor) {
+    state.keyboard_last_recovery_stage =
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_REARM;
+    if xhci_arm_keyboard_interrupt_queue(state, descriptor)
+        && usize::from(state.keyboard_reports_queued) >= xhci_keyboard_interrupt_queue_target(state)
+    {
+        state.keyboard_last_recovery_stage =
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_READY;
+        publish_usb_keyboard_endpoint_recovery_progress(
+            progress,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY,
+        );
         true
     } else {
-        xhci_mark_keyboard_endpoint_recovery_failed(state);
-        false
+        xhci_mark_keyboard_endpoint_recovery_failed_with_progress(state, progress)
     }
 }
 
@@ -19816,6 +20455,60 @@ fn usb_keyboard_recovery_aux_unmatched_recovery_due(
         && usb_keyboard_poll_ready_state(state)
         && usb_keyboard_post_first_report_unmatched(state)
         && state.keyboard_endpoint_recoveries < USB_KEYBOARD_HARD_RECOVERY_LIMIT
+}
+
+fn usb_keyboard_recovery_aux_full_queue_recovery_due(
+    state: &UsbRuntimeState,
+    recovery_aux: bool,
+) -> bool {
+    recovery_aux
+        && usb_keyboard_poll_ready_state(state)
+        && usb_keyboard_has_first_valid_report(state)
+        && state.keyboard_endpoint_recoveries < USB_KEYBOARD_HARD_RECOVERY_LIMIT
+        && state.keyboard_preserved_event_count == 0
+        && usize::from(state.keyboard_reports_queued) >= xhci_keyboard_interrupt_queue_target(state)
+        && !usb_keyboard_post_first_report_unmatched(state)
+}
+
+fn usb_keyboard_recovery_aux_underfilled_queue_recovery_due(
+    state: &UsbRuntimeState,
+    recovery_aux: bool,
+) -> bool {
+    recovery_aux
+        && usb_keyboard_poll_ready_state(state)
+        && usb_keyboard_has_first_valid_report(state)
+        && state.keyboard_endpoint_recoveries < USB_KEYBOARD_HARD_RECOVERY_LIMIT
+        && state.keyboard_reports_queued != 0
+        && usize::from(state.keyboard_reports_queued) < USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
+        && !usb_keyboard_post_first_report_unmatched(state)
+}
+
+fn usb_keyboard_recovery_aux_reenumeration_due(
+    state: &UsbRuntimeState,
+    recovery_aux: bool,
+) -> bool {
+    recovery_aux
+        && usb_keyboard_poll_ready_state(state)
+        && usb_keyboard_has_first_valid_report(state)
+        && state.keyboard_endpoint_recoveries >= USB_KEYBOARD_HARD_RECOVERY_LIMIT
+}
+
+fn usb_keyboard_steady_idle_recovery_due(state: &UsbRuntimeState) -> bool {
+    usb_keyboard_poll_ready_state(state)
+        && usb_keyboard_has_first_valid_report(state)
+        && state.keyboard_endpoint_recoveries < USB_KEYBOARD_HARD_RECOVERY_LIMIT
+        && state.keyboard_preserved_event_count == 0
+        && state.keyboard_transfer_events >= USB_KEYBOARD_STEADY_IDLE_RECOVERY_EVENTS
+        && usize::from(state.keyboard_reports_queued) == USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
+        && state.keyboard_last_report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
+}
+
+fn usb_keyboard_steady_overqueue_recovery_due(state: &UsbRuntimeState) -> bool {
+    usb_keyboard_poll_ready_state(state)
+        && usb_keyboard_has_first_valid_report(state)
+        && state.keyboard_endpoint_recoveries < USB_KEYBOARD_HARD_RECOVERY_LIMIT
+        && state.keyboard_preserved_event_count == 0
+        && usize::from(state.keyboard_reports_queued) > USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
 }
 
 fn usb_keyboard_queue_collapse_recovery_due(state: &UsbRuntimeState) -> bool {
@@ -20103,8 +20796,6 @@ fn xhci_next_keyboard_transfer_event(
             xhci_complete_keyboard_report_slot(state, descriptor, dma_range, event)
         {
             state.keyboard_transfer_events = state.keyboard_transfer_events.saturating_add(1);
-            state.keyboard_valid_report_events =
-                state.keyboard_valid_report_events.saturating_add(1);
             state.keyboard_unmatched_streak = 0;
             return Some((event, report_slot));
         } else if xhci_keyboard_transfer_event_matches(state, event) {
@@ -20125,11 +20816,17 @@ fn xhci_next_keyboard_transfer_event(
             return None;
         }
         let event = xhci_next_event(state, descriptor)?;
+        let trb_type = xhci_trb_type(event.control);
+        if trb_type == XHCI_TRB_TYPE_COMMAND_COMPLETION {
+            state.keyboard_command_completion_blocked =
+                state.keyboard_command_completion_blocked.saturating_add(1);
+            return None;
+        }
         scanned_events = scanned_events.saturating_add(1);
         if !xhci_ack_event_dequeue(state, descriptor) {
             return None;
         }
-        match xhci_trb_type(event.control) {
+        match trb_type {
             XHCI_TRB_TYPE_PORT_STATUS_CHANGE_EVENT => {
                 xhci_preserve_port_status_change_event(state, event);
             }
@@ -20142,8 +20839,6 @@ fn xhci_next_keyboard_transfer_event(
                 {
                     state.keyboard_transfer_events =
                         state.keyboard_transfer_events.saturating_add(1);
-                    state.keyboard_valid_report_events =
-                        state.keyboard_valid_report_events.saturating_add(1);
                     state.keyboard_unmatched_streak = 0;
                     return Some((event, report_slot));
                 }
@@ -21303,7 +21998,6 @@ mod tests {
         DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA, DRIVER_RUNTIME_RESOURCE_TAG_GENET_REGS,
         DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
         DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
-        DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
     };
 
     fn test_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -21554,7 +22248,10 @@ mod tests {
         assert!(genet_rx_queue_push_for_test(&mut state, &packet_a));
         assert!(genet_rx_queue_push_for_test(&mut state, &packet_b));
 
-        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some(packet_a.len()));
+        assert_eq!(
+            genet_rx_queue_pop_to_ring(&mut state),
+            Some((packet_a.len(), 0))
+        );
         assert_eq!(
             read_frame_prefix::<10>(DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
@@ -21563,7 +22260,13 @@ mod tests {
             }),
             packet_a
         );
-        assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some(packet_b.len()));
+        assert_eq!(
+            genet_rx_queue_pop_to_ring(&mut state),
+            Some((
+                packet_b.len(),
+                u16::from_be_bytes([packet_b[12], packet_b[13]])
+            ))
+        );
         assert_eq!(
             read_frame_prefix::<16>(DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
@@ -21590,7 +22293,7 @@ mod tests {
         assert_eq!(usize::from(state.rx_queue_count), GENET_RX_QUEUE_CAP);
 
         for slot in 0..GENET_RX_QUEUE_CAP {
-            assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some(4));
+            assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((4, 0)));
             assert_eq!(
                 read_frame_prefix::<4>(DriverFrameDescriptor {
                     offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
@@ -21607,14 +22310,549 @@ mod tests {
     fn genet_rx_drain_budget_caps_one_service_turn() {
         assert_eq!(GENET_RX_DRAIN_BUDGET, 8);
         assert_eq!(GENET_RX_QUEUE_CAP, GENET_RX_DRAIN_BUDGET);
-        assert!(GENET_RX_DRAIN_BUDGET < GENET_HW_TOTAL_DESCS);
+        assert!(GENET_RX_DRAIN_BUDGET < GENET_ACTIVE_RING_DESCS);
         assert!(GENET_MAX_FRAME_LEN <= MAX_DRIVER_TASK_FRAME_BYTES);
     }
 
     #[test]
     fn genet_tx_completion_reclaim_budget_caps_one_service_turn() {
-        assert_eq!(GENET_TX_COMPLETION_RECLAIM_BUDGET, GENET_HW_TOTAL_DESCS);
-        assert!(GENET_TX_COMPLETION_RECLAIM_BUDGET <= GENET_HW_TOTAL_DESCS);
+        assert_eq!(GENET_TX_COMPLETION_RECLAIM_BUDGET, GENET_ACTIVE_RING_DESCS);
+        assert!(GENET_TX_COMPLETION_RECLAIM_BUDGET <= GENET_ACTIVE_RING_DESCS);
+    }
+
+    #[test]
+    fn genet_dma_register_layout_skips_full_descriptor_table() {
+        assert_eq!(GENET_MMIO_TOTAL_DESCS, 256);
+        assert_eq!(GENET_ACTIVE_RING_DESCS, 32);
+        assert_eq!(GENET_TBUF_OFF, 0x0600);
+        assert_eq!(GENET_TBUF_CTRL, GENET_TBUF_OFF);
+        assert_eq!(GENET_STATUS_BLOCK_BYTES, 64);
+        assert_eq!(GENET_RX_BUF_OFFSET, GENET_STATUS_BLOCK_BYTES + 2);
+        assert_eq!(GENET_TX_BUF_OFFSET, GENET_STATUS_BLOCK_BYTES);
+        assert_eq!(
+            GENET_RDMA_REG_OFF,
+            GENET_RX_OFF + GENET_MMIO_TOTAL_DESCS * GENET_DMA_DESC_SIZE
+        );
+        assert_eq!(
+            GENET_TDMA_REG_OFF,
+            GENET_TX_OFF + GENET_MMIO_TOTAL_DESCS * GENET_DMA_DESC_SIZE
+        );
+        assert_eq!(
+            GENET_RDMA_RING_REG_BASE,
+            GENET_RDMA_REG_OFF + (GENET_DEFAULT_Q as usize) * GENET_DMA_RING_SIZE
+        );
+        assert_eq!(
+            GENET_TDMA_RING_REG_BASE,
+            GENET_TDMA_REG_OFF + (GENET_DEFAULT_Q as usize) * GENET_DMA_RING_SIZE
+        );
+        assert_eq!(
+            GENET_RDMA_REG_BASE,
+            GENET_RDMA_REG_OFF + GENET_DMA_RINGS_SIZE
+        );
+        assert_eq!(
+            GENET_TDMA_REG_BASE,
+            GENET_TDMA_REG_OFF + GENET_DMA_RINGS_SIZE
+        );
+    }
+
+    #[test]
+    fn genet_tx_prepends_status_block_in_dma_descriptor() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let payload = *b"dhcp-discover";
+        for (index, byte) in payload.iter().copied().enumerate() {
+            write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, byte);
+        }
+        let mut state = GenetRuntimeState::new();
+        state.initialized = true;
+
+        assert_eq!(
+            genet_runtime_submit_tx(
+                &mut state,
+                DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: payload.len() as u16,
+                    flags: 0,
+                }
+            ),
+            payload.len()
+        );
+
+        let dma_slot = GENET_ACTIVE_RING_DESCS;
+        let dma_vaddr = dma_range.vaddr as usize + dma_slot * DRIVER_TASK_RING_PAGE_BYTES;
+        for index in 0..GENET_TX_BUF_OFFSET {
+            assert_eq!(read_dma_byte(dma_vaddr + index), 0);
+        }
+        for (index, byte) in payload.iter().copied().enumerate() {
+            assert_eq!(read_dma_byte(dma_vaddr + GENET_TX_BUF_OFFSET + index), byte);
+        }
+        let desc = genet_read_tx_desc(0);
+        assert_eq!(
+            genet_decode_rx_len(desc.0),
+            GENET_TX_BUF_OFFSET + payload.len()
+        );
+        assert_eq!(
+            u64::from(desc.1) | (u64::from(desc.2) << 32),
+            runtime_resource_bus_addr_at(
+                &descriptor,
+                dma_range,
+                dma_slot * DRIVER_TASK_RING_PAGE_BYTES
+            )
+            .expect("Genet test descriptor must resolve TX DMA buffer")
+        );
+        assert_eq!(genet_read32(GENET_TDMA_PROD_INDEX), 1);
+        assert_eq!(state.tx_last_in_flight, 1);
+        assert_eq!(state.tx_last_free, (GENET_ACTIVE_RING_DESCS - 1) as u16);
+
+        genet_write32(GENET_TDMA_CONS_INDEX, 1);
+        genet_runtime_poll_tx_completions(&mut state);
+
+        assert_eq!(state.tx_completions, 1);
+        assert_eq!(state.tx_last_reclaim, 1);
+        assert_eq!(state.tx_last_in_flight, 0);
+        assert_eq!(state.tx_last_free, GENET_ACTIVE_RING_DESCS as u16);
+        assert_eq!(
+            genet_tx_progress_completion(17, payload.len() as u32, 1, 31, 1),
+            DriverTaskCompletionRecord {
+                sequence: 17,
+                code: COMPLETION_PROGRESS,
+                detail: 1,
+                result: payload.len() as u32,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 31,
+                    flags: 1,
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn genet_rx_idle_completion_reports_tx_reclaim_window() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_GENET_NIC, ROLE_NET);
+        let init = DriverTaskCommandRecord {
+            sequence: 30,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_GENET_NIC,
+            arg1: ROLE_NET,
+            aux0: DRIVER_RUNTIME_NET_INIT_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_command(0, init),
+            DriverTaskCompletionRecord::progress(30, 1)
+        );
+        let payload = [0x5au8; 64];
+        for (index, byte) in payload.iter().copied().enumerate() {
+            write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, byte);
+        }
+
+        let tx = DriverTaskCommandRecord {
+            sequence: 31,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_GENET_NIC,
+            arg1: ROLE_NET,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload.len() as u16,
+                flags: 0,
+            },
+        };
+        assert_eq!(
+            service_command(0, tx),
+            genet_tx_progress_completion(31, payload.len() as u32, 0, 31, 1)
+        );
+
+        genet_write32(GENET_TDMA_CONS_INDEX, 1);
+        let poll = DriverTaskCommandRecord {
+            sequence: 32,
+            frame: DriverFrameDescriptor::empty(),
+            ..tx
+        };
+
+        assert_eq!(
+            service_command(0, poll),
+            genet_tx_idle_completion(32, 1, GENET_ACTIVE_RING_DESCS as u16, 0)
+        );
+    }
+
+    #[test]
+    fn genet_hw_init_hard_clears_rbuf_flush_control() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        genet_write32(GENET_SYS_RBUF_FLUSH_CTRL, u32::MAX & !(1 << 1));
+
+        genet_hw_init_registers();
+
+        assert_eq!(genet_read32(GENET_SYS_RBUF_FLUSH_CTRL), 0);
+    }
+
+    #[test]
+    fn genet_hw_init_enables_64b_status_blocks() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        genet_write32(GENET_TBUF_CTRL, 0);
+        genet_write32(GENET_RBUF_CTRL, 0);
+
+        genet_hw_init_registers();
+
+        assert_eq!(
+            genet_read32(GENET_TBUF_CTRL) & GENET_TBUF_64B_EN,
+            GENET_TBUF_64B_EN
+        );
+        assert_eq!(
+            genet_read32(GENET_RBUF_CTRL) & (GENET_RBUF_64B_EN | GENET_RBUF_ALIGN_2B),
+            GENET_RBUF_64B_EN | GENET_RBUF_ALIGN_2B
+        );
+    }
+
+    #[test]
+    fn genet_runtime_init_aligns_ring_indices_to_hardware() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        genet_write32(GENET_RDMA_PROD_INDEX, 9);
+        genet_write32(GENET_TDMA_CONS_INDEX, 7);
+        let mut state = GenetRuntimeState::new();
+
+        assert!(genet_runtime_init_hw(&descriptor, &mut state));
+
+        assert_eq!(state.rx_cons_index, 9);
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 9);
+        assert_eq!(state.tx_cons_index, 7);
+        assert_eq!(state.tx_prod_index, 7);
+        assert_eq!(genet_read32(GENET_TDMA_PROD_INDEX), 7);
+    }
+
+    #[test]
+    fn genet_rx_completion_uses_producer_index_not_own_bit() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let payload = *b"dhcp-offer";
+        let dma_vaddr = dma_range.vaddr as usize;
+        write_dma_u32(
+            dma_vaddr,
+            (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                | GENET_DMA_OWN
+                | GENET_DMA_SOP
+                | GENET_DMA_EOP,
+        );
+        for (index, byte) in payload.iter().copied().enumerate() {
+            write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
+        }
+        let mut state = GenetRuntimeState::new();
+        state.initialized = true;
+        genet_write_rx_desc(
+            0,
+            runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
+                .expect("Genet test descriptor must resolve the first DMA buffer"),
+            (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                | GENET_DMA_OWN
+                | GENET_DMA_SOP
+                | GENET_DMA_EOP,
+        );
+        genet_write32(GENET_RDMA_PROD_INDEX, 1);
+
+        assert_eq!(
+            genet_runtime_poll_rx(
+                &mut state,
+                DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 1,
+                    max_bytes: payload.len() as u32,
+                }
+            ),
+            GenetRxPoll::Frame {
+                len: payload.len(),
+                flags: 0,
+            }
+        );
+        assert_eq!(
+            read_frame_prefix::<10>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload.len() as u16,
+                flags: 0,
+            }),
+            payload
+        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
+        assert_eq!(genet_read_rx_desc(0).0, genet_rx_owned_len_status());
+    }
+
+    #[test]
+    fn genet_rx_hardware_ring_delivers_one_frame_per_service_turn() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let mut payload_a = [0u8; 18];
+        payload_a[0..6].copy_from_slice(&[0xff; 6]);
+        payload_a[6..12].copy_from_slice(&GENET_DRIVER_TASK_MAC);
+        payload_a[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+        payload_a[14..18].copy_from_slice(b"ack1");
+        let mut payload_b = [0u8; 18];
+        payload_b[0..6].copy_from_slice(&GENET_DRIVER_TASK_MAC);
+        payload_b[6..12].copy_from_slice(&[0x9c, 0x69, 0xd3, 0x40, 0xa8, 0x57]);
+        payload_b[12..14].copy_from_slice(&0x0806u16.to_be_bytes());
+        payload_b[14..18].copy_from_slice(b"arp2");
+
+        for (slot, payload) in [(0usize, payload_a), (1usize, payload_b)] {
+            let dma_vaddr = dma_range.vaddr as usize + slot * DRIVER_TASK_RING_PAGE_BYTES;
+            write_dma_u32(
+                dma_vaddr,
+                (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                    | GENET_DMA_OWN
+                    | GENET_DMA_SOP
+                    | GENET_DMA_EOP,
+            );
+            for (index, byte) in payload.iter().copied().enumerate() {
+                write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
+            }
+            genet_write_rx_desc(
+                slot,
+                runtime_resource_bus_addr_at(
+                    &descriptor,
+                    dma_range,
+                    slot * DRIVER_TASK_RING_PAGE_BYTES,
+                )
+                .expect("Genet test descriptor must resolve RX DMA buffers"),
+                (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                    | GENET_DMA_OWN
+                    | GENET_DMA_SOP
+                    | GENET_DMA_EOP,
+            );
+        }
+        let mut state = GenetRuntimeState::new();
+        state.initialized = true;
+        genet_write32(GENET_RDMA_PROD_INDEX, 2);
+
+        let budget = DriverTaskBudgetGrant {
+            max_ops: GENET_RX_DRAIN_BUDGET as u16,
+            max_frames: GENET_RX_DRAIN_BUDGET as u16,
+            max_bytes: MAX_DRIVER_TASK_FRAME_BYTES as u32,
+        };
+        assert_eq!(
+            genet_runtime_poll_rx(&mut state, budget),
+            GenetRxPoll::Frame {
+                len: payload_a.len(),
+                flags: 0x0800,
+            }
+        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
+        assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(
+            read_frame_prefix::<18>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload_a.len() as u16,
+                flags: 0x0800,
+            }),
+            payload_a
+        );
+
+        assert_eq!(
+            genet_runtime_poll_rx(&mut state, budget),
+            GenetRxPoll::Frame {
+                len: payload_b.len(),
+                flags: 0x0806,
+            }
+        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
+        assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(
+            read_frame_prefix::<18>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload_b.len() as u16,
+                flags: 0x0806,
+            }),
+            payload_b
+        );
+    }
+
+    #[test]
+    fn genet_rx_completion_prefers_receive_status_block_length() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let payload = *b"offer-via-rsb";
+        let dma_vaddr = dma_range.vaddr as usize;
+        write_dma_u32(
+            dma_vaddr,
+            (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                | GENET_DMA_SOP
+                | GENET_DMA_EOP,
+        );
+        for (index, byte) in payload.iter().copied().enumerate() {
+            write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
+        }
+        let mut state = GenetRuntimeState::new();
+        state.initialized = true;
+        genet_write_rx_desc(
+            0,
+            runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
+                .expect("Genet test descriptor must resolve the first DMA buffer"),
+            0,
+        );
+        genet_write32(GENET_RDMA_PROD_INDEX, 1);
+
+        assert_eq!(
+            genet_runtime_poll_rx(
+                &mut state,
+                DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 1,
+                    max_bytes: payload.len() as u32,
+                }
+            ),
+            GenetRxPoll::Frame {
+                len: payload.len(),
+                flags: 0,
+            }
+        );
+        assert_eq!(
+            read_frame_prefix::<13>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload.len() as u16,
+                flags: 0,
+            }),
+            payload
+        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
+    }
+
+    #[test]
+    fn genet_rx_completion_reports_ether_type_in_frame_flags() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let mut payload = [0u8; 18];
+        payload[0..6].copy_from_slice(&[0xff; 6]);
+        payload[6..12].copy_from_slice(&GENET_DRIVER_TASK_MAC);
+        payload[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+        payload[14..18].copy_from_slice(&[0x45, 0, 0, 4]);
+        let dma_vaddr = dma_range.vaddr as usize;
+        write_dma_u32(
+            dma_vaddr,
+            (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                | GENET_DMA_SOP
+                | GENET_DMA_EOP,
+        );
+        for (index, byte) in payload.iter().copied().enumerate() {
+            write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
+        }
+        let mut state = GenetRuntimeState::new();
+        state.initialized = true;
+        genet_write_rx_desc(
+            0,
+            runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
+                .expect("Genet test descriptor must resolve the first DMA buffer"),
+            0,
+        );
+        genet_write32(GENET_RDMA_PROD_INDEX, 1);
+
+        assert_eq!(
+            genet_runtime_poll_rx(
+                &mut state,
+                DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 1,
+                    max_bytes: payload.len() as u32,
+                }
+            ),
+            GenetRxPoll::Frame {
+                len: payload.len(),
+                flags: 0x0800,
+            }
+        );
+        assert_eq!(
+            read_frame_prefix::<18>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload.len() as u16,
+                flags: 0x0800,
+            }),
+            payload
+        );
+    }
+
+    #[test]
+    fn genet_rx_invalid_descriptor_length_recycles_without_frame() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let mut state = GenetRuntimeState::new();
+        state.initialized = true;
+        genet_write_rx_desc(
+            0,
+            runtime_resource_bus_addr_at(&descriptor, dma_range, 0)
+                .expect("Genet test descriptor must resolve the first DMA buffer"),
+            genet_rx_owned_len_status(),
+        );
+        genet_write32(GENET_RDMA_PROD_INDEX, 1);
+
+        assert_eq!(
+            genet_runtime_poll_rx(
+                &mut state,
+                DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 1,
+                    max_bytes: MAX_DRIVER_TASK_FRAME_BYTES as u32,
+                }
+            ),
+            GenetRxPoll::Idle
+        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
+        assert_eq!(genet_read_rx_desc(0).0, genet_rx_owned_len_status());
     }
 
     #[test]
@@ -22141,6 +23379,25 @@ mod tests {
         })
     }
 
+    fn test_sdio_cmd53_write_shape_count(
+        function: u8,
+        addr: u32,
+        block_size: u16,
+        block_count: u16,
+        len: u16,
+    ) -> usize {
+        let expected_arg = sdio_cmd53_arg(true, function, addr, false, block_count, len);
+        test_sdio_transfer_count(|record| {
+            record.cmd == SDIO_CMD53
+                && sdio_cmd53_arg_write(record.arg)
+                && sdio_cmd53_arg_function(record.arg) == function
+                && sdio_cmd53_arg_addr(record.arg) == addr
+                && record.arg == expected_arg
+                && record.block_size == block_size
+                && record.block_count == block_count
+        })
+    }
+
     fn cyw43_runtime_payload_offset() -> u16 {
         (DRIVER_TASK_RING_FRAME_OFFSET
             + core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>()) as u16
@@ -22169,6 +23426,34 @@ mod tests {
                 CYW43_DESCRIPTOR_INVALID_PAYLOAD
             )
         );
+    }
+
+    #[test]
+    fn cyw43_descriptor_invalid_accepts_control_pre_tx_drain_flags() {
+        let payload_offset = cyw43_runtime_payload_offset();
+        for op in [
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+        ] {
+            let descriptor = DriverRuntimeCyw43CommandDescriptor {
+                op,
+                flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                    | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+                target_addr: 0,
+                payload_offset,
+                payload_len: 16,
+                total_len: 16,
+                arg0: 0x107,
+                arg1: 41,
+                reserved: 0,
+            };
+
+            assert!(descriptor.valid());
+            assert_eq!(
+                cyw43_descriptor_invalid_result(descriptor) & CYW43_DESCRIPTOR_INVALID_FLAGS,
+                0
+            );
+        }
     }
 
     fn init_cyw43_engine_for_test() {
@@ -22729,9 +24014,14 @@ mod tests {
             reserved: 0,
         });
         let data_tx_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14;
+        let data_tx_request_len = cyw43_data_tx_request_len(data_tx_len);
         assert_eq!(
             service_command(0, cyw43_descriptor_command(75)),
-            DriverTaskCompletionRecord::progress(75, data_tx_len as u32)
+            DriverTaskCompletionRecord::progress_with_detail(
+                75,
+                data_tx_request_len as u16,
+                data_tx_len as u32
+            )
         );
         assert_eq!(
             read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET),
@@ -22809,6 +24099,181 @@ mod tests {
         assert_eq!(state.sdpcm_seq, 7);
         assert_eq!(state.tx_frames, 0);
         assert_eq!(cyw43_take_last_fault_detail(), None);
+    }
+
+    #[test]
+    fn cyw43_data_tx_waits_for_credit_by_pumping_rx() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.sdpcm_seq = 7;
+        state.sdpcm_seq_max = 7;
+        let inbound = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10, 0x08, 0x00,
+        ];
+        let inbound_len = stage_sdpcm_data_subframe(CYW43_RUNTIME_RX_BUFFER_OFFSET, &inbound, 9);
+        state.sdpcm_next_frame_len = inbound_len as u16;
+        let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
+        let outbound = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10, 0x08, 0x00,
+        ];
+        stage_bytes(payload_offset, &outbound);
+        reset_test_sdio_transfer_log();
+
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: outbound.len() as u16,
+            flags: 0,
+        };
+        assert_eq!(
+            cyw43_submit_sdpcm_frame(&mut state, frame, true, false),
+            CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + outbound.len()
+        );
+        assert_eq!(state.sdpcm_seq, 8);
+        assert_eq!(state.sdpcm_seq_max, 9);
+        assert_eq!(state.tx_frames, 1);
+        assert_eq!(state.rx_queue_count, 1);
+        assert!(test_sdio_cmd53_transfer_count(2, false) >= 1);
+        assert!(test_sdio_cmd53_transfer_count(2, true) >= 1);
+        assert_eq!(
+            cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_DATA),
+            Some(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: inbound.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 9),
+            })
+        );
+        assert_eq!(
+            read_frame_prefix::<14>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: inbound.len() as u16,
+                flags: 0,
+            }),
+            inbound
+        );
+    }
+
+    #[test]
+    fn cyw43_data_tx_keeps_dhcp_sized_frame_in_byte_mode() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.sdpcm_seq = 11;
+        state.sdpcm_seq_max = 12;
+        let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 1024;
+        let mut dhcp_discover = [0u8; 300];
+        dhcp_discover[..6].fill(0xff);
+        dhcp_discover[6..12].copy_from_slice(&[0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
+        dhcp_discover[12..14].copy_from_slice(&[0x08, 0x00]);
+        stage_bytes(payload_offset, &dhcp_discover);
+        reset_test_sdio_transfer_log();
+
+        let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_discover.len();
+        let request_len = cyw43_data_tx_request_len(total_len);
+        assert_eq!(total_len, 330);
+        assert_eq!(request_len, 332);
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: dhcp_discover.len() as u16,
+            flags: 0,
+        };
+        assert_eq!(
+            cyw43_submit_sdpcm_frame(&mut state, frame, true, false),
+            total_len
+        );
+        assert_eq!(
+            read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET),
+            total_len as u16
+        );
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                request_len as u16,
+                0,
+                request_len as u16
+            ),
+            1
+        );
+        assert_eq!(
+            read_frame_prefix::<14>(DriverFrameDescriptor {
+                offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES) as u32,
+                len: dhcp_discover.len() as u16,
+                flags: 0,
+            }),
+            dhcp_discover[..14]
+        );
+    }
+
+    #[test]
+    fn cyw43_eth_tx_completion_reports_m2_sized_byte_mode_shape() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        let mut m2_frame = [0u8; 135];
+        m2_frame[..6].copy_from_slice(&[0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5]);
+        m2_frame[6..12].copy_from_slice(&[0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
+        m2_frame[12..14].copy_from_slice(&[0x88, 0x8e]);
+        stage_bytes(usize::from(payload_offset), &m2_frame);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq = 9;
+            state.sdpcm_seq_max = 10;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+            flags: 0,
+            target_addr: 0,
+            payload_offset,
+            payload_len: m2_frame.len() as u16,
+            total_len: m2_frame.len() as u32,
+            arg0: 0,
+            arg1: 0,
+            reserved: 0,
+        });
+        reset_test_sdio_transfer_log();
+
+        let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + m2_frame.len();
+        let request_len = cyw43_data_tx_request_len(total_len);
+        assert_eq!(total_len, 165);
+        assert_eq!(request_len, 168);
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(176)),
+            DriverTaskCompletionRecord::progress_with_detail(
+                176,
+                request_len as u16,
+                total_len as u32
+            )
+        );
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                request_len as u16,
+                0,
+                request_len as u16
+            ),
+            1
+        );
+        assert_eq!(
+            read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_DATA_TX_BDC_OFFSET + 1),
+            CYW43_HOST_EAPOL_BDC_PRIORITY
+        );
+        assert_eq!(
+            read_frame_prefix::<135>(DriverFrameDescriptor {
+                offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES) as u32,
+                len: m2_frame.len() as u16,
+                flags: 0,
+            }),
+            m2_frame
+        );
     }
 
     #[test]
@@ -22940,6 +24405,67 @@ mod tests {
             }),
             packet
         );
+    }
+
+    #[test]
+    fn cyw43_control_tx_pre_drain_consumes_stale_control_reply() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        let control_payload = *b"cdc-control";
+        let stale_cmd = 0x17u32;
+        let stale_id = 7u16;
+        let frame_len = CYW43_SDPCM_HEADER_BYTES + CYW43_CDC_HEADER_BYTES;
+        stage_bytes(usize::from(payload_offset), &control_payload);
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_CONTROL,
+            8,
+            false,
+        );
+        let cdc_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES;
+        stage_u32(cdc_offset, stale_cmd);
+        stage_u32(cdc_offset + 4, 0);
+        stage_u16(cdc_offset + 10, stale_id);
+        stage_u32(cdc_offset + 12, CYW43_CDC_STATUS_SUCCESS);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq = 4;
+            state.sdpcm_seq_max = 5;
+            state.sdpcm_next_frame_len = frame_len as u16;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+            target_addr: 0,
+            payload_offset,
+            payload_len: control_payload.len() as u16,
+            total_len: control_payload.len() as u32,
+            arg0: 0,
+            arg1: 0,
+            reserved: 0,
+        });
+        reset_test_sdio_transfer_log();
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(89)),
+            DriverTaskCompletionRecord::progress(
+                89,
+                (CYW43_SDPCM_CONTROL_TX_EXT_HEADER_BYTES + control_payload.len()) as u32
+            )
+        );
+        assert!(test_sdio_cmd53_transfer_count(2, false) >= 1);
+        assert!(test_sdio_cmd53_transfer_count(2, true) >= 1);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert_eq!(state.rx_queue_count, 0);
+            assert_eq!(state.sdpcm_next_frame_len, 0);
+            assert_eq!(state.sdpcm_seq, 5);
+            assert_eq!(state.sdpcm_seq_max, 8);
+        });
     }
 
     #[test]
@@ -23346,6 +24872,84 @@ mod tests {
                 }
             )
         );
+    }
+
+    #[test]
+    fn cyw43_control_reply_parser_rejects_sdio_telemetry_prefix() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let offset = DRIVER_TASK_RING_FRAME_OFFSET + 128;
+        stage_u32(offset, SDIO_FAULT_TELEMETRY_MAGIC);
+        stage_u32(offset + 4, 1);
+        stage_u16(offset + 10, 40320);
+        stage_u32(offset + 12, 0xffff_ffff);
+
+        assert_eq!(
+            cyw43_control_reply_from_frame(DriverFrameDescriptor {
+                offset: offset as u32,
+                len: 17,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 1),
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn cyw43_control_exchange_skips_non_cdc_control_before_wsec_reply() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        let cmd = 0x107u32;
+        let id = 41u16;
+        let request = [0u8; CYW43_CDC_HEADER_BYTES];
+        let mut non_cdc_control = [0u8; 17];
+        non_cdc_control[0..4].copy_from_slice(&SDIO_FAULT_TELEMETRY_MAGIC.to_le_bytes());
+        non_cdc_control[4..8].copy_from_slice(&1u32.to_le_bytes());
+        non_cdc_control[10..12].copy_from_slice(&40320u16.to_le_bytes());
+        non_cdc_control[12..16].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
+        stage_bytes(usize::from(payload_offset), &request);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(1);
+            state.control_startup_status_drained = true;
+            queue_cyw43_raw_frame_at(
+                state,
+                0,
+                cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 1),
+                &non_cdc_control,
+            );
+            queue_cyw43_control_reply_at(state, 1, cmd, id, CYW43_CDC_STATUS_SUCCESS, &[]);
+            state.rx_queue_head = 0;
+            state.rx_queue_count = 2;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+            target_addr: 0,
+            payload_offset,
+            payload_len: request.len() as u16,
+            total_len: request.len() as u32,
+            arg0: cmd,
+            arg1: u32::from(id),
+            reserved: 0,
+        });
+
+        assert_eq!(
+            service_command(0, cyw43_descriptor_command(83)),
+            DriverTaskCompletionRecord::frame_ready_with_descriptor(
+                83,
+                DriverFrameDescriptor {
+                    offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_CDC_HEADER_BYTES) as u32,
+                    len: 0,
+                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 1),
+                }
+            )
+        );
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert_eq!(state.rx_queue_count, 0);
+        });
     }
 
     #[test]
@@ -26197,6 +27801,22 @@ mod tests {
             CYW43_CONTROL_RX_BLOCK_PROBE_BYTES,
             CYW43_FUNCTION2_BLOCK_BYTES
         );
+        assert_eq!(
+            cyw43_data_tx_request_len(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14),
+            44
+        );
+        assert_eq!(
+            cyw43_data_tx_request_len(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 300),
+            332
+        );
+        assert_eq!(
+            cyw43_data_tx_request_len(SDIO_CMD53_BYTE_MODE_MAX),
+            SDIO_CMD53_BYTE_MODE_MAX
+        );
+        assert_eq!(
+            cyw43_data_tx_request_len(SDIO_CMD53_BYTE_MODE_MAX + 1),
+            CYW43_FUNCTION2_BLOCK_BYTES * 2
+        );
         let (probe_byte_size, probe_byte_count) =
             cyw43_function2_cmd53_shape(CYW43_CONTROL_RX_BLOCK_PROBE_BYTES);
         assert_eq!(probe_byte_size, SDIO_CMD53_BYTE_MODE_MAX as u16);
@@ -27435,6 +29055,34 @@ mod tests {
     }
 
     #[test]
+    fn usb_keyboard_valid_report_counter_requires_decoded_status() {
+        assert!(usb_keyboard_report_status_counts_as_valid_report(
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
+        ));
+        assert!(usb_keyboard_report_status_counts_as_valid_report(
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY
+        ));
+        assert!(usb_keyboard_report_status_counts_as_valid_report(
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FLEXIBLE_FALLBACK
+        ));
+        assert!(usb_keyboard_report_status_counts_as_valid_report(
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE
+        ));
+        assert!(usb_keyboard_report_status_counts_as_valid_report(
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY
+        ));
+        assert!(!usb_keyboard_report_status_counts_as_valid_report(
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_SHORT
+        ));
+        assert!(!usb_keyboard_report_status_counts_as_valid_report(
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODE_FAILED
+        ));
+        assert!(!usb_keyboard_report_status_counts_as_valid_report(
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER
+        ));
+    }
+
+    #[test]
     fn usb_keyboard_attach_settle_requires_release_before_bytes() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -28014,6 +29662,16 @@ mod tests {
         assert_eq!(USB_COMMAND_COMPLETION_SPINS, 20_000_000);
         assert_eq!(USB_COMMAND_COMPLETION_SLICE_SPINS, 128);
         assert_eq!(USB_COMMAND_COMPLETION_EVENTS_PER_SLICE, 4);
+        assert_eq!(
+            USB_ENDPOINT_RECOVERY_COMMAND_EVENTS_PER_SLICE,
+            XHCI_EVENT_RING_TRBS
+        );
+        assert_eq!(
+            USB_ENDPOINT_RECOVERY_COMMAND_SPINS,
+            USB_COMMAND_COMPLETION_SPINS
+        );
+        assert!(USB_ENDPOINT_RECOVERY_COMMAND_SPINS >= USB_COMMAND_COMPLETION_SPINS);
+        assert_eq!(USB_KEYBOARD_RECOVERY_REENUMERATE_FAILURES, 1);
         assert_eq!(USB_COMMAND_PROOF_MAX_POLL_SLICES, 192);
         assert!(USB_COMMAND_PROOF_RERINGS_PENDING_DOORBELL);
         assert_eq!(USB_COMMAND_PROOF_RERING_INTERVAL_SLICES, 8);
@@ -29268,7 +30926,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_arms_deep_first_report_queue() {
+    fn usb_keyboard_arms_known_good_interrupt_queue_depth() {
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
         let mut state = UsbRuntimeState::new();
         state.db_offset = 0x1000;
@@ -29276,6 +30934,7 @@ mod tests {
         state.keyboard_endpoint_id = 3;
 
         assert_eq!(USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH, 128);
+        assert_eq!(USB_KEYBOARD_FIRST_REPORT_QUEUE_DEPTH, 32);
         assert_eq!(USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH, 32);
         assert!(xhci_arm_keyboard_interrupt_queue(&mut state, &descriptor));
         assert_eq!(
@@ -29291,7 +30950,11 @@ mod tests {
             );
         }
 
-        assert!(!xhci_queue_keyboard_interrupt_in(&mut state, &descriptor));
+        assert!(xhci_arm_keyboard_interrupt_queue(&mut state, &descriptor));
+        assert_eq!(
+            usize::from(state.keyboard_reports_queued),
+            USB_KEYBOARD_FIRST_REPORT_QUEUE_DEPTH
+        );
 
         let mut steady_state = UsbRuntimeState::new();
         steady_state.db_offset = 0x1000;
@@ -29305,6 +30968,13 @@ mod tests {
         ));
         assert_eq!(
             usize::from(steady_state.keyboard_reports_queued),
+            USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
+        );
+
+        steady_state.keyboard_last_report_status =
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS;
+        assert_eq!(
+            xhci_keyboard_interrupt_queue_target(&steady_state),
             USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
         );
     }
@@ -29577,9 +31247,566 @@ mod tests {
             }
         );
         assert_eq!(state.keyboard_report_trb_indices[0], 0);
+    }
+
+    #[test]
+    fn usb_keyboard_endpoint_recovery_rearms_before_first_report() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let kbd_ring = xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET).unwrap();
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        write_xhci_trb(
+            event_base,
+            1,
+            XhciTrb {
+                parameter: cmd_ring + XHCI_TRB_BYTES as u64,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        let mut state = UsbRuntimeState::new();
+        state.db_offset = 0x1000;
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_reports_queued = 1;
+        state.keyboard_report_in_use[0] = true;
+        state.keyboard_report_trb_indices[0] = 0;
+        state.kbd_enqueue = 1;
+        state.event_dequeue = 0;
+        state.event_cycle = true;
+
+        assert!(usb_keyboard_pre_first_report_underfilled_queue_recovery_due(&state));
+        assert!(xhci_recover_keyboard_interrupt_endpoint(
+            &mut state,
+            &descriptor
+        ));
+
+        assert_eq!(state.event_dequeue, 2);
+        assert_eq!(state.keyboard_endpoint_recoveries, 1);
+        assert_eq!(state.keyboard_valid_report_events, 0);
         assert_eq!(
-            state.keyboard_report_trb_indices[USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH - 1],
-            (USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH - 1) as u16
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS
+        );
+        assert_eq!(
+            usize::from(state.keyboard_reports_queued),
+            USB_KEYBOARD_FIRST_REPORT_QUEUE_DEPTH
+        );
+        assert_eq!(
+            read_xhci_trb(
+                dma_range.vaddr as usize + XHCI_DMA_KBD_RING_OFFSET,
+                XHCI_COMMAND_RING_TRBS - 1
+            ),
+            XhciTrb {
+                parameter: kbd_ring,
+                status: 0,
+                control: (XHCI_TRB_TYPE_LINK << 10) | XHCI_TRB_ENT | XHCI_TRB_CYCLE
+            }
+        );
+    }
+
+    #[test]
+    fn usb_keyboard_mature_full_steady_idle_queue_recovers_without_aux() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let kbd_ring = xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET).unwrap();
+        let cmd_base = dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET;
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        zero_dma_range(cmd_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        write_xhci_trb(
+            event_base,
+            1,
+            XhciTrb {
+                parameter: cmd_ring + XHCI_TRB_BYTES as u64,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        let mut state = UsbRuntimeState::new();
+        state.db_offset = 0x1000;
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_transfer_events = 229;
+        state.keyboard_valid_report_events = 133;
+        state.keyboard_reports_queued = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u8;
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+        state.kbd_enqueue = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u16;
+        for report_slot in 0..USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH {
+            state.keyboard_report_in_use[report_slot] = true;
+            state.keyboard_report_trb_indices[report_slot] = report_slot as u16;
+        }
+
+        assert!(usb_keyboard_steady_idle_recovery_due(&state));
+        assert!(usb_keyboard_recover_endpoint_if_due(
+            &mut state,
+            &descriptor,
+            false
+        ));
+
+        assert_eq!(state.keyboard_endpoint_recoveries, 1);
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS
+        );
+        assert_eq!(
+            usize::from(state.keyboard_reports_queued),
+            USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 0),
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_STOP_ENDPOINT << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 1),
+            XhciTrb {
+                parameter: kbd_ring | 1,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_SET_TR_DEQUEUE_POINTER << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+    }
+
+    #[test]
+    fn usb_keyboard_steady_overqueue_recovers_without_aux() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let kbd_ring = xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET).unwrap();
+        let cmd_base = dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET;
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        zero_dma_range(cmd_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        write_xhci_trb(
+            event_base,
+            1,
+            XhciTrb {
+                parameter: cmd_ring + XHCI_TRB_BYTES as u64,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        let mut state = UsbRuntimeState::new();
+        state.db_offset = 0x1000;
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_transfer_events = 28;
+        state.keyboard_valid_report_events = 14;
+        state.keyboard_reports_queued = 100;
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE;
+        state.kbd_enqueue = 100;
+        for report_slot in 0..100 {
+            state.keyboard_report_in_use[report_slot] = true;
+            state.keyboard_report_trb_indices[report_slot] = report_slot as u16;
+        }
+
+        assert!(usb_keyboard_steady_overqueue_recovery_due(&state));
+        assert!(usb_keyboard_recover_endpoint_if_due(
+            &mut state,
+            &descriptor,
+            false
+        ));
+
+        assert_eq!(state.keyboard_endpoint_recoveries, 1);
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS
+        );
+        assert_eq!(
+            usize::from(state.keyboard_reports_queued),
+            USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 0),
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_STOP_ENDPOINT << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 1),
+            XhciTrb {
+                parameter: kbd_ring | 1,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_SET_TR_DEQUEUE_POINTER << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+    }
+
+    #[test]
+    fn usb_keyboard_endpoint_recovery_stop_failure_forces_reenumeration() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let cmd_base = dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET;
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        let kbd_base = dma_range.vaddr as usize + XHCI_DMA_KBD_RING_OFFSET;
+        zero_dma_range(cmd_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(kbd_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_STALL_ERROR << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+
+        let mut state = UsbRuntimeState::new();
+        state.db_offset = 0x1000;
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_valid_report_events = 3;
+        state.keyboard_reports_queued = 2;
+        state.keyboard_report_in_use[0] = true;
+        state.keyboard_report_in_use[1] = true;
+        state.keyboard_report_trb_indices[0] = 21;
+        state.keyboard_report_trb_indices[1] = 22;
+        state.keyboard_endpoint_reset_required = true;
+        state.kbd_enqueue = 23;
+        state.kbd_cycle = false;
+        state.event_dequeue = 0;
+        state.event_cycle = true;
+
+        assert!(!xhci_recover_keyboard_interrupt_endpoint(
+            &mut state,
+            &descriptor
+        ));
+
+        assert_eq!(state.event_dequeue, 1);
+        assert_eq!(state.keyboard_endpoint_recoveries, 0);
+        assert_eq!(state.keyboard_endpoint_recovery_failures, 1);
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED
+        );
+        assert_eq!(state.keyboard_reports_queued, 0);
+        assert!(!state.keyboard_report_in_use.iter().any(|&in_use| in_use));
+        assert!(!state
+            .keyboard_report_trb_indices
+            .iter()
+            .any(|&index| index != 0));
+        assert_eq!(state.kbd_enqueue, 0);
+        assert!(state.kbd_cycle);
+        assert_eq!(state.keyboard_slot, 0);
+        assert_eq!(state.keyboard_endpoint_id, 0);
+        assert_eq!(
+            state.init_detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 0),
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_STOP_ENDPOINT << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 1),
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: 0,
+            }
+        );
+        assert_eq!(
+            read_xhci_trb(kbd_base, 0),
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn usb_keyboard_endpoint_recovery_set_dequeue_failure_invalidates_live_queue() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let cmd_base = dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET;
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        let kbd_base = dma_range.vaddr as usize + XHCI_DMA_KBD_RING_OFFSET;
+        zero_dma_range(cmd_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(kbd_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        write_xhci_trb(
+            event_base,
+            1,
+            XhciTrb {
+                parameter: cmd_ring + XHCI_TRB_BYTES as u64,
+                status: XHCI_COMPLETION_STALL_ERROR << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+
+        let mut state = UsbRuntimeState::new();
+        state.db_offset = 0x1000;
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_valid_report_events = 3;
+        state.keyboard_reports_queued = 2;
+        state.keyboard_report_in_use[0] = true;
+        state.keyboard_report_in_use[1] = true;
+        state.keyboard_report_trb_indices[0] = 21;
+        state.keyboard_report_trb_indices[1] = 22;
+        state.kbd_enqueue = 23;
+        state.kbd_cycle = false;
+        state.event_dequeue = 0;
+        state.event_cycle = true;
+
+        assert!(!xhci_recover_keyboard_interrupt_endpoint(
+            &mut state,
+            &descriptor
+        ));
+
+        assert_eq!(state.event_dequeue, 2);
+        assert_eq!(state.keyboard_endpoint_recoveries, 0);
+        assert_eq!(state.keyboard_endpoint_recovery_failures, 1);
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED
+        );
+        assert_eq!(state.keyboard_reports_queued, 0);
+        assert!(!state.keyboard_report_in_use[0]);
+        assert!(!state.keyboard_report_in_use[1]);
+        assert_eq!(state.keyboard_report_trb_indices[0], 0);
+        assert_eq!(state.keyboard_report_trb_indices[1], 0);
+        assert_eq!(state.kbd_enqueue, 0);
+        assert!(state.kbd_cycle);
+        assert_eq!(state.keyboard_slot, 0);
+        assert_eq!(state.keyboard_endpoint_id, 0);
+        assert_eq!(
+            state.init_detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 0),
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_STOP_ENDPOINT << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 1),
+            XhciTrb {
+                parameter: xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET)
+                    .unwrap()
+                    | 1,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_SET_TR_DEQUEUE_POINTER << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+        assert_eq!(
+            read_xhci_trb(kbd_base, 0),
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn usb_keyboard_repeated_recovery_failures_force_reenumeration() {
+        let mut state = UsbRuntimeState::new();
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_endpoint_address = 0x83;
+        state.keyboard_interface = 1;
+        state.keyboard_attach_rank = USB_KEYBOARD_ATTACH_RANK_STRICT_BOOT;
+        state.keyboard_valid_report_events = 3;
+        state.keyboard_reports_queued = 2;
+        state.keyboard_report_in_use[0] = true;
+        state.keyboard_report_in_use[1] = true;
+        state.keyboard_report_trb_indices[0] = 21;
+        state.keyboard_report_trb_indices[1] = 22;
+        state.keyboard_endpoint_recovery_failures = USB_KEYBOARD_RECOVERY_REENUMERATE_FAILURES - 1;
+        state.keyboard_control_poll_disabled = true;
+        state.keyboard_control_poll_cooldown = 9;
+        state.keyboard_led_sync_pending = true;
+        state.keyboard_led_sync_cooldown = 7;
+        state.enumeration_retry_cooldown = 1;
+        state.enumeration_retry_window_exhausted = true;
+
+        xhci_mark_keyboard_endpoint_recovery_failed(&mut state);
+
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED
+        );
+        assert_eq!(state.keyboard_reports_queued, 0);
+        assert!(!state.keyboard_report_in_use.iter().any(|&in_use| in_use));
+        assert_eq!(state.keyboard_slot, 0);
+        assert_eq!(state.keyboard_endpoint_id, 0);
+        assert_eq!(state.keyboard_endpoint_address, 0);
+        assert_eq!(state.keyboard_interface, 0xff);
+        assert_eq!(state.keyboard_attach_rank, USB_KEYBOARD_ATTACH_RANK_NONE);
+        assert_eq!(
+            state.init_detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+        );
+        assert_eq!(state.enumeration_retry_cooldown, 0);
+        assert!(!state.enumeration_retry_window_exhausted);
+        assert!(!state.keyboard_control_poll_disabled);
+        assert_eq!(state.keyboard_control_poll_cooldown, 0);
+        assert!(!state.keyboard_led_sync_pending);
+        assert_eq!(state.keyboard_led_sync_cooldown, 0);
+    }
+
+    #[test]
+    fn usb_keyboard_recovery_aux_hard_limit_forces_reenumeration() {
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let mut state = UsbRuntimeState::new();
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_endpoint_address = 0x83;
+        state.keyboard_interface = 1;
+        state.keyboard_attach_rank = USB_KEYBOARD_ATTACH_RANK_STRICT_BOOT;
+        state.keyboard_valid_report_events = 1;
+        state.keyboard_reports_queued = 1;
+        state.keyboard_report_in_use[0] = true;
+        state.keyboard_endpoint_recoveries = USB_KEYBOARD_HARD_RECOVERY_LIMIT;
+
+        assert!(usb_keyboard_recovery_aux_reenumeration_due(&state, true));
+        assert!(!usb_keyboard_recover_endpoint_if_due(
+            &mut state,
+            &descriptor,
+            true
+        ));
+
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED
+        );
+        assert_eq!(state.keyboard_slot, 0);
+        assert_eq!(state.keyboard_endpoint_id, 0);
+        assert_eq!(
+            state.init_detail,
+            DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
         );
     }
 
@@ -29655,7 +31882,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_recovery_aux_only_for_unhealthy_unmatched_queue() {
+    fn usb_keyboard_recovery_aux_covers_unmatched_underfilled_and_full_steady_queue() {
         let mut state = UsbRuntimeState::new();
         state.initialized = true;
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
@@ -29668,10 +31895,47 @@ mod tests {
         assert!(!usb_keyboard_recovery_aux_unmatched_recovery_due(
             &state, true
         ));
+        assert!(usb_keyboard_recovery_aux_full_queue_recovery_due(
+            &state, true
+        ));
+        assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
+            &state, false
+        ));
+        assert!(!usb_keyboard_recovery_aux_underfilled_queue_recovery_due(
+            &state, true
+        ));
+
+        state.keyboard_reports_queued = USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u8;
+        assert!(usb_keyboard_steady_overqueue_recovery_due(&state));
+        assert!(usb_keyboard_recovery_aux_full_queue_recovery_due(
+            &state, true
+        ));
+
+        state.keyboard_reports_queued = 1;
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
+        assert!(usb_keyboard_recovery_aux_underfilled_queue_recovery_due(
+            &state, true
+        ));
+        assert!(!usb_keyboard_recovery_aux_underfilled_queue_recovery_due(
+            &state, false
+        ));
+
+        state.keyboard_preserved_event_count = 1;
+        assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
+            &state, true
+        ));
+        assert!(usb_keyboard_recovery_aux_underfilled_queue_recovery_due(
+            &state, true
+        ));
+        state.keyboard_preserved_event_count = 0;
+        state.keyboard_reports_queued = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u8;
 
         state.keyboard_last_report_status =
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER;
         assert!(usb_keyboard_recovery_aux_unmatched_recovery_due(
+            &state, true
+        ));
+        assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
             &state, true
         ));
         assert!(!usb_keyboard_recovery_aux_unmatched_recovery_due(
@@ -29682,15 +31946,34 @@ mod tests {
         assert!(usb_keyboard_recovery_aux_unmatched_recovery_due(
             &state, true
         ));
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+        assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
+            &state, true
+        ));
+        assert!(usb_keyboard_recovery_aux_underfilled_queue_recovery_due(
+            &state, true
+        ));
 
         state.keyboard_valid_report_events = 0;
         assert!(!usb_keyboard_recovery_aux_unmatched_recovery_due(
+            &state, true
+        ));
+        assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
+            &state, true
+        ));
+        assert!(!usb_keyboard_recovery_aux_underfilled_queue_recovery_due(
             &state, true
         ));
         state.keyboard_valid_report_events = 1;
 
         state.keyboard_endpoint_recoveries = USB_KEYBOARD_HARD_RECOVERY_LIMIT;
         assert!(!usb_keyboard_recovery_aux_unmatched_recovery_due(
+            &state, true
+        ));
+        assert!(!usb_keyboard_recovery_aux_full_queue_recovery_due(
+            &state, true
+        ));
+        assert!(!usb_keyboard_recovery_aux_underfilled_queue_recovery_due(
             &state, true
         ));
     }
@@ -30147,6 +32430,7 @@ mod tests {
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER
         );
 
+        state.keyboard_valid_report_events = state.keyboard_valid_report_events.saturating_add(1);
         assert!(xhci_arm_keyboard_interrupt_queue(&mut state, &descriptor));
         assert_eq!(
             usize::from(state.keyboard_reports_queued),
@@ -30213,6 +32497,17 @@ mod tests {
         assert_eq!(completion.code, COMPLETION_FRAME_READY);
         assert_eq!(completion.frame.len, 1);
         assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'a');
+        USB_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.keyboard_valid_report_events, 1);
+            assert_eq!(
+                usize::from(state.keyboard_reports_queued),
+                USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
+            );
+            assert_eq!(
+                state.keyboard_last_report_status,
+                DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE
+            );
+        });
     }
 
     #[test]
@@ -30235,6 +32530,110 @@ mod tests {
             Some(event)
         );
         assert_eq!(state.keyboard_preserved_event_count, 0);
+    }
+
+    #[test]
+    fn usb_endpoint_recovery_command_waits_through_keyboard_transfer_noise() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let kbd_ring = xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET).unwrap();
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        let transfer_noise = USB_COMMAND_COMPLETION_EVENTS_PER_SLICE + 2;
+        for index in 0..transfer_noise {
+            write_xhci_trb(
+                event_base,
+                index,
+                XhciTrb {
+                    parameter: kbd_ring + (index * XHCI_TRB_BYTES) as u64 + 0x08,
+                    status: XHCI_COMPLETION_SHORT_PACKET << 24,
+                    control: XHCI_TRB_CYCLE
+                        | (XHCI_TRB_TYPE_TRANSFER_EVENT << 10)
+                        | (3 << 16)
+                        | (4 << 24),
+                },
+            );
+        }
+        write_xhci_trb(
+            event_base,
+            transfer_noise,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        let mut state = UsbRuntimeState::new();
+        state.db_offset = 0x1000;
+        state.initialized = true;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.event_dequeue = 0;
+        state.event_cycle = true;
+
+        assert!(xhci_enqueue_endpoint_recovery_command(
+            &mut state,
+            &descriptor,
+            xhci_stop_endpoint_command(4, 3),
+            true
+        ));
+
+        assert_eq!(usize::from(state.event_dequeue), transfer_noise + 1);
+        assert_eq!(state.keyboard_preserved_event_count, 0);
+        assert_eq!(state.keyboard_transfer_events, transfer_noise as u32);
+    }
+
+    #[test]
+    fn usb_keyboard_transfer_scan_reports_blocked_command_completion() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        let mut state = UsbRuntimeState::new();
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.event_dequeue = 0;
+        state.event_cycle = true;
+
+        assert_eq!(
+            xhci_next_keyboard_transfer_event(&mut state, &descriptor),
+            None
+        );
+        assert_eq!(state.event_dequeue, 0);
+        assert_eq!(state.keyboard_command_completion_blocked, 1);
+        let frame = usb_keyboard_diagnostic_frame(&state);
+        assert_eq!(
+            (frame.offset >> 16) as u16,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_DIAG_MAGIC
+        );
+        assert_eq!((frame.offset >> 8) & 0xff, 1);
     }
 
     #[test]
@@ -30625,7 +33024,7 @@ mod tests {
             state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
             state.keyboard_slot = 1;
             state.keyboard_endpoint_id = 3;
-            state.keyboard_reports_queued = USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u8;
+            state.keyboard_reports_queued = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u8;
             state.keyboard_transfer_events = 1;
             state.keyboard_valid_report_events = 1;
         });
@@ -30646,13 +33045,13 @@ mod tests {
             DriverTaskCompletionRecord::progress_with_detail(
                 96,
                 DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
-                0x0100_0000 | USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u32
+                0x0100_0000 | USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u32
             )
         );
     }
 
     #[test]
-    fn usb_keyboard_recovery_aux_does_not_reset_healthy_queue() {
+    fn usb_keyboard_poll_does_not_reset_healthy_steady_queue_without_recovery_aux() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -30665,7 +33064,7 @@ mod tests {
             state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
             state.keyboard_slot = 1;
             state.keyboard_endpoint_id = 3;
-            state.keyboard_reports_queued = USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u8;
+            state.keyboard_reports_queued = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u8;
             state.keyboard_transfer_events = 1;
             state.keyboard_valid_report_events = 1;
             state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
@@ -30676,7 +33075,7 @@ mod tests {
             flags: 0,
             arg0: HOT_PATH_USB_KEYBOARD,
             arg1: ROLE_USB,
-            aux0: DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
+            aux0: 0,
             aux1: 0,
             budget: budget(),
             frame: DriverFrameDescriptor::empty(),
@@ -30690,7 +33089,7 @@ mod tests {
                 0x0100_0000
                     | (u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE)
                         << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
-                    | USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u32
+                    | USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u32
             )
         );
         USB_RUNTIME_STATE.with_ref(|state| {
@@ -30699,6 +33098,393 @@ mod tests {
             assert_eq!(
                 state.keyboard_last_report_status,
                 DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
+            );
+        });
+    }
+
+    #[test]
+    fn usb_keyboard_underfilled_post_first_report_queue_is_not_armed() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let mut state = UsbRuntimeState::new();
+        state.db_offset = 0x1000;
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_valid_report_events = 1;
+        state.keyboard_reports_queued = 1;
+        state.keyboard_report_in_use = [true; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+        state.keyboard_report_trb_indices = [1; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+        state.kbd_enqueue = 1;
+
+        assert!(!xhci_arm_keyboard_interrupt_queue(&mut state, &descriptor));
+        assert_eq!(state.keyboard_reports_queued, 1);
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
+        );
+    }
+
+    #[test]
+    fn usb_keyboard_normal_poll_marks_collapsed_queue_without_recovery() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.db_offset = 0x1000;
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+            state.keyboard_slot = 4;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_valid_report_events = 1;
+            state.keyboard_transfer_events = USB_KEYBOARD_QUEUE_COLLAPSE_RECOVERY_EVENTS;
+            state.keyboard_reports_queued = 1;
+            state.keyboard_report_in_use = [true; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+            state.keyboard_report_trb_indices = [1; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+            state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+            state.kbd_enqueue = 1;
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 97,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        let completion = service_usb_keyboard(poll);
+
+        assert_eq!(completion.code, COMPLETION_PROGRESS);
+        assert_eq!(
+            completion.detail,
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+        );
+        assert_eq!(completion.result & 0xff, 1);
+        assert_eq!(
+            (completion.result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
+            u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE)
+        );
+        USB_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.keyboard_endpoint_recoveries, 0);
+            assert_eq!(state.keyboard_endpoint_recovery_failures, 0);
+            assert_eq!(state.keyboard_queue_collapse_recoveries, 0);
+            assert_eq!(state.keyboard_reports_queued, 1);
+        });
+    }
+
+    #[test]
+    fn usb_keyboard_recovery_aux_rearms_collapsed_idle_queue_to_steady_depth() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let cmd_base = dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET;
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        let kbd_base = dma_range.vaddr as usize + XHCI_DMA_KBD_RING_OFFSET;
+        zero_dma_range(cmd_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(kbd_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        write_xhci_trb(
+            event_base,
+            1,
+            XhciTrb {
+                parameter: cmd_ring + XHCI_TRB_BYTES as u64,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.db_offset = 0x1000;
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+            state.keyboard_slot = 4;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_valid_report_events = 1;
+            state.keyboard_transfer_events = 79;
+            state.keyboard_reports_queued = 1;
+            state.keyboard_report_in_use = [true; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+            state.keyboard_report_trb_indices = [1; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+            state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+            state.kbd_enqueue = 1;
+            state.cmd_enqueue = 0;
+            state.cmd_cycle = true;
+            state.event_dequeue = 0;
+            state.event_cycle = true;
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 98,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        let completion = service_usb_keyboard(poll);
+
+        assert_eq!(completion.code, COMPLETION_PROGRESS);
+        assert_eq!(
+            completion.detail,
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+        );
+        assert_eq!(
+            completion.result & 0xff,
+            USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u32
+        );
+        assert_eq!(
+            (completion.result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
+            u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS)
+        );
+        assert_eq!(
+            (completion.frame.offset >> 16) as u16,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_DIAG_MAGIC
+        );
+        assert_eq!(
+            completion.frame.offset & 0xff,
+            u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_READY)
+        );
+        assert_eq!(completion.frame.len & 0xff, 1);
+        assert_eq!(completion.frame.flags & 0xff, 1);
+        assert_eq!(
+            (completion.frame.flags >> 8) as u8,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_QUEUE_COLLAPSE
+        );
+        USB_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.keyboard_endpoint_recoveries, 1);
+            assert_eq!(state.keyboard_endpoint_recovery_failures, 0);
+            assert_eq!(
+                usize::from(state.keyboard_reports_queued),
+                USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
+            );
+        });
+    }
+
+    #[test]
+    fn usb_keyboard_poll_clears_stale_success_when_full_queue_has_no_events() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.db_offset = 0x1000;
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+            state.keyboard_slot = 4;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_valid_report_events = 1;
+            state.keyboard_reports_queued = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u8;
+            state.keyboard_report_in_use = [false; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+            state.keyboard_report_trb_indices = [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+            for report_slot in 0..USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH {
+                state.keyboard_report_in_use[report_slot] = true;
+                state.keyboard_report_trb_indices[report_slot] = report_slot as u16;
+            }
+            state.keyboard_last_report_status =
+                DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS;
+            state.kbd_enqueue = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u16;
+            state.cmd_enqueue = 0;
+            state.cmd_cycle = true;
+            state.event_dequeue = 0;
+            state.event_cycle = true;
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 99,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        let completion = service_usb_keyboard(poll);
+
+        assert_eq!(completion.code, COMPLETION_PROGRESS);
+        assert_eq!(
+            completion.detail,
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+        );
+        assert_eq!(
+            completion.result & 0xff,
+            USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u32
+        );
+        assert_eq!(
+            (completion.result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
+            u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE)
+        );
+        USB_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.keyboard_endpoint_recoveries, 0);
+            assert_eq!(
+                state.keyboard_last_report_status,
+                DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE
+            );
+        });
+    }
+
+    #[test]
+    fn usb_keyboard_recovery_aux_rearms_full_no_event_queue_to_steady_depth() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let cmd_base = dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET;
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        let kbd_base = dma_range.vaddr as usize + XHCI_DMA_KBD_RING_OFFSET;
+        zero_dma_range(cmd_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(kbd_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        write_xhci_trb(
+            event_base,
+            1,
+            XhciTrb {
+                parameter: cmd_ring + XHCI_TRB_BYTES as u64,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.db_offset = 0x1000;
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+            state.keyboard_slot = 4;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_valid_report_events = 1;
+            state.keyboard_reports_queued = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u8;
+            state.keyboard_report_in_use = [false; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+            state.keyboard_report_trb_indices = [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH];
+            for report_slot in 0..USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH {
+                state.keyboard_report_in_use[report_slot] = true;
+                state.keyboard_report_trb_indices[report_slot] = report_slot as u16;
+            }
+            state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
+            state.kbd_enqueue = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u16;
+            state.cmd_enqueue = 0;
+            state.cmd_cycle = true;
+            state.event_dequeue = 0;
+            state.event_cycle = true;
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 100,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        let completion = service_usb_keyboard(poll);
+
+        assert_eq!(completion.code, COMPLETION_PROGRESS);
+        assert_eq!(
+            completion.detail,
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+        );
+        assert_eq!(
+            completion.result & 0xff,
+            USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u32
+        );
+        assert_eq!(
+            (completion.result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
+            u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS)
+        );
+        assert_eq!(
+            (completion.frame.offset >> 16) as u16,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_DIAG_MAGIC
+        );
+        assert_eq!(
+            completion.frame.offset & 0xff,
+            u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_READY)
+        );
+        assert_eq!(completion.frame.len & 0xff, 1);
+        assert_eq!(completion.frame.flags & 0xff, 0);
+        assert_eq!(
+            (completion.frame.flags >> 8) as u8,
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_FULL_QUEUE_NO_EVENT
+        );
+        USB_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.keyboard_endpoint_recoveries, 1);
+            assert_eq!(state.keyboard_endpoint_recovery_failures, 0);
+            assert_eq!(state.keyboard_transfer_events, 0);
+            assert_eq!(
+                usize::from(state.keyboard_reports_queued),
+                USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
             );
         });
     }
@@ -30745,6 +33531,191 @@ mod tests {
                     | USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH as u32
             )
         );
+    }
+
+    #[test]
+    fn usb_keyboard_matched_stall_requests_reset_endpoint_recovery() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let cmd_ring =
+            xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_COMMAND_RING_OFFSET).unwrap();
+        let kbd_ring = xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET).unwrap();
+        let cmd_base = dma_range.vaddr as usize + XHCI_DMA_COMMAND_RING_OFFSET;
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        zero_dma_range(cmd_base, XHCI_COMMAND_RING_BYTES);
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: cmd_ring,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        write_xhci_trb(
+            event_base,
+            1,
+            XhciTrb {
+                parameter: cmd_ring + XHCI_TRB_BYTES as u64,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        write_xhci_trb(
+            event_base,
+            2,
+            XhciTrb {
+                parameter: cmd_ring + (2 * XHCI_TRB_BYTES) as u64,
+                status: XHCI_COMPLETION_SUCCESS << 24,
+                control: XHCI_TRB_CYCLE | (XHCI_TRB_TYPE_COMMAND_COMPLETION << 10),
+            },
+        );
+        let mut state = UsbRuntimeState::new();
+        state.db_offset = 0x1000;
+        state.initialized = true;
+        state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+        state.keyboard_slot = 4;
+        state.keyboard_endpoint_id = 3;
+        state.keyboard_transfer_events = 1;
+        state.keyboard_valid_report_events = 1;
+        state.kbd_enqueue = 1;
+        state.event_dequeue = 0;
+        state.event_cycle = true;
+
+        usb_keyboard_handle_matched_transfer_fault(
+            &mut state,
+            &descriptor,
+            XHCI_COMPLETION_STALL_ERROR,
+        );
+
+        assert_eq!(state.keyboard_transfer_events, 0);
+        assert_eq!(state.keyboard_valid_report_events, 1);
+        assert_eq!(state.keyboard_endpoint_recoveries, 1);
+        assert!(!state.keyboard_endpoint_reset_required);
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS
+        );
+        assert_eq!(
+            usize::from(state.keyboard_reports_queued),
+            USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 0),
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_STOP_ENDPOINT << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 1),
+            XhciTrb {
+                parameter: 0,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_RESET_ENDPOINT << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+        assert_eq!(
+            read_xhci_trb(cmd_base, 2),
+            XhciTrb {
+                parameter: kbd_ring | 1,
+                status: 0,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_SET_TR_DEQUEUE_POINTER << 10)
+                    | (3 << 16)
+                    | (4 << 24)
+            }
+        );
+    }
+
+    #[test]
+    fn usb_keyboard_matched_stall_does_not_promote_first_report_ready() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("USB descriptor has DMA arena");
+        let kbd_ring = xhci_dma_bus_addr(&descriptor, dma_range, XHCI_DMA_KBD_RING_OFFSET).unwrap();
+        let event_base = dma_range.vaddr as usize + XHCI_DMA_EVENT_RING_OFFSET;
+        zero_dma_range(event_base, XHCI_COMMAND_RING_BYTES);
+        write_xhci_trb(
+            event_base,
+            0,
+            XhciTrb {
+                parameter: kbd_ring + 0x08,
+                status: XHCI_COMPLETION_STALL_ERROR << 24,
+                control: XHCI_TRB_CYCLE
+                    | (XHCI_TRB_TYPE_TRANSFER_EVENT << 10)
+                    | (3 << 16)
+                    | (4 << 24),
+            },
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.db_offset = 0x1000;
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+            state.keyboard_slot = 4;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_reports_queued = 1;
+            state.keyboard_report_in_use[0] = true;
+            state.keyboard_report_trb_indices[0] = 0;
+            state.kbd_enqueue = 1;
+            state.event_dequeue = 0;
+            state.event_cycle = true;
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 99,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        let completion = service_usb_keyboard(poll);
+
+        assert_eq!(completion.code, COMPLETION_PROGRESS);
+        assert_eq!(
+            completion.detail,
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+        );
+        USB_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.keyboard_transfer_events, 1);
+            assert_eq!(state.keyboard_valid_report_events, 0);
+            assert_eq!(state.keyboard_endpoint_recoveries, 0);
+            assert!(state.keyboard_endpoint_reset_required);
+            assert_eq!(
+                state.keyboard_last_report_status,
+                DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED
+            );
+        });
     }
 
     #[test]
