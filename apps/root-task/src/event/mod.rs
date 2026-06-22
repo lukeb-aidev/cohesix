@@ -11774,12 +11774,14 @@ where
                             stats.smoltcp_polls
                         ));
                         let line_two = format_message(format_args!(
-                            "netstats: udp_rx={} udp_tx={} tcp_accepts={} tcp_auth={} tcp_rx_bytes={} tcp_tx_bytes={}",
+                            "netstats: udp_rx={} udp_tx={} tcp_accepts={} tcp_auth={} tcp_rx_bytes={} tcp_recv_ready={} tcp_recv_budget_hits={} tcp_tx_bytes={}",
                             stats.udp_rx,
                             stats.udp_tx,
                             stats.tcp_accepts,
                             stats.tcp_auth_sessions,
                             stats.tcp_rx_bytes,
+                            stats.tcp_console_recv_ready,
+                            stats.tcp_console_recv_budget_hits,
                             stats.tcp_tx_bytes
                         ));
                         let line_three = format_message(format_args!(
@@ -16913,6 +16915,9 @@ mod tests {
         net.counters.udp_tx = 2;
         net.counters.tcp_accepts = 1;
         net.counters.tcp_auth_sessions = 1;
+        net.counters.tcp_rx_bytes = 128;
+        net.counters.tcp_console_recv_ready = 7;
+        net.counters.tcp_console_recv_budget_hits = 2;
         net.counters.wifi_assoc = 1;
         net.counters.wifi_link_up = 1;
         net.counters.wifi_host_eapol_rx = 2;
@@ -16949,7 +16954,9 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("netstats: udp_rx=1 udp_tx=2 tcp_accepts=1 tcp_auth=1"),
+            rendered.contains(
+                "netstats: udp_rx=1 udp_tx=2 tcp_accepts=1 tcp_auth=1 tcp_rx_bytes=128 tcp_recv_ready=7 tcp_recv_budget_hits=2"
+            ),
             "{rendered}"
         );
         assert!(!rendered.contains("netstats: genet_rx_hw="), "{rendered}");

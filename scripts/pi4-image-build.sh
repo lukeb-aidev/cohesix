@@ -258,7 +258,11 @@ verify_boot_cmd_handoff() {
     grep -q 'setenv coh_fastboot_rsts_addr 0xfe100020' "$path" || fail "boot.cmd is missing Cohesix fast-boot RSTS address"
     grep -q 'setenv coh_fastboot_rsts_mask 0x00ff0000' "$path" || fail "boot.cmd is missing Cohesix fast-boot RSTS mask"
     grep -q 'setenv coh_fastboot_rsts_magic 0x00430000' "$path" || fail "boot.cmd is missing Cohesix fast-boot RSTS marker"
-    grep -q 'setexpr.l coh_fastboot_rsts \*${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_mask}' "$path" || fail "boot.cmd does not mask Cohesix fast-boot RSTS state"
+    grep -q 'setenv coh_fastboot_rsts_low_mask 0x00000020' "$path" || fail "boot.cmd is missing Cohesix fast-boot low RSTS marker"
+    grep -q 'setenv coh_fastboot_rsts_clear_mask 0xff00ffdf' "$path" || fail "boot.cmd is missing Cohesix fast-boot RSTS clear mask"
+    grep -q 'setexpr.l coh_fastboot_rsts \*${coh_fastboot_rsts_addr}' "$path" || fail "boot.cmd does not read Cohesix fast-boot RSTS state"
+    grep -q 'setexpr.l coh_fastboot_rsts_marker ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_mask}' "$path" || fail "boot.cmd does not mask Cohesix high fast-boot RSTS state"
+    grep -q 'setexpr.l coh_fastboot_rsts_low ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_low_mask}' "$path" || fail "boot.cmd does not mask Cohesix low fast-boot RSTS state"
     grep -q 'mw.l ${coh_fastboot_rsts_addr} ${coh_fastboot_rsts_clear} 1' "$path" || fail "boot.cmd does not clear the Cohesix fast-boot marker"
     grep -q 'run coh_maybe_fastboot' "$path" || fail "boot.cmd does not check the Cohesix fast-boot path before the wizard"
     grep -q '^run coh_prompt_root$' "$path" || fail "boot.cmd does not enter the interactive Cohesix menu on cold boot"
@@ -980,10 +984,11 @@ setenv coh_pm_password 0x5a000000
 setenv coh_fastboot_rsts_addr 0xfe100020
 setenv coh_fastboot_rsts_mask 0x00ff0000
 setenv coh_fastboot_rsts_magic 0x00430000
-setenv coh_fastboot_rsts_clear_mask 0xff00ffff
+setenv coh_fastboot_rsts_low_mask 0x00000020
+setenv coh_fastboot_rsts_clear_mask 0xff00ffdf
 setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""'
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
-setenv coh_detect_fastboot 'setenv coh_fastboot 0; setexpr.l coh_fastboot_rsts *${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_mask}; if itest.l ${coh_fastboot_rsts} == ${coh_fastboot_rsts_magic}; then setenv coh_fastboot 1; fi'
+setenv coh_detect_fastboot 'setenv coh_fastboot 0; setexpr.l coh_fastboot_rsts *${coh_fastboot_rsts_addr}; setexpr.l coh_fastboot_rsts_marker ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_mask}; setexpr.l coh_fastboot_rsts_low ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_low_mask}; if itest.l ${coh_fastboot_rsts_marker} == ${coh_fastboot_rsts_magic}; then setenv coh_fastboot 1; fi; if itest.l ${coh_fastboot_rsts_low} == ${coh_fastboot_rsts_low_mask}; then setenv coh_fastboot 1; fi'
 setenv coh_clear_fastboot_marker 'setexpr.l coh_fastboot_rsts_clear *${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_clear_mask}; setexpr.l coh_fastboot_rsts_clear ${coh_fastboot_rsts_clear} "|" ${coh_pm_password}; mw.l ${coh_fastboot_rsts_addr} ${coh_fastboot_rsts_clear} 1'
 setenv coh_maybe_fastboot 'run coh_detect_fastboot; if test "${coh_fastboot}" = "1"; then echo "[cohesix] authenticated reboot fast boot: using saved or manifest settings"; run coh_clear_fastboot_marker; run coh_boot_sequence; fi'
 setenv coh_bootstrap_usb_session 'if test "${coh_menu_input}" = "usb"; then if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi; else setenv coh_usb_input_ready 0; fi'

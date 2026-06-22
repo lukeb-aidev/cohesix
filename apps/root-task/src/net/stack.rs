@@ -72,13 +72,15 @@ use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
 use spin::Mutex;
 
-const TCP_RX_BUFFER: usize = 2048;
-const TCP_TX_BUFFER: usize = 2048;
+const TCP_RX_BUFFER: usize = 4096;
+const TCP_TX_BUFFER: usize = 4096;
 const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 16;
 const MAX_CONSOLE_BYTES_PER_POLL: usize = 8_192;
 const MAX_DHCP_RX_PACKETS_PER_POLL: usize = 2;
 const MAX_UDP_ECHO_PACKETS_PER_POLL: usize = 2;
-const MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL: usize = 4;
+const TCP_CONSOLE_RECV_CHUNK_BYTES: usize = DEFAULT_LINE_CAPACITY + 4;
+const MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL: usize = 16;
+const MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL: usize = 4_096;
 const MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL: usize = 2;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
@@ -3539,6 +3541,8 @@ impl<D: NetDevice> NetStack<D> {
             tcp_accepts: self.counters.tcp_accepts,
             tcp_auth_sessions: self.counters.tcp_auth_sessions,
             tcp_rx_bytes: self.counters.tcp_rx_bytes,
+            tcp_console_recv_ready: self.counters.tcp_console_recv_ready,
+            tcp_console_recv_budget_hits: self.counters.tcp_console_recv_budget_hits,
             tcp_tx_bytes: self.counters.tcp_tx_bytes,
             tcp_smoke_outbound: self.counters.tcp_smoke_outbound,
             tcp_smoke_outbound_failures: self.counters.tcp_smoke_outbound_failures,
@@ -4668,8 +4672,10 @@ impl<D: NetDevice> NetStack<D> {
             }
 
             if socket.can_recv() {
-                let mut temp = [0u8; 64];
+                let mut temp = [0u8; TCP_CONSOLE_RECV_CHUNK_BYTES];
                 let conn_id = self.active_client_id.unwrap_or(0);
+                self.counters.tcp_console_recv_ready =
+                    self.counters.tcp_console_recv_ready.saturating_add(1);
                 debug!(
                     "[cohsh-net] conn id={} recv-ready state={:?} may_recv={} can_recv={}",
                     conn_id,
@@ -4685,8 +4691,17 @@ impl<D: NetDevice> NetStack<D> {
                     socket.state()
                 );
                 let mut recv_chunks = 0usize;
+                let mut recv_bytes = 0usize;
+                let mut budget_exhausted = false;
                 while socket.can_recv() {
                     if recv_chunks >= MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL {
+                        budget_exhausted = true;
+                        break;
+                    }
+                    let remaining_budget =
+                        MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL.saturating_sub(recv_bytes);
+                    if remaining_budget == 0 {
+                        budget_exhausted = true;
                         break;
                     }
                     let mut copied = 0usize;
@@ -4698,7 +4713,10 @@ impl<D: NetDevice> NetStack<D> {
                             data.len(),
                             &data[..preview_len],
                         );
-                        let copy_len = core::cmp::min(data.len(), temp.len());
+                        let copy_len = core::cmp::min(
+                            data.len(),
+                            core::cmp::min(temp.len(), remaining_budget),
+                        );
                         let _ = maybe_report_str_write(
                             temp.as_mut_ptr(),
                             copy_len,
@@ -4720,6 +4738,7 @@ impl<D: NetDevice> NetStack<D> {
                             self.counters.tcp_rx_bytes =
                                 self.counters.tcp_rx_bytes.saturating_add(copied as u64);
                             recv_chunks = recv_chunks.saturating_add(1);
+                            recv_bytes = recv_bytes.saturating_add(copied);
                             #[cfg(feature = "net-trace-31337")]
                             {
                                 let (peer_label, peer_port) =
@@ -4987,6 +5006,10 @@ impl<D: NetDevice> NetStack<D> {
                             break;
                         }
                     }
+                }
+                if budget_exhausted && socket.can_recv() {
+                    self.counters.tcp_console_recv_budget_hits =
+                        self.counters.tcp_console_recv_budget_hits.saturating_add(1);
                 }
             }
             if self.session_active && socket.state() == TcpState::Established && !socket.may_recv()
@@ -6841,7 +6864,9 @@ mod tests {
         assert!(MAX_DHCP_RX_PACKETS_PER_POLL <= 2);
         assert!(MAX_UDP_ECHO_PACKETS_PER_POLL <= 2);
         assert!(MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL <= 2);
-        assert!(MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL <= 4);
+        assert_eq!(TCP_CONSOLE_RECV_CHUNK_BYTES, DEFAULT_LINE_CAPACITY + 4);
+        assert!(MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL <= 16);
+        assert!(MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL <= 4_096);
         assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 16);
         assert!(MAX_CONSOLE_BYTES_PER_POLL <= 8_192);
     }

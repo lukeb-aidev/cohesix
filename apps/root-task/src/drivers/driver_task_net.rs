@@ -348,6 +348,8 @@ static CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_TX_DRAINED: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_TX_DRAIN_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_SECURE: AtomicU32 = AtomicU32::new(0);
@@ -4253,15 +4255,20 @@ fn process_cyw43_host_eapol_data_completion(
                             Some(m2_completion),
                         );
                         emit_cyw43_host_eapol_message(contract, "m2", "send-m2", poll, len);
-                        if let Err(err) = wait_cyw43_host_eapol_tx_drain(
+                        match wait_cyw43_host_eapol_tx_drain(
                             contract,
                             session,
                             "m2-before-m3",
                             poll,
                             m2_completion,
                         ) {
-                            session.progress.record_eapol_error("host-eapol-m2-drain");
-                            return Err(err);
+                            Ok(_drained) => {
+                                // M3 can arrive after AP M1 retransmits; only the M2 submit/proof is fatal.
+                            }
+                            Err(err) => {
+                                session.progress.record_eapol_error("host-eapol-m2-drain");
+                                return Err(err);
+                            }
                         }
                         result.activity = true;
                     }
@@ -4280,15 +4287,17 @@ fn process_cyw43_host_eapol_data_completion(
                         };
                         CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
                         emit_cyw43_host_eapol_message(contract, "m4", "send-m4", poll, len);
-                        if let Err(err) = wait_cyw43_host_eapol_tx_drain(
+                        if !wait_cyw43_host_eapol_tx_drain(
                             contract,
                             session,
                             "m4-before-wsec",
                             poll,
                             m4_completion,
-                        ) {
+                        )? {
                             session.progress.record_eapol_error("host-eapol-m4-drain");
-                            return Err(err);
+                            return Err(DriverTaskNetError::RuntimeInit(
+                                "host-eapol-tx-drain-timeout",
+                            ));
                         }
                         let pairwise_rsc = [0u8; 6];
                         if let Err(err) = cyw43_install_wsec_key_with_pre_tx_drain(
@@ -4454,17 +4463,19 @@ fn process_cyw43_host_eapol_data_completion(
                             poll,
                             len,
                         );
-                        if let Err(err) = wait_cyw43_host_eapol_tx_drain(
+                        if !wait_cyw43_host_eapol_tx_drain(
                             contract,
                             session,
                             "group-m2-before-secure",
                             poll,
                             group_m2_completion,
-                        ) {
+                        )? {
                             session
                                 .progress
                                 .record_eapol_error("host-eapol-group-m2-drain");
-                            return Err(err);
+                            return Err(DriverTaskNetError::RuntimeInit(
+                                "host-eapol-tx-drain-timeout",
+                            ));
                         }
                         restore_cyw43_host_eapol_rx_after_secure(contract);
                         session.progress.associated = true;
@@ -6539,7 +6550,7 @@ fn wait_cyw43_host_eapol_tx_drain(
     stage: &'static str,
     poll: usize,
     tx_completion: DriverTaskCompletionRecord,
-) -> Result<(), DriverTaskNetError> {
+) -> Result<bool, DriverTaskNetError> {
     #[cfg(test)]
     if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
         CYW43_HOST_EAPOL_TEST_TX_DRAINED.fetch_add(1, Ordering::AcqRel);
@@ -6552,8 +6563,25 @@ fn wait_cyw43_host_eapol_tx_drain(
         {
             CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_SECURE.store(1, Ordering::Release);
         }
+        let timeout_bit = match stage {
+            "m2-before-m3" => 1,
+            "m4-before-wsec" => 2,
+            "group-m2-before-secure" => 4,
+            _ => 0,
+        };
+        if CYW43_HOST_EAPOL_TEST_TX_DRAIN_TIMEOUTS.load(Ordering::Acquire) & timeout_bit != 0 {
+            emit_cyw43_host_eapol_tx_drain(
+                contract,
+                stage,
+                "test-timeout",
+                tx_completion.result,
+                0,
+                0,
+            );
+            return Ok(false);
+        }
         emit_cyw43_host_eapol_tx_drain(contract, stage, "test-stub", tx_completion.result, 0, 0);
-        return Ok(());
+        return Ok(true);
     }
 
     let Some(tx_proof) = cyw43_tx_completion_proof(tx_completion) else {
@@ -6588,7 +6616,7 @@ fn wait_cyw43_host_eapol_tx_drain(
                     polls,
                     observed_control,
                 );
-                return Ok(());
+                return Ok(true);
             }
         }
         if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
@@ -6611,7 +6639,7 @@ fn wait_cyw43_host_eapol_tx_drain(
                 polls,
                 observed_control,
             );
-            return Ok(());
+            return Ok(true);
         }
     }
     emit_cyw43_host_eapol_tx_drain(
@@ -6622,9 +6650,7 @@ fn wait_cyw43_host_eapol_tx_drain(
         polls,
         observed_control,
     );
-    Err(DriverTaskNetError::RuntimeInit(
-        "host-eapol-tx-drain-timeout",
-    ))
+    Ok(false)
 }
 
 #[cfg(feature = "kernel")]
@@ -11335,6 +11361,7 @@ mod tests {
         CYW43_HOST_EAPOL_TEST_GTK_INSTALLED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_TX_DRAINED.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_TX_DRAIN_TIMEOUTS.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_SECURE.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.store(0, Ordering::Release);
@@ -12347,6 +12374,148 @@ mod tests {
             },
         );
         assert!(cyw43_completion_credit_covers_tx(frame_ready, proof));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_m2_tx_drain_timeout_is_advisory() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 replay tests must serialize");
+        reset_cyw43_status_flags();
+        let _io_guard = test_enable_cyw43_host_eapol_io_stub();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        *CYW43_RUNTIME_MAC.lock() = EthernetAddress(station);
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        let mut tx_frame = [0u8; MAX_FRAME_LEN];
+
+        CYW43_HOST_EAPOL_TEST_TX_DRAIN_TIMEOUTS.store(1, Ordering::Release);
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len =
+            cyw43_host_eapol::write_test_m1_frame(&mut m1, &station, &ap).expect("test m1 frame");
+        let m1_result = process_cyw43_host_eapol_data_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            EthernetAddress(station),
+            &mut session,
+            8193,
+            0,
+            test_stage_cyw43_completion(
+                &m1[..m1_len],
+                DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+                1,
+            ),
+            &mut tx_frame,
+        )
+        .expect("M2 drain timeout after a submitted M2 must stay advisory");
+
+        assert!(m1_result.observed_frame);
+        assert!(!m1_result.secure);
+        assert_eq!(session.progress.eapol_error, None);
+        assert_eq!(CYW43_HOST_EAPOL_M2.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire), 0);
+
+        CYW43_HOST_EAPOL_TEST_TX_DRAIN_TIMEOUTS.store(0, Ordering::Release);
+        let mut m3 = [0u8; MAX_FRAME_LEN];
+        let m3_len = cyw43_host_eapol::write_test_m3_frame(&mut m3, &station, &session.eapol)
+            .expect("test m3 frame");
+        let m3_result = process_cyw43_host_eapol_data_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            EthernetAddress(station),
+            &mut session,
+            8197,
+            0,
+            test_stage_cyw43_completion(
+                &m3[..m3_len],
+                DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+                2,
+            ),
+            &mut tx_frame,
+        )
+        .expect("M3 must remain accepted after advisory M2 drain timeout");
+
+        assert!(m3_result.observed_frame);
+        assert!(m3_result.secure);
+        assert_eq!(session.progress.eapol_error, None);
+        assert_eq!(CYW43_HOST_EAPOL_M4.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_PTK.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_GTK.load(Ordering::Acquire), 1);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_m4_tx_drain_timeout_remains_fatal() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 replay tests must serialize");
+        reset_cyw43_status_flags();
+        let _io_guard = test_enable_cyw43_host_eapol_io_stub();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        *CYW43_RUNTIME_MAC.lock() = EthernetAddress(station);
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        let mut tx_frame = [0u8; MAX_FRAME_LEN];
+
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len =
+            cyw43_host_eapol::write_test_m1_frame(&mut m1, &station, &ap).expect("test m1 frame");
+        process_cyw43_host_eapol_data_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            EthernetAddress(station),
+            &mut session,
+            8193,
+            0,
+            test_stage_cyw43_completion(
+                &m1[..m1_len],
+                DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+                1,
+            ),
+            &mut tx_frame,
+        )
+        .expect("M1 replay should submit M2");
+
+        CYW43_HOST_EAPOL_TEST_TX_DRAIN_TIMEOUTS.store(2, Ordering::Release);
+        let mut m3 = [0u8; MAX_FRAME_LEN];
+        let m3_len = cyw43_host_eapol::write_test_m3_frame(&mut m3, &station, &session.eapol)
+            .expect("test m3 frame");
+        let err = process_cyw43_host_eapol_data_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            EthernetAddress(station),
+            &mut session,
+            8197,
+            0,
+            test_stage_cyw43_completion(
+                &m3[..m3_len],
+                DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+                2,
+            ),
+            &mut tx_frame,
+        )
+        .expect_err("M4 drain timeout must still stop key install");
+
+        assert_eq!(
+            err,
+            DriverTaskNetError::RuntimeInit("host-eapol-tx-drain-timeout")
+        );
+        assert_eq!(session.progress.eapol_error, Some("host-eapol-m4-drain"));
+        assert_eq!(CYW43_HOST_EAPOL_M4.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_PTK.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_HOST_EAPOL_GTK.load(Ordering::Acquire), 0);
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]

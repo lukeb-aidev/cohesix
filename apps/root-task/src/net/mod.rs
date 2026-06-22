@@ -591,6 +591,10 @@ pub struct NetCounters {
     pub tcp_auth_sessions: u64,
     /// TCP RX bytes consumed.
     pub tcp_rx_bytes: u64,
+    /// TCP console receive-ready turns observed.
+    pub tcp_console_recv_ready: u64,
+    /// TCP console receive turns that exhausted the bounded receive budget.
+    pub tcp_console_recv_budget_hits: u64,
     /// TCP TX bytes submitted.
     pub tcp_tx_bytes: u64,
     /// Successful outbound TCP smoke test completions.

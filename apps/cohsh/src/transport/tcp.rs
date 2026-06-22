@@ -1177,12 +1177,12 @@ impl TcpTransport {
         }
     }
 
+    fn stream_wait(&self) -> Duration {
+        self.timeout
+    }
+
     fn stream_deadline(&self) -> Instant {
-        let wait = self
-            .timeout
-            .checked_mul(u32::try_from(self.max_retries + 1).unwrap_or(u32::MAX))
-            .unwrap_or(self.timeout)
-            .saturating_add(self.heartbeat_interval);
+        let wait = self.stream_wait();
         Instant::now()
             .checked_add(wait)
             .unwrap_or_else(Instant::now)
@@ -1633,13 +1633,7 @@ impl Transport for TcpTransport {
 
     fn ping(&mut self, _session: &Session) -> Result<String> {
         let mut attempts = 0usize;
-        let wait = self
-            .timeout
-            .checked_mul(u32::try_from(self.max_retries + 1).unwrap_or(u32::MAX))
-            .unwrap_or(self.timeout)
-            .saturating_add(self.heartbeat_interval);
-        let now = Instant::now();
-        let deadline = now.checked_add(wait).unwrap_or(now);
+        let deadline = self.stream_deadline();
         loop {
             self.send_line("PING")?;
             match self.next_protocol_line_with_deadline(deadline, false) {
@@ -1692,9 +1686,10 @@ impl Transport for TcpTransport {
         let mut attempts = 0usize;
         loop {
             self.send_line_attached(&command)?;
+            let deadline = self.stream_deadline();
             loop {
-                match self.next_protocol_line()? {
-                    Some(response) => {
+                match self.next_protocol_line_with_deadline(deadline, false) {
+                    Ok(Some(response)) => {
                         if let Some(ack) = parse_ack(&response) {
                             let _ = self.record_ack(&response);
                             if is_frame_error(&ack) {
@@ -1719,12 +1714,21 @@ impl Transport for TcpTransport {
                         }
                         // Ignore unsolicited lines from prior streaming commands.
                     }
-                    None => {
+                    Ok(None) => {
                         attempts += 1;
                         if attempts > self.max_retries {
                             return Err(anyhow!(
                                 "connection dropped repeatedly while writing to {path}"
                             ));
+                        }
+                        self.recover_session()?;
+                        break;
+                    }
+                    Err(err) => {
+                        attempts += 1;
+                        if attempts > self.max_retries {
+                            return Err(err)
+                                .with_context(|| format!("timeout waiting for ECHO on {path}"));
                         }
                         self.recover_session()?;
                         break;
@@ -2116,6 +2120,15 @@ mod tests {
             TcpTransport::normalise_ticket(Role::WorkerHeartbeat, Some(valid_token.as_str()),)
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn stream_wait_excludes_heartbeat_and_retry_window() {
+        let transport = TcpTransport::new("127.0.0.1", 31337)
+            .with_timeout(Duration::from_millis(250))
+            .with_heartbeat_interval(Duration::from_secs(30))
+            .with_max_retries(8);
+        assert_eq!(transport.stream_wait(), Duration::from_millis(250));
     }
 
     fn unix_time_ms() -> u64 {

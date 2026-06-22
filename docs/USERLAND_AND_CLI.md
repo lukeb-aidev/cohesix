@@ -222,7 +222,7 @@ _Generated from cohsh-core verb specs (20 verbs)._
 - `reboot` — requests a platform reboot and returns `OK REBOOT detail=scheduled` before the reset backend fires.
 - TCP `cohsh reboot` uses the existing TCP console auth token (`--auth-token`, `COHSH_AUTH_TOKEN`, or `COH_AUTH_TOKEN`) plus an attached Queen session; no new network listener or reboot-specific secret is introduced.
 - Serial/local-seat reboot requires a Queen session attached with a Queen ticket minted from the same manifest Queen secret. A bare `attach queen` remains usable for ordinary diagnostics but is refused for reboot with `ERR REBOOT reason=policy detail=secret-required`.
-- On Pi 4 U-Boot profiles, authenticated reboot best-effort marks a one-shot BCM2711 PM RSTS fast-boot flag before arming reset, but reset success is gated only on the watchdog/RSTC writes because PM RSTS readback is not reliable on live hardware. The generated `boot.cmd` loads saved `cohesix.env` policy, clears that flag when present, and boots those settings without showing the U-Boot wizard; absent saved policy, it boots manifest defaults. Cold boots still enter the splash/menu path, where the default first action continues with saved policy or manifest defaults.
+- On Pi 4 U-Boot profiles, authenticated reboot best-effort marks one-shot BCM2711 PM RSTS fast-boot state before arming reset, using both the existing high marker and a low marker bit that is disjoint from the Raspberry Pi firmware partition selector. Reset success is gated only on the watchdog/RSTC writes because PM RSTS readback is not reliable on live hardware. The generated `boot.cmd` accepts either marker, clears both when present, and boots saved `cohesix.env` policy or manifest defaults without showing the U-Boot wizard. Cold boots still enter the splash/menu path, where the default first action continues with saved policy or manifest defaults.
 - If the selected profile has no registered platform reset backend, root-task returns `ERR REBOOT reason=policy detail=reboot-backend-unavailable` and does not alter lifecycle state.
 
 <!-- coh-rtc:cohsh-ticket-policy:start -->
@@ -589,7 +589,10 @@ QEMU runs with `-serial mon:stdio` and a user-net device that forwards TCP/UDP p
 - `netstats` emits a policy line: `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`.
 - `netstats` separates TCP establishment from remote shell proof:
   `tcp_accepts=<count>` counts TCP Established and `tcp_auth=<count>` counts
-  authenticated `cohsh` sessions.
+  authenticated `cohsh` sessions. The same line includes shared TCP-console
+  receive counters: `tcp_recv_ready=<count>` records receive-ready turns and
+  `tcp_recv_budget_hits=<count>` records turns that exhausted the bounded
+  receive budget.
 - `netstats` emits a Wi-Fi/EAPOL line: `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`.
 - `netstats` also emits a compact status line for wrapped serial consoles: `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`.
 - Only one control-plane interface is active at a time. The current as-built runtime supports `wired` over GENETv5, `wifi` over CYW43455, and `auto` with deterministic Wi-Fi-first fallback to wired when CYW43455 attach/join setup fails before DHCP ownership transfers to the active Wi-Fi stack; historical Milestone 26b compatibility evidence is recorded in `docs/audit/M26B_COMPLETION_EVIDENCE.md`.

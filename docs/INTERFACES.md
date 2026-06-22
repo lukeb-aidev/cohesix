@@ -765,7 +765,11 @@ pub trait RootTaskControl {
   `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`.
 - `netstats` reports TCP establishment and authenticated console readiness
   separately: `tcp_accepts=<count>` counts TCP Established, while
-  `tcp_auth=<count>` counts Cohesix-authenticated remote `cohsh` sessions.
+  `tcp_auth=<count>` counts Cohesix-authenticated remote `cohsh` sessions. The
+  same line includes shared TCP-console receive counters:
+  `tcp_recv_ready=<count>` for receive-ready turns and
+  `tcp_recv_budget_hits=<count>` for turns that exhaust the bounded receive
+  budget.
 - `netstats` emits an additional compact serial-friendly line:
   `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`.
 - `nettest` target selection is profile-gated:
