@@ -1,0 +1,50 @@
+$ usb-devices 2>&1 || true
+
+T:  Bus=01 Lev=00 Prnt=00 Port=00 Cnt=00 Dev#=  1 Spd=480  MxCh= 1
+D:  Ver= 2.00 Cls=09(hub  ) Sub=00 Prot=01 MxPS=64 #Cfgs=  1
+P:  Vendor=1d6b ProdID=0002 Rev=06.12
+S:  Manufacturer=Linux 6.12.75+rpt-rpi-v8 xhci-hcd
+S:  Product=xHCI Host Controller
+S:  SerialNumber=0000:01:00.0
+C:  #Ifs= 1 Cfg#= 1 Atr=e0 MxPwr=0mA
+I:  If#= 0 Alt= 0 #EPs= 1 Cls=09(hub  ) Sub=00 Prot=00 Driver=hub
+E:  Ad=81(I) Atr=03(Int.) MxPS=   4 Ivl=256ms
+
+T:  Bus=01 Lev=01 Prnt=01 Port=00 Cnt=01 Dev#=  2 Spd=480  MxCh= 4
+D:  Ver= 2.10 Cls=09(hub  ) Sub=00 Prot=01 MxPS=64 #Cfgs=  1
+P:  Vendor=2109 ProdID=3431 Rev=04.21
+S:  Product=USB2.0 Hub
+C:  #Ifs= 1 Cfg#= 1 Atr=e0 MxPwr=100mA
+I:  If#= 0 Alt= 0 #EPs= 1 Cls=09(hub  ) Sub=00 Prot=00 Driver=hub
+E:  Ad=81(I) Atr=03(Int.) MxPS=   1 Ivl=256ms
+
+T:  Bus=01 Lev=02 Prnt=02 Port=03 Cnt=01 Dev#=  3 Spd=480  MxCh= 4
+D:  Ver= 2.00 Cls=09(hub  ) Sub=00 Prot=01 MxPS=64 #Cfgs=  1
+P:  Vendor=05e3 ProdID=0608 Rev=85.36
+S:  Product=USB2.0 Hub
+C:  #Ifs= 1 Cfg#= 1 Atr=e0 MxPwr=100mA
+I:  If#= 0 Alt= 0 #EPs= 1 Cls=09(hub  ) Sub=00 Prot=00 Driver=hub
+E:  Ad=81(I) Atr=03(Int.) MxPS=   1 Ivl=256ms
+
+T:  Bus=01 Lev=03 Prnt=03 Port=03 Cnt=01 Dev#=  4 Spd=1.5  MxCh= 0
+D:  Ver= 2.00 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 8 #Cfgs=  1
+P:  Vendor=258a ProdID=0f0a Rev=02.10
+S:  Manufacturer=SINO WEALTH
+S:  Product=USB TOUCHPAD KEYBOARD
+C:  #Ifs= 2 Cfg#= 1 Atr=a0 MxPwr=100mA
+I:  If#= 0 Alt= 0 #EPs= 1 Cls=03(HID  ) Sub=01 Prot=01 Driver=usbhid
+E:  Ad=81(I) Atr=03(Int.) MxPS=   8 Ivl=10ms
+I:  If#= 1 Alt= 0 #EPs= 1 Cls=03(HID  ) Sub=00 Prot=00 Driver=usbhid
+E:  Ad=82(I) Atr=03(Int.) MxPS=   8 Ivl=10ms
+
+T:  Bus=02 Lev=00 Prnt=00 Port=00 Cnt=00 Dev#=  1 Spd=5000 MxCh= 4
+D:  Ver= 3.00 Cls=09(hub  ) Sub=00 Prot=03 MxPS= 9 #Cfgs=  1
+P:  Vendor=1d6b ProdID=0003 Rev=06.12
+S:  Manufacturer=Linux 6.12.75+rpt-rpi-v8 xhci-hcd
+S:  Product=xHCI Host Controller
+S:  SerialNumber=0000:01:00.0
+C:  #Ifs= 1 Cfg#= 1 Atr=e0 MxPwr=0mA
+I:  If#= 0 Alt= 0 #EPs= 1 Cls=09(hub  ) Sub=00 Prot=00 Driver=hub
+E:  Ad=81(I) Atr=03(Int.) MxPS=   4 Ivl=256ms
+
+[exit=0]

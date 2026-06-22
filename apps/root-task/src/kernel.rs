@@ -4493,6 +4493,17 @@ fn bootstrap<P: Platform>(
     // Keep low Pi4 MMIO pages ahead of driver-child VSpace mappings so later
     // root diagnostics and child runtimes share one HAL-owned frame cap.
     crate::hal::pi4_wifi::preseed_mailbox_mmio(hal);
+    #[cfg(feature = "release-pi4")]
+    match crate::reboot::register_bcm2711_pm_watchdog(hal) {
+        Ok(()) => {
+            console.writeln_prefixed("[reboot] bcm2711 watchdog backend registered via HAL");
+        }
+        Err(err) => {
+            let mut line = heapless::String::<160>::new();
+            let _ = write!(line, "[reboot] bcm2711 watchdog backend unavailable: {err}");
+            console.writeln_prefixed(line.as_str());
+        }
+    }
     crate::hal::pi4_wifi::preseed_gpio_mmio(hal);
 
     let driver_task_report = if let Some(reason) =

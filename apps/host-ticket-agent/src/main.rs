@@ -33,7 +33,7 @@ struct Args {
     /// Optional capability ticket payload.
     #[arg(long)]
     ticket: Option<String>,
-    /// Path to `out/manifests/root_task_resolved.json`.
+    /// Path to `configs/generated/root_task_resolved.json`.
     #[arg(long, value_name = "FILE", default_value = DEFAULT_RESOLVED_MANIFEST_PATH)]
     manifest: PathBuf,
     /// Cursor state file for deterministic resume.

@@ -259,29 +259,23 @@ impl HostEapolState {
             &body[EAPOL_KEY_BODY_REPLAY_OFFSET
                 ..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN],
         );
-        let retransmitted_m1 = self.m2_sent
-            && self.ap_mac == ap_mac
-            && self.anonce == anonce
-            && self.m1_replay_counter == replay_counter;
-        if !retransmitted_m1 {
-            self.ap_mac = ap_mac;
-            self.anonce = anonce;
-            self.m1_replay_counter = replay_counter;
-            self.snonce = derive_host_snonce(
-                &self.pmk,
-                &self.ap_mac,
-                &station_mac,
-                &self.anonce,
-                &self.m1_replay_counter,
-            );
-            self.ptk = derive_wpa2_pairwise_ptk(
-                &self.pmk,
-                &self.ap_mac,
-                &station_mac,
-                &self.anonce,
-                &self.snonce,
-            );
-        }
+        self.ap_mac = ap_mac;
+        self.anonce = anonce;
+        self.m1_replay_counter = replay_counter;
+        self.snonce = derive_host_snonce(
+            &self.pmk,
+            &self.ap_mac,
+            &station_mac,
+            &self.anonce,
+            self.rx_packets,
+        );
+        self.ptk = derive_wpa2_pairwise_ptk(
+            &self.pmk,
+            &self.ap_mac,
+            &station_mac,
+            &self.anonce,
+            &self.snonce,
+        );
         self.record_current_ptk_candidate();
         let len = write_eapol_key_reply_frame(
             tx_frame,
@@ -395,6 +389,7 @@ impl HostEapolState {
                 && slot.ap_mac == candidate.ap_mac
                 && slot.anonce == candidate.anonce
                 && slot.m1_replay_counter == candidate.m1_replay_counter
+                && slot.snonce == candidate.snonce
         }) {
             *slot = candidate;
             return;
@@ -1149,13 +1144,13 @@ fn derive_host_snonce(
     ap_mac: &[u8; ETHER_ADDR_LEN],
     sta_mac: &[u8; ETHER_ADDR_LEN],
     anonce: &[u8; WPA_NONCE_LEN],
-    replay_counter: &[u8; WPA_REPLAY_COUNTER_LEN],
+    rx_count: u32,
 ) -> [u8; WPA_NONCE_LEN] {
-    let mut seed = [0u8; ETHER_ADDR_LEN + ETHER_ADDR_LEN + WPA_NONCE_LEN + WPA_REPLAY_COUNTER_LEN];
+    let mut seed = [0u8; ETHER_ADDR_LEN + ETHER_ADDR_LEN + WPA_NONCE_LEN + 4];
     seed[..ETHER_ADDR_LEN].copy_from_slice(ap_mac);
     seed[ETHER_ADDR_LEN..ETHER_ADDR_LEN * 2].copy_from_slice(sta_mac);
     seed[ETHER_ADDR_LEN * 2..ETHER_ADDR_LEN * 2 + WPA_NONCE_LEN].copy_from_slice(anonce);
-    seed[ETHER_ADDR_LEN * 2 + WPA_NONCE_LEN..].copy_from_slice(replay_counter);
+    seed[ETHER_ADDR_LEN * 2 + WPA_NONCE_LEN..].copy_from_slice(&rx_count.to_be_bytes());
     let first = hmac_sha1_three(pmk, WPA_SNONCE_LABEL_PREFIX, &seed, &[0]);
     let second = hmac_sha1_three(pmk, WPA_SNONCE_LABEL_PREFIX, &seed, &[1]);
     let mut snonce = [0u8; WPA_NONCE_LEN];
@@ -1666,7 +1661,7 @@ mod tests {
     }
 
     #[test]
-    fn retransmitted_m1_replays_identical_m2() {
+    fn retransmitted_m1_rotates_m2_and_preserves_candidates() {
         let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
         let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
         let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
@@ -1684,6 +1679,9 @@ mod tests {
         };
         let first_snonce = state.snonce;
         let first_ptk = state.ptk;
+        let mut m3_for_first_m2 = [0u8; MAX_FRAME_LEN];
+        let m3_len =
+            write_test_m3_frame(&mut m3_for_first_m2, &station, &state).expect("m3 for first m2");
 
         let second = state
             .handle_packet(station, &m1[..m1_len], &mut second_m2)
@@ -1695,9 +1693,21 @@ mod tests {
 
         assert_eq!(state.rx_packets(), 2);
         assert_eq!(second_len, first_len);
-        assert_eq!(state.snonce, first_snonce);
+        assert_ne!(state.snonce, first_snonce);
+        assert_ne!(state.ptk, first_ptk);
+        assert_ne!(&second_m2[..second_len], &first_m2[..first_len]);
+        assert_eq!(state.ptk_candidate_count, 2);
+
+        let m3_action = state
+            .handle_packet(station, &m3_for_first_m2[..m3_len], &mut second_m2)
+            .expect("m3 should match earlier m2 candidate");
+        assert!(matches!(
+            m3_action,
+            HostEapolAction::SendM4InstallKeys { .. }
+        ));
         assert_eq!(state.ptk, first_ptk);
-        assert_eq!(&second_m2[..second_len], &first_m2[..first_len]);
+        assert_eq!(state.snonce, first_snonce);
+        assert!(state.secure_complete());
     }
 
     #[test]

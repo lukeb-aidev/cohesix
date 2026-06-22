@@ -1,0 +1,664 @@
+{
+  "meta": {
+    "author": "Lukas Bower",
+    "purpose": "Root-task manifest input for coh-rtc."
+  },
+  "root_task": {
+    "schema": "1.5",
+    "affinity": {
+      "enabled": true,
+      "max_cores": 4,
+      "authority_core": 0,
+      "ninedoor_cores": [
+        1
+      ],
+      "provider_cores": [
+        2,
+        3
+      ],
+      "worker_cores": [
+        2,
+        3
+      ],
+      "drivers": {
+        "serial": 1,
+        "usb-local-seat": 1,
+        "hdmi-text": 2,
+        "bcmgenet-v5": 3,
+        "cyw43455": 3,
+        "rtl8139": 2,
+        "virtio-net": 3,
+        "sdio-host": 3,
+        "pcie-root": 2
+      }
+    },
+    "driver_images": {
+      "required": true,
+      "images": [
+        {
+          "id": "pi4-serial-runtime",
+          "contract": "serial",
+          "hot-path": "serial-console",
+          "artifact": "cohesix/bin/pi4-driver-serial",
+          "entry-symbol": "cohesix_pi4_driver_runtime_entry",
+          "code-pages": 128,
+          "stack-pages": 16,
+          "ipc-pages": 1,
+          "ring-pages": 1,
+          "mmio-pages": 1,
+          "dma-pages": 0,
+          "shared-buffer-pages": 4,
+          "root-context-required": false,
+          "hardware-state-migrated": true
+        },
+        {
+          "id": "pi4-usb-runtime",
+          "contract": "usb-local-seat",
+          "hot-path": "usb-keyboard",
+          "artifact": "cohesix/bin/pi4-driver-usb",
+          "entry-symbol": "cohesix_pi4_driver_runtime_entry",
+          "code-pages": 128,
+          "stack-pages": 16,
+          "ipc-pages": 1,
+          "ring-pages": 1,
+          "mmio-pages": 16,
+          "dma-pages": 128,
+          "shared-buffer-pages": 32,
+          "root-context-required": false,
+          "hardware-state-migrated": true
+        },
+        {
+          "id": "pi4-hdmi-runtime",
+          "contract": "hdmi-text",
+          "hot-path": "hdmi-text",
+          "artifact": "cohesix/bin/pi4-driver-hdmi",
+          "entry-symbol": "cohesix_pi4_driver_runtime_entry",
+          "code-pages": 128,
+          "stack-pages": 16,
+          "ipc-pages": 1,
+          "ring-pages": 1,
+          "mmio-pages": 0,
+          "dma-pages": 0,
+          "shared-buffer-pages": 16,
+          "root-context-required": false,
+          "hardware-state-migrated": true
+        },
+        {
+          "id": "pi4-genet-runtime",
+          "contract": "bcmgenet-v5",
+          "hot-path": "genet-nic",
+          "artifact": "cohesix/bin/pi4-driver-genet",
+          "entry-symbol": "cohesix_pi4_driver_runtime_entry",
+          "code-pages": 128,
+          "stack-pages": 16,
+          "ipc-pages": 1,
+          "ring-pages": 1,
+          "mmio-pages": 6,
+          "dma-pages": 64,
+          "shared-buffer-pages": 32,
+          "root-context-required": false,
+          "hardware-state-migrated": true
+        },
+        {
+          "id": "pi4-cyw43-runtime",
+          "contract": "cyw43455",
+          "hot-path": "cyw43-wifi",
+          "artifact": "cohesix/bin/pi4-driver-cyw43",
+          "entry-symbol": "cohesix_pi4_driver_runtime_entry",
+          "code-pages": 128,
+          "stack-pages": 16,
+          "ipc-pages": 1,
+          "ring-pages": 1,
+          "mmio-pages": 0,
+          "dma-pages": 0,
+          "shared-buffer-pages": 64,
+          "root-context-required": false,
+          "hardware-state-migrated": true
+        },
+        {
+          "id": "pi4-sdio-runtime",
+          "contract": "sdio-host",
+          "hot-path": "sdio-host",
+          "artifact": "cohesix/bin/pi4-driver-sdio",
+          "entry-symbol": "cohesix_pi4_driver_runtime_entry",
+          "code-pages": 128,
+          "stack-pages": 16,
+          "ipc-pages": 1,
+          "ring-pages": 1,
+          "mmio-pages": 1,
+          "dma-pages": 0,
+          "shared-buffer-pages": 32,
+          "root-context-required": false,
+          "hardware-state-migrated": true
+        },
+        {
+          "id": "pi4-pcie-runtime",
+          "contract": "pcie-root",
+          "hot-path": "pcie-root",
+          "artifact": "cohesix/bin/pi4-driver-pcie",
+          "entry-symbol": "cohesix_pi4_driver_runtime_entry",
+          "code-pages": 128,
+          "stack-pages": 16,
+          "ipc-pages": 1,
+          "ring-pages": 1,
+          "mmio-pages": 10,
+          "dma-pages": 0,
+          "shared-buffer-pages": 16,
+          "root-context-required": false,
+          "hardware-state-migrated": true
+        }
+      ]
+    }
+  },
+  "profile": {
+    "name": "virt-aarch64",
+    "kernel": true
+  },
+  "event_pump": {
+    "tick_ms": 5
+  },
+  "secure9p": {
+    "msize": 8192,
+    "walk_depth": 8,
+    "tags_per_session": 16,
+    "batch_frames": 1,
+    "short_write": {
+      "policy": "reject"
+    }
+  },
+  "features": {
+    "net_console": true,
+    "serial_console": true,
+    "std_console": false,
+    "std_host_tools": false
+  },
+  "hw": {
+    "secure_boot": false,
+    "no_nic": false,
+    "network": {
+      "enabled": false,
+      "backend": "auto",
+      "mode": "off",
+      "interface": "wired",
+      "static_ipv4": {
+        "ip": "",
+        "prefix_len": 0,
+        "gateway": null
+      },
+      "dhcp": {
+        "discover_timeout_ms": 1000,
+        "request_timeout_ms": 1000,
+        "max_retries": 4
+      }
+    },
+    "attestation": {
+      "enabled": false,
+      "policy": "tpm-or-dice",
+      "evidence_max_bytes": 256
+    },
+    "local_seat": {
+      "enabled": false,
+      "required": false,
+      "keyboard_device": "usb-kbd0",
+      "display_device": "hdmi0",
+      "line_bytes": 160,
+      "buffer_lines": 128
+    },
+    "devices": []
+  },
+  "cache": {
+    "kernel_ops": true,
+    "dma_clean": true,
+    "dma_invalidate": true,
+    "unify_instructions": false
+  },
+  "tickets": [
+    {
+      "role": "queen",
+      "secret": "bootstrap"
+    },
+    {
+      "role": "worker-heartbeat",
+      "secret": "worker"
+    },
+    {
+      "role": "worker-gpu",
+      "secret": "worker-gpu"
+    },
+    {
+      "role": "worker-bus",
+      "secret": "worker-bus"
+    },
+    {
+      "role": "worker-lora",
+      "secret": "worker-lora"
+    }
+  ],
+  "ticket_limits": {
+    "max_scopes": 8,
+    "max_scope_path_len": 128,
+    "max_scope_rate_per_s": 64,
+    "bandwidth_bytes": 131072,
+    "cursor_resumes": 16,
+    "cursor_advances": 256
+  },
+  "namespaces": {
+    "role_isolation": true,
+    "mounts": [
+      {
+        "service": "logs",
+        "target": [
+          "log"
+        ]
+      }
+    ]
+  },
+  "sharding": {
+    "enabled": true,
+    "shard_bits": 8,
+    "legacy_worker_alias": true
+  },
+  "ecosystem": {
+    "host": {
+      "enable": true,
+      "providers": [
+        "systemd",
+        "k8s",
+        "docker",
+        "nvidia"
+      ],
+      "mount_at": "/host",
+      "tickets": {
+        "enable": true,
+        "request_schema": "host-ticket/v1",
+        "result_schema": "host-ticket-result/v1",
+        "max_line_bytes": 2048,
+        "action_allowlist": [
+          "gpu.lease.grant",
+          "gpu.lease.renew",
+          "gpu.lease.release",
+          "peft.import",
+          "peft.activate",
+          "peft.rollback",
+          "systemd.start",
+          "systemd.stop",
+          "systemd.restart",
+          "systemd.status-check",
+          "docker.restart",
+          "docker.stop",
+          "docker.status-check",
+          "k8s.cordon",
+          "k8s.drain",
+          "k8s.lease.sync"
+        ],
+        "lifecycle": [
+          "queued",
+          "claimed",
+          "running",
+          "succeeded",
+          "failed",
+          "expired"
+        ]
+      },
+      "federation": {
+        "enable": true,
+        "local_hive": "hive-a",
+        "peers": [
+          {
+            "name": "hive-b",
+            "rest_url": "http://127.0.0.1:8081",
+            "auth_ref": "COHESIX_RELAY_HIVE_B_TOKEN"
+          },
+          {
+            "name": "hive-c",
+            "rest_url": "http://127.0.0.1:8082",
+            "auth_ref": "COHESIX_RELAY_HIVE_C_TOKEN"
+          }
+        ],
+        "action_allowlist": [
+          "gpu.lease.grant",
+          "gpu.lease.renew",
+          "gpu.lease.release",
+          "peft.import",
+          "peft.activate",
+          "peft.rollback",
+          "systemd.start",
+          "systemd.stop",
+          "systemd.restart",
+          "systemd.status-check",
+          "docker.restart",
+          "docker.stop",
+          "docker.status-check",
+          "k8s.cordon",
+          "k8s.drain",
+          "k8s.lease.sync"
+        ],
+        "relay_queue_max_entries": 256,
+        "relay_queue_max_bytes": 32768,
+        "wal_max_entries": 1024,
+        "wal_max_bytes": 524288,
+        "relay_timeout_ms": 2000
+      }
+    },
+    "audit": {
+      "enable": false,
+      "journal_max_bytes": 8192,
+      "decisions_max_bytes": 4096,
+      "replay_enable": false,
+      "replay_max_entries": 64,
+      "replay_ctl_max_bytes": 1024,
+      "replay_status_max_bytes": 1024
+    },
+    "policy": {
+      "enable": true,
+      "queue_max_entries": 256,
+      "queue_max_bytes": 8192,
+      "ctl_max_bytes": 2048,
+      "status_max_bytes": 512,
+      "rules": [
+        {
+          "id": "queen-ctl",
+          "target": "/queen/ctl"
+        },
+        {
+          "id": "systemd-restart",
+          "target": "/host/systemd/*/restart"
+        }
+      ]
+    },
+    "models": {
+      "enable": false
+    }
+  },
+  "sidecars": {
+    "modbus": {
+      "enable": false,
+      "mount_at": "/bus",
+      "adapters": []
+    },
+    "dnp3": {
+      "enable": false,
+      "mount_at": "/bus",
+      "adapters": []
+    },
+    "lora": {
+      "enable": false,
+      "mount_at": "/lora",
+      "adapters": []
+    }
+  },
+  "telemetry": {
+    "ring_bytes_per_worker": 1024,
+    "frame_schema": "legacy-plaintext",
+    "cursor": {
+      "retain_on_boot": false
+    }
+  },
+  "telemetry_ingest": {
+    "max_segments_per_device": 4,
+    "max_bytes_per_segment": 131072,
+    "max_total_bytes_per_device": 524288,
+    "max_reference_entries_per_segment": 1024,
+    "max_reference_manifest_bytes_per_segment": 131072,
+    "max_reference_bytes_per_segment": 1073741824,
+    "eviction_policy": "evict-oldest"
+  },
+  "lifecycle": {
+    "initial_state": "BOOTING",
+    "auto_transitions": [
+      {
+        "from": "BOOTING",
+        "to": "ONLINE"
+      }
+    ]
+  },
+  "control_plane": {
+    "schedule": {
+      "enable": true,
+      "queue_max_entries": 256,
+      "ctl_max_bytes": 8192
+    },
+    "lease": {
+      "enable": true,
+      "active_max_entries": 256,
+      "preemptions_max_entries": 256,
+      "ctl_max_bytes": 8192
+    },
+    "export": {
+      "enable": true,
+      "ctl_max_bytes": 2048
+    }
+  },
+  "observability": {
+    "proc_9p": {
+      "sessions": true,
+      "outstanding": true,
+      "short_writes": true,
+      "sessions_bytes": 8192,
+      "outstanding_bytes": 128,
+      "short_writes_bytes": 128
+    },
+    "proc_9p_session": {
+      "active": true,
+      "state": true,
+      "since_ms": true,
+      "owner": true,
+      "active_bytes": 128,
+      "state_bytes": 64,
+      "since_ms_bytes": 64,
+      "owner_bytes": 96
+    },
+    "proc_ingest": {
+      "p50_ms": true,
+      "p95_ms": true,
+      "backpressure": true,
+      "dropped": true,
+      "queued": true,
+      "watch": true,
+      "p50_ms_bytes": 64,
+      "p95_ms_bytes": 64,
+      "backpressure_bytes": 64,
+      "dropped_bytes": 64,
+      "queued_bytes": 64,
+      "watch_max_entries": 16,
+      "watch_line_bytes": 192,
+      "watch_min_interval_ms": 50,
+      "latency_samples": 32,
+      "latency_tolerance_ms": 5,
+      "counter_tolerance": 1
+    },
+    "proc_root": {
+      "reachable": true,
+      "last_seen_ms": true,
+      "cut_reason": true,
+      "reachable_bytes": 32,
+      "last_seen_ms_bytes": 64,
+      "cut_reason_bytes": 64
+    },
+    "proc_pressure": {
+      "busy": true,
+      "quota": true,
+      "cut": true,
+      "policy": true,
+      "busy_bytes": 64,
+      "quota_bytes": 64,
+      "cut_bytes": 64,
+      "policy_bytes": 64
+    },
+    "proc_schedule": {
+      "summary": true,
+      "queue": true,
+      "summary_bytes": 128,
+      "queue_bytes": 256
+    },
+    "proc_lease": {
+      "summary": true,
+      "active": true,
+      "preemptions": true,
+      "summary_bytes": 160,
+      "active_bytes": 256,
+      "preemptions_bytes": 256
+    }
+  },
+  "ui_providers": {
+    "proc_9p": {
+      "sessions": true,
+      "outstanding": true,
+      "short_writes": true
+    },
+    "proc_ingest": {
+      "p50_ms": true,
+      "p95_ms": true,
+      "backpressure": true
+    },
+    "policy_preflight": {
+      "req": false,
+      "diff": false
+    },
+    "updates": {
+      "manifest": true,
+      "status": true
+    }
+  },
+  "client_policies": {
+    "coh": {
+      "mount": {
+        "root": "/",
+        "allowlist": [
+          "/proc",
+          "/queen",
+          "/worker",
+          "/log",
+          "/gpu",
+          "/host"
+        ]
+      },
+      "telemetry": {
+        "root": "/queen/telemetry",
+        "max_devices": 32,
+        "max_segments_per_device": 4,
+        "max_bytes_per_segment": 131072,
+        "max_total_bytes_per_device": 524288
+      },
+      "run": {
+        "lease": {
+          "schema": "gpu-lease/v1",
+          "active_state": "ACTIVE",
+          "max_bytes": 1024
+        },
+        "breadcrumb": {
+          "schema": "gpu-breadcrumb/v1",
+          "max_line_bytes": 512,
+          "max_command_bytes": 256
+        }
+      },
+      "peft": {
+        "export": {
+          "root": "/queen/export/lora_jobs",
+          "max_telemetry_bytes": 131072,
+          "max_policy_bytes": 8192,
+          "max_base_model_bytes": 1024
+        },
+        "import": {
+          "registry_root": "out/model_registry",
+          "max_adapter_bytes": 67108864,
+          "max_lora_bytes": 65536,
+          "max_metrics_bytes": 65536,
+          "max_manifest_bytes": 8192
+        },
+        "activate": {
+          "max_model_id_bytes": 128,
+          "max_state_bytes": 4096
+        }
+      }
+    },
+    "cohsh": {
+      "pool": {
+        "control_sessions": 2,
+        "telemetry_sessions": 24
+      },
+      "tail": {
+        "poll_ms_default": 1000,
+        "poll_ms_min": 250,
+        "poll_ms_max": 10000
+      },
+      "host_telemetry": {
+        "nvidia_poll_ms": 1000,
+        "systemd_poll_ms": 2000,
+        "docker_poll_ms": 2000,
+        "k8s_poll_ms": 5000
+      }
+    },
+    "retry": {
+      "max_attempts": 3,
+      "backoff_ms": 200,
+      "ceiling_ms": 2000,
+      "timeout_ms": 5000
+    },
+    "heartbeat": {
+      "interval_ms": 15000
+    },
+    "trace": {
+      "max_bytes": 1048576
+    }
+  },
+  "client_paths": {
+    "queen_ctl": "/queen/ctl",
+    "queen_lifecycle_ctl": "/queen/lifecycle/ctl",
+    "queen_schedule_ctl": "/queen/schedule/ctl",
+    "queen_lease_ctl": "/queen/lease/ctl",
+    "queen_export_ctl": "/queen/export/ctl",
+    "policy_ctl": "/policy/ctl",
+    "log": "/log/queen.log"
+  },
+  "swarmui": {
+    "ticket_scope": "per-ticket",
+    "cache": {
+      "enabled": false,
+      "max_bytes": 262144,
+      "ttl_s": 3600
+    },
+    "hive": {
+      "frame_cap_fps": 30,
+      "step_ms": 16,
+      "lod_zoom_out": 0.7,
+      "lod_zoom_in": 1.25,
+      "lod_event_budget": 512,
+      "snapshot_max_events": 4096,
+      "overlay_lines": 3,
+      "detail_lines": 50,
+      "line_cap_bytes": 160,
+      "per_worker_bytes": 2048,
+      "pending_lines_per_worker": 64,
+      "pending_event_cap": 4096,
+      "poll_workers_per_tick": 32,
+      "status_poll_ms": 500,
+      "degrade_pressure": 1.0
+    },
+    "paths": {
+      "telemetry_root": "/worker",
+      "proc_ingest_root": "/proc/ingest",
+      "worker_root": "/worker",
+      "namespace_roots": [
+        "/proc",
+        "/queen",
+        "/worker",
+        "/log",
+        "/gpu"
+      ]
+    }
+  },
+  "cas": {
+    "enable": true,
+    "store": {
+      "chunk_bytes": 128
+    },
+    "delta": {
+      "enable": true
+    },
+    "signing": {
+      "required": true,
+      "key_path": "resources/fixtures/cas_signing_key.hex"
+    }
+  }
+}

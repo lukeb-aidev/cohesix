@@ -254,6 +254,7 @@ impl ConsoleHarness {
             | ConsoleCommand::Test
             | ConsoleCommand::NetTest
             | ConsoleCommand::NetStats
+            | ConsoleCommand::Reboot
             | ConsoleCommand::Cat { .. }
             | ConsoleCommand::Ls { .. }
             | ConsoleCommand::Kill(_)

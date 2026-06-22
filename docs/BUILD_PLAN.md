@@ -759,7 +759,7 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 - `apps/root-task/build.rs` gains a check that fails the build if generated files are missing or stale relative to `configs/root_task.toml`.
 - Generated artefacts:
   - `apps/root-task/src/generated/bootstrap.rs` — init graph, ticket table, namespace descriptors with compile-time hashes.
-  - `out/manifests/root_task_resolved.json` — serialised IR with SHA-256 fingerprint stored alongside.
+  - `configs/generated/root_task_resolved.json` — serialised IR with SHA-256 fingerprint stored alongside.
   - `scripts/cohsh/boot_v0.coh` — baseline CLI script derived from the manifest to exercise attach/log/quit flows.
 - Manifest IR gains optional `ecosystem.*` section (schema-validated, defaults to noop):
   - `ecosystem.host.enable` (bool)
@@ -777,14 +777,14 @@ Introduce the `coh-rtc` compiler that ingests `configs/root_task.toml` and emits
 **Status:** Complete — local aarch64/QEMU validation and regression pack confirm the DoD checks.
 
 **Commands**
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh`
 - `cargo check -p root-task --no-default-features --features kernel,net-console`
 - `cargo test -p root-task`
 - `cargo test -p tools/coh-rtc`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/boot_v0.coh`
 
 **Checks (DoD)**
-- Regeneration is deterministic: two consecutive runs of `cargo run -p coh-rtc …` produce identical Rust, JSON, and CLI artefacts (verified via hash comparison recorded in `out/manifests/root_task_resolved.json.sha256`).
+- Regeneration is deterministic: two consecutive runs of `cargo run -p coh-rtc …` produce identical Rust, JSON, and CLI artefacts (verified via hash comparison recorded in `configs/generated/root_task_resolved.json.sha256`).
 - Root task boots under QEMU using generated bootstrap tables; serial log shows manifest fingerprint and ticket registration sourced from generated code.
 - Compiler validation rejects manifests that violate red lines (e.g., invalid walk depth, enabling `gpu` while `profile.kernel` omits the feature gate) and exits with non-zero status.
 - Run the Regression Pack and reject any drift in `scripts/cohsh/boot_v0.coh` output or manifest fingerprints unless the docs and schema version are updated in the same change.
@@ -817,7 +817,7 @@ Wrap the AArch64-specific VSpace cache operations in the HAL, wire them into man
 
 **Commands**
 - `cd apps/root-task && cargo test cache_maintenance --features cache-maintenance`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json --cli-script scripts/cohsh/boot_v0.coh`
 - `cargo test -p coh-rtc`
 
 **Checks (DoD)**
@@ -975,7 +975,7 @@ Implement ring-backed telemetry providers with manifest-governed sizes and CBOR 
 **Commands**
 - `cargo test -p nine-door`
 - `cargo test -p secure9p-core`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh`
 
 **Checks (DoD)**
@@ -1013,7 +1013,7 @@ Changes:
   - tools/coh-rtc/src/codegen/cbor.rs — schema + Markdown export.
   - apps/root-task/src/generated/bootstrap.rs — emit ring quotas and cursor retention flags.
 Commands:
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/telemetry_ring.coh
 Checks:
   - CLI script proves wraparound and stale cursor rejection; regenerated schema matches docs snippet.
@@ -1119,7 +1119,7 @@ Add a PolicyFS surface that captures human-legible approvals for sensitive opera
 
 **Commands**
 - `cargo test -p nine-door`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/policy_gate.coh`
 
 **Checks (DoD)**
@@ -1142,7 +1142,7 @@ Changes:
   - apps/nine-door/src/host/control.rs — enforcement hook requiring approvals before queen/host writes.
 Commands:
   - cargo test -p nine-door --test policyfs
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
 Checks:
   - Missing approval produces ERR EPERM with audit; enabling flag publishes /policy tree; disabling removes it.
 Deliverables:
@@ -1192,7 +1192,7 @@ Provide append-only audit logs and a bounded replay surface that re-applies Cohe
 
 **Commands**
 - `cargo test -p nine-door`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/replay_journal.coh`
 
 **Checks (DoD)**
@@ -1258,7 +1258,7 @@ Introduce manifest-driven namespace sharding with optional legacy aliases.
 - `cargo test -p nine-door`
 - `cargo test -p secure9p-core`
 - `cargo test -p tests --test shard_1k`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 
 **Checks (DoD)**
 - 1k worker sessions attach concurrently without starvation; metrics exported via `/proc/9p/sessions` demonstrate shard distribution.
@@ -1313,7 +1313,7 @@ Add pooled sessions and retry policies to `cohsh`, governed by compiler-exported
 **Deliverables**
 - `apps/cohsh/src/lib.rs` extends `Shell` with a session pool (default manifest value: two control, twenty-four telemetry) and batched Twrite helper. `apps/cohsh/src/transport/tcp.rs` gains retry scheduling based on manifest policy.
 - `apps/cohsh/tests/pooling.rs` verifies pooled throughput and idempotent retry behaviour.
-- Manifest IR v1.3: `client_policies.cohsh.pool`, `client_policies.retry`, `client_policies.heartbeat`. Compiler emits `out/cohsh_policy.toml` consumed at runtime (CLI loads it on start, failing if missing/out-of-sync).
+- Manifest IR v1.3: `client_policies.cohsh.pool`, `client_policies.retry`, `client_policies.heartbeat`. Compiler emits `configs/generated/cohsh_policy.toml` consumed at runtime (CLI loads it on start, failing if missing/out-of-sync).
 - CLI regression `scripts/cohsh/session_pool.coh` demonstrating increased throughput under load and safe recovery from injected failures.
 - Docs (`docs/USERLAND_AND_CLI.md`) describe new CLI flags/env overrides, referencing manifest-derived defaults.
 
@@ -1322,7 +1322,7 @@ Add pooled sessions and retry policies to `cohsh`, governed by compiler-exported
 **Commands**
 - `cargo test -p cohsh`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/session_pool.coh`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 
 **Checks (DoD)**
 - Throughput benchmark (documented in test output) demonstrates improvement relative to single-session baseline without exceeding `msize` or server tag limits.
@@ -1388,7 +1388,7 @@ Expose audit-friendly observability nodes under `/proc` generated from the manif
 **Commands**
 - `cargo test -p nine-door`
 - `cargo test -p root-task`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/observe_watch.coh`
 
 **Checks (DoD)**
@@ -1456,7 +1456,7 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 **Commands**
 - `cargo test -p nine-door`
 - `cargo test -p cas-tool`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/cas_roundtrip.coh`
 - `cargo run -p cohsh --features tcp -- --transport tcp --script scripts/cohsh/model_cas_bind.coh`
 
@@ -4831,7 +4831,7 @@ Reduce Live Hive REST status poll wall-clock time with minimal risk by:
 ## Implementation Touchpoints
 - `apps/swarmui/src/lib.rs` — REST status polling: cache + parallel reads.
 - `configs/root_task.toml` — REST pool sizing adjustments (manifest-driven).
-- `out/cohsh_policy.toml` + generated policy artifacts (via `coh-rtc`).
+- `configs/generated/cohsh_policy.toml` + generated policy artifacts (via `coh-rtc`).
 - `apps/swarmui/src/hive.rs` — REST telemetry tails: parallel with pool-capped concurrency.
 - `scripts/rest_perf_harness.py` — deterministic REST performance harness.
 - `apps/root-task/src/affinity.rs`, `apps/root-task/src/sel4.rs`, `apps/root-task/src/kernel.rs` — apply manifest-driven affinity during bootstrap.
@@ -4883,7 +4883,7 @@ Goal: Increase REST session pool sizing to support parallel polling.
 Inputs: configs/root_task.toml.
 Changes:
   - configs/root_task.toml — adjust `client_policies.cohsh.pool` sizes.
-  - out/cohsh_policy.toml — regenerated.
+  - configs/generated/cohsh_policy.toml — regenerated.
   - apps/cohsh/src/generated/policy.rs — regenerated.
   - docs/snippets/cohsh_policy.md — regenerated.
 Commands:
@@ -4896,7 +4896,7 @@ Deliverables:
 
 Title/ID: m25a-swarmui-rest-telemetry
 Goal: Parallelize REST telemetry tails per worker after pool sizing.
-Inputs: apps/swarmui/src/hive.rs, configs/root_task.toml, out/cohsh_policy.toml.
+Inputs: apps/swarmui/src/hive.rs, configs/root_task.toml, configs/generated/cohsh_policy.toml.
 Changes:
   - apps/swarmui/src/hive.rs — parallel `tail` calls within pool-sized bounds.
 Commands:
@@ -5482,7 +5482,7 @@ Deliver a Cohesix-aligned reliability and scale step that:
 - `cargo test -p hive-gateway`
 - `cargo test -p cohsh`
 - `cargo test -p nine-door`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `.venv/bin/python -m pytest -q tests/test_rest_perf_harness.py`
 - `python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-1mb --error-budget-rate 0.01`
 - `python scripts/rest_perf_harness.py --mode simulate --rest-url http://127.0.0.1:8080 --no-retries --fast-ramp --scenario telemetry-10mb --error-budget-rate 0.01`
@@ -5522,7 +5522,7 @@ Changes:
   - apps/cohsh/src/lib.rs + apps/coh/src/telemetry.rs - add/extend host tooling for emitting reference manifests and resolving latest segment IDs without new control verbs.
   - docs/INTERFACES.md - document reference-manifest schema and limits as-built.
 Commands:
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - cargo test -p nine-door
   - cargo test -p cohsh
 Checks:
@@ -5601,7 +5601,7 @@ Deliver a deterministic, policy-gated host control-ticket plane that:
 - `docs/INTERFACES.md`, `docs/HOST_TOOLS.md`, `docs/USERLAND_AND_CLI.md`, `docs/USE_CASES.md`, `docs/TEST_PLAN.md`, `docs/ARCHITECTURE.md` - docs-as-built and operator/test alignment.
 
 ## Commands
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `scripts/check-generated.sh`
 - `cargo test -p nine-door`
 - `cargo test -p host-sidecar-bridge`
@@ -5631,7 +5631,7 @@ Changes:
   - apps/nine-door/src/host/tickets.rs + apps/root-task/src/ninedoor.rs - add `/host/tickets/spec`, `/host/tickets/status`, `/host/tickets/deadletter`, and bounded snapshot nodes.
   - docs/INTERFACES.md - document ticket file paths, schema, and deterministic failure semantics.
 Commands:
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
   - cargo test -p nine-door
 Checks:
@@ -5755,7 +5755,7 @@ Deliver a deterministic multi-hive interoperability layer that:
 - `docs/FAILOVER.md`, `docs/HOST_TOOLS.md`, `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/TEST_PLAN.md`, `docs/USE_CASES.md` - canonical as-built behavior and operator runbooks.
 
 ## Commands
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `scripts/check-generated.sh`
 - `cargo test -p host-ticket-agent`
 - `cargo test -p hive-gateway`
@@ -5783,7 +5783,7 @@ Changes:
   - Generated artifacts/snippets - emit federation bounds for docs and host tooling.
   - docs/INTERFACES.md + docs/ARCHITECTURE.md - document federation envelope and invariants.
 Commands:
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
 Checks:
   - Invalid peer config or over-limit bounds fail generation deterministically.
@@ -6065,7 +6065,7 @@ Changes:
 Commands:
   - `cargo check -p root-task`
   - `cargo test -p root-task --features "kernel serial-console" local_seat`
-  - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+  - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 Checks:
   - USB keyboard commands yield identical parser semantics to serial.
   - Pi 4 USB enumeration does not synthesize root-port state from Linux/U-Boot captures after command-ring proof.
@@ -6172,7 +6172,7 @@ Add the HAL-enforced driver-task substrate, migrate serial/display and GENET beh
 - `cargo test -p sel4-sys`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::driver_task`
 - `cargo test -p root-task net:: -- --nocapture`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `cargo run -p cohsh --features tcp -- --transport tcp --tcp-host <STATIC_IP> --tcp-port 31337 --script scripts/cohsh/boot_v0.coh`
@@ -6320,7 +6320,7 @@ Changes:
   - apps/root-task/src/net/mod.rs — consume generated profile config before dev-virt fallback defaults.
 Commands:
   - cargo test -p coh-rtc
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
 Checks:
   - Invalid static IPv4 entries fail deterministically; valid configs produce stable generated artifacts.
 Deliverables:
@@ -6452,7 +6452,7 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 - `cargo test -p pi4-driver-runtime`
 - `cargo test -p coh-rtc`
 - `python3 -m pytest tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml`
 - `scripts/uboot/qemu-uboot-smoke.sh --net user`
 - `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none`
@@ -6638,6 +6638,26 @@ Commands:
 Checks: Pi linked-runtime throughput meets or exceeds the selected QEMU reference under matched workload/provenance, latency remains recorded but excluded from verdict, and side proof lanes stay separate.
 Deliverables: fresh benchmark artifacts, comparator PASS/FAIL, normalized Pi proof, and updated benchmark docs.
 
+Title/ID: m26b-authenticated-cohsh-reboot
+Goal: Add an authenticated `cohsh reboot` command that works over TCP and local-seat without introducing a new in-VM listener or bypassing existing Queen secrets.
+Inputs: crates/cohsh-core/src/{verb.rs,command.rs,help.rs}, apps/cohsh/src/lib.rs, apps/cohsh/src/transport/tcp.rs, apps/root-task/src/{event/mod.rs,reboot.rs,kernel.rs}, scripts/pi4-image-build.sh, third_party/u-boot/configs/rpi_4_defconfig, docs/{HARDWARE_BRINGUP.md,INTERFACES.md,USERLAND_AND_CLI.md}.
+Changes:
+  - crates/cohsh-core/src/* — add the shared `reboot` console verb and `REBOOT` ACK label so serial, TCP, cohsh, and local-seat parse the same command.
+  - apps/root-task/src/reboot.rs + apps/root-task/src/kernel.rs — register the Pi 4 BCM2711 watchdog reset backend through HAL-owned device mapping, mark authenticated Pi resets as one-shot fast boots through the BCM2711 PM RSTS register with readback before watchdog arming, and fail closed when unavailable.
+  - apps/root-task/src/event/mod.rs — require a secret-backed Queen session, emit `OK REBOOT detail=scheduled`, then defer the hardware reboot request long enough to flush the acknowledgement.
+  - apps/cohsh/src/* — expose `cohsh reboot` through the existing authenticated TCP console flow and stop waiting for trailing lines once `OK REBOOT` is received.
+  - scripts/pi4-image-build.sh + third_party/u-boot/configs/rpi_4_defconfig — generate a Pi 4 U-Boot script that loads saved `cohesix.env` policy, consumes and clears the authenticated fast-boot marker, defaults to unattended saved/manifest boot, preserves an explicit `coh_force_menu=1` wizard escape, and rejects stale U-Boot binaries that still use generic `bootflow scan`.
+  - docs/USERLAND_AND_CLI.md + docs/snippets/cohsh_grammar.md — document reboot grammar and the TCP/local-seat authorization model.
+  - docs/HARDWARE_BRINGUP.md + docs/INTERFACES.md — document the authenticated reboot fast-boot handoff and saved-policy behavior.
+Commands:
+  - cargo test -p cohsh-core
+  - cargo test -p cohsh --lib network_console_verbs_forward_to_transport
+  - cargo test -p root-task reboot --lib
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests::local_seat_ticket_backed_reboot_schedules_backend_request
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+Checks: Bare `reboot` without an authenticated session fails; physical console/local-seat reboot requires a Queen ticket minted from the existing Queen secret; TCP reboot remains gated by the existing TCP auth token plus Queen session; Pi 4 reset access uses only HAL-mapped PM/watchdog registers; an authenticated Pi reset sets only the Cohesix RSTS marker bits outside the Raspberry Pi firmware partition field and reads the marker back before arming reset; the next generated U-Boot script load consumes that marker before menu/input setup, reloads saved policy, clears the marker, and boots the saved or manifest settings; the Pi 4 U-Boot default command sources `boot.scr.uimg` directly rather than entering EFI/bootflow scan.
+Deliverables: Shared reboot verb, host CLI forwarding, authenticated root-task scheduling, HAL-backed Pi 4 reboot backend, unattended Pi 4 U-Boot saved/manifest boot with explicit wizard escape, generated-script validation, and tests for denial/success paths.
+
 Compatibility baseline tasks below are retained because they describe the original 26b DHCP, U-Boot policy, Wi-Fi, and QEMU guardrails that must not regress. They do not close reopened 26b by themselves; closure now requires the USB/Wi-Fi driver-task and concurrency/benchmark gates above plus the retained baseline checks below.
 
 Title/ID: m26b-dhcp-core-nostd
@@ -6663,7 +6683,7 @@ Changes:
   - docs/HARDWARE_BRINGUP.md — document U-Boot policy source, fallback rules, and expected boot lines.
 Commands:
   - cargo test -p coh-rtc
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
 Checks:
   - Invalid policy settings fail deterministically; valid settings generate stable artifacts.
 Deliverables:
@@ -6820,7 +6840,7 @@ Commands:
   - cargo check -p root-task
   - cargo test -p root-task net:: -- --nocapture
   - cargo test -p coh-rtc
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
 Checks:
   - `nettest` on `wired` and `wifi` policies executes against only the selected interface.
   - `auto` policy uses deterministic priority/failover, with at most one active TCP console interface at any moment.
@@ -6934,7 +6954,7 @@ Task blocks below own the exact file changes, commands, checks, and deliverables
 - `scripts/ci/mermaid_inventory.py --markdown-list out/audit/m26c_markdown_inventory.txt --out docs/audit/M26C_MERMAID_INVENTORY.csv`
 - `scripts/ci/check_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt`
 - `scripts/ci/render_mermaid_github.sh --markdown-list out/audit/m26c_markdown_inventory.txt --out out/audit/m26c-mermaid-rendered`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `scripts/check-generated.sh`
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
@@ -7153,7 +7173,7 @@ Deliverables:
 
 Title/ID: m26c-docs-as-built-audit
 Goal: Audit canonical documentation against the actual generated and observed system before any humanizing prose cleanup lands.
-Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md, docs/SECURE9P.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, docs/USERLAND_AND_CLI.md, docs/BOOT_REFERENCE.md, docs/FAILURE_MODES.md, docs/OPERATOR_WALKTHROUGH.md, README.md, docs/snippets/*.md, apps/root-task/src/generated/*, out/manifests/root_task_resolved.json, tracked release-cut docs under releases/**, staged test evidence, scripts/ci/check_test_plan.sh
+Inputs: docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md, docs/SECURE9P.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, docs/USERLAND_AND_CLI.md, docs/BOOT_REFERENCE.md, docs/FAILURE_MODES.md, docs/OPERATOR_WALKTHROUGH.md, README.md, docs/snippets/*.md, apps/root-task/src/generated/*, configs/generated/root_task_resolved.json, tracked release-cut docs under releases/**, staged test evidence, scripts/ci/check_test_plan.sh
 Changes:
   - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md — trace each canonical doc surface to generated snippets, manifests, fixtures, release artifacts, or staged-run evidence.
   - docs/audit/M26C_DOC_DRIFT_LEDGER.md — record docs/script drift discovered during the audit and the closure evidence for each item.
@@ -7161,7 +7181,7 @@ Changes:
   - docs/snippets/*.md + tracked release-cut docs under releases/** — verify provenance and regeneration paths; update only through the proper source or release-cut flow.
   - scripts/ci/check_test_plan.sh — update whenever 26c changes authoritative test-plan commands, stage semantics, or target-qualified PASS requirements.
 Commands:
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
   - scripts/ci/check_test_plan.sh
 Checks:
@@ -7182,7 +7202,7 @@ Commands:
   - cargo test -p nine-door --test integration
   - cargo test -p root-task --tests
   - cargo test -p root-task --lib
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
 Checks:
   - Checked-in audit artifacts state clearly that VM-side Cohesix remains `no_std` and that host `std` capability is not a valid convergence target.
   - Every overlapping host/VM semantic surface in the parity matrix has either passing test evidence from the relevant `apps/nine-door` and `root-task` test suites or an explicit host-only/VM-only disposition.
@@ -7203,7 +7223,7 @@ Commands:
   - cargo test -p pi4-driver-abi
   - cargo test -p pi4-driver-runtime
   - cargo test -p root-task --tests
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26c-pi4
@@ -7227,7 +7247,7 @@ Changes:
 Commands:
   - cargo test -p coh-rtc dma_protection
   - cargo test -p root-task --tests dma
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
   - rg -n "IOMMU|SMMU|hardware-enforced DMA|DMA isolation" docs README.md AGENTS.md
 Checks:
@@ -7253,7 +7273,7 @@ Commands:
   - cargo test -p worker-gpu
   - cargo test -p worker-lora
   - cargo test -p root-task --tests worker
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
   - cargo check -p worker-heart --target aarch64-unknown-none
   - cargo check -p worker-gpu --target aarch64-unknown-none
@@ -7281,7 +7301,7 @@ Commands:
   - cargo test -p worker-heart
   - cargo test -p worker-gpu
   - cargo test -p worker-lora
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
   - cargo check -p worker-heart --target aarch64-unknown-none
   - cargo check -p worker-gpu --target aarch64-unknown-none
@@ -7310,7 +7330,7 @@ Commands:
   - cargo test -p worker-gpu
   - cargo test -p worker-lora
   - cargo test -p pi4-driver-runtime
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
 Checks:
   - Revoke, shutdown, lease-expiry, telemetry-pressure, and applicable IRQ events are delivered through generated notification caps/badges rather than unbounded lifecycle polling.
@@ -7335,7 +7355,7 @@ Commands:
   - cargo test -p worker-gpu
   - cargo test -p worker-lora
   - cargo test -p pi4-driver-runtime
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
 Checks:
   - MCS profiles prove generated scheduling-context budget/period binding, timeout endpoint routing, and consumed-budget evidence for worker and driver tasks.
@@ -7600,7 +7620,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
   - Publish refreshed audit artifacts proving that operator-visible semantics remain unchanged and that the VM build remains `no_std`.
 
 ### Commands
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `scripts/check-generated.sh`
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
@@ -8021,7 +8041,7 @@ Deliverables:
 
 Title/ID: m27b-proof-witness-ir
 Goal: Generate and verify proof-carrying manifest witnesses from compiler IR.
-Inputs: tools/coh-rtc, configs/root_task*.toml, apps/root-task/src/generated, out/manifests/.
+Inputs: tools/coh-rtc, configs/root_task*.toml, apps/root-task/src/generated, configs/generated/.
 Changes:
   - tools/coh-rtc/src/verify.rs — witness schema and verifier.
   - tools/coh-rtc/src/codegen/* — witness emission beside resolved manifests.
@@ -8058,7 +8078,7 @@ Changes:
   - crates/pi4-driver-abi/proofs/ — ABI layout/bounds checks.
 Commands:
   - cargo test -p pi4-driver-abi
-  - cargo run -p verify-cohesix -- hal-authority --manifest out/manifests/root_task_resolved.json
+  - cargo run -p verify-cohesix -- hal-authority --manifest configs/generated/root_task_resolved.json
 Checks:
   - MMIO/DMA/IRQ/resource grants appear only through approved HAL paths; driver descriptors are pointer-free and bounded.
 Deliverables:
@@ -8675,7 +8695,7 @@ As-built leverage:
 ---
 
 ## Commands
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `cargo test -p hive-gateway`
 - `cargo test -p coh`
 - `cargo test -p cohsh`
@@ -8771,7 +8791,7 @@ Changes:
   - tools/coh-rtc/src/validate.rs — reject fixture key paths and bootstrap/default secret literals in production profiles.
   - configs/root_task.toml — introduce secret-reference fields for ticket and CAS signing material.
   - scripts/ci/due_diligence_gate.sh — extend hardcoded-secret checks to generated manifests/profiles.
-Commands: cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json && scripts/ci/due_diligence_gate.sh
+Commands: cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json && scripts/ci/due_diligence_gate.sh
 Checks: Production profile generation fails on fixture/default secrets and passes with secret references.
 Deliverables: Release-manifest secret hygiene is compiler-enforced, not convention-only.
 
@@ -10025,7 +10045,7 @@ Complete production VM authority by making worker and driver tickets correspond 
 - `cargo test -p worker-gpu`
 - `cargo test -p worker-lora`
 - `cargo test -p coh --test evidence`
-- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json`
+- `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `scripts/check-generated.sh`
 - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28e-qemu-cap-bundles`
 - `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m28e-pi4-cap-bundles`
@@ -10062,7 +10082,7 @@ Commands:
   - cargo test -p worker-heart
   - cargo test -p worker-gpu
   - cargo test -p worker-lora
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
 Checks:
   - Production cap-backed ticket profiles fail generation if any worker or driver role has metadata scope without the corresponding generated cap-bundle inventory.
@@ -10087,7 +10107,7 @@ Commands:
   - cargo test -p worker-gpu
   - cargo test -p worker-lora
   - cargo test -p coh --test evidence
-  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json
+  - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
 Checks:
   - Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
@@ -10640,7 +10660,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 
 **Commands**
 - `cmake --build seL4/build --target elfloader.efi`
-- `scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json`
+- `scripts/uefi/esp-build.sh --manifest configs/generated/root_task_resolved.json`
 - `scripts/aws/build-esp.sh`
 - `scripts/aws/register-ami.sh`
 - `scripts/aws/launch-smoke.sh`
@@ -10724,7 +10744,7 @@ Changes:
 - `scripts/aws/build-esp.sh` — thin AWS wrapper producing an AMI-ready ESP image from the canonical builder output.
 Commands:
 - cmake --build seL4/build --target elfloader.efi
-- scripts/uefi/esp-build.sh --manifest out/manifests/root_task_resolved.json
+- scripts/uefi/esp-build.sh --manifest configs/generated/root_task_resolved.json
 Checks:
 - ESP boots to root-task via elfloader with deterministic serial output.
 Deliverables:

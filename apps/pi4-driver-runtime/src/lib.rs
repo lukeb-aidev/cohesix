@@ -607,6 +607,7 @@ const ENGINE_STATE_HW_READY: u32 = 1 << 5;
 const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
 const HDMI_SAFE_AREA_MARGIN_DIVISOR: usize = 50;
+const HDMI_SCROLL_LINES: usize = 10;
 const FB_BYTES_PER_PIXEL_32: usize = 4;
 const HDMI_FG_COLOR: u32 = 0xffff_ffff;
 const HDMI_BG_COLOR: u32 = 0xff00_0000;
@@ -614,10 +615,9 @@ const USB_BOOT_REPORT_BYTES: usize = 8;
 const USB_KEYBOARD_REPORT_BUFFER_BYTES: usize = 64;
 const USB_FLEXIBLE_KEYBOARD_REPORT_MIN_BYTES: usize = 4;
 const USB_KEYBOARD_OUTPUT_LIMIT: usize = 16;
-const USB_KEYBOARD_OUTPUT_PENDING_BYTES: usize = 64;
+const USB_KEYBOARD_BYTE_QUEUE_BYTES: usize = 64;
 const USB_HID_CONTROL_GET_REPORT_COOLDOWN_POLLS: u8 = 7;
 const USB_HID_LED_SYNC_IDLE_POLLS: u8 = 8;
-const USB_HID_LED_SYNC_RETRY_POLLS: u8 = 32;
 const USB_KEYBOARD_UNMATCHED_RECOVERY_EVENTS_PER_POLL: u8 = 16;
 const USB_HID_USAGE_SCROLL_LOCK: u8 = 0x47;
 const USB_HID_USAGE_RIGHT_ARROW: u8 = 0x4f;
@@ -1625,9 +1625,9 @@ struct UsbRuntimeState {
     keyboard_preserved_event_parameters: [u64; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
     keyboard_preserved_event_statuses: [u32; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
     keyboard_preserved_event_controls: [u32; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
-    keyboard_output_pending: [u8; USB_KEYBOARD_OUTPUT_PENDING_BYTES],
-    keyboard_output_pending_offset: u8,
-    keyboard_output_pending_len: u8,
+    keyboard_byte_queue: [u8; USB_KEYBOARD_BYTE_QUEUE_BYTES],
+    keyboard_byte_queue_head: u8,
+    keyboard_byte_queue_len: u8,
     keyboard_transfer_events: u32,
     keyboard_valid_report_events: u32,
     keyboard_last_report_status: u8,
@@ -1711,9 +1711,9 @@ impl UsbRuntimeState {
             keyboard_preserved_event_parameters: [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
             keyboard_preserved_event_statuses: [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
             keyboard_preserved_event_controls: [0; USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH],
-            keyboard_output_pending: [0; USB_KEYBOARD_OUTPUT_PENDING_BYTES],
-            keyboard_output_pending_offset: 0,
-            keyboard_output_pending_len: 0,
+            keyboard_byte_queue: [0; USB_KEYBOARD_BYTE_QUEUE_BYTES],
+            keyboard_byte_queue_head: 0,
+            keyboard_byte_queue_len: 0,
             keyboard_transfer_events: 0,
             keyboard_valid_report_events: 0,
             keyboard_last_report_status: DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE,
@@ -2178,6 +2178,11 @@ static HDMI_CURSOR_ROW: AtomicU32 = AtomicU32::new(0);
 static HDMI_CURSOR_COL: AtomicU32 = AtomicU32::new(0);
 static HDMI_ESCAPE_STATE: AtomicU32 = AtomicU32::new(0);
 static HDMI_CSI_VALUE: AtomicU32 = AtomicU32::new(0);
+static HDMI_CSI_VALUE_2: AtomicU32 = AtomicU32::new(0);
+static HDMI_CSI_PARAM_INDEX: AtomicU32 = AtomicU32::new(0);
+static HDMI_CSI_DIGITS_SEEN: AtomicU32 = AtomicU32::new(0);
+static HDMI_SAVED_CURSOR_ROW: AtomicU32 = AtomicU32::new(0);
+static HDMI_SAVED_CURSOR_COL: AtomicU32 = AtomicU32::new(0);
 static GENET_RUNTIME_FLAGS: AtomicU32 = AtomicU32::new(0);
 static GENET_TX_COUNT: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -4792,6 +4797,7 @@ fn service_cyw43_descriptor_command(
     let mut exact_fault = None;
     let mut frame_ready = None;
     let mut progress_detail = None;
+    let mut progress_frame = DriverFrameDescriptor::empty();
     let mut rx_idle_reason = None;
     let previous_parent_sequence =
         CYW43_ACTIVE_PARENT_SEQUENCE.swap(command.sequence, Ordering::AcqRel);
@@ -4971,13 +4977,21 @@ fn service_cyw43_descriptor_command(
                 len: desc.payload_len,
                 flags: 0,
             };
+            let submitted_seq = state.sdpcm_seq;
+            let submitted_credit_observations = state.sdpcm_credit_observations;
             let written = cyw43_submit_sdpcm_frame(state, frame, true, false);
             if written != 0 {
                 progress_detail = u16::try_from(cyw43_data_tx_request_len(written)).ok();
+                progress_frame = cyw43_sdpcm_tx_credit_proof_frame(
+                    submitted_seq,
+                    state.sdpcm_seq_max,
+                    submitted_credit_observations,
+                );
             }
             written as u32
         }
         DRIVER_RUNTIME_CYW43_OP_RX_POLL => {
+            let credit_observations_before = state.sdpcm_credit_observations;
             match cyw43_runtime_poll_rx_detailed(
                 state,
                 CYW43_RX_FRAME_FLAG_MASK_DATA,
@@ -4990,11 +5004,15 @@ fn service_cyw43_descriptor_command(
                 }
                 Cyw43RxPollResult::Idle(reason) => {
                     rx_idle_reason = Some(reason);
+                    if state.sdpcm_credit_observations != credit_observations_before {
+                        progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
+                    }
                     0
                 }
             }
         }
         DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
+            let credit_observations_before = state.sdpcm_credit_observations;
             match cyw43_runtime_poll_rx_detailed(
                 state,
                 CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT,
@@ -5007,6 +5025,9 @@ fn service_cyw43_descriptor_command(
                 }
                 Cyw43RxPollResult::Idle(reason) => {
                     rx_idle_reason = Some(reason);
+                    if state.sdpcm_credit_observations != credit_observations_before {
+                        progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
+                    }
                     0
                 }
             }
@@ -5030,7 +5051,10 @@ fn service_cyw43_descriptor_command(
             )
         }
     } else if let Some(detail) = progress_detail {
-        DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, result)
+        let mut completion =
+            DriverTaskCompletionRecord::progress_with_detail(command.sequence, detail, result);
+        completion.frame = progress_frame;
+        completion
     } else if result == 0
         && (desc.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
             || desc.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL)
@@ -5039,13 +5063,23 @@ fn service_cyw43_descriptor_command(
             let reason = rx_idle_reason.unwrap_or(Cyw43RxIdleReason::NoRframe);
             let detail = cyw43_rx_idle_detail(reason);
             let idle_result = cyw43_rx_idle_result(reason);
-            let frame = CYW43_RUNTIME_STATE
+            let mut frame = CYW43_RUNTIME_STATE
                 .with_mut(|state| cyw43_stage_rx_idle_trace(state, detail, idle_result));
+            if progress_frame.flags != 0 {
+                frame.flags = progress_frame.flags;
+            }
             DriverTaskCompletionRecord::idle_with_detail_and_frame(
                 command.sequence,
                 detail,
                 idle_result,
                 frame,
+            )
+        } else if progress_frame.flags != 0 {
+            DriverTaskCompletionRecord::idle_with_detail_and_frame(
+                command.sequence,
+                FAULT_NONE,
+                0,
+                progress_frame,
             )
         } else {
             DriverTaskCompletionRecord::idle(command.sequence)
@@ -10961,6 +10995,30 @@ const fn cyw43_frame_flags(channel: u8, credit: u8) -> u16 {
         | ((credit as u16) << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT)
 }
 
+const fn cyw43_sdpcm_credit_proof_flags(seq: u8, seq_max: u8) -> u16 {
+    (seq as u16) | ((seq_max as u16) << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT)
+}
+
+const fn cyw43_sdpcm_tx_credit_proof_frame(
+    submitted_seq: u8,
+    seq_max: u8,
+    credit_observations: u32,
+) -> DriverFrameDescriptor {
+    DriverFrameDescriptor {
+        offset: 0,
+        len: (credit_observations & 0xffff) as u16,
+        flags: cyw43_sdpcm_credit_proof_flags(submitted_seq, seq_max),
+    }
+}
+
+const fn cyw43_sdpcm_credit_snapshot_frame(state: &Cyw43RuntimeState) -> DriverFrameDescriptor {
+    DriverFrameDescriptor {
+        offset: 0,
+        len: (state.sdpcm_credit_observations & 0xffff) as u16,
+        flags: cyw43_sdpcm_credit_proof_flags(state.sdpcm_seq, state.sdpcm_seq_max),
+    }
+}
+
 const fn cyw43_frame_flags_for_header(header: Cyw43RxSdpcmHeader) -> u16 {
     cyw43_frame_flags(header.channel, header.credit)
 }
@@ -12068,9 +12126,9 @@ fn pcie_runtime_init(state: &mut PcieRuntimeState) -> bool {
 
 fn usb_reset_keyboard_interrupt_queue(state: &mut UsbRuntimeState) {
     usb_clear_keyboard_interrupt_transfer_state(state);
-    state.keyboard_output_pending = [0; USB_KEYBOARD_OUTPUT_PENDING_BYTES];
-    state.keyboard_output_pending_offset = 0;
-    state.keyboard_output_pending_len = 0;
+    state.keyboard_byte_queue = [0; USB_KEYBOARD_BYTE_QUEUE_BYTES];
+    state.keyboard_byte_queue_head = 0;
+    state.keyboard_byte_queue_len = 0;
     state.keyboard_transfer_events = 0;
     state.keyboard_valid_report_events = 0;
     state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
@@ -12204,12 +12262,6 @@ fn usb_keyboard_recover_endpoint_if_due_with_progress(
     }
     let full_recovery_queue =
         usb_keyboard_recovery_aux_full_queue_recovery_due(state, recovery_aux);
-    if full_recovery_queue
-        && state.keyboard_last_report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE
-    {
-        state.keyboard_last_report_status =
-            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE;
-    }
     if usb_keyboard_steady_idle_recovery_due(state)
         || usb_keyboard_steady_overqueue_recovery_due(state)
         || usb_keyboard_pre_first_report_underfilled_queue_recovery_due(state)
@@ -12247,11 +12299,37 @@ fn usb_keyboard_mark_recovery_needed_if_due(state: &mut UsbRuntimeState) -> bool
     let reason = usb_keyboard_recovery_due_reason(state, false, false);
     if reason != pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_NONE {
         state.keyboard_last_recovery_reason = reason;
-        state.keyboard_last_report_status =
-            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED;
+        state.keyboard_last_report_status = usb_keyboard_report_status_for_recovery_reason(
+            state.keyboard_last_report_status,
+            reason,
+        );
         return true;
     }
     false
+}
+
+const fn usb_keyboard_report_status_for_recovery_reason(current_status: u8, reason: u8) -> u8 {
+    match reason {
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_STEADY_IDLE
+        | pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_FULL_QUEUE_NO_EVENT => {
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_QUEUE_COLLAPSE => {
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE
+        }
+        pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_STEADY_UNMATCHED
+        | pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_AUX_UNMATCHED
+        | pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_HARD_UNMATCHED => {
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER
+        }
+        _ => {
+            if usb_keyboard_stale_without_fresh_event_status(current_status) {
+                DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE
+            } else {
+                DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED
+            }
+        }
+    }
 }
 
 fn usb_keyboard_pre_first_report_underfilled_queue_recovery_due(state: &UsbRuntimeState) -> bool {
@@ -12290,8 +12368,8 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
     }
     RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
         let recovery_aux = aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX;
-        let mut bytes = usb_keyboard_drain_pending_output(state, 0);
-        if bytes >= USB_KEYBOARD_OUTPUT_LIMIT || state.keyboard_output_pending_len != 0 {
+        let mut bytes = usb_keyboard_drain_byte_queue(state, 0);
+        if bytes >= USB_KEYBOARD_OUTPUT_LIMIT || state.keyboard_byte_queue_len != 0 {
             return bytes;
         }
         if !xhci_arm_keyboard_interrupt_queue(state, descriptor) {
@@ -12371,7 +12449,7 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
                 recovery_attempted = true;
                 break;
             }
-            if bytes >= USB_KEYBOARD_OUTPUT_LIMIT || state.keyboard_output_pending_len != 0 {
+            if bytes >= USB_KEYBOARD_OUTPUT_LIMIT || state.keyboard_byte_queue_len != 0 {
                 break;
             }
         }
@@ -12401,7 +12479,7 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
         if bytes == 0 && recovery_aux && usb_keyboard_control_poll_allowed(state) {
             bytes = usb_poll_keyboard_control_report(state, descriptor, sequence, aux0);
         }
-        if bytes == 0 && recovery_aux {
+        if bytes == 0 {
             usb_keyboard_sync_pending_leds_after_idle(state, descriptor);
         }
         bytes
@@ -12799,88 +12877,104 @@ fn usb_keyboard_output_room(output_offset: usize, produced: usize) -> usize {
     USB_KEYBOARD_OUTPUT_LIMIT.saturating_sub(output_offset.saturating_add(produced))
 }
 
-fn usb_keyboard_compact_pending_output(state: &mut UsbRuntimeState) {
-    let offset = usize::from(state.keyboard_output_pending_offset);
-    let len = usize::from(state.keyboard_output_pending_len);
-    if len == 0 {
-        state.keyboard_output_pending_offset = 0;
-        return;
-    }
-    if offset == 0 {
-        return;
-    }
-    let mut index = 0usize;
-    while index < len {
-        state.keyboard_output_pending[index] = state.keyboard_output_pending[offset + index];
-        index += 1;
-    }
-    state.keyboard_output_pending_offset = 0;
+const fn usb_keyboard_byte_queue_free(state: &UsbRuntimeState) -> usize {
+    USB_KEYBOARD_BYTE_QUEUE_BYTES.saturating_sub(state.keyboard_byte_queue_len as usize)
 }
 
-fn usb_keyboard_stage_pending_output(state: &mut UsbRuntimeState, bytes: &[u8]) -> bool {
-    if bytes.is_empty() {
-        return true;
-    }
-    usb_keyboard_compact_pending_output(state);
-    let len = usize::from(state.keyboard_output_pending_len);
-    if len.saturating_add(bytes.len()) > USB_KEYBOARD_OUTPUT_PENDING_BYTES {
+fn usb_keyboard_byte_queue_push(state: &mut UsbRuntimeState, byte: u8) -> bool {
+    if state.keyboard_byte_queue_len as usize >= USB_KEYBOARD_BYTE_QUEUE_BYTES {
         return false;
     }
-    for (index, byte) in bytes.iter().copied().enumerate() {
-        state.keyboard_output_pending[len + index] = byte;
-    }
-    state.keyboard_output_pending_len = (len + bytes.len()) as u8;
+    let head = usize::from(state.keyboard_byte_queue_head);
+    let len = usize::from(state.keyboard_byte_queue_len);
+    let index = (head + len) % USB_KEYBOARD_BYTE_QUEUE_BYTES;
+    state.keyboard_byte_queue[index] = byte;
+    state.keyboard_byte_queue_len = state.keyboard_byte_queue_len.saturating_add(1);
     true
 }
 
-fn usb_keyboard_drain_pending_output(state: &mut UsbRuntimeState, output_offset: usize) -> usize {
+fn usb_keyboard_byte_queue_push_slice(state: &mut UsbRuntimeState, bytes: &[u8]) -> usize {
+    let mut accepted = 0usize;
+    for byte in bytes.iter().copied() {
+        if !usb_keyboard_byte_queue_push(state, byte) {
+            break;
+        }
+        accepted = accepted.saturating_add(1);
+    }
+    accepted
+}
+
+fn usb_keyboard_byte_queue_pop(state: &mut UsbRuntimeState) -> Option<u8> {
+    if state.keyboard_byte_queue_len == 0 {
+        state.keyboard_byte_queue_head = 0;
+        return None;
+    }
+    let head = usize::from(state.keyboard_byte_queue_head);
+    let byte = state.keyboard_byte_queue[head];
+    state.keyboard_byte_queue_head = ((head + 1) % USB_KEYBOARD_BYTE_QUEUE_BYTES) as u8;
+    state.keyboard_byte_queue_len = state.keyboard_byte_queue_len.saturating_sub(1);
+    if state.keyboard_byte_queue_len == 0 {
+        state.keyboard_byte_queue_head = 0;
+    }
+    Some(byte)
+}
+
+fn usb_keyboard_drain_byte_queue(state: &mut UsbRuntimeState, output_offset: usize) -> usize {
     let mut produced = 0usize;
-    while state.keyboard_output_pending_len != 0 {
+    while state.keyboard_byte_queue_len != 0 {
         if usb_keyboard_output_room(output_offset, produced) == 0 {
             break;
         }
-        let offset = usize::from(state.keyboard_output_pending_offset);
-        let byte = state.keyboard_output_pending[offset];
+        let Some(byte) = usb_keyboard_byte_queue_pop(state) else {
+            break;
+        };
         write_ring_byte(
             DRIVER_TASK_RING_FRAME_OFFSET + output_offset + produced,
             byte,
         );
-        state.keyboard_output_pending_offset =
-            state.keyboard_output_pending_offset.saturating_add(1);
-        state.keyboard_output_pending_len = state.keyboard_output_pending_len.saturating_sub(1);
         produced = produced.saturating_add(1);
-    }
-    if state.keyboard_output_pending_len == 0 {
-        state.keyboard_output_pending_offset = 0;
     }
     produced
 }
 
+#[cfg(test)]
 fn usb_keyboard_report_bytes_to_frame_at(
     state: &mut UsbRuntimeState,
     report: [u8; USB_BOOT_REPORT_BYTES],
     output_offset: usize,
 ) -> usize {
-    let mut produced = 0usize;
+    let accepted = usb_keyboard_queue_report_bytes(state, report);
+    if accepted == 0 && state.keyboard_byte_queue_len == 0 {
+        return 0;
+    }
+    usb_keyboard_drain_byte_queue(state, output_offset)
+}
+
+fn usb_keyboard_queue_report_bytes(
+    state: &mut UsbRuntimeState,
+    report: [u8; USB_BOOT_REPORT_BYTES],
+) -> usize {
+    let mut accepted = 0usize;
+    let mut seen = [0u8; 6];
+    let mut seen_len = 0usize;
     'keys: for &code in report[2..].iter() {
         if code == 0 {
             continue;
         }
-        if state.last_keys.contains(&code) {
+        if state.last_keys.contains(&code) || seen[..seen_len].contains(&code) {
             continue;
+        }
+        if seen_len < seen.len() {
+            seen[seen_len] = code;
+            seen_len += 1;
         }
         if usb_keyboard_toggle_lock(state, code) {
             continue;
         }
         if let Some(sequence) = usb_hid_usage_to_sequence(code) {
-            if sequence.len() > usb_keyboard_output_room(output_offset, produced) {
-                let _ = usb_keyboard_stage_pending_output(state, sequence);
+            accepted = accepted.saturating_add(usb_keyboard_byte_queue_push_slice(state, sequence));
+            if usb_keyboard_byte_queue_free(state) == 0 {
                 break 'keys;
-            }
-            for &byte in sequence {
-                let frame_offset = output_offset + produced;
-                write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + frame_offset, byte);
-                produced = produced.saturating_add(1);
             }
             continue;
         }
@@ -12891,16 +12985,13 @@ fn usb_keyboard_report_bytes_to_frame_at(
         if state.caps_lock_on && byte.is_ascii_alphabetic() {
             byte ^= 0x20;
         }
-        if usb_keyboard_output_room(output_offset, produced) == 0 {
-            let _ = usb_keyboard_stage_pending_output(state, &[byte]);
+        if !usb_keyboard_byte_queue_push(state, byte) {
             break;
         }
-        let frame_offset = output_offset + produced;
-        write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + frame_offset, byte);
-        produced = produced.saturating_add(1);
+        accepted = accepted.saturating_add(1);
     }
     state.last_keys.copy_from_slice(&report[2..8]);
-    produced
+    accepted
 }
 
 fn usb_keyboard_report_is_idle(report: &[u8; USB_BOOT_REPORT_BYTES]) -> bool {
@@ -12917,10 +13008,17 @@ fn usb_keyboard_consume_attach_settle_report(
         return false;
     }
     let report_idle = usb_keyboard_report_is_idle(report);
-    state.last_keys.copy_from_slice(&report[2..8]);
     if report_idle {
+        state.last_keys.copy_from_slice(&report[2..8]);
         state.keyboard_attach_awaiting_idle = false;
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+        return true;
     }
+    if report_has_key {
+        state.keyboard_attach_awaiting_idle = false;
+        return false;
+    }
+    state.last_keys.copy_from_slice(&report[2..8]);
     state.keyboard_last_report_status = if report_has_key {
         DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY
     } else if payload_nonzero {
@@ -12990,10 +13088,15 @@ fn usb_keyboard_report_payload_to_frame_at_inner(
     if usb_keyboard_consume_attach_settle_report(state, &report, report_has_key, payload_nonzero) {
         return 0;
     }
-    let produced = usb_keyboard_report_bytes_to_frame_at(state, report, output_offset);
+    let queued = usb_keyboard_queue_report_bytes(state, report);
+    let produced = if queued == 0 {
+        0
+    } else {
+        usb_keyboard_drain_byte_queue(state, output_offset)
+    };
     state.keyboard_last_report_status = if fallback {
         DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FLEXIBLE_FALLBACK
-    } else if produced != 0 {
+    } else if queued != 0 {
         DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE
     } else if report_has_key {
         DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY
@@ -13246,13 +13349,9 @@ fn usb_keyboard_sync_pending_leds_after_idle(
         return;
     }
     let leds = state.keyboard_led_report;
-    if usb_set_hid_leds(state, descriptor, leds) {
-        state.keyboard_led_sync_pending = false;
-        state.led_sync_failed = false;
-    } else {
-        state.led_sync_failed = true;
-        state.keyboard_led_sync_cooldown = USB_HID_LED_SYNC_RETRY_POLLS;
-    }
+    state.keyboard_led_sync_pending = false;
+    state.keyboard_led_sync_cooldown = 0;
+    state.led_sync_failed = !usb_set_hid_leds(state, descriptor, leds);
 }
 
 fn usb_keyboard_led_bitmap(state: &UsbRuntimeState) -> u8 {
@@ -13327,7 +13426,12 @@ fn hdmi_render_frame(frame: DriverFrameDescriptor) -> usize {
         HDMI_CURSOR_ROW.store(state.row as u32, Ordering::Release);
         HDMI_CURSOR_COL.store(state.col as u32, Ordering::Release);
         HDMI_ESCAPE_STATE.store(u32::from(state.escape_state), Ordering::Release);
-        HDMI_CSI_VALUE.store(state.csi_value as u32, Ordering::Release);
+        HDMI_CSI_VALUE.store(state.csi_values[0] as u32, Ordering::Release);
+        HDMI_CSI_VALUE_2.store(state.csi_values[1] as u32, Ordering::Release);
+        HDMI_CSI_PARAM_INDEX.store(state.csi_param_index as u32, Ordering::Release);
+        HDMI_CSI_DIGITS_SEEN.store(u32::from(state.csi_digits_seen), Ordering::Release);
+        HDMI_SAVED_CURSOR_ROW.store(state.saved_row as u32, Ordering::Release);
+        HDMI_SAVED_CURSOR_COL.store(state.saved_col as u32, Ordering::Release);
         rendered
     })
 }
@@ -13342,6 +13446,11 @@ fn hdmi_render_boot_diagnostics(descriptor: &DriverRuntimeInitDescriptor) {
     HDMI_CURSOR_COL.store(0, Ordering::Release);
     HDMI_ESCAPE_STATE.store(0, Ordering::Release);
     HDMI_CSI_VALUE.store(0, Ordering::Release);
+    HDMI_CSI_VALUE_2.store(0, Ordering::Release);
+    HDMI_CSI_PARAM_INDEX.store(0, Ordering::Release);
+    HDMI_CSI_DIGITS_SEEN.store(0, Ordering::Release);
+    HDMI_SAVED_CURSOR_ROW.store(0, Ordering::Release);
+    HDMI_SAVED_CURSOR_COL.store(0, Ordering::Release);
 }
 
 struct HdmiRenderState {
@@ -13360,7 +13469,11 @@ struct HdmiRenderState {
     row: usize,
     col: usize,
     escape_state: u8,
-    csi_value: usize,
+    csi_values: [usize; 2],
+    csi_param_index: usize,
+    csi_digits_seen: u8,
+    saved_row: usize,
+    saved_col: usize,
 }
 
 impl HdmiRenderState {
@@ -13390,7 +13503,15 @@ impl HdmiRenderState {
             row,
             col,
             escape_state: HDMI_ESCAPE_STATE.load(Ordering::Acquire) as u8,
-            csi_value: HDMI_CSI_VALUE.load(Ordering::Acquire) as usize,
+            csi_values: [
+                HDMI_CSI_VALUE.load(Ordering::Acquire) as usize,
+                HDMI_CSI_VALUE_2.load(Ordering::Acquire) as usize,
+            ],
+            csi_param_index: (HDMI_CSI_PARAM_INDEX.load(Ordering::Acquire) as usize).min(1),
+            csi_digits_seen: (HDMI_CSI_DIGITS_SEEN.load(Ordering::Acquire) as u8) & 0x03,
+            saved_row: (HDMI_SAVED_CURSOR_ROW.load(Ordering::Acquire) as usize)
+                .min(rows.saturating_sub(1)),
+            saved_col: (HDMI_SAVED_CURSOR_COL.load(Ordering::Acquire) as usize).min(cols),
         }
     }
 
@@ -13402,7 +13523,7 @@ impl HdmiRenderState {
         match byte {
             0x1b => {
                 self.escape_state = 1;
-                self.csi_value = 0;
+                self.reset_csi();
             }
             b'\n' => self.newline(),
             b'\r' => self.col = 0,
@@ -13413,7 +13534,8 @@ impl HdmiRenderState {
             }
             0x08 | 0x7f => self.backspace(),
             b'\t' => {
-                for _ in 0..4 {
+                let next_tab = ((self.col / 8).saturating_add(1)).saturating_mul(8);
+                while self.col < next_tab {
                     self.put_byte(b' ');
                 }
             }
@@ -13431,44 +13553,117 @@ impl HdmiRenderState {
         match self.escape_state {
             1 if byte == b'[' => {
                 self.escape_state = 2;
-                self.csi_value = 0;
+                self.reset_csi();
             }
-            2 if byte.is_ascii_digit() => {
-                self.csi_value = self
-                    .csi_value
-                    .saturating_mul(10)
-                    .saturating_add(usize::from(byte - b'0'));
+            1 if byte == b'7' => {
+                self.saved_row = self.row.min(self.rows.saturating_sub(1));
+                self.saved_col = self.col.min(self.cols);
+                self.escape_state = 0;
+                self.reset_csi();
             }
-            2 if byte == b';' => {}
-            2 => {
+            1 if byte == b'8' => {
+                self.row = self.saved_row.min(self.rows.saturating_sub(1));
+                self.col = self.saved_col.min(self.cols);
+                self.escape_state = 0;
+                self.reset_csi();
+            }
+            2 if byte.is_ascii_digit() => self.push_csi_digit(byte),
+            2 if byte == b';' => {
+                self.csi_param_index = self.csi_param_index.saturating_add(1).min(1);
+            }
+            2 if (0x40..=0x7e).contains(&byte) => {
                 self.handle_csi(byte);
                 self.escape_state = 0;
-                self.csi_value = 0;
+                self.reset_csi();
             }
             _ => {
                 self.escape_state = 0;
-                self.csi_value = 0;
+                self.reset_csi();
             }
         }
     }
 
     fn handle_csi(&mut self, byte: u8) {
         match byte {
-            b'H' | b'f' => {
-                self.row = 0;
+            b'A' => self.move_cursor_up(self.csi_count_or_one()),
+            b'B' => self.move_cursor_down(self.csi_count_or_one()),
+            b'C' => self.move_cursor_right(self.csi_count_or_one()),
+            b'D' => self.move_cursor_left(self.csi_count_or_one()),
+            b'E' => {
+                self.move_cursor_down(self.csi_count_or_one());
                 self.col = 0;
             }
-            b'J' if self.csi_value == 2 => {
+            b'F' => {
+                self.move_cursor_up(self.csi_count_or_one());
+                self.col = 0;
+            }
+            b'H' | b'f' => {
+                let row = self.csi_param(0).unwrap_or(0);
+                let col = self.csi_param(1).unwrap_or(0);
+                self.row = row.saturating_sub(1).min(self.rows.saturating_sub(1));
+                self.col = col.saturating_sub(1).min(self.cols.saturating_sub(1));
+            }
+            b'J' if self.csi_param(0).unwrap_or(0) == 1 => self.clear_from_start_to_cursor(),
+            b'J' if self.csi_param(0).unwrap_or(0) == 2 => {
                 self.clear_text_area();
                 self.row = 0;
                 self.col = 0;
             }
             b'J' => self.clear_from_cursor_to_end(),
-            b'K' if self.csi_value == 1 => self.clear_current_row_to_cursor(),
-            b'K' if self.csi_value == 2 => self.clear_current_row(),
+            b'K' if self.csi_param(0).unwrap_or(0) == 1 => self.clear_current_row_to_cursor(),
+            b'K' if self.csi_param(0).unwrap_or(0) == 2 => self.clear_current_row(),
             b'K' => self.clear_current_row_from_cursor(),
+            b'm' => {}
             _ => {}
         }
+    }
+
+    fn reset_csi(&mut self) {
+        self.csi_values = [0, 0];
+        self.csi_param_index = 0;
+        self.csi_digits_seen = 0;
+    }
+
+    fn push_csi_digit(&mut self, byte: u8) {
+        let index = self.csi_param_index.min(1);
+        self.csi_values[index] = self.csi_values[index]
+            .saturating_mul(10)
+            .saturating_add(usize::from(byte - b'0'));
+        self.csi_digits_seen |= 1 << index;
+    }
+
+    fn csi_param(&self, index: usize) -> Option<usize> {
+        (index < self.csi_values.len() && (self.csi_digits_seen & (1 << index)) != 0)
+            .then_some(self.csi_values[index])
+    }
+
+    fn csi_count_or_one(&self) -> usize {
+        match self.csi_param(0) {
+            Some(0) | None => 1,
+            Some(value) => value,
+        }
+    }
+
+    fn move_cursor_up(&mut self, count: usize) {
+        self.row = self.row.saturating_sub(count);
+    }
+
+    fn move_cursor_down(&mut self, count: usize) {
+        self.row = self
+            .row
+            .saturating_add(count)
+            .min(self.rows.saturating_sub(1));
+    }
+
+    fn move_cursor_left(&mut self, count: usize) {
+        self.col = self.col.saturating_sub(count);
+    }
+
+    fn move_cursor_right(&mut self, count: usize) {
+        self.col = self
+            .col
+            .saturating_add(count)
+            .min(self.cols.saturating_sub(1));
     }
 
     fn put_str(&mut self, text: &str) {
@@ -13481,7 +13676,7 @@ impl HdmiRenderState {
         self.col = 0;
         self.row = self.row.saturating_add(1);
         if self.row >= self.rows {
-            self.scroll_up_one_text_row();
+            self.scroll_up_text_rows(HDMI_SCROLL_LINES);
         }
     }
 
@@ -13497,7 +13692,9 @@ impl HdmiRenderState {
         self.draw_char(b' ');
     }
 
-    fn scroll_up_one_text_row(&mut self) {
+    fn scroll_up_text_rows(&mut self, rows: usize) {
+        let scroll_rows = rows.min(self.rows.saturating_sub(1)).max(1);
+        let scroll_pixels = scroll_rows.saturating_mul(CHAR_HEIGHT);
         let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
             self.clear_text_area();
             self.row = 0;
@@ -13505,7 +13702,7 @@ impl HdmiRenderState {
             return;
         };
         let text_height = self.rows.saturating_mul(CHAR_HEIGHT).min(self.height);
-        if text_height <= CHAR_HEIGHT || self.pitch == 0 || self.width == 0 {
+        if text_height <= scroll_pixels || self.pitch == 0 || self.width == 0 {
             self.clear_text_area();
             self.row = 0;
             self.col = 0;
@@ -13523,7 +13720,7 @@ impl HdmiRenderState {
             self.col = 0;
             return;
         }
-        let copy_rows = text_height.saturating_sub(CHAR_HEIGHT);
+        let copy_rows = text_height.saturating_sub(scroll_pixels);
         for y in 0..copy_rows {
             let Some(dst_off) =
                 self.framebuffer_offset(self.safe_x, self.safe_y + y, bytes_per_pixel)
@@ -13532,7 +13729,7 @@ impl HdmiRenderState {
             };
             let Some(src_off) = self.framebuffer_offset(
                 self.safe_x,
-                self.safe_y + y + CHAR_HEIGHT,
+                self.safe_y + y + scroll_pixels,
                 bytes_per_pixel,
             ) else {
                 continue;
@@ -13554,12 +13751,12 @@ impl HdmiRenderState {
         }
         self.fill_rect(
             0,
-            text_height.saturating_sub(CHAR_HEIGHT),
+            text_height.saturating_sub(scroll_pixels),
             self.width,
-            CHAR_HEIGHT,
+            scroll_pixels,
             HDMI_BG_COLOR,
         );
-        self.row = self.rows.saturating_sub(1);
+        self.row = self.rows.saturating_sub(scroll_rows);
         self.col = 0;
     }
 
@@ -13592,6 +13789,14 @@ impl HdmiRenderState {
             .min(self.cols)
             .saturating_mul(CHAR_WIDTH);
         self.fill_rect(0, y, width, CHAR_HEIGHT, HDMI_BG_COLOR);
+    }
+
+    fn clear_from_start_to_cursor(&mut self) {
+        let y = self.row.saturating_mul(CHAR_HEIGHT);
+        if y != 0 {
+            self.fill_rect(0, 0, self.width, y, HDMI_BG_COLOR);
+        }
+        self.clear_current_row_to_cursor();
     }
 
     fn clear_from_cursor_to_end(&mut self) {
@@ -20364,7 +20569,7 @@ fn xhci_recover_keyboard_interrupt_endpoint_with_progress(
     let slot = state.keyboard_slot;
     let endpoint_id = state.keyboard_endpoint_id;
     state.keyboard_control_poll_cooldown = USB_HID_CONTROL_GET_REPORT_COOLDOWN_POLLS;
-    state.keyboard_led_sync_cooldown = USB_HID_LED_SYNC_RETRY_POLLS;
+    state.keyboard_led_sync_cooldown = 0;
     let reset_required = state.keyboard_endpoint_reset_required;
 
     state.keyboard_last_recovery_stage =
@@ -22017,6 +22222,11 @@ mod tests {
         HDMI_CURSOR_COL.store(0, Ordering::Release);
         HDMI_ESCAPE_STATE.store(0, Ordering::Release);
         HDMI_CSI_VALUE.store(0, Ordering::Release);
+        HDMI_CSI_VALUE_2.store(0, Ordering::Release);
+        HDMI_CSI_PARAM_INDEX.store(0, Ordering::Release);
+        HDMI_CSI_DIGITS_SEEN.store(0, Ordering::Release);
+        HDMI_SAVED_CURSOR_ROW.store(0, Ordering::Release);
+        HDMI_SAVED_CURSOR_COL.store(0, Ordering::Release);
         GENET_RUNTIME_FLAGS.store(0, Ordering::Release);
         GENET_TX_COUNT.store(0, Ordering::Release);
         GENET_RX_COUNT.store(0, Ordering::Release);
@@ -24015,14 +24225,15 @@ mod tests {
         });
         let data_tx_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14;
         let data_tx_request_len = cyw43_data_tx_request_len(data_tx_len);
-        assert_eq!(
-            service_command(0, cyw43_descriptor_command(75)),
-            DriverTaskCompletionRecord::progress_with_detail(
+        assert_eq!(service_command(0, cyw43_descriptor_command(75)), {
+            let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 75,
                 data_tx_request_len as u16,
-                data_tx_len as u32
-            )
-        );
+                data_tx_len as u32,
+            );
+            completion.frame = cyw43_sdpcm_tx_credit_proof_frame(0, 1, 0);
+            completion
+        });
         assert_eq!(
             read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET),
             data_tx_len as u16
@@ -24244,14 +24455,15 @@ mod tests {
         let request_len = cyw43_data_tx_request_len(total_len);
         assert_eq!(total_len, 165);
         assert_eq!(request_len, 168);
-        assert_eq!(
-            service_command(0, cyw43_descriptor_command(176)),
-            DriverTaskCompletionRecord::progress_with_detail(
+        assert_eq!(service_command(0, cyw43_descriptor_command(176)), {
+            let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 176,
                 request_len as u16,
-                total_len as u32
-            )
-        );
+                total_len as u32,
+            );
+            completion.frame = cyw43_sdpcm_tx_credit_proof_frame(9, 10, 0);
+            completion
+        });
         assert_eq!(
             test_sdio_cmd53_write_shape_count(
                 2,
@@ -28834,7 +29046,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_led_sync_defers_until_idle_and_retries_failure() {
+    fn usb_keyboard_led_sync_is_fire_and_forget_after_idle() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -28860,12 +29072,9 @@ mod tests {
         }
 
         usb_keyboard_sync_pending_leds_after_idle(&mut state, &descriptor);
-        assert!(state.keyboard_led_sync_pending);
+        assert!(!state.keyboard_led_sync_pending);
         assert!(state.led_sync_failed);
-        assert_eq!(
-            state.keyboard_led_sync_cooldown,
-            USB_HID_LED_SYNC_RETRY_POLLS
-        );
+        assert_eq!(state.keyboard_led_sync_cooldown, 0);
 
         state.last_keys = [0; 6];
         let num_report = [0, 0, USB_HID_USAGE_NUM_LOCK, 0, 0, 0, 0, 0];
@@ -28906,7 +29115,51 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_escape_sequence_defers_atomically_at_frame_boundary() {
+    fn usb_keyboard_report_queue_suppresses_duplicate_keys_until_release() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = UsbRuntimeState::new();
+        let a = [0, 0, 0x04, 0, 0, 0, 0, 0];
+        let idle = [0; USB_BOOT_REPORT_BYTES];
+
+        assert_eq!(usb_keyboard_report_bytes_to_frame(&mut state, a), 1);
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'a');
+        assert_eq!(usb_keyboard_report_bytes_to_frame(&mut state, a), 0);
+        assert_eq!(state.last_keys[0], 0x04);
+        assert_eq!(usb_keyboard_report_bytes_to_frame(&mut state, idle), 0);
+        assert_eq!(state.last_keys, [0; 6]);
+        assert_eq!(usb_keyboard_report_bytes_to_frame(&mut state, a), 1);
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'a');
+    }
+
+    #[test]
+    fn usb_keyboard_byte_queue_wraps_without_reordering() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = UsbRuntimeState::new();
+
+        assert_eq!(usb_keyboard_byte_queue_push_slice(&mut state, b"abcdef"), 6);
+        assert_eq!(
+            usb_keyboard_drain_byte_queue(&mut state, USB_KEYBOARD_OUTPUT_LIMIT - 4),
+            4
+        );
+        assert_eq!(usb_keyboard_byte_queue_push_slice(&mut state, b"ghijkl"), 6);
+        assert_eq!(state.keyboard_byte_queue_len, 8);
+        assert_eq!(usb_keyboard_drain_byte_queue(&mut state, 0), 8);
+        assert_eq!(
+            &read_frame_prefix::<8>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 8,
+                flags: 0,
+            }),
+            b"efghijkl"
+        );
+        assert_eq!(state.keyboard_byte_queue_head, 0);
+        assert_eq!(state.keyboard_byte_queue_len, 0);
+    }
+
+    #[test]
+    fn usb_keyboard_byte_queue_splits_escape_sequence_across_frame_boundary() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = UsbRuntimeState::new();
@@ -28918,36 +29171,35 @@ mod tests {
 
         assert_eq!(
             usb_keyboard_report_bytes_to_frame_at(&mut state, down, USB_KEYBOARD_OUTPUT_LIMIT - 1),
-            0
+            1
         );
         assert_eq!(
             read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + USB_KEYBOARD_OUTPUT_LIMIT - 1),
-            b'!'
+            0x1b
         );
-        assert_eq!(state.keyboard_output_pending_len, 3);
-        assert_eq!(
-            usb_keyboard_drain_pending_output(&mut state, 0),
-            b"\x1b[B".len()
-        );
-        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), 0x1b);
-        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + 1), b'[');
-        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + 2), b'B');
-        assert_eq!(state.keyboard_output_pending_len, 0);
+        assert_eq!(state.keyboard_byte_queue_len, 2);
+        assert_eq!(usb_keyboard_drain_byte_queue(&mut state, 0), b"[B".len());
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'[');
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + 1), b'B');
+        assert_eq!(state.keyboard_byte_queue_len, 0);
         assert_eq!(state.last_keys[0], USB_HID_USAGE_DOWN_ARROW);
     }
 
     #[test]
-    fn usb_keyboard_pending_output_drains_before_new_report_bytes() {
+    fn usb_keyboard_byte_queue_drains_before_new_report_bytes() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = UsbRuntimeState::new();
 
-        assert!(usb_keyboard_stage_pending_output(&mut state, b"\x1b[A"));
         assert_eq!(
-            usb_keyboard_drain_pending_output(&mut state, USB_KEYBOARD_OUTPUT_LIMIT - 2),
+            usb_keyboard_byte_queue_push_slice(&mut state, b"\x1b[A"),
+            b"\x1b[A".len()
+        );
+        assert_eq!(
+            usb_keyboard_drain_byte_queue(&mut state, USB_KEYBOARD_OUTPUT_LIMIT - 2),
             2
         );
-        assert_eq!(state.keyboard_output_pending_len, 1);
+        assert_eq!(state.keyboard_byte_queue_len, 1);
         assert_eq!(
             read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + USB_KEYBOARD_OUTPUT_LIMIT - 2),
             0x1b
@@ -28957,9 +29209,9 @@ mod tests {
             b'['
         );
 
-        assert_eq!(usb_keyboard_drain_pending_output(&mut state, 0), 1);
+        assert_eq!(usb_keyboard_drain_byte_queue(&mut state, 0), 1);
         assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'A');
-        assert_eq!(state.keyboard_output_pending_len, 0);
+        assert_eq!(state.keyboard_byte_queue_len, 0);
     }
 
     #[test]
@@ -29083,20 +29335,29 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_attach_settle_requires_release_before_bytes() {
+    fn usb_keyboard_attach_settle_accepts_first_non_idle_report() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = UsbRuntimeState::new();
         usb_reset_keyboard_interrupt_queue(&mut state);
 
-        let caps = [0, 0, USB_HID_USAGE_CAPS_LOCK, 0, 0, 0, 0, 0];
+        let a = [0, 0, 0x04, 0, 0, 0, 0, 0];
         assert_eq!(
-            usb_keyboard_report_payload_to_frame_at(&mut state, &caps, 0),
+            usb_keyboard_report_payload_to_frame_at(&mut state, &a, 0),
+            1
+        );
+        assert!(!state.keyboard_attach_awaiting_idle);
+        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'a');
+        assert_eq!(state.last_keys[0], 0x04);
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE
+        );
+
+        assert_eq!(
+            usb_keyboard_report_payload_to_frame_at(&mut state, &a, 0),
             0
         );
-        assert!(state.keyboard_attach_awaiting_idle);
-        assert!(!state.caps_lock_on);
-        assert_eq!(state.last_keys[0], USB_HID_USAGE_CAPS_LOCK);
         assert_eq!(
             state.keyboard_last_report_status,
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY
@@ -29113,13 +29374,6 @@ mod tests {
             state.keyboard_last_report_status,
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
         );
-
-        let a = [0, 0, 0x04, 0, 0, 0, 0, 0];
-        assert_eq!(
-            usb_keyboard_report_payload_to_frame_at(&mut state, &a, 0),
-            1
-        );
-        assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'a');
     }
 
     #[test]
@@ -31097,8 +31351,8 @@ mod tests {
         state.keyboard_report_trb_indices[1] = 11;
         state.keyboard_preserved_event_count = 1;
         state.keyboard_preserved_event_parameters[0] = 0xdead_beef;
-        state.keyboard_output_pending[0] = b'x';
-        state.keyboard_output_pending_len = 1;
+        state.keyboard_byte_queue[0] = b'x';
+        state.keyboard_byte_queue_len = 1;
         state.keyboard_transfer_events = 9;
         state.keyboard_valid_report_events = 3;
         state.last_keys[0] = 0x04;
@@ -31115,8 +31369,8 @@ mod tests {
         assert!(!state.keyboard_report_in_use[0]);
         assert_eq!(state.keyboard_report_trb_indices[0], 0);
         assert_eq!(state.keyboard_preserved_event_count, 0);
-        assert_eq!(state.keyboard_output_pending[0], b'x');
-        assert_eq!(state.keyboard_output_pending_len, 1);
+        assert_eq!(state.keyboard_byte_queue[0], b'x');
+        assert_eq!(state.keyboard_byte_queue_len, 1);
         assert_eq!(state.keyboard_transfer_events, 9);
         assert_eq!(state.keyboard_valid_report_events, 3);
         assert_eq!(state.last_keys[0], 0x04);
@@ -33103,6 +33357,113 @@ mod tests {
     }
 
     #[test]
+    fn usb_keyboard_poll_reports_steady_idle_without_recovery_failure() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+            state.keyboard_slot = 1;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_reports_queued = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u8;
+            state.keyboard_transfer_events = USB_KEYBOARD_STEADY_IDLE_RECOVERY_EVENTS;
+            state.keyboard_valid_report_events = 1;
+            state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 98,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        let completion = service_usb_keyboard(poll);
+
+        assert_eq!(completion.code, COMPLETION_PROGRESS);
+        assert_eq!(
+            completion.detail,
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+        );
+        assert_eq!(
+            completion.result & 0xff,
+            USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u32
+        );
+        assert_eq!(
+            (completion.result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
+            u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE)
+        );
+        USB_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.keyboard_endpoint_recoveries, 0);
+            assert_eq!(state.keyboard_endpoint_recovery_failures, 0);
+            assert_eq!(
+                state.keyboard_last_recovery_reason,
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_STEADY_IDLE
+            );
+            assert_eq!(
+                state.keyboard_last_report_status,
+                DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
+            );
+        });
+    }
+
+    #[test]
+    fn usb_keyboard_normal_idle_poll_syncs_pending_leds() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+            state.keyboard_slot = 4;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_interface = 0;
+            state.keyboard_valid_report_events = 1;
+            state.keyboard_reports_queued = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u8;
+            state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+            state.keyboard_led_report = USB_HID_LED_CAPS_LOCK;
+            state.keyboard_led_sync_pending = true;
+            state.keyboard_led_sync_cooldown = 0;
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 99,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        let completion = service_usb_keyboard(poll);
+
+        assert_eq!(completion.code, COMPLETION_PROGRESS);
+        USB_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.keyboard_led_sync_pending);
+            assert!(state.led_sync_failed);
+            assert_eq!(state.keyboard_led_sync_cooldown, 0);
+            assert_eq!(state.keyboard_endpoint_recoveries, 0);
+            assert_eq!(state.keyboard_endpoint_recovery_failures, 0);
+        });
+    }
+
+    #[test]
     fn usb_keyboard_underfilled_post_first_report_queue_is_not_armed() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -33374,7 +33735,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_recovery_aux_rearms_full_no_event_queue_to_steady_depth() {
+    fn usb_keyboard_recovery_aux_recovers_full_no_event_queue() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -33482,6 +33843,7 @@ mod tests {
             assert_eq!(state.keyboard_endpoint_recoveries, 1);
             assert_eq!(state.keyboard_endpoint_recovery_failures, 0);
             assert_eq!(state.keyboard_transfer_events, 0);
+            assert_eq!(state.cmd_enqueue, 2);
             assert_eq!(
                 usize::from(state.keyboard_reports_queued),
                 USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH
@@ -34648,6 +35010,115 @@ mod tests {
         assert_eq!(top_after, bottom_before);
         assert_eq!(bottom_after, blank);
         assert_eq!(state.row, 1);
+        assert_eq!(state.col, 0);
+    }
+
+    #[test]
+    fn hdmi_runtime_csi_cursor_params_persist_across_frames() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 640,
+            height: 480,
+            pitch: 640 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        RUNTIME_DESCRIPTOR.store(descriptor);
+
+        stage_bytes(DRIVER_TASK_RING_FRAME_OFFSET, b"alpha\nbravo\n\x1b[");
+        let first = DriverFrameDescriptor {
+            offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len: 14,
+            flags: 0,
+        };
+        assert_eq!(hdmi_render_frame(first), 14);
+        assert_eq!(HDMI_ESCAPE_STATE.load(Ordering::Acquire), 2);
+
+        stage_bytes(DRIVER_TASK_RING_FRAME_OFFSET, b"2;3HZ");
+        let second = DriverFrameDescriptor {
+            offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len: 5,
+            flags: 0,
+        };
+        assert_eq!(hdmi_render_frame(second), 5);
+        assert_eq!(HDMI_ESCAPE_STATE.load(Ordering::Acquire), 0);
+        assert_eq!(HDMI_CURSOR_ROW.load(Ordering::Acquire), 1);
+        assert_eq!(HDMI_CURSOR_COL.load(Ordering::Acquire), 3);
+
+        let mut blank_state = HdmiRenderState::from_descriptor(&descriptor);
+        blank_state.clear_text_area();
+        let blank = test_hdmi_cell_digest(&descriptor.framebuffer, 1, 2);
+        let mut state = HdmiRenderState::from_descriptor(&descriptor);
+        state.put_str("\x1b[2;3HZ");
+        let rendered = test_hdmi_cell_digest(&descriptor.framebuffer, 1, 2);
+        assert_ne!(rendered, blank);
+    }
+
+    #[test]
+    fn hdmi_runtime_tab_uses_eight_column_stops() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 640,
+            height: 480,
+            pitch: 640 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        let mut state = HdmiRenderState::from_descriptor(&descriptor);
+
+        state.put_str("x\t");
+
+        assert_eq!(state.row, 0);
+        assert_eq!(state.col, 8);
+    }
+
+    #[test]
+    fn hdmi_runtime_scroll_uses_u_boot_row_batch_on_tall_framebuffer() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 96,
+            height: 320,
+            pitch: 96 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        let mut state = HdmiRenderState::from_descriptor(&descriptor);
+        state.clear_text_area();
+        let blank = test_hdmi_cell_digest(&descriptor.framebuffer, state.rows - 1, 0);
+        for row in 0..state.rows {
+            state.row = row;
+            state.col = 0;
+            state.draw_char(b'A'.saturating_add((row % 26) as u8));
+        }
+        let scroll_rows = HDMI_SCROLL_LINES.min(state.rows.saturating_sub(1)).max(1);
+        assert!(scroll_rows > 1);
+        let expected_top = test_hdmi_cell_digest(&descriptor.framebuffer, scroll_rows, 0);
+
+        state.row = state.rows - 1;
+        state.col = 1;
+        state.newline();
+
+        assert_eq!(
+            test_hdmi_cell_digest(&descriptor.framebuffer, 0, 0),
+            expected_top
+        );
+        assert_eq!(
+            test_hdmi_cell_digest(&descriptor.framebuffer, state.rows - 1, 0),
+            blank
+        );
+        assert_eq!(state.row, state.rows - scroll_rows);
         assert_eq!(state.col, 0);
     }
 

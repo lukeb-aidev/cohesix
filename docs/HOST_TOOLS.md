@@ -310,7 +310,7 @@ python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack ./out/evidence/li
 - `coh evidence pack` exports a deterministic on-disk snapshot sourced only from existing Cohesix surfaces (`/proc`, `/log`, `/audit`, `/replay`, telemetry). Exported audit JSONL hashes ticket fields (`ticket` → `sha256:<hex>`) so evidence packs do not leak raw capability tickets.
 - `coh evidence timeline` generates `timeline.ndjson` and `timeline.md` offline from an evidence pack directory. For federated host tickets, timeline rows include `source_hive`, `target_hive`, `relay_hop`, and correlate with `id + idempotency_key + source_hive + target_hive`.
 - `coh fleet` commands are read-only fan-in views over `/proc` surfaces (`status`, `lease-summary`, `pressure`). They never mutate hive state.
-- Policy enforcement is manifest-driven; `COH_POLICY` (or `out/coh_policy.toml`) must hash-match the compiled defaults.
+- Policy enforcement is manifest-driven; `COH_POLICY` (or `configs/generated/coh_policy.toml`) must hash-match the compiled defaults.
 - If policy gating is enabled (see `/policy/rules`), writes to `/queen/ctl` require approvals queued in `/actions/queue`. `coh gpu lease`, `coh run`, and `coh peft ...` will fail with `ERR ECHO reason=policy ... EPERM` until an approval is queued.
 - Auth token fallback order is `--auth-token`, `COH_AUTH_TOKEN`, then `COHSH_AUTH_TOKEN`.
 - REST request-auth fallback order is `--rest-auth-token`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, then `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`.
@@ -481,7 +481,7 @@ Host-only ticket executor that tails `/host/tickets/spec`, applies allowlisted a
 
 ### Usage
 ```bash
-      --manifest <FILE>          Path to out/manifests/root_task_resolved.json
+      --manifest <FILE>          Path to configs/generated/root_task_resolved.json
       --cursor <FILE>            Cursor state file for deterministic resume
       --mount <PATH>             Optional host mount override (default from manifest)
       --poll-ms <POLL_MS>        Poll interval in milliseconds [default: 1000]
@@ -509,7 +509,7 @@ Host-only ticket executor that tails `/host/tickets/spec`, applies allowlisted a
 ```
 
 ### Notes
-- Reads ticket bounds/allowlists from `out/manifests/root_task_resolved.json` (`ecosystem.host.tickets`).
+- Reads ticket bounds/allowlists from `configs/generated/root_task_resolved.json` (`ecosystem.host.tickets`).
 - Cursor resume is persisted to `out/host-ticket-agent/cursor.json` by default.
 - Lifecycle receipts are append-only and bounded (`claimed`, `running`, `succeeded`, `failed`, `expired`).
 - Idempotency key is `id + idempotency_key`; terminal receipts deduplicate repeated ticket specs.

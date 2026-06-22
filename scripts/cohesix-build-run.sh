@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Build and stage Cohesix artefacts, including rootfs payloads, for QEMU runs.
@@ -10,6 +9,7 @@ declare -a EXTRA_QEMU_ARGS=()
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+GENERATED_CONFIG_DIR="$PROJECT_ROOT/configs/generated"
 HOST_OS="$(uname -s)"
 QEMU_MACHINE_EXTRA="${COHESIX_QEMU_MACHINE_EXTRA:-${QEMU_MACHINE_EXTRA:-}}"
 if [[ -z "$QEMU_MACHINE_EXTRA" && "$HOST_OS" == "Darwin" ]]; then
@@ -735,12 +735,13 @@ main() {
     fi
 
     RTC_MANIFEST="${COH_RTC_MANIFEST:-$PROJECT_ROOT/configs/root_task.toml}"
-    log "Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- ${RTC_MANIFEST} --out apps/root-task/src/generated --manifest out/manifests/root_task_resolved.json --cas-manifest-template out/cas_manifest_template.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md --gpu-breadcrumbs-snippet docs/snippets/gpu_breadcrumbs.md --observability-interfaces-snippet docs/snippets/observability_interfaces.md --observability-security-snippet docs/snippets/observability_security.md --ticket-quotas-snippet docs/snippets/ticket_quotas.md --trace-policy-snippet docs/snippets/trace_policy.md --cas-interfaces-snippet docs/snippets/cas_interfaces.md --cas-security-snippet docs/snippets/cas_security.md --cohsh-grammar-doc docs/snippets/cohsh_grammar.md --cohsh-ticket-policy-doc docs/snippets/cohsh_ticket_policy.md"
+    mkdir -p "$GENERATED_CONFIG_DIR"
+    log "Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- ${RTC_MANIFEST} --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json --cas-manifest-template configs/generated/cas_manifest_template.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md --gpu-breadcrumbs-snippet docs/snippets/gpu_breadcrumbs.md --observability-interfaces-snippet docs/snippets/observability_interfaces.md --observability-security-snippet docs/snippets/observability_security.md --ticket-quotas-snippet docs/snippets/ticket_quotas.md --trace-policy-snippet docs/snippets/trace_policy.md --cas-interfaces-snippet docs/snippets/cas_interfaces.md --cas-security-snippet docs/snippets/cas_security.md --cohsh-grammar-doc docs/snippets/cohsh_grammar.md --cohsh-ticket-policy-doc docs/snippets/cohsh_ticket_policy.md"
     cargo run -p coh-rtc -- \
         "$RTC_MANIFEST" \
         --out "$PROJECT_ROOT/apps/root-task/src/generated" \
-        --manifest "$PROJECT_ROOT/out/manifests/root_task_resolved.json" \
-        --cas-manifest-template "$PROJECT_ROOT/out/cas_manifest_template.json" \
+        --manifest "$GENERATED_CONFIG_DIR/root_task_resolved.json" \
+        --cas-manifest-template "$GENERATED_CONFIG_DIR/cas_manifest_template.json" \
         --cli-script "$PROJECT_ROOT/scripts/cohsh/boot_v0.coh" \
         --doc-snippet "$PROJECT_ROOT/docs/snippets/root_task_manifest.md" \
         --gpu-breadcrumbs-snippet "$PROJECT_ROOT/docs/snippets/gpu_breadcrumbs.md" \

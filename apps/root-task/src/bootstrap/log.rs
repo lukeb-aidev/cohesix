@@ -203,8 +203,11 @@ static PRECOMMIT_IPC_FORBIDDEN: AtomicU32 = AtomicU32::new(0);
 static LOG_DROPS: AtomicU32 = AtomicU32::new(0);
 static UART_LOG_SUPPRESSION_DEPTH: AtomicU32 = AtomicU32::new(0);
 static SERIAL_PROMPT_REFRESH_AFTER_LOGS: AtomicBool = AtomicBool::new(false);
+static CONSOLE_EVENT_SEQ: AtomicU32 = AtomicU32::new(1);
 const SERIAL_PROMPT: &[u8] = b"cohesix> ";
 const SERIAL_RX_PRESERVE_CHUNK_BYTES: usize = 8;
+const ORDERING_SUFFIX_CAPACITY: usize = 96;
+const ORDERED_LOG_LINE_CAPACITY: usize = 512;
 const fn env_flag(value: Option<&'static str>) -> bool {
     match value {
         Some(val) => {
@@ -354,10 +357,66 @@ fn emit_serial_prompt_refresh_unlocked(payload: &[u8]) {
     sel4::debug_put_bytes_unlocked(SERIAL_PROMPT);
 }
 
+/// Allocate a monotonic diagnostic event id for cross-sink ordering telemetry.
+pub fn next_console_event_seq() -> u32 {
+    let mut observed = CONSOLE_EVENT_SEQ.load(Ordering::Acquire);
+    loop {
+        let next = if observed == u32::MAX {
+            1
+        } else {
+            observed.saturating_add(1)
+        };
+        match CONSOLE_EVENT_SEQ.compare_exchange_weak(
+            observed,
+            next,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return observed,
+            Err(actual) => observed = actual,
+        }
+    }
+}
+
+fn console_ordering_suffix(
+    seq: u32,
+    telemetry_sinks: &str,
+    prompt_refresh: bool,
+) -> HeaplessString<ORDERING_SUFFIX_CAPACITY> {
+    let mut suffix = HeaplessString::<ORDERING_SUFFIX_CAPACITY>::new();
+    let _ = write!(
+        suffix,
+        " console_seq={} telemetry_sinks={} prompt_refresh={}",
+        seq,
+        telemetry_sinks,
+        if prompt_refresh { "yes" } else { "no" },
+    );
+    suffix
+}
+
+fn append_ordered_log_line(line: &str, suffix: &str) {
+    let mut ordered = HeaplessString::<ORDERED_LOG_LINE_CAPACITY>::new();
+    let _ = ordered.push_str(line);
+    let _ = ordered.push_str(suffix);
+    log_buffer::append_log_line(ordered.as_str());
+}
+
 fn emit_uart_payload(payload: &[u8], append_crlf: bool) {
+    emit_uart_payload_with_suffix(payload, None, append_crlf, true);
+}
+
+fn emit_uart_payload_with_suffix(
+    payload: &[u8],
+    suffix: Option<&[u8]>,
+    append_crlf: bool,
+    refresh_prompt: bool,
+) {
     if !SERIAL_PROMPT_REFRESH_AFTER_LOGS.load(Ordering::Acquire) {
         with_raw_uart_lock(|| {
             sel4::debug_put_bytes_unlocked(payload);
+            if let Some(suffix) = suffix {
+                sel4::debug_put_bytes_unlocked(suffix);
+            }
             if append_crlf {
                 sel4::debug_put_bytes_unlocked(b"\r\n");
             }
@@ -373,16 +432,35 @@ fn emit_uart_payload(payload: &[u8], append_crlf: bool) {
         with_raw_uart_lock(|| sel4::debug_put_bytes_unlocked(chunk));
         preserve_serial_rx_after_raw_uart();
     }
+    if let Some(suffix) = suffix {
+        for chunk in suffix.chunks(SERIAL_RX_PRESERVE_CHUNK_BYTES) {
+            if chunk.is_empty() {
+                continue;
+            }
+            with_raw_uart_lock(|| sel4::debug_put_bytes_unlocked(chunk));
+            preserve_serial_rx_after_raw_uart();
+        }
+    }
     if append_crlf {
         with_raw_uart_lock(|| sel4::debug_put_bytes_unlocked(b"\r\n"));
         preserve_serial_rx_after_raw_uart();
     }
-    with_raw_uart_lock(|| emit_serial_prompt_refresh_unlocked(payload));
-    preserve_serial_rx_after_raw_uart();
+    if refresh_prompt {
+        with_raw_uart_lock(|| emit_serial_prompt_refresh_unlocked(payload));
+        preserve_serial_rx_after_raw_uart();
+    }
 }
 
 const fn serial_prompt_refresh_should_emit(enabled: bool, payload: &[u8]) -> bool {
     enabled && payload.len() != 0
+}
+
+const fn serial_raw_prompt_refresh_allowed(
+    refresh_prompt: bool,
+    enabled: bool,
+    payload: &[u8],
+) -> bool {
+    refresh_prompt && serial_prompt_refresh_should_emit(enabled, payload)
 }
 
 /// Reprint the root prompt after raw UART diagnostics once the prompt exists.
@@ -424,11 +502,36 @@ pub fn force_uart_line(line: &str) {
 /// Use this for operator-visible readiness/failure summaries that must stay on
 /// the serial console even if another logger transport is active.
 pub fn force_uart_line_raw(line: &str) {
+    force_uart_line_raw_with_console_seq(line, next_console_event_seq());
+}
+
+/// Emit a raw UART diagnostic with a caller-supplied ordering id.
+pub fn force_uart_line_raw_with_console_seq(line: &str, console_seq: u32) {
+    force_uart_line_raw_with_console_seq_inner(line, console_seq, true);
+}
+
+/// Emit a raw UART diagnostic without repainting the interactive prompt.
+pub fn force_uart_line_raw_without_prompt_refresh(line: &str) {
+    force_uart_line_raw_with_console_seq_inner(line, next_console_event_seq(), false);
+}
+
+fn force_uart_line_raw_with_console_seq_inner(line: &str, console_seq: u32, refresh_prompt: bool) {
     if line.trim().is_empty() {
         return;
     }
 
-    emit_uart_payload(line.as_bytes(), true);
+    let prompt_refresh = serial_raw_prompt_refresh_allowed(
+        refresh_prompt,
+        SERIAL_PROMPT_REFRESH_AFTER_LOGS.load(Ordering::Acquire),
+        line.as_bytes(),
+    );
+    let suffix = console_ordering_suffix(console_seq, "serial", prompt_refresh);
+    emit_uart_payload_with_suffix(
+        line.as_bytes(),
+        Some(suffix.as_bytes()),
+        true,
+        prompt_refresh,
+    );
 }
 
 /// Emit a diagnostic line to raw UART and retain it in `/log/queen.log`.
@@ -436,14 +539,49 @@ pub fn force_uart_line_raw(line: &str) {
 /// Use this for hardware-fault telemetry that must survive log-channel handoff
 /// without losing the audit trail available to 9P/TCP clients.
 pub fn force_uart_line_raw_and_log(line: &str) {
+    force_uart_line_raw_and_log_with_console_seq(line, next_console_event_seq());
+}
+
+/// Emit a raw UART plus `/log/queen.log` diagnostic with a shared ordering id.
+pub fn force_uart_line_raw_and_log_with_console_seq(line: &str, console_seq: u32) {
+    force_uart_line_raw_and_log_with_console_seq_inner(line, console_seq, true);
+}
+
+/// Emit raw UART plus `/log/queen.log` telemetry without repainting the prompt.
+pub fn force_uart_line_raw_and_log_without_prompt_refresh(line: &str, console_seq: u32) {
+    force_uart_line_raw_and_log_with_console_seq_inner(line, console_seq, false);
+}
+
+fn force_uart_line_raw_and_log_with_console_seq_inner(
+    line: &str,
+    console_seq: u32,
+    refresh_prompt: bool,
+) {
     if line.trim().is_empty() {
         return;
     }
 
-    if log_buffer::log_channel_active() {
-        log_buffer::append_log_line(line);
+    let log_active = log_buffer::log_channel_active();
+    let prompt_refresh = serial_raw_prompt_refresh_allowed(
+        refresh_prompt,
+        SERIAL_PROMPT_REFRESH_AFTER_LOGS.load(Ordering::Acquire),
+        line.as_bytes(),
+    );
+    let telemetry_sinks = if log_active {
+        "serial+queen-log"
+    } else {
+        "serial"
+    };
+    let suffix = console_ordering_suffix(console_seq, telemetry_sinks, prompt_refresh);
+    if log_active {
+        append_ordered_log_line(line, suffix.as_str());
     }
-    emit_uart_payload(line.as_bytes(), true);
+    emit_uart_payload_with_suffix(
+        line.as_bytes(),
+        Some(suffix.as_bytes()),
+        true,
+        prompt_refresh,
+    );
 }
 
 fn emit_ep(payload: &[u8]) -> Result<(), ()> {
@@ -690,11 +828,11 @@ mod tests {
     #[test]
     fn force_uart_line_raw_routes_via_raw_helper() {
         sel4::clear_debug_uart_capture();
-        force_uart_line_raw("[bootstrap-test] compact uart summary");
+        force_uart_line_raw_with_console_seq("[bootstrap-test] compact uart summary", 41);
         let captured = sel4::take_debug_uart_capture();
         assert_eq!(
             captured.as_slice(),
-            b"[bootstrap-test] compact uart summary\r\n"
+            b"[bootstrap-test] compact uart summary console_seq=41 telemetry_sinks=serial prompt_refresh=no\r\n"
         );
     }
 
@@ -702,9 +840,40 @@ mod tests {
     #[test]
     fn force_uart_line_raw_and_log_routes_via_raw_helper() {
         sel4::clear_debug_uart_capture();
-        force_uart_line_raw_and_log("[bootstrap-test] hdmi diagnostic");
+        force_uart_line_raw_and_log_with_console_seq("[bootstrap-test] hdmi diagnostic", 42);
         let captured = sel4::take_debug_uart_capture();
-        assert_eq!(captured.as_slice(), b"[bootstrap-test] hdmi diagnostic\r\n");
+        assert_eq!(
+            captured.as_slice(),
+            b"[bootstrap-test] hdmi diagnostic console_seq=42 telemetry_sinks=serial prompt_refresh=no\r\n"
+        );
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    #[test]
+    fn raw_ordering_suffix_marks_prompt_refresh() {
+        sel4::clear_debug_uart_capture();
+        SERIAL_PROMPT_REFRESH_AFTER_LOGS.store(true, Ordering::Release);
+        force_uart_line_raw_with_console_seq("[bootstrap-test] prompt refresh", 43);
+        SERIAL_PROMPT_REFRESH_AFTER_LOGS.store(false, Ordering::Release);
+        let captured = sel4::take_debug_uart_capture();
+        assert_eq!(
+            captured.as_slice(),
+            b"[bootstrap-test] prompt refresh console_seq=43 telemetry_sinks=serial prompt_refresh=yes\r\ncohesix> "
+        );
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    #[test]
+    fn raw_without_prompt_refresh_suppresses_prompt_repaint() {
+        sel4::clear_debug_uart_capture();
+        SERIAL_PROMPT_REFRESH_AFTER_LOGS.store(true, Ordering::Release);
+        force_uart_line_raw_without_prompt_refresh("[bootstrap-test] no prompt refresh");
+        SERIAL_PROMPT_REFRESH_AFTER_LOGS.store(false, Ordering::Release);
+        let captured = sel4::take_debug_uart_capture();
+        assert!(core::str::from_utf8(captured.as_slice())
+            .unwrap()
+            .contains("prompt_refresh=no\r\n"));
+        assert!(!captured.ends_with(SERIAL_PROMPT));
     }
 
     #[test]
@@ -712,6 +881,14 @@ mod tests {
         assert!(serial_prompt_refresh_should_emit(true, b"log\r\n"));
         assert!(!serial_prompt_refresh_should_emit(true, b""));
         assert!(!serial_prompt_refresh_should_emit(false, b"log\r\n"));
+    }
+
+    #[test]
+    fn raw_prompt_refresh_gate_honors_call_site_suppression() {
+        assert!(serial_raw_prompt_refresh_allowed(true, true, b"log\r\n"));
+        assert!(!serial_raw_prompt_refresh_allowed(false, true, b"log\r\n"));
+        assert!(!serial_raw_prompt_refresh_allowed(true, false, b"log\r\n"));
+        assert!(!serial_raw_prompt_refresh_allowed(true, true, b""));
     }
 
     #[test]

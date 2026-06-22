@@ -1,0 +1,1055 @@
+$ ls -l /lib/firmware/brcm/brcmfmac43455-sdio* /lib/firmware/brcm/*43455* 2>&1 || true; sha256sum /lib/firmware/brcm/brcmfmac43455-sdio* /lib/firmware/brcm/*43455* 2>&1 || true; for f in /lib/firmware/brcm/brcmfmac43455-sdio* /lib/firmware/brcm/*43455*; do [ -f "$f" ] || continue; echo "### $f"; strings -n 8 "$f" 2>/dev/null | grep -Ei "version|43455|clm|nvram|board|sdio" | head -80 || true; done
+-rw-r--r-- 1 root root 1475 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.AW-CM256SM.txt
+-rw-r--r-- 1 root root 1475 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.AW-CM256SM.txt
+-rw-r--r-- 1 root root 2510 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.MINIX-NEO Z83-4.txt
+-rw-r--r-- 1 root root 2510 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.MINIX-NEO Z83-4.txt
+lrwxrwxrwx 1 root root   44 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi 4 Model B.txt -> brcmfmac43455-sdio.raspberrypi,4-model-b.txt
+lrwxrwxrwx 1 root root   44 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi 4 Model B.txt -> brcmfmac43455-sdio.raspberrypi,4-model-b.txt
+lrwxrwxrwx 1 root root   44 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi Compute Module 4.txt -> brcmfmac43455-sdio.raspberrypi,4-model-b.txt
+lrwxrwxrwx 1 root root   44 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi Compute Module 4.txt -> brcmfmac43455-sdio.raspberrypi,4-model-b.txt
+-rw-r--r-- 1 root root 1723 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.acepc-t8.txt
+-rw-r--r-- 1 root root 1723 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.acepc-t8.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.beagle,am5729-beagleboneai.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.beagle,am5729-beagleboneai.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinebook-pro.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinebook-pro.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.1.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.1.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.2.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.2.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinephone-pro.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinephone-pro.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-a.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-a.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-b.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-b.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.0.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.0.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.1.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.1.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-blade.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-blade.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-cm4io.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-cm4io.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-model-a.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   33 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-model-a.txt -> brcmfmac43455-sdio.AW-CM256SM.txt
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   31 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.bin -> ../cypress/cyfmac43455-sdio.bin
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   36 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.clm_blob -> ../cypress/cyfmac43455-sdio.clm_blob
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.txt -> brcmfmac43455-sdio.txt
+lrwxrwxrwx 1 root root   22 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.txt -> brcmfmac43455-sdio.txt
+-rw-r--r-- 1 root root 2074 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.txt
+-rw-r--r-- 1 root root 2074 Mar 21 17:31 /lib/firmware/brcm/brcmfmac43455-sdio.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.AW-CM256SM.txt
+030aa76f3554075df9a576ea46b7d0a00b46dc8070c9e969b7d813cd0dac3981  /lib/firmware/brcm/brcmfmac43455-sdio.MINIX-NEO Z83-4.txt
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi 4 Model B.txt
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi Compute Module 4.txt
+b87e0dc904dbc660a1c467bf0e3ca1cf8babe7e9ec0559041758808646e4f3e3  /lib/firmware/brcm/brcmfmac43455-sdio.acepc-t8.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.beagle,am5729-beagleboneai.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.clm_blob
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinebook-pro.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.1.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.2.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinephone-pro.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-a.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-b.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.0.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.1.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-blade.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-cm4io.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-model-a.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.txt
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.AW-CM256SM.txt
+030aa76f3554075df9a576ea46b7d0a00b46dc8070c9e969b7d813cd0dac3981  /lib/firmware/brcm/brcmfmac43455-sdio.MINIX-NEO Z83-4.txt
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi 4 Model B.txt
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi Compute Module 4.txt
+b87e0dc904dbc660a1c467bf0e3ca1cf8babe7e9ec0559041758808646e4f3e3  /lib/firmware/brcm/brcmfmac43455-sdio.acepc-t8.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.beagle,am5729-beagleboneai.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.clm_blob
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinebook-pro.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.1.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.2.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinephone-pro.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-a.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-b.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.0.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.1.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-blade.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-cm4io.txt
+f50362207b7536521cadaa59bdc294a9ad946b149fbb6e332ec2a245c1f34fbf  /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-model-a.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.txt
+d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.bin
+9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.clm_blob
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.txt
+ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d  /lib/firmware/brcm/brcmfmac43455-sdio.txt
+### /lib/firmware/brcm/brcmfmac43455-sdio.AW-CM256SM.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.MINIX-NEO Z83-4.txt
+# NVRAM config file for the Ampak AP6255 43455 WiFi/BT module found on the
+boardflags2=0x00802000
+boardflags3=0x0000000a
+boardflags=0x02400201
+boardrev=0x1122
+boardtype=0x073e
+### /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi 4 Model B.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi Compute Module 4.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.acepc-t8.txt
+# NVRAM config file for the Ampak AP6255 43455 WiFi/BT module found on the
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardflags=0x00080201
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.beagle,am5729-beagleboneai.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinebook-pro.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.1.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.2.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinephone-pro.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-a.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-b.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.0.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.1.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-blade.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-cm4io.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-model-a.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.AW-CM256SM.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.MINIX-NEO Z83-4.txt
+# NVRAM config file for the Ampak AP6255 43455 WiFi/BT module found on the
+boardflags2=0x00802000
+boardflags3=0x0000000a
+boardflags=0x02400201
+boardrev=0x1122
+boardtype=0x073e
+### /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi 4 Model B.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.Raspberry Pi Foundation-Raspberry Pi Compute Module 4.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.acepc-t8.txt
+# NVRAM config file for the Ampak AP6255 43455 WiFi/BT module found on the
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardflags=0x00080201
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.beagle,am5729-beagleboneai.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinebook-pro.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.1.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinenote-v1.2.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,pinephone-pro.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-a.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,quartz64-b.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.0.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,rockpro64-v2.1.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-blade.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-cm4io.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.pine64,soquartz-model-a.txt
+boardflags=0x00080201
+boardflags2=0x40000000
+boardflags3=0x48200100
+boardrev=0x1304
+boardtype=0x6e4
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-a-plus.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,3-model-b-plus.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-compute-module.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,4-model-b.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-model-b.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.bin
+%s: unsupported bdc protocol version (%d)
+boardflags3
+Out of memory for malloc for NVRAM sort
+nvram_init: called again without calling nvram_exit()
+si_doattach: unknown board type
+wl%d: %s %s version %s FWID 01-%x
+wlc_antsel_attach: 2o3 board cfg invalid
+wl%d: %s: rsn-ie version (%d) mismatch
+wl%d: %s: Unsupported Broadcom board type (0x%x) or revision level (0x%x)
+clmload_status
+CLM DATA
+ClmImport: 1.36.3
+Driver version mismatch. expected = %d, got = %d
+wlc_phy_nvram_femctrl_read
+boardflags2=0x%x
+boardflags3=0x%x
+boardflags=0x%x
+boardtype=0x%x
+boardnum=%d
+boardrev=0x%x
+boardtype
+boardflags
+boardrev
+NVRAMRev
+boardrev
+boardflags2
+boardflags
+boardflags4
+boardflags3
+43455c0-roml/43455_sdio-pno-aoe-pktfilter-pktctx-wfds-mfp-dfsradar-wowlpf-noclminc-clm_min-obss-obssdump-swdiv-gtkoe-roamprof-txbf-ve-extsae-dpp-sr-okc-bpd Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c Date: Tue 2023-08-29 01:51:02 PDT Ucode Ver: 1043.2170 FWID 01-b677b91b
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.clm_blob
+CLM DATA
+ClmImport: 1.39.1
+### /lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,500.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+### /lib/firmware/brcm/brcmfmac43455-sdio.txt
+NVRAMRev=$Rev: 498373 $
+boardtype=0x6e4
+boardrev=0x1304
+#boardflags: 5GHz eTR switch by default
+boardflags=0x00480201
+boardflags2=0x40800000
+boardflags3=0x44200100
+
+[exit=0]

@@ -1,0 +1,122 @@
+$ for d in /proc/device-tree/scb/pcie@7d500000 /proc/device-tree/scb/pcie@7d500000/pci@0,0; do echo "### $d"; find "$d" -maxdepth 3 -type f -print 2>/dev/null | while read f; do echo "--- $f"; if command -v xxd >/dev/null; then xxd -g4 -l 512 "$f"; else od -Ax -tx1 -N 512 "$f"; fi; done; done
+### /proc/device-tree/scb/pcie@7d500000
+--- /proc/device-tree/scb/pcie@7d500000/dma-ranges
+000000 02 00 00 00 00 00 00 04 00 00 00 00 00 00 00 00
+000010 00 00 00 00 00 00 00 01 00 00 00 00
+00001c
+--- /proc/device-tree/scb/pcie@7d500000/brcm,enable-ssc
+000000
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/#address-cells
+000000 00 00 00 03
+000004
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/usb@0,0/resets
+000000 00 00 00 3f 00 00 00 00
+000008
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/usb@0,0/reg
+000000 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+000010 00 00 00 00
+000014
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/usb@0,0/name
+000000 75 73 62 00
+000004
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/#size-cells
+000000 00 00 00 02
+000004
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/device_type
+000000 70 63 69 00
+000004
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/ranges
+000000
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/reg
+000000 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+000010 00 00 00 00
+000014
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/name
+000000 70 63 69 00
+000004
+--- /proc/device-tree/scb/pcie@7d500000/#address-cells
+000000 00 00 00 03
+000004
+--- /proc/device-tree/scb/pcie@7d500000/interrupts
+000000 00 00 00 00 00 00 00 93 00 00 00 04 00 00 00 00
+000010 00 00 00 94 00 00 00 04
+000018
+--- /proc/device-tree/scb/pcie@7d500000/interrupt-map
+000000 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 01
+000010 00 00 00 01 00 00 00 00 00 00 00 8f 00 00 00 04
+000020 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 02
+000030 00 00 00 01 00 00 00 00 00 00 00 90 00 00 00 04
+000040 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 03
+000050 00 00 00 01 00 00 00 00 00 00 00 91 00 00 00 04
+000060 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 04
+000070 00 00 00 01 00 00 00 00 00 00 00 92 00 00 00 04
+000080
+--- /proc/device-tree/scb/pcie@7d500000/#size-cells
+000000 00 00 00 02
+000004
+--- /proc/device-tree/scb/pcie@7d500000/msi-controller
+000000
+--- /proc/device-tree/scb/pcie@7d500000/device_type
+000000 70 63 69 00
+000004
+--- /proc/device-tree/scb/pcie@7d500000/interrupt-map-mask
+000000 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 07
+000010
+--- /proc/device-tree/scb/pcie@7d500000/compatible
+000000 62 72 63 6d 2c 62 63 6d 32 37 31 31 2d 70 63 69
+000010 65 00 62 72 63 6d 2c 62 63 6d 37 34 34 35 2d 70
+000020 63 69 65 00
+000024
+--- /proc/device-tree/scb/pcie@7d500000/ranges
+000000 02 00 00 00 00 00 00 00 c0 00 00 00 00 00 00 06
+000010 00 00 00 00 00 00 00 00 40 00 00 00
+00001c
+--- /proc/device-tree/scb/pcie@7d500000/#interrupt-cells
+000000 00 00 00 01
+000004
+--- /proc/device-tree/scb/pcie@7d500000/interrupt-names
+000000 70 63 69 65 00 6d 73 69 00
+000009
+--- /proc/device-tree/scb/pcie@7d500000/reg
+000000 00 00 00 00 7d 50 00 00 00 00 00 00 00 00 93 10
+000010
+--- /proc/device-tree/scb/pcie@7d500000/phandle
+000000 00 00 00 3e
+000004
+--- /proc/device-tree/scb/pcie@7d500000/msi-parent
+000000 00 00 00 3e
+000004
+--- /proc/device-tree/scb/pcie@7d500000/name
+000000 70 63 69 65 00
+000005
+### /proc/device-tree/scb/pcie@7d500000/pci@0,0
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/#address-cells
+000000 00 00 00 03
+000004
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/usb@0,0/resets
+000000 00 00 00 3f 00 00 00 00
+000008
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/usb@0,0/reg
+000000 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+000010 00 00 00 00
+000014
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/usb@0,0/name
+000000 75 73 62 00
+000004
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/#size-cells
+000000 00 00 00 02
+000004
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/device_type
+000000 70 63 69 00
+000004
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/ranges
+000000
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/reg
+000000 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+000010 00 00 00 00
+000014
+--- /proc/device-tree/scb/pcie@7d500000/pci@0,0/name
+000000 70 63 69 00
+000004
+
+[exit=0]

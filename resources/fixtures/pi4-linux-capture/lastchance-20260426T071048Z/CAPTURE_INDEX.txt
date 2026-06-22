@@ -1,0 +1,30 @@
+Pi 4 Linux last-chance capture
+Captured UTC: 2026-04-26T07:15:06Z
+Host path: /Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z
+
+Archives:
+-rw-r--r--@ 1 lukasbower  staff   815K Apr 26 17:11 /Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z.tar.gz
+-rw-r--r--@ 1 lukasbower  staff   114B Apr 26 17:11 /Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z.tar.gz.sha256
+-rw-r--r--@ 1 lukasbower  staff    68K Apr 26 17:13 /Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-addendum-20260426T071316Z.tar.gz
+-rw-r--r--@ 1 lukasbower  staff   123B Apr 26 17:13 /Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-addendum-20260426T071316Z.tar.gz.sha256
+
+Extracted file counts:
+main=131
+addendum=1408
+
+Key files:
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z/commands/dmesg-iso.txt
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z/commands/journal-kernel.txt
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z/commands/proc-interrupts.txt
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z/commands/dt-pcie-summary.txt
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z/debugfs/usb/xhci/0000:01:00.0/reg-op
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z/debugfs/usb/xhci/0000:01:00.0/reg-runtime
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-20260426T071114Z/debugfs/mmc1/ios
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-addendum-20260426T071316Z/commands/pci-resource-details.txt
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/cohesix-lastchance-addendum-20260426T071316Z/commands/sdio-resource-details.txt
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/firmware-resolved/SHA256SUMS.txt
+/Users/lukasbower/GitHub/cohesix/out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/pi4-serial-linux.log
+
+High-value observed facts:
+USB: VL805 at PCI 01:00.0 BAR0 0x600000000, IRQ 30 MSI; xHCI DCBAAP/ERST high dword 0x4.
+WiFi: SDIO 02D0:A9A6 on mmc1, brcmfmac, 4-bit high-speed, actual clock 41666667Hz.

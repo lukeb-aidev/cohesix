@@ -2092,6 +2092,7 @@ const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRA
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize =
     DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT;
+const DRIVER_TASK_USB_HID_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
 const DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
 const DRIVER_TASK_USB_ENUM_ADDRESS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
 const DRIVER_TASK_USB_ENUM_TRANSFER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
@@ -5936,9 +5937,24 @@ fn driver_task_ring_timeout_keep_active_limit_for_progress(
         } else {
             DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT
         }
+    } else if limit == DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT
+        && cached_driver_task_ring_progress_matches_request(slot, request, command.aux0)
+        && driver_task_ring_usb_hid_recovery_phase(slot.last_progress_phase.load(Ordering::Acquire))
+    {
+        DRIVER_TASK_USB_HID_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT
     } else {
         limit
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_usb_hid_recovery_phase(phase: u32) -> bool {
+    matches!(
+        phase,
+        DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_FAILED
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -10808,6 +10824,43 @@ mod tests {
                 false,
             ),
             (false, DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT)
+        );
+        record_driver_task_ring_progress(
+            &recovery_slot,
+            DriverTaskRingProgressRecord {
+                magic: DRIVER_RUNTIME_RING_PROGRESS_MAGIC,
+                sequence: recovery_request,
+                phase: DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_BEGIN,
+                aux0: command.aux0,
+            },
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit_for_progress(
+                &recovery_slot,
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                recovery_request,
+            ),
+            DRIVER_TASK_USB_HID_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        recovery_slot.timeout_resumes.store(
+            DRIVER_TASK_USB_HID_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &recovery_slot,
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::PromptSlice,
+                recovery_request,
+                false,
+            ),
+            (
+                false,
+                DRIVER_TASK_USB_HID_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT
+            )
         );
         assert!(!driver_task_ring_call_trace_enabled(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,

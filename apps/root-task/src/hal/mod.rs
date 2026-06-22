@@ -761,6 +761,65 @@ impl MappedRegion {
 #[cfg(feature = "kernel")]
 const HAL_PAGE_SIZE: usize = 1 << sel4_sys::seL4_PageBits;
 
+/// Bounded MMIO register window derived from a HAL-owned mapping.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MappedRegisterWindow {
+    base_vaddr: usize,
+    size: usize,
+}
+
+#[cfg(feature = "kernel")]
+impl MappedRegisterWindow {
+    fn new(base_vaddr: usize, size: usize) -> Result<Self, HalError> {
+        if base_vaddr == 0 || size == 0 {
+            return Err(HalError::Unsupported("register-window-empty"));
+        }
+        if base_vaddr & (HAL_PAGE_SIZE - 1) != 0 {
+            return Err(HalError::Unsupported("register-window-base-unaligned"));
+        }
+        Ok(Self { base_vaddr, size })
+    }
+
+    fn checked_register_ptr<T>(&self, offset: usize) -> Result<*mut T, HalError> {
+        let width = core::mem::size_of::<T>();
+        let align = core::mem::align_of::<T>();
+        let Some(end) = offset.checked_add(width) else {
+            return Err(HalError::Unsupported("register-window-offset-overflow"));
+        };
+        if width == 0 || offset % align != 0 {
+            return Err(HalError::Unsupported("register-window-offset-unaligned"));
+        }
+        let page_offset = offset % HAL_PAGE_SIZE;
+        if end > self.size || page_offset + width > HAL_PAGE_SIZE {
+            return Err(HalError::Unsupported("register-window-offset-out-of-range"));
+        }
+        let Some(vaddr) = self.base_vaddr.checked_add(offset) else {
+            return Err(HalError::Unsupported("register-window-vaddr-overflow"));
+        };
+        // SAFETY: the window is constructed from a HAL-owned MMIO mapping and
+        // the offset arithmetic above bounds access to one mapped page.
+        Ok(ptr::with_exposed_provenance_mut::<u8>(vaddr).cast::<T>())
+    }
+
+    /// Reads a 32-bit register from the mapped MMIO window.
+    pub fn read_u32(&self, offset: usize) -> Result<u32, HalError> {
+        let ptr = self.checked_register_ptr::<u32>(offset)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned MMIO window.
+        Ok(unsafe { ptr::read_volatile(ptr.cast_const()) })
+    }
+
+    /// Writes a 32-bit register to the mapped MMIO window.
+    pub fn write_u32(&self, offset: usize, value: u32) -> Result<(), HalError> {
+        let ptr = self.checked_register_ptr::<u32>(offset)?;
+        // SAFETY: `checked_register_ptr` verified bounds and alignment for the
+        // HAL-owned MMIO window.
+        unsafe { ptr::write_volatile(ptr, value) };
+        Ok(())
+    }
+}
+
 /// HAL-owned contiguous device register pages.
 #[cfg(feature = "kernel")]
 #[derive(Clone)]
@@ -827,6 +886,11 @@ impl<const N: usize> MappedRegisterPages<N> {
         self.checked_register_ptr::<u8>(offset, false)
             .ok()
             .map(|ptr| ptr as usize)
+    }
+
+    /// Returns a bounded MMIO window for safe storage outside HAL-owned setup.
+    pub fn register_window(&self) -> Result<MappedRegisterWindow, HalError> {
+        MappedRegisterWindow::new(self.base_ptr().as_ptr() as usize, self.size())
     }
 
     /// Returns the physical address corresponding to a register offset.

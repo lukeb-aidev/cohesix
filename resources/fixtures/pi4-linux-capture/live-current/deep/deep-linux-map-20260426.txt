@@ -1,0 +1,1293 @@
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/cohesix_pi4_known_hosts lukas@192.168.86.154 set -o pipefail
+run(){ echo "=== $* ==="; "$@" 2>&1 || true; }
+run date -u
+run uname -a
+run sudo lspci -vvxxx -s 00:00.0
+run sudo lspci -vvxxx -s 01:00.0
+run sudo find /sys/kernel/debug/usb -maxdepth 4 -type f -print -exec sh -c 'echo "--- $1"; cat "$1" 2>&1 | head -c 16384; echo' sh {} \;
+run sudo find /sys/kernel/debug/xhci -maxdepth 4 -type f -print -exec sh -c 'echo "--- $1"; cat "$1" 2>&1 | head -c 16384; echo' sh {} \;
+run sudo find /sys/kernel/debug/mmc1 -maxdepth 2 -type f -print -exec sh -c 'echo "--- $1"; cat "$1" 2>&1 | head -c 8192; echo' sh {} \;
+run sudo journalctl -k -b --no-pager | grep -Ei 'brcmf|mmc1|sdio|xhci|usb|pci 0000|brcm-pcie|firmware|wlan' | head -n 500
+run sudo cat /proc/interrupts
+run sudo ls -l /sys/bus/pci/devices/0000:01:00.0
+run sudo sh -c 'for f in /sys/bus/pci/devices/0000:01:00.0/{resource,irq,msi_bus,enable,local_cpulist,local_cpus,modalias,uevent}; do echo --- $f; cat $f 2>&1 || true; done'
+
+lukas@192.168.86.154's password: 
+=== date -u ===
+Sun Apr 26 06:42:59 UTC 2026
+=== uname -a ===
+Linux raspberrypi 6.12.75+rpt-rpi-v8 #1 SMP PREEMPT Debian 1:6.12.75-1+rpt1 (2026-03-11) aarch64 GNU/Linux
+=== sudo lspci -vvxxx -s 00:00.0 ===
+00:00.0 PCI bridge: Broadcom Inc. and subsidiaries BCM2711 PCIe Bridge (rev 20) (prog-if 00 [Normal decode])
+	Device tree node: /sys/firmware/devicetree/base/scb/pcie@7d500000/pci@0,0
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
+	Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Latency: 0
+	Interrupt: pin A routed to IRQ 27
+	Bus: primary=00, secondary=01, subordinate=01, sec-latency=0
+	Memory behind bridge: 00000000-000fffff [size=1M] [32-bit]
+	Prefetchable memory behind bridge: [disabled] [64-bit]
+	Secondary status: 66MHz- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- <SERR- <PERR-
+	BridgeCtl: Parity- SERR- NoISA- VGA- VGA16- MAbort- >Reset- FastB2B-
+		PriDiscTmr- SecDiscTmr- DiscTmrStat- DiscTmrSERREn-
+	Capabilities: [48] Power Management version 3
+		Flags: PMEClk- DSI- D1- D2- AuxCurrent=0mA PME(D0+,D1-,D2-,D3hot+,D3cold-)
+		Status: D0 NoSoftRst+ PME-Enable- DSel=0 DScale=1 PME-
+	Capabilities: [ac] Express (v2) Root Port (Slot-), IntMsgNum 0
+		DevCap:	MaxPayload 512 bytes, PhantFunc 0
+			ExtTag- RBE+ TEE-IO-
+		DevCtl:	CorrErr- NonFatalErr- FatalErr- UnsupReq-
+			RlxdOrd+ ExtTag- PhantFunc- AuxPwr+ NoSnoop+
+			MaxPayload 128 bytes, MaxReadReq 512 bytes
+		DevSta:	CorrErr- NonFatalErr- FatalErr- UnsupReq- AuxPwr- TransPend-
+		LnkCap:	Port #0, Speed 5GT/s, Width x1, ASPM L0s L1, Exit Latency L0s <1us, L1 <2us
+			ClockPM+ Surprise- LLActRep- BwNot+ ASPMOptComp+
+		LnkCtl:	ASPM L1 Enabled; RCB 64 bytes, LnkDisable- CommClk+
+			ExtSynch- ClockPM- AutWidDis- BWInt- AutBWInt-
+		LnkSta:	Speed 5GT/s, Width x1
+			TrErr- Train- SlotClk+ DLActive- BWMgmt- ABWMgmt+
+		RootCap: CRSVisible+
+		RootCtl: ErrCorrectable- ErrNon-Fatal- ErrFatal- PMEIntEna+ CRSVisible+
+		RootSta: PME ReqID 0000, PMEStatus- PMEPending-
+		DevCap2: Completion Timeout: Range ABCD, TimeoutDis+ NROPrPrP- LTR+
+			 10BitTagComp- 10BitTagReq- OBFF Via WAKE#, ExtFmt- EETLPPrefix-
+			 EmergencyPowerReduction Not Supported, EmergencyPowerReductionInit-
+			 FRS- LN System CLS Not Supported, TPHComp- ExtTPHComp- ARIFwd-
+			 AtomicOpsCap: Routing- 32bit- 64bit- 128bitCAS-
+		DevCtl2: Completion Timeout: 50us to 50ms, TimeoutDis- ARIFwd-
+			 AtomicOpsCtl: ReqEn- EgressBlck-
+			 IDOReq- IDOCompl- LTR- EmergencyPowerReductionReq-
+			 10BitTagReq- OBFF Disabled, EETLPPrefixBlk-
+		LnkCap2: Supported Link Speeds: 2.5-5GT/s, Crosslink- Retimer- 2Retimers- DRS+
+		LnkCtl2: Target Link Speed: 5GT/s, EnterCompliance- SpeedDis-
+			 Transmit Margin: Normal Operating Range, EnterModifiedCompliance- ComplianceSOS-
+			 Compliance Preset/De-emphasis: -6dB de-emphasis, 0dB preshoot
+		LnkSta2: Current De-emphasis Level: -6dB, EqualizationComplete- EqualizationPhase1-
+			 EqualizationPhase2- EqualizationPhase3- LinkEqualizationRequest-
+			 Retimer- 2Retimers- CrosslinkRes: unsupported, DRS-
+			 DownstreamComp: Link Down - Not Determined
+	Capabilities: [100 v1] Advanced Error Reporting
+		UESta:	DLP- SDES- TLP- FCP- CmpltTO- CmpltAbrt- UnxCmplt- RxOF- MalfTLP-
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		UEMsk:	DLP- SDES- TLP- FCP- CmpltTO- CmpltAbrt- UnxCmplt- RxOF- MalfTLP-
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		UESvrt:	DLP+ SDES+ TLP- FCP+ CmpltTO- CmpltAbrt- UnxCmplt- RxOF+ MalfTLP+
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		CESta:	RxErr- BadTLP- BadDLLP- Rollover- Timeout- AdvNonFatalErr- CorrIntErr- HeaderOF-
+		CEMsk:	RxErr- BadTLP- BadDLLP- Rollover- Timeout- AdvNonFatalErr+ CorrIntErr- HeaderOF-
+		AERCap:	First Error Pointer: 00, ECRCGenCap- ECRCGenEn- ECRCChkCap- ECRCChkEn-
+			MultHdrRecCap- MultHdrRecEn- TLPPfxPres- HdrLogCap-
+		HeaderLog: 00000000 00000000 00000000 00000000
+		RootCmd: CERptEn+ NFERptEn+ FERptEn+
+		RootSta: CERcvd- MultCERcvd- UERcvd- MultUERcvd-
+			 FirstFatal- NonFatalMsg- FatalMsg- IntMsgNum 0
+		ErrorSrc: ERR_COR: 0000 ERR_FATAL/NONFATAL: 0000
+	Capabilities: [180 v1] Vendor Specific Information: ID=0000 Rev=0 Len=028 <?>
+	Capabilities: [240 v1] L1 PM Substates
+		L1SubCap: PCI-PM_L1.2+ PCI-PM_L1.1+ ASPM_L1.2+ ASPM_L1.1+ L1_PM_Substates+
+			  PortCommonModeRestoreTime=8us PortTPowerOnTime=10us
+		L1SubCtl1: PCI-PM_L1.2- PCI-PM_L1.1- ASPM_L1.2- ASPM_L1.1-
+			   T_CommonMode=1us LTR1.2_Threshold=0ns
+		L1SubCtl2: T_PwrOn=10us
+	Kernel driver in use: pcieport
+00: e4 14 11 27 06 00 10 00 20 00 04 06 00 00 01 00
+10: 00 00 00 00 00 00 00 00 00 01 01 00 00 00 00 00
+20: 00 c0 00 c0 f1 ff 01 00 00 00 00 00 00 00 00 00
+30: 00 00 00 00 48 00 00 00 00 00 00 00 1b 01 00 00
+40: 00 00 00 00 00 00 00 00 01 ac 13 48 08 20 00 00
+50: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+60: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+70: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+90: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+a0: 00 00 00 00 00 00 00 00 00 00 00 00 10 00 42 00
+b0: 02 80 00 00 10 2c 00 00 12 cc 64 00 42 00 12 90
+c0: 00 00 00 00 00 00 40 00 18 00 01 00 00 00 00 00
+d0: 1f 08 08 00 00 00 00 00 06 00 00 80 02 00 00 00
+e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+
+=== sudo lspci -vvxxx -s 01:00.0 ===
+01:00.0 USB controller: VIA Technologies, Inc. VL805/806 xHCI USB 3.0 Controller (rev 01) (prog-if 30 [XHCI])
+	Subsystem: VIA Technologies, Inc. VL805/806 xHCI USB 3.0 Controller
+	Device tree node: /sys/firmware/devicetree/base/scb/pcie@7d500000/pci@0,0/usb@0,0
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr+ Stepping- SERR+ FastB2B- DisINTx+
+	Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Latency: 0, Cache Line Size: 64 bytes
+	Interrupt: pin A routed to IRQ 30
+	Region 0: Memory at 600000000 (64-bit, non-prefetchable) [size=4K]
+	Capabilities: [80] Power Management version 3
+		Flags: PMEClk- DSI- D1- D2- AuxCurrent=375mA PME(D0+,D1-,D2-,D3hot-,D3cold+)
+		Status: D0 NoSoftRst- PME-Enable- DSel=0 DScale=0 PME-
+	Capabilities: [90] MSI: Enable+ Count=4/4 Maskable- 64bit+
+		Address: 00000000fffffffc  Data: 6540
+	Capabilities: [c4] Express (v2) Endpoint, IntMsgNum 0
+		DevCap:	MaxPayload 256 bytes, PhantFunc 0, Latency L0s <64ns, L1 <1us
+			ExtTag- AttnBtn- AttnInd- PwrInd- RBE+ FLReset- SlotPowerLimit 0W TEE-IO-
+		DevCtl:	CorrErr+ NonFatalErr+ FatalErr+ UnsupReq+
+			RlxdOrd+ ExtTag- PhantFunc- AuxPwr- NoSnoop+
+			MaxPayload 128 bytes, MaxReadReq 512 bytes
+		DevSta:	CorrErr+ NonFatalErr- FatalErr- UnsupReq+ AuxPwr+ TransPend-
+		LnkCap:	Port #0, Speed 5GT/s, Width x1, ASPM L0s L1, Exit Latency L0s <2us, L1 <16us
+			ClockPM+ Surprise- LLActRep- BwNot- ASPMOptComp-
+		LnkCtl:	ASPM L0s L1 Enabled; RCB 64 bytes, LnkDisable- CommClk+
+			ExtSynch- ClockPM+ AutWidDis- BWInt- AutBWInt-
+		LnkSta:	Speed 5GT/s, Width x1
+			TrErr- Train- SlotClk+ DLActive- BWMgmt- ABWMgmt-
+		DevCap2: Completion Timeout: Range B, TimeoutDis+ NROPrPrP- LTR-
+			 10BitTagComp- 10BitTagReq- OBFF Not Supported, ExtFmt- EETLPPrefix-
+			 EmergencyPowerReduction Not Supported, EmergencyPowerReductionInit-
+			 FRS- TPHComp- ExtTPHComp-
+			 AtomicOpsCap: 32bit- 64bit- 128bitCAS-
+		DevCtl2: Completion Timeout: 50us to 50ms, TimeoutDis-
+			 AtomicOpsCtl: ReqEn-
+			 IDOReq- IDOCompl- LTR- EmergencyPowerReductionReq-
+			 10BitTagReq- OBFF Disabled, EETLPPrefixBlk-
+		LnkCtl2: Target Link Speed: 5GT/s, EnterCompliance- SpeedDis+
+			 Transmit Margin: Normal Operating Range, EnterModifiedCompliance- ComplianceSOS-
+			 Compliance Preset/De-emphasis: -6dB de-emphasis, 0dB preshoot
+		LnkSta2: Current De-emphasis Level: -3.5dB, EqualizationComplete- EqualizationPhase1-
+			 EqualizationPhase2- EqualizationPhase3- LinkEqualizationRequest-
+			 Retimer- 2Retimers- CrosslinkRes: unsupported
+	Capabilities: [100 v1] Advanced Error Reporting
+		UESta:	DLP- SDES- TLP- FCP- CmpltTO- CmpltAbrt- UnxCmplt- RxOF- MalfTLP-
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		UEMsk:	DLP- SDES- TLP- FCP- CmpltTO- CmpltAbrt- UnxCmplt- RxOF- MalfTLP-
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		UESvrt:	DLP+ SDES+ TLP- FCP+ CmpltTO- CmpltAbrt- UnxCmplt- RxOF+ MalfTLP+
+			ECRC- UnsupReq- ACSViol- UncorrIntErr- BlockedTLP- AtomicOpBlocked- TLPBlockedErr-
+			PoisonTLPBlocked- DMWrReqBlocked- IDECheck- MisIDETLP- PCRC_CHECK- TLPXlatBlocked-
+		CESta:	RxErr- BadTLP- BadDLLP- Rollover- Timeout- AdvNonFatalErr- CorrIntErr- HeaderOF-
+		CEMsk:	RxErr- BadTLP- BadDLLP- Rollover- Timeout- AdvNonFatalErr+ CorrIntErr- HeaderOF-
+		AERCap:	First Error Pointer: 00, ECRCGenCap- ECRCGenEn- ECRCChkCap- ECRCChkEn-
+			MultHdrRecCap- MultHdrRecEn- TLPPfxPres- HdrLogCap-
+		HeaderLog: 00000000 00000000 00000000 00000000
+	Kernel driver in use: xhci_hcd
+00: 06 11 83 34 46 05 10 00 01 30 03 0c 10 00 00 00
+10: 04 00 00 c0 00 00 00 00 00 00 00 00 00 00 00 00
+20: 00 00 00 00 00 00 00 00 00 00 00 00 06 11 83 34
+30: 00 00 00 00 80 00 00 00 00 00 00 00 1b 01 00 00
+40: 00 00 00 00 00 01 00 00 09 00 40 0e 04 00 00 00
+50: c0 38 01 00 00 00 00 00 00 00 00 00 06 11 83 34
+60: 30 20 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+70: 00 00 00 00 00 00 00 00 08 00 03 00 01 00 00 18
+80: 01 90 c3 89 00 00 00 00 00 00 00 00 00 00 00 00
+90: 05 c4 a5 00 fc ff ff ff 00 00 00 00 40 65 00 00
+a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+c0: 00 20 00 00 10 00 02 00 01 80 00 00 1f 28 19 00
+d0: 12 5c 06 00 43 01 12 10 00 00 00 00 00 00 00 00
+e0: 00 00 00 00 00 00 00 00 12 00 00 00 00 00 00 00
+f0: 00 00 00 00 22 00 01 00 00 00 00 00 00 00 00 00
+
+=== sudo find /sys/kernel/debug/usb -maxdepth 4 -type f -print -exec sh -c echo "--- $1"; cat "$1" 2>&1 | head -c 16384; echo sh {} ; ===
+/sys/kernel/debug/usb/xhci/0000:01:00.0/event-ring/trbs
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/event-ring/trbs
+ 0 0x000000040e402000: TRB 0000000001000000 status 'Success' len 0 slot 0 ep 0 type 'Port Status Change Event' flags e:C
+ 0 0x000000040e402010: TRB 000000040e400000 status 'Success' len 0 slot 1 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402020: TRB 0000000001000000 status 'Success' len 0 slot 0 ep 0 type 'Port Status Change Event' flags e:C
+ 0 0x000000040e402030: TRB 000000040e400010 status 'Success' len 0 slot 1 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402040: TRB 000000040e412010 status 'Short Packet' len 46 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402050: TRB 000000040e412020 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402060: TRB 0000000001000000 status 'Success' len 0 slot 0 ep 0 type 'Port Status Change Event' flags e:C
+ 0 0x000000040e402070: TRB 000000040e400020 status 'Success' len 0 slot 0 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402080: TRB 000000040e400030 status 'Success' len 0 slot 1 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402090: TRB 000000040e412050 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4020a0: TRB 000000040e412080 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4020b0: TRB 000000040e4120b0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4020c0: TRB 000000040e4120e0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4020d0: TRB 000000040e412110 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4020e0: TRB 000000040e412130 status 'Short Packet' len 251 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4020f0: TRB 000000040e412140 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402100: TRB 000000040e412160 status 'Short Packet' len 233 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402110: TRB 000000040e412170 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402120: TRB 000000040e400040 status 'Success' len 0 slot 1 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402130: TRB 000000040e416000 status 'Stopped - Length Invalid' len 0 slot 1 ep 3 type 'Transfer Event' flags e:C
+ 0 0x000000040e402140: TRB 000000040e400050 status 'Success' len 0 slot 1 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402150: TRB 000000040e400060 status 'Success' len 0 slot 1 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402160: TRB 000000040e412190 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402170: TRB 000000040e4121b0 status 'Short Packet' len 6 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402180: TRB 000000040e4121c0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402190: TRB 000000040e4121f0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4021a0: TRB 000000040e412220 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4021b0: TRB 000000040e400070 status 'Success' len 0 slot 1 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4021c0: TRB 000000040e412240 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4021d0: TRB 000000040e412260 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4021e0: TRB 000000040e412280 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4021f0: TRB 000000040e4122a0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402200: TRB 000000040e4122d0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402210: TRB 000000040e412300 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402220: TRB 000000040e412330 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402230: TRB 000000040e412360 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402240: TRB 000000040e412380 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402250: TRB 000000040e4123b0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402260: TRB 000000040e4123d0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402270: TRB 000000040e400080 status 'Success' len 0 slot 2 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402280: TRB 000000040e4123f0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402290: TRB 000000040e412420 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4022a0: TRB 000000040e412440 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4022b0: TRB 000000040e400090 status 'Success' len 0 slot 2 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4022c0: TRB 000000040e41a010 status 'Short Packet' len 46 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4022d0: TRB 000000040e41a020 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4022e0: TRB 000000040e412460 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4022f0: TRB 000000040e412490 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402300: TRB 000000040e4124b0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402310: TRB 000000040e4000a0 status 'Success' len 0 slot 0 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402320: TRB 000000040e4000b0 status 'Success' len 0 slot 2 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402330: TRB 000000040e41a050 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402340: TRB 000000040e41a080 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402350: TRB 000000040e41a0b0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402360: TRB 000000040e41a0d0 status 'Short Packet' len 251 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402370: TRB 000000040e41a0e0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402380: TRB 000000040e41a100 status 'Short Packet' len 233 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402390: TRB 000000040e41a110 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4023a0: TRB 000000040e4000c0 status 'Success' len 0 slot 2 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4023b0: TRB 000000040e41e000 status 'Stopped - Length Invalid' len 0 slot 2 ep 3 type 'Transfer Event' flags e:C
+ 0 0x000000040e4023c0: TRB 000000040e4000d0 status 'Success' len 0 slot 2 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4023d0: TRB 000000040e4000e0 status 'Success' len 0 slot 2 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4023e0: TRB 000000040e41a130 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4023f0: TRB 000000040e41a150 status 'Short Packet' len 6 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402400: TRB 000000040e41a160 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402410: TRB 000000040e41a190 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402420: TRB 000000040e41a1c0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402430: TRB 000000040e4000f0 status 'Success' len 0 slot 2 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402440: TRB 000000040e41a1e0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402450: TRB 000000040e41a200 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402460: TRB 000000040e41a220 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402470: TRB 000000040e41a240 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402480: TRB 000000040e41a270 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402490: TRB 000000040e41a2a0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4024a0: TRB 000000040e41a2d0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4024b0: TRB 000000040e41a300 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4024c0: TRB 000000040e41a320 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4024d0: TRB 000000040e41a350 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4024e0: TRB 000000040e41a370 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4024f0: TRB 000000040e400100 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402500: TRB 000000040e41a390 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402510: TRB 000000040e41a3c0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402520: TRB 000000040e41a3e0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402530: TRB 000000040e400110 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402540: TRB 000000040e422010 status 'Short Packet' len 46 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402550: TRB 000000040e422020 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402560: TRB 000000040e41a400 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402570: TRB 000000040e41a430 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402580: TRB 000000040e41a450 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402590: TRB 000000040e400120 status 'Success' len 0 slot 0 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4025a0: TRB 000000040e400130 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4025b0: TRB 000000040e422050 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4025c0: TRB 000000040e422080 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4025d0: TRB 000000040e4220b0 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4025e0: TRB 000000040e4220d0 status 'Short Packet' len 251 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4025f0: TRB 000000040e4220e0 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402600: TRB 000000040e422100 status 'Short Packet' len 211 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402610: TRB 000000040e422110 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402620: TRB 000000040e422130 status 'Short Packet' len 231 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402630: TRB 000000040e422140 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402640: TRB 000000040e400140 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402650: TRB 000000040e426000 status 'Stopped - Length Invalid' len 0 slot 3 ep 3 type 'Transfer Event' flags e:C
+ 0 0x000000040e402660: TRB 000000040e400150 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402670: TRB 000000040e400160 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402680: TRB 000000040e42a000 status 'Stopped - Length Invalid' len 0 slot 3 ep 5 type 'Transfer Event' flags e:C
+ 0 0x000000040e402690: TRB 000000040e400170 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4026a0: TRB 000000040e400180 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4026b0: TRB 000000040e422160 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4026c0: TRB 000000040e422180 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4026d0: TRB 000000040e4221b0 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4026e0: TRB 000000040e400190 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4026f0: TRB 000000040e4221e0 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402700: TRB 000000040e422200 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402710: TRB 000000040e422230 status 'Success' len 0 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402720: TRB 000000040e4001a0 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402730: TRB 000000040e4124e0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402740: TRB 000000040e412510 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402750: TRB 000000040e412530 status 'Short Packet' len 4 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402760: TRB 000000040e412540 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402770: TRB 000000040e412570 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402780: TRB 000000040e4125a0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402790: TRB 000000040e4125d0 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4027a0: TRB 000000040e412600 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4027b0: TRB 000000040e412620 status 'Stall Error' len 4 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4027c0: TRB 000000040e4001b0 status 'Success' len 0 slot 1 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4027d0: TRB 000000040e4001c0 status 'Success' len 0 slot 1 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4027e0: TRB 000000040e412660 status 'Success' len 0 slot 1 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4027f0: TRB 000000040e41a470 status 'Short Packet' len 4 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402800: TRB 000000040e41a480 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402810: TRB 000000040e41a4b0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402820: TRB 000000040e41a4e0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402830: TRB 000000040e41a510 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402840: TRB 000000040e41a540 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402850: TRB 000000040e41a570 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402860: TRB 000000040e41a590 status 'Stall Error' len 4 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e402870: TRB 000000040e4001d0 status 'Success' len 0 slot 2 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402880: TRB 000000040e4001e0 status 'Success' len 0 slot 2 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e402890: TRB 000000040e41a5d0 status 'Success' len 0 slot 2 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4028a0: TRB 000000040e422250 status 'Stall Error' len 10 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4028b0: TRB 000000040e4001f0 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4028c0: TRB 000000040e400200 status 'Success' len 0 slot 3 ep 0 type 'Command Completion Event' flags e:C
+ 0 0x000000040e4028d0: TRB 000000040e422280 status 'Stall Error' len 4 slot 3 ep 1 type 'Transfer Event' flags e:C
+ 0 0x000000040e4028e0: TRB 000000040e400210 status 'Success' len 0 slot 3 ep 0 type 'Comma
+/sys/kernel/debug/usb/xhci/0000:01:00.0/event-ring/cycle
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/event-ring/cycle
+1
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/event-ring/dequeue
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/event-ring/dequeue
+0x000000040e402db0
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/event-ring/enqueue
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/event-ring/enqueue
+0x000000040e402000
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/command-ring/trbs
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/command-ring/trbs
+ 0 0x000000040e400000: Enable Slot Command: flags C
+ 0 0x000000040e400010: Address Device Command: ctx 0000000440e0d000 slot 1 flags B:C
+ 0 0x000000040e400020: Reset Device Command: slot 1 flags C
+ 0 0x000000040e400030: Address Device Command: ctx 0000000440e0d000 slot 1 flags b:C
+ 0 0x000000040e400040: Configure Endpoint Command: ctx 0000000440e0d000 slot 1 flags d:C
+ 0 0x000000040e400050: Stop Ring Command: slot 1 sp 0 ep 3 flags C
+ 0 0x000000040e400060: Configure Endpoint Command: ctx 000000040e200000 slot 1 flags d:C
+ 0 0x000000040e400070: Configure Endpoint Command: ctx 000000040e200000 slot 1 flags d:C
+ 0 0x000000040e400080: Enable Slot Command: flags C
+ 0 0x000000040e400090: Address Device Command: ctx 0000000442017000 slot 2 flags B:C
+ 0 0x000000040e4000a0: Reset Device Command: slot 2 flags C
+ 0 0x000000040e4000b0: Address Device Command: ctx 0000000442017000 slot 2 flags b:C
+ 0 0x000000040e4000c0: Configure Endpoint Command: ctx 0000000442017000 slot 2 flags d:C
+ 0 0x000000040e4000d0: Stop Ring Command: slot 2 sp 0 ep 3 flags C
+ 0 0x000000040e4000e0: Configure Endpoint Command: ctx 000000040e500000 slot 2 flags d:C
+ 0 0x000000040e4000f0: Configure Endpoint Command: ctx 000000040e500000 slot 2 flags d:C
+ 0 0x000000040e400100: Enable Slot Command: flags C
+ 0 0x000000040e400110: Address Device Command: ctx 0000000445251000 slot 3 flags B:C
+ 0 0x000000040e400120: Reset Device Command: slot 3 flags C
+ 0 0x000000040e400130: Address Device Command: ctx 0000000445251000 slot 3 flags b:C
+ 0 0x000000040e400140: Configure Endpoint Command: ctx 0000000445251000 slot 3 flags d:C
+ 0 0x000000040e400150: Stop Ring Command: slot 3 sp 0 ep 3 flags C
+ 0 0x000000040e400160: Configure Endpoint Command: ctx 000000040e501000 slot 3 flags d:C
+ 0 0x000000040e400170: Stop Ring Command: slot 3 sp 0 ep 5 flags C
+ 0 0x000000040e400180: Configure Endpoint Command: ctx 000000040e501000 slot 3 flags d:C
+ 0 0x000000040e400190: Configure Endpoint Command: ctx 000000040e501000 slot 3 flags d:C
+ 0 0x000000040e4001a0: Configure Endpoint Command: ctx 000000040e501000 slot 3 flags d:C
+ 0 0x000000040e4001b0: Reset Endpoint Command: ctx 0000000000000000 slot 1 ep 1 flags t:C
+ 0 0x000000040e4001c0: Set TR Dequeue Pointer Command: deq 000000040e412641 stream 0 slot 1 ep 1 flags C
+ 0 0x000000040e4001d0: Reset Endpoint Command: ctx 0000000000000000 slot 2 ep 1 flags t:C
+ 0 0x000000040e4001e0: Set TR Dequeue Pointer Command: deq 000000040e41a5b1 stream 0 slot 2 ep 1 flags C
+ 0 0x000000040e4001f0: Reset Endpoint Command: ctx 0000000000000000 slot 3 ep 1 flags t:C
+ 0 0x000000040e400200: Set TR Dequeue Pointer Command: deq 000000040e422271 stream 0 slot 3 ep 1 flags C
+ 0 0x000000040e400210: Reset Endpoint Command: ctx 0000000000000000 slot 3 ep 1 flags t:C
+ 0 0x000000040e400220: Set TR Dequeue Pointer Command: deq 000000040e4222a1 stream 0 slot 3 ep 1 flags C
+ 0 0x000000040e400230: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400240: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400250: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400260: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400270: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400280: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400290: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4002a0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4002b0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4002c0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4002d0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4002e0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4002f0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400300: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400310: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400320: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400330: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400340: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400350: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400360: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400370: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400380: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400390: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4003a0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4003b0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4003c0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4003d0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4003e0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4003f0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400400: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400410: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400420: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400430: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400440: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400450: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400460: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400470: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400480: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400490: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4004a0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4004b0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4004c0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4004d0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4004e0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4004f0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400500: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400510: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400520: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400530: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400540: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400550: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400560: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400570: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400580: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400590: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4005a0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4005b0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4005c0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4005d0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4005e0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4005f0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400600: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400610: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400620: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400630: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400640: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400650: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400660: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400670: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400680: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400690: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4006a0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4006b0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4006c0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4006d0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4006e0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4006f0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400700: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400710: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400720: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400730: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400740: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400750: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400760: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400770: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400780: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400790: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4007a0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4007b0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4007c0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4007d0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4007e0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4007f0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400800: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400810: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400820: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400830: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400840: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400850: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400860: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400870: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400880: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400890: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4008a0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4008b0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4008c0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4008d0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4008e0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4008f0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400900: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400910: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400920: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400930: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400940: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400950: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400960: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400970: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400980: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400990: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4009a0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4009b0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4009c0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4009d0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4009e0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e4009f0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a00: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a10: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a20: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a30: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a40: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a50: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a60: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a70: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a80: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400a90: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400aa0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400ab0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400ac0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400ad0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400ae0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400af0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b00: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b10: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b20: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b30: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b40: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b50: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b60: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b70: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b80: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400b90: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400ba0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400bb0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400bc0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400bd0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400be0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400bf0: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c00: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c10: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c20: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c30: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c40: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c50: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c60: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c70: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c80: type 'UNKNOWN' -> raw 00000000 00000000 00000000 00000000
+ 0 0x000000040e400c90: type 'UNKNOWN' -> raw 00000000 00000000 00
+/sys/kernel/debug/usb/xhci/0000:01:00.0/command-ring/cycle
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/command-ring/cycle
+1
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/command-ring/dequeue
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/command-ring/dequeue
+0x000000040e400230
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/command-ring/enqueue
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/command-ring/enqueue
+0x000000040e400230
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/reg-ext-dbc:00
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/reg-ext-dbc:00
+EXTCAP_DBC_CAPABILITY = 0x0001000a
+EXTCAP_DBC_DOORBELL = 0x00000000
+EXTCAP_DBC_ERSTSIZE = 0x00000000
+EXTCAP_DBC_ERST_LOW = 0x00000000
+EXTCAP_DBC_ERST_HIGH = 0x00000000
+EXTCAP_DBC_ERDP_LOW = 0x00000000
+EXTCAP_DBC_ERDP_HIGH = 0x00000000
+EXTCAP_DBC_CONTROL = 0x00000000
+EXTCAP_DBC_STATUS = 0x00000000
+EXTCAP_DBC_PORTSC = 0x000000a0
+EXTCAP_DBC_CONT_LOW = 0x00000000
+EXTCAP_DBC_CONT_HIGH = 0x00000000
+EXTCAP_DBC_DEVINFO1 = 0x00000000
+EXTCAP_DBC_DEVINFO2 = 0x00000000
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/reg-ext-protocol:01
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/reg-ext-protocol:01
+EXTCAP_REVISION = 0x03008c02
+EXTCAP_NAME = 0x20425355
+EXTCAP_PORTINFO = 0x10000402
+EXTCAP_PORTTYPE = 0x00000000
+EXTCAP_MANTISSA1 = 0x00050134
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/reg-ext-protocol:00
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/reg-ext-protocol:00
+EXTCAP_REVISION = 0x02000802
+EXTCAP_NAME = 0x20425355
+EXTCAP_PORTINFO = 0x10060101
+EXTCAP_PORTTYPE = 0x00000000
+EXTCAP_MANTISSA1 = 0x01e00023
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/reg-ext-legsup:00
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/reg-ext-legsup:00
+EXTCAP_USBLEGSUP = 0x00000401
+EXTCAP_USBLEGCTLSTS = 0x40000000
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/reg-runtime
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/reg-runtime
+MFINDEX = 0x00002976
+IR0_IMAN = 0x00000002
+IR0_IMOD = 0x000000a0
+IR0_ERSTSZ = 0x00000008
+IR0_ERSTBA_LOW = 0x40d36000
+IR0_ERSTBA_HIGH = 0x00000004
+IR0_ERDP_LOW = 0x0e402db0
+IR0_ERDP_HIGH = 0x00000004
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/reg-op
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/reg-op
+USBCMD = 0x00000005
+USBSTS = 0x00000000
+PAGESIZE = 0x00000001
+DNCTRL = 0x00000002
+CRCR = 0x00000008
+DCBAAP_LOW = 0x40d33000
+DCBAAP_HIGH = 0x00000004
+CONFIG = 0x00000020
+
+/sys/kernel/debug/usb/xhci/0000:01:00.0/reg-cap
+--- /sys/kernel/debug/usb/xhci/0000:01:00.0/reg-cap
+CAPLENGTH = 0x01000020
+HCSPARAMS1 = 0x05000420
+HCSPARAMS2 = 0xfc000031
+HCSPARAMS3 = 0x00e70004
+HCCPARAMS1 = 0x002841eb
+DOORBELLOFF = 0x00000100
+RUNTIMEOFF = 0x00000200
+HCCPARAMS2 = 0x00000000
+
+/sys/kernel/debug/usb/devices
+--- /sys/kernel/debug/usb/devices
+
+T:  Bus=01 Lev=00 Prnt=00 Port=00 Cnt=00 Dev#=  1 Spd=480  MxCh= 1
+B:  Alloc=  0/800 us ( 0%), #Int=  0, #Iso=  0
+D:  Ver= 2.00 Cls=09(hub  ) Sub=00 Prot=01 MxPS=64 #Cfgs=  1
+P:  Vendor=1d6b ProdID=0002 Rev= 6.12
+S:  Manufacturer=Linux 6.12.75+rpt-rpi-v8 xhci-hcd
+S:  Product=xHCI Host Controller
+S:  SerialNumber=0000:01:00.0
+C:* #Ifs= 1 Cfg#= 1 Atr=e0 MxPwr=  0mA
+I:* If#= 0 Alt= 0 #EPs= 1 Cls=09(hub  ) Sub=00 Prot=00 Driver=hub
+E:  Ad=81(I) Atr=03(Int.) MxPS=   4 Ivl=256ms
+
+T:  Bus=01 Lev=01 Prnt=01 Port=00 Cnt=01 Dev#=  2 Spd=480  MxCh= 4
+D:  Ver= 2.10 Cls=09(hub  ) Sub=00 Prot=01 MxPS=64 #Cfgs=  1
+P:  Vendor=2109 ProdID=3431 Rev= 4.21
+S:  Product=USB2.0 Hub
+C:* #Ifs= 1 Cfg#= 1 Atr=e0 MxPwr=100mA
+I:* If#= 0 Alt= 0 #EPs= 1 Cls=09(hub  ) Sub=00 Prot=00 Driver=hub
+E:  Ad=81(I) Atr=03(Int.) MxPS=   1 Ivl=256ms
+
+T:  Bus=01 Lev=02 Prnt=02 Port=03 Cnt=01 Dev#=  3 Spd=480  MxCh= 4
+D:  Ver= 2.00 Cls=09(hub  ) Sub=00 Prot=01 MxPS=64 #Cfgs=  1
+P:  Vendor=05e3 ProdID=0608 Rev=85.36
+S:  Product=USB2.0 Hub
+C:* #Ifs= 1 Cfg#= 1 Atr=e0 MxPwr=100mA
+I:* If#= 0 Alt= 0 #EPs= 1 Cls=09(hub  ) Sub=00 Prot=00 Driver=hub
+E:  Ad=81(I) Atr=03(Int.) MxPS=   1 Ivl=256ms
+
+T:  Bus=01 Lev=03 Prnt=03 Port=03 Cnt=01 Dev#=  4 Spd=1.5  MxCh= 0
+D:  Ver= 2.00 Cls=00(>ifc ) Sub=00 Prot=00 MxPS= 8 #Cfgs=  1
+P:  Vendor=258a ProdID=0f0a Rev= 2.10
+S:  Manufacturer=SINO WEALTH
+S:  Product=USB TOUCHPAD KEYBOARD
+C:* #Ifs= 2 Cfg#= 1 Atr=a0 MxPwr=100mA
+I:* If#= 0 Alt= 0 #EPs= 1 Cls=03(HID  ) Sub=01 Prot=01 Driver=usbhid
+E:  Ad=81(I) Atr=03(Int.) MxPS=   8 Ivl=10ms
+I:* If#= 1 Alt= 0 #EPs= 1 Cls=03(HID  ) Sub=00 Prot=00 Driver=usbhid
+E:  Ad=82(I) Atr=03(Int.) MxPS=   8 Ivl=10ms
+
+T:  Bus=02 Lev=00 Prnt=00 Port=00 Cnt=00 Dev#=  1 Spd=5000 MxCh= 4
+B:  Alloc=  0/800 us ( 0%), #Int=  0, #Iso=  0
+D:  Ver= 3.00 Cls=09(hub  ) Sub=00 Prot=03 MxPS= 9 #Cfgs=  1
+P:  Vendor=1d6b ProdID=0003 Rev= 6.12
+S:  Manufacturer=Linux 6.12.75+rpt-rpi-v8 xhci-hcd
+S:  Product=xHCI Host Controller
+S:  SerialNumber=0000:01:00.0
+C:* #Ifs= 1 Cfg#= 1 Atr=e0 MxPwr=  0mA
+I:* If#= 0 Alt= 0 #EPs= 1 Cls=09(hub  ) Sub=00 Prot=00 Driver=hub
+E:  Ad=81(I) Atr=03(Int.) MxPS=   4 Ivl=256ms
+
+=== sudo find /sys/kernel/debug/xhci -maxdepth 4 -type f -print -exec sh -c echo "--- $1"; cat "$1" 2>&1 | head -c 16384; echo sh {} ; ===
+find: ‘/sys/kernel/debug/xhci’: No such file or directory
+=== sudo find /sys/kernel/debug/mmc1 -maxdepth 2 -type f -print -exec sh -c echo "--- $1"; cat "$1" 2>&1 | head -c 8192; echo sh {} ; ===
+/sys/kernel/debug/mmc1/mmc1:0001/quirks
+--- /sys/kernel/debug/mmc1/mmc1:0001/quirks
+0x00000001
+
+/sys/kernel/debug/mmc1/mmc1:0001/state
+--- /sys/kernel/debug/mmc1/mmc1:0001/state
+0x00000001
+
+/sys/kernel/debug/mmc1/err_stats
+--- /sys/kernel/debug/mmc1/err_stats
+# Command Timeout Occurred:	 0
+# Command CRC Errors Occurred:	 0
+# Data Timeout Occurred:	 0
+# Data CRC Errors Occurred:	 0
+# Auto-Cmd Error Occurred:	 0
+# ADMA Error Occurred:	 0
+# Tuning Error Occurred:	 0
+# CMDQ RED Errors:	 0
+# CMDQ GCE Errors:	 0
+# CMDQ ICCE Errors:	 0
+# Request Timedout:	 0
+# CMDQ Request Timedout:	 0
+# ICE Config Errors:	 0
+# Controller Timedout errors:	 0
+# Unexpected IRQ errors:	 0
+
+/sys/kernel/debug/mmc1/err_state
+--- /sys/kernel/debug/mmc1/err_state
+0
+
+/sys/kernel/debug/mmc1/clock
+--- /sys/kernel/debug/mmc1/clock
+50000000
+
+/sys/kernel/debug/mmc1/caps2
+--- /sys/kernel/debug/mmc1/caps2
+0x00020000
+
+/sys/kernel/debug/mmc1/caps
+--- /sys/kernel/debug/mmc1/caps
+0x4000012f
+
+/sys/kernel/debug/mmc1/ios
+--- /sys/kernel/debug/mmc1/ios
+clock:		50000000 Hz
+actual clock:	41666667 Hz
+vdd:		21 (3.3 ~ 3.4 V)
+bus mode:	2 (push-pull)
+chip select:	0 (don't care)
+power mode:	2 (on)
+bus width:	2 (4 bits)
+timing spec:	2 (sd high-speed)
+signal voltage:	0 (3.30 V)
+driver type:	0 (driver type B)
+
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_txctl ctrl_frame complete, err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_proto_bcdc_cmplt Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_rxctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_readframes Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_read_control Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 2048
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_rxctl resumed on rxctl frame, got 2064 expected 2064
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_fil_cmd_data_get ifidx=0, cmd=136, len=2048, err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_readframes processed 1 frames
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_proto_bcdc_query_dcmd Enter, cmd 127 len 12
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_proto_bcdc_msg Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_txctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_tx_ctrlframe Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_txctl ctrl_frame complete, err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_proto_bcdc_cmplt Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_rxctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_readframes Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_read_control Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_rxctl resumed on rxctl frame, got 28 expected 28
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_fil_cmd_data_get ifidx=0, cmd=127, len=12, err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_cfg80211_get_station RSSI -43 dBm
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_cfg80211_get_station Exit
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_readframes processed 1 frames
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_cfg80211_dump_station Enter, idx 1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_cfg80211_dump_station Enter, idx 1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 1024 bytes at offset 0x00005ab4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: CONSOLE: 001109.352 wl0: unable to find iovar "tdls_sta_info"
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: CONSOLE: 001109.352 wl0: wlc_iovar_op: tdls_sta_info BCME -23 (Unsupported)
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=1
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_isr Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_dpc Dongle reports CHIPACTIVE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_clkctl Enter
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_watchdog idle
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+Apr 26 07:40:14 raspberrypi kernel: brcmfmac: brcmf_sdio_kso_control Enter: on=0
+=== sudo cat /proc/interrupts ===
+           CPU0       CPU1       CPU2       CPU3       
+  9:          0          0          0          0     GICv2  25 Level     vgic
+ 11:     157797      98877      67188      69288     GICv2  30 Level     arch_timer
+ 12:          0          0          0          0     GICv2  27 Level     kvm guest vtimer
+ 14:      11318          0          0          0     GICv2  65 Level     fe00b880.mailbox
+ 15:      10096          0          0          0     GICv2 114 Level     DMA IRQ
+ 21:          0          0          0          0     GICv2 122 Level     DMA IRQ
+ 22:          0          0          0          0     GICv2 123 Level     DMA IRQ
+ 27:          0          0          0          0     GICv2 175 Level     PCIe PME, aerdrv
+ 28:       6300          0          0          0     GICv2 189 Level     eth0
+ 29:          0          0          0          0     GICv2 190 Level     eth0
+ 30:        209          0          0          0  BRCM STB PCIe MSI 524288 Edge      xhci_hcd
+ 34:         75          0          0          0     GICv2  66 Level     VCHIQ doorbell
+ 35:          0          0          0          0     GICv2  48 Level     arm-pmu
+ 36:          0          0          0          0     GICv2  49 Level     arm-pmu
+ 37:          0          0          0          0     GICv2  50 Level     arm-pmu
+ 38:          0          0          0          0     GICv2  51 Level     arm-pmu
+ 39:       3826          0          0          0     GICv2 153 Level     uart-pl011
+ 40:       1450          0          0          0     GICv2 125 Level     ttyS0
+ 41:     817818          0          0          0     GICv2 158 Level     mmc1, mmc0
+ 42:          0          0          0          0     GICv2 106 Level     v3d
+ 43:          0          0          0          0     GICv2 130 Level     feb00000.codec
+ 44:         12          0          0          0     GICv2 129 Level     vc4 hvs
+ 45:          0          0          0          0  interrupt-controller@7ef00100   4 Level     vc4 hdmi hpd connected
+ 46:          0          0          0          0  interrupt-controller@7ef00100   5 Level     vc4 hdmi hpd disconnected
+ 47:          0          0          0          0  interrupt-controller@7ef00100   1 Level     vc4 hdmi cec rx
+ 48:          0          0          0          0  interrupt-controller@7ef00100   0 Level     vc4 hdmi cec tx
+ 49:          0          0          0          0  interrupt-controller@7ef00100  10 Level     vc4 hdmi hpd connected
+ 50:          0          0          0          0  interrupt-controller@7ef00100  11 Level     vc4 hdmi hpd disconnected
+ 51:          0          0          0          0  interrupt-controller@7ef00100   7 Level     vc4 hdmi cec rx
+ 52:          0          0          0          0  interrupt-controller@7ef00100   8 Level     vc4 hdmi cec tx
+ 53:          0          0          0          0     GICv2 107 Level     fe004000.txp
+ 54:          0          0          0          0     GICv2 141 Level     vc4 crtc
+ 55:          0          0          0          0     GICv2 142 Level     vc4 crtc, vc4 crtc
+ 56:          9          0          0          0     GICv2 133 Level     vc4 crtc
+ 57:          0          0          0          0     GICv2 138 Level     vc4 crtc
+IPI0:      3690       4242       6495       8999       Rescheduling interrupts
+IPI1:     84487     139221     100154     122548       Function call interrupts
+IPI2:         0          0          0          0       CPU stop interrupts
+IPI3:         0          0          0          0       CPU stop NMIs
+IPI4:         0          0          0          0       Timer broadcast interrupts
+IPI5:     15457       2896       6047       1575       IRQ work interrupts
+IPI6:         0          0          0          0       CPU backtrace interrupts
+IPI7:         0          0          0          0       KGDB roundup interrupts
+Err:          0
+=== sudo ls -l /sys/bus/pci/devices/0000:01:00.0 ===
+lrwxrwxrwx 1 root root 0 Jan  1  1970 /sys/bus/pci/devices/0000:01:00.0 -> ../../../devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0
+=== sudo sh -c for f in /sys/bus/pci/devices/0000:01:00.0/{resource,irq,msi_bus,enable,local_cpulist,local_cpus,modalias,uevent}; do echo --- $f; cat $f 2>&1 || true; done ===
+--- /sys/bus/pci/devices/0000:01:00.0/{resource,irq,msi_bus,enable,local_cpulist,local_cpus,modalias,uevent}
+cat: '/sys/bus/pci/devices/0000:01:00.0/{resource,irq,msi_bus,enable,local_cpulist,local_cpus,modalias,uevent}': No such file or directory

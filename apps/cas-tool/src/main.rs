@@ -55,8 +55,8 @@ struct PackArgs {
     /// Output directory for the bundle (defaults to out/cas/<epoch>).
     #[arg(long)]
     out_dir: Option<PathBuf>,
-    /// CAS manifest template JSON (defaults to out/cas_manifest_template.json).
-    #[arg(long, default_value = "out/cas_manifest_template.json")]
+    /// CAS manifest template JSON (defaults to configs/generated/cas_manifest_template.json).
+    #[arg(long, default_value = "configs/generated/cas_manifest_template.json")]
     template: PathBuf,
     /// Override chunk_bytes from the template.
     #[arg(long)]

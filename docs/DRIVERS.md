@@ -125,7 +125,7 @@ Use this order when sources disagree:
    `seL4/build/kernel/gen_headers/*`, `seL4/build/libsel4/include/*`,
    and `seL4/build/kernel/generated/invocations_all.json`.
 2. Cohesix manifest IR and generated artifacts: `configs/root_task*.toml`,
-   `apps/root-task/src/generated/*`, and `out/manifests/*`.
+   `apps/root-task/src/generated/*`, and `configs/generated/*`.
 3. Cohesix HAL and driver implementation: `apps/root-task/src/hal/mod.rs`,
    `apps/root-task/src/hal/dma.rs`, `apps/root-task/src/hal/cache.rs`,
    `apps/root-task/src/hal/pi4_wifi.rs`,
@@ -1269,10 +1269,10 @@ context and the retry/poll window.
   `bsscfg:sup_wpa` wrapper probe, host-EAPOL PMK/session preparation,
   connect-time station policy, PAE multicast admission, and only then primary
   join submission. Host-EAPOL proof is required before data release. Station
-  setup uses
-  `DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE`, not fire-and-forget control
-  frames: the runtime must match CDC command plus ioctl id, reject nonzero CDC
-  status, and return the CDC response body for reads such as `cur_etheraddr`.
+  setup uses matched `DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE` for key
+  security controls, not fire-and-forget control frames: the runtime must match
+  CDC command plus ioctl id, reject nonzero CDC status, and return the CDC
+  response body for reads such as `cur_etheraddr`.
   Primary-BSS commands use plain iovar names; do not invent BSSCFG wrappers on
   this path.
 - Firmware supplicant offload must prove `sup_wpa`, valid PMK programming, and
@@ -1287,12 +1287,14 @@ context and the retry/poll window.
 - Host-EAPOL admits the PAE group multicast, sends bounded EAPOL-Start frames
   through the linked CYW43 `ETH_TX` descriptor while waiting for AP M1, derives
   PMK/PTK locally, writes M2/M4 in WPA2-PSK order, verifies M3 MIC/replay state,
-  drains the submitted M4 before PTK/GTK `wsec_key` install, unwraps GTK with
-  AES-128 key unwrap, waits after Group M2 before secure release when the GTK
-  arrives in the group-key handshake, restores the Linux-unicast-M1 RX admission
-  mode, and only then reports secure completion. EAPOL TX uses the extended
-  SDPCM data shape with BDC priority `6`; control writes may wait for CDC
-  replies, but data/event writes must not inherit a control-plane reply wait.
+  drains the submitted M4 before PTK/GTK `wsec_key` install, sends those
+  `wsec_key` installs through the runtime `CONTROL_EXCHANGE` path with the
+  old-good reply window, unwraps GTK with AES-128 key unwrap, waits after Group
+  M2 before secure release when the GTK arrives in the group-key handshake,
+  restores the Linux-unicast-M1 RX admission mode, and only then reports secure
+  completion. EAPOL TX uses the extended SDPCM data shape with BDC priority `6`;
+  control writes may wait for CDC replies, but data/event writes must not
+  inherit a control-plane reply wait.
   `eapol_start` counts only the bounded linked-runtime 802.1X start frames; it
   is not DHCP/data success by itself.
 - `WIFI_GATE=7`, `wifi-host-eapol-pending`, and

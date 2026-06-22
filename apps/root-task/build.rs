@@ -250,8 +250,8 @@ fn validate_generated_manifest() -> io::Result<()> {
     let generated_dir = manifest_dir.join("src").join("generated");
     let generated_mod = generated_dir.join("mod.rs");
     let generated_bootstrap = generated_dir.join("bootstrap.rs");
-    let manifest_out = repo_root.join("out/manifests/root_task_resolved.json");
-    let manifest_hash = repo_root.join("out/manifests/root_task_resolved.json.sha256");
+    let manifest_out = repo_root.join("configs/generated/root_task_resolved.json");
+    let manifest_hash = repo_root.join("configs/generated/root_task_resolved.json.sha256");
     let cli_script = repo_root.join("scripts/cohsh/boot_v0.coh");
     let doc_snippet = repo_root.join("docs/snippets/root_task_manifest.md");
 
@@ -377,7 +377,7 @@ struct Pi4WifiKnownArtifact {
 
 const PI4_WIFI_FIRMWARE_DIR_ENV: &str = "COHESIX_PI4_WIFI_FIRMWARE_DIR";
 const PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR: &str =
-    "out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/firmware-resolved";
+    "resources/fixtures/pi4-linux-capture/lastchance-20260426T071048Z/firmware-resolved";
 const PI4_WIFI_BOARD_TYPE: &str = "raspberrypi,4-model-b";
 const PI4_WIFI_KNOWN_FIRMWARE: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "cyfmac43455-sdio.bin",

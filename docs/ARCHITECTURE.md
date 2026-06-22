@@ -45,7 +45,7 @@ Non-goals:
 - Secure9P core (`crates/secure9p-*`): 9P2000.L codec and session logic used by NineDoor, `cohsh`, and `coh`.
 - Worker crates (`apps/worker-heart`, `apps/worker-gpu`, `apps/worker-bus`, `apps/worker-lora`): role-specific binaries; orchestration is file-driven via `/queen/ctl` and role-scoped mounts.
 - Host tools: `cohsh` CLI (`apps/cohsh`), `coh` host bridge (`apps/coh`), `swarmui` UI (`apps/swarmui`), `hive-gateway` REST gateway, `gpu-bridge-host`, `host-sidecar-bridge`, and `cas-tool`.
-- Manifest compiler: `tools/coh-rtc` generates root-task tables, policies, and docs snippets from `configs/root_task.toml` into `apps/root-task/src/generated`, `out/manifests/`, and `docs/snippets/`.
+- Manifest compiler: `tools/coh-rtc` generates root-task tables, policies, and docs snippets from `configs/root_task.toml` into `apps/root-task/src/generated`, `configs/generated/`, and `docs/snippets/`.
 
 ## 4. Control Surfaces
 ### Secure9P namespace (NineDoor)
@@ -160,7 +160,7 @@ Mount and bind semantics:
 - **GPU publish + leases:** Use `gpu-bridge-host --publish` (or `coh peft import --publish`) to refresh `/gpu/*`, then `coh gpu lease/run` for host-side GPU workflows.
 - **REST access:** `hive-gateway` exposes a host-only HTTP projection of `LS`/`CAT`/`ECHO` for automation; bounds and semantics match the console/file grammar.
 - **Self-test:** `coh> test` executes the preinstalled `/proc/tests/*.coh` scripts; it is the canonical regression gate for console and Secure9P behavior.
-- **Regression pack:** `scripts/cohsh/run_regression_batch.sh` runs the full `.coh` suite across base and gated manifests using QEMU.
+- **Regression pack:** `scripts/cohsh/run_regression_batch.sh` runs the full `.coh` suite across base and gated manifests using QEMU by default, or against a live Pi 4 TCP console with `COHSH_BATCH_TARGET=pi4 COHSH_TCP_HOST=<pi4-ip>`.
 
 ## 11. Diagrams
 ### Concept architecture
@@ -366,7 +366,7 @@ flowchart LR
 - `docs/GPU_NODES.md`
 - `docs/HOST_TOOLS.md`
 - `configs/root_task.toml`
-- `out/manifests/root_task_resolved.json`
+- `configs/generated/root_task_resolved.json`
 - `apps/root-task`
 - `apps/nine-door`
 - `apps/cohsh`

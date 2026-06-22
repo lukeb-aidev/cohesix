@@ -12,6 +12,7 @@
 - `test`
 - `nettest`
 - `netstats`
+- `reboot`
 - `log`
 - `cachelog [n]`
 - `quit`
@@ -23,4 +24,4 @@
 - `spawn <payload>`
 - `kill <worker>`
 
-_Generated from cohsh-core verb specs (19 verbs)._
+_Generated from cohsh-core verb specs (20 verbs)._

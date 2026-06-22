@@ -885,6 +885,13 @@ def test_gate_summary_splits_serial_and_hdmi_output_pressure() -> None:
             "[smp] activity local-seat-display pending_bytes=4096 "
             "pending_redraw=no submitted=8 deferred=9 busy=0 no_reply=1280 "
             "coalesced=10 backpressure_bytes=64 superseded_bytes=0",
+            "cohesix> HDMI_FRAME_QUEUE reason=keyboard-scrollback "
+            "chunk_bytes=512 chunk_redraw=yes generation=15 pending_bytes=128 "
+            "redraw_bytes=64 pending_redraw=yes scrollback=0 open_line=yes "
+            "submitted=9 deferred=10 busy=1 no_reply=11 cooldown=2",
+            "HDMI_FRAME_COUNTERS reason=keyboard-scrollback coalesced=12 "
+            "backpressure_bytes=15 superseded_bytes=33 "
+            "redraw_no_reply_streak=2 stale_after_retry=yes",
         ]
     )
 
@@ -894,18 +901,57 @@ def test_gate_summary_splits_serial_and_hdmi_output_pressure() -> None:
     assert record["SERIAL_OUTPUT_DEFERRED"] == 11
     assert record["SERIAL_OUTPUT_FLUSHED"] == 7
     assert record["SERIAL_OUTPUT_BACKPRESSURE"] == 3
-    assert record["HDMI_DISPLAY_PENDING_BYTES"] == 4096
-    assert record["HDMI_DISPLAY_PENDING_REDRAW"] == "no"
-    assert record["HDMI_DISPLAY_SUBMITTED"] == 8
-    assert record["HDMI_DISPLAY_DEFERRED"] == 9
-    assert record["HDMI_DISPLAY_BUSY"] == 0
-    assert record["HDMI_DISPLAY_NO_REPLY"] == 1280
-    assert record["HDMI_DISPLAY_COALESCED"] == 10
-    assert record["HDMI_DISPLAY_BACKPRESSURE_BYTES"] == 64
-    assert record["HDMI_DISPLAY_SUPERSEDED_BYTES"] == 0
+    assert record["HDMI_DISPLAY_PENDING_BYTES"] == 128
+    assert record["HDMI_DISPLAY_PENDING_REDRAW"] == "yes"
+    assert record["HDMI_DISPLAY_SUBMITTED"] == 9
+    assert record["HDMI_DISPLAY_DEFERRED"] == 10
+    assert record["HDMI_DISPLAY_BUSY"] == 1
+    assert record["HDMI_DISPLAY_NO_REPLY"] == 11
+    assert record["HDMI_DISPLAY_COALESCED"] == 12
+    assert record["HDMI_DISPLAY_BACKPRESSURE_BYTES"] == 15
+    assert record["HDMI_DISPLAY_SUPERSEDED_BYTES"] == 33
     assert record["USB_KEYBOARD_NO_REPLIES"] == 6
     assert record["USB_KEYBOARD_POLL_COOLDOWN"] == 7
     assert record["USB_KEYBOARD_COOLDOWN_SKIPS"] == 8
+
+
+def test_gate_summary_treats_post_prompt_hdmi_frame_as_responsive_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "cohesix> HDMI_FRAME_SUBMIT reason=keyboard-scrollback status=ready "
+            "root_console_ready=yes attached=yes failed=no fatal=no redraw=yes "
+            "bytes=220 chunk_index=0 chunk_count=1 payload_sig=0xc13cd357 "
+            "completion_sequence=29 code=1 detail=0 result=220 frame_len=0",
+            "HDMI_FRAME_QUEUE reason=keyboard-scrollback chunk_bytes=220 "
+            "chunk_redraw=yes generation=5 pending_bytes=0 redraw_bytes=0 "
+            "pending_redraw=no scrollback=0 open_line=no submitted=0 "
+            "deferred=0 busy=0 no_reply=0 cooldown=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
+    assert record["HDMI_DISPLAY_PENDING_BYTES"] == 0
+    assert record["HDMI_DISPLAY_PENDING_REDRAW"] == "no"
+    assert record["HDMI_DISPLAY_NO_REPLY"] == 0
+
+
+def test_gate_summary_treats_in_progress_hdmi_queue_as_responsive_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "HDMI_FRAME_QUEUE reason=keyboard-scrollback chunk_bytes=512 "
+            "chunk_redraw=yes generation=5 pending_bytes=200 redraw_bytes=0 "
+            "pending_redraw=no scrollback=0 open_line=no submitted=4 "
+            "deferred=0 busy=0 no_reply=0 cooldown=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
+    assert record["HDMI_DISPLAY_PENDING_BYTES"] == 200
+    assert record["HDMI_DISPLAY_PENDING_REDRAW"] == "no"
+    assert record["HDMI_DISPLAY_BUSY"] == 0
+    assert record["HDMI_DISPLAY_NO_REPLY"] == 0
 
 
 def test_gate_summary_treats_serial_input_trace_as_responsive_proof() -> None:
@@ -1925,6 +1971,29 @@ def test_gate_summary_tracks_driver_task_resource_init_blocker() -> None:
         record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"]
         == "cyw43-wifi:runtime-ring-submit:busy"
     )
+
+
+def test_gate_summary_clears_current_resource_blocker_after_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-enumeration-retry "
+            "status=not-enumerated detail=0x0200 result=0 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-owner-state "
+            "status=blocked-first-report detail=0x0500 result=0 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-owner-state "
+            "status=ready detail=0x0501 result=1 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert (
+        record["DRIVER_TASK_RESOURCE_BLOCKER"]
+        == "usb-keyboard:usb-keyboard-enumeration-retry:not-enumerated"
+    )
+    assert record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"] == "none"
 
 
 def test_driver_task_resource_init_preserves_request_context_fields() -> None:
@@ -5853,6 +5922,38 @@ def test_gate_summary_replaces_stale_usb_first_report_frontier_after_ready() -> 
 
     record = normalizer.summarize_gates(events).to_record()
 
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_DRIVER_TASK_FRONTIER"] == "usb-owner-state-ready"
+    assert record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"] == "none"
+
+
+def test_gate_summary_uses_resource_init_first_report_despite_stale_progress_marker() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-enumeration "
+            "status=ready detail=0x0202 result=0x9f000301 frame_len=24 "
+            "progress_marker_valid=yes progress_phase_name=usb-hub-port-status-disconnected",
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=usb-local-seat endpoint=0x07aa "
+            "request=8 mode=nonblocking attempts=16384 opcode=1 arg0=2 "
+            "aux0=0x55534245 frame_len=0 owner=linked-runtime marker_valid=yes "
+            "marker_sequence=8 marker_phase=428 "
+            "marker_phase_name=usb-hub-port-status-disconnected "
+            "marker_aux0=0x55534245 blocker=usb-keyboard-enumeration-no-reply",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-keyboard-first-report "
+            "status=ready detail=0x0501 result=0x01000220 frame_len=0 "
+            "progress_marker_valid=yes progress_phase_name=usb-hub-port-status-disconnected",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-owner-state "
+            "status=ready detail=0x0501 result=0x01000220 frame_len=0 "
+            "progress_marker_valid=yes progress_phase_name=usb-hub-port-status-disconnected",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_BLOCKER"] == "none"
     assert record["USB_DRIVER_TASK_FRONTIER"] == "usb-owner-state-ready"
 
 
@@ -5948,6 +6049,9 @@ def test_gate_summary_reports_usb_runtime_recovery_diagnostics() -> None:
             "queue_collapse=0 stage=ready stage_code=9 "
             "reason=full-queue-no-event reason_code=3 "
             "command_completion_blocked=2",
+            "usb: runtime_recovery diag_valid=unknown recoveries=0 failures=0 "
+            "queue_collapse=0 stage=unknown stage_code=0 "
+            "reason=unknown reason_code=0 command_completion_blocked=0",
         ]
     )
 
@@ -5960,6 +6064,75 @@ def test_gate_summary_reports_usb_runtime_recovery_diagnostics() -> None:
     assert record["USB_RUNTIME_RECOVERY_STAGE"] == "ready"
     assert record["USB_RUNTIME_RECOVERY_REASON"] == "full-queue-no-event"
     assert record["USB_RUNTIME_COMMAND_COMPLETION_BLOCKED"] == 2
+
+
+def test_gate_summary_reports_post_first_byte_recovery_request_timeout() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x65",
+            "DRIVER_TASK_RING_CALL_ABORT contract=usb-local-seat "
+            "endpoint=0x07a3 request=171845 mode=prompt-slice "
+            "reason=timeout-resume-limit timeout_count=256 opcode=1 "
+            "arg0=2 aux0=0x55534252 frame_len=0 owner=linked-runtime "
+            "marker_valid=yes marker_sequence=171845 marker_phase=268 "
+            "marker_phase_name=usb-hid-interrupt-queue-begin "
+            "marker_aux0=0x55534252 blocker=usb-hid-interrupt-queue-begin",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert (
+        record["USB_POST_FIRST_BYTE_BLOCKER"]
+        == "usb-post-first-byte-recovery-request-timeout"
+    )
+
+
+def test_gate_summary_reports_post_first_byte_recovery_request_no_reply() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x65",
+            "usb: recovery_request action=no-reply aux0=0x55534252 "
+            "no_reply=27 streak=9 cooldown=2 recovery_aux_requests=1 "
+            "recovery_aux_pending=yes queue_empty=yes accepted=12 drained=11 "
+            "echoed=10 detail=0x0501 result=0x00000220 queued_reports=1 "
+            "report_status=none report_status_code=0 stale_runtime_queue=no "
+            "full_idle_queue=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert (
+        record["USB_POST_FIRST_BYTE_BLOCKER"]
+        == "usb-post-first-byte-recovery-request-no-reply"
+    )
+    assert record["USB_KEYBOARD_NO_REPLIES"] == 27
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 1
+    assert record["USB_RUNTIME_REPORT_STATUS"] == "none"
+
+
+def test_gate_summary_reports_post_first_byte_recovery_pending_without_diag() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x65",
+            "usb: sustained_input queue_valid=no detail=0x0501 result=0x00000000 "
+            "queued_reports=0 transfer_events=0 report_status=none "
+            "accepted=5 drained=5 echoed=5 no_reply=273197 no_reply_streak=9 "
+            "recovery_aux_requests=4040 recovery_aux_pending=yes "
+            "runtime_skipped=0 blocker=none usb_burst=yes drops=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert (
+        record["USB_POST_FIRST_BYTE_BLOCKER"]
+        == "usb-post-first-byte-recovery-pending-no-diag"
+    )
 
 
 def test_gate_summary_reports_post_first_byte_recovery_failed() -> None:

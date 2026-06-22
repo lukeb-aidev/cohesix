@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Load and validate manifest-derived coh host policies.
 // Author: Lukas Bower
@@ -332,7 +332,7 @@ struct RetryTomlSection {
 #[must_use]
 pub fn default_policy_path() -> PathBuf {
     if let Ok(cwd) = std::env::current_dir() {
-        let candidate = cwd.join("out/coh_policy.toml");
+        let candidate = cwd.join("configs/generated/coh_policy.toml");
         if candidate.is_file() {
             return candidate;
         }
@@ -340,14 +340,14 @@ pub fn default_policy_path() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(bin_dir) = exe.parent() {
             if let Some(root) = bin_dir.parent() {
-                let candidate = root.join("out/coh_policy.toml");
+                let candidate = root.join("configs/generated/coh_policy.toml");
                 if candidate.is_file() {
                     return candidate;
                 }
             }
         }
     }
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../out/coh_policy.toml")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../configs/generated/coh_policy.toml")
 }
 
 /// Load and validate the coh policy from disk, enforcing hash alignment.

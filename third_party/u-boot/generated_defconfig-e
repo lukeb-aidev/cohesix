@@ -23,6 +23,9 @@ CONFIG_BOOTSTD_DEFAULTS=y
 CONFIG_OF_BOARD_SETUP=y
 CONFIG_FDT_SIMPLEFB=y
 CONFIG_BOOTDELAY=0
+# CONFIG_BOOTSTD_BOOTCOMMAND is not set
+CONFIG_USE_BOOTCOMMAND=y
+CONFIG_BOOTCOMMAND="if fatload mmc 0:1 ${scriptaddr} boot.scr.uimg; then source ${scriptaddr}; else echo [cohesix] ERROR: boot.scr.uimg missing on mmc 0:1; fi"
 CONFIG_USE_PREBOOT=y
 CONFIG_PREBOOT="setenv stdin serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole"
 CONFIG_SYS_PBSIZE=1049

@@ -33,7 +33,7 @@ pub mod status;
 pub mod wal;
 
 /// Default resolved manifest path.
-pub const DEFAULT_RESOLVED_MANIFEST_PATH: &str = "out/manifests/root_task_resolved.json";
+pub const DEFAULT_RESOLVED_MANIFEST_PATH: &str = "configs/generated/root_task_resolved.json";
 /// Default cursor state file path.
 pub const DEFAULT_CURSOR_STATE_PATH: &str = "out/host-ticket-agent/cursor.json";
 /// Default relay WAL state file path.
@@ -170,7 +170,7 @@ pub struct HostFederationManifest {
 }
 
 impl HostTicketManifest {
-    /// Load ticket configuration from `out/manifests/root_task_resolved.json`.
+    /// Load ticket configuration from `configs/generated/root_task_resolved.json`.
     pub fn from_resolved_manifest(path: &Path) -> Result<Self> {
         let payload =
             fs::read(path).with_context(|| format!("read resolved manifest {}", path.display()))?;

@@ -588,6 +588,7 @@ impl<const N: usize> CapabilityValidator for TicketTable<N> {
 }
 
 const TICKET_RATE_WINDOW_MS: u64 = 1_000;
+const REBOOT_ACK_FLUSH_TURNS: u8 = 1;
 
 /// Validation error when a ticket exceeds manifest limits.
 #[derive(Debug, Clone)]
@@ -1575,6 +1576,8 @@ where
     local_seat_chunk_input_pending: bool,
     console_output_flush_active: bool,
     local_seat_mirror_suppressed: bool,
+    reboot_pending: bool,
+    reboot_flush_turns: u8,
     #[cfg(feature = "kernel")]
     pending_usb_debug_hdmi_frontier: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
     local_seat_escape_state: LocalSeatEscapeState,
@@ -1688,6 +1691,8 @@ where
             local_seat_chunk_input_pending: false,
             console_output_flush_active: false,
             local_seat_mirror_suppressed: false,
+            reboot_pending: false,
+            reboot_flush_turns: 0,
             #[cfg(feature = "kernel")]
             pending_usb_debug_hdmi_frontier: None,
             local_seat_escape_state: LocalSeatEscapeState::Idle,
@@ -2035,6 +2040,31 @@ where
         self.drain_bootstrap_ipc();
         #[cfg(feature = "kernel")]
         self.flush_pending_stream();
+        self.service_pending_reboot();
+    }
+
+    fn service_pending_reboot(&mut self) {
+        if !self.reboot_pending {
+            return;
+        }
+        if self.reboot_flush_turns != 0 {
+            self.reboot_flush_turns = self.reboot_flush_turns.saturating_sub(1);
+            return;
+        }
+        match crate::reboot::request_reboot() {
+            Ok(()) => {
+                self.reboot_pending = false;
+            }
+            Err(err) => {
+                self.reboot_pending = false;
+                self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+                let message =
+                    format_message(format_args!("reboot request failed: {}", err.detail()));
+                self.audit.denied(message.as_str());
+                let detail = format_message(format_args!("detail={}", err.detail()));
+                self.emit_refusal("REBOOT", RefusalReason::Policy, Some(detail.as_str()));
+            }
+        }
     }
 
     #[cfg(feature = "net-console")]
@@ -2190,15 +2220,17 @@ where
         self.emit_help_serial_only();
         debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
         #[cfg(feature = "kernel")]
-        boot_log::force_uart_line_raw("[mark] root-console.prompt.write.begin");
+        boot_log::force_uart_line_raw_without_prompt_refresh(
+            "[mark] root-console.prompt.write.begin",
+        );
         self.emit_prompt();
+        #[cfg(feature = "kernel")]
+        boot_log::force_uart_line_raw_without_prompt_refresh("[mark] root-console.prompt.write.ok");
+        self.serial.poll_io();
         #[cfg(feature = "kernel")]
         boot_log::set_serial_prompt_refresh_after_logs(
             crate::generated::hardware_config().local_seat.enabled,
         );
-        #[cfg(feature = "kernel")]
-        boot_log::force_uart_line_raw("[mark] root-console.prompt.write.ok");
-        self.serial.poll_io();
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();
             runtime.mirror_line("Cohesix console ready");
@@ -2208,11 +2240,11 @@ where
         #[cfg(feature = "kernel")]
         if self.ninedoor.is_some() {
             if boot_log::switch_logger_to_log_buffer() {
-                boot_log::force_uart_line_raw(
+                boot_log::force_uart_line_raw_without_prompt_refresh(
                     "[trace] log channel switched to /log/queen.log; raw driver blockers remain on serial",
                 );
             } else {
-                boot_log::force_uart_line_raw(
+                boot_log::force_uart_line_raw_without_prompt_refresh(
                     "[trace] log channel remains on serial; raw driver blockers preserved",
                 );
             }
@@ -2682,7 +2714,7 @@ where
                 .now_ms
                 .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS);
             #[cfg(all(target_arch = "aarch64", target_os = "none"))]
-            boot_log::force_uart_line_raw(
+            boot_log::force_uart_line_raw_without_prompt_refresh(
                 "[local-seat] prompt-settle attach scheduled action=idle-cooperative",
             );
         }
@@ -2753,7 +2785,7 @@ where
                 "[local-seat] post-prompt attach deferred reason={} idle_turns={} now_ms={}",
                 reason, self.post_prompt_local_seat_attach_idle_turns, self.now_ms
             );
-            boot_log::force_uart_line_raw(line.as_str());
+            boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
         }
     }
 
@@ -2782,7 +2814,7 @@ where
                 "[local-seat] prompt-settle attach active-usb action=arm-cooperative retry_ms={}",
                 POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS
             );
-            boot_log::force_uart_line_raw(line.as_str());
+            boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
         }
     }
 
@@ -2805,7 +2837,7 @@ where
                     .saturating_add(1);
                 let verbose_attempt = attempt < POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS;
                 if verbose_attempt {
-                    boot_log::force_uart_line_raw(
+                    boot_log::force_uart_line_raw_without_prompt_refresh(
                         "[local-seat] prompt-settle attach begin action=arm-cooperative",
                     );
                 }
@@ -2821,7 +2853,7 @@ where
                 if verbose_attempt || keyboard_probe.attached() {
                     let usb_frontier =
                         "[drivers] USB frontier: prompt-settle linked-runtime probe armed; xHCI/keyboard state preserved";
-                    boot_log::force_uart_line_raw(usb_frontier);
+                    boot_log::force_uart_line_raw_without_prompt_refresh(usb_frontier);
                     runtime.mirror_high_impact_line(usb_frontier);
                 }
                 #[cfg(feature = "net-console")]
@@ -2831,7 +2863,9 @@ where
                             "[drivers] WiFi frontier: driver-task replay state preserved {}",
                             wifi_detail
                         ));
-                        boot_log::force_uart_line_raw(wifi_frontier.as_str());
+                        boot_log::force_uart_line_raw_without_prompt_refresh(
+                            wifi_frontier.as_str(),
+                        );
                         runtime.mirror_high_impact_line(wifi_frontier.as_str());
                     }
                 }
@@ -2843,14 +2877,14 @@ where
                         "[local-seat] prompt-settle attach end result=armed-cooperative linked_display={}",
                         if linked_display_ready { "ready" } else { "deferred" }
                     );
-                    boot_log::force_uart_line_raw(line.as_str());
+                    boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
                     let mut probe_line = HeaplessString::<128>::new();
                     let _ = write!(
                         probe_line,
                         "[local-seat] prompt-settle usb probe result={}",
                         keyboard_probe.as_str()
                     );
-                    boot_log::force_uart_line_raw(probe_line.as_str());
+                    boot_log::force_uart_line_raw_without_prompt_refresh(probe_line.as_str());
                 }
                 let retry_policy = if keyboard_probe.attached() {
                     None
@@ -2870,10 +2904,10 @@ where
                             "[local-seat] prompt-settle attach retry scheduled action={} retry_ms={}",
                             retry_action, retry_ms
                         );
-                        boot_log::force_uart_line_raw(retry_line.as_str());
+                        boot_log::force_uart_line_raw_without_prompt_refresh(retry_line.as_str());
                     }
                 } else if usb_no_reply {
-                    boot_log::force_uart_line_raw(
+                    boot_log::force_uart_line_raw_without_prompt_refresh(
                         "[local-seat] prompt-settle attach suspended reason=driver-task-no-reply action=serial-shell explicit=usb-probe-kbd",
                     );
                 }
@@ -4681,7 +4715,10 @@ where
             local_trace.dropped_bytes,
         );
         let sustained_line = format_message(format_args!(
-            "usb: sustained_input queued_reports={} transfer_events={} report_status={} accepted={} drained={} echoed={} no_reply={} runtime_skipped={} blocker={} usb_burst={} drops={}",
+            "usb: sustained_input queue_valid={} detail=0x{:04x} result=0x{:08x} queued_reports={} transfer_events={} report_status={} accepted={} drained={} echoed={} no_reply={} no_reply_streak={} recovery_aux_requests={} recovery_aux_pending={} runtime_skipped={} blocker={} usb_burst={} drops={}",
+            Self::yes_no(queue_valid),
+            linked_detail,
+            linked_result,
             queued_reports,
             transfer_events,
             Self::usb_runtime_keyboard_report_status_label(report_status),
@@ -4689,6 +4726,9 @@ where
             local_trace.drained_bytes,
             local_trace.echoed_bytes,
             local_trace.driver_task_no_replies,
+            local_trace.driver_task_no_reply_streak,
+            local_trace.recovery_aux_requests,
+            Self::yes_no(local_trace.recovery_aux_pending),
             self.metrics.local_seat_runtime_skipped_turns,
             sustained_blocker,
             Self::yes_no(usb_burst),
@@ -11453,7 +11493,7 @@ where
         if let Err(err) = self.feed_parser(line) {
             self.handle_console_error(err);
         }
-        if self.last_input_source.is_physical_console() {
+        if self.last_input_source.is_physical_console() && !self.reboot_pending {
             self.emit_prompt();
         }
         self.console_input_turn_active = prior_input_turn_active;
@@ -11817,6 +11857,34 @@ where
                         RefusalReason::Policy,
                         Some("detail=net-disabled"),
                     );
+                }
+            }
+            Command::Reboot => {
+                if self.ensure_reboot_authorized(verb_label) {
+                    if crate::reboot::backend_available() {
+                        self.audit.info("console: reboot scheduled");
+                        self.metrics.accepted_commands += 1;
+                        self.reboot_pending = true;
+                        self.reboot_flush_turns = REBOOT_ACK_FLUSH_TURNS;
+                        self.emit_ack_ok(verb_label, Some("detail=scheduled"));
+                        #[cfg(feature = "net-console")]
+                        if self.last_input_source == ConsoleInputSource::Net {
+                            if let Some(net) = self.net.as_mut() {
+                                net.request_disconnect();
+                            }
+                        }
+                    } else {
+                        self.metrics.denied_commands += 1;
+                        self.audit.denied("reboot denied: backend unavailable");
+                        cmd_status = "err";
+                        self.emit_refusal(
+                            verb_label,
+                            RefusalReason::Policy,
+                            Some("detail=reboot-backend-unavailable"),
+                        );
+                    }
+                } else {
+                    cmd_status = "err";
                 }
             }
             Command::Quit => {
@@ -12763,6 +12831,7 @@ where
             | Command::Test
             | Command::NetTest
             | Command::NetStats
+            | Command::Reboot
             | Command::Cat { .. }
             | Command::Echo { .. }
             | Command::Ls { .. } => {
@@ -13185,6 +13254,26 @@ where
                 false
             }
         }
+    }
+
+    fn ensure_reboot_authorized(&mut self, verb: &str) -> bool {
+        if !self.ensure_authenticated(SessionRole::Queen) {
+            self.emit_auth_failure(verb);
+            return false;
+        }
+        let authorized_by_tcp_secret = matches!(self.session_origin, Some(ConsoleInputSource::Net));
+        let authorized_by_ticket = self
+            .session_ticket
+            .as_deref()
+            .is_some_and(|ticket| !ticket.trim().is_empty());
+        if authorized_by_tcp_secret || authorized_by_ticket {
+            return true;
+        }
+        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+        self.audit
+            .denied("reboot denied: secret-backed session required");
+        self.emit_refusal(verb, RefusalReason::Policy, Some("detail=secret-required"));
+        false
     }
 
     fn ensure_worker_session(&mut self, verb: &str) -> bool {
@@ -16884,6 +16973,88 @@ mod tests {
         );
         assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
         assert!(rendered.contains("OK LOG"), "{rendered}");
+    }
+
+    #[test]
+    fn reboot_requires_authenticated_secret_backed_session() {
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.serial_mut()
+            .driver_mut()
+            .push_rx(b"reboot\nattach queen\nreboot\n");
+
+        pump.poll();
+
+        let tx = pump.serial_mut().driver_mut().drain_tx();
+        let transcript: Vec<u8> = tx.into_iter().collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR REBOOT reason=policy detail=unauthenticated"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
+        assert!(
+            rendered.contains("ERR REBOOT reason=policy detail=secret-required"),
+            "{rendered}"
+        );
+        assert_eq!(crate::reboot::test_reboot_requests(), 0);
+        crate::reboot::reset_test_backend();
+    }
+
+    #[test]
+    fn local_seat_ticket_backed_reboot_schedules_backend_request() {
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.enable_backend_keyboard_polling();
+        let token = issue_token("ticket", Role::Queen);
+        let line = format!("attach queen {token}\nreboot\n");
+        assert_eq!(
+            local_seat.enqueue_keyboard_bytes(line.as_bytes()),
+            line.len()
+        );
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.poll();
+        assert_eq!(crate::reboot::test_reboot_requests(), 0);
+        pump.poll();
+        assert_eq!(crate::reboot::test_reboot_requests(), 0);
+        pump.poll();
+
+        let tx = pump.serial_mut().driver_mut().drain_tx();
+        let transcript: Vec<u8> = tx.into_iter().collect();
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(rendered.contains("OK ATTACH role=queen"), "{rendered}");
+        assert!(
+            rendered.contains("OK REBOOT detail=scheduled"),
+            "{rendered}"
+        );
+        assert_eq!(crate::reboot::test_reboot_requests(), 1);
+        crate::reboot::reset_test_backend();
     }
 
     #[test]

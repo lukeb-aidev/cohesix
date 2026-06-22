@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Author: Lukas Bower -->
+<!-- Purpose: Provide the local Mac DHCP lease pool for Pi 4 wired NIC bring-up on en8. -->
+<!-- Copyright 2026 Lukas Bower -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>bootp_enabled</key>
+	<array>
+		<string>en8</string>
+	</array>
+	<key>dhcp_enabled</key>
+	<array>
+		<string>en8</string>
+	</array>
+	<key>ignore_allow_deny</key>
+	<array>
+		<string>en8</string>
+	</array>
+	<key>dhcp_ignore_client_identifier</key>
+	<true/>
+	<key>detect_other_dhcp_server</key>
+	<false/>
+	<key>use_server_config_for_dhcp_options</key>
+	<false/>
+	<key>reply_threshold_seconds</key>
+	<integer>0</integer>
+	<key>Subnets</key>
+	<array>
+		<dict>
+			<key>name</key>
+			<string>cohesix-pi4-en8</string>
+			<key>net_address</key>
+			<string>192.168.10.0</string>
+			<key>net_mask</key>
+			<string>255.255.255.0</string>
+			<key>net_range</key>
+			<array>
+				<string>192.168.10.50</string>
+				<string>192.168.10.99</string>
+			</array>
+			<key>allocate</key>
+			<true/>
+			<key>lease_min</key>
+			<integer>600</integer>
+			<key>lease_max</key>
+			<integer>3600</integer>
+			<key>dhcp_router</key>
+			<string>192.168.10.1</string>
+			<key>dhcp_domain_name_server</key>
+			<array>
+				<string>192.168.10.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

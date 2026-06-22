@@ -529,6 +529,7 @@ run_normalizer() {
     fi
     if [[ "${REQUIRE_INPUT_RESPONSIVE}" -eq 1 ]]; then
         args+=("--expect" "SERIAL_RESPONSIVE_PROOF=yes")
+        args+=("--expect" "USB_POST_FIRST_BYTE_BLOCKER=none")
         args+=("--expect" "USB_BURST_PROOF=yes")
         args+=("--expect" "USB_BURST_DROPS=0")
         args+=("--expect" "HDMI_RESPONSIVE_PROOF=yes")

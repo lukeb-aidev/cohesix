@@ -50,6 +50,7 @@ TRACE_SEGMENT_RE = re.compile(
     r"|\[cohsh-net\]"
     r"|\[net-console\]"
     r"|\[smp\]"
+    r"|HDMI_FRAME_"
     r"|CYW43_"
     r"|(?<![A-Za-z0-9_.:-])(?:usb:|USB:|wifi:|WiFi:|WIFI:)"
     r"|(?<![A-Za-z0-9_.:-])(?:OK|ERR) NETTEST"
@@ -1158,6 +1159,7 @@ def classify_domain(line: str) -> str | None:
         or line.startswith("SERIAL_INPUT_TRACE")
         or line.startswith("USB_BURST")
         or line.startswith("HDMI_RESPONSIVE")
+        or line.startswith("HDMI_FRAME_")
         or line.startswith("[smp] activity local-seat")
         or line.startswith("[smp] activity local-seat-display")
         or "serial echo" in lower
@@ -3726,12 +3728,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
 
     event_list = list(events)
     usb_events = [event for event in event_list if event.domain == "usb"]
+    linked_first_report_seen = any(usb_first_report_step(event) for event in event_list)
+    linked_first_byte_seen = any(usb_first_byte_step(event) for event in event_list)
     usb_driver_progress_seen = any(
         "driver_task_ring_progress" in event.raw.lower()
         and usb_raw_driver_task_progress_blocker(event.fields) is not None
         for event in event_list
     )
-    if not usb_events and not usb_driver_progress_seen:
+    usb_resource_progress_seen = linked_first_report_seen or linked_first_byte_seen
+    if not usb_events and not usb_driver_progress_seen and not usb_resource_progress_seen:
         return 0, "missing"
 
     gate = 1
@@ -3903,6 +3908,16 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         blocker = progress_blocker
                     direct_usb_progress_blocker = progress_blocker
                     continue
+        if usb_first_byte_step(event):
+            gate = max(gate, 10)
+            linked_runtime_gate10_seen = True
+            blocker = "none"
+            continue
+        if usb_first_report_step(event):
+            gate = max(gate, 9)
+            if blocker in {"unknown", "none", "hid-report-event", "hid-first-report"}:
+                blocker = "none"
+            continue
         if event.domain != "usb":
             continue
         if "map exact miss" in raw and fields.get("reason") == "no-device-coverage":
@@ -4238,6 +4253,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "usb hid queue-read failed" in raw:
             gate = max(gate, 7)
             blocker = "hid-queue-read-failed"
+            continue
+        if usb_first_report_step(event):
+            gate = max(gate, 9)
+            if blocker in {"unknown", "none", "hid-report-event", "hid-first-report"}:
+                blocker = "none"
             continue
         if tag == "usb-hid-report-event":
             if usb_linked_hid_source(event):
@@ -4688,6 +4708,11 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         or blocker.startswith("usb-keyboard-enumeration-")
     ):
         gate = max(gate, 10)
+        blocker = "none"
+    if linked_first_report_seen and gate >= 9 and (
+        blocker in USB_OUTCOME_BLOCKERS.union({"unknown", "none", "attached"})
+        or blocker.startswith("usb-keyboard-enumeration-")
+    ):
         blocker = "none"
     if gate == 9 and blocker in {
         "keyboard-first-byte",
@@ -7008,6 +7033,7 @@ def summarize_usb_keyboard_pressure(
             or raw.startswith("usb: stall_telemetry")
             or raw.startswith("usb: keyboard_trace")
             or raw.startswith("usb: sustained_input")
+            or raw.startswith("usb: recovery_request")
             or raw.startswith("[smp] activity local-seat ")
         ):
             update_usb_keyboard_pressure_field(
@@ -7040,6 +7066,7 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
             raw.startswith("usb: runtime_queue")
             or raw.startswith("usb: stall_telemetry")
             or raw.startswith("usb: sustained_input")
+            or raw.startswith("usb: recovery_request")
         ):
             queued_reports = parse_hex_int(fields.get("queued_reports"))
             if queued_reports is not None:
@@ -7052,6 +7079,8 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
                 values["report_status"] = report_status.replace("_", "-")
         if raw.startswith("usb: runtime_recovery"):
             diag_valid = field_lower(event, "diag_valid")
+            if diag_valid == "unknown" and values["recovery_diag_valid"] == "yes":
+                continue
             if diag_valid:
                 values["recovery_diag_valid"] = diag_valid
             recoveries = parse_hex_int(fields.get("recoveries"))
@@ -7130,6 +7159,29 @@ def summarize_output_pressure(events: Iterable[TraceEvent]) -> OutputPressureSum
             values["hdmi_pending_redraw"] = fields.get(
                 "pending_redraw", values["hdmi_pending_redraw"]
             )
+        elif raw.startswith("hdmi_frame_queue"):
+            for out_key, in_key in (
+                ("hdmi_pending_bytes", "pending_bytes"),
+                ("hdmi_submitted", "submitted"),
+                ("hdmi_deferred", "deferred"),
+                ("hdmi_busy", "busy"),
+                ("hdmi_no_reply", "no_reply"),
+            ):
+                parsed = parse_hex_int(fields.get(in_key))
+                if parsed is not None:
+                    values[out_key] = parsed
+            values["hdmi_pending_redraw"] = fields.get(
+                "pending_redraw", values["hdmi_pending_redraw"]
+            )
+        elif raw.startswith("hdmi_frame_counters"):
+            for out_key, in_key in (
+                ("hdmi_coalesced", "coalesced"),
+                ("hdmi_backpressure_bytes", "backpressure_bytes"),
+                ("hdmi_superseded_bytes", "superseded_bytes"),
+            ):
+                parsed = parse_hex_int(fields.get(in_key))
+                if parsed is not None:
+                    values[out_key] = parsed
     return OutputPressureSummary(**values)
 
 
@@ -7754,6 +7806,30 @@ def line_has_usb_burst_proof(raw: str, fields: dict[str, str]) -> bool:
 def line_has_hdmi_responsiveness(raw: str, fields: dict[str, str]) -> bool:
     """Return whether a line proves HDMI/display local-seat responsiveness."""
 
+    if raw.startswith("hdmi_frame_submit"):
+        reason = fields.get("reason", "").lower()
+        payload_bytes = parse_hex_int(fields.get("bytes"))
+        if payload_bytes is None:
+            payload_bytes = parse_hex_int(fields.get("result"))
+        return (
+            reason in {"queued-output", "keyboard-scrollback"}
+            and fields.get("status", "").lower() == "ready"
+            and fields.get("root_console_ready", "").lower() == "yes"
+            and fields.get("attached", "").lower() == "yes"
+            and (payload_bytes or 0) > 0
+        )
+    if raw.startswith("hdmi_frame_queue"):
+        reason = fields.get("reason", "").lower()
+        chunk_bytes = parse_hex_int(fields.get("chunk_bytes")) or 0
+        busy = parse_hex_int(fields.get("busy")) or 0
+        no_reply = parse_hex_int(fields.get("no_reply")) or 0
+        return (
+            reason in {"queued-output", "keyboard-scrollback"}
+            and chunk_bytes > 0
+            and fields.get("pending_redraw", "").lower() == "no"
+            and busy == 0
+            and no_reply == 0
+        )
     return (
         raw.startswith("hdmi_responsive")
         or "hdmi stats" in raw
@@ -8684,10 +8760,33 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
             continue
 
         report_status = event.fields.get("report_status", "").lower().replace("_", "-")
+        if raw.startswith("usb: recovery_request"):
+            if field_lower(event, "action") == "no-reply":
+                return "usb-post-first-byte-recovery-request-no-reply"
+            continue
+        if (
+            "driver_task_ring_call_abort" in raw
+            or "driver_task_ring_call_timeout" in raw
+        ) and field_lower(event, "contract") == "usb-local-seat":
+            aux0 = parse_hex_int(event.fields.get("aux0"))
+            marker_aux0 = parse_hex_int(event.fields.get("marker_aux0"))
+            if (
+                0x55534252 in {aux0, marker_aux0}
+                and field_lower(event, "reason") == "timeout-resume-limit"
+            ):
+                phase = field_lower(event, "marker_phase_name")
+                if phase == "usb-hid-interrupt-queue-begin":
+                    return "usb-post-first-byte-recovery-request-timeout"
+                return "usb-post-first-byte-recovery-request-no-reply"
         if raw.startswith("usb: sustained_input"):
             sustained_blocker = field_lower(event, "blocker").replace("_", "-")
             if sustained_blocker and sustained_blocker != "none":
                 return sustained_blocker
+            if (
+                field_lower(event, "recovery_aux_pending") == "yes"
+                and field_lower(event, "queue_valid") == "no"
+            ):
+                return "usb-post-first-byte-recovery-pending-no-diag"
         if report_status == "queue-collapse" or "queue-collapse" in raw:
             return "usb-post-first-byte-queue-collapse"
         if report_status == "recovery-failed" or "recovery-failed" in raw:
@@ -9482,7 +9581,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     )
     if usb_driver_task_blocker is not None:
         driver_gate = usb_driver_task_blocker_gate(usb_driver_task_blocker)
-        if usb_blocker in {"unknown", "missing", "none"} and usb_gate < 10:
+        if usb_blocker in {"unknown", "missing", "none"} and usb_gate < 9:
             usb_gate = max(usb_gate, driver_gate)
             usb_blocker = usb_driver_task_blocker
         elif usb_blocker == "pcie-vl805" and usb_frontier_advances_pcie(
@@ -9805,7 +9904,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
 def summarize_driver_task_resource_init(
     events: Iterable[TraceEvent],
 ) -> tuple[int, str, str]:
-    """Return resource-init breadcrumb count, first blocker, and latest blocker."""
+    """Return resource-init breadcrumb count, first blocker, and current blocker."""
 
     resource_events = [
         event
@@ -9823,20 +9922,33 @@ def summarize_driver_task_resource_init(
         "resume-retained-stage",
     }
     first_blocker = "none"
-    latest_blocker = "none"
+    current_blockers: dict[tuple[str, str, str], str] = {}
     for event in resource_events:
         status = event.fields.get("status", "unknown").lower()
+        contract = event.fields.get("contract", "unknown")
+        hot_path = event.fields.get("hot_path", contract)
+        stage = event.fields.get("stage", "unknown")
+        key = (contract, hot_path, stage)
         if status not in non_blocking_statuses:
-            hot_path = event.fields.get(
-                "hot_path",
-                event.fields.get("contract", "unknown"),
-            )
-            stage = event.fields.get("stage", "unknown")
             blocker = f"{hot_path}:{stage}:{status}"
             if first_blocker == "none":
                 first_blocker = blocker
-            latest_blocker = blocker
-    return len(resource_events), first_blocker, latest_blocker
+            current_blockers.pop(key, None)
+            current_blockers[key] = blocker
+        else:
+            current_blockers.pop(key, None)
+            if status in {"ready", "preserved-ready", "cached-ready"}:
+                stale_keys = [
+                    blocker_key
+                    for blocker_key in current_blockers
+                    if blocker_key[0] == contract and blocker_key[1] == hot_path
+                ]
+                for blocker_key in stale_keys:
+                    current_blockers.pop(blocker_key, None)
+    current_blocker = "none"
+    if current_blockers:
+        current_blocker = next(reversed(current_blockers.values()))
+    return len(resource_events), first_blocker, current_blocker
 
 
 def summarize_driver_task_frontiers(

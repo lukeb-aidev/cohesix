@@ -1,0 +1,39 @@
+# Author: Lukas Bower
+# Purpose: Generated SwarmUI defaults derived from configs/root_task.toml.
+# Copyright 2026 Lukas Bower
+[meta]
+manifest_sha256 = "3a8690c01e1c9c165b91d3c366fbe7dcb9667602461f82e51df6ca5e2ba45d77"
+
+[swarmui]
+ticket_scope = "per-ticket"
+
+[swarmui.cache]
+enabled = false
+max_bytes = 262144
+ttl_s = 3600
+
+[swarmui.hive]
+frame_cap_fps = 30
+step_ms = 16
+lod_zoom_out = 0.7
+lod_zoom_in = 1.25
+lod_event_budget = 512
+snapshot_max_events = 4096
+overlay_lines = 3
+detail_lines = 50
+line_cap_bytes = 160
+per_worker_bytes = 2048
+pending_lines_per_worker = 64
+pending_event_cap = 4096
+poll_workers_per_tick = 32
+status_poll_ms = 500
+degrade_pressure = 1.0
+
+[swarmui.paths]
+telemetry_root = "/worker"
+proc_ingest_root = "/proc/ingest"
+worker_root = "/worker"
+namespace_roots = ["/proc", "/queen", "/worker", "/log", "/gpu"]
+
+[trace]
+max_bytes = 1048576

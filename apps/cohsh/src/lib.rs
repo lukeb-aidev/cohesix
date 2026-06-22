@@ -3381,6 +3381,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(console_lines[10])?;
                 self.write_line(console_lines[11])?;
                 self.write_line(console_lines[12])?;
+                self.write_line(console_lines[13])?;
                 self.write_line("  bind <src> <dst>             - Bind namespace path")?;
                 self.write_line("  mount <service> <path>       - Mount service namespace")?;
                 self.write_line(
@@ -3389,7 +3390,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(
                     "  telemetry push <src> --device <id> - Push bounded telemetry segment",
                 )?;
-                self.write_line(console_lines[13])?;
+                self.write_line(console_lines[14])?;
                 Ok(CommandStatus::Continue)
             }
             "tail" => {
@@ -3516,6 +3517,14 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     return Err(anyhow!("netstats does not take any arguments"));
                 }
                 self.run_console_command("netstats", "NETSTATS")?;
+                Ok(CommandStatus::Continue)
+            }
+            "reboot" => {
+                if parts.next().is_some() {
+                    return Err(anyhow!("reboot does not take any arguments"));
+                }
+                let _session = self.queen_session("reboot")?;
+                self.run_console_command("reboot", "REBOOT")?;
                 Ok(CommandStatus::Continue)
             }
             "echo" => {
@@ -4758,10 +4767,12 @@ mod tests {
             shell.attach(Role::Queen, None).unwrap();
             shell.execute("netstats").expect("netstats should forward");
             shell.execute("nettest").expect("nettest should forward");
+            shell.execute("reboot").expect("reboot should forward");
         }
         let rendered = String::from_utf8(output).expect("utf8 output");
         assert!(rendered.contains("stub console command=netstats ack=NETSTATS"));
         assert!(rendered.contains("stub console command=nettest ack=NETTEST"));
+        assert!(rendered.contains("stub console command=reboot ack=REBOOT"));
     }
 
     #[test]

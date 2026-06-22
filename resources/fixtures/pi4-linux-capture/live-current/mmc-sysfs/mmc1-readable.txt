@@ -1,0 +1,1190 @@
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/tmp/cohesix_pi4_known_hosts lukas@192.168.86.154 for root in /sys/bus/mmc/devices/mmc1:0001 /sys/class/mmc_host/mmc1 /sys/kernel/debug/mmc1; do echo "### $root"; find -L "$root" -maxdepth 4 -type f 2>/dev/null | sort | while read -r f; do echo "=== $f ==="; cat "$f" 2>&1 | head -c 8192; echo; done; done
+lukas@192.168.86.154's password: 
+### /sys/bus/mmc/devices/mmc1:0001
+=== /sys/bus/mmc/devices/mmc1:0001/device ===
+0xa9a6
+
+=== /sys/bus/mmc/devices/mmc1:0001/info1 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/info1': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/info2 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/info2': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/info3 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/info3': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/info4 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/info4': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/class ===
+0x00
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/coredump ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/coredump': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/device ===
+0xa9a6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/bind ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/bind': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/class ===
+0x00
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/coredump ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/coredump': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/device ===
+0xa9a6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/info1 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/info1': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/info2 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/info2': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/info3 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/info3': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/info4 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/info4': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/modalias ===
+sdio:c00v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/revision ===
+0.0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/uevent ===
+DRIVER=brcmfmac
+SDIO_CLASS=00
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+MODALIAS=sdio:c00v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/mmc1:0001:2/vendor ===
+0x02d0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/module/coresize ===
+372736
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/module/initsize ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/module/initstate ===
+live
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/module/refcnt ===
+1
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/module/srcversion ===
+E1218F5EA05260DEDBCE1ED
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/module/taint ===
+
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/module/uevent ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/module/uevent': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/uevent ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/uevent': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/unbind ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/driver/unbind': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/ieee80211/phy0/address_mask ===
+00:00:00:00:00:00
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/ieee80211/phy0/addresses ===
+88:a2:9e:66:59:10
+8a:a2:9e:66:59:11
+8a:a2:9e:66:59:12
+8a:a2:9e:66:59:13
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/ieee80211/phy0/index ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/ieee80211/phy0/macaddress ===
+88:a2:9e:66:59:10
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/ieee80211/phy0/name ===
+phy0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/ieee80211/phy0/uevent ===
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/info1 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/info1': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/info2 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/info2': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/info3 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/info3': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/info4 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/info4': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/modalias ===
+sdio:c00v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/addr_assign_type ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/addr_len ===
+6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/address ===
+88:a2:9e:66:59:10
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/broadcast ===
+ff:ff:ff:ff:ff:ff
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/carrier ===
+1
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/carrier_changes ===
+6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/carrier_down_count ===
+3
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/carrier_up_count ===
+3
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/dev_id ===
+0x0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/dev_port ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/dormant ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/duplex ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/duplex': Invalid argument
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/flags ===
+0x1003
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/gro_flush_timeout ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/ifalias ===
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/ifindex ===
+3
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/iflink ===
+3
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/link_mode ===
+1
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/mtu ===
+1500
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/name_assign_type ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/name_assign_type': Invalid argument
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/napi_defer_hard_irqs ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/netdev_group ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/operstate ===
+up
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/phys_port_id ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/phys_port_id': Operation not supported
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/phys_port_name ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/phys_port_name': Operation not supported
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/phys_switch_id ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/phys_switch_id': Operation not supported
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/proto_down ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/speed ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/speed': Invalid argument
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/testing ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/threaded ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/tx_queue_len ===
+1000
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/type ===
+1
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/net/wlan0/uevent ===
+DEVTYPE=wlan
+INTERFACE=wlan0
+IFINDEX=3
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/of_node/compatible ===
+brcm,bcm4329-fmac 
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/of_node/name ===
+wifi 
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/of_node/phandle ===
+   Ý
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/of_node/reg ===
+   
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/power/autosuspend_delay_ms ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/power/autosuspend_delay_ms': Input/output error
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/power/control ===
+auto
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/power/runtime_active_time ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/power/runtime_status ===
+unsupported
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/power/runtime_suspended_time ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/revision ===
+0.0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/subsystem/drivers_autoprobe ===
+1
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/subsystem/drivers_probe ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/subsystem/drivers_probe': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/subsystem/uevent ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/subsystem/uevent': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/uevent ===
+DRIVER=brcmfmac
+OF_NAME=wifi
+OF_FULLNAME=/soc/mmcnr@7e300000/wifi@1
+OF_COMPATIBLE_0=brcm,bcm4329-fmac
+OF_COMPATIBLE_N=1
+SDIO_CLASS=00
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+MODALIAS=sdio:c00v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:1/vendor ===
+0x02d0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/class ===
+0x00
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/coredump ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/coredump': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/device ===
+0xa9a6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/bind ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/bind': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/class ===
+0x00
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/coredump ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/coredump': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/device ===
+0xa9a6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/info1 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/info1': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/info2 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/info2': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/info3 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/info3': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/info4 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/info4': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/modalias ===
+sdio:c00v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/revision ===
+0.0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/uevent ===
+DRIVER=brcmfmac
+OF_NAME=wifi
+OF_FULLNAME=/soc/mmcnr@7e300000/wifi@1
+OF_COMPATIBLE_0=brcm,bcm4329-fmac
+OF_COMPATIBLE_N=1
+SDIO_CLASS=00
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+MODALIAS=sdio:c00v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/mmc1:0001:1/vendor ===
+0x02d0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/module/coresize ===
+372736
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/module/initsize ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/module/initstate ===
+live
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/module/refcnt ===
+1
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/module/srcversion ===
+E1218F5EA05260DEDBCE1ED
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/module/taint ===
+
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/module/uevent ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/module/uevent': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/uevent ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/uevent': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/unbind ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/driver/unbind': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/info1 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/info1': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/info2 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/info2': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/info3 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/info3': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/info4 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/info4': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/modalias ===
+sdio:c00v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/power/autosuspend_delay_ms ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/power/autosuspend_delay_ms': Input/output error
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/power/control ===
+auto
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/power/runtime_active_time ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/power/runtime_status ===
+unsupported
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/power/runtime_suspended_time ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/revision ===
+0.0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/subsystem/drivers_autoprobe ===
+1
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/subsystem/drivers_probe ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/subsystem/drivers_probe': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/subsystem/uevent ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/subsystem/uevent': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/uevent ===
+DRIVER=brcmfmac
+SDIO_CLASS=00
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+MODALIAS=sdio:c00v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:2/vendor ===
+0x02d0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/class ===
+0x02
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/device ===
+0xa9a6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/info1 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/info1': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/info2 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/info2': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/info3 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/info3': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/info4 ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/info4': No data available
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/modalias ===
+sdio:c02v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/power/autosuspend_delay_ms ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/power/autosuspend_delay_ms': Input/output error
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/power/control ===
+auto
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/power/runtime_active_time ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/power/runtime_status ===
+unsupported
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/power/runtime_suspended_time ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/revision ===
+0.0
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/subsystem/drivers_autoprobe ===
+1
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/subsystem/drivers_probe ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/subsystem/drivers_probe': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/subsystem/uevent ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/subsystem/uevent': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/uevent ===
+SDIO_CLASS=02
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+MODALIAS=sdio:c02v02D0dA9A6
+
+=== /sys/bus/mmc/devices/mmc1:0001/mmc1:0001:3/vendor ===
+0x02d0
+
+=== /sys/bus/mmc/devices/mmc1:0001/ocr ===
+0x00300000
+
+=== /sys/bus/mmc/devices/mmc1:0001/power/autosuspend_delay_ms ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/power/autosuspend_delay_ms': Input/output error
+
+=== /sys/bus/mmc/devices/mmc1:0001/power/control ===
+auto
+
+=== /sys/bus/mmc/devices/mmc1:0001/power/runtime_active_time ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/power/runtime_status ===
+unsupported
+
+=== /sys/bus/mmc/devices/mmc1:0001/power/runtime_suspended_time ===
+0
+
+=== /sys/bus/mmc/devices/mmc1:0001/rca ===
+0x0001
+
+=== /sys/bus/mmc/devices/mmc1:0001/removable ===
+fixed
+
+=== /sys/bus/mmc/devices/mmc1:0001/revision ===
+0.0
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/cid ===
+0353445344363447854b109f03019300
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/csd ===
+400e00325b590001dbd37f800a404000
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/date ===
+03/2025
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/dsr ===
+0x404
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/erase_size ===
+512
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/ext_perf ===
+00
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/ext_power ===
+00
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/fwrev ===
+0x5
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/hwrev ===
+0x8
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/manfid ===
+0x000003
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/name ===
+SD64G
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/ocr ===
+0x00300000
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/oemid ===
+0x5344
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/preferred_erase_size ===
+4194304
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/rca ===
+0xaaaa
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/removable ===
+removable
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/scr ===
+0245804300000000
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/serial ===
+0x4b109f03
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/ssr ===
+0000000008000000040090000f051900000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/type ===
+SD
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/devices/mmc0:aaaa/uevent ===
+DRIVER=mmcblk
+MMC_TYPE=SD
+MMC_NAME=SD64G
+MODALIAS=mmc:block
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/drivers/mmcblk/bind ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/subsystem/drivers/mmcblk/bind': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/drivers/mmcblk/uevent ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/subsystem/drivers/mmcblk/uevent': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/drivers/mmcblk/unbind ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/subsystem/drivers/mmcblk/unbind': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/drivers_autoprobe ===
+1
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/drivers_probe ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/subsystem/drivers_probe': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/subsystem/uevent ===
+cat: '/sys/bus/mmc/devices/mmc1:0001/subsystem/uevent': Permission denied
+
+=== /sys/bus/mmc/devices/mmc1:0001/type ===
+SDIO
+
+=== /sys/bus/mmc/devices/mmc1:0001/uevent ===
+MMC_TYPE=SDIO
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+
+=== /sys/bus/mmc/devices/mmc1:0001/vendor ===
+0x02d0
+
+### /sys/class/mmc_host/mmc1
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/bytes_transferred ===
+0
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/device/driver_override ===
+(null)
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/device/modalias ===
+of:Ndma-controllerT(null)Cbrcm,bcm2835-dma
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/device/pools ===
+poolinfo - 0.1
+fe007000.dma-controller    0  128   32  1
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/device/uevent ===
+DRIVER=bcm2835-dma
+OF_NAME=dma-controller
+OF_FULLNAME=/soc/dma-controller@7e007000
+OF_COMPATIBLE_0=brcm,bcm2835-dma
+OF_COMPATIBLE_N=1
+MODALIAS=of:Ndma-controllerT(null)Cbrcm,bcm2835-dma
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/in_use ===
+1
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/memcpy_count ===
+0
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/power/autosuspend_delay_ms ===
+cat: '/sys/class/mmc_host/mmc1/device/dma:rx-tx/power/autosuspend_delay_ms': Input/output error
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/power/control ===
+auto
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/power/runtime_active_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/power/runtime_status ===
+unsupported
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/power/runtime_suspended_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/device/dma:rx-tx/uevent ===
+
+=== /sys/class/mmc_host/mmc1/device/driver/bind ===
+cat: /sys/class/mmc_host/mmc1/device/driver/bind: Permission denied
+
+=== /sys/class/mmc_host/mmc1/device/driver/uevent ===
+cat: /sys/class/mmc_host/mmc1/device/driver/uevent: Permission denied
+
+=== /sys/class/mmc_host/mmc1/device/driver/unbind ===
+cat: /sys/class/mmc_host/mmc1/device/driver/unbind: Permission denied
+
+=== /sys/class/mmc_host/mmc1/device/driver_override ===
+(null)
+
+=== /sys/class/mmc_host/mmc1/device/modalias ===
+of:NmmcnrT(null)Cbrcm,bcm2835-mmcCbrcm,bcm2835-sdhci
+
+=== /sys/class/mmc_host/mmc1/device/of_node/#address-cells ===
+   
+=== /sys/class/mmc_host/mmc1/device/of_node/#size-cells ===
+    
+=== /sys/class/mmc_host/mmc1/device/of_node/brcm,overclock-50 ===
+    
+=== /sys/class/mmc_host/mmc1/device/of_node/bus-width ===
+   
+=== /sys/class/mmc_host/mmc1/device/of_node/clocks ===
+      
+=== /sys/class/mmc_host/mmc1/device/of_node/compatible ===
+brcm,bcm2835-mmc brcm,bcm2835-sdhci 
+=== /sys/class/mmc_host/mmc1/device/of_node/dma-names ===
+rx-tx 
+=== /sys/class/mmc_host/mmc1/device/of_node/dmas ===
+      
+=== /sys/class/mmc_host/mmc1/device/of_node/interrupts ===
+       ~   
+=== /sys/class/mmc_host/mmc1/device/of_node/name ===
+mmcnr 
+=== /sys/class/mmc_host/mmc1/device/of_node/non-removable ===
+
+=== /sys/class/mmc_host/mmc1/device/of_node/phandle ===
+   M
+=== /sys/class/mmc_host/mmc1/device/of_node/pinctrl-0 ===
+   3
+=== /sys/class/mmc_host/mmc1/device/of_node/pinctrl-names ===
+default 
+=== /sys/class/mmc_host/mmc1/device/of_node/reg ===
+~0     
+=== /sys/class/mmc_host/mmc1/device/of_node/status ===
+okay 
+=== /sys/class/mmc_host/mmc1/device/of_node/wifi@1/compatible ===
+brcm,bcm4329-fmac 
+=== /sys/class/mmc_host/mmc1/device/of_node/wifi@1/name ===
+wifi 
+=== /sys/class/mmc_host/mmc1/device/of_node/wifi@1/phandle ===
+   Ý
+=== /sys/class/mmc_host/mmc1/device/of_node/wifi@1/reg ===
+   
+=== /sys/class/mmc_host/mmc1/device/power/autosuspend_delay_ms ===
+cat: /sys/class/mmc_host/mmc1/device/power/autosuspend_delay_ms: Input/output error
+
+=== /sys/class/mmc_host/mmc1/device/power/control ===
+on
+
+=== /sys/class/mmc_host/mmc1/device/power/runtime_active_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/device/power/runtime_status ===
+unsupported
+
+=== /sys/class/mmc_host/mmc1/device/power/runtime_suspended_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/device/subsystem/drivers_autoprobe ===
+1
+
+=== /sys/class/mmc_host/mmc1/device/subsystem/drivers_probe ===
+cat: /sys/class/mmc_host/mmc1/device/subsystem/drivers_probe: Permission denied
+
+=== /sys/class/mmc_host/mmc1/device/subsystem/uevent ===
+cat: /sys/class/mmc_host/mmc1/device/subsystem/uevent: Permission denied
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe101000.cprman/auto_remove_on ===
+never
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe101000.cprman/runtime_pm ===
+1
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe101000.cprman/status ===
+active
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe101000.cprman/supplier/driver_override ===
+(null)
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe101000.cprman/supplier/modalias ===
+of:NcprmanT(null)Cbrcm,bcm2711-cprman
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe101000.cprman/supplier/uevent ===
+DRIVER=bcm2835-clk
+OF_NAME=cprman
+OF_FULLNAME=/soc/cprman@7e101000
+OF_COMPATIBLE_0=brcm,bcm2711-cprman
+OF_COMPATIBLE_N=1
+MODALIAS=of:NcprmanT(null)Cbrcm,bcm2711-cprman
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe101000.cprman/sync_state_only ===
+0
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe101000.cprman/uevent ===
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe200000.gpio/auto_remove_on ===
+never
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe200000.gpio/runtime_pm ===
+1
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe200000.gpio/status ===
+active
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe200000.gpio/supplier/driver_override ===
+(null)
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe200000.gpio/supplier/modalias ===
+of:NgpioT(null)Cbrcm,bcm2711-gpio
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe200000.gpio/supplier/uevent ===
+DRIVER=pinctrl-bcm2835
+OF_NAME=gpio
+OF_FULLNAME=/soc/gpio@7e200000
+OF_COMPATIBLE_0=brcm,bcm2711-gpio
+OF_COMPATIBLE_N=1
+MODALIAS=of:NgpioT(null)Cbrcm,bcm2711-gpio
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe200000.gpio/sync_state_only ===
+0
+
+=== /sys/class/mmc_host/mmc1/device/supplier:platform:fe200000.gpio/uevent ===
+
+=== /sys/class/mmc_host/mmc1/device/uevent ===
+DRIVER=mmc-bcm2835
+OF_NAME=mmcnr
+OF_FULLNAME=/soc/mmcnr@7e300000
+OF_COMPATIBLE_0=brcm,bcm2835-mmc
+OF_COMPATIBLE_1=brcm,bcm2835-sdhci
+OF_COMPATIBLE_N=2
+OF_ALIAS_0=mmc1
+MODALIAS=of:NmmcnrT(null)Cbrcm,bcm2835-mmcCbrcm,bcm2835-sdhci
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/device ===
+0xa9a6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/info1 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/info1': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/info2 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/info2': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/info3 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/info3': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/info4 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/info4': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/class ===
+0x00
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/coredump ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/coredump': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/device ===
+0xa9a6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/driver/bind ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/driver/bind': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/driver/uevent ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/driver/uevent': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/driver/unbind ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/driver/unbind': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/info1 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/info1': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/info2 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/info2': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/info3 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/info3': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/info4 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/info4': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/modalias ===
+sdio:c00v02D0dA9A6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/of_node/compatible ===
+brcm,bcm4329-fmac 
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/of_node/name ===
+wifi 
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/of_node/phandle ===
+   Ý
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/of_node/reg ===
+   
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/power/autosuspend_delay_ms ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/power/autosuspend_delay_ms': Input/output error
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/power/control ===
+auto
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/power/runtime_active_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/power/runtime_status ===
+unsupported
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/power/runtime_suspended_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/revision ===
+0.0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/subsystem/drivers_autoprobe ===
+1
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/subsystem/drivers_probe ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/subsystem/drivers_probe': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/subsystem/uevent ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/subsystem/uevent': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/uevent ===
+DRIVER=brcmfmac
+OF_NAME=wifi
+OF_FULLNAME=/soc/mmcnr@7e300000/wifi@1
+OF_COMPATIBLE_0=brcm,bcm4329-fmac
+OF_COMPATIBLE_N=1
+SDIO_CLASS=00
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+MODALIAS=sdio:c00v02D0dA9A6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:1/vendor ===
+0x02d0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/class ===
+0x00
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/coredump ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/coredump': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/device ===
+0xa9a6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/driver/bind ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/driver/bind': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/driver/uevent ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/driver/uevent': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/driver/unbind ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/driver/unbind': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/info1 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/info1': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/info2 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/info2': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/info3 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/info3': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/info4 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/info4': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/modalias ===
+sdio:c00v02D0dA9A6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/power/autosuspend_delay_ms ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/power/autosuspend_delay_ms': Input/output error
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/power/control ===
+auto
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/power/runtime_active_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/power/runtime_status ===
+unsupported
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/power/runtime_suspended_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/revision ===
+0.0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/subsystem/drivers_autoprobe ===
+1
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/subsystem/drivers_probe ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/subsystem/drivers_probe': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/subsystem/uevent ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/subsystem/uevent': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/uevent ===
+DRIVER=brcmfmac
+SDIO_CLASS=00
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+MODALIAS=sdio:c00v02D0dA9A6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:2/vendor ===
+0x02d0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/class ===
+0x02
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/device ===
+0xa9a6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/info1 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/info1': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/info2 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/info2': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/info3 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/info3': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/info4 ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/info4': No data available
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/modalias ===
+sdio:c02v02D0dA9A6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/power/autosuspend_delay_ms ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/power/autosuspend_delay_ms': Input/output error
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/power/control ===
+auto
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/power/runtime_active_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/power/runtime_status ===
+unsupported
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/power/runtime_suspended_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/revision ===
+0.0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/subsystem/drivers_autoprobe ===
+1
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/subsystem/drivers_probe ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/subsystem/drivers_probe': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/subsystem/uevent ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/subsystem/uevent': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/uevent ===
+SDIO_CLASS=02
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+MODALIAS=sdio:c02v02D0dA9A6
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/mmc1:0001:3/vendor ===
+0x02d0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/ocr ===
+0x00300000
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/power/autosuspend_delay_ms ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/power/autosuspend_delay_ms': Input/output error
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/power/control ===
+auto
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/power/runtime_active_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/power/runtime_status ===
+unsupported
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/power/runtime_suspended_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/rca ===
+0x0001
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/removable ===
+fixed
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/revision ===
+0.0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/subsystem/drivers_autoprobe ===
+1
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/subsystem/drivers_probe ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/subsystem/drivers_probe': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/subsystem/uevent ===
+cat: '/sys/class/mmc_host/mmc1/mmc1:0001/subsystem/uevent': Permission denied
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/type ===
+SDIO
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/uevent ===
+MMC_TYPE=SDIO
+SDIO_ID=02D0:A9A6
+SDIO_REVISION=0.0
+
+=== /sys/class/mmc_host/mmc1/mmc1:0001/vendor ===
+0x02d0
+
+=== /sys/class/mmc_host/mmc1/power/autosuspend_delay_ms ===
+cat: /sys/class/mmc_host/mmc1/power/autosuspend_delay_ms: Input/output error
+
+=== /sys/class/mmc_host/mmc1/power/control ===
+auto
+
+=== /sys/class/mmc_host/mmc1/power/runtime_active_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/power/runtime_status ===
+unsupported
+
+=== /sys/class/mmc_host/mmc1/power/runtime_suspended_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/device/driver_override ===
+(null)
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/device/modalias ===
+of:NmmcT(null)Cbrcm,bcm2711-emmc2
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/device/uevent ===
+DRIVER=sdhci-iproc
+OF_NAME=mmc
+OF_FULLNAME=/emmc2bus/mmc@7e340000
+OF_COMPATIBLE_0=brcm,bcm2711-emmc2
+OF_COMPATIBLE_N=1
+OF_ALIAS_0=mmc0
+MODALIAS=of:NmmcT(null)Cbrcm,bcm2711-emmc2
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/cid ===
+0353445344363447854b109f03019300
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/csd ===
+400e00325b590001dbd37f800a404000
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/date ===
+03/2025
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/dsr ===
+0x404
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/erase_size ===
+512
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/ext_perf ===
+00
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/ext_power ===
+00
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/fwrev ===
+0x5
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/hwrev ===
+0x8
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/manfid ===
+0x000003
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/name ===
+SD64G
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/ocr ===
+0x00300000
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/oemid ===
+0x5344
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/preferred_erase_size ===
+4194304
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/rca ===
+0xaaaa
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/removable ===
+removable
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/scr ===
+0245804300000000
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/serial ===
+0x4b109f03
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/ssr ===
+0000000008000000040090000f051900000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/type ===
+SD
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/mmc0:aaaa/uevent ===
+DRIVER=mmcblk
+MMC_TYPE=SD
+MMC_NAME=SD64G
+MODALIAS=mmc:block
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/power/autosuspend_delay_ms ===
+cat: /sys/class/mmc_host/mmc1/subsystem/mmc0/power/autosuspend_delay_ms: Input/output error
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/power/control ===
+auto
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/power/runtime_active_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/power/runtime_status ===
+unsupported
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/power/runtime_suspended_time ===
+0
+
+=== /sys/class/mmc_host/mmc1/subsystem/mmc0/uevent ===
+
+=== /sys/class/mmc_host/mmc1/uevent ===
+
+### /sys/kernel/debug/mmc1
+=== /sys/kernel/debug/mmc1/caps ===
+cat: /sys/kernel/debug/mmc1/caps: Permission denied
+
+=== /sys/kernel/debug/mmc1/caps2 ===
+cat: /sys/kernel/debug/mmc1/caps2: Permission denied
+
+=== /sys/kernel/debug/mmc1/clock ===
+cat: /sys/kernel/debug/mmc1/clock: Permission denied
+
+=== /sys/kernel/debug/mmc1/err_state ===
+cat: /sys/kernel/debug/mmc1/err_state: Permission denied
+
+=== /sys/kernel/debug/mmc1/err_stats ===
+cat: /sys/kernel/debug/mmc1/err_stats: Permission denied
+
+=== /sys/kernel/debug/mmc1/ios ===
+cat: /sys/kernel/debug/mmc1/ios: Permission denied
+
+=== /sys/kernel/debug/mmc1/mmc1:0001/quirks ===
+cat: '/sys/kernel/debug/mmc1/mmc1:0001/quirks': Permission denied
+
+=== /sys/kernel/debug/mmc1/mmc1:0001/state ===
+cat: '/sys/kernel/debug/mmc1/mmc1:0001/state': Permission denied
+

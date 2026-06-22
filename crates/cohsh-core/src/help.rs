@@ -28,6 +28,7 @@ pub const COHSH_CONSOLE_HELP_LINES: &[&str] = &[
     "  test [--mode <quick|full|smp>] [--json] [--timeout <s>] [--no-mutate] - Run self-tests",
     "  nettest                      - Run network self-test",
     "  netstats                     - Show network counters",
+    "  reboot                       - Reboot the node after authenticated Queen authorization",
     "  ls <path>                    - Enumerate directory entries",
     "  cat <path>                   - Read file contents",
     "  echo <text> > <path>         - Append to a file (adds newline)",

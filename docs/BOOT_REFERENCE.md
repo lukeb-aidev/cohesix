@@ -15,7 +15,7 @@ A successful boot is expected to reach the root task, emit the manifest
 summary, and bring up the TCP console. The transcript below is trimmed from a
 known-good QEMU serial log. The literal hash and network line below are historical
 for the cited run; current builds must compare their own manifest summary against
-the generated `out/manifests/root_task_resolved.json` and current boot logs.
+the generated `configs/generated/root_task_resolved.json` and current boot logs.
 
 ```
 ELF-loader started on CPU: ARM Ltd. Cortex-A57 r1p0
@@ -56,7 +56,7 @@ Booting all finished, dropped to user space
   `[MARK] boot_state=COLD` must precede the manifest summary and driver bring-up.
 - **Manifest summary**: `manifest.schema`, `manifest.profile`, and
   `manifest.sha256` are logged at boot; the active run's hash must match the compiled
-  manifest in `out/manifests/root_task_resolved.json`.
+  manifest in `configs/generated/root_task_resolved.json`.
 - **Secure9P bounds**: `manifest.secure9p.msize=8192` and
   `manifest.secure9p.walk_depth=8` must remain unchanged.
 - **Console & event pump**: `event_pump.fds=serial,timer,ipc,net-console,ninedoor`

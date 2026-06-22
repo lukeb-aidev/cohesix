@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document the canonical Cohesix repository layout and app roster. -->
 <!-- Author: Lukas Bower -->
@@ -26,9 +26,11 @@
     ticket_quotas.md
 /configs/
   root_task.toml
-/out/
-  manifests/
+  generated/
     root_task_resolved.json
+    coh_policy.toml
+    cohsh_policy.toml
+/out/                   ← Ignored disposable build, staging, log, and run output
 /scripts/
   qemu-run.sh
   cohsh/

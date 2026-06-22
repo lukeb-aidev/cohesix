@@ -46,6 +46,8 @@ pub mod local_seat;
 pub mod observe;
 /// Compile-time profile surface exposed to kernels and tests.
 pub mod profile;
+/// Authenticated platform reboot support for console commands.
+pub mod reboot;
 pub mod serial;
 
 #[cfg(feature = "net-console")]

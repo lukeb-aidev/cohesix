@@ -26,6 +26,8 @@ pub enum ConsoleVerb {
     NetTest,
     /// `netstats`
     NetStats,
+    /// `reboot`
+    Reboot,
     /// `log`
     Log,
     /// `cachelog`
@@ -49,7 +51,7 @@ pub enum ConsoleVerb {
 }
 
 /// Number of console verbs known to the compiler.
-pub const VERB_SPEC_COUNT: usize = 19;
+pub const VERB_SPEC_COUNT: usize = 20;
 
 /// All console verbs in canonical order.
 pub const ALL_VERBS: [ConsoleVerb; VERB_SPEC_COUNT] = [
@@ -62,6 +64,7 @@ pub const ALL_VERBS: [ConsoleVerb; VERB_SPEC_COUNT] = [
     ConsoleVerb::Test,
     ConsoleVerb::NetTest,
     ConsoleVerb::NetStats,
+    ConsoleVerb::Reboot,
     ConsoleVerb::Log,
     ConsoleVerb::CacheLog,
     ConsoleVerb::Quit,
@@ -133,6 +136,11 @@ pub const VERB_SPECS: [VerbSpec; VERB_SPEC_COUNT] = [
         example: "netstats",
     },
     VerbSpec {
+        verb: ConsoleVerb::Reboot,
+        usage: "reboot",
+        example: "reboot",
+    },
+    VerbSpec {
         verb: ConsoleVerb::Log,
         usage: "log",
         example: "log",
@@ -201,6 +209,7 @@ impl ConsoleVerb {
             Self::Test => "test",
             Self::NetTest => "nettest",
             Self::NetStats => "netstats",
+            Self::Reboot => "reboot",
             Self::Log => "log",
             Self::CacheLog => "cachelog",
             Self::Quit => "quit",
@@ -227,6 +236,7 @@ impl ConsoleVerb {
             Self::Test => "TEST",
             Self::NetTest => "NETTEST",
             Self::NetStats => "NETSTATS",
+            Self::Reboot => "REBOOT",
             Self::Log => "LOG",
             Self::CacheLog => "CACHELOG",
             Self::Quit => "QUIT",
@@ -261,6 +271,8 @@ impl ConsoleVerb {
             Some(Self::NetTest)
         } else if token.eq_ignore_ascii_case("netstats") {
             Some(Self::NetStats)
+        } else if token.eq_ignore_ascii_case("reboot") {
+            Some(Self::Reboot)
         } else if token.eq_ignore_ascii_case("log") {
             Some(Self::Log)
         } else if token.eq_ignore_ascii_case("cachelog") {

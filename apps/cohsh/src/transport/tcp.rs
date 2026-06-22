@@ -1385,6 +1385,9 @@ impl TcpTransport {
                                 if matches!(ack.status, AckStatus::Err) {
                                     return Err(anyhow!("{command} failed: {response}"));
                                 }
+                                if expected_ack.eq_ignore_ascii_case("REBOOT") {
+                                    return Ok(lines);
+                                }
                                 self.drain_console_command_trailing_lines(&mut lines)?;
                                 return Ok(lines);
                             }

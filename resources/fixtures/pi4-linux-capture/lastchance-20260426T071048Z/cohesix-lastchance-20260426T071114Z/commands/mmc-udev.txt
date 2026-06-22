@@ -1,0 +1,139 @@
+$ for d in /sys/bus/mmc/devices/mmc*; do echo "### $d"; udevadm info -a -p "$d" 2>&1 || true; done
+### /sys/bus/mmc/devices/mmc0:aaaa
+
+Udevadm info starts with the device specified by the devpath and then
+walks up the chain of parent devices. It prints for every device
+found, all possible attributes in the udev rules key format.
+A rule to match, can be composed by the attributes of the device
+and the attributes from one single parent device.
+
+  looking at device '/devices/platform/emmc2bus/fe340000.mmc/mmc_host/mmc0/mmc0:aaaa':
+    KERNEL=="mmc0:aaaa"
+    SUBSYSTEM=="mmc"
+    DRIVER=="mmcblk"
+    ATTR{cid}=="0353445344363447854b109f03019300"
+    ATTR{csd}=="400e00325b590001dbd37f800a404000"
+    ATTR{date}=="03/2025"
+    ATTR{dsr}=="0x404"
+    ATTR{erase_size}=="512"
+    ATTR{ext_perf}=="00"
+    ATTR{ext_power}=="00"
+    ATTR{fwrev}=="0x5"
+    ATTR{hwrev}=="0x8"
+    ATTR{manfid}=="0x000003"
+    ATTR{name}=="SD64G"
+    ATTR{ocr}=="0x00300000"
+    ATTR{oemid}=="0x5344"
+    ATTR{power/autosuspend_delay_ms}=="3000"
+    ATTR{power/control}=="auto"
+    ATTR{power/runtime_active_time}=="2977499"
+    ATTR{power/runtime_status}=="active"
+    ATTR{power/runtime_suspended_time}=="0"
+    ATTR{preferred_erase_size}=="4194304"
+    ATTR{rca}=="0xaaaa"
+    ATTR{removable}=="removable"
+    ATTR{scr}=="0245804300000000"
+    ATTR{serial}=="0x4b109f03"
+    ATTR{ssr}=="0000000008000000040090000f051900000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+    ATTR{type}=="SD"
+
+  looking at parent device '/devices/platform/emmc2bus/fe340000.mmc/mmc_host/mmc0':
+    KERNELS=="mmc0"
+    SUBSYSTEMS=="mmc_host"
+    DRIVERS==""
+    ATTRS{power/control}=="auto"
+    ATTRS{power/runtime_active_time}=="0"
+    ATTRS{power/runtime_status}=="unsupported"
+    ATTRS{power/runtime_suspended_time}=="0"
+
+  looking at parent device '/devices/platform/emmc2bus/fe340000.mmc':
+    KERNELS=="fe340000.mmc"
+    SUBSYSTEMS=="platform"
+    DRIVERS=="sdhci-iproc"
+    ATTRS{driver_override}=="(null)"
+    ATTRS{power/control}=="auto"
+    ATTRS{power/runtime_active_time}=="0"
+    ATTRS{power/runtime_status}=="unsupported"
+    ATTRS{power/runtime_suspended_time}=="0"
+
+  looking at parent device '/devices/platform/emmc2bus':
+    KERNELS=="emmc2bus"
+    SUBSYSTEMS=="platform"
+    DRIVERS=="simple-pm-bus"
+    ATTRS{driver_override}=="(null)"
+    ATTRS{power/control}=="auto"
+    ATTRS{power/runtime_active_time}=="0"
+    ATTRS{power/runtime_status}=="unsupported"
+    ATTRS{power/runtime_suspended_time}=="0"
+
+  looking at parent device '/devices/platform':
+    KERNELS=="platform"
+    SUBSYSTEMS==""
+    DRIVERS==""
+    ATTRS{power/control}=="auto"
+    ATTRS{power/runtime_active_time}=="0"
+    ATTRS{power/runtime_status}=="unsupported"
+    ATTRS{power/runtime_suspended_time}=="0"
+### /sys/bus/mmc/devices/mmc1:0001
+
+Udevadm info starts with the device specified by the devpath and then
+walks up the chain of parent devices. It prints for every device
+found, all possible attributes in the udev rules key format.
+A rule to match, can be composed by the attributes of the device
+and the attributes from one single parent device.
+
+  looking at device '/devices/platform/soc/fe300000.mmcnr/mmc_host/mmc1/mmc1:0001':
+    KERNEL=="mmc1:0001"
+    SUBSYSTEM=="mmc"
+    DRIVER==""
+    ATTR{device}=="0xa9a6"
+    ATTR{ocr}=="0x00300000"
+    ATTR{power/control}=="auto"
+    ATTR{power/runtime_active_time}=="0"
+    ATTR{power/runtime_status}=="unsupported"
+    ATTR{power/runtime_suspended_time}=="0"
+    ATTR{rca}=="0x0001"
+    ATTR{removable}=="fixed"
+    ATTR{revision}=="0.0"
+    ATTR{type}=="SDIO"
+    ATTR{vendor}=="0x02d0"
+
+  looking at parent device '/devices/platform/soc/fe300000.mmcnr/mmc_host/mmc1':
+    KERNELS=="mmc1"
+    SUBSYSTEMS=="mmc_host"
+    DRIVERS==""
+    ATTRS{power/control}=="auto"
+    ATTRS{power/runtime_active_time}=="0"
+    ATTRS{power/runtime_status}=="unsupported"
+    ATTRS{power/runtime_suspended_time}=="0"
+
+  looking at parent device '/devices/platform/soc/fe300000.mmcnr':
+    KERNELS=="fe300000.mmcnr"
+    SUBSYSTEMS=="platform"
+    DRIVERS=="mmc-bcm2835"
+    ATTRS{driver_override}=="(null)"
+    ATTRS{power/control}=="on"
+    ATTRS{power/runtime_active_time}=="0"
+    ATTRS{power/runtime_status}=="unsupported"
+    ATTRS{power/runtime_suspended_time}=="0"
+
+  looking at parent device '/devices/platform/soc':
+    KERNELS=="soc"
+    SUBSYSTEMS=="platform"
+    DRIVERS=="simple-pm-bus"
+    ATTRS{driver_override}=="(null)"
+    ATTRS{power/control}=="auto"
+    ATTRS{power/runtime_active_time}=="0"
+    ATTRS{power/runtime_status}=="unsupported"
+    ATTRS{power/runtime_suspended_time}=="0"
+
+  looking at parent device '/devices/platform':
+    KERNELS=="platform"
+    SUBSYSTEMS==""
+    DRIVERS==""
+    ATTRS{power/control}=="auto"
+    ATTRS{power/runtime_active_time}=="0"
+    ATTRS{power/runtime_status}=="unsupported"
+    ATTRS{power/runtime_suspended_time}=="0"
+
+[exit=0]

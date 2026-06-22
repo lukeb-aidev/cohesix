@@ -216,6 +216,7 @@ impl CohesixConsole {
             Command::Mem => self.print_mem(),
             Command::Ping => self.emit_line("pong"),
             Command::Test => self.emit_line("test not supported on root console"),
+            Command::Reboot => self.emit_line("reboot unavailable before authenticated event pump"),
             Command::Quit => self.emit_line("quit not supported on root console"),
             Command::Log => self.emit_line("log streaming unavailable"),
             Command::NetTest | Command::NetStats => {

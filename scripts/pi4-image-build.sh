@@ -20,7 +20,8 @@ fi
 SEL4_VENV_DIR="${ROOT_DIR}/.venv"
 U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
 OBJCOPY_WRAPPER="${ROOT_DIR}/scripts/aarch64-objcopy-stdout.sh"
-FIRMWARE_DIR="${ROOT_DIR}/out/uefi/pi4-followup/firmware/v1.50"
+GENERATED_CONFIG_DIR="${ROOT_DIR}/configs/generated"
+FIRMWARE_DIR="${ROOT_DIR}/third_party/raspberry-pi-firmware/v1.50"
 STAGE_DIR="${ROOT_DIR}/out/pi4-sd"
 SEL4_UPSTREAM_IMAGE_NAME="sel4test-driver-image-arm-bcm2711"
 COHESIX_IMAGE_NAME="cohesix-image-arm-bcm2711"
@@ -68,7 +69,7 @@ Options:
                             when present, otherwise ~/seL4/build_UBOOT)
   --venv <dir>              Python venv containing build tooling (default: <repo>/.venv)
   --u-boot-bin <path>       U-Boot binary (default: third_party/u-boot/u-boot.bin)
-  --firmware-dir <dir>      Pi firmware directory (default: out/uefi/pi4-followup/firmware/v1.50)
+  --firmware-dir <dir>      Pi firmware directory (default: third_party/raspberry-pi-firmware/v1.50)
   --stage-dir <dir>         Output staging directory (default: out/pi4-sd)
   --image-name <name>       Staged/boot image filename on FAT partition
                             (default: cohesix-image-arm-bcm2711)
@@ -200,6 +201,10 @@ verify_u_boot_pi4_target() {
       fail "u-boot.bin is missing CONFIG_CMD_BOOTM; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
     grep -q '^CONFIG_LEGACY_IMAGE_FORMAT=y$' "${config_file}" || \
       fail "u-boot.bin is missing CONFIG_LEGACY_IMAGE_FORMAT; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
+    grep -Fq 'CONFIG_BOOTCOMMAND="if fatload mmc 0:1 ${scriptaddr} boot.scr.uimg; then source ${scriptaddr}; else echo [cohesix] ERROR: boot.scr.uimg missing on mmc 0:1; fi"' "${config_file}" || \
+      fail "u-boot.bin does not boot the Cohesix script directly; rebuild U-Boot from third_party/u-boot/configs/rpi_4_defconfig"
+    ! grep -q '^CONFIG_BOOTCOMMAND="bootflow scan' "${config_file}" || \
+      fail "u-boot.bin still uses bootflow scan; rebuild U-Boot from third_party/u-boot/configs/rpi_4_defconfig"
     if [[ "${U_BOOT_MENU_INPUT}" == "usb" ]]; then
         grep -q '^CONFIG_USB_KEYBOARD=y$' "${config_file}" || \
           fail "u-boot.bin is missing CONFIG_USB_KEYBOARD for --uboot-menu-input usb; run: make -C third_party/u-boot rpi_4_defconfig && make -C third_party/u-boot CROSS_COMPILE=aarch64-linux-gnu- -j\$(sysctl -n hw.ncpu)"
@@ -250,6 +255,14 @@ verify_boot_cmd_handoff() {
     require_file "$path"
 
     grep -q "setenv coh_menu_input ${U_BOOT_MENU_INPUT}" "$path" || fail "boot.cmd menu input mode does not match ${U_BOOT_MENU_INPUT}"
+    grep -q 'setenv coh_fastboot_rsts_addr 0xfe100020' "$path" || fail "boot.cmd is missing Cohesix fast-boot RSTS address"
+    grep -q 'setenv coh_fastboot_rsts_mask 0x00ff0000' "$path" || fail "boot.cmd is missing Cohesix fast-boot RSTS mask"
+    grep -q 'setenv coh_fastboot_rsts_magic 0x00430000' "$path" || fail "boot.cmd is missing Cohesix fast-boot RSTS marker"
+    grep -q 'setexpr.l coh_fastboot_rsts \*${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_mask}' "$path" || fail "boot.cmd does not mask Cohesix fast-boot RSTS state"
+    grep -q 'mw.l ${coh_fastboot_rsts_addr} ${coh_fastboot_rsts_clear} 1' "$path" || fail "boot.cmd does not clear the Cohesix fast-boot marker"
+    grep -q 'run coh_maybe_fastboot' "$path" || fail "boot.cmd does not check the Cohesix fast-boot path before the wizard"
+    grep -q 'unattended boot: using saved or manifest settings' "$path" || fail "boot.cmd does not default to unattended saved/manifest boot"
+    grep -q 'test "${coh_force_menu}" = "1"' "$path" || fail "boot.cmd does not preserve an explicit menu escape"
     grep -q 'test "${coh_menu_input}" = "usb"' "$path" || fail "boot.cmd is missing guarded USB menu-input setup"
     grep -q 'run coh_quiesce_usb' "$path" || fail "boot.cmd is missing USB quiesce step"
     grep -q 'run coh_clear_xhci_handoff_live' "$path" || fail "boot.cmd is missing xHCI stale-token clearing before usb stop"
@@ -699,13 +712,13 @@ root_task_release_elf_path() {
 run_coh_rtc_codegen_for_manifest() {
     local manifest_path="$1"
     local manifest_json="$2"
-    mkdir -p "${ROOT_DIR}/out/manifests"
+    mkdir -p "${GENERATED_CONFIG_DIR}"
 
     cargo run -p coh-rtc -- \
       "$manifest_path" \
       --out "${ROOT_DIR}/apps/root-task/src/generated" \
       --manifest "$manifest_json" \
-      --cas-manifest-template "${ROOT_DIR}/out/cas_manifest_template.json" \
+      --cas-manifest-template "${GENERATED_CONFIG_DIR}/cas_manifest_template.json" \
       --cli-script "${ROOT_DIR}/scripts/cohsh/boot_v0.coh" \
       --doc-snippet "${ROOT_DIR}/docs/snippets/root_task_manifest.md" \
       --gpu-breadcrumbs-snippet "${ROOT_DIR}/docs/snippets/gpu_breadcrumbs.md" \
@@ -718,17 +731,17 @@ run_coh_rtc_codegen_for_manifest() {
       --cohesix-py-defaults "${ROOT_DIR}/tools/cohesix-py/cohesix/generated.py" \
       --cohesix-py-doc "${ROOT_DIR}/docs/snippets/cohesix_py_defaults.md" \
       --coh-doctor-doc "${ROOT_DIR}/docs/snippets/coh_doctor_checks.md" \
-      --cohsh-policy "${ROOT_DIR}/out/cohsh_policy.toml" \
+      --cohsh-policy "${GENERATED_CONFIG_DIR}/cohsh_policy.toml" \
       --cohsh-policy-rust "${ROOT_DIR}/apps/cohsh/src/generated/policy.rs" \
       --cohsh-policy-doc "${ROOT_DIR}/docs/snippets/cohsh_policy.md" \
       --cohsh-client-rust "${ROOT_DIR}/apps/cohsh/src/generated/client.rs" \
       --cohsh-client-doc "${ROOT_DIR}/docs/snippets/cohsh_client.md" \
       --cohsh-grammar-doc "${ROOT_DIR}/docs/snippets/cohsh_grammar.md" \
       --cohsh-ticket-policy-doc "${ROOT_DIR}/docs/snippets/cohsh_ticket_policy.md" \
-      --coh-policy "${ROOT_DIR}/out/coh_policy.toml" \
+      --coh-policy "${GENERATED_CONFIG_DIR}/coh_policy.toml" \
       --coh-policy-rust "${ROOT_DIR}/apps/coh/src/generated/policy.rs" \
       --coh-policy-doc "${ROOT_DIR}/docs/snippets/coh_policy.md" \
-      --swarmui-defaults "${ROOT_DIR}/out/swarmui_defaults.toml" \
+      --swarmui-defaults "${GENERATED_CONFIG_DIR}/swarmui_defaults.toml" \
       --swarmui-defaults-rust "${ROOT_DIR}/apps/swarmui/src/generated.rs" \
       --swarmui-defaults-doc "${ROOT_DIR}/docs/snippets/swarmui_defaults.md"
 }
@@ -736,7 +749,7 @@ run_coh_rtc_codegen_for_manifest() {
 run_coh_rtc_codegen() {
     run_coh_rtc_codegen_for_manifest \
       "${MANIFEST_PATH}" \
-      "${ROOT_DIR}/out/manifests/root_task_resolved.json"
+      "${GENERATED_CONFIG_DIR}/root_task_resolved.json"
 }
 
 restore_canonical_codegen() {
@@ -746,7 +759,7 @@ restore_canonical_codegen() {
     log "Restoring canonical manifest artifacts via coh-rtc (${CANONICAL_MANIFEST_PATH})"
     run_coh_rtc_codegen_for_manifest \
       "${CANONICAL_MANIFEST_PATH}" \
-      "${ROOT_DIR}/out/manifests/root_task_resolved.json"
+      "${GENERATED_CONFIG_DIR}/root_task_resolved.json"
 }
 
 cleanup() {
@@ -759,10 +772,10 @@ cleanup() {
 }
 
 sync_resolved_manifest_json() {
-    local manifest_json="${ROOT_DIR}/out/manifests/root_task_resolved.json"
+    local manifest_json="${GENERATED_CONFIG_DIR}/root_task_resolved.json"
     local src_real
     local dst_real
-    mkdir -p "${ROOT_DIR}/out/manifests"
+    mkdir -p "${GENERATED_CONFIG_DIR}"
 
     src_real="$(realpath_py "${MANIFEST_PATH}")"
     dst_real="$(realpath_py "${manifest_json}")"
@@ -963,8 +976,16 @@ setenv coh_logo_delay 1
 setenv coh_logo_x 20
 setenv coh_logo_y 20
 setenv coh_menu_input __COH_MENU_INPUT__
+setenv coh_pm_password 0x5a000000
+setenv coh_fastboot_rsts_addr 0xfe100020
+setenv coh_fastboot_rsts_mask 0x00ff0000
+setenv coh_fastboot_rsts_magic 0x00430000
+setenv coh_fastboot_rsts_clear_mask 0xff00ffff
 setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""'
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
+setenv coh_detect_fastboot 'setenv coh_fastboot 0; setexpr.l coh_fastboot_rsts *${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_mask}; if itest.l ${coh_fastboot_rsts} == ${coh_fastboot_rsts_magic}; then setenv coh_fastboot 1; fi'
+setenv coh_clear_fastboot_marker 'setexpr.l coh_fastboot_rsts_clear *${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_clear_mask}; setexpr.l coh_fastboot_rsts_clear ${coh_fastboot_rsts_clear} "|" ${coh_pm_password}; mw.l ${coh_fastboot_rsts_addr} ${coh_fastboot_rsts_clear} 1'
+setenv coh_maybe_fastboot 'run coh_detect_fastboot; if test "${coh_fastboot}" = "1"; then echo "[cohesix] authenticated reboot fast boot: using saved or manifest settings"; run coh_clear_fastboot_marker; run coh_boot_sequence; setenv coh_force_menu 1; fi'
 setenv coh_bootstrap_usb_session 'if test "${coh_menu_input}" = "usb"; then if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi; else setenv coh_usb_input_ready 0; fi'
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
 setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_mmio; setenv coh_xhci_pci_cmd; setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
@@ -988,7 +1009,8 @@ setenv coh_after_interface 'if test "${coh_net_interface}" = "wifi"; then run co
 setenv coh_confirm_prompt 'run coh_prepare_input; cls; echo "[cohesix] Review network settings"; run coh_emit_policy_summary; echo "  1. Boot with these settings"; echo "  2. Save settings and reboot"; echo "  3. Edit settings"; echo "  4. Discard changes and return"; echo "  0. Exit to U-Boot prompt"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then run coh_boot_sequence; elif test "${coh_choice}" = "2"; then run coh_persist_policy; reset; elif test "${coh_choice}" = "3"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "4"; then run coh_load_saved_policy; run coh_prompt_root; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_confirm_prompt; fi'
 setenv coh_prompt_root 'run coh_show_logo_splash; run coh_prepare_input; run coh_detect_saved_config; cls; echo "[cohesix] Cohesix boot options"; if test "${coh_has_saved_config}" = "1"; then echo "[cohesix] Saved network settings detected"; run coh_emit_policy_summary; echo "  1. Continue with existing config"; else echo "[cohesix] No saved network settings; manifest defaults remain active"; echo "  1. Boot with manifest defaults"; fi; echo "  2. Configure networking"; echo "  3. Toggle HDMI logo"; echo "  4. Restore manifest defaults"; echo "  5. Save current settings and reboot"; echo "  0. Exit to U-Boot prompt"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then run coh_boot_sequence; elif test "${coh_choice}" = "2"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "3"; then run coh_toggle_logo; run coh_prompt_root; elif test "${coh_choice}" = "4"; then run coh_reset_policy; run coh_persist_policy; echo "[cohesix] manifest defaults restored"; run coh_prompt_root; elif test "${coh_choice}" = "5"; then run coh_persist_policy; reset; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_root; fi'
 run coh_load_saved_policy
-run coh_prompt_root
+run coh_maybe_fastboot
+if test "${coh_force_menu}" = "1"; then run coh_prompt_root; else echo "[cohesix] unattended boot: using saved or manifest settings"; run coh_boot_sequence; run coh_prompt_root; fi
 EOF
     sed -i '' "s/__COH_IMAGE__/${coh_image}/g" "$out"
     sed -i '' "s/__COH_IMAGE_FALLBACK__/${fallback_image}/g" "$out"
@@ -1044,7 +1066,7 @@ EOF
 
 assert_driver_runtime_elf_budgets() {
     local runtime_artifact_dir="$1"
-    local manifest_json="${ROOT_DIR}/out/manifests/root_task_resolved.json"
+    local manifest_json="${GENERATED_CONFIG_DIR}/root_task_resolved.json"
     require_file "$manifest_json"
     python3 - "$manifest_json" "$runtime_artifact_dir" <<'PY'
 import json

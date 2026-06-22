@@ -85,6 +85,7 @@ pub enum Command {
     Quit,
     NetTest,
     NetStats,
+    Reboot,
     Spawn(String<MAX_JSON_LEN>),
     Kill(String<MAX_ID_LEN>),
     CacheLog {
@@ -113,6 +114,7 @@ impl Command {
             Self::Quit => ConsoleVerb::Quit,
             Self::NetTest => ConsoleVerb::NetTest,
             Self::NetStats => ConsoleVerb::NetStats,
+            Self::Reboot => ConsoleVerb::Reboot,
             Self::Spawn(_) => ConsoleVerb::Spawn,
             Self::Kill(_) => ConsoleVerb::Kill,
             Self::CacheLog { .. } => ConsoleVerb::CacheLog,
@@ -294,6 +296,12 @@ fn parse_line_inner(line: &str) -> Result<Command, ConsoleError> {
         }
         ConsoleVerb::NetTest => Ok(Command::NetTest),
         ConsoleVerb::NetStats => Ok(Command::NetStats),
+        ConsoleVerb::Reboot => {
+            if !remainder.is_empty() {
+                return Err(ConsoleError::InvalidValue("reboot"));
+            }
+            Ok(Command::Reboot)
+        }
         ConsoleVerb::Log => Ok(Command::Log),
         ConsoleVerb::CacheLog => {
             if remainder.is_empty() {
@@ -469,6 +477,7 @@ mod tests {
             Command::Test,
             Command::NetTest,
             Command::NetStats,
+            Command::Reboot,
             Command::Log,
             Command::CacheLog { count: None },
             Command::Quit,
@@ -608,6 +617,15 @@ mod tests {
     #[test]
     fn netstats_command_parses() {
         assert_eq!(parse("netstats\n").unwrap(), Command::NetStats);
+    }
+
+    #[test]
+    fn reboot_command_parses_without_arguments() {
+        assert_eq!(parse("reboot\n").unwrap(), Command::Reboot);
+        assert_eq!(
+            parse("reboot now\n").unwrap_err(),
+            ConsoleError::InvalidValue("reboot")
+        );
     }
 
     #[test]

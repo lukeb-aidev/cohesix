@@ -1,0 +1,211 @@
+=== date ===
+Sun Apr 26 06:36:24 UTC 2026
+=== uname ===
+Linux raspberrypi 6.12.75+rpt-rpi-v8 #1 SMP PREEMPT Debian 1:6.12.75-1+rpt1 (2026-03-11) aarch64 GNU/Linux
+=== cmdline ===
+coherent_pool=1M 8250.nr_uarts=1 snd_bcm2835.enable_headphones=0 cgroup_disable=memory numa_policy=interleave nvme.max_host_mem_size_mb=0 snd_bcm2835.enable_headphones=1 snd_bcm2835.enable_hdmi=1 snd_bcm2835.enable_hdmi=0  numa=fake=1 system_heap.max_order=0 iommu_dma_numa_policy=interleave smsc95xx.macaddr=88:A2:9E:66:59:0F vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  console=ttyS0,115200 console=tty1 root=PARTUUID=f5445819-02 rootfstype=ext4 fsck.repair=yes rootwait cohesix_capture=1 brcmfmac.debug=0x001fffff usbcore.autosuspend=-1 dyndbg="file drivers/net/wireless/broadcom/brcm80211/brcmfmac/* +p; file drivers/net/wireless/broadcom/brcm80211/brcmutil/* +p; file drivers/mmc/core/* +p; file drivers/mmc/host/sdhci* +p; file drivers/usb/core/* +p; file drivers/usb/host/xhci* +p; file drivers/pci/* +p" loglevel=3
+=== ip addr ===
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host noprefixroute 
+       valid_lft forever preferred_lft forever
+2: eth0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc mq state DOWN group default qlen 1000
+    link/ether 88:a2:9e:66:59:0f brd ff:ff:ff:ff:ff:ff
+3: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
+    link/ether 88:a2:9e:66:59:10 brd ff:ff:ff:ff:ff:ff
+    inet 192.168.86.154/24 brd 192.168.86.255 scope global dynamic noprefixroute wlan0
+       valid_lft 85846sec preferred_lft 85846sec
+    inet6 fdc9:959:30ad:d446:c74a:f221:ac2e:29af/64 scope global dynamic noprefixroute 
+       valid_lft 1799sec preferred_lft 1799sec
+    inet6 fe80::f600:af18:7d67:9978/64 scope link noprefixroute 
+       valid_lft forever preferred_lft forever
+=== iw dev ===
+bash: line 1: iw: command not found
+=== iw wlan0 link ===
+bash: line 1: iw: command not found
+=== iw wlan0 station dump ===
+bash: line 1: iw: command not found
+=== nmcli dev ===
+DEVICE         TYPE      STATE                   CONNECTION   
+wlan0          wifi      connected               DachshundHub 
+lo             loopback  connected (externally)  lo           
+p2p-dev-wlan0  wifi-p2p  disconnected            --           
+eth0           ethernet  unavailable             --           
+=== nmcli active ===
+NAME          UUID                                  TYPE      DEVICE 
+DachshundHub  1e1dfd74-56d9-4319-99a9-a6e32feecd99  wifi      wlan0  
+lo            b55fff73-913d-4ab4-a405-8086c7112f64  loopback  lo     
+=== rfkill ===
+bash: line 1: rfkill: command not found
+=== proc interrupts ===
+           CPU0       CPU1       CPU2       CPU3       
+  9:          0          0          0          0     GICv2  25 Level     vgic
+ 11:     111291      81913      40142      54394     GICv2  30 Level     arch_timer
+ 12:          0          0          0          0     GICv2  27 Level     kvm guest vtimer
+ 14:       7821          0          0          0     GICv2  65 Level     fe00b880.mailbox
+ 15:       9822          0          0          0     GICv2 114 Level     DMA IRQ
+ 21:          0          0          0          0     GICv2 122 Level     DMA IRQ
+ 22:          0          0          0          0     GICv2 123 Level     DMA IRQ
+ 27:          0          0          0          0     GICv2 175 Level     PCIe PME, aerdrv
+ 28:       4370          0          0          0     GICv2 189 Level     eth0
+ 29:          0          0          0          0     GICv2 190 Level     eth0
+ 30:        209          0          0          0  BRCM STB PCIe MSI 524288 Edge      xhci_hcd
+ 34:         75          0          0          0     GICv2  66 Level     VCHIQ doorbell
+ 35:          0          0          0          0     GICv2  48 Level     arm-pmu
+ 36:          0          0          0          0     GICv2  49 Level     arm-pmu
+ 37:          0          0          0          0     GICv2  50 Level     arm-pmu
+ 38:          0          0          0          0     GICv2  51 Level     arm-pmu
+ 39:       3826          0          0          0     GICv2 153 Level     uart-pl011
+ 40:       1450          0          0          0     GICv2 125 Level     ttyS0
+ 41:     625363          0          0          0     GICv2 158 Level     mmc1, mmc0
+ 42:          0          0          0          0     GICv2 106 Level     v3d
+ 43:          0          0          0          0     GICv2 130 Level     feb00000.codec
+ 44:         12          0          0          0     GICv2 129 Level     vc4 hvs
+ 45:          0          0          0          0  interrupt-controller@7ef00100   4 Level     vc4 hdmi hpd connected
+ 46:          0          0          0          0  interrupt-controller@7ef00100   5 Level     vc4 hdmi hpd disconnected
+ 47:          0          0          0          0  interrupt-controller@7ef00100   1 Level     vc4 hdmi cec rx
+ 48:          0          0          0          0  interrupt-controller@7ef00100   0 Level     vc4 hdmi cec tx
+ 49:          0          0          0          0  interrupt-controller@7ef00100  10 Level     vc4 hdmi hpd connected
+ 50:          0          0          0          0  interrupt-controller@7ef00100  11 Level     vc4 hdmi hpd disconnected
+ 51:          0          0          0          0  interrupt-controller@7ef00100   7 Level     vc4 hdmi cec rx
+ 52:          0          0          0          0  interrupt-controller@7ef00100   8 Level     vc4 hdmi cec tx
+ 53:          0          0          0          0     GICv2 107 Level     fe004000.txp
+ 54:          0          0          0          0     GICv2 141 Level     vc4 crtc
+ 55:          0          0          0          0     GICv2 142 Level     vc4 crtc, vc4 crtc
+ 56:          9          0          0          0     GICv2 133 Level     vc4 crtc
+ 57:          0          0          0          0     GICv2 138 Level     vc4 crtc
+IPI0:      3453       3794       6000       8701       Rescheduling interrupts
+IPI1:     67844     109753      65509     101644       Function call interrupts
+IPI2:         0          0          0          0       CPU stop interrupts
+IPI3:         0          0          0          0       CPU stop NMIs
+IPI4:         0          0          0          0       Timer broadcast interrupts
+IPI5:     14215       2422       5305       1187       IRQ work interrupts
+IPI6:         0          0          0          0       CPU backtrace interrupts
+IPI7:         0          0          0          0       KGDB roundup interrupts
+Err:          0
+=== lsmod ===
+Module                  Size  Used by
+rfcomm                 57344  2
+cmac                   12288  2
+algif_hash             12288  1
+aes_arm64              12288  2
+aes_generic            32768  1 aes_arm64
+algif_skcipher         12288  1
+af_alg                 28672  6 algif_hash,algif_skcipher
+bnep                   24576  2
+binfmt_misc            16384  1
+brcmfmac_wcc           12288  0
+vc4                   401408  4
+hci_uart               53248  0
+btbcm                  24576  1 hci_uart
+bluetooth             651264  27 hci_uart,btbcm,bnep,rfcomm
+brcmfmac              372736  1 brcmfmac_wcc
+snd_soc_hdmi_codec     20480  2
+rpi_hevc_dec           49152  0
+bcm2835_v4l2           45056  0
+bcm2835_codec          49152  0
+ecdh_generic           16384  1 bluetooth
+bcm2835_isp            28672  0
+drm_display_helper     24576  1 vc4
+ecc                    40960  1 ecdh_generic
+cec                    53248  1 vc4
+libaes                 12288  3 aes_arm64,bluetooth,aes_generic
+bcm2835_mmal_vchiq     36864  3 bcm2835_codec,bcm2835_v4l2,bcm2835_isp
+brcmutil               24576  1 brcmfmac
+v4l2_mem2mem           45056  2 bcm2835_codec,rpi_hevc_dec
+drm_dma_helper         24576  2 vc4
+cfg80211             1052672  1 brcmfmac
+vc_sm_cma              32768  2 bcm2835_mmal_vchiq,bcm2835_isp
+snd_soc_core          303104  2 vc4,snd_soc_hdmi_codec
+v3d                   184320  0
+videobuf2_vmalloc      12288  1 bcm2835_v4l2
+videobuf2_dma_contig    20480  3 bcm2835_codec,rpi_hevc_dec,bcm2835_isp
+videobuf2_memops       12288  2 videobuf2_vmalloc,videobuf2_dma_contig
+gpu_sched              61440  1 v3d
+snd_compress           20480  1 snd_soc_core
+snd_bcm2835            24576  0
+snd_pcm_dmaengine      16384  1 snd_soc_core
+rfkill                 32768  6 bluetooth,cfg80211
+videobuf2_v4l2         32768  5 bcm2835_codec,rpi_hevc_dec,bcm2835_v4l2,v4l2_mem2mem,bcm2835_isp
+drm_shmem_helper       32768  1 v3d
+drm_kms_helper        229376  3 drm_dma_helper,vc4,drm_shmem_helper
+raspberrypi_hwmon      12288  0
+snd_pcm               151552  5 snd_bcm2835,snd_soc_hdmi_codec,snd_compress,snd_soc_core,snd_pcm_dmaengine
+snd_timer              36864  1 snd_pcm
+videodev              319488  6 bcm2835_codec,rpi_hevc_dec,videobuf2_v4l2,bcm2835_v4l2,v4l2_mem2mem,bcm2835_isp
+raspberrypi_gpiomem    12288  0
+videobuf2_common       73728  9 bcm2835_codec,videobuf2_vmalloc,rpi_hevc_dec,videobuf2_dma_contig,videobuf2_v4l2,bcm2835_v4l2,v4l2_mem2mem,videobuf2_memops,bcm2835_isp
+snd                   114688  6 snd_bcm2835,snd_soc_hdmi_codec,snd_timer,snd_compress,snd_soc_core,snd_pcm
+mc                     69632  7 videodev,bcm2835_codec,rpi_hevc_dec,videobuf2_v4l2,videobuf2_common,v4l2_mem2mem,bcm2835_isp
+uio_pdrv_genirq        12288  0
+uio                    20480  1 uio_pdrv_genirq
+sch_fq_codel           20480  7
+zram                   40960  1
+lz4_compress           24576  1 zram
+drm                   675840  8 gpu_sched,drm_kms_helper,drm_dma_helper,v3d,vc4,drm_shmem_helper,drm_display_helper
+fuse                  172032  1
+drm_panel_orientation_quirks    28672  1 drm
+backlight              24576  2 drm_kms_helper,drm
+nfnetlink              20480  1
+ip_tables              32768  0
+x_tables               53248  1 ip_tables
+ipv6                  598016  32
+i2c_brcmstb            12288  0
+nvmem_rmem             12288  0
+=== lspci ===
+00:00.0 PCI bridge [0604]: Broadcom Inc. and subsidiaries BCM2711 PCIe Bridge [14e4:2711] (rev 20) (prog-if 00 [Normal decode])
+	Device tree node: /sys/firmware/devicetree/base/scb/pcie@7d500000/pci@0,0
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
+	Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Latency: 0
+	Interrupt: pin A routed to IRQ 27
+	Bus: primary=00, secondary=01, subordinate=01, sec-latency=0
+	Memory behind bridge: 00000000-000fffff [size=1M] [32-bit]
+	Prefetchable memory behind bridge: [disabled] [64-bit]
+	Secondary status: 66MHz- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- <SERR- <PERR-
+	BridgeCtl: Parity- SERR- NoISA- VGA- VGA16- MAbort- >Reset- FastB2B-
+		PriDiscTmr- SecDiscTmr- DiscTmrStat- DiscTmrSERREn-
+	Capabilities: <access denied>
+	Kernel driver in use: pcieport
+00: e4 14 11 27 06 00 10 00 20 00 04 06 00 00 01 00
+10: 00 00 00 00 00 00 00 00 00 01 01 00 00 00 00 00
+20: 00 c0 00 c0 f1 ff 01 00 00 00 00 00 00 00 00 00
+30: 00 00 00 00 48 00 00 00 00 00 00 00 1b 01 00 00
+
+01:00.0 USB controller [0c03]: VIA Technologies, Inc. VL805/806 xHCI USB 3.0 Controller [1106:3483] (rev 01) (prog-if 30 [XHCI])
+	Subsystem: VIA Technologies, Inc. VL805/806 xHCI USB 3.0 Controller [1106:3483]
+	Device tree node: /sys/firmware/devicetree/base/scb/pcie@7d500000/pci@0,0/usb@0,0
+	Control: I/O- Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr+ Stepping- SERR+ FastB2B- DisINTx+
+	Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Latency: 0, Cache Line Size: 64 bytes
+	Interrupt: pin A routed to IRQ 30
+	Region 0: Memory at 600000000 (64-bit, non-prefetchable) [size=4K]
+	Capabilities: <access denied>
+	Kernel driver in use: xhci_hcd
+00: 06 11 83 34 46 05 10 00 01 30 03 0c 10 00 00 00
+10: 04 00 00 c0 00 00 00 00 00 00 00 00 00 00 00 00
+20: 00 00 00 00 00 00 00 00 00 00 00 00 06 11 83 34
+30: 00 00 00 00 80 00 00 00 00 00 00 00 1b 01 00 00
+
+=== lsusb tv ===
+/:  Bus 001.Port 001: Dev 001, Class=root_hub, Driver=xhci_hcd/1p, 480M
+    ID 1d6b:0002 Linux Foundation 2.0 root hub
+    |__ Port 001: Dev 002, If 0, Class=Hub, Driver=hub/4p, 480M
+        ID 2109:3431 VIA Labs, Inc. Hub
+        |__ Port 004: Dev 003, If 0, Class=Hub, Driver=hub/4p, 480M
+            ID 05e3:0608 Genesys Logic, Inc. Hub
+            |__ Port 004: Dev 004, If 0, Class=Human Interface Device, Driver=usbhid, 1.5M
+                ID 258a:0f0a  
+            |__ Port 004: Dev 004, If 1, Class=Human Interface Device, Driver=usbhid, 1.5M
+                ID 258a:0f0a  
+/:  Bus 002.Port 001: Dev 001, Class=root_hub, Driver=xhci_hcd/4p, 5000M
+    ID 1d6b:0003 Linux Foundation 3.0 root hub
+=== sys mmc tree ===
+/sys/bus/mmc/devices
+/sys/bus/mmc/devices/mmc0:aaaa
+/sys/bus/mmc/devices/mmc1:0001
+/sys/class/mmc_host
+/sys/class/mmc_host/mmc0
+/sys/class/mmc_host/mmc1

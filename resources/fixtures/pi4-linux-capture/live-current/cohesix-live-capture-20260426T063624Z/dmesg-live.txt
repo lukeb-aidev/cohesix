@@ -1,0 +1,1938 @@
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff cd 02 00 0e 00 8a 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5b d8 85 7a f0 04  ..V.......[..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 52 54 00 00 01 01 08 0a 98 70 31 12  ....RT.......p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 63 00 00 00 10 2f 0c af 50 b4 de 4d 31  ..hc..../..P..M1
+[Sun Apr 26 07:36:26 2026] 00000060: 48 f9 c3 22 7e 3b 34 71 11 95 75 e8 61 4c 7a c8  H.."~;4q..u.aLz.
+[Sun Apr 26 07:36:26 2026] 00000070: cf 6d 65 22 a9 2c 43 32                          .me".,C2
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000e316215d
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 00000000f96a446e len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 62 02 00 1a  ..{.........b...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 e5 40 00 40 06 b9 a5 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f0 04 fb ea 5b fc 80 18 02 6f  .....z....[....o
+[Sun Apr 26 07:36:26 2026] 00000050: ef 00 00 00 01 01 08 0a d0 9e 68 7d 98 70 31 12  ..........h}.p1.
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 18 90 25 9b cc aa 45 a7 07 b1 8a 5d  ......%...E....]
+[Sun Apr 26 07:36:26 2026] 00000070: 16 59 83 f6 44 a8 c8 56 60 fa c5 d6 7d fe 6b 3f  .Y..D..V`...}.k?
+[Sun Apr 26 07:36:26 2026] 00000080: ee 5e 04 15                                      .^..
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff ce 02 00 0e 00 8b 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff ce 02 00 0e 00 8b 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5b fc 85 7a f0 28  ..V.......[..z.(
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 75 dd 00 00 01 01 08 0a 98 70 31 1a  ....u........p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 7d                                      ..h}
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000006d89ae7f
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff cf 02 00 0e 00 8b 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff cf 02 00 0e 00 8b 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5b fc 85 7a f0 28  ..V.......[..z.(
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 bc be 00 00 01 01 08 0a 98 70 31 29  .............p1)
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 7d 00 00 00 10 a4 cb c8 b0 80 f2 77 19  ..h}..........w.
+[Sun Apr 26 07:36:26 2026] 00000060: 51 3e ab 52 5e bd 83 ef 9d 67 8e 89 2c 65 64 cb  Q>.R^....g..,ed.
+[Sun Apr 26 07:36:26 2026] 00000070: 69 78 03 ee 82 ba c6 ca                          ix......
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000006d89ae7f
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 0000000000f20e03 len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 63 02 00 1a  ..{.........c...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 e6 40 00 40 06 b9 a4 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f0 28 fb ea 5c 20 80 18 02 6f  .....z.(..\ ...o
+[Sun Apr 26 07:36:26 2026] 00000050: 1e c0 00 00 01 01 08 0a d0 9e 68 92 98 70 31 29  ..........h..p1)
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 23 0e 3a 19 8c 6d 56 1a 17 01 d7 e1  ....#.:..mV.....
+[Sun Apr 26 07:36:26 2026] 00000070: 6f 4c cb ee 14 e1 90 ce 75 af a4 45 95 33 f7 12  oL......u..E.3..
+[Sun Apr 26 07:36:26 2026] 00000080: 6f c3 36 ae                                      o.6.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d0 02 00 0e 00 8c 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d0 02 00 0e 00 8c 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c 20 85 7a f0 4c  ..V.......\ .z.L
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 75 6b 00 00 01 01 08 0a 98 70 31 2f  ....uk.......p1/
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 92                                      ..h.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000002b821c91
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d1 02 00 0e 00 8c 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d1 02 00 0e 00 8c 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c 20 85 7a f0 4c  ..V.......\ .z.L
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 e5 5c 00 00 01 01 08 0a 98 70 31 3d  .....\.......p1=
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 92 00 00 00 10 7e 7b 12 c1 bd a6 07 26  ..h.....~{.....&
+[Sun Apr 26 07:36:26 2026] 00000060: 62 2d cb 0e 73 2e 34 3d a4 df 6b c5 98 bb a8 d2  b-..s.4=..k.....
+[Sun Apr 26 07:36:26 2026] 00000070: 97 0f 61 ef 2f d3 ea 0d                          ..a./...
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000002b821c91
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 00000000f96a446e len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 64 02 00 1a  ..{.........d...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 e7 40 00 40 06 b9 a3 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f0 4c fb ea 5c 44 80 18 02 6f  .....z.L..\D...o
+[Sun Apr 26 07:36:26 2026] 00000050: c0 e7 00 00 01 01 08 0a d0 9e 68 a6 98 70 31 3d  ..........h..p1=
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 d8 d1 2a d4 b0 45 90 d8 d6 d6 77 39  ......*..E....w9
+[Sun Apr 26 07:36:26 2026] 00000070: 30 1a e3 71 49 e3 dd ba 93 06 e3 80 1d b8 eb 2f  0..qI........../
+[Sun Apr 26 07:36:26 2026] 00000080: 9b 7a d0 a9                                      .z..
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d2 02 00 0e 00 8d 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d2 02 00 0e 00 8d 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c 44 85 7a f0 70  ..V.......\D.z.p
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 74 fa 00 00 01 01 08 0a 98 70 31 44  ....t........p1D
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 a6                                      ..h.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000009c036af6
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d3 02 00 0e 00 8d 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d3 02 00 0e 00 8d 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c 44 85 7a f0 70  ..V.......\D.z.p
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 e2 49 00 00 01 01 08 0a 98 70 31 55  .....I.......p1U
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 a6 00 00 00 10 43 01 88 96 66 3f 1c d6  ..h.....C...f?..
+[Sun Apr 26 07:36:26 2026] 00000060: 03 96 74 ec b3 f8 e9 d6 74 1e dc 18 27 7c 61 40  ..t.....t...'|a@
+[Sun Apr 26 07:36:26 2026] 00000070: 06 43 be 0f 1e 6d 71 b0                          .C...mq.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000009c036af6
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 0000000000f20e03 len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 65 02 00 1a  ..{.........e...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 e8 40 00 40 06 b9 a2 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f0 70 fb ea 5c 68 80 18 02 6f  .....z.p..\h...o
+[Sun Apr 26 07:36:26 2026] 00000050: 8a eb 00 00 01 01 08 0a d0 9e 68 be 98 70 31 55  ..........h..p1U
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 db 75 c9 d9 7b 5a 75 72 e8 ea a9 2a  .....u..{Zur...*
+[Sun Apr 26 07:36:26 2026] 00000070: 12 2b 54 c3 15 1e 82 8c 5b 71 9d ae 15 69 64 e9  .+T.....[q...id.
+[Sun Apr 26 07:36:26 2026] 00000080: 43 f7 10 e2                                      C...
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d4 02 00 0e 00 8e 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d4 02 00 0e 00 8e 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c 68 85 7a f0 94  ..V.......\h.z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 74 81 00 00 01 01 08 0a 98 70 31 5d  ....t........p1]
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 be                                      ..h.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000367580f3
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d5 02 00 0e 00 8e 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d5 02 00 0e 00 8e 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c 68 85 7a f0 94  ..V.......\h.z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 1f 85 00 00 01 01 08 0a 98 70 31 6a  .............p1j
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 be 00 00 00 10 e5 4f d0 71 fb 7f 03 64  ..h......O.q...d
+[Sun Apr 26 07:36:26 2026] 00000060: 8b 06 13 ec 22 62 ab a9 e9 c2 cd a4 d2 55 04 ec  ...."b.......U..
+[Sun Apr 26 07:36:26 2026] 00000070: e5 ff ff 6e af ae 0f 48                          ...n...H
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000367580f3
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 00000000f96a446e len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 66 02 00 1a  ..{.........f...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 e9 40 00 40 06 b9 a1 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f0 94 fb ea 5c 8c 80 18 02 6f  .....z....\....o
+[Sun Apr 26 07:36:26 2026] 00000050: d6 f7 00 00 01 01 08 0a d0 9e 68 d4 98 70 31 6a  ..........h..p1j
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 99 3a 7f 61 31 69 7a 64 a2 ea 8e 15  .....:.a1izd....
+[Sun Apr 26 07:36:26 2026] 00000070: 70 d8 df d6 bb ba 94 ed 0d 40 fa 45 be a8 46 ac  p........@.E..F.
+[Sun Apr 26 07:36:26 2026] 00000080: cd 52 31 a8                                      .R1.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d6 02 00 0e 00 8f 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d6 02 00 0e 00 8f 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c 8c 85 7a f0 b8  ..V.......\..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 74 0e 00 00 01 01 08 0a 98 70 31 72  ....t........p1r
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 d4                                      ..h.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000007ace0400
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d7 02 00 0e 00 8f 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d7 02 00 0e 00 8f 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c 8c 85 7a f0 b8  ..V.......\..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 f5 99 00 00 01 01 08 0a 98 70 31 82  .............p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 d4 00 00 00 10 4f 78 64 59 65 d9 86 71  ..h.....OxdYe..q
+[Sun Apr 26 07:36:26 2026] 00000060: b8 fe 37 54 1d 31 19 59 3f 33 a0 65 d9 5f ef b0  ..7T.1.Y?3.e._..
+[Sun Apr 26 07:36:26 2026] 00000070: b2 2f d7 9b dc 7e a8 3a                          ./...~.:
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000007ace0400
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 0000000000f20e03 len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 67 02 00 1a  ..{.........g...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 ea 40 00 40 06 b9 a0 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f0 b8 fb ea 5c b0 80 18 02 6f  .....z....\....o
+[Sun Apr 26 07:36:26 2026] 00000050: bb c3 00 00 01 01 08 0a d0 9e 68 eb 98 70 31 82  ..........h..p1.
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 64 9c ae 6e fb fc e8 0c 6b 30 05 e5  ....d..n....k0..
+[Sun Apr 26 07:36:26 2026] 00000070: b6 f5 ce ac 37 55 6b 81 b3 ef 35 ac b4 6b 07 4b  ....7Uk...5..k.K
+[Sun Apr 26 07:36:26 2026] 00000080: 4d 86 39 d8                                      M.9.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d8 02 00 0e 00 90 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff d8 02 00 0e 00 90 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c b0 85 7a f0 dc  ..V.......\..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 73 99 00 00 01 01 08 0a 98 70 31 88  ....s........p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 eb                                      ..h.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000e6d87888
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d9 02 00 0e 00 90 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff d9 02 00 0e 00 90 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c b0 85 7a f0 dc  ..V.......\..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 64 65 00 00 01 01 08 0a 98 70 31 9b  ....de.......p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 68 eb 00 00 00 10 40 4b 8f 91 e0 52 14 64  ..h.....@K...R.d
+[Sun Apr 26 07:36:26 2026] 00000060: ca d5 a5 52 fe c0 d7 53 f9 45 57 b1 9f a0 f1 3e  ...R...S.EW....>
+[Sun Apr 26 07:36:26 2026] 00000070: 07 4f 9f b2 54 3f 26 fc                          .O..T?&.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000e6d87888
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 00000000f96a446e len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 68 02 00 1a  ..{.........h...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 eb 40 00 40 06 b9 9f c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f0 dc fb ea 5c d4 80 18 02 6f  .....z....\....o
+[Sun Apr 26 07:36:26 2026] 00000050: 82 ed 00 00 01 01 08 0a d0 9e 69 04 98 70 31 9b  ..........i..p1.
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 ca 6f 0b c7 8c 39 6a bd 93 90 e2 d4  .....o...9j.....
+[Sun Apr 26 07:36:26 2026] 00000070: a5 37 4c 3f 7a 8e 9d 13 ac c9 67 6f 63 8f 55 41  .7L?z.....goc.UA
+[Sun Apr 26 07:36:26 2026] 00000080: 8f 27 4c d3                                      .'L.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff da 02 00 0e 00 91 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff da 02 00 0e 00 91 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c d4 85 7a f1 00  ..V.......\..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 73 1f 00 00 01 01 08 0a 98 70 31 a1  ....s........p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 04                                      ..i.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000a38d46ca
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff db 02 00 0e 00 91 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff db 02 00 0e 00 91 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c d4 85 7a f1 00  ..V.......\..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 51 71 00 00 01 01 08 0a 98 70 31 b1  ....Qq.......p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 04 00 00 00 10 3e 23 c9 4a 7d 72 ba 9d  ..i.....>#.J}r..
+[Sun Apr 26 07:36:26 2026] 00000060: a2 78 49 5c 3e 1f 2b c0 8f 3a d2 17 53 ad 6e e3  .xI\>.+..:..S.n.
+[Sun Apr 26 07:36:26 2026] 00000070: eb e6 fa 98 94 40 ed 8b                          .....@..
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000a38d46ca
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 0000000000f20e03 len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 69 02 00 1a  ..{.........i...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 ec 40 00 40 06 b9 9e c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f1 00 fb ea 5c f8 80 18 02 6f  .....z....\....o
+[Sun Apr 26 07:36:26 2026] 00000050: 0b 1e 00 00 01 01 08 0a d0 9e 69 1b 98 70 31 b1  ..........i..p1.
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 7c 07 82 56 41 3a d5 01 34 97 38 64  ....|..VA:..4.8d
+[Sun Apr 26 07:36:26 2026] 00000070: 89 2a 63 b7 e6 cf f4 b9 37 13 c2 c5 30 4f ac 7c  .*c.....7...0O.|
+[Sun Apr 26 07:36:26 2026] 00000080: 66 5b e6 09                                      f[..
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff dc 02 00 0e 00 92 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff dc 02 00 0e 00 92 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c f8 85 7a f1 24  ..V.......\..z.$
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 72 a8 00 00 01 01 08 0a 98 70 31 b9  ....r........p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 1b                                      ..i.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000001d478ff2
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff dd 02 00 0e 00 92 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff dd 02 00 0e 00 92 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5c f8 85 7a f1 24  ..V.......\..z.$
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 36 b9 00 00 01 01 08 0a 98 70 31 c6  ....6........p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 1b 00 00 00 10 2b e3 80 f5 3d 0d 5f 2c  ..i.....+...=._,
+[Sun Apr 26 07:36:26 2026] 00000060: 22 e5 7c 8d 37 78 e4 d7 8f c8 28 0f a0 bf db 13  ".|.7x....(.....
+[Sun Apr 26 07:36:26 2026] 00000070: 2f ba 1a 01 d8 a5 e0 c4                          /.......
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000001d478ff2
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 00000000f96a446e len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 6a 02 00 1a  ..{.........j...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 ed 40 00 40 06 b9 9d c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f1 24 fb ea 5d 1c 80 18 02 6f  .....z.$..]....o
+[Sun Apr 26 07:36:26 2026] 00000050: 59 dd 00 00 01 01 08 0a d0 9e 69 2f 98 70 31 c6  Y.........i/.p1.
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 79 f7 b3 92 f8 24 e7 17 48 9b 17 74  ....y....$..H..t
+[Sun Apr 26 07:36:26 2026] 00000070: 54 f2 83 c6 11 9f 2e 9f c7 0b 96 aa 66 02 ea b1  T...........f...
+[Sun Apr 26 07:36:26 2026] 00000080: ac 69 3d 39                                      .i=9
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff de 02 00 0e 00 93 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff de 02 00 0e 00 93 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d 1c 85 7a f1 48  ..V.......]..z.H
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 72 39 00 00 01 01 08 0a 98 70 31 cc  ....r9.......p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 2f                                      ..i/
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=0000000094b0a987
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff df 02 00 0e 00 93 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff df 02 00 0e 00 93 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d 1c 85 7a f1 48  ..V.......]..z.H
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 ad 38 00 00 01 01 08 0a 98 70 31 dd  .....8.......p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 2f 00 00 00 10 96 b7 28 ca 36 08 88 7a  ..i/......(.6..z
+[Sun Apr 26 07:36:26 2026] 00000060: f7 16 86 6b 44 a9 f5 a7 10 fa 43 5d a8 3b cc 0e  ...kD.....C].;..
+[Sun Apr 26 07:36:26 2026] 00000070: 31 0a d9 d0 9f 6b 1b f3                          1....k..
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=0000000094b0a987
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 0000000000f20e03 len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 6b 02 00 1a  ..{.........k...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 ee 40 00 40 06 b9 9c c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f1 48 fb ea 5d 40 80 18 02 6f  .....z.H..]@...o
+[Sun Apr 26 07:36:26 2026] 00000050: 9a 5a 00 00 01 01 08 0a d0 9e 69 47 98 70 31 dd  .Z........iG.p1.
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 9a 99 6d ca de 0a 28 bb 4e 36 7b f0  ......m...(.N6{.
+[Sun Apr 26 07:36:26 2026] 00000070: 54 a1 a6 66 8e cb 60 92 fc d3 b6 40 5c 45 69 16  T..f..`....@\Ei.
+[Sun Apr 26 07:36:26 2026] 00000080: 2c a6 74 19                                      ,.t.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e0 02 00 0e 00 94 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e0 02 00 0e 00 94 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d 40 85 7a f1 6c  ..V.......]@.z.l
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 71 c0 00 00 01 01 08 0a 98 70 31 e5  ....q........p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 47                                      ..iG
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000f76352b3
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e1 02 00 0e 00 94 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e1 02 00 0e 00 94 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d 40 85 7a f1 6c  ..V.......]@.z.l
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 af 83 00 00 01 01 08 0a 98 70 31 f3  .............p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 47 00 00 00 10 79 89 8a 04 df 71 65 d5  ..iG....y....qe.
+[Sun Apr 26 07:36:26 2026] 00000060: d4 e7 66 3c ee 9e 67 4b c1 7d 9a aa 13 db 43 9f  ..f<..gK.}....C.
+[Sun Apr 26 07:36:26 2026] 00000070: bc 0a d2 b6 6c de 38 cc                          ....l.8.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000f76352b3
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 00000000f96a446e len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 6c 02 00 1a  ..{.........l...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 ef 40 00 40 06 b9 9b c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f1 6c fb ea 5d 64 80 18 02 6f  .....z.l..]d...o
+[Sun Apr 26 07:36:26 2026] 00000050: f4 d9 00 00 01 01 08 0a d0 9e 69 5e 98 70 31 f3  ..........i^.p1.
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 0e 81 0f 6b 41 5b 87 e4 f6 4a d0 6b  .......kA[...J.k
+[Sun Apr 26 07:36:26 2026] 00000070: 89 a6 f2 db b4 19 f4 62 b9 3d ea c6 9d be e2 09  .......b.=......
+[Sun Apr 26 07:36:26 2026] 00000080: 49 41 42 02                                      IAB.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e2 02 00 0e 00 95 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e2 02 00 0e 00 95 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d 64 85 7a f1 90  ..V.......]d.z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 71 4a 00 00 01 01 08 0a 98 70 31 fc  ....qJ.......p1.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 5e                                      ..i^
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000916c7dc7
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e3 02 00 0e 00 95 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e3 02 00 0e 00 95 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d 64 85 7a f1 90  ..V.......]d.z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 29 d2 00 00 01 01 08 0a 98 70 32 0b  ....)........p2.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 5e 00 00 00 10 25 9e 04 8a 08 77 0e 18  ..i^....%....w..
+[Sun Apr 26 07:36:26 2026] 00000060: f3 61 bd 86 a5 04 de 44 71 dd c9 f3 a5 8d 46 7d  .a.....Dq.....F}
+[Sun Apr 26 07:36:26 2026] 00000070: 95 2d e2 3a 16 ce 1c 31                          .-.:...1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000916c7dc7
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 0000000000f20e03 len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 6d 02 00 1a  ..{.........m...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 f0 40 00 40 06 b9 9a c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f1 90 fb ea 5d 88 80 18 02 6f  .....z....]....o
+[Sun Apr 26 07:36:26 2026] 00000050: 3c e6 00 00 01 01 08 0a d0 9e 69 75 98 70 32 0b  <.........iu.p2.
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 1c 35 ff d0 02 1a 90 a5 c8 1c 84 d5  .....5..........
+[Sun Apr 26 07:36:26 2026] 00000070: 5d c2 14 ce f8 48 af 94 43 c9 86 bc 69 29 ed 7c  ]....H..C...i).|
+[Sun Apr 26 07:36:26 2026] 00000080: f1 cf 10 4d                                      ...M
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e4 02 00 0e 00 96 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e4 02 00 0e 00 96 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d 88 85 7a f1 b4  ..V.......]..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 70 ca 00 00 01 01 08 0a 98 70 32 1d  ....p........p2.
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 75                                      ..iu
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000477ff675
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e5 02 00 0e 00 96 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e5 02 00 0e 00 96 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d 88 85 7a f1 b4  ..V.......]..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 4c 4e 00 00 01 01 08 0a 98 70 32 21  ....LN.......p2!
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 75 00 00 00 10 3e da 1b 95 1a 56 f2 8e  ..iu....>....V..
+[Sun Apr 26 07:36:26 2026] 00000060: b6 54 37 c5 98 c9 b1 12 c4 f9 35 63 04 dc 63 fa  .T7.......5c..c.
+[Sun Apr 26 07:36:26 2026] 00000070: a4 1f c2 dc 0a 8a b0 37                          .......7
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000477ff675
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 00000000f96a446e len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 6e 02 00 1a  ..{.........n...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 f1 40 00 40 06 b9 99 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f1 b4 fb ea 5d ac 80 18 02 6f  .....z....]....o
+[Sun Apr 26 07:36:26 2026] 00000050: ed 38 00 00 01 01 08 0a d0 9e 69 8b 98 70 32 21  .8........i..p2!
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 20 90 80 cb 10 d4 7a 27 7e e9 95 2b  .... .....z'~..+
+[Sun Apr 26 07:36:26 2026] 00000070: c1 7a bc d9 75 0b 17 78 8a 61 7d 40 6f ef 50 fe  .z..u..x.a}@o.P.
+[Sun Apr 26 07:36:26 2026] 00000080: fb 03 79 d0                                      ..y.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e6 02 00 0e 00 97 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e6 02 00 0e 00 97 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d ac 85 7a f1 d8  ..V.......]..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 70 5c 00 00 01 01 08 0a 98 70 32 2d  ....p\.......p2-
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 8b                                      ..i.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=0000000097294b4e
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e7 02 00 0e 00 97 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e7 02 00 0e 00 97 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d ac 85 7a f1 d8  ..V.......]..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 d4 df 00 00 01 01 08 0a 98 70 32 35  .............p25
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 8b 00 00 00 10 00 da 7d 67 52 55 c6 e4  ..i.......}gRU..
+[Sun Apr 26 07:36:26 2026] 00000060: 6e d7 9b 01 ed cf 38 40 38 fb 16 48 00 8a 4c c1  n.....8@8..H..L.
+[Sun Apr 26 07:36:26 2026] 00000070: 66 d4 31 6d 18 a4 86 5f                          f.1m..._
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=0000000097294b4e
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 0000000000f20e03 len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 6f 02 00 1a  ..{.........o...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 f2 40 00 40 06 b9 98 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f1 d8 fb ea 5d d0 80 18 02 6f  .....z....]....o
+[Sun Apr 26 07:36:26 2026] 00000050: 81 93 00 00 01 01 08 0a d0 9e 69 9e 98 70 32 35  ..........i..p25
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 bd b8 b1 4b a8 f5 86 e5 a2 12 6d 94  .......K......m.
+[Sun Apr 26 07:36:26 2026] 00000070: dc d6 f1 97 56 e2 ff 9a 09 b7 28 2f 95 86 2d fb  ....V.....(/..-.
+[Sun Apr 26 07:36:26 2026] 00000080: cc 51 5e b2                                      .Q^.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e8 02 00 0e 00 98 00 00              T...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 54 00 ab ff e8 02 00 0e 00 98 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d d0 85 7a f1 fc  ..V.......]..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 10 08 00 6f f1 00 00 01 01 08 0a 98 70 32 3d  ....o........p2=
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 9e                                      ..i.
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000ef01eab1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e9 02 00 0e 00 98 00 00              x...........
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:26 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:26 2026] 00000000: 78 00 87 ff e9 02 00 0e 00 98 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:26 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:26 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d d0 85 7a f1 fc  ..V.......]..z..
+[Sun Apr 26 07:36:26 2026] 00000040: 80 18 08 00 70 0a 00 00 01 01 08 0a 98 70 32 4b  ....p........p2K
+[Sun Apr 26 07:36:26 2026] 00000050: d0 9e 69 9e 00 00 00 10 3d 81 45 39 fb 6f b3 96  ..i.....=.E9.o..
+[Sun Apr 26 07:36:26 2026] 00000060: aa d5 e5 66 7d da ee 78 fd 0a 7f c2 b3 e2 79 db  ...f}..x......y.
+[Sun Apr 26 07:36:26 2026] 00000070: 15 84 2a 97 41 bb a4 e9                          ..*.A...
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000ef01eab1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:26 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:26 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 00000000f96a446e len 106
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:26 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:26 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 70 02 00 1a  ..{.........p...
+[Sun Apr 26 07:36:26 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:26 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:26 2026] 00000030: 52 f3 40 00 40 06 b9 97 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:26 2026] 00000040: 00 16 fa 94 85 7a f1 fc fb ea 5d f4 80 18 02 6f  .....z....]....o
+[Sun Apr 26 07:36:26 2026] 00000050: 6d ac 00 00 01 01 08 0a d0 9e 69 b5 98 70 32 4b  m.........i..p2K
+[Sun Apr 26 07:36:26 2026] 00000060: 00 00 00 10 de ee 4d fe 5e e0 c9 0e 17 df a1 0b  ......M.^.......
+[Sun Apr 26 07:36:26 2026] 00000070: 9d 09 2e a9 14 e3 f5 28 51 1e 7e f3 ec cb 4c c0  .......(Q.~...L.
+[Sun Apr 26 07:36:26 2026] 00000080: 01 a8 18 85                                      ....
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:26 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 54 00 ab ff ea 02 00 0e 00 99 00 00              T...........
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:27 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:27 2026] 00000000: 54 00 ab ff ea 02 00 0e 00 99 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:27 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:27 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:27 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d f4 85 7a f2 20  ..V.......]..z. 
+[Sun Apr 26 07:36:27 2026] 00000040: 80 10 08 00 6f 75 00 00 01 01 08 0a 98 70 32 5a  ....ou.......p2Z
+[Sun Apr 26 07:36:27 2026] 00000050: d0 9e 69 b5                                      ..i.
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000074335bd
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 78 00 87 ff eb 02 00 0e 00 99 00 00              x...........
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 56
+[Sun Apr 26 07:36:27 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:27 2026] 00000000: 78 00 87 ff eb 02 00 0e 00 99 00 00 00 00 20 05  x............. .
+[Sun Apr 26 07:36:27 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:27 2026] 00000020: 45 ba 00 58 00 00 40 00 40 06 0b e3 c0 a8 56 18  E..X..@.@.....V.
+[Sun Apr 26 07:36:27 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5d f4 85 7a f2 20  ..V.......]..z. 
+[Sun Apr 26 07:36:27 2026] 00000040: 80 18 08 00 40 d1 00 00 01 01 08 0a 98 70 32 60  ....@........p2`
+[Sun Apr 26 07:36:27 2026] 00000050: d0 9e 69 b5 00 00 00 10 5e 96 6f b8 a8 df ef 85  ..i.....^.o.....
+[Sun Apr 26 07:36:27 2026] 00000060: ab ca 0e 39 02 39 cd 26 a0 e2 a5 08 3b b2 24 ff  ...9.9.&....;.$.
+[Sun Apr 26 07:36:27 2026] 00000070: 37 0f b0 5c 97 e7 18 5a                          7..\...Z
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000074335bd
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 102, sig 0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 0000000000f20e03 len 106
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:27 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:27 2026] 00000000: 84 00 7b ff 80 00 00 01 00 00 00 00 71 02 00 1a  ..{.........q...
+[Sun Apr 26 07:36:27 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:27 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 12 00 58  X.G[...fY...E..X
+[Sun Apr 26 07:36:27 2026] 00000030: 52 f4 40 00 40 06 b9 96 c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:27 2026] 00000040: 00 16 fa 94 85 7a f2 20 fb ea 5e 18 80 18 02 6f  .....z. ..^....o
+[Sun Apr 26 07:36:27 2026] 00000050: 5e 3d 00 00 01 01 08 0a d0 9e 69 c9 98 70 32 60  ^=........i..p2`
+[Sun Apr 26 07:36:27 2026] 00000060: 00 00 00 10 68 27 26 bb 5f 1e 15 40 03 54 c2 11  ....h'&._..@.T..
+[Sun Apr 26 07:36:27 2026] 00000070: 58 95 93 61 50 99 c8 42 f5 d8 a4 57 f0 bf 61 07  X..aP..B...W..a.
+[Sun Apr 26 07:36:27 2026] 00000080: fb 1a 61 c2                                      ..a.
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 54 00 ab ff ec 02 00 0e 00 9a 00 00              T...........
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 24
+[Sun Apr 26 07:36:27 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:27 2026] 00000000: 54 00 ab ff ec 02 00 0e 00 9a 00 00 00 00 20 05  T............. .
+[Sun Apr 26 07:36:27 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:27 2026] 00000020: 45 b8 00 34 00 00 40 00 40 06 0c 09 c0 a8 56 18  E..4..@.@.....V.
+[Sun Apr 26 07:36:27 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5e 18 85 7a f2 44  ..V.......^..z.D
+[Sun Apr 26 07:36:27 2026] 00000040: 80 10 08 00 6f 03 00 00 01 01 08 0a 98 70 32 70  ....o........p2p
+[Sun Apr 26 07:36:27 2026] 00000050: d0 9e 69 c9                                      ..i.
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000005850498c
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 66, sig 0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 48 00 b7 ff ed 02 00 0e 00 9a 00 00              H...........
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 8
+[Sun Apr 26 07:36:27 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:27 2026] 00000000: 48 00 b7 ff ed 02 00 0e 00 9a 00 00 00 00 20 00  H............. .
+[Sun Apr 26 07:36:27 2026] 00000010: 00 00 88 a2 9e 66 59 10 62 72 58 ed 47 5b 08 00  .....fY.brX.G[..
+[Sun Apr 26 07:36:27 2026] 00000020: 45 00 00 28 e3 34 00 00 40 06 69 98 c0 a8 56 18  E..(.4..@.i...V.
+[Sun Apr 26 07:36:27 2026] 00000030: c0 a8 56 9a fa 94 00 16 fb ea 5e 17 85 7a f2 44  ..V.......^..z.D
+[Sun Apr 26 07:36:27 2026] 00000040: 50 10 08 00 ad 64 00 00                          P....d..
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=000000005850498c
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 54, sig 0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_netdev_start_xmit Enter, bsscfgidx=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpush Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_txdata Enter: pkt: data 00000000f96a446e len 70
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_txdata deferring pktq len 0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_sendfromq Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_txpkt Enter
+[Sun Apr 26 07:36:27 2026] brcmutil: Tx Frame:
+[Sun Apr 26 07:36:27 2026] 00000000: 60 00 9f ff 5c 00 00 01 00 00 00 00 72 02 00 1a  `...\.......r...
+[Sun Apr 26 07:36:27 2026] 00000010: 00 00 00 00 00 00 00 00 00 00 20 06 00 00 62 72  .......... ...br
+[Sun Apr 26 07:36:27 2026] 00000020: 58 ed 47 5b 88 a2 9e 66 59 10 08 00 45 10 00 34  X.G[...fY...E..4
+[Sun Apr 26 07:36:27 2026] 00000030: 52 f5 40 00 40 06 b9 bb c0 a8 56 9a c0 a8 56 18  R.@.@.....V...V.
+[Sun Apr 26 07:36:27 2026] 00000040: 00 16 fa 94 85 7a f2 44 fb ea 5e 18 80 10 02 6f  .....z.D..^....o
+[Sun Apr 26 07:36:27 2026] 00000050: 73 f2 00 00 01 01 08 0a d0 9e 6a 6b 98 70 32 70  s.........jk.p2p
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_send_pkt addr = 0x18000000, size = 1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 0e 02 f1 fd ee 02 00 0e 00 9b 00 00              ............
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 464
+[Sun Apr 26 07:36:27 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:27 2026] 00000000: 0e 02 f1 fd ee 02 00 0e 00 9b 00 00 00 00 20 00  .............. .
+[Sun Apr 26 07:36:27 2026] 00000010: 00 00 01 00 5e 00 00 fb c0 95 6d 6d 01 51 08 00  ....^.....mm.Q..
+[Sun Apr 26 07:36:27 2026] 00000020: 45 00 01 ee a4 6e 00 00 ff 11 1c f6 c0 a8 56 f6  E....n........V.
+[Sun Apr 26 07:36:27 2026] 00000030: e0 00 00 fb 14 e9 14 e9 01 da 5b 4c 00 00 84 00  ..........[L....
+[Sun Apr 26 07:36:27 2026] 00000040: 00 00 00 01 00 00 00 01 07 4c 69 62 72 61 72 79  .........Library
+[Sun Apr 26 07:36:27 2026] 00000050: 08 5f 61 69 72 70 6c 61 79 04 5f 74 63 70 05 6c  ._airplay._tcp.l
+[Sun Apr 26 07:36:27 2026] 00000060: 6f 63 61 6c 00 00 10 80 01 00 00 11 94 01 8a 05  ocal............
+[Sun Apr 26 07:36:27 2026] 00000070: 61 63 6c 3d 30 18 62 74 61 64 64 72 3d 37 37 3a  acl=0.btaddr=77:
+[Sun Apr 26 07:36:27 2026] 00000080: 32 39 3a 31 46 3a 30 34 3a 38 32 3a 30 43 1a 64  29:1F:04:82:0C.d
+[Sun Apr 26 07:36:27 2026] 00000090: 65 76 69 63 65 69 64 3d 39 41 3a 31 31 3a 39 39  eviceid=9A:11:99
+[Sun Apr 26 07:36:27 2026] 000000a0: 3a 39 44 3a 39 35 3a 34 41 14 66 65 78 3d 31 64  :9D:95:4A.fex=1d
+[Sun Apr 26 07:36:27 2026] 000000b0: 39 2f 53 74 35 2f 46 7a 77 34 6f 59 35 38 1e 66  9/St5/Fzw4oY58.f
+[Sun Apr 26 07:36:27 2026] 000000c0: 65 61 74 75 72 65 73 3d 30 78 34 41 37 46 44 46  eatures=0x4A7FDF
+[Sun Apr 26 07:36:27 2026] 000000d0: 44 35 2c 30 78 33 43 31 37 37 46 44 45 0e 66 6c  D5,0x3C177FDE.fl
+[Sun Apr 26 07:36:27 2026] 000000e0: 61 67 73 3d 30 78 31 31 38 36 34 34 28 67 69 64  ags=0x118644(gid
+[Sun Apr 26 07:36:27 2026] 000000f0: 3d 41 46 37 46 39 33 45 38 2d 43 34 44 33 2d 34  =AF7F93E8-C4D3-4
+[Sun Apr 26 07:36:27 2026] 00000100: 38 45 39 2d 38 33 45 32 2d 34 32 32 36 41 30 38  8E9-83E2-4226A08
+[Sun Apr 26 07:36:27 2026] 00000110: 44 39 46 30 34 05 69 67 6c 3d 31 06 67 63 67 6c  D9F04.igl=1.gcgl
+[Sun Apr 26 07:36:27 2026] 00000120: 3d 31 11 6d 6f 64 65 6c 3d 41 70 70 6c 65 54 56  =1.model=AppleTV
+[Sun Apr 26 07:36:27 2026] 00000130: 31 34 2c 31 0d 70 72 6f 74 6f 76 65 72 73 3d 31  14,1.protovers=1
+[Sun Apr 26 07:36:27 2026] 00000140: 2e 31 27 70 69 3d 37 64 36 65 39 61 61 65 2d 61  .1'pi=7d6e9aae-a
+[Sun Apr 26 07:36:27 2026] 00000150: 63 61 66 2d 34 35 38 63 2d 39 32 37 35 2d 65 65  caf-458c-9275-ee
+[Sun Apr 26 07:36:27 2026] 00000160: 32 33 33 36 38 36 38 62 31 61 28 70 73 69 3d 39  2336868b1a(psi=9
+[Sun Apr 26 07:36:27 2026] 00000170: 42 31 31 39 39 39 44 2d 39 35 34 41 2d 34 30 41  B11999D-954A-40A
+[Sun Apr 26 07:36:27 2026] 00000180: 41 2d 41 36 42 33 2d 44 45 38 38 42 30 44 39 30  A-A6B3-DE88B0D90
+[Sun Apr 26 07:36:27 2026] 00000190: 42 39 33 43 70 6b 3d 36 39 39 62 37 66 65 32 62  B93Cpk=699b7fe2b
+[Sun Apr 26 07:36:27 2026] 000001a0: 39 35 37 64 31 39 32 35 65 65 31 34 65 39 33 33  957d1925ee14e933
+[Sun Apr 26 07:36:27 2026] 000001b0: 30 31 37 61 64 37 64 38 66 39 37 37 63 65 61 64  017ad7d8f977cead
+[Sun Apr 26 07:36:27 2026] 000001c0: 39 64 64 30 33 61 31 32 65 31 39 66 63 37 34 37  9dd03a12e19fc747
+[Sun Apr 26 07:36:27 2026] 000001d0: 32 38 31 34 66 36 33 10 73 72 63 76 65 72 73 3d  2814f63.srcvers=
+[Sun Apr 26 07:36:27 2026] 000001e0: 39 34 30 2e 32 33 2e 31 0b 6f 73 76 65 72 73 3d  940.23.1.osvers=
+[Sun Apr 26 07:36:27 2026] 000001f0: 32 36 2e 34 04 76 76 3d 31 c0 0c 00 2f 80 01 00  26.4.vv=1.../...
+[Sun Apr 26 07:36:27 2026] 00000200: 00 11 94 00 09 c0 0c 00 05 00 00 80 00 40        .............@
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000626c7bd9
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 508, sig 0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_netif_rx rx proto=0x800
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ib_irqhandler IB intr triggered
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_isr Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_dpc Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 22 02 dd fd ef 02 00 0e 00 9b 00 00              "...........
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 488
+[Sun Apr 26 07:36:27 2026] brcmutil: Rx Data:
+[Sun Apr 26 07:36:27 2026] 00000000: 22 02 dd fd ef 02 00 0e 00 9b 00 00 00 00 20 00  "............. .
+[Sun Apr 26 07:36:27 2026] 00000010: 00 00 33 33 00 00 00 fb c0 95 6d 6d 01 51 86 dd  ..33......mm.Q..
+[Sun Apr 26 07:36:27 2026] 00000020: 60 08 07 00 01 da 11 ff fe 80 00 00 00 00 00 00  `...............
+[Sun Apr 26 07:36:27 2026] 00000030: 00 c5 7f b2 2f 3f f2 7a ff 02 00 00 00 00 00 00  ..../?.z........
+[Sun Apr 26 07:36:27 2026] 00000040: 00 00 00 00 00 00 00 fb 14 e9 14 e9 01 da b3 36  ...............6
+[Sun Apr 26 07:36:27 2026] 00000050: 00 00 84 00 00 00 00 01 00 00 00 01 07 4c 69 62  .............Lib
+[Sun Apr 26 07:36:27 2026] 00000060: 72 61 72 79 08 5f 61 69 72 70 6c 61 79 04 5f 74  rary._airplay._t
+[Sun Apr 26 07:36:27 2026] 00000070: 63 70 05 6c 6f 63 61 6c 00 00 10 80 01 00 00 11  cp.local........
+[Sun Apr 26 07:36:27 2026] 00000080: 94 01 8a 05 61 63 6c 3d 30 18 62 74 61 64 64 72  ....acl=0.btaddr
+[Sun Apr 26 07:36:27 2026] 00000090: 3d 37 37 3a 32 39 3a 31 46 3a 30 34 3a 38 32 3a  =77:29:1F:04:82:
+[Sun Apr 26 07:36:27 2026] 000000a0: 30 43 1a 64 65 76 69 63 65 69 64 3d 39 41 3a 31  0C.deviceid=9A:1
+[Sun Apr 26 07:36:27 2026] 000000b0: 31 3a 39 39 3a 39 44 3a 39 35 3a 34 41 14 66 65  1:99:9D:95:4A.fe
+[Sun Apr 26 07:36:27 2026] 000000c0: 78 3d 31 64 39 2f 53 74 35 2f 46 7a 77 34 6f 59  x=1d9/St5/Fzw4oY
+[Sun Apr 26 07:36:27 2026] 000000d0: 35 38 1e 66 65 61 74 75 72 65 73 3d 30 78 34 41  58.features=0x4A
+[Sun Apr 26 07:36:27 2026] 000000e0: 37 46 44 46 44 35 2c 30 78 33 43 31 37 37 46 44  7FDFD5,0x3C177FD
+[Sun Apr 26 07:36:27 2026] 000000f0: 45 0e 66 6c 61 67 73 3d 30 78 31 31 38 36 34 34  E.flags=0x118644
+[Sun Apr 26 07:36:27 2026] 00000100: 28 67 69 64 3d 41 46 37 46 39 33 45 38 2d 43 34  (gid=AF7F93E8-C4
+[Sun Apr 26 07:36:27 2026] 00000110: 44 33 2d 34 38 45 39 2d 38 33 45 32 2d 34 32 32  D3-48E9-83E2-422
+[Sun Apr 26 07:36:27 2026] 00000120: 36 41 30 38 44 39 46 30 34 05 69 67 6c 3d 31 06  6A08D9F04.igl=1.
+[Sun Apr 26 07:36:27 2026] 00000130: 67 63 67 6c 3d 31 11 6d 6f 64 65 6c 3d 41 70 70  gcgl=1.model=App
+[Sun Apr 26 07:36:27 2026] 00000140: 6c 65 54 56 31 34 2c 31 0d 70 72 6f 74 6f 76 65  leTV14,1.protove
+[Sun Apr 26 07:36:27 2026] 00000150: 72 73 3d 31 2e 31 27 70 69 3d 37 64 36 65 39 61  rs=1.1'pi=7d6e9a
+[Sun Apr 26 07:36:27 2026] 00000160: 61 65 2d 61 63 61 66 2d 34 35 38 63 2d 39 32 37  ae-acaf-458c-927
+[Sun Apr 26 07:36:27 2026] 00000170: 35 2d 65 65 32 33 33 36 38 36 38 62 31 61 28 70  5-ee2336868b1a(p
+[Sun Apr 26 07:36:27 2026] 00000180: 73 69 3d 39 42 31 31 39 39 39 44 2d 39 35 34 41  si=9B11999D-954A
+[Sun Apr 26 07:36:27 2026] 00000190: 2d 34 30 41 41 2d 41 36 42 33 2d 44 45 38 38 42  -40AA-A6B3-DE88B
+[Sun Apr 26 07:36:27 2026] 000001a0: 30 44 39 30 42 39 33 43 70 6b 3d 36 39 39 62 37  0D90B93Cpk=699b7
+[Sun Apr 26 07:36:27 2026] 000001b0: 66 65 32 62 39 35 37 64 31 39 32 35 65 65 31 34  fe2b957d1925ee14
+[Sun Apr 26 07:36:27 2026] 000001c0: 65 39 33 33 30 31 37 61 64 37 64 38 66 39 37 37  e933017ad7d8f977
+[Sun Apr 26 07:36:27 2026] 000001d0: 63 65 61 64 39 64 64 30 33 61 31 32 65 31 39 66  cead9dd03a12e19f
+[Sun Apr 26 07:36:27 2026] 000001e0: 63 37 34 37 32 38 31 34 66 36 33 10 73 72 63 76  c7472814f63.srcv
+[Sun Apr 26 07:36:27 2026] 000001f0: 65 72 73 3d 39 34 30 2e 32 33 2e 31 0b 6f 73 76  ers=940.23.1.osv
+[Sun Apr 26 07:36:27 2026] 00000200: 65 72 73 3d 32 36 2e 34 04 76 76 3d 31 c0 0c 00  ers=26.4.vv=1...
+[Sun Apr 26 07:36:27 2026] 00000210: 2f 80 01 00 00 11 94 00 09 c0 0c 00 05 00 00 80  /...............
+[Sun Apr 26 07:36:27 2026] 00000220: 00 40                                            .@
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_rx_frame Enter: mmc1:0001:1: rxp=00000000626c7bd9
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_proto_bcdc_hdrpull Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_fws_hdrpull enter: ifidx 0, skblen 528, sig 0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_netif_rx rx proto=0x86DD
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_recv_pkt addr = 0x18000000, size = 64
+[Sun Apr 26 07:36:27 2026] brcmutil: RxHdr:
+[Sun Apr 26 07:36:27 2026] 00000000: 00 00 00 00 00 00 00 00 00 00 00 00              ............
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_readframes processed 1 frames
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_clkctl Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdiod_ramrw read 24 bytes at offset 0x00005ec4 in window 0x00258000
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog idle
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request SLEEP currently WAKE
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep new state SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Exit: err=0
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_watchdog Enter
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_bus_sleep Enter: request WAKE currently SLEEP
+[Sun Apr 26 07:36:27 2026] brcmfmac: brcmf_sdio_kso_control Enter: on=1

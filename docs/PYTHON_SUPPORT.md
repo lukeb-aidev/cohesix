@@ -299,7 +299,7 @@ python3 tools/cohesix-py/examples/lease_run.py --mount-root /tmp/coh-mount
 
 Notes:
 - Live mounts require FUSE (a FUSE runtime installed and `coh` built with FUSE enabled; default on Linux, macOS requires `--features fuse` plus MacFUSE).
-- The mount root is constrained by the manifest allowlist in `out/coh_policy.toml`.
+- The mount root is constrained by the manifest allowlist in `configs/generated/coh_policy.toml`.
 - The mount process stays in the foreground; use a second terminal or run it in the background.
 
 ## Bounds and defaults

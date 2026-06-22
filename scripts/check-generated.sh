@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Guard against drift in coh-rtc generated artefacts.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+generated_root="$repo_root/configs/generated"
 manifest_path="$repo_root/configs/root_task.toml"
 
 if [[ ! -f "$manifest_path" ]]; then
@@ -40,6 +42,9 @@ cohsh_ticket_policy_doc="$work_dir/cohsh_ticket_policy.md"
 coh_policy="$work_dir/coh_policy.toml"
 coh_policy_rust="$work_dir/coh_policy.rs"
 coh_policy_doc="$work_dir/coh_policy.md"
+swarmui_defaults="$work_dir/swarmui_defaults.toml"
+swarmui_defaults_rust="$work_dir/swarmui_defaults.rs"
+swarmui_defaults_doc="$work_dir/swarmui_defaults.md"
 
 cargo run -p coh-rtc -- \
   "$manifest_path" \
@@ -65,6 +70,9 @@ cargo run -p coh-rtc -- \
   --coh-policy "$coh_policy" \
   --coh-policy-rust "$coh_policy_rust" \
   --coh-policy-doc "$coh_policy_doc" \
+  --swarmui-defaults "$swarmui_defaults" \
+  --swarmui-defaults-rust "$swarmui_defaults_rust" \
+  --swarmui-defaults-doc "$swarmui_defaults_doc" \
   --cohesix-py-defaults "$cohesix_py_defaults" \
   --cohesix-py-doc "$cohesix_py_doc" \
   --coh-doctor-doc "$coh_doctor_doc"
@@ -80,10 +88,10 @@ compare_file() {
 
 compare_file "$repo_root/apps/root-task/src/generated/mod.rs" "$generated_dir/mod.rs"
 compare_file "$repo_root/apps/root-task/src/generated/bootstrap.rs" "$generated_dir/bootstrap.rs"
-compare_file "$repo_root/out/manifests/root_task_resolved.json" "$manifest_out"
-compare_file "$repo_root/out/manifests/root_task_resolved.json.sha256" "${manifest_out}.sha256"
-compare_file "$repo_root/out/cas_manifest_template.json" "$cas_template"
-compare_file "$repo_root/out/cas_manifest_template.json.sha256" "${cas_template}.sha256"
+compare_file "$generated_root/root_task_resolved.json" "$manifest_out"
+compare_file "$generated_root/root_task_resolved.json.sha256" "${manifest_out}.sha256"
+compare_file "$generated_root/cas_manifest_template.json" "$cas_template"
+compare_file "$generated_root/cas_manifest_template.json.sha256" "${cas_template}.sha256"
 compare_file "$repo_root/scripts/cohsh/boot_v0.coh" "$cli_script"
 compare_file "$repo_root/docs/snippets/root_task_manifest.md" "$doc_snippet"
 compare_file "$repo_root/docs/snippets/gpu_breadcrumbs.md" "$gpu_breadcrumbs"
@@ -93,18 +101,22 @@ compare_file "$repo_root/docs/snippets/ticket_quotas.md" "$ticket_quotas"
 compare_file "$repo_root/docs/snippets/trace_policy.md" "$trace_policy"
 compare_file "$repo_root/docs/snippets/cas_interfaces.md" "$cas_interfaces"
 compare_file "$repo_root/docs/snippets/cas_security.md" "$cas_security"
-compare_file "$repo_root/out/cohsh_policy.toml" "$cohsh_policy"
-compare_file "$repo_root/out/cohsh_policy.toml.sha256" "${cohsh_policy}.sha256"
+compare_file "$generated_root/cohsh_policy.toml" "$cohsh_policy"
+compare_file "$generated_root/cohsh_policy.toml.sha256" "${cohsh_policy}.sha256"
 compare_file "$repo_root/apps/cohsh/src/generated/policy.rs" "$cohsh_policy_rust"
 compare_file "$repo_root/docs/snippets/cohsh_policy.md" "$cohsh_policy_doc"
 compare_file "$repo_root/apps/cohsh/src/generated/client.rs" "$cohsh_client_rust"
 compare_file "$repo_root/docs/snippets/cohsh_client.md" "$cohsh_client_doc"
 compare_file "$repo_root/docs/snippets/cohsh_grammar.md" "$cohsh_grammar_doc"
 compare_file "$repo_root/docs/snippets/cohsh_ticket_policy.md" "$cohsh_ticket_policy_doc"
-compare_file "$repo_root/out/coh_policy.toml" "$coh_policy"
-compare_file "$repo_root/out/coh_policy.toml.sha256" "${coh_policy}.sha256"
+compare_file "$generated_root/coh_policy.toml" "$coh_policy"
+compare_file "$generated_root/coh_policy.toml.sha256" "${coh_policy}.sha256"
 compare_file "$repo_root/apps/coh/src/generated/policy.rs" "$coh_policy_rust"
 compare_file "$repo_root/docs/snippets/coh_policy.md" "$coh_policy_doc"
+compare_file "$generated_root/swarmui_defaults.toml" "$swarmui_defaults"
+compare_file "$generated_root/swarmui_defaults.toml.sha256" "${swarmui_defaults}.sha256"
+compare_file "$repo_root/apps/swarmui/src/generated.rs" "$swarmui_defaults_rust"
+compare_file "$repo_root/docs/snippets/swarmui_defaults.md" "$swarmui_defaults_doc"
 compare_file "$repo_root/tools/cohesix-py/cohesix/generated.py" "$cohesix_py_defaults"
 compare_file "$repo_root/docs/snippets/cohesix_py_defaults.md" "$cohesix_py_doc"
 compare_file "$repo_root/docs/snippets/coh_doctor_checks.md" "$coh_doctor_doc"

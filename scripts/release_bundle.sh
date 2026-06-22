@@ -89,6 +89,7 @@ done
 
 OUT_DIR="${ROOT_DIR}/out/cohesix"
 STAGING_DIR="${OUT_DIR}/staging"
+GENERATED_CONFIG_DIR="${ROOT_DIR}/configs/generated"
 DEFAULT_HOST_TOOLS_DIR="${OUT_DIR}/host-tools"
 LINUX_HOST_TOOLS_DIR="${LINUX_HOST_TOOLS_DIR:-${OUT_DIR}/host-tools-linux}"
 MACOS_BUNDLE_NAME="${RELEASE_NAME}-MacOS"
@@ -229,6 +230,7 @@ bundle_release() {
   mkdir -p \
     "${bundle_dir}/bin" \
     "${bundle_dir}/configs" \
+    "${bundle_dir}/configs/generated" \
     "${bundle_dir}/image" \
     "${bundle_dir}/out" \
     "${bundle_dir}/python" \
@@ -247,15 +249,11 @@ bundle_release() {
   cp -p "${OUT_DIR}/cohesix-system.cpio" "${bundle_dir}/image/cohesix-system.cpio"
   cp -p "${STAGING_DIR}/cohesix/manifest.json" "${bundle_dir}/image/manifest.json"
   cp -p "${ROOT_DIR}/configs/root_task.toml" "${bundle_dir}/configs/root_task.toml"
+  cp -p "${GENERATED_CONFIG_DIR}/"* "${bundle_dir}/configs/generated/"
   cp -p "${ROOT_DIR}/resources/fixtures/cas_signing_key.hex" "${bundle_dir}/resources/fixtures/cas_signing_key.hex"
   if [[ -d "${ROOT_DIR}/resources/systemd" ]]; then
     cp -p "${ROOT_DIR}/resources/systemd/"* "${bundle_dir}/resources/systemd/"
   fi
-  cp -p "${ROOT_DIR}/out/cas_manifest_template.json" "${bundle_dir}/out/cas_manifest_template.json"
-  cp -p "${ROOT_DIR}/out/cohsh_policy.toml" "${bundle_dir}/out/cohsh_policy.toml"
-  cp -p "${ROOT_DIR}/out/cohsh_policy.toml.sha256" "${bundle_dir}/out/cohsh_policy.toml.sha256"
-  cp -p "${ROOT_DIR}/out/coh_policy.toml" "${bundle_dir}/out/coh_policy.toml"
-  cp -p "${ROOT_DIR}/out/coh_policy.toml.sha256" "${bundle_dir}/out/coh_policy.toml.sha256"
 
   if [[ -x "${ROOT_DIR}/scripts/lib/detect_gic_version.py" ]]; then
     GIC_CFG="${SEL4_BUILD_DIR}/kernel/gen_config/kernel/gen_config.h"
@@ -643,8 +641,8 @@ require_file "${ROOT_DIR}/LICENSE.txt"
 require_file "${ROOT_DIR}/releases/RELEASE_NOTES-${RELEASE_VERSION}.md"
 require_file "${ROOT_DIR}/configs/root_task.toml"
 require_file "${ROOT_DIR}/resources/fixtures/cas_signing_key.hex"
-require_file "${ROOT_DIR}/out/coh_policy.toml"
-require_file "${ROOT_DIR}/out/coh_policy.toml.sha256"
+require_file "${GENERATED_CONFIG_DIR}/coh_policy.toml"
+require_file "${GENERATED_CONFIG_DIR}/coh_policy.toml.sha256"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.hive.cbor"
 require_file "${ROOT_DIR}/scripts/setup_environment.sh"
