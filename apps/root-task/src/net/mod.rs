@@ -6,7 +6,10 @@
 //! Networking subsystem abstractions for host and seL4 targets.
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-use smoltcp::{phy::Device, wire::EthernetAddress};
+use smoltcp::{
+    phy::Device,
+    wire::{EthernetAddress, Ipv4Address},
+};
 
 #[cfg(feature = "net")]
 pub mod diag;
@@ -792,6 +795,9 @@ pub trait NetDevice: Device {
 
     /// Return the Ethernet MAC address for the device.
     fn mac(&self) -> EthernetAddress;
+
+    /// Notify the driver client that the stack has a configured IPv4 address.
+    fn set_assigned_ipv4(&mut self, _ip: Ipv4Address) {}
 
     /// Total TX drops recorded by the driver.
     fn tx_drop_count(&self) -> u32;

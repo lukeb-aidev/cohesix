@@ -453,6 +453,22 @@ static LINKED_LOCAL_SEAT_PCIE_ENGINE_DEFERRED_LOGGED: AtomicBool = AtomicBool::n
     target_arch = "aarch64",
     target_os = "none"
 ))]
+static LINKED_LOCAL_SEAT_PCIE_ENGINE_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+static LINKED_LOCAL_SEAT_PCIE_OWNER_READY_LOGGED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 static LINKED_LOCAL_SEAT_USB_REPLAY_BEGIN_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(
@@ -887,9 +903,8 @@ fn routine_hdmi_ready_log_visible(
     if chunk_redraw {
         if let Some(trace) = display_trace {
             if trace.redraw_no_reply_streak != 0
-                || trace.redraw_bytes != 0
-                || trace.pending_redraw
                 || trace.stale_after_retry_exhaustion
+                || trace.backpressure_bytes != 0
             {
                 return true;
             }
@@ -4511,24 +4526,28 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 None,
             );
         }
-        crate::hal::driver_task::emit_driver_task_resource_init_status(
-            pcie_contract,
-            crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
-            "usb-prereq-pcie-engine-init",
-            "ready-adopted",
-            None,
-        );
+        if !LINKED_LOCAL_SEAT_PCIE_ENGINE_READY_LOGGED.swap(true, Ordering::AcqRel) {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                pcie_contract,
+                crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                "usb-prereq-pcie-engine-init",
+                "ready-adopted",
+                None,
+            );
+        }
         let pcie_owner = crate::hal::driver_task::register_driver_task_runtime_owner_state(
             crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
         );
         if pcie_owner {
-            crate::hal::driver_task::emit_driver_task_resource_init_status(
-                pcie_contract,
-                crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
-                "pcie-owner-state",
-                "ready",
-                None,
-            );
+            if !LINKED_LOCAL_SEAT_PCIE_OWNER_READY_LOGGED.swap(true, Ordering::AcqRel) {
+                crate::hal::driver_task::emit_driver_task_resource_init_status(
+                    pcie_contract,
+                    crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+                    "pcie-owner-state",
+                    "ready",
+                    None,
+                );
+            }
         } else {
             if !LINKED_LOCAL_SEAT_PCIE_ENGINE_DEFERRED_LOGGED.swap(true, Ordering::AcqRel) {
                 crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -6500,6 +6519,33 @@ mod tests {
             "keyboard-scrollback",
             true,
             Some(retry_trace),
+            true,
+        ));
+    }
+
+    #[test]
+    fn routine_hdmi_ready_log_samples_clean_active_redraw_chunks() {
+        let _guard = HDMI_READY_LOG_TEST_LOCK
+            .lock()
+            .expect("HDMI log test lock must not be poisoned");
+        let runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 160,
+            buffer_lines: 128,
+        });
+        let mut trace = runtime.display_trace();
+        trace.redraw_bytes = LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES;
+        trace.pending_redraw = true;
+        LINKED_LOCAL_SEAT_DISPLAY_READY_LOG_COUNT.store(
+            LINKED_LOCAL_SEAT_HDMI_READY_VERBOSE_LIMIT,
+            Ordering::Release,
+        );
+
+        assert!(!routine_hdmi_ready_log_visible(
+            "keyboard-scrollback",
+            true,
+            Some(trace),
             true,
         ));
     }

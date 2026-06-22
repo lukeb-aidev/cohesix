@@ -261,8 +261,8 @@ verify_boot_cmd_handoff() {
     grep -q 'setexpr.l coh_fastboot_rsts \*${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_mask}' "$path" || fail "boot.cmd does not mask Cohesix fast-boot RSTS state"
     grep -q 'mw.l ${coh_fastboot_rsts_addr} ${coh_fastboot_rsts_clear} 1' "$path" || fail "boot.cmd does not clear the Cohesix fast-boot marker"
     grep -q 'run coh_maybe_fastboot' "$path" || fail "boot.cmd does not check the Cohesix fast-boot path before the wizard"
-    grep -q 'unattended boot: using saved or manifest settings' "$path" || fail "boot.cmd does not default to unattended saved/manifest boot"
-    grep -q 'test "${coh_force_menu}" = "1"' "$path" || fail "boot.cmd does not preserve an explicit menu escape"
+    grep -q '^run coh_prompt_root$' "$path" || fail "boot.cmd does not enter the interactive Cohesix menu on cold boot"
+    ! grep -q 'unattended boot: using saved or manifest settings' "$path" || fail "boot.cmd must not bypass the menu without an authenticated fast-boot marker"
     grep -q 'test "${coh_menu_input}" = "usb"' "$path" || fail "boot.cmd is missing guarded USB menu-input setup"
     grep -q 'run coh_quiesce_usb' "$path" || fail "boot.cmd is missing USB quiesce step"
     grep -q 'run coh_clear_xhci_handoff_live' "$path" || fail "boot.cmd is missing xHCI stale-token clearing before usb stop"
@@ -985,7 +985,7 @@ setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; se
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
 setenv coh_detect_fastboot 'setenv coh_fastboot 0; setexpr.l coh_fastboot_rsts *${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_mask}; if itest.l ${coh_fastboot_rsts} == ${coh_fastboot_rsts_magic}; then setenv coh_fastboot 1; fi'
 setenv coh_clear_fastboot_marker 'setexpr.l coh_fastboot_rsts_clear *${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_clear_mask}; setexpr.l coh_fastboot_rsts_clear ${coh_fastboot_rsts_clear} "|" ${coh_pm_password}; mw.l ${coh_fastboot_rsts_addr} ${coh_fastboot_rsts_clear} 1'
-setenv coh_maybe_fastboot 'run coh_detect_fastboot; if test "${coh_fastboot}" = "1"; then echo "[cohesix] authenticated reboot fast boot: using saved or manifest settings"; run coh_clear_fastboot_marker; run coh_boot_sequence; setenv coh_force_menu 1; fi'
+setenv coh_maybe_fastboot 'run coh_detect_fastboot; if test "${coh_fastboot}" = "1"; then echo "[cohesix] authenticated reboot fast boot: using saved or manifest settings"; run coh_clear_fastboot_marker; run coh_boot_sequence; fi'
 setenv coh_bootstrap_usb_session 'if test "${coh_menu_input}" = "usb"; then if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi; else setenv coh_usb_input_ready 0; fi'
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
 setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_mmio; setenv coh_xhci_pci_cmd; setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
@@ -1010,7 +1010,7 @@ setenv coh_confirm_prompt 'run coh_prepare_input; cls; echo "[cohesix] Review ne
 setenv coh_prompt_root 'run coh_show_logo_splash; run coh_prepare_input; run coh_detect_saved_config; cls; echo "[cohesix] Cohesix boot options"; if test "${coh_has_saved_config}" = "1"; then echo "[cohesix] Saved network settings detected"; run coh_emit_policy_summary; echo "  1. Continue with existing config"; else echo "[cohesix] No saved network settings; manifest defaults remain active"; echo "  1. Boot with manifest defaults"; fi; echo "  2. Configure networking"; echo "  3. Toggle HDMI logo"; echo "  4. Restore manifest defaults"; echo "  5. Save current settings and reboot"; echo "  0. Exit to U-Boot prompt"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then run coh_boot_sequence; elif test "${coh_choice}" = "2"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "3"; then run coh_toggle_logo; run coh_prompt_root; elif test "${coh_choice}" = "4"; then run coh_reset_policy; run coh_persist_policy; echo "[cohesix] manifest defaults restored"; run coh_prompt_root; elif test "${coh_choice}" = "5"; then run coh_persist_policy; reset; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_root; fi'
 run coh_load_saved_policy
 run coh_maybe_fastboot
-if test "${coh_force_menu}" = "1"; then run coh_prompt_root; else echo "[cohesix] unattended boot: using saved or manifest settings"; run coh_boot_sequence; run coh_prompt_root; fi
+run coh_prompt_root
 EOF
     sed -i '' "s/__COH_IMAGE__/${coh_image}/g" "$out"
     sed -i '' "s/__COH_IMAGE_FALLBACK__/${fallback_image}/g" "$out"

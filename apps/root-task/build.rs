@@ -338,10 +338,16 @@ pub(crate) const PI4_WIFI_BOARD_TYPE: &str = {:?};\n",
                 bundle.board_type,
             ));
         }
+        None if env::var_os("CARGO_FEATURE_RELEASE_PI4").is_some() => {
+            return Err(io::Error::other(format!(
+                "Pi 4 release builds require a CYW43455 firmware bundle; searched {} or set {PI4_WIFI_FIRMWARE_DIR_ENV}",
+                pi4_wifi_default_search_dirs(repo_root)
+            )));
+        }
         None => {
             println!(
-                "cargo:warning=Pi 4 WiFi firmware bundle not found at {}; generated CYW43455 assets are empty",
-                repo_root.join(PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR).display(),
+                "cargo:warning=Pi 4 WiFi firmware bundle not found in {}; generated CYW43455 assets are empty",
+                pi4_wifi_default_search_dirs(repo_root),
             );
             contents.push_str(
                 "pub(crate) static PI4_WIFI_FIRMWARE: &[u8] = &[];\n\
@@ -369,6 +375,15 @@ struct Pi4WifiFirmwareSearch {
     clm_blob: PathBuf,
 }
 
+#[derive(Clone, Copy)]
+struct Pi4WifiKnownBundle {
+    dir: &'static str,
+    firmware: Pi4WifiKnownArtifact,
+    nvram: Pi4WifiKnownArtifact,
+    clm_blob: Pi4WifiKnownArtifact,
+}
+
+#[derive(Clone, Copy)]
 struct Pi4WifiKnownArtifact {
     file_name: &'static str,
     expected_len: u64,
@@ -378,22 +393,57 @@ struct Pi4WifiKnownArtifact {
 const PI4_WIFI_FIRMWARE_DIR_ENV: &str = "COHESIX_PI4_WIFI_FIRMWARE_DIR";
 const PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR: &str =
     "resources/fixtures/pi4-linux-capture/lastchance-20260426T071048Z/firmware-resolved";
+const PI4_WIFI_LOCAL_CAPTURE_DIR: &str =
+    "out/pi4-linux-capture/ssh-192.168.86.154/lastchance-20260426T071048Z/firmware-resolved";
+const PI4_WIFI_TRACKED_FIRMWARE_DIR: &str = "third_party/raspberry-pi-firmware/v1.50/firmware/brcm";
 const PI4_WIFI_BOARD_TYPE: &str = "raspberrypi,4-model-b";
-const PI4_WIFI_KNOWN_FIRMWARE: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
+const PI4_WIFI_CAPTURE_FIRMWARE: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "cyfmac43455-sdio.bin",
     expected_len: 609_309,
     expected_sha256: "d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3",
 };
-const PI4_WIFI_KNOWN_NVRAM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
+const PI4_WIFI_CAPTURE_NVRAM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "brcmfmac43455-sdio.raspberrypi,4-model-b.txt",
     expected_len: 2_074,
     expected_sha256: "ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d",
 };
-const PI4_WIFI_KNOWN_CLM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
+const PI4_WIFI_CAPTURE_CLM: Pi4WifiKnownArtifact = Pi4WifiKnownArtifact {
     file_name: "cyfmac43455-sdio.clm_blob",
     expected_len: 2_676,
     expected_sha256: "9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1",
 };
+const PI4_WIFI_KNOWN_BUNDLES: &[Pi4WifiKnownBundle] = &[
+    Pi4WifiKnownBundle {
+        dir: PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR,
+        firmware: PI4_WIFI_CAPTURE_FIRMWARE,
+        nvram: PI4_WIFI_CAPTURE_NVRAM,
+        clm_blob: PI4_WIFI_CAPTURE_CLM,
+    },
+    Pi4WifiKnownBundle {
+        dir: PI4_WIFI_LOCAL_CAPTURE_DIR,
+        firmware: PI4_WIFI_CAPTURE_FIRMWARE,
+        nvram: PI4_WIFI_CAPTURE_NVRAM,
+        clm_blob: PI4_WIFI_CAPTURE_CLM,
+    },
+    Pi4WifiKnownBundle {
+        dir: PI4_WIFI_TRACKED_FIRMWARE_DIR,
+        firmware: Pi4WifiKnownArtifact {
+            file_name: "brcmfmac43455-sdio.bin",
+            expected_len: 631_467,
+            expected_sha256: "cf79e8e8727d103a94cd243f1d98770fa29f5da25df251d0d31b3696f3b4ac6a",
+        },
+        nvram: Pi4WifiKnownArtifact {
+            file_name: "brcmfmac43455-sdio.Raspberry",
+            expected_len: 2_074,
+            expected_sha256: "ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d",
+        },
+        clm_blob: Pi4WifiKnownArtifact {
+            file_name: "brcmfmac43455-sdio.clm_blob",
+            expected_len: 7_163,
+            expected_sha256: "2dbd7d22fc9af0eb560ceab45b19646d211bc7b34a1dd00c6bfac5dd6ba25e8a",
+        },
+    },
+];
 const PI4_DRIVER_RUNTIME_PAYLOAD_ENV: &str = "COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD";
 
 fn emit_pi4_driver_runtime_payload() -> io::Result<()> {
@@ -470,36 +520,85 @@ fn payload_contains_cpio_magic(data: &[u8]) -> bool {
 
 fn find_pi4_wifi_firmware(repo_root: &Path) -> Result<Option<Pi4WifiFirmwareSearch>, String> {
     println!("cargo:rerun-if-env-changed={PI4_WIFI_FIRMWARE_DIR_ENV}");
-    let (firmware_dir, explicit_dir) = match env::var(PI4_WIFI_FIRMWARE_DIR_ENV) {
-        Ok(value) if !value.trim().is_empty() => {
+    if let Ok(value) = env::var(PI4_WIFI_FIRMWARE_DIR_ENV) {
+        if !value.trim().is_empty() {
             let configured = PathBuf::from(value);
-            let resolved = if configured.is_absolute() {
+            let firmware_dir = if configured.is_absolute() {
                 configured
             } else {
                 repo_root.join(configured)
             };
-            (resolved, true)
+            if !firmware_dir.is_dir() {
+                return Err(format!(
+                    "{}={} is not a directory",
+                    PI4_WIFI_FIRMWARE_DIR_ENV,
+                    firmware_dir.display(),
+                ));
+            }
+            return find_pi4_wifi_firmware_in_dir(&firmware_dir).map(Some);
         }
-        _ => (repo_root.join(PI4_WIFI_KNOWN_GOOD_CAPTURE_DIR), false),
-    };
-    if !firmware_dir.is_dir() {
-        if explicit_dir {
-            return Err(format!(
-                "{}={} is not a directory",
-                PI4_WIFI_FIRMWARE_DIR_ENV,
-                firmware_dir.display(),
-            ));
-        }
-        return Ok(None);
     }
-    let firmware = validate_pi4_wifi_known_artifact(&firmware_dir, &PI4_WIFI_KNOWN_FIRMWARE)?;
-    let nvram = validate_pi4_wifi_known_artifact(&firmware_dir, &PI4_WIFI_KNOWN_NVRAM)?;
-    let clm_blob = validate_pi4_wifi_known_artifact(&firmware_dir, &PI4_WIFI_KNOWN_CLM)?;
-    Ok(Some(Pi4WifiFirmwareSearch {
+
+    let mut invalid = Vec::new();
+    for bundle in PI4_WIFI_KNOWN_BUNDLES {
+        let firmware_dir = repo_root.join(bundle.dir);
+        println!("cargo:rerun-if-changed={}", firmware_dir.display());
+        if !firmware_dir.is_dir() {
+            continue;
+        }
+        match validate_pi4_wifi_known_bundle(&firmware_dir, bundle) {
+            Ok(found) => return Ok(Some(found)),
+            Err(err) => invalid.push(format!("{}: {}", firmware_dir.display(), err)),
+        }
+    }
+
+    if invalid.is_empty() {
+        Ok(None)
+    } else {
+        Err(format!(
+            "Pi 4 CYW43455 firmware candidates were present but invalid: {}",
+            invalid.join("; "),
+        ))
+    }
+}
+
+fn find_pi4_wifi_firmware_in_dir(firmware_dir: &Path) -> Result<Pi4WifiFirmwareSearch, String> {
+    let mut invalid = Vec::new();
+    for bundle in PI4_WIFI_KNOWN_BUNDLES {
+        match validate_pi4_wifi_known_bundle(firmware_dir, bundle) {
+            Ok(found) => return Ok(found),
+            Err(err) => invalid.push(format!("{} layout: {}", bundle.dir, err)),
+        }
+    }
+
+    Err(format!(
+        "{}={} does not match a supported CYW43455 firmware bundle: {}",
+        PI4_WIFI_FIRMWARE_DIR_ENV,
+        firmware_dir.display(),
+        invalid.join("; "),
+    ))
+}
+
+fn validate_pi4_wifi_known_bundle(
+    firmware_dir: &Path,
+    bundle: &Pi4WifiKnownBundle,
+) -> Result<Pi4WifiFirmwareSearch, String> {
+    let firmware = validate_pi4_wifi_known_artifact(firmware_dir, &bundle.firmware)?;
+    let nvram = validate_pi4_wifi_known_artifact(firmware_dir, &bundle.nvram)?;
+    let clm_blob = validate_pi4_wifi_known_artifact(firmware_dir, &bundle.clm_blob)?;
+    Ok(Pi4WifiFirmwareSearch {
         firmware,
         nvram,
         clm_blob,
-    }))
+    })
+}
+
+fn pi4_wifi_default_search_dirs(repo_root: &Path) -> String {
+    PI4_WIFI_KNOWN_BUNDLES
+        .iter()
+        .map(|bundle| repo_root.join(bundle.dir).display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn validate_pi4_wifi_known_artifact(

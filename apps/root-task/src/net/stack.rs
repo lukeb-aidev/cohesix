@@ -3480,6 +3480,7 @@ impl<D: NetDevice> NetStack<D> {
         self.ip = ip;
         self.prefix_len = lease.prefix_len;
         self.gateway = gateway;
+        self.device.set_assigned_ipv4(ip);
         self.interface.update_ip_addrs(|addrs| {
             let cidr = IpCidr::new(IpAddress::from(ip), lease.prefix_len);
             if addrs.push(cidr).is_err() {
@@ -5846,6 +5847,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     ) {
                         return self.poll_with_time(now_ms);
                     }
+                    if !crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(
+                        contract,
+                    ) {
+                        return self.poll_with_time(now_ms);
+                    }
                     let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
                         0,
                         hot_path,
@@ -5915,6 +5921,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     );
                     if wifi_host_eapol_blocks_driver_task_pre_poll(
                         self.device.bringup_status_label(),
+                    ) {
+                        return self.poll_budgeted_with_time(now_ms, budget);
+                    }
+                    if !crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(
+                        contract,
                     ) {
                         return self.poll_budgeted_with_time(now_ms, budget);
                     }

@@ -470,7 +470,7 @@ impl HostEapolState {
         let body = host_eapol_key_body(packet).ok_or("host-eapol-group-body")?;
         let replay_counter = &body
             [EAPOL_KEY_BODY_REPLAY_OFFSET..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN];
-        if !group_replay_counter_increases(replay_counter, self) {
+        if !group_replay_counter_admitted(replay_counter, self) {
             return Err("host-eapol-group-replay");
         }
         if !verify_eapol_key_mic(packet, &self.ptk[..WPA_KCK_LEN])? {
@@ -1219,13 +1219,16 @@ fn replay_counter_increases(current: &[u8], previous: &[u8; WPA_REPLAY_COUNTER_L
     false
 }
 
-fn group_replay_counter_increases(current: &[u8], state: &HostEapolState) -> bool {
+fn group_replay_counter_admitted(current: &[u8], state: &HostEapolState) -> bool {
     let previous = if state.group_replay_counter_valid {
         &state.group_replay_counter
     } else {
         &state.m3_replay_counter
     };
     replay_counter_increases(current, previous)
+        || (state.gtk_installed
+            && state.group_replay_counter_valid
+            && current == state.group_replay_counter.as_slice())
 }
 
 fn bytes_less<const N: usize>(left: &[u8; N], right: &[u8; N]) -> bool {
@@ -1805,6 +1808,87 @@ mod tests {
 
         assert!(matches!(
             group_action,
+            HostEapolAction::SendGroupM2InstallGtk { .. }
+        ));
+        assert!(state.secure_complete());
+    }
+
+    #[test]
+    fn retransmitted_m3_after_secure_resends_m4() {
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len = write_test_m1_frame(&mut m1, &station, &ap).expect("m1");
+        let mut tx = [0u8; MAX_FRAME_LEN];
+        assert!(matches!(
+            state
+                .handle_packet(station, &m1[..m1_len], &mut tx)
+                .expect("m1"),
+            HostEapolAction::SendM2 { .. }
+        ));
+
+        let mut m3 = [0u8; MAX_FRAME_LEN];
+        let m3_len = write_test_m3_frame(&mut m3, &station, &state).expect("m3");
+        assert!(matches!(
+            state
+                .handle_packet(station, &m3[..m3_len], &mut tx)
+                .expect("first m3"),
+            HostEapolAction::SendM4InstallKeys { .. }
+        ));
+        assert!(state.secure_complete());
+
+        let retransmit = state
+            .handle_packet(station, &m3[..m3_len], &mut tx)
+            .expect("retransmitted m3 after secure");
+        assert!(matches!(
+            retransmit,
+            HostEapolAction::SendM4InstallKeys { .. }
+        ));
+        assert!(state.secure_complete());
+    }
+
+    #[test]
+    fn retransmitted_group_key_after_secure_resends_group_m2() {
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len = write_test_m1_frame(&mut m1, &station, &ap).expect("m1");
+        let mut tx = [0u8; MAX_FRAME_LEN];
+        assert!(matches!(
+            state
+                .handle_packet(station, &m1[..m1_len], &mut tx)
+                .expect("m1"),
+            HostEapolAction::SendM2 { .. }
+        ));
+
+        let mut m3 = [0u8; MAX_FRAME_LEN];
+        let m3_len =
+            write_test_m3_frame_without_gtk(&mut m3, &station, &state).expect("ptk-only m3");
+        assert!(matches!(
+            state
+                .handle_packet(station, &m3[..m3_len], &mut tx)
+                .expect("m3 without gtk"),
+            HostEapolAction::SendM4InstallKeys { .. }
+        ));
+
+        let mut group = [0u8; MAX_FRAME_LEN];
+        let group_len =
+            write_test_group_key_frame(&mut group, &station, &state).expect("group key");
+        assert!(matches!(
+            state
+                .handle_packet(station, &group[..group_len], &mut tx)
+                .expect("first group key"),
+            HostEapolAction::SendGroupM2InstallGtk { .. }
+        ));
+        assert!(state.secure_complete());
+
+        let retransmit = state
+            .handle_packet(station, &group[..group_len], &mut tx)
+            .expect("retransmitted group key after secure");
+        assert!(matches!(
+            retransmit,
             HostEapolAction::SendGroupM2InstallGtk { .. }
         ));
         assert!(state.secure_complete());

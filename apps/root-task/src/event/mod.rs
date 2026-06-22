@@ -2051,6 +2051,13 @@ where
             self.reboot_flush_turns = self.reboot_flush_turns.saturating_sub(1);
             return;
         }
+        let line = format_message(format_args!(
+            "console: reboot firing source={}",
+            self.last_input_source.label()
+        ));
+        self.audit.info(line.as_str());
+        #[cfg(feature = "kernel")]
+        boot_log::force_uart_line_raw("[reboot] platform reset request firing");
         match crate::reboot::request_reboot() {
             Ok(()) => {
                 self.reboot_pending = false;
@@ -15512,6 +15519,7 @@ mod tests {
         status: NetStatusReport,
         counters: NetCounters,
         polls: usize,
+        disconnect_requests: usize,
     }
 
     #[cfg(feature = "net-console")]
@@ -15524,6 +15532,7 @@ mod tests {
                 status: NetStatusReport::default(),
                 counters: NetCounters::default(),
                 polls: 0,
+                disconnect_requests: 0,
             }
         }
     }
@@ -15569,6 +15578,10 @@ mod tests {
             }
             let _ = self.sent.push(buf);
             true
+        }
+
+        fn request_disconnect(&mut self) {
+            self.disconnect_requests = self.disconnect_requests.saturating_add(1);
         }
 
         fn start_self_test(&mut self, _now_ms: u64) -> NetSelfTestStartResult {
@@ -17054,6 +17067,53 @@ mod tests {
             "{rendered}"
         );
         assert_eq!(crate::reboot::test_reboot_requests(), 1);
+        crate::reboot::reset_test_backend();
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn tcp_secret_backed_reboot_flushes_then_requests_backend() {
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut attach = HeaplessString::new();
+        attach.push_str("attach queen").unwrap();
+        let mut reboot = HeaplessString::new();
+        reboot.push_str("reboot").unwrap();
+        net.lines.push(ConsoleLine::new(attach, 1)).unwrap();
+        net.lines.push(ConsoleLine::new(reboot, 2)).unwrap();
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+            pump.poll();
+            assert_eq!(crate::reboot::test_reboot_requests(), 0);
+            pump.poll();
+            assert_eq!(crate::reboot::test_reboot_requests(), 1);
+        }
+
+        let sent = net
+            .sent
+            .iter()
+            .map(|line| line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(sent.contains("OK ATTACH role=queen"), "{sent}");
+        assert!(sent.contains("OK REBOOT detail=scheduled"), "{sent}");
+        assert_eq!(net.disconnect_requests, 1);
+        assert!(audit
+            .entries
+            .iter()
+            .any(|entry| entry.as_str() == "console: reboot firing source=net"));
         crate::reboot::reset_test_backend();
     }
 

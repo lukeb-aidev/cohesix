@@ -5,8 +5,12 @@
 
 //! Authenticated platform reboot support for root-task console commands.
 
+#[cfg(feature = "kernel")]
+use core::sync::atomic::compiler_fence;
+#[cfg(any(feature = "kernel", test))]
+use core::sync::atomic::Ordering;
 #[cfg(test)]
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize};
 
 #[cfg(feature = "kernel")]
 use crate::hal::{DeviceHal, HalError, MappedRegisterPages, MappedRegisterWindow};
@@ -23,9 +27,9 @@ const PM_RSTS_OFFSET: usize = 0x20;
 const PM_WDOG_OFFSET: usize = 0x24;
 #[cfg(any(feature = "kernel", test))]
 const PM_PASSWORD: u32 = 0x5a00_0000;
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 const PM_RSTC_WRCFG_MASK: u32 = 0x0000_0030;
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 const PM_RSTC_WRCFG_FULL_RESET: u32 = 0x0000_0020;
 #[cfg(feature = "kernel")]
 const PM_WDOG_RESET_TICKS: u32 = 10;
@@ -103,8 +107,32 @@ fn rsts_fastboot_reboot_value(current: u32) -> u32 {
 }
 
 #[cfg(any(feature = "kernel", test))]
+fn rstc_full_reset_value(current: u32) -> u32 {
+    PM_PASSWORD | (current & !PM_RSTC_WRCFG_MASK) | PM_RSTC_WRCFG_FULL_RESET
+}
+
+#[cfg(any(feature = "kernel", test))]
 const fn rsts_has_fastboot_marker(value: u32) -> bool {
     value & PM_RSTS_COHESIX_FASTBOOT_MASK == PM_RSTS_COHESIX_FASTBOOT_MAGIC
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+fn pm_mmio_write_barrier() {
+    compiler_fence(Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+fn write_u32_release(
+    watchdog: &MappedRegisterWindow,
+    offset: usize,
+    value: u32,
+) -> Result<(), RebootError> {
+    watchdog
+        .write_u32(offset, value)
+        .map_err(|_| RebootError::RegisterAccess)?;
+    pm_mmio_write_barrier();
+    Ok(())
 }
 
 /// Request a platform reboot.
@@ -121,39 +149,14 @@ pub fn request_reboot() -> Result<(), RebootError> {
         let Some(watchdog) = watchdog.as_ref() else {
             return Err(RebootError::BackendUnavailable);
         };
+        if let Ok(rsts) = watchdog.read_u32(PM_RSTS_OFFSET) {
+            let _ = write_u32_release(watchdog, PM_RSTS_OFFSET, rsts_fastboot_reboot_value(rsts));
+        }
+        write_u32_release(watchdog, PM_WDOG_OFFSET, PM_PASSWORD | PM_WDOG_RESET_TICKS)?;
         let rstc = watchdog
             .read_u32(PM_RSTC_OFFSET)
-            .map_err(|_| RebootError::RegisterAccess)?
-            & !PM_RSTC_WRCFG_MASK;
-        let rsts = watchdog
-            .read_u32(PM_RSTS_OFFSET)
             .map_err(|_| RebootError::RegisterAccess)?;
-        watchdog
-            .write_u32(PM_RSTS_OFFSET, rsts_fastboot_reboot_value(rsts))
-            .map_err(|_| RebootError::RegisterAccess)?;
-        let marker = watchdog
-            .read_u32(PM_RSTS_OFFSET)
-            .map_err(|_| RebootError::RegisterAccess)?;
-        if !rsts_has_fastboot_marker(marker) {
-            watchdog
-                .write_u32(PM_RSTS_OFFSET, rsts_fastboot_reboot_value(rsts))
-                .map_err(|_| RebootError::RegisterAccess)?;
-            let marker = watchdog
-                .read_u32(PM_RSTS_OFFSET)
-                .map_err(|_| RebootError::RegisterAccess)?;
-            if !rsts_has_fastboot_marker(marker) {
-                return Err(RebootError::RegisterAccess);
-            }
-        }
-        watchdog
-            .write_u32(PM_WDOG_OFFSET, PM_PASSWORD | PM_WDOG_RESET_TICKS)
-            .map_err(|_| RebootError::RegisterAccess)?;
-        watchdog
-            .write_u32(
-                PM_RSTC_OFFSET,
-                PM_PASSWORD | rstc | PM_RSTC_WRCFG_FULL_RESET,
-            )
-            .map_err(|_| RebootError::RegisterAccess)?;
+        write_u32_release(watchdog, PM_RSTC_OFFSET, rstc_full_reset_value(rstc))?;
         loop {
             core::hint::spin_loop();
         }
@@ -241,5 +244,18 @@ mod tests {
         assert!(!rsts_has_fastboot_marker(
             0x00aa_0000 | PM_RSTS_PI_FIRMWARE_PARTITION_MASK
         ));
+    }
+
+    #[test]
+    fn rstc_full_reset_value_preserves_non_wrcfg_bits() {
+        let current = 0x0000_a030;
+        let encoded = rstc_full_reset_value(current);
+
+        assert_eq!(encoded & PM_PASSWORD, PM_PASSWORD);
+        assert_eq!(encoded & PM_RSTC_WRCFG_MASK, PM_RSTC_WRCFG_FULL_RESET);
+        assert_eq!(
+            encoded & !PM_PASSWORD & !PM_RSTC_WRCFG_MASK,
+            current & !PM_RSTC_WRCFG_MASK
+        );
     }
 }

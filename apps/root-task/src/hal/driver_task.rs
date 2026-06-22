@@ -2881,6 +2881,17 @@ fn driver_task_resource_log_key(
     let completion_detail = completion.map_or(0, |completion| usize::from(completion.detail));
     let completion_result = completion.map_or(0, |completion| completion.result as usize);
     let completion_frame_len = completion.map_or(0, |completion| usize::from(completion.frame.len));
+    let normalize_progress_turn = matches!(status, "no-reply" | "poll-timeout" | "tx-no-reply");
+    let active_request_key = if normalize_progress_turn {
+        0
+    } else {
+        active_request.unwrap_or(0)
+    };
+    let progress_sequence_key = if normalize_progress_turn {
+        0
+    } else {
+        progress.map_or(0, |progress| progress.sequence as usize)
+    };
     for value in [
         completion_code,
         completion_detail,
@@ -2888,9 +2899,9 @@ fn driver_task_resource_log_key(
         completion_frame_len,
         expected_aux0_value as usize,
         expected_request_value as usize,
-        active_request.unwrap_or(0),
+        active_request_key,
         progress.map_or(0, |progress| progress.marker_valid as usize),
-        progress.map_or(0, |progress| progress.sequence as usize),
+        progress_sequence_key,
         progress.map_or(0, |progress| progress.phase as usize),
         progress.map_or(0, |progress| progress.aux0 as usize),
     ] {
@@ -3160,6 +3171,30 @@ pub(crate) fn active_driver_task_ring_request(contract: DriverTaskContract) -> O
     }
     let request = slot.request_seq.load(Ordering::Acquire);
     (request != 0).then_some(request)
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn active_driver_task_ring_command(
+    contract: DriverTaskContract,
+) -> Option<DriverTaskCommandRecord> {
+    let task_key = driver_task_contract_key(contract)?;
+    let slot = slot_for_task_key(task_key)?;
+    if slot.active.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let request = slot.request_seq.load(Ordering::Acquire);
+    if request == 0 {
+        return None;
+    }
+    let command_ptr = ring_root_ptr as *const DriverTaskCommandRecord;
+    // SAFETY: The ring root pointer was admitted by HAL and points to the
+    // fixed command record at the start of the shared ring page.
+    let command = unsafe { core::ptr::read_volatile(command_ptr) };
+    (command.sequence == request as u32).then_some(command)
 }
 
 #[cfg(feature = "kernel")]
@@ -5631,6 +5666,19 @@ fn driver_task_ring_call_trace_enabled(
     {
         return false;
     }
+    if matches!(contract.kind, DriverTaskKind::WifiNic)
+        && command.aux0 == 0
+        && command.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE == 0
+        && command.frame.flags & DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE == 0
+        && matches!(
+            mode,
+            DriverTaskRingCommandMode::Steady
+                | DriverTaskRingCommandMode::NonBlocking
+                | DriverTaskRingCommandMode::PromptSlice
+        )
+    {
+        return false;
+    }
     if matches!(contract.kind, DriverTaskKind::HdmiText)
         && command.opcode == DriverTaskOpcode::SubmitFrame.as_u16()
         && command.aux0 == 0
@@ -5690,7 +5738,11 @@ fn driver_task_ring_completion_trace_enabled(
 
 #[cfg(feature = "kernel")]
 fn driver_task_ring_timeout_trace_enabled(trace_call: bool, contract: DriverTaskContract) -> bool {
-    trace_call || matches!(contract.kind, DriverTaskKind::WiredNic)
+    trace_call
+        || matches!(
+            contract.kind,
+            DriverTaskKind::WiredNic | DriverTaskKind::WifiNic
+        )
 }
 
 #[cfg(feature = "kernel")]
@@ -7136,11 +7188,10 @@ fn driver_task_resource_status_mirrors_to_hdmi(
     if stage == "cyw43-firmware-chunk" && status == "ready" {
         return false;
     }
+    if matches!(status, "ready" | "deferred" | "pending" | "resumed") {
+        return false;
+    }
     status == "begin"
-        || status == "ready"
-        || status == "deferred"
-        || status == "pending"
-        || status == "resumed"
         || status == "fault"
         || status == "failed"
         || status == "no-reply"
@@ -10388,6 +10439,66 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn wifi_steady_dataplane_trace_is_suppressed_for_benchmarks() {
+        let budget = DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        let rx_command = DriverTaskCommandRecord::pi4_hot_path(
+            92,
+            DriverTaskHotPath::Cyw43Wifi,
+            budget,
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        assert!(!driver_task_ring_call_trace_enabled(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            rx_command,
+            DriverTaskRingCommandMode::Steady
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            rx_command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+        assert!(!driver_task_ring_call_trace_enabled(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            rx_command,
+            DriverTaskRingCommandMode::PromptSlice
+        ));
+        assert!(!driver_task_ring_completion_trace_enabled(
+            false,
+            DriverTaskCompletionRecord::progress(92, 1)
+        ));
+        assert!(driver_task_ring_completion_trace_enabled(
+            false,
+            DriverTaskCompletionRecord::budget_exhausted(
+                92,
+                DriverServiceBudgetError::BytesExhausted
+            )
+        ));
+        assert!(driver_task_ring_completion_trace_enabled(
+            false,
+            DriverTaskCompletionRecord::fault(92, DriverTaskFaultCode::RejectedCommand)
+        ));
+        assert!(driver_task_ring_timeout_trace_enabled(
+            false,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+
+        let non_acceptance_command = DriverTaskCommandRecord {
+            flags: DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE,
+            ..rx_command
+        };
+        assert!(driver_task_ring_call_trace_enabled(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            non_acceptance_command,
+            DriverTaskRingCommandMode::Steady
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_descriptor_commands_get_long_bounded_init_window() {
         let mut command = DriverTaskCommandRecord::pi4_hot_path(
             0,
@@ -12507,6 +12618,15 @@ mod tests {
         )
         .is_none());
 
+        assert!(driver_task_resource_hdmi_progress_line(
+            PCIE_ROOT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::PcieRoot,
+            "pcie-owner-state",
+            "ready",
+            None,
+        )
+        .is_none());
+
         let fault = driver_task_resource_hdmi_progress_line(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::Cyw43Wifi,
@@ -12653,6 +12773,83 @@ mod tests {
             driver_task_log_repeat_count(&key_cell, &count_cell, 0x66),
             Some(1)
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn no_reply_resource_key_tracks_stable_blocker_not_retry_turn() {
+        let progress_3 = DriverTaskRingProgressSnapshot {
+            marker_valid: true,
+            sequence: 3,
+            phase: DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
+            phase_name: "usb-reset-wait-begin",
+            aux0: DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
+        };
+        let progress_4 = DriverTaskRingProgressSnapshot {
+            sequence: 4,
+            ..progress_3
+        };
+
+        let key_3 = driver_task_resource_log_key(
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "no-reply",
+            None,
+            0,
+            0,
+            Some(3),
+            Some(progress_3),
+        );
+        let key_4 = driver_task_resource_log_key(
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "no-reply",
+            None,
+            0,
+            0,
+            Some(4),
+            Some(progress_4),
+        );
+        assert_eq!(key_3, key_4);
+
+        let ready_key_3 = driver_task_resource_log_key(
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "ready",
+            None,
+            0,
+            0,
+            Some(3),
+            Some(progress_3),
+        );
+        let ready_key_4 = driver_task_resource_log_key(
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "ready",
+            None,
+            0,
+            0,
+            Some(4),
+            Some(progress_4),
+        );
+        assert_ne!(ready_key_3, ready_key_4);
+
+        let cnr_progress = DriverTaskRingProgressSnapshot {
+            phase: DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN,
+            phase_name: "usb-cnr-wait-begin",
+            ..progress_4
+        };
+        let cnr_key = driver_task_resource_log_key(
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "no-reply",
+            None,
+            0,
+            0,
+            Some(4),
+            Some(cnr_progress),
+        );
+        assert_ne!(key_3, cnr_key);
     }
 
     #[cfg(feature = "kernel")]
@@ -12940,6 +13137,64 @@ mod tests {
 
         slot.request_seq.store(previous, Ordering::Release);
         slot.active.store(previous_active, Ordering::Release);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn active_ring_command_reports_matching_command_record() {
+        let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        clear_driver_task_transport(contract);
+        let mut ring_page = [0u8; DRIVER_TASK_RING_PAGE_BYTES];
+        publish_driver_task_ring(contract, ring_page.as_mut_ptr() as usize);
+        let task_key = driver_task_contract_key(contract).expect("CYW43 task key");
+        let slot = slot_for_task_key(task_key).expect("CYW43 slot");
+        let command = DriverTaskCommandRecord::pi4_hot_path(
+            73,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(contract),
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 16,
+                flags: 0,
+            },
+        );
+
+        // SAFETY: The local ring page is test-owned and begins with the fixed
+        // shared-ring command record layout.
+        unsafe {
+            core::ptr::write_volatile(
+                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                command,
+            );
+        }
+        slot.request_seq.store(73, Ordering::Release);
+        slot.active.store(1, Ordering::Release);
+        assert_eq!(active_driver_task_ring_command(contract), Some(command));
+
+        let mut stale = command;
+        stale.sequence = 72;
+        // SAFETY: The local ring page is test-owned and begins with the fixed
+        // shared-ring command record layout.
+        unsafe {
+            core::ptr::write_volatile(
+                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                stale,
+            );
+        }
+        assert_eq!(active_driver_task_ring_command(contract), None);
+
+        slot.active.store(0, Ordering::Release);
+        // SAFETY: The local ring page is test-owned and begins with the fixed
+        // shared-ring command record layout.
+        unsafe {
+            core::ptr::write_volatile(
+                ring_page.as_mut_ptr() as *mut DriverTaskCommandRecord,
+                command,
+            );
+        }
+        assert_eq!(active_driver_task_ring_command(contract), None);
+
+        clear_driver_task_transport(contract);
     }
 
     #[cfg(feature = "kernel")]

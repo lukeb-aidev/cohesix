@@ -1191,8 +1191,8 @@ const CYW43_BDC_VERSION_SHIFT: u8 = 4;
 const CYW43_ETH_HEADER_BYTES: usize = 14;
 const CYW43_ETH_P_EAPOL: u16 = 0x888e;
 const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
-const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 64;
-const CYW43_RX_QUEUE_CAP: usize = 128;
+const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
+const CYW43_RX_QUEUE_CAP: usize = 4;
 const CYW43_FUNCTION2_BLOCK_BYTES: usize = SDIO_FUNCTION2_BLOCK_SIZE as usize;
 const CYW43_CONTROL_RX_FIRSTREAD_BYTES: usize = 64;
 const CYW43_CONTROL_RX_BLOCK_PROBE_BYTES: usize = CYW43_FUNCTION2_BLOCK_BYTES;
@@ -24820,8 +24820,8 @@ mod tests {
 
     #[test]
     fn cyw43_rx_glom_and_deferred_queue_caps_match_old_good_envelope() {
-        assert_eq!(CYW43_RX_GLOM_SUBFRAME_CAP, 64);
-        assert_eq!(CYW43_RX_QUEUE_CAP, 128);
+        assert_eq!(CYW43_RX_GLOM_SUBFRAME_CAP, 8);
+        assert_eq!(CYW43_RX_QUEUE_CAP, 4);
         assert!(CYW43_RX_QUEUE_CAP <= u8::MAX as usize);
     }
 
