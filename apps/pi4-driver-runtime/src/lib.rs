@@ -1189,7 +1189,12 @@ const CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT: u16 =
 const CYW43_BDC_VERSION: u8 = 2;
 const CYW43_BDC_VERSION_SHIFT: u8 = 4;
 const CYW43_ETH_HEADER_BYTES: usize = 14;
+const CYW43_ETH_P_IPV4: u16 = 0x0800;
+const CYW43_ETH_P_ARP: u16 = 0x0806;
 const CYW43_ETH_P_EAPOL: u16 = 0x888e;
+const CYW43_IP_PROTO_UDP: u8 = 17;
+const CYW43_DHCP_SERVER_PORT: u16 = 67;
+const CYW43_DHCP_CLIENT_PORT: u16 = 68;
 const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
 const CYW43_RX_QUEUE_CAP: usize = 4;
@@ -4979,9 +4984,15 @@ fn service_cyw43_descriptor_command(
             };
             let submitted_seq = state.sdpcm_seq;
             let submitted_credit_observations = state.sdpcm_credit_observations;
+            let expected_request_len = cyw43_data_tx_total_len(usize::from(frame.len))
+                .map(|total_len| cyw43_data_tx_request_len_for_frame(frame, total_len).0);
             let written = cyw43_submit_sdpcm_frame(state, frame, true, false);
             if written != 0 {
-                progress_detail = u16::try_from(cyw43_data_tx_request_len(written)).ok();
+                progress_detail = u16::try_from(
+                    expected_request_len
+                        .unwrap_or_else(|| cyw43_data_tx_request_len_default(written)),
+                )
+                .ok();
                 progress_frame = cyw43_sdpcm_tx_credit_proof_frame(
                     submitted_seq,
                     state.sdpcm_seq_max,
@@ -8534,6 +8545,23 @@ const fn cyw43_function2_cmd53_shape(request_len: usize) -> (u16, u16) {
     }
 }
 
+const fn cyw43_function2_data_tx_cmd53_shape(
+    request_len: usize,
+    prefer_block_mode: bool,
+) -> (u16, u16) {
+    if prefer_block_mode
+        && request_len >= CYW43_FUNCTION2_BLOCK_BYTES
+        && request_len % CYW43_FUNCTION2_BLOCK_BYTES == 0
+    {
+        (
+            CYW43_FUNCTION2_BLOCK_BYTES as u16,
+            (request_len / CYW43_FUNCTION2_BLOCK_BYTES) as u16,
+        )
+    } else {
+        cyw43_function2_cmd53_shape(request_len)
+    }
+}
+
 fn cyw43_function2_execute_transfer(
     state: &mut Cyw43RuntimeState,
     write: bool,
@@ -8844,12 +8872,12 @@ fn cyw43_submit_sdpcm_frame(
         return 0;
     }
     let seq = state.sdpcm_seq;
-    let request_len = if data_frame {
-        cyw43_data_tx_request_len(total_len)
+    let (request_len, data_block_mode) = if data_frame {
+        cyw43_data_tx_request_len_for_frame(frame, total_len)
     } else if control_ext_header {
-        cyw43_control_tx_request_len(total_len)
+        (cyw43_control_tx_request_len(total_len), false)
     } else {
-        align4(total_len)
+        (align4(total_len), false)
     };
     if request_len > CYW43_RING_PAGE_PAYLOAD_BYTES {
         cyw43_record_last_fault(cyw43_command_fault_detail(if data_frame {
@@ -8902,7 +8930,11 @@ fn cyw43_submit_sdpcm_frame(
     for index in total_len..request_len {
         write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, 0);
     }
-    let (block_size, block_count) = cyw43_function2_cmd53_shape(request_len);
+    let (block_size, block_count) = if data_frame {
+        cyw43_function2_data_tx_cmd53_shape(request_len, data_block_mode)
+    } else {
+        cyw43_function2_cmd53_shape(request_len)
+    };
     let tx_frame = DriverFrameDescriptor {
         offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
         len: request_len as u16,
@@ -11290,7 +11322,11 @@ const fn cyw43_control_tx_request_len(unpadded_len: usize) -> usize {
     }
 }
 
-const fn cyw43_data_tx_request_len(unpadded_len: usize) -> usize {
+fn cyw43_data_tx_total_len(payload_len: usize) -> Option<usize> {
+    payload_len.checked_add(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES)
+}
+
+const fn cyw43_data_tx_request_len_default(unpadded_len: usize) -> usize {
     let aligned = align4(unpadded_len);
     if aligned <= SDIO_CMD53_BYTE_MODE_MAX {
         aligned
@@ -11302,6 +11338,94 @@ const fn cyw43_data_tx_request_len(unpadded_len: usize) -> usize {
             aligned + (CYW43_FUNCTION2_BLOCK_BYTES - remainder)
         }
     }
+}
+
+const fn cyw43_data_tx_block_request_len(unpadded_len: usize) -> usize {
+    let aligned = align4(unpadded_len);
+    if aligned <= CYW43_FUNCTION2_BLOCK_BYTES {
+        CYW43_FUNCTION2_BLOCK_BYTES
+    } else {
+        let remainder = aligned % CYW43_FUNCTION2_BLOCK_BYTES;
+        if remainder == 0 {
+            aligned
+        } else {
+            aligned + (CYW43_FUNCTION2_BLOCK_BYTES - remainder)
+        }
+    }
+}
+
+fn cyw43_data_tx_request_len_for_frame(
+    frame: DriverFrameDescriptor,
+    unpadded_len: usize,
+) -> (usize, bool) {
+    if cyw43_data_tx_prefers_block_mode(frame) {
+        (cyw43_data_tx_block_request_len(unpadded_len), true)
+    } else {
+        (cyw43_data_tx_request_len_default(unpadded_len), false)
+    }
+}
+
+fn cyw43_data_tx_prefers_block_mode(frame: DriverFrameDescriptor) -> bool {
+    match cyw43_ring_frame_ethertype(frame) {
+        Some(CYW43_ETH_P_ARP) => true,
+        Some(CYW43_ETH_P_IPV4) => !cyw43_ring_frame_is_dhcp(frame),
+        Some(CYW43_ETH_P_EAPOL) => false,
+        _ => false,
+    }
+}
+
+fn cyw43_ring_frame_is_dhcp(frame: DriverFrameDescriptor) -> bool {
+    if cyw43_ring_frame_byte(frame, CYW43_ETH_HEADER_BYTES).map(|version_ihl| version_ihl >> 4)
+        != Some(4)
+    {
+        return false;
+    }
+    let Some(version_ihl) = cyw43_ring_frame_byte(frame, CYW43_ETH_HEADER_BYTES) else {
+        return false;
+    };
+    let ip_header_len = usize::from(version_ihl & 0x0f) * 4;
+    if ip_header_len < 20 {
+        return false;
+    }
+    if cyw43_ring_frame_byte(frame, CYW43_ETH_HEADER_BYTES + 9) != Some(CYW43_IP_PROTO_UDP) {
+        return false;
+    }
+    let Some(udp_offset) = CYW43_ETH_HEADER_BYTES.checked_add(ip_header_len) else {
+        return false;
+    };
+    let Some(udp_src) = cyw43_ring_frame_u16_be(frame, udp_offset) else {
+        return false;
+    };
+    let Some(udp_dst) = cyw43_ring_frame_u16_be(frame, udp_offset + 2) else {
+        return false;
+    };
+    cyw43_udp_ports_are_dhcp(udp_src, udp_dst)
+}
+
+fn cyw43_ring_frame_ethertype(frame: DriverFrameDescriptor) -> Option<u16> {
+    if usize::from(frame.len) < CYW43_ETH_HEADER_BYTES {
+        return None;
+    }
+    cyw43_ring_frame_u16_be(frame, 12)
+}
+
+fn cyw43_ring_frame_u16_be(frame: DriverFrameDescriptor, offset: usize) -> Option<u16> {
+    let high = cyw43_ring_frame_byte(frame, offset)?;
+    let low = cyw43_ring_frame_byte(frame, offset.checked_add(1)?)?;
+    Some(u16::from_be_bytes([high, low]))
+}
+
+fn cyw43_ring_frame_byte(frame: DriverFrameDescriptor, offset: usize) -> Option<u8> {
+    if offset >= usize::from(frame.len) {
+        return None;
+    }
+    let absolute = usize::try_from(frame.offset).ok()?.checked_add(offset)?;
+    Some(read_ring_byte(absolute))
+}
+
+const fn cyw43_udp_ports_are_dhcp(src: u16, dst: u16) -> bool {
+    (src == CYW43_DHCP_CLIENT_PORT && dst == CYW43_DHCP_SERVER_PORT)
+        || (src == CYW43_DHCP_SERVER_PORT && dst == CYW43_DHCP_CLIENT_PORT)
 }
 
 const fn cyw43_control_rx_request_len(unpadded_len: usize) -> usize {
@@ -24224,7 +24348,7 @@ mod tests {
             reserved: 0,
         });
         let data_tx_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14;
-        let data_tx_request_len = cyw43_data_tx_request_len(data_tx_len);
+        let data_tx_request_len = cyw43_data_tx_request_len_default(data_tx_len);
         assert_eq!(service_command(0, cyw43_descriptor_command(75)), {
             let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 75,
@@ -24382,11 +24506,16 @@ mod tests {
         dhcp_discover[..6].fill(0xff);
         dhcp_discover[6..12].copy_from_slice(&[0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
         dhcp_discover[12..14].copy_from_slice(&[0x08, 0x00]);
+        dhcp_discover[14] = 0x45;
+        dhcp_discover[14 + 9] = CYW43_IP_PROTO_UDP;
+        let udp = 14 + 20;
+        dhcp_discover[udp..udp + 2].copy_from_slice(&CYW43_DHCP_CLIENT_PORT.to_be_bytes());
+        dhcp_discover[udp + 2..udp + 4].copy_from_slice(&CYW43_DHCP_SERVER_PORT.to_be_bytes());
         stage_bytes(payload_offset, &dhcp_discover);
         reset_test_sdio_transfer_log();
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_discover.len();
-        let request_len = cyw43_data_tx_request_len(total_len);
+        let request_len = cyw43_data_tx_request_len_default(total_len);
         assert_eq!(total_len, 330);
         assert_eq!(request_len, 332);
         let frame = DriverFrameDescriptor {
@@ -24423,6 +24552,73 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_data_tx_promotes_arp_to_function2_block_mode() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        let mut arp_reply = [0u8; 42];
+        arp_reply[..6].copy_from_slice(&[0xcc, 0xf4, 0x11, 0x42, 0x5b, 0x92]);
+        arp_reply[6..12].copy_from_slice(&[0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
+        arp_reply[12..14].copy_from_slice(&CYW43_ETH_P_ARP.to_be_bytes());
+        arp_reply[14..16].copy_from_slice(&1u16.to_be_bytes());
+        arp_reply[16..18].copy_from_slice(&CYW43_ETH_P_IPV4.to_be_bytes());
+        arp_reply[18] = 6;
+        arp_reply[19] = 4;
+        arp_reply[20..22].copy_from_slice(&2u16.to_be_bytes());
+        stage_bytes(usize::from(payload_offset), &arp_reply);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq = 3;
+            state.sdpcm_seq_max = 4;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+            flags: 0,
+            target_addr: 0,
+            payload_offset,
+            payload_len: arp_reply.len() as u16,
+            total_len: arp_reply.len() as u32,
+            arg0: 0,
+            arg1: 0,
+            reserved: 0,
+        });
+        reset_test_sdio_transfer_log();
+
+        let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + arp_reply.len();
+        let request_len = cyw43_data_tx_block_request_len(total_len);
+        assert_eq!(total_len, 72);
+        assert_eq!(request_len, CYW43_FUNCTION2_BLOCK_BYTES);
+        assert_eq!(service_command(0, cyw43_descriptor_command(177)), {
+            let mut completion = DriverTaskCompletionRecord::progress_with_detail(
+                177,
+                request_len as u16,
+                total_len as u32,
+            );
+            completion.frame = cyw43_sdpcm_tx_credit_proof_frame(3, 4, 0);
+            completion
+        });
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16,
+                1,
+                CYW43_FUNCTION2_BLOCK_BYTES as u16
+            ),
+            1
+        );
+        assert_eq!(
+            read_frame_prefix::<14>(DriverFrameDescriptor {
+                offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES) as u32,
+                len: arp_reply.len() as u16,
+                flags: 0,
+            }),
+            arp_reply[..14]
+        );
+    }
+
+    #[test]
     fn cyw43_eth_tx_completion_reports_m2_sized_byte_mode_shape() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -24452,7 +24648,7 @@ mod tests {
         reset_test_sdio_transfer_log();
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + m2_frame.len();
-        let request_len = cyw43_data_tx_request_len(total_len);
+        let request_len = cyw43_data_tx_request_len_default(total_len);
         assert_eq!(total_len, 165);
         assert_eq!(request_len, 168);
         assert_eq!(service_command(0, cyw43_descriptor_command(176)), {
@@ -28014,19 +28210,23 @@ mod tests {
             CYW43_FUNCTION2_BLOCK_BYTES
         );
         assert_eq!(
-            cyw43_data_tx_request_len(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14),
+            cyw43_data_tx_request_len_default(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14),
             44
         );
         assert_eq!(
-            cyw43_data_tx_request_len(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 300),
+            cyw43_data_tx_block_request_len(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14),
+            CYW43_FUNCTION2_BLOCK_BYTES
+        );
+        assert_eq!(
+            cyw43_data_tx_request_len_default(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 300),
             332
         );
         assert_eq!(
-            cyw43_data_tx_request_len(SDIO_CMD53_BYTE_MODE_MAX),
+            cyw43_data_tx_request_len_default(SDIO_CMD53_BYTE_MODE_MAX),
             SDIO_CMD53_BYTE_MODE_MAX
         );
         assert_eq!(
-            cyw43_data_tx_request_len(SDIO_CMD53_BYTE_MODE_MAX + 1),
+            cyw43_data_tx_request_len_default(SDIO_CMD53_BYTE_MODE_MAX + 1),
             CYW43_FUNCTION2_BLOCK_BYTES * 2
         );
         let (probe_byte_size, probe_byte_count) =
@@ -28065,6 +28265,15 @@ mod tests {
         let byte_arg = sdio_cmd53_arg(true, 2, BACKPLANE_32BIT_FLAG, false, byte_count, 96);
         assert_eq!(byte_arg & (1 << 27), 0);
         assert_eq!(byte_arg & 0x1ff, 96);
+
+        assert_eq!(
+            cyw43_function2_data_tx_cmd53_shape(CYW43_FUNCTION2_BLOCK_BYTES, true),
+            (CYW43_FUNCTION2_BLOCK_BYTES as u16, 1)
+        );
+        assert_eq!(
+            cyw43_function2_data_tx_cmd53_shape(CYW43_FUNCTION2_BLOCK_BYTES, false),
+            (CYW43_FUNCTION2_BLOCK_BYTES as u16, 0)
+        );
     }
 
     #[test]
