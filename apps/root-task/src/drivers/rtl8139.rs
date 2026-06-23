@@ -459,6 +459,8 @@ impl NetDevice for Rtl8139Device {
             tx_in_flight: 0,
             tx_double_submit: 0,
             tx_zero_len_attempt: 0,
+            arp_rx: 0,
+            arp_tx: 0,
             driver_rx_last_len: 0,
             driver_rx_last_ethertype: 0,
             dropped_zero_len_tx: 0,

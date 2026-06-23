@@ -47,6 +47,7 @@ release-pi4 = [
     "kernel",
     "serial-console",
     "net-console",
+    "timers-arch-counter",
     "cache-maintenance",
     "usb",
 ]

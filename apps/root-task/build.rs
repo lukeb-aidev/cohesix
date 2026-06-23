@@ -19,6 +19,7 @@ use regex::Regex;
 #[path = "build_support.rs"]
 mod build_support;
 
+use build_support::parse_timer_clock_hz;
 use build_support::{classify_linker_script, LinkerScriptKind};
 
 const IPC_GUARD_SOURCE: &str = "apps/root-task/src";
@@ -26,6 +27,7 @@ const IPC_GUARD_ALLOW: &str = "sel4.rs";
 const IPC_GUARD_PATTERN: &str = r"\bseL4_(Send|Call|ReplyRecv)\s*\(";
 
 const CONFIG_CANDIDATES: &[&str] = &[
+    "CMakeCache.txt",
     ".config",
     "kernel/.config",
     "KernelConfig",
@@ -88,6 +90,11 @@ const LINKER_SCRIPT_SEARCH_SETS: &[LinkerScriptSearchSet] = &[
     },
 ];
 
+const TIMER_PLATFORM_HEADER_CANDIDATES: &[&str] = &[
+    "kernel/gen_headers/plat/platform_gen.h",
+    "gen_headers/plat/platform_gen.h",
+];
+
 enum ArtifactDecision {
     Accept,
     Reject(String),
@@ -114,6 +121,7 @@ fn main() {
     println!("cargo:rustc-check-cfg=cfg(sel4_config_debug_build)");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_printing)");
     println!("cargo:rustc-check-cfg=cfg(sel4_config_kernel_mcs)");
+    println!("cargo:rustc-check-cfg=cfg(sel4_config_export_vcnt_user)");
 
     if let Err(error) = enforce_guarded_ipc() {
         panic!("failed to scan `{IPC_GUARD_SOURCE}` for direct IPC syscalls: {error}");
@@ -150,6 +158,17 @@ fn main() {
     }
 
     let debug_syscalls_enabled = probe_config_flag(&build_path, "CONFIG_DEBUG_BUILD") == Some(true);
+    let timer_clock_hz = match emit_timer_build_metadata(&build_path) {
+        Ok(freq) => freq,
+        Err(err) => {
+            panic!(
+                "Unable to derive seL4 timer metadata from {}: {}",
+                build_path.display(),
+                err
+            );
+        }
+    };
+    validate_arch_counter_config(&build_path, timer_clock_hz);
 
     if explicit_linker_script.is_none() {
         if let Err(err) = stage_linker_script(&build_path) {
@@ -851,6 +870,82 @@ fn stage_linker_script(build_root: &Path) -> Result<(), String> {
     Err(format!("Tried [{}]. {}", searched, detail))
 }
 
+fn emit_timer_build_metadata(build_root: &Path) -> Result<u64, String> {
+    let header = find_artifact_with(
+        build_root,
+        "platform_gen.h",
+        TIMER_PLATFORM_HEADER_CANDIDATES,
+        |path| {
+            let contents = fs::read_to_string(path)
+                .map_err(|err| format!("failed to read {}: {}", path.display(), err))?;
+            match parse_timer_clock_hz(&contents) {
+                Some(_) => Ok(ArtifactDecision::Accept),
+                None => Ok(ArtifactDecision::Reject(format!(
+                    "missing TIMER_CLOCK_HZ: {}",
+                    path.display()
+                ))),
+            }
+        },
+    )?;
+    println!("cargo:rerun-if-changed={}", header.display());
+    let contents = fs::read_to_string(&header)
+        .map_err(|err| format!("failed to read {}: {}", header.display(), err))?;
+    let timer_clock_hz = parse_timer_clock_hz(&contents)
+        .ok_or_else(|| format!("missing TIMER_CLOCK_HZ in {}", header.display()))?;
+    println!("cargo:rustc-env=SEL4_TIMER_CLOCK_HZ={timer_clock_hz}");
+    println!("cargo:rustc-env=SEL4_TIMER_COUNTER_KIND=virtual");
+    Ok(timer_clock_hz)
+}
+
+fn validate_arch_counter_config(build_root: &Path, timer_clock_hz: u64) {
+    if timer_clock_hz == 0 {
+        panic!("seL4 TIMER_CLOCK_HZ must be nonzero");
+    }
+
+    let vcnt_user = probe_any_config_flag(
+        build_root,
+        &["KernelArmExportVCNTUser", "CONFIG_EXPORT_VCNT_USER"],
+    );
+    if vcnt_user == Some(true) {
+        println!("cargo:rustc-cfg=sel4_config_export_vcnt_user");
+    }
+
+    if !feature_enabled("TIMERS_ARCH_COUNTER") {
+        return;
+    }
+
+    if vcnt_user != Some(true) {
+        panic!(
+            "feature `timers-arch-counter` requires the selected seL4 build to expose \
+             CNTVCT_EL0/CNTFRQ_EL0 to EL0 (KernelArmExportVCNTUser=ON or \
+             CONFIG_EXPORT_VCNT_USER=y). Reconfigure the Pi build instead of falling \
+             back to the dummy timer."
+        );
+    }
+
+    for flag in [
+        ("KernelArmExportPCNTUser", "CONFIG_EXPORT_PCNT_USER"),
+        ("KernelArmExportPTMRUser", "CONFIG_EXPORT_PTMR_USER"),
+        ("KernelArmExportVTMRUser", "CONFIG_EXPORT_VTMR_USER"),
+    ] {
+        if probe_any_config_flag(build_root, &[flag.0, flag.1]) == Some(true) {
+            panic!(
+                "feature `timers-arch-counter` expects the Pi profile to export only \
+                 the read-only virtual counter; disable {} / {}",
+                flag.0, flag.1
+            );
+        }
+    }
+}
+
+fn feature_enabled(feature: &str) -> bool {
+    let env_name = format!(
+        "CARGO_FEATURE_{}",
+        feature.replace('-', "_").to_ascii_uppercase()
+    );
+    env::var_os(env_name).is_some()
+}
+
 fn emit_config_flags(root: &Path, debug_syscalls_enabled: bool) {
     if debug_syscalls_enabled {
         println!("cargo:rustc-cfg=sel4_config_debug_build");
@@ -863,6 +958,10 @@ fn emit_config_flags(root: &Path, debug_syscalls_enabled: bool) {
     if let Some(true) = probe_config_flag(root, "CONFIG_KERNEL_MCS") {
         println!("cargo:rustc-cfg=sel4_config_kernel_mcs");
     }
+}
+
+fn probe_any_config_flag(root: &Path, flags: &[&str]) -> Option<bool> {
+    flags.iter().find_map(|flag| probe_config_flag(root, flag))
 }
 
 fn probe_config_flag(root: &Path, flag: &str) -> Option<bool> {
@@ -892,6 +991,10 @@ fn parse_config_flag(contents: &str, flag: &str) -> Option<bool> {
             return Some(value);
         }
 
+        if let Some(value) = parse_define_line(line, flag) {
+            return Some(value);
+        }
+
         if let Some(value) = parse_assignment_line(line, flag) {
             return Some(value);
         }
@@ -905,15 +1008,26 @@ fn parse_config_flag(contents: &str, flag: &str) -> Option<bool> {
 }
 
 fn parse_comment_line(line: &str, flag: &str) -> Option<bool> {
-    if !line.starts_with('#') {
-        return None;
-    }
-
     if line.contains(flag) && line.contains("is not set") {
         return Some(false);
     }
 
+    if line.contains(flag) && line.contains("disabled:") {
+        return Some(false);
+    }
+
     None
+}
+
+fn parse_define_line(line: &str, flag: &str) -> Option<bool> {
+    let stripped = line.strip_prefix("#define")?.trim();
+    let mut parts = stripped.split_whitespace();
+    let name = parts.next()?;
+    if name != flag {
+        return None;
+    }
+    let value = parts.next().unwrap_or("1");
+    parse_bool_token(value)
 }
 
 fn parse_assignment_line(line: &str, flag: &str) -> Option<bool> {

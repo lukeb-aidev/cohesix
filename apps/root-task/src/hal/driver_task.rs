@@ -16,6 +16,8 @@ use core::sync::atomic::AtomicU64;
 #[cfg(feature = "kernel")]
 use core::sync::atomic::{fence, AtomicU32, AtomicUsize, Ordering};
 
+#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+use crate::arch::aarch64::timer::{timer_counter_ticks, timer_freq_hz};
 use heapless::Deque;
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
@@ -1249,10 +1251,13 @@ pub fn wait_for_driver_task_start(task_key: usize, spins: usize) -> bool {
     if mask == 0 {
         return false;
     }
-    for _ in 0..spins {
+    let mut spin = 0usize;
+    let mut deadline = driver_task_deadline_from_spins(spins);
+    while spin < spins && !driver_task_deadline_expired(&mut deadline) {
         if DRIVER_TASK_STARTED_TASK_MASK.load(Ordering::Acquire) & mask != 0 {
             return true;
         }
+        spin = spin.saturating_add(1);
         crate::sel4::yield_now();
     }
     DRIVER_TASK_STARTED_TASK_MASK.load(Ordering::Acquire) & mask != 0
@@ -1275,6 +1280,8 @@ pub const REQUIRED_PI4_ACCEPTANCE_HOT_PATHS: usize = 7;
 
 /// Maximum Ethernet-sized frame admitted through a dedicated driver-task ring.
 pub const MAX_DRIVER_TASK_FRAME_BYTES: usize = 1536;
+#[cfg(feature = "kernel")]
+const DRIVER_TASK_LEGACY_SPINS_PER_SECOND: u64 = 100_000_000;
 
 /// Ring command flag used by transitional handlers that still carry a root
 /// pointer or root-stack context despite using the fixed command/completion
@@ -3269,13 +3276,16 @@ pub fn wait_for_driver_task_runtime_recv_ready(
         return false;
     }
     let expected_aux0 = (task_key & u32::MAX as usize) as u32;
-    for _ in 0..spins {
+    let mut spin = 0usize;
+    let mut deadline = driver_task_deadline_from_spins(spins);
+    while spin < spins && !driver_task_deadline_expired(&mut deadline) {
         let progress = driver_task_ring_read_progress_record(ring_root_ptr);
         record_driver_task_ring_progress(slot, progress);
         if driver_task_runtime_progress_is_admission_ready(progress, expected_aux0) {
             emit_driver_task_runtime_entry_status(contract, task_key, tcb, "ready", progress);
             return true;
         }
+        spin = spin.saturating_add(1);
         crate::sel4::yield_now();
     }
     let progress = driver_task_ring_read_progress_record(ring_root_ptr);
@@ -3376,7 +3386,7 @@ fn record_observed_service_us(contract: DriverTaskContract, observed_us: u32) {
 fn driver_task_counter_frequency() -> Option<u64> {
     #[cfg(all(target_arch = "aarch64", feature = "timers-arch-counter"))]
     {
-        Some(read_cntfrq())
+        Some(timer_freq_hz())
     }
     #[cfg(all(target_arch = "aarch64", not(feature = "timers-arch-counter")))]
     {
@@ -3393,7 +3403,7 @@ fn driver_task_counter_frequency() -> Option<u64> {
 fn driver_task_counter_ticks() -> Option<u64> {
     #[cfg(all(target_arch = "aarch64", feature = "timers-arch-counter"))]
     {
-        Some(read_cntvct())
+        Some(timer_counter_ticks())
     }
     #[cfg(all(target_arch = "aarch64", not(feature = "timers-arch-counter")))]
     {
@@ -3405,29 +3415,54 @@ fn driver_task_counter_ticks() -> Option<u64> {
     }
 }
 
-#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
-#[inline]
-fn read_cntvct() -> u64 {
-    let value: u64;
-    // SAFETY: CNTVCT_EL0 is the EL0-readable architectural virtual counter
-    // exposed by seL4 for userspace timing. This is read-only telemetry and
-    // does not change device, kernel, or capability authority.
-    unsafe {
-        core::arch::asm!("mrs {value}, cntvct_el0", value = out(reg) value);
-    }
-    value
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy)]
+enum DriverTaskDeadline {
+    Counter { start: u64, cycles: u64 },
+    Iterations { remaining: usize },
 }
 
-#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
-#[inline]
-fn read_cntfrq() -> u64 {
-    let value: u64;
-    // SAFETY: CNTFRQ_EL0 is a read-only architectural frequency register. The
-    // value is used only to convert local service timing into proof telemetry.
-    unsafe {
-        core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value);
+#[cfg(feature = "kernel")]
+fn driver_task_spins_to_cycles_at_hz(spins: usize, freq_hz: u64) -> u64 {
+    if spins == 0 || freq_hz == 0 {
+        return 0;
     }
-    value
+    let cycles = (spins as u128)
+        .saturating_mul(freq_hz as u128)
+        .saturating_div(DRIVER_TASK_LEGACY_SPINS_PER_SECOND as u128);
+    cycles.clamp(1, u64::MAX as u128) as u64
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_deadline_from_spins(spins: usize) -> DriverTaskDeadline {
+    match (driver_task_counter_ticks(), driver_task_counter_frequency()) {
+        (Some(start), Some(freq_hz)) if start != 0 && freq_hz != 0 => {
+            let cycles = driver_task_spins_to_cycles_at_hz(spins, freq_hz);
+            if cycles == 0 {
+                DriverTaskDeadline::Iterations { remaining: 0 }
+            } else {
+                DriverTaskDeadline::Counter { start, cycles }
+            }
+        }
+        _ => DriverTaskDeadline::Iterations { remaining: spins },
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_deadline_expired(deadline: &mut DriverTaskDeadline) -> bool {
+    match deadline {
+        DriverTaskDeadline::Counter { start, cycles } => driver_task_counter_ticks()
+            .map(|current| current.wrapping_sub(*start) >= *cycles)
+            .unwrap_or(false),
+        DriverTaskDeadline::Iterations { remaining } => {
+            if *remaining == 0 {
+                true
+            } else {
+                *remaining = (*remaining).saturating_sub(1);
+                false
+            }
+        }
+    }
 }
 
 /// Publish the TCB cap and steady priority backing one driver task.
@@ -9518,6 +9553,22 @@ mod tests {
             assert!(contract.budget.preemptible);
             assert!(!contract.budget.allow_blocking_waits);
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_task_spin_conversion_uses_counter_frequency() {
+        assert_eq!(
+            driver_task_spins_to_cycles_at_hz(100_000, 54_000_000),
+            54_000
+        );
+        assert_eq!(
+            driver_task_spins_to_cycles_at_hz(10_000_000, 54_000_000),
+            5_400_000
+        );
+        assert_eq!(driver_task_spins_to_cycles_at_hz(0, 54_000_000), 0);
+        assert_eq!(driver_task_spins_to_cycles_at_hz(1, 54_000_000), 1);
+        assert_eq!(driver_task_spins_to_cycles_at_hz(1, 0), 0);
     }
 
     #[test]

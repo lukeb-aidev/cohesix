@@ -50,6 +50,7 @@ TRACE_SEGMENT_RE = re.compile(
     r"|\[cohsh-net\]"
     r"|\[net-console\]"
     r"|\[smp\]"
+    r"|\[timers\]"
     r"|HDMI_FRAME_"
     r"|CYW43_"
     r"|(?<![A-Za-z0-9_.:-])(?:usb:|USB:|wifi:|WiFi:|WIFI:)"
@@ -510,6 +511,10 @@ class GateSummary:
     serial_clean: bool = True
     boot_halted: bool = False
     timer_irq27_seen: bool = False
+    timer_backend: str = "unknown"
+    timer_clock_hz: int = 0
+    timer_el0_counter: str = "none"
+    dummy_timer_seen: bool = False
     sdio_irq158_seen: bool = False
     sdio_irq158_bound: bool = False
     sdio_irq158_line: int = 0
@@ -665,6 +670,10 @@ class GateSummary:
             "SERIAL_CLEAN": "yes" if self.serial_clean else "no",
             "BOOT_HALTED": "yes" if self.boot_halted else "no",
             "TIMER_IRQ27_SEEN": "yes" if self.timer_irq27_seen else "no",
+            "TIMER_BACKEND": self.timer_backend,
+            "TIMER_CLOCK_HZ": self.timer_clock_hz,
+            "TIMER_EL0_COUNTER": self.timer_el0_counter,
+            "DUMMY_TIMER_SEEN": "yes" if self.dummy_timer_seen else "no",
             "SDIO_IRQ158_SEEN": "yes" if self.sdio_irq158_seen else "no",
             "SDIO_IRQ158_BOUND": "yes" if self.sdio_irq158_bound else "no",
             "SDIO_IRQ158_LINE": self.sdio_irq158_line,
@@ -1066,6 +1075,7 @@ def classify_domain(line: str) -> str | None:
     if (
         line.startswith("BOOTINFO_SNAPSHOT_CORRUPTED")
         or "[panic]" in lower
+        or "[timers]" in lower
         or lower.startswith("[bootstrap:fatal]")
         or lower.startswith("[cohesix:root-task] panic")
     ):
@@ -9336,6 +9346,55 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
     )
 
 
+def summarize_timer_backend(events: Iterable[TraceEvent]) -> tuple[str, int, str, bool]:
+    """Return timer backend, clock, counter kind, and dummy-timer evidence."""
+
+    backend = "unknown"
+    timer_clock_hz = 0
+    counter = "none"
+    dummy_seen = False
+
+    for event in events:
+        raw_lower = event.raw.lower()
+        if "[timers]" not in raw_lower:
+            continue
+
+        if "dummysofttimer" in raw_lower or "dummy software counter" in raw_lower:
+            dummy_seen = True
+            if backend == "unknown":
+                backend = "dummy"
+
+        if "architected" in raw_lower and "counter" in raw_lower:
+            backend = "arch-counter"
+            if counter == "none":
+                counter = "vct"
+
+        if event.fields.get("backend") == "arch-counter":
+            backend = "arch-counter"
+        elif event.fields.get("backend") == "dummy":
+            backend = "dummy"
+            dummy_seen = True
+
+        if event.fields.get("counter") in {"virtual", "vct"}:
+            counter = "vct"
+        elif event.fields.get("counter") == "none":
+            counter = "none"
+
+        raw_freq = event.fields.get("timer_freq_hz")
+        if raw_freq is None and "timer_freq_hz=" in event.raw:
+            raw_freq = event.raw.split("timer_freq_hz=", 1)[1].split(None, 1)[0]
+        if raw_freq is not None:
+            try:
+                timer_clock_hz = int(str(raw_freq).rstrip("Hz"))
+            except ValueError:
+                pass
+
+    if backend == "dummy":
+        counter = "none"
+
+    return backend, timer_clock_hz, counter, dummy_seen
+
+
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
@@ -9403,6 +9462,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         and event.fields.get("irq") == "27"
         and event.fields.get("timer_irq") == "yes"
         for event in event_list
+    )
+    timer_backend, timer_clock_hz, timer_el0_counter, dummy_timer_seen = (
+        summarize_timer_backend(event_list)
     )
     sdio_irq158_events = [
         event
@@ -9758,6 +9820,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         serial_clean=serial_clean(event_list),
         boot_halted=boot_halted,
         timer_irq27_seen=timer_irq27_seen,
+        timer_backend=timer_backend,
+        timer_clock_hz=timer_clock_hz,
+        timer_el0_counter=timer_el0_counter,
+        dummy_timer_seen=dummy_timer_seen,
         sdio_irq158_seen=sdio_irq158_seen,
         sdio_irq158_bound=sdio_irq158_bound,
         sdio_irq158_line=sdio_irq158_line,

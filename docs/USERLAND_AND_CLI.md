@@ -593,6 +593,8 @@ QEMU runs with `-serial mon:stdio` and a user-net device that forwards TCP/UDP p
   receive counters: `tcp_recv_ready=<count>` records receive-ready turns and
   `tcp_recv_budget_hits=<count>` records turns that exhausted the bounded
   receive budget.
+- `netstats` emits driver TX and ARP edge counters:
+  `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`.
 - `netstats` emits a Wi-Fi/EAPOL line: `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`.
 - `netstats` also emits a compact status line for wrapped serial consoles: `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`.
 - Only one control-plane interface is active at a time. The current as-built runtime supports `wired` over GENETv5, `wifi` over CYW43455, and `auto` with deterministic Wi-Fi-first fallback to wired when CYW43455 attach/join setup fails before DHCP ownership transfers to the active Wi-Fi stack; historical Milestone 26b compatibility evidence is recorded in `docs/audit/M26B_COMPLETION_EVIDENCE.md`.

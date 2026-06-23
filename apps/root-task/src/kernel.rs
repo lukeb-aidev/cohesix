@@ -16,12 +16,11 @@ use core::panic::PanicInfo;
 use core::ptr::{self, NonNull};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-#[cfg(feature = "timers-arch-counter")]
-use core::arch::asm;
-
 use crate::affinity;
 #[cfg(all(feature = "kernel", target_arch = "aarch64"))]
-use crate::arch::aarch64::timer::timer_freq_hz;
+use crate::arch::aarch64::timer::{
+    timer_counter_kind, timer_counter_ticks, timer_freq_hz, timer_period_cycles,
+};
 use crate::attest;
 #[cfg(feature = "kernel")]
 use crate::audit::boot as audit_boot;
@@ -5777,7 +5776,7 @@ impl KernelTimer {
             "[timers] init: ticks_per_period={}",
             ticks_per_period
         );
-        let period_cycles = compute_period_cycles(freq_hz, clamped_period);
+        let period_cycles = timer_period_cycles(freq_hz, clamped_period);
         log::info!(
             target: "root_task::kernel::timer",
             "[timers] init: computed period_cycles={}",
@@ -5795,19 +5794,19 @@ impl KernelTimer {
             TimerBackend::ArchCounterPollOnly => {
                 log::info!(
                     target: "root_task::kernel::timer",
-                    "[timers] init: snapshot cntpct begin",
+                    "[timers] init: snapshot cntvct begin",
                 );
-                let last_cycles = read_cntpct();
+                let last_cycles = timer_counter_ticks();
                 if last_cycles == 0 {
                     log::error!(
                         target: "root_task::kernel::timer",
-                        "[timers] init: cntpct read returned 0"
+                        "[timers] init: cntvct read returned 0"
                     );
                     return Err(TimerError::CounterUnavailable);
                 }
                 log::info!(
                     target: "root_task::kernel::timer",
-                    "[timers] init: baseline cntpct={} (poll-only)",
+                    "[timers] init: baseline cntvct={} (poll-only)",
                     last_cycles
                 );
                 last_cycles
@@ -5826,6 +5825,20 @@ impl KernelTimer {
                 baseline
             }
         };
+        log::info!(
+            target: "root_task::kernel::timer",
+            "[timers] summary backend={} counter={} timer_freq_hz={} period_cycles={}",
+            match backend {
+                TimerBackend::ArchCounterPollOnly => "arch-counter",
+                TimerBackend::DummySoftTimer => "dummy",
+            },
+            match backend {
+                TimerBackend::ArchCounterPollOnly => timer_counter_kind(),
+                TimerBackend::DummySoftTimer => "none",
+            },
+            freq_hz,
+            period_cycles,
+        );
         log::info!(
             target: "root_task::kernel::timer",
             "[timers] init: done; timers online (non-blocking)",
@@ -5901,34 +5914,10 @@ impl TimerSource for KernelTimer {
 impl KernelTimer {
     fn snapshot_cycles(&self) -> u64 {
         match self.backend {
-            TimerBackend::ArchCounterPollOnly => read_cntpct(),
+            TimerBackend::ArchCounterPollOnly => timer_counter_ticks(),
             TimerBackend::DummySoftTimer => read_dummy_cycles(self.period_cycles),
         }
     }
-}
-
-fn compute_period_cycles(freq_hz: u64, period_ms: u64) -> u64 {
-    if freq_hz == 0 {
-        return 1;
-    }
-
-    let clamped_period = period_ms.max(1);
-    let cycles = ((freq_hz as u128) * (clamped_period as u128) / 1_000u128) as u64;
-    cycles.max(1)
-}
-
-#[cfg(feature = "timers-arch-counter")]
-fn read_cntpct() -> u64 {
-    let value: u64;
-    unsafe {
-        asm!("mrs {value}, cntpct_el0", value = out(reg) value, options(nomem, preserves_flags));
-    }
-    value
-}
-
-#[cfg(not(feature = "timers-arch-counter"))]
-fn read_cntpct() -> u64 {
-    0
 }
 
 fn read_dummy_cycles(period_cycles: u64) -> u64 {

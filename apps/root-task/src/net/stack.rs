@@ -76,6 +76,7 @@ const TCP_RX_BUFFER: usize = 4096;
 const TCP_TX_BUFFER: usize = 4096;
 const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 16;
 const MAX_CONSOLE_BYTES_PER_POLL: usize = 8_192;
+const SAME_TICK_STALL_WARN_POLLS: u16 = 256;
 const MAX_DHCP_RX_PACKETS_PER_POLL: usize = 2;
 const MAX_UDP_ECHO_PACKETS_PER_POLL: usize = 2;
 const TCP_CONSOLE_RECV_CHUNK_BYTES: usize = DEFAULT_LINE_CAPACITY + 4;
@@ -194,6 +195,16 @@ fn console_listener_defer_reason_for(
 
 fn timebase_stall_warning_suppressed(bringup_status: Option<&'static str>) -> bool {
     matches!(bringup_status, Some("wifi-host-eapol-pending"))
+}
+
+fn timebase_stall_warning_due(
+    same_tick_poll_count: u16,
+    already_warned: bool,
+    bringup_status: Option<&'static str>,
+) -> bool {
+    same_tick_poll_count >= SAME_TICK_STALL_WARN_POLLS
+        && !already_warned
+        && !timebase_stall_warning_suppressed(bringup_status)
 }
 
 fn wifi_host_eapol_blocks_data_path(bringup_status: Option<&'static str>) -> bool {
@@ -1170,6 +1181,7 @@ pub struct NetStack<D: NetDevice> {
     #[cfg(feature = "net-outbound-probe")]
     probe_hint_logged: bool,
     last_now_ms: Option<u64>,
+    same_tick_poll_count: u16,
     time_stall_warned: bool,
     budgeted_phase: BudgetedNetPhase,
 }
@@ -2786,6 +2798,7 @@ impl<D: NetDevice> NetStack<D> {
             #[cfg(feature = "net-outbound-probe")]
             probe_hint_logged: false,
             last_now_ms: None,
+            same_tick_poll_count: 0,
             time_stall_warned: false,
             budgeted_phase: BudgetedNetPhase::Interface,
         });
@@ -2981,16 +2994,23 @@ impl<D: NetDevice> NetStack<D> {
                     "[net-console] timebase regression detected: prev_now_ms={} now_ms={}",
                     previous, now_ms
                 );
-            } else if now_ms == previous
-                && !self.time_stall_warned
-                && !timebase_stall_warning_suppressed(self.device.bringup_status_label())
-            {
-                warn!(
-                    "[net-console] timebase stalled: now_ms={} (no forward progress)",
-                    now_ms
-                );
-                self.time_stall_warned = true;
+                self.same_tick_poll_count = 0;
+                self.time_stall_warned = false;
+            } else if now_ms == previous {
+                self.same_tick_poll_count = self.same_tick_poll_count.saturating_add(1);
+                if timebase_stall_warning_due(
+                    self.same_tick_poll_count,
+                    self.time_stall_warned,
+                    self.device.bringup_status_label(),
+                ) {
+                    warn!(
+                        "[net-console] timebase stalled: now_ms={} polls={} (no forward progress)",
+                        now_ms, self.same_tick_poll_count
+                    );
+                    self.time_stall_warned = true;
+                }
             } else if now_ms > previous {
+                self.same_tick_poll_count = 0;
                 self.time_stall_warned = false;
             }
         }
@@ -3518,6 +3538,8 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.tx_in_flight = device_counters.tx_in_flight;
         self.counters.tx_double_submit = device_counters.tx_double_submit;
         self.counters.tx_zero_len_attempt = device_counters.tx_zero_len_attempt;
+        self.counters.arp_rx = device_counters.arp_rx;
+        self.counters.arp_tx = device_counters.arp_tx;
         self.counters.driver_rx_last_len = device_counters.driver_rx_last_len;
         self.counters.driver_rx_last_ethertype = device_counters.driver_rx_last_ethertype;
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
@@ -3552,6 +3574,8 @@ impl<D: NetDevice> NetStack<D> {
             tx_in_flight: device_counters.tx_in_flight,
             tx_double_submit: device_counters.tx_double_submit,
             tx_zero_len_attempt: device_counters.tx_zero_len_attempt,
+            arp_rx: device_counters.arp_rx,
+            arp_tx: device_counters.arp_tx,
             driver_rx_last_len: device_counters.driver_rx_last_len,
             driver_rx_last_ethertype: device_counters.driver_rx_last_ethertype,
             dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
@@ -6147,6 +6171,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.self_test.console_probe_auth_sent = false;
         self.self_test.console_ok = false;
         self.last_now_ms = None;
+        self.same_tick_poll_count = 0;
         self.time_stall_warned = false;
         self.budgeted_phase = BudgetedNetPhase::Interface;
         #[cfg(feature = "net-outbound-probe")]
@@ -6706,6 +6731,30 @@ mod tests {
             "wifi-host-eapol-required"
         )));
         assert!(!timebase_stall_warning_suppressed(None));
+    }
+
+    #[test]
+    fn repeated_same_tick_polls_delay_timebase_stall_warning() {
+        assert!(!timebase_stall_warning_due(
+            SAME_TICK_STALL_WARN_POLLS - 1,
+            false,
+            None
+        ));
+        assert!(timebase_stall_warning_due(
+            SAME_TICK_STALL_WARN_POLLS,
+            false,
+            None
+        ));
+        assert!(!timebase_stall_warning_due(
+            SAME_TICK_STALL_WARN_POLLS,
+            true,
+            None
+        ));
+        assert!(!timebase_stall_warning_due(
+            SAME_TICK_STALL_WARN_POLLS,
+            false,
+            Some("wifi-host-eapol-pending")
+        ));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-#[cfg(not(target_arch = "aarch64"))]
+#[cfg(any(not(target_arch = "aarch64"), not(feature = "timers-arch-counter")))]
 use core::sync::atomic::AtomicU64;
 
 #[cfg(feature = "kernel")]
@@ -1022,11 +1022,11 @@ fn ticks_to_ms(delta: u64, freq: u64) -> u64 {
 
 #[inline]
 fn monotonic_ticks() -> u64 {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", feature = "timers-arch-counter"))]
     {
-        read_cntpct()
+        crate::arch::aarch64::timer::timer_counter_ticks()
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(all(target_arch = "aarch64", feature = "timers-arch-counter")))]
     {
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -1035,34 +1035,14 @@ fn monotonic_ticks() -> u64 {
 
 #[inline]
 fn counter_frequency() -> u64 {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", feature = "timers-arch-counter"))]
     {
-        read_cntfrq()
+        crate::arch::aarch64::timer::timer_freq_hz()
     }
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(all(target_arch = "aarch64", feature = "timers-arch-counter")))]
     {
         1
     }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline]
-fn read_cntpct() -> u64 {
-    let value: u64;
-    unsafe {
-        core::arch::asm!("mrs {value}, cntpct_el0", value = out(reg) value);
-    }
-    value
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline]
-fn read_cntfrq() -> u64 {
-    let value: u64;
-    unsafe {
-        core::arch::asm!("mrs {value}, cntfrq_el0", value = out(reg) value);
-    }
-    value
 }
 
 #[cfg(test)]

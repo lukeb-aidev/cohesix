@@ -542,6 +542,10 @@ pub struct NetDeviceCounters {
     pub tx_double_submit: u64,
     /// TX zero-length submit attempts detected.
     pub tx_zero_len_attempt: u64,
+    /// ARP frames consumed from the NIC by the stack.
+    pub arp_rx: u64,
+    /// ARP frames submitted by the stack to the NIC.
+    pub arp_tx: u64,
     /// Last hardware RX frame length reported by the driver task.
     pub driver_rx_last_len: u64,
     /// Last hardware RX Ethernet type reported by the driver task.
@@ -613,6 +617,10 @@ pub struct NetCounters {
     pub tx_double_submit: u64,
     /// TX zero-length submit attempts detected.
     pub tx_zero_len_attempt: u64,
+    /// ARP frames consumed from the NIC by the stack.
+    pub arp_rx: u64,
+    /// ARP frames submitted by the stack to the NIC.
+    pub arp_tx: u64,
     /// Last hardware RX frame length reported by the driver task.
     pub driver_rx_last_len: u64,
     /// Last hardware RX Ethernet type reported by the driver task.

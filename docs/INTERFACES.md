@@ -770,6 +770,8 @@ pub trait RootTaskControl {
   `tcp_recv_ready=<count>` for receive-ready turns and
   `tcp_recv_budget_hits=<count>` for turns that exhaust the bounded receive
   budget.
+- `netstats` reports driver TX and ARP edge counters on a dedicated line:
+  `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`.
 - `netstats` emits an additional compact serial-friendly line:
   `netstatus: ip=<ipv4> gateway=<ipv4> src=<source> dhcp=<phase>`.
 - `nettest` target selection is profile-gated:

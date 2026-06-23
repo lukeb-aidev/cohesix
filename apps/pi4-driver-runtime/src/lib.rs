@@ -18,6 +18,8 @@
     clippy::too_many_arguments
 )]
 
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+use core::arch::asm;
 use core::{
     cell::UnsafeCell,
     sync::atomic::{fence, AtomicU32, Ordering},
@@ -603,6 +605,9 @@ const ENGINE_STATE_RESOURCE_READY: u32 = 1 << 2;
 const ENGINE_STATE_TX_PROGRESS: u32 = 1 << 3;
 const ENGINE_STATE_RX_PROGRESS: u32 = 1 << 4;
 const ENGINE_STATE_HW_READY: u32 = 1 << 5;
+
+const RUNTIME_LEGACY_SPINS_PER_SECOND: u64 = 100_000_000;
+const RUNTIME_TIMER_FALLBACK_HZ: u64 = 54_000_000;
 
 const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
@@ -2741,7 +2746,7 @@ fn poll_runtime_command(
             if command.sequence != 0 && command.sequence == ipc_sequence {
                 break;
             }
-            core::hint::spin_loop();
+            runtime_poll_pause();
         }
     }
     if command.sequence == 0 || command.sequence == last_sequence {
@@ -6150,11 +6155,12 @@ fn sdio_wait_inhibit_clear(wait_data: bool) -> bool {
     } else {
         SDHCI_CMD_INHIBIT
     };
-    for _ in 0..SDHCI_CMD_WAIT_LOOPS {
+    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_CMD_WAIT_LOOPS);
+    while !runtime_deadline_expired(&mut deadline) {
         if sdio_read32(SDHCI_PRESENT_STATE) & mask == 0 {
             return true;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     false
 }
@@ -6173,7 +6179,8 @@ fn sdio_wait_int(mask: u32) -> u32 {
         | SDHCI_INT_DATA_TIMEOUT
         | SDHCI_INT_DATA_CRC
         | SDHCI_INT_DATA_END_BIT;
-    for _ in 0..SDHCI_CMD_WAIT_LOOPS {
+    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_CMD_WAIT_LOOPS);
+    while !runtime_deadline_expired(&mut deadline) {
         let status = sdio_read32(SDHCI_INT_STATUS);
         if status & (mask | error_mask) != 0 {
             let ack = sdhci_wait_int_ack_bits(mask, status);
@@ -6182,7 +6189,7 @@ fn sdio_wait_int(mask: u32) -> u32 {
             }
             return status;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     0
 }
@@ -6244,12 +6251,13 @@ fn sdio_transfer_frame(frame: DriverFrameDescriptor, write: bool, block_size: u1
 
 #[cfg(target_os = "none")]
 fn sdio_settle_transfer_data_path() {
-    for _ in 0..SDHCI_CMD_WAIT_LOOPS {
+    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_CMD_WAIT_LOOPS);
+    while !runtime_deadline_expired(&mut deadline) {
         let present = sdio_read32(SDHCI_PRESENT_STATE);
         if present & (SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE) == 0 {
             return;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     let present = sdio_read32(SDHCI_PRESENT_STATE);
     sdio_record_transfer_failure(SDIO_TRANSFER_FAILURE_STAGE_DATA_END, present);
@@ -6831,7 +6839,8 @@ fn cyw43_sdio_card_init_once() -> Result<(), u16> {
         return Err(FAULT_CYW43_TRANSPORT_CARD_CMD0);
     }
     let mut ocr = 0u32;
-    for _ in 0..SDHCI_INIT_SPINS {
+    let mut ocr_deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
+    while !runtime_deadline_expired(&mut ocr_deadline) {
         let Some(response) =
             sdio_execute_transfer(SDIO_CMD5, 0, DRIVER_RUNTIME_SDIO_FLAG_RESP_OCR, empty, 1, 0)
         else {
@@ -6841,13 +6850,14 @@ fn cyw43_sdio_card_init_once() -> Result<(), u16> {
         if ocr & SDIO_OCR_3V2_3V4 != 0 {
             break;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     if ocr & SDIO_OCR_3V2_3V4 == 0 {
         return Err(FAULT_CYW43_TRANSPORT_CARD_CMD5_OCR);
     }
     let desired_ocr = ocr & SDIO_OCR_3V2_3V4;
-    for _ in 0..SDHCI_INIT_SPINS {
+    let mut ready_deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
+    while !runtime_deadline_expired(&mut ready_deadline) {
         let Some(response) = sdio_execute_transfer(
             SDIO_CMD5,
             desired_ocr,
@@ -6862,7 +6872,7 @@ fn cyw43_sdio_card_init_once() -> Result<(), u16> {
             ocr = response;
             break;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     if ocr & SDIO_R4_READY == 0 {
         return Err(FAULT_CYW43_TRANSPORT_CARD_CMD5_READY);
@@ -6947,11 +6957,12 @@ fn cyw43_enable_sdio_function(enable_bit: u8, ready_bit: u8) -> bool {
         if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, desired) {
             return false;
         }
-        for _ in 0..CYW43_SDIO_WAIT_F2_READY_POLLS {
+        let mut deadline = runtime_deadline_from_legacy_spins(CYW43_SDIO_WAIT_F2_READY_POLLS);
+        while !runtime_deadline_expired(&mut deadline) {
             if cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX).unwrap_or(0) & ready_bit != 0 {
                 return true;
             }
-            core::hint::spin_loop();
+            runtime_poll_pause();
         }
         false
     }
@@ -7008,12 +7019,13 @@ fn cyw43_backplane_transport_init_once() -> Result<(), u16> {
         return Err(FAULT_CYW43_BACKPLANE_ALP);
     }
     let mut alp_ready = cfg!(not(target_os = "none"));
-    for _ in 0..SDHCI_INIT_SPINS {
+    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
+    while !runtime_deadline_expired(&mut deadline) {
         if cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR).unwrap_or(0) & SBSDIO_ALP_AVAIL != 0 {
             alp_ready = true;
             break;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     if !alp_ready {
         return Err(FAULT_CYW43_BACKPLANE_ALP);
@@ -7090,12 +7102,13 @@ fn cyw43_prepare_firmware_upload_transport(state: &mut Cyw43RuntimeState) -> Res
         return Err(FAULT_CYW43_BACKPLANE_ALP);
     }
     let mut alp_ready = cfg!(not(target_os = "none"));
-    for _ in 0..SDHCI_INIT_SPINS {
+    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
+    while !runtime_deadline_expired(&mut deadline) {
         if cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR).unwrap_or(0) & SBSDIO_ALP_AVAIL != 0 {
             alp_ready = true;
             break;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     if !alp_ready {
         return Err(FAULT_CYW43_BACKPLANE_ALP);
@@ -7150,7 +7163,8 @@ fn cyw43_require_post_release_ht_clock() -> Result<u8, u16> {
         if !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ) {
             return Err(FAULT_CYW43_POST_RELEASE_HT);
         }
-        for _ in 0..SDHCI_INIT_SPINS {
+        let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
+        while !runtime_deadline_expired(&mut deadline) {
             let Some(chipclk) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR) else {
                 return Err(FAULT_CYW43_POST_RELEASE_HT);
             };
@@ -7163,7 +7177,7 @@ fn cyw43_require_post_release_ht_clock() -> Result<u8, u16> {
             {
                 return Err(FAULT_CYW43_POST_RELEASE_HT);
             }
-            core::hint::spin_loop();
+            runtime_poll_pause();
         }
         cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, u32::from(last_chipclk));
         Err(FAULT_CYW43_POST_RELEASE_HT)
@@ -7280,7 +7294,10 @@ fn cyw43_enable_post_release_function2() -> Result<u8, u16> {
                 );
                 return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
             }
-            for poll in 0..CYW43_SDIO_WAIT_F2_READY_POLLS {
+            let mut poll = 0usize;
+            let mut deadline = runtime_deadline_from_legacy_spins(CYW43_SDIO_WAIT_F2_READY_POLLS);
+            while poll < CYW43_SDIO_WAIT_F2_READY_POLLS && !runtime_deadline_expired(&mut deadline)
+            {
                 let Some(iordy) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX) else {
                     cyw43_record_last_fault_with_result(
                         FAULT_CYW43_POST_RELEASE_F2_READY,
@@ -7311,7 +7328,8 @@ fn cyw43_enable_post_release_function2() -> Result<u8, u16> {
                     }
                     return Ok(iordy);
                 }
-                core::hint::spin_loop();
+                runtime_poll_pause();
+                poll = poll.saturating_add(1);
             }
         }
         cyw43_record_last_fault_with_result(
@@ -7421,7 +7439,8 @@ fn cyw43_wait_for_firmware_mailbox_ready(_state: &mut Cyw43RuntimeState) -> Resu
     #[cfg(target_os = "none")]
     {
         let mut last_mailbox = 0u32;
-        for _ in 0..CYW43_POST_RELEASE_MAILBOX_POLLS {
+        let mut deadline = runtime_deadline_from_legacy_spins(CYW43_POST_RELEASE_MAILBOX_POLLS);
+        while !runtime_deadline_expired(&mut deadline) {
             let Some(mailbox) = cyw43_backplane_read_u32(
                 _state,
                 CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOHOSTMAILBOXDATA,
@@ -7440,7 +7459,7 @@ fn cyw43_wait_for_firmware_mailbox_ready(_state: &mut Cyw43RuntimeState) -> Resu
                 );
                 return Err(FAULT_CYW43_POST_RELEASE_PROTOCOL_VERSION);
             }
-            core::hint::spin_loop();
+            runtime_poll_pause();
         }
         cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_MAILBOX_READY, last_mailbox);
         Err(FAULT_CYW43_POST_RELEASE_MAILBOX_READY)
@@ -8949,7 +8968,8 @@ fn cyw43_submit_sdpcm_frame(
 }
 
 fn cyw43_wait_for_sdpcm_tx_credit(state: &mut Cyw43RuntimeState) -> bool {
-    for _ in 0..CYW43_TX_CREDIT_WAIT_LOOPS {
+    let mut deadline = runtime_deadline_from_legacy_spins(CYW43_TX_CREDIT_WAIT_LOOPS);
+    while !runtime_deadline_expired(&mut deadline) {
         if has_sdpcm_credit(state.sdpcm_seq, state.sdpcm_seq_max) {
             return true;
         }
@@ -8958,7 +8978,7 @@ fn cyw43_wait_for_sdpcm_tx_credit(state: &mut Cyw43RuntimeState) -> bool {
             0,
             Cyw43AssertedEmptyPolicy::RequestRetransmit,
         );
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     has_sdpcm_credit(state.sdpcm_seq, state.sdpcm_seq_max)
 }
@@ -9305,9 +9325,7 @@ fn cyw43_runtime_retry_asserted_empty_firstread(
         {
             return None;
         }
-        for _ in 0..CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS {
-            core::hint::spin_loop();
-        }
+        runtime_spin(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS);
         match cyw43_runtime_read_hintless_firstread_once(
             state,
             wanted_mask,
@@ -9522,7 +9540,11 @@ fn cyw43_runtime_recover_asserted_empty_firstread(
 }
 
 fn cyw43_runtime_wait_for_retransmit_handled(state: &mut Cyw43RuntimeState) -> bool {
-    for _ in 0..CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS {
+    let mut polls = 0usize;
+    let mut deadline = runtime_deadline_from_legacy_spins(
+        CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS.saturating_mul(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS),
+    );
+    while polls < CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS && !runtime_deadline_expired(&mut deadline) {
         if let Some(mailbox_data) =
             cyw43_backplane_read_u32(state, CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOHOSTMAILBOXDATA)
         {
@@ -9537,9 +9559,8 @@ fn cyw43_runtime_wait_for_retransmit_handled(state: &mut Cyw43RuntimeState) -> b
                 return true;
             }
         }
-        for _ in 0..CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS {
-            core::hint::spin_loop();
-        }
+        runtime_spin(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS);
+        polls = polls.saturating_add(1);
     }
     state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACK_TIMEOUT;
     cyw43_runtime_continue_after_stale_retransmit(state)
@@ -9565,9 +9586,7 @@ fn cyw43_runtime_continue_after_stale_retransmit(state: &mut Cyw43RuntimeState) 
         }
         Cyw43RetransmitRetryAction::ClearStale => {}
     }
-    for _ in 0..CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS {
-        core::hint::spin_loop();
-    }
+    runtime_spin(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS);
     let second = cyw43_runtime_retransmit_retry_sample(state);
     let second_action = cyw43_retransmit_retry_sample_action(second);
     cyw43_rx_trace_record_retransmit_sample(state, second, second_action);
@@ -9758,7 +9777,14 @@ fn cyw43_runtime_wait_for_asserted_empty_rframe(
     source: &mut Cyw43RxSourceSnapshot,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
 ) -> Option<Cyw43RxPollResult> {
-    for _ in 0..CYW43_RX_SOURCE_ASSERTED_EMPTY_RFRAME_POLLS {
+    let mut polls = 0usize;
+    let mut deadline = runtime_deadline_from_legacy_spins(
+        CYW43_RX_SOURCE_ASSERTED_EMPTY_RFRAME_POLLS
+            .saturating_mul(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS),
+    );
+    while polls < CYW43_RX_SOURCE_ASSERTED_EMPTY_RFRAME_POLLS
+        && !runtime_deadline_expired(&mut deadline)
+    {
         *source = cyw43_rx_source_snapshot_force(state, CYW43_CONTROL_RX_FIRSTREAD_BYTES as u16)
             .unwrap_or(*source);
         if let Some(result) =
@@ -9766,9 +9792,8 @@ fn cyw43_runtime_wait_for_asserted_empty_rframe(
         {
             return Some(result);
         }
-        for _ in 0..CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS {
-            core::hint::spin_loop();
-        }
+        runtime_spin(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS);
+        polls = polls.saturating_add(1);
     }
     None
 }
@@ -9780,16 +9805,19 @@ fn cyw43_runtime_drain_function2_frame_count(write: bool) -> u16 {
         (SBSDIO_FUNC1_RFRAMEBCLO, SBSDIO_FUNC1_RFRAMEBCHI)
     };
     let mut last_count = u16::MAX;
-    for _ in 0..CYW43_RX_SOURCE_RECOVERY_DRAIN_POLLS {
+    let mut polls = 0usize;
+    let mut deadline = runtime_deadline_from_legacy_spins(
+        CYW43_RX_SOURCE_RECOVERY_DRAIN_POLLS.saturating_mul(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS),
+    );
+    while polls < CYW43_RX_SOURCE_RECOVERY_DRAIN_POLLS && !runtime_deadline_expired(&mut deadline) {
         let lo = cyw43_sdio_cmd52_read(1, count_lo_reg).unwrap_or(0xff);
         let hi = cyw43_sdio_cmd52_read(1, count_hi_reg).unwrap_or(0xff);
         last_count = u16::from(lo) | (u16::from(hi) << 8);
         if last_count == 0 {
             break;
         }
-        for _ in 0..CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS {
-            core::hint::spin_loop();
-        }
+        runtime_spin(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS);
+        polls = polls.saturating_add(1);
     }
     last_count
 }
@@ -10337,7 +10365,11 @@ fn cyw43_control_exchange(
         sequence,
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
     );
-    for attempt in 1..=CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS {
+    let mut attempt = 1usize;
+    let mut deadline = runtime_deadline_from_legacy_spins(CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS);
+    while attempt <= CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS
+        && !runtime_deadline_expired(&mut deadline)
+    {
         let allow_firstread = cyw43_control_exchange_attempt_uses_firstread(attempt);
         let reply_frame = match cyw43_runtime_poll_rx_detailed(
             state,
@@ -10348,7 +10380,8 @@ fn cyw43_control_exchange(
             Cyw43RxPollResult::Frame(frame) => frame,
             Cyw43RxPollResult::Idle(reason) => {
                 cyw43_remember_control_idle_reason(&mut last_idle_reason, reason);
-                core::hint::spin_loop();
+                attempt = attempt.saturating_add(1);
+                runtime_poll_pause();
                 continue;
             }
         };
@@ -10357,12 +10390,14 @@ fn cyw43_control_exchange(
         };
         let Some(reply) = cyw43_control_reply_from_frame(reply_frame) else {
             nonmatching_frames = nonmatching_frames.saturating_add(1);
-            core::hint::spin_loop();
+            attempt = attempt.saturating_add(1);
+            runtime_poll_pause();
             continue;
         };
         if reply.cmd != expected_cmd || reply.id != expected_id {
             nonmatching_frames = nonmatching_frames.saturating_add(1);
-            core::hint::spin_loop();
+            attempt = attempt.saturating_add(1);
+            runtime_poll_pause();
             continue;
         }
         let response_len = match usize::try_from(reply.response_len) {
@@ -11691,6 +11726,12 @@ fn genet_runtime_poll_rx(
         let Some((payload_len, flags)) = genet_rx_queue_pop_to_ring(state) else {
             return GenetRxPoll::Idle;
         };
+        let bytes_left = (budget.max_bytes as usize).saturating_sub(payload_len);
+        let _ = genet_runtime_drain_rx_hardware_to_queue(
+            state,
+            bytes_left,
+            drain_budget.saturating_sub(1),
+        );
         state.rx_packets = state.rx_packets.saturating_add(1);
         return GenetRxPoll::Frame {
             len: payload_len,
@@ -11706,7 +11747,87 @@ fn genet_runtime_poll_rx(
     ) else {
         return GenetRxPoll::Idle;
     };
+    match genet_runtime_drain_rx_hardware(state, &descriptor, dma_range, budget, drain_budget) {
+        Ok(Some((len, flags))) => GenetRxPoll::Frame { len, flags },
+        Ok(None) => GenetRxPoll::Idle,
+        Err(detail) => GenetRxPoll::BudgetExhausted(detail),
+    }
+}
+
+fn genet_runtime_drain_rx_hardware(
+    state: &mut GenetRuntimeState,
+    descriptor: &DriverRuntimeInitDescriptor,
+    dma_range: DriverRuntimeResourceRangeDescriptor,
+    budget: DriverTaskBudgetGrant,
+    drain_budget: usize,
+) -> Result<Option<(usize, u16)>, u16> {
+    let mut first_frame = None;
+    let mut bytes_left = budget.max_bytes as usize;
     for _ in 0..drain_budget {
+        let prod = genet_read32(GENET_RDMA_PROD_INDEX) as u16;
+        if prod == state.rx_cons_index {
+            break;
+        }
+        let slot = ring_slot(state.rx_cons_index, GENET_ACTIVE_RING_DESCS);
+        let dma_vaddr = dma_range.vaddr as usize + slot * DRIVER_TASK_RING_PAGE_BYTES;
+        dma_load_barrier();
+        let desc = genet_read_rx_desc(slot);
+        let len_status = genet_rx_len_status_from_dma(dma_vaddr, desc.0);
+        let Some(payload_len) = genet_rx_payload_len(len_status) else {
+            genet_rearm_rx_slot(descriptor, dma_range, slot);
+            state.rx_cons_index = state.rx_cons_index.wrapping_add(1);
+            genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
+            continue;
+        };
+        if payload_len > budget.max_bytes as usize {
+            if first_frame.is_none() {
+                return Err(BUDGET_EXHAUSTED_BYTES);
+            }
+            break;
+        }
+        if payload_len > bytes_left {
+            if first_frame.is_none() {
+                return Err(BUDGET_EXHAUSTED_BYTES);
+            }
+            break;
+        }
+        let flags = genet_dma_frame_ethertype(dma_vaddr, payload_len);
+        if first_frame.is_none() {
+            genet_copy_dma_frame_to_ring(dma_vaddr, payload_len);
+            first_frame = Some((payload_len, flags));
+            state.rx_packets = state.rx_packets.saturating_add(1);
+        } else if !genet_rx_queue_push_from_dma(state, dma_vaddr, payload_len, flags) {
+            break;
+        }
+        bytes_left = bytes_left.saturating_sub(payload_len);
+        genet_rearm_rx_slot(descriptor, dma_range, slot);
+        state.rx_cons_index = state.rx_cons_index.wrapping_add(1);
+        genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
+    }
+    Ok(first_frame)
+}
+
+fn genet_runtime_drain_rx_hardware_to_queue(
+    state: &mut GenetRuntimeState,
+    mut bytes_left: usize,
+    drain_budget: usize,
+) -> usize {
+    if drain_budget == 0 || state.rx_queue_count as usize >= GENET_RX_QUEUE_CAP {
+        return 0;
+    }
+    let descriptor = RUNTIME_DESCRIPTOR.load();
+    let Some(dma_range) = runtime_resource_range(
+        &descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    ) else {
+        return 0;
+    };
+    let mut queued = 0usize;
+    for _ in 0..drain_budget {
+        if usize::from(state.rx_queue_count) >= GENET_RX_QUEUE_CAP {
+            break;
+        }
         let prod = genet_read32(GENET_RDMA_PROD_INDEX) as u16;
         if prod == state.rx_cons_index {
             break;
@@ -11722,21 +11843,20 @@ fn genet_runtime_poll_rx(
             genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
             continue;
         };
-        if payload_len > budget.max_bytes as usize {
-            return GenetRxPoll::BudgetExhausted(BUDGET_EXHAUSTED_BYTES);
+        if payload_len > bytes_left {
+            break;
         }
-        genet_copy_dma_frame_to_ring(dma_vaddr, payload_len);
         let flags = genet_dma_frame_ethertype(dma_vaddr, payload_len);
+        if !genet_rx_queue_push_from_dma(state, dma_vaddr, payload_len, flags) {
+            break;
+        }
+        bytes_left = bytes_left.saturating_sub(payload_len);
         genet_rearm_rx_slot(&descriptor, dma_range, slot);
         state.rx_cons_index = state.rx_cons_index.wrapping_add(1);
         genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
-        state.rx_packets = state.rx_packets.saturating_add(1);
-        return GenetRxPoll::Frame {
-            len: payload_len,
-            flags,
-        };
+        queued = queued.saturating_add(1);
     }
-    GenetRxPoll::Idle
+    queued
 }
 
 fn genet_rx_len_status_from_dma(dma_vaddr: usize, descriptor_len_status: u32) -> u32 {
@@ -11753,6 +11873,29 @@ fn genet_copy_dma_frame_to_ring(dma_vaddr: usize, payload_len: usize) {
         let byte = read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index);
         write_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET + index, byte);
     }
+}
+
+fn genet_rx_queue_push_from_dma(
+    state: &mut GenetRuntimeState,
+    dma_vaddr: usize,
+    payload_len: usize,
+    flags: u16,
+) -> bool {
+    if payload_len == 0
+        || payload_len > GENET_MAX_FRAME_LEN
+        || usize::from(state.rx_queue_count) >= GENET_RX_QUEUE_CAP
+    {
+        return false;
+    }
+    let slot =
+        (usize::from(state.rx_queue_head) + usize::from(state.rx_queue_count)) % GENET_RX_QUEUE_CAP;
+    for index in 0..payload_len {
+        state.rx_queue_frames[slot][index] = read_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index);
+    }
+    state.rx_queue_lens[slot] = payload_len as u16;
+    state.rx_queue_flags[slot] = flags;
+    state.rx_queue_count = state.rx_queue_count.saturating_add(1);
+    true
 }
 
 fn genet_dma_frame_ethertype(dma_vaddr: usize, payload_len: usize) -> u16 {
@@ -11950,7 +12093,11 @@ fn genet_configure_phy_link() -> Option<(u8, bool, u32)> {
 
     let mut link_ready = false;
     let mut resolved_speed = None;
-    for _ in 0..GENET_PHY_LINK_POLL_TRIES {
+    let mut polls = 0usize;
+    let mut deadline = runtime_deadline_from_legacy_spins(
+        GENET_PHY_LINK_POLL_TRIES.saturating_mul(GENET_PHY_LINK_POLL_DELAY_SPINS),
+    );
+    while polls < GENET_PHY_LINK_POLL_TRIES && !runtime_deadline_expired(&mut deadline) {
         let _ = genet_mdio_read(phy_addr, GENET_MII_BMSR);
         if let Some(status) = genet_mdio_read(phy_addr, GENET_MII_BMSR) {
             link_ready = (status & GENET_MII_BMSR_LSTATUS) != 0;
@@ -11961,6 +12108,7 @@ fn genet_configure_phy_link() -> Option<(u8, bool, u32)> {
             }
         }
         runtime_spin(GENET_PHY_LINK_POLL_DELAY_SPINS);
+        polls = polls.saturating_add(1);
     }
 
     let speed = resolved_speed
@@ -11990,11 +12138,12 @@ fn genet_discover_phy_addr() -> Option<u8> {
 }
 
 fn genet_mdio_wait_idle() -> bool {
-    for _ in 0..GENET_MDIO_POLL_TRIES {
+    let mut deadline = runtime_deadline_from_legacy_spins(GENET_MDIO_POLL_TRIES);
+    while !runtime_deadline_expired(&mut deadline) {
         if (genet_read32(GENET_MDIO_CMD) & GENET_MDIO_START_BUSY) == 0 {
             return true;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     false
 }
@@ -14970,15 +15119,97 @@ fn test_genet_mmio_word(offset: usize) -> Option<usize> {
     (word < TEST_GENET_MMIO_WORDS).then_some(word)
 }
 
-#[cfg(target_os = "none")]
-fn runtime_spin(iterations: usize) {
-    for _ in 0..iterations {
-        core::hint::spin_loop();
+#[derive(Clone, Copy)]
+enum RuntimeDeadline {
+    Counter { start: u64, cycles: u64 },
+    Iterations { remaining: usize },
+}
+
+fn runtime_timer_freq_hz() -> u64 {
+    option_env!("PI4_DRIVER_RUNTIME_TIMER_CLOCK_HZ")
+        .and_then(runtime_parse_u64)
+        .unwrap_or(RUNTIME_TIMER_FALLBACK_HZ)
+}
+
+fn runtime_parse_u64(value: &str) -> Option<u64> {
+    value.parse().ok()
+}
+
+fn runtime_legacy_spins_to_cycles(spins: usize) -> u64 {
+    runtime_legacy_spins_to_cycles_at_hz(spins, runtime_timer_freq_hz())
+}
+
+fn runtime_legacy_spins_to_cycles_at_hz(spins: usize, freq_hz: u64) -> u64 {
+    if spins == 0 || freq_hz == 0 {
+        return 0;
+    }
+    let cycles = (spins as u128)
+        .saturating_mul(freq_hz as u128)
+        .saturating_div(RUNTIME_LEGACY_SPINS_PER_SECOND as u128);
+    cycles.clamp(1, u64::MAX as u128) as u64
+}
+
+fn runtime_deadline_from_legacy_spins(spins: usize) -> RuntimeDeadline {
+    let start = runtime_timer_counter_ticks();
+    let cycles = runtime_legacy_spins_to_cycles(spins);
+    if start != 0 && cycles != 0 {
+        RuntimeDeadline::Counter { start, cycles }
+    } else {
+        RuntimeDeadline::Iterations { remaining: spins }
     }
 }
 
-#[cfg(not(target_os = "none"))]
+fn runtime_deadline_expired(deadline: &mut RuntimeDeadline) -> bool {
+    match deadline {
+        RuntimeDeadline::Counter { start, cycles } => {
+            runtime_counter_deadline_expired(*start, *cycles, runtime_timer_counter_ticks())
+        }
+        RuntimeDeadline::Iterations { remaining } => {
+            if *remaining == 0 {
+                true
+            } else {
+                *remaining = (*remaining).saturating_sub(1);
+                false
+            }
+        }
+    }
+}
+
+fn runtime_counter_deadline_expired(start: u64, cycles: u64, current: u64) -> bool {
+    current.wrapping_sub(start) >= cycles
+}
+
+fn runtime_poll_pause() {
+    core::hint::spin_loop();
+}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn runtime_spin(iterations: usize) {
+    let mut deadline = runtime_deadline_from_legacy_spins(iterations);
+    while !runtime_deadline_expired(&mut deadline) {
+        runtime_poll_pause();
+    }
+}
+
+#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
 fn runtime_spin(_iterations: usize) {}
+
+#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+fn runtime_timer_counter_ticks() -> u64 {
+    let value: u64;
+    // SAFETY: `apps/pi4-driver-runtime/build.rs` rejects linked Pi 4 runtime
+    // builds unless the selected seL4 kernel exports the read-only virtual
+    // counter to EL0. The runtime never writes timer-control registers.
+    unsafe {
+        asm!("mrs {value}, cntvct_el0", value = out(reg) value, options(nomem, nostack, preserves_flags));
+    }
+    value
+}
+
+#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
+fn runtime_timer_counter_ticks() -> u64 {
+    0
+}
 
 fn dma_store_barrier() {
     core::sync::atomic::compiler_fence(Ordering::Release);
@@ -16056,7 +16287,9 @@ fn xhci_poll_command_completion(
     let mut peek_begin_published = false;
     let events_per_slice = xhci_command_completion_events_per_slice(ack_mode);
     xhci_publish_command_poll_begin(ack_mode);
-    for spin in 0..spins {
+    let mut spin = 0usize;
+    let mut deadline = runtime_deadline_from_legacy_spins(spins);
+    while spin < spins && !runtime_deadline_expired(&mut deadline) {
         if !peek_begin_published {
             xhci_publish_command_proof_event_peek_begin(ack_mode);
             peek_begin_published = true;
@@ -16122,7 +16355,8 @@ fn xhci_poll_command_completion(
                 spin / USB_COMMAND_COMPLETION_PROGRESS_SPINS,
             );
         }
-        core::hint::spin_loop();
+        spin = spin.saturating_add(1);
+        runtime_poll_pause();
     }
     XhciCommandCompletionPoll::Pending(pending)
 }
@@ -16659,8 +16893,10 @@ fn xhci_wait_control_transfer_completion_outcome(
 ) -> XhciControlTransferOutcome {
     let mut transferred = if plan.data_len == 0 { Some(0) } else { None };
     let mut published_pending = None;
+    let mut spin = 0usize;
+    let mut deadline = runtime_deadline_from_legacy_spins(completion_spins);
     xhci_publish_control_progress(progress, progress.map_or(0, |progress| progress.wait_begin));
-    for _ in 0..completion_spins {
+    while spin < completion_spins && !runtime_deadline_expired(&mut deadline) {
         while let Some(event) = xhci_next_event(state, descriptor) {
             published_pending = None;
             match xhci_classify_control_transfer_event(
@@ -16750,7 +16986,8 @@ fn xhci_wait_control_transfer_completion_outcome(
             transferred.is_some(),
             &mut published_pending,
         );
-        core::hint::spin_loop();
+        spin = spin.saturating_add(1);
+        runtime_poll_pause();
     }
     xhci_publish_control_progress(
         progress,
@@ -17288,12 +17525,13 @@ fn xhci_reset_root_port_once(
             DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_CONNECT_WAIT_BEGIN,
             aux0,
         );
-        for _ in 0..USB_ROOT_PORT_POWER_SETTLE_SPINS {
+        let mut deadline = runtime_deadline_from_legacy_spins(USB_ROOT_PORT_POWER_SETTLE_SPINS);
+        while !runtime_deadline_expired(&mut deadline) {
             status = usb_read32(portsc);
             if status & XHCI_PORTSC_CCS != 0 {
                 break;
             }
-            core::hint::spin_loop();
+            runtime_poll_pause();
         }
     }
     if status & XHCI_PORTSC_CCS == 0 {
@@ -17321,7 +17559,8 @@ fn xhci_reset_root_port_once(
         DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_POLL_BEGIN,
         aux0,
     );
-    for _ in 0..USB_XHCI_SPINS {
+    let mut deadline = runtime_deadline_from_legacy_spins(USB_XHCI_SPINS);
+    while !runtime_deadline_expired(&mut deadline) {
         let next = usb_read32(portsc);
         if next & XHCI_PORTSC_PR == 0 && next & XHCI_PORTSC_PRC != 0 {
             publish_runtime_progress(
@@ -17346,7 +17585,7 @@ fn xhci_reset_root_port_once(
                 aux0,
             );
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     publish_runtime_progress(
         sequence,
@@ -18417,15 +18656,11 @@ fn xhci_configure_keyboard_endpoint(
 }
 
 fn usb_spin_wait(spins: usize) {
-    for _ in 0..spins {
-        core::hint::spin_loop();
-    }
+    runtime_spin(spins);
 }
 
 fn cyw43_spin_wait(spins: usize) {
-    for _ in 0..spins {
-        core::hint::spin_loop();
-    }
+    runtime_spin(spins);
 }
 
 fn usb_read_configuration(
@@ -21183,11 +21418,12 @@ fn xhci_next_keyboard_transfer_event(
 }
 
 fn usb_wait_status(op_base: usize, mask: u32, expected: u32) -> bool {
-    for _ in 0..PCIE_POLL_SPINS {
+    let mut deadline = runtime_deadline_from_legacy_spins(PCIE_POLL_SPINS);
+    while !runtime_deadline_expired(&mut deadline) {
         if usb_read32(op_base + XHCI_USBSTS) & mask == expected {
             return true;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     false
 }
@@ -21753,21 +21989,23 @@ fn sdio_software_reset(mask: u8) -> bool {
             return false;
         }
     }
-    for _ in 0..SDHCI_INIT_SPINS {
+    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
+    while !runtime_deadline_expired(&mut deadline) {
         if sdio_read8(SDHCI_SOFTWARE_RESET) & mask == 0 {
             return true;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     false
 }
 
 fn sdio_wait_for_int_clock_stable() -> bool {
-    for _ in 0..SDHCI_INIT_SPINS {
+    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
+    while !runtime_deadline_expired(&mut deadline) {
         if sdio_read16(SDHCI_CLOCK_CONTROL) & SDHCI_CLOCK_INT_STABLE != 0 {
             return true;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
     false
 }
@@ -21830,13 +22068,14 @@ fn sdio_power_card_ready(power: u8, present: u32) -> bool {
 }
 
 fn sdio_settle_power_on_ready() {
-    for _ in 0..SDHCI_POWER_READY_SPINS {
+    let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_POWER_READY_SPINS);
+    while !runtime_deadline_expired(&mut deadline) {
         let power = sdio_read8(SDHCI_POWER_CONTROL);
         let present = sdio_read32(SDHCI_PRESENT_STATE);
         if sdio_power_ready(power, present) || sdio_power_card_ready(power, present) {
             return;
         }
-        core::hint::spin_loop();
+        runtime_poll_pause();
     }
 }
 
@@ -21892,9 +22131,7 @@ fn sdio_runtime_init_hw(sequence: u32, aux0: u32) -> Result<(), u16> {
         aux0,
     );
     sdio_write8(SDHCI_POWER_CONTROL, 0);
-    for _ in 0..SDHCI_POWER_READY_SPINS {
-        core::hint::spin_loop();
-    }
+    runtime_spin(SDHCI_POWER_READY_SPINS);
     if !sdio_software_reset(SDHCI_RESET_ALL) {
         if sdio_adopt_hal_prepared_host(sequence, aux0).is_ok() {
             return Ok(());
@@ -22187,7 +22424,9 @@ fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
 
 #[cfg(target_os = "none")]
 fn wait_for_mini_uart_tx(_uart: *mut u32) -> bool {
-    for _ in 0..MINI_UART_TX_SPIN_LIMIT {
+    let mut spin = 0usize;
+    let mut deadline = runtime_deadline_from_legacy_spins(MINI_UART_TX_SPIN_LIMIT);
+    while spin < MINI_UART_TX_SPIN_LIMIT && !runtime_deadline_expired(&mut deadline) {
         // SAFETY: The serial runtime image maps the UART MMIO page at
         // `DRIVER_TASK_DEVICE_MMIO_VADDR`; the MU_LSR offset is in the same
         // page and is read-only for this polling check.
@@ -22199,7 +22438,8 @@ fn wait_for_mini_uart_tx(_uart: *mut u32) -> bool {
         if lsr & MINI_UART_LSR_TX_EMPTY != 0 {
             return true;
         }
-        core::hint::spin_loop();
+        spin = spin.saturating_add(1);
+        runtime_poll_pause();
     }
     false
 }
@@ -22374,6 +22614,29 @@ mod tests {
         SDIO_RUNTIME_STATE.with_mut(SdioRuntimeState::reset);
         CYW43_RUNTIME_STATE.with_mut(Cyw43RuntimeState::reset);
         SERIAL_RUNTIME_RX_QUEUE.with_mut(SerialRuntimeRxQueue::reset);
+    }
+
+    #[test]
+    fn runtime_legacy_spin_conversion_uses_counter_frequency() {
+        assert_eq!(
+            runtime_legacy_spins_to_cycles_at_hz(100_000, 54_000_000),
+            54_000
+        );
+        assert_eq!(
+            runtime_legacy_spins_to_cycles_at_hz(10_000_000, 54_000_000),
+            5_400_000
+        );
+        assert_eq!(runtime_legacy_spins_to_cycles_at_hz(0, 54_000_000), 0);
+        assert_eq!(runtime_legacy_spins_to_cycles_at_hz(1, 54_000_000), 1);
+        assert_eq!(runtime_legacy_spins_to_cycles_at_hz(1, 0), 0);
+    }
+
+    #[test]
+    fn runtime_counter_deadline_handles_wraparound() {
+        assert!(!runtime_counter_deadline_expired(100, 50, 149));
+        assert!(runtime_counter_deadline_expired(100, 50, 150));
+        assert!(!runtime_counter_deadline_expired(u64::MAX - 4, 8, 2));
+        assert!(runtime_counter_deadline_expired(u64::MAX - 4, 8, 3));
     }
 
     #[test]
@@ -22939,7 +23202,7 @@ mod tests {
     }
 
     #[test]
-    fn genet_rx_hardware_ring_delivers_one_frame_per_service_turn() {
+    fn genet_rx_hardware_ring_drains_burst_tail_into_runtime_queue() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
@@ -23003,8 +23266,9 @@ mod tests {
                 flags: 0x0800,
             }
         );
-        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
-        assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
+        assert_eq!(usize::from(state.rx_queue_count), 1);
+        assert_eq!(state.rx_packets, 1);
         assert_eq!(
             read_frame_prefix::<18>(DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
@@ -23023,6 +23287,7 @@ mod tests {
         );
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
         assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(state.rx_packets, 2);
         assert_eq!(
             read_frame_prefix::<18>(DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
@@ -23031,6 +23296,92 @@ mod tests {
             }),
             payload_b
         );
+    }
+
+    #[test]
+    fn genet_rx_burst_drain_respects_cumulative_byte_budget() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let mut payload_a = [0u8; 18];
+        payload_a[0..6].copy_from_slice(&[0xff; 6]);
+        payload_a[6..12].copy_from_slice(&GENET_DRIVER_TASK_MAC);
+        payload_a[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+        payload_a[14..18].copy_from_slice(b"one1");
+        let mut payload_b = [0u8; 18];
+        payload_b[0..6].copy_from_slice(&GENET_DRIVER_TASK_MAC);
+        payload_b[6..12].copy_from_slice(&[0x9c, 0x69, 0xd3, 0x40, 0xa8, 0x57]);
+        payload_b[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+        payload_b[14..18].copy_from_slice(b"two2");
+
+        for (slot, payload) in [(0usize, payload_a), (1usize, payload_b)] {
+            let dma_vaddr = dma_range.vaddr as usize + slot * DRIVER_TASK_RING_PAGE_BYTES;
+            write_dma_u32(
+                dma_vaddr,
+                (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                    | GENET_DMA_OWN
+                    | GENET_DMA_SOP
+                    | GENET_DMA_EOP,
+            );
+            for (index, byte) in payload.iter().copied().enumerate() {
+                write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
+            }
+            genet_write_rx_desc(
+                slot,
+                runtime_resource_bus_addr_at(
+                    &descriptor,
+                    dma_range,
+                    slot * DRIVER_TASK_RING_PAGE_BYTES,
+                )
+                .expect("Genet test descriptor must resolve RX DMA buffers"),
+                (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                    | GENET_DMA_OWN
+                    | GENET_DMA_SOP
+                    | GENET_DMA_EOP,
+            );
+        }
+        let mut state = GenetRuntimeState::new();
+        state.initialized = true;
+        genet_write32(GENET_RDMA_PROD_INDEX, 2);
+
+        let one_frame_budget = DriverTaskBudgetGrant {
+            max_ops: GENET_RX_DRAIN_BUDGET as u16,
+            max_frames: GENET_RX_DRAIN_BUDGET as u16,
+            max_bytes: payload_a.len() as u32,
+        };
+        assert_eq!(
+            genet_runtime_poll_rx(&mut state, one_frame_budget),
+            GenetRxPoll::Frame {
+                len: payload_a.len(),
+                flags: 0x0800,
+            }
+        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
+        assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(state.rx_packets, 1);
+
+        let full_budget = DriverTaskBudgetGrant {
+            max_ops: GENET_RX_DRAIN_BUDGET as u16,
+            max_frames: GENET_RX_DRAIN_BUDGET as u16,
+            max_bytes: MAX_DRIVER_TASK_FRAME_BYTES as u32,
+        };
+        assert_eq!(
+            genet_runtime_poll_rx(&mut state, full_budget),
+            GenetRxPoll::Frame {
+                len: payload_b.len(),
+                flags: 0x0800,
+            }
+        );
+        assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
+        assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(state.rx_packets, 2);
     }
 
     #[test]

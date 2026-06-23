@@ -104,7 +104,6 @@
 /* disabled: CONFIG_CLZ_NO_BUILTIN */
 /* disabled: CONFIG_CTZ_NO_BUILTIN */
 /* disabled: CONFIG_EXPORT_PCNT_USER */
-/* disabled: CONFIG_EXPORT_VCNT_USER */
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
 /* Set ENABLE_SMP_SUPPORT for kernel source files */

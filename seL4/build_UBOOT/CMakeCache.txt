@@ -377,7 +377,7 @@ KernelArmExportPTMRUser:BOOL=OFF
 // access to virtual counter and counter     frequency registers
 // of the generic timer.     WARNING: selecting this option opens
 // a timing     channel
-KernelArmExportVCNTUser:BOOL=OFF
+KernelArmExportVCNTUser:BOOL=ON
 
 //PL0 access to generic timer CNTV_CTL and CNTV_CVAL.     Grant
 // user access to virtual timer registers of the generic timer.

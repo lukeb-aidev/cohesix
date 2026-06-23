@@ -303,9 +303,13 @@ static GENET_TX_HW_IN_FLIGHT: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_HW_FRAMES: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_LAST_ETHERTYPE: AtomicU32 = AtomicU32::new(0);
 static GENET_RX_LAST_LEN: AtomicU32 = AtomicU32::new(0);
+static GENET_ARP_RX: AtomicU32 = AtomicU32::new(0);
+static GENET_ARP_TX: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_SUBMITTED: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_DROPPED: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_FRAMES: AtomicU32 = AtomicU32::new(0);
+static CYW43_ARP_RX: AtomicU32 = AtomicU32::new(0);
+static CYW43_ARP_TX: AtomicU32 = AtomicU32::new(0);
 static GENET_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static CYW43_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 static CYW43_CONTROL_PLANE_READY: AtomicU32 = AtomicU32::new(0);
@@ -1058,6 +1062,15 @@ impl Cyw43HostEapolProgress {
 
     fn record_eapol_error(&mut self, error: &'static str) {
         self.eapol_error = Some(error);
+    }
+
+    fn record_eapol_association_proof(&mut self, label: &'static str, poll: usize) {
+        self.associated = true;
+        if self.association_event.is_none() {
+            self.association_event = Some(label);
+            self.association_poll = poll.min(u32::MAX as usize) as u32;
+        }
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
     }
 
     fn record_rx_idle_completion(&mut self, completion: DriverTaskCompletionRecord) {
@@ -4235,6 +4248,9 @@ fn process_cyw43_host_eapol_data_completion(
                     HostEapolAction::Inspect { .. } => {}
                     HostEapolAction::SendM2 { len } => {
                         CYW43_HOST_EAPOL_M1.fetch_add(1, Ordering::AcqRel);
+                        session
+                            .progress
+                            .record_eapol_association_proof("eapol-m1", poll);
                         emit_cyw43_host_eapol_message(contract, "m1", "recv-m1", poll, frame.len());
                         let Some(m2_completion) =
                             submit_cyw43_host_eapol_payload_bounded_completion(
@@ -4274,6 +4290,9 @@ fn process_cyw43_host_eapol_data_completion(
                     }
                     HostEapolAction::SendM4InstallKeys { len, keys } => {
                         CYW43_HOST_EAPOL_M3.fetch_add(1, Ordering::AcqRel);
+                        session
+                            .progress
+                            .record_eapol_association_proof("eapol-m3", poll);
                         emit_cyw43_host_eapol_message(contract, "m3", "recv-m3", poll, frame.len());
                         let Some(m4_completion) =
                             submit_cyw43_host_eapol_payload_bounded_completion(
@@ -10098,6 +10117,54 @@ static CYW43_PENDING_RX_TOKEN: Mutex<Option<DriverTaskNetPendingRxToken>> = Mute
 #[cfg(feature = "kernel")]
 static GENET_PENDING_RX_TOKEN: Mutex<Option<DriverTaskNetRxToken>> = Mutex::new(None);
 
+fn driver_task_ethertype(frame: &[u8]) -> Option<u16> {
+    let ethertype = frame.get(12..14)?;
+    Some(u16::from_be_bytes([ethertype[0], ethertype[1]]))
+}
+
+fn driver_task_arp_rx_counter(hot_path: DriverTaskHotPath) -> Option<&'static AtomicU32> {
+    match hot_path {
+        DriverTaskHotPath::GenetNic => Some(&GENET_ARP_RX),
+        DriverTaskHotPath::Cyw43Wifi => Some(&CYW43_ARP_RX),
+        _ => None,
+    }
+}
+
+fn driver_task_arp_tx_counter(hot_path: DriverTaskHotPath) -> Option<&'static AtomicU32> {
+    match hot_path {
+        DriverTaskHotPath::GenetNic => Some(&GENET_ARP_TX),
+        DriverTaskHotPath::Cyw43Wifi => Some(&CYW43_ARP_TX),
+        _ => None,
+    }
+}
+
+fn record_driver_task_arp_rx(hot_path: DriverTaskHotPath, frame: &[u8]) {
+    if driver_task_ethertype(frame) == Some(CYW43_ETH_P_ARP) {
+        if let Some(counter) = driver_task_arp_rx_counter(hot_path) {
+            counter.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+}
+
+fn record_driver_task_arp_tx(hot_path: DriverTaskHotPath, frame: &[u8]) {
+    if driver_task_ethertype(frame) == Some(CYW43_ETH_P_ARP) {
+        if let Some(counter) = driver_task_arp_tx_counter(hot_path) {
+            counter.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+}
+
+fn driver_task_arp_counts(hot_path: DriverTaskHotPath) -> (u64, u64) {
+    (
+        driver_task_arp_rx_counter(hot_path)
+            .map(|counter| counter.load(Ordering::Acquire) as u64)
+            .unwrap_or_default(),
+        driver_task_arp_tx_counter(hot_path)
+            .map(|counter| counter.load(Ordering::Acquire) as u64)
+            .unwrap_or_default(),
+    )
+}
+
 impl phy::RxToken for DriverTaskNetRxToken {
     fn consume<R, F>(self, f: F) -> R
     where
@@ -10125,6 +10192,7 @@ impl phy::TxToken for DriverTaskNetTxToken {
         let result = f(&mut scratch[..frame_len]);
         if submit_driver_task_frame(self.contract, self.hot_path, &scratch[..frame_len]) {
             self.tx_submitted.fetch_add(1, Ordering::AcqRel);
+            record_driver_task_arp_tx(self.hot_path, &scratch[..frame_len]);
         } else {
             self.tx_dropped.fetch_add(1, Ordering::AcqRel);
         }
@@ -11187,6 +11255,7 @@ macro_rules! driver_task_nic {
                     return None;
                 }
                 let rx = receive_driver_task_frame($contract, DriverTaskHotPath::$hot_path)?;
+                record_driver_task_arp_rx(DriverTaskHotPath::$hot_path, &rx.buffer[..rx.len]);
                 $rx_frames.fetch_add(1, Ordering::AcqRel);
                 Some((
                     rx,
@@ -11300,6 +11369,7 @@ macro_rules! driver_task_nic {
 
             fn counters(&self) -> NetDeviceCounters {
                 let tx_submit = $tx_submitted.load(Ordering::Acquire) as u64;
+                let (arp_rx, arp_tx) = driver_task_arp_counts(DriverTaskHotPath::$hot_path);
                 let (rx_used_advances, tx_used_advances, tx_complete, tx_free, tx_in_flight) =
                     if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::GenetNic) {
                         let tx_complete = GENET_TX_HW_COMPLETED.load(Ordering::Acquire) as u64;
@@ -11322,6 +11392,8 @@ macro_rules! driver_task_nic {
                     tx_complete,
                     tx_free,
                     tx_in_flight,
+                    arp_rx,
+                    arp_tx,
                     driver_rx_last_len: if matches!(
                         DriverTaskHotPath::$hot_path,
                         DriverTaskHotPath::GenetNic
@@ -12670,6 +12742,19 @@ mod tests {
             CYW43_HOST_EAPOL_START_MAX
         ));
         assert!(!cyw43_host_eapol_start_due(2, 1));
+
+        assert!(cyw43_host_eapol_start_due(
+            CYW43_HOST_EAPOL_START_FIRST_POLL,
+            0
+        ));
+        assert!(
+            cyw43_host_eapol_start_due(CYW43_HOST_EAPOL_START_FIRST_POLL, 0),
+            "observed M1/M2 traffic must not suppress bounded EAPOL-Start retries before M3"
+        );
+        assert!(!cyw43_host_eapol_start_due(
+            CYW43_HOST_EAPOL_START_FIRST_POLL,
+            CYW43_HOST_EAPOL_START_MAX
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -13852,6 +13937,74 @@ mod tests {
         assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 1);
         assert!(cyw43_data_plane_ready());
         assert_eq!(cyw43_driver_task_bringup_status_label(), None);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_m1_opens_post_assoc_maintenance_window() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 replay tests must serialize");
+        reset_cyw43_status_flags();
+        let _io_guard = test_enable_cyw43_host_eapol_io_stub();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        *CYW43_RUNTIME_MAC.lock() = EthernetAddress(station);
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        let mut tx_frame = [0u8; MAX_FRAME_LEN];
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len =
+            cyw43_host_eapol::write_test_m1_frame(&mut m1, &station, &ap).expect("test m1 frame");
+
+        let m1_result = process_cyw43_host_eapol_data_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            EthernetAddress(station),
+            &mut session,
+            CYW43_HOST_EAPOL_PRE_ASSOC_POLLS,
+            0,
+            test_stage_cyw43_completion(
+                &m1[..m1_len],
+                DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+                4,
+            ),
+            &mut tx_frame,
+        )
+        .expect("m1 replay should produce m2");
+
+        assert!(m1_result.observed_frame);
+        assert_eq!(session.progress.eapol_rx, 1);
+        assert!(session.progress.associated);
+        assert!(!session.progress.link_up);
+        assert_eq!(session.progress.association_event, Some("eapol-m1"));
+        assert_eq!(
+            session.progress.association_poll,
+            CYW43_HOST_EAPOL_PRE_ASSOC_POLLS as u32
+        );
+        assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 0);
+
+        session.progress.post_assoc_polls = CYW43_HOST_EAPOL_START_FIRST_POLL as u32 - 1;
+        assert!(cyw43_service_host_eapol_post_assoc(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            EthernetAddress(station),
+            &mut session
+        ));
+        assert_eq!(CYW43_HOST_EAPOL_START.load(Ordering::Acquire), 1);
+        assert_eq!(
+            session.progress.post_assoc_polls,
+            CYW43_HOST_EAPOL_START_FIRST_POLL as u32
+        );
+        assert_eq!(CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire), 0);
         reset_cyw43_status_flags();
     }
 
@@ -15614,6 +15767,34 @@ mod tests {
             DriverTaskCompletionCode::Progress.as_u16(),
             DriverTaskCompletionRecord::progress(11, 1).code
         );
+    }
+
+    #[test]
+    fn driver_task_arp_counters_split_genet_and_wifi_edges() {
+        GENET_ARP_RX.store(0, Ordering::Release);
+        GENET_ARP_TX.store(0, Ordering::Release);
+        CYW43_ARP_RX.store(0, Ordering::Release);
+        CYW43_ARP_TX.store(0, Ordering::Release);
+
+        let mut arp = [0u8; 60];
+        arp[12] = 0x08;
+        arp[13] = 0x06;
+        let mut ipv4 = [0u8; 60];
+        ipv4[12] = 0x08;
+        ipv4[13] = 0x00;
+
+        record_driver_task_arp_rx(DriverTaskHotPath::GenetNic, &arp);
+        record_driver_task_arp_tx(DriverTaskHotPath::GenetNic, &arp);
+        record_driver_task_arp_rx(DriverTaskHotPath::Cyw43Wifi, &arp);
+        record_driver_task_arp_tx(DriverTaskHotPath::Cyw43Wifi, &ipv4);
+
+        assert_eq!(driver_task_arp_counts(DriverTaskHotPath::GenetNic), (1, 1));
+        assert_eq!(driver_task_arp_counts(DriverTaskHotPath::Cyw43Wifi), (1, 0));
+
+        GENET_ARP_RX.store(0, Ordering::Release);
+        GENET_ARP_TX.store(0, Ordering::Release);
+        CYW43_ARP_RX.store(0, Ordering::Release);
+        CYW43_ARP_TX.store(0, Ordering::Release);
     }
 
     #[cfg(feature = "kernel")]

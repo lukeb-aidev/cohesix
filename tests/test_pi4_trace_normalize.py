@@ -572,6 +572,10 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "SERIAL_CLEAN": "yes",
         "BOOT_HALTED": "no",
         "TIMER_IRQ27_SEEN": "no",
+        "TIMER_BACKEND": "unknown",
+        "TIMER_CLOCK_HZ": 0,
+        "TIMER_EL0_COUNTER": "none",
+        "DUMMY_TIMER_SEEN": "no",
         "BOOT_HALT_REASON": "none",
         "PANIC_SEEN": "no",
         "PANIC_REASON": "none",
@@ -3332,6 +3336,38 @@ def test_gate_summary_tracks_wifi_sdio_irq158_separately_from_timer_irq27() -> N
     assert gates.to_record()["TIMER_IRQ27_SEEN"] == "yes"
     assert gates.to_record()["SDIO_IRQ158_SEEN"] == "yes"
     assert gates.to_record()["SDIO_IRQ158_BOUND"] == "yes"
+
+
+def test_gate_summary_reports_arch_counter_timer_backend() -> None:
+    events = normalizer.parse_events(
+        [
+            "[timers] init: timer_freq_hz=54000000 Hz",
+            "[timers] summary backend=arch-counter counter=virtual "
+            "timer_freq_hz=54000000 period_cycles=270000",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["TIMER_BACKEND"] == "arch-counter"
+    assert record["TIMER_CLOCK_HZ"] == 54_000_000
+    assert record["TIMER_EL0_COUNTER"] == "vct"
+    assert record["DUMMY_TIMER_SEEN"] == "no"
+
+
+def test_gate_summary_reports_dummy_timer_backend() -> None:
+    events = normalizer.parse_events(
+        [
+            "[timers] init: using dummy software counter; snapshots will not "
+            "read CNT registers",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["TIMER_BACKEND"] == "dummy"
+    assert record["TIMER_EL0_COUNTER"] == "none"
+    assert record["DUMMY_TIMER_SEEN"] == "yes"
 
 
 def test_gate_summary_derives_sdio_irq158_bound_from_hal_init_when_irq_breadcrumbs_suppressed() -> None:

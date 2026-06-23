@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the build_support module for root-task.
 // Author: Lukas Bower
@@ -52,6 +52,38 @@ pub fn classify_linker_script(path: &Path) -> Result<LinkerScriptKind, String> {
     } else {
         Ok(classification)
     }
+}
+
+/// Parse the seL4 platform timer frequency from a generated platform header.
+///
+/// seL4 emits platform timer clocks in forms such as
+/// `#define TIMER_CLOCK_HZ ULL_CONST(54000000)`. The root-task build uses this
+/// generated value as the single source of truth for converting architectural
+/// counter ticks into milliseconds.
+pub fn parse_timer_clock_hz(contents: &str) -> Option<u64> {
+    contents.lines().find_map(parse_timer_clock_hz_line)
+}
+
+fn parse_timer_clock_hz_line(raw_line: &str) -> Option<u64> {
+    let line = raw_line.trim();
+    let value = line.strip_prefix("#define TIMER_CLOCK_HZ")?.trim();
+    parse_first_decimal_u64(value)
+}
+
+fn parse_first_decimal_u64(value: &str) -> Option<u64> {
+    let mut digits = String::new();
+    let mut started = false;
+    for ch in value.chars() {
+        if ch.is_ascii_digit() {
+            started = true;
+            digits.push(ch);
+            continue;
+        }
+        if started {
+            break;
+        }
+    }
+    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
 }
 
 fn classify_linker_script_contents(contents: &str) -> LinkerScriptKind {
@@ -205,6 +237,22 @@ mod tests {
         assert_eq!(
             classify_linker_script_contents("/* no hints */"),
             LinkerScriptKind::Unknown
+        );
+    }
+
+    #[test]
+    fn parses_platform_timer_clock_hz_from_ull_const() {
+        assert_eq!(
+            parse_timer_clock_hz("#define TIMER_CLOCK_HZ ULL_CONST(54000000)\n"),
+            Some(54_000_000)
+        );
+    }
+
+    #[test]
+    fn parses_platform_timer_clock_hz_from_plain_integer() {
+        assert_eq!(
+            parse_timer_clock_hz("#define TIMER_CLOCK_HZ 62500000\n"),
+            Some(62_500_000)
         );
     }
 }

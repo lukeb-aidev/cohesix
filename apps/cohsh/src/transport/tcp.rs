@@ -45,6 +45,8 @@ const FRAME_ERROR_VERB: &str = "FRAME";
 const CONSOLE_LOCK_ENV: &str = "COHSH_CONSOLE_LOCK";
 const CONSOLE_LOCK_DISABLE_VALUES: &[&str] = &["0", "false", "off", "no"];
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
+const TCP_BATCH_MAX_WRITE_BYTES: usize = 1_360;
+const TCP_BATCH_MAX_FRAMES: usize = 4;
 
 /// Return true when the supplied token is the documented insecure placeholder.
 pub fn is_insecure_placeholder_token(token: &str) -> bool {
@@ -792,15 +794,9 @@ impl TcpTransport {
         let stream = self.stream.as_mut().ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotConnected, "TCP transport not connected")
         })?;
-        let total_len = line.len().saturating_add(4);
-        let len: u32 = total_len
-            .try_into()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame too large"))?;
-        let len_bytes = len.to_le_bytes();
+        let mut frame = Vec::with_capacity(line.len().saturating_add(4));
+        Self::append_frame(&mut frame, line)?;
         if let Some(limit) = self.inject_short_write.take() {
-            let mut frame = Vec::with_capacity(total_len);
-            frame.extend_from_slice(&len_bytes);
-            frame.extend_from_slice(line.as_bytes());
             let to_write = limit.min(frame.len());
             let _ = stream.write(&frame[..to_write]);
             let _ = stream.flush();
@@ -809,14 +805,95 @@ impl TcpTransport {
                 "injected short write",
             ));
         }
-        stream.write_all(&len_bytes)?;
-        stream.write_all(line.as_bytes())?;
+        stream.write_all(&frame)?;
         trace!(
             "[cohsh][tcp] wrote {} bytes in state {:?}",
-            total_len,
+            frame.len(),
             self.auth_state
         );
         stream.flush()
+    }
+
+    fn send_lines_raw(&mut self, lines: &[String]) -> Result<(), io::Error> {
+        let stream = self.stream.as_mut().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotConnected, "TCP transport not connected")
+        })?;
+        let capacity = Self::batch_frame_bytes(lines)?;
+        if lines.len() > TCP_BATCH_MAX_FRAMES
+            || (lines.len() > 1 && capacity > TCP_BATCH_MAX_WRITE_BYTES)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "TCP command batch exceeds bounded write chunk",
+            ));
+        }
+        let mut frame = Vec::with_capacity(capacity);
+        for line in lines {
+            Self::append_frame(&mut frame, line)?;
+        }
+        if let Some(limit) = self.inject_short_write.take() {
+            let to_write = limit.min(frame.len());
+            let _ = stream.write(&frame[..to_write]);
+            let _ = stream.flush();
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "injected short write",
+            ));
+        }
+        stream.write_all(&frame)?;
+        trace!(
+            "[cohsh][tcp] wrote {} frames ({} bytes) in state {:?}",
+            lines.len(),
+            frame.len(),
+            self.auth_state
+        );
+        stream.flush()
+    }
+
+    fn frame_len(line: &str) -> Result<usize, io::Error> {
+        let total_len = line
+            .as_bytes()
+            .len()
+            .checked_add(4)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "frame too large"))?;
+        let _: u32 = total_len
+            .try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame too large"))?;
+        Ok(total_len)
+    }
+
+    fn batch_frame_bytes(lines: &[String]) -> Result<usize, io::Error> {
+        lines.iter().try_fold(0usize, |total, line| {
+            let frame_len = Self::frame_len(line)?;
+            total
+                .checked_add(frame_len)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "batch too large"))
+        })
+    }
+
+    fn bounded_batch_end(lines: &[String], start: usize) -> Result<usize, io::Error> {
+        if start >= lines.len() {
+            return Ok(start);
+        }
+        let mut end = start;
+        let mut bytes = 0usize;
+        while end < lines.len() && end.saturating_sub(start) < TCP_BATCH_MAX_FRAMES {
+            let frame_len = Self::frame_len(&lines[end])?;
+            if end > start && bytes.saturating_add(frame_len) > TCP_BATCH_MAX_WRITE_BYTES {
+                break;
+            }
+            bytes = bytes.saturating_add(frame_len);
+            end += 1;
+        }
+        Ok(end.max(start + 1))
+    }
+
+    fn append_frame(frame: &mut Vec<u8>, line: &str) -> Result<(), io::Error> {
+        let payload = line.as_bytes();
+        let len: u32 = Self::frame_len(line)? as u32;
+        frame.extend_from_slice(&len.to_le_bytes());
+        frame.extend_from_slice(payload);
+        Ok(())
     }
 
     fn send_line(&mut self, line: &str) -> Result<()> {
@@ -862,6 +939,39 @@ impl TcpTransport {
                     attempt += 1;
                     if attempt > self.max_retries {
                         return Err(anyhow!("failed to send command after retries: {err}"));
+                    }
+                    self.telemetry.log_reconnect(attempt, delay);
+                    thread::sleep(delay);
+                    delay = Self::next_delay(delay, self.retry_ceiling);
+                }
+            }
+        }
+    }
+
+    fn send_lines_attached(&mut self, lines: &[String]) -> Result<()> {
+        let mut attempt = 0usize;
+        let mut delay = self.retry_backoff;
+        loop {
+            if self.session_cache.is_some() && self.auth_state != AuthState::Attached {
+                self.recover_session()?;
+            } else {
+                self.ensure_authenticated()?;
+            }
+            match self.send_lines_raw(lines) {
+                Ok(()) => {
+                    return Ok(());
+                }
+                Err(err) => {
+                    self.telemetry.log_disconnect(&err);
+                    self.reset_connection();
+                    if lines.len() > 1 {
+                        return Err(anyhow!(
+                            "failed to send multi-frame command batch without retrying a potentially partial write: {err}"
+                        ));
+                    }
+                    attempt += 1;
+                    if attempt > self.max_retries {
+                        return Err(anyhow!("failed to send command batch after retries: {err}"));
                     }
                     self.telemetry.log_reconnect(attempt, delay);
                     thread::sleep(delay);
@@ -1129,7 +1239,7 @@ impl TcpTransport {
         }
         let mut timeouts = 0usize;
         loop {
-            if Instant::now() >= deadline {
+            if Instant::now() >= deadline && !self.has_partial_frame() {
                 return Err(anyhow!("timeout waiting for console response"));
             }
             match self.read_line_internal()? {
@@ -1153,11 +1263,11 @@ impl TcpTransport {
                     return Ok(Some(trimmed));
                 }
                 ReadStatus::Timeout => {
-                    if Instant::now() >= deadline {
-                        return Err(anyhow!("timeout waiting for console response"));
-                    }
                     if self.has_partial_frame() {
                         continue;
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(anyhow!("timeout waiting for console response"));
                     }
                     if allow_heartbeat && self.last_activity.elapsed() >= self.heartbeat_interval {
                         match self.issue_heartbeat()? {
@@ -1761,15 +1871,17 @@ impl Transport for TcpTransport {
             commands.push(Self::build_echo_command(path, payload)?);
         }
 
-        let mut sent = 0usize;
         let mut acked = 0usize;
         let mut attempts = 0usize;
-        loop {
-            while sent < commands.len() {
-                self.send_line_attached(&commands[sent])?;
-                sent = sent.saturating_add(1);
-            }
-            while acked < commands.len() {
+        while acked < commands.len() {
+            let chunk_end = if self.inject_short_write.is_some() {
+                acked.saturating_add(1).min(commands.len())
+            } else {
+                Self::bounded_batch_end(&commands, acked)
+                    .map_err(|err| anyhow!("failed to bound TCP command batch: {err}"))?
+            };
+            self.send_lines_attached(&commands[acked..chunk_end])?;
+            while acked < chunk_end {
                 match self.next_protocol_line()? {
                     Some(response) => {
                         if let Some(ack) = parse_ack(&response) {
@@ -1803,16 +1915,19 @@ impl Transport for TcpTransport {
                                 "connection dropped repeatedly while writing to {path}"
                             ));
                         }
+                        if chunk_end.saturating_sub(acked) > 1 {
+                            self.recover_session()?;
+                            return Err(anyhow!(
+                                "connection dropped before acknowledging TCP command batch; retry would risk duplicate writes to {path}"
+                            ));
+                        }
                         self.recover_session()?;
-                        sent = acked;
                         break;
                     }
                 }
             }
-            if acked >= commands.len() {
-                return Ok(acked);
-            }
         }
+        Ok(acked)
     }
 
     fn quit(&mut self, _session: &Session) -> Result<()> {
@@ -2129,6 +2244,155 @@ mod tests {
             .with_heartbeat_interval(Duration::from_secs(30))
             .with_max_retries(8);
         assert_eq!(transport.stream_wait(), Duration::from_millis(250));
+    }
+
+    #[test]
+    fn batch_sender_writes_back_to_back_frames() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let lines = vec![
+            "ECHO /log/queen.log first".to_owned(),
+            "ECHO /log/queen.log second".to_owned(),
+        ];
+        let mut expected = Vec::new();
+        for line in &lines {
+            TcpTransport::append_frame(&mut expected, line).unwrap();
+        }
+        let expected_len = expected.len();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut observed = vec![0u8; expected_len];
+            stream.read_exact(&mut observed).unwrap();
+            observed
+        });
+
+        let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let mut transport = TcpTransport::new("127.0.0.1", port);
+        transport.stream = Some(stream);
+        transport.auth_state = AuthState::Attached;
+        transport.send_lines_raw(&lines).unwrap();
+
+        let observed = server.join().unwrap();
+        assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn write_batch_waits_for_acknowledgements_between_bounded_chunks() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let payload_count = TCP_BATCH_MAX_FRAMES + 2;
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            write_frame(&mut stream, "OK AUTH detail=present-token");
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut echoes = 0usize;
+            while let Some(line) = read_frame(&mut reader) {
+                let trimmed = line.trim();
+                if trimmed == format!("AUTH {TEST_AUTH_TOKEN}") {
+                    write_frame(&mut stream, "OK AUTH");
+                } else if trimmed.starts_with("ATTACH") {
+                    write_frame(&mut stream, "OK ATTACH role=queen");
+                } else if trimmed.starts_with("ECHO /log/queen.log ") {
+                    echoes = echoes.saturating_add(1);
+                    if echoes == TCP_BATCH_MAX_FRAMES {
+                        reader
+                            .get_mut()
+                            .set_read_timeout(Some(Duration::from_millis(75)))
+                            .unwrap();
+                        assert!(
+                            read_frame(&mut reader).is_none(),
+                            "client sent the next TCP command chunk before ACKs"
+                        );
+                        reader
+                            .get_mut()
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .unwrap();
+                        for _ in 0..TCP_BATCH_MAX_FRAMES {
+                            write_frame(&mut stream, "OK ECHO path=/log/queen.log bytes=1");
+                        }
+                    } else if echoes > TCP_BATCH_MAX_FRAMES {
+                        write_frame(&mut stream, "OK ECHO path=/log/queen.log bytes=1");
+                        if echoes == payload_count {
+                            break;
+                        }
+                    }
+                } else if trimmed == "PING" {
+                    write_frame(&mut stream, "PONG");
+                    write_frame(&mut stream, "OK PING reply=pong");
+                }
+            }
+            echoes
+        });
+
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(100))
+            .with_max_retries(2)
+            .with_auth_token(TEST_AUTH_TOKEN);
+        let session = transport.attach(Role::Queen, None).unwrap();
+        let payloads = (0..payload_count)
+            .map(|index| format!("{index}").into_bytes())
+            .collect::<Vec<_>>();
+        let written = transport
+            .write_batch(&session, "/log/queen.log", &payloads)
+            .unwrap();
+        assert_eq!(written, payload_count);
+        assert_eq!(server.join().unwrap(), payload_count);
+    }
+
+    #[test]
+    fn write_batch_short_write_retry_does_not_duplicate_payloads() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let received_server = Arc::clone(&received);
+        let server = thread::spawn(move || {
+            for stream in listener.incoming().take(2) {
+                let mut stream = stream.unwrap();
+                write_frame(&mut stream, "OK AUTH detail=present-token");
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                while let Some(line) = read_frame(&mut reader) {
+                    let trimmed = line.trim();
+                    if trimmed == format!("AUTH {TEST_AUTH_TOKEN}") {
+                        write_frame(&mut stream, "OK AUTH");
+                    } else if trimmed.starts_with("ATTACH") {
+                        write_frame(&mut stream, "OK ATTACH role=queen");
+                    } else if trimmed.starts_with("ECHO /log/queen.log ") {
+                        let payload = trimmed.splitn(3, ' ').nth(2).unwrap_or_default().to_owned();
+                        received_server.lock().unwrap().push(payload);
+                        write_frame(&mut stream, "OK ECHO path=/log/queen.log bytes=1");
+                        if received_server.lock().unwrap().len() == 2 {
+                            return;
+                        }
+                    } else if trimmed == "PING" {
+                        write_frame(&mut stream, "PONG");
+                        write_frame(&mut stream, "OK PING reply=pong");
+                    }
+                }
+            }
+        });
+
+        let mut transport = TcpTransport::new("127.0.0.1", port)
+            .with_timeout(Duration::from_millis(100))
+            .with_max_retries(3)
+            .with_auth_token(TEST_AUTH_TOKEN);
+        let session = transport.attach(Role::Queen, None).unwrap();
+        assert!(transport.inject_short_write(8));
+        let payloads = vec![b"batch-one".to_vec(), b"batch-two".to_vec()];
+        let written = transport
+            .write_batch(&session, "/log/queen.log", &payloads)
+            .unwrap();
+        assert_eq!(written, payloads.len());
+        let observed = received.lock().unwrap().clone();
+        assert_eq!(
+            observed,
+            vec!["batch-one".to_owned(), "batch-two".to_owned()]
+        );
+        assert!(transport.metrics().reconnects > 0);
+        drop(transport);
+        server.join().unwrap();
     }
 
     fn unix_time_ms() -> u64 {

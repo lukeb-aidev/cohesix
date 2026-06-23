@@ -224,6 +224,7 @@ verify_skip_build_image_fresh() {
         "${MANIFEST_PATH}"
         "${ROOT_DIR}/apps/root-task/Cargo.toml"
         "${ROOT_DIR}/apps/root-task/build.rs"
+        "${ROOT_DIR}/apps/root-task/build_support.rs"
         "${ROOT_DIR}/apps/root-task/src"
         "${ROOT_DIR}/apps/pi4-driver-runtime/Cargo.toml"
         "${ROOT_DIR}/apps/pi4-driver-runtime/src"
@@ -341,6 +342,52 @@ verify_pi4_sel4_xhci_device_untyped() {
     log "Verified Pi4 seL4 device-untyped source/artifact for VL805 BAR0 (${overlay_path})"
 }
 
+require_cmake_bool() {
+    local cache_file="$1"
+    local name="$2"
+    local expected="$3"
+
+    grep -Eq "^${name}:[A-Z]+=${expected}$" "$cache_file" || \
+      fail "${name} not ${expected} in ${cache_file}"
+}
+
+platform_timer_clock_hz() {
+    local header="$1"
+
+    awk '
+      /^#define[[:space:]]+TIMER_CLOCK_HZ[[:space:]]+/ {
+        line = $0
+        gsub(/[^0-9]/, " ", line)
+        split(line, parts, /[[:space:]]+/)
+        for (idx in parts) {
+          if (parts[idx] != "") {
+            print parts[idx]
+            exit
+          }
+        }
+      }
+    ' "$header"
+}
+
+verify_pi4_sel4_counter_config() {
+    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
+    local platform_header="${SEL4_BUILD_DIR}/kernel/gen_headers/plat/platform_gen.h"
+    local timer_clock_hz
+
+    require_file "$cache_file"
+    require_file "$platform_header"
+    require_cmake_bool "$cache_file" "KernelArmExportVCNTUser" "ON"
+    require_cmake_bool "$cache_file" "KernelArmExportPCNTUser" "OFF"
+    require_cmake_bool "$cache_file" "KernelArmExportPTMRUser" "OFF"
+    require_cmake_bool "$cache_file" "KernelArmExportVTMRUser" "OFF"
+
+    timer_clock_hz="$(platform_timer_clock_hz "$platform_header")"
+    [[ "$timer_clock_hz" == "54000000" ]] || \
+      fail "Pi4 seL4 TIMER_CLOCK_HZ must be 54000000, got ${timer_clock_hz:-unset} in ${platform_header}"
+
+    log "Verified Pi4 seL4 virtual counter export and TIMER_CLOCK_HZ=${timer_clock_hz}"
+}
+
 configure_pi4_sel4_build() {
     local sel4_source_dir="$1"
 
@@ -359,6 +406,10 @@ configure_pi4_sel4_build() {
       -DKernelSel4Arch=aarch64 \
       -DKernelDebugBuild=ON \
       -DKernelPrinting=ON \
+      -DKernelArmExportVCNTUser=ON \
+      -DKernelArmExportPCNTUser=OFF \
+      -DKernelArmExportPTMRUser=OFF \
+      -DKernelArmExportVTMRUser=OFF \
       -DHardwareDebugAPI=OFF \
       -DKernelMaxNumNodes=4 \
       -DKernelRootCNodeSizeBits=13 \
@@ -378,6 +429,7 @@ configure_pi4_sel4_build() {
     grep -q "^Sel4testAllowSettingsOverride:BOOL=ON$" "$cache_file" || fail "Sel4testAllowSettingsOverride not ON"
     grep -q "^KernelDebugBuild:BOOL=ON$" "$cache_file" || fail "KernelDebugBuild not ON"
     grep -q "^KernelPrinting:BOOL=ON$" "$cache_file" || fail "KernelPrinting not ON"
+    verify_pi4_sel4_counter_config
     grep -q "^HardwareDebugAPI:BOOL=OFF$" "$cache_file" || fail "HardwareDebugAPI must be OFF for current sel4-sys bindings"
     grep -q "^KernelMaxNumNodes:STRING=4$" "$cache_file" || fail "KernelMaxNumNodes not 4"
     grep -q "^ElfloaderImage:STRING=uimage$" "$cache_file" || fail "ElfloaderImage not set to uimage"
@@ -1514,6 +1566,7 @@ main() {
         local sel4_source_dir
         sel4_source_dir="$(resolve_sel4_source_dir)"
         verify_pi4_sel4_xhci_device_untyped "$sel4_source_dir"
+        verify_pi4_sel4_counter_config
         verify_skip_build_image_fresh
         log "Skipping build (--skip-build)"
     fi

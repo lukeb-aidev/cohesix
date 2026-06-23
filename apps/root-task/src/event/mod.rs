@@ -373,6 +373,11 @@ fn net_status_should_yield_to_physical_input(status: &NetStatusReport) -> bool {
     )
 }
 
+#[cfg(feature = "net-console")]
+fn net_status_needs_physical_pressure_service(status: &NetStatusReport) -> bool {
+    net_status_active_interface_is_wired(status) && status.address_source == "dhcp-lease"
+}
+
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
 #[derive(Debug, Default)]
 struct BootstrapBackoff {
@@ -1922,9 +1927,11 @@ where
         let local_seat_first_report_pending = self.linked_local_seat_first_report_pending();
         #[cfg(feature = "net-console")]
         let net_poll = if let Some(net) = self.net.as_mut() {
-            let should_yield_before =
-                net_status_should_yield_to_physical_input(&net.status_report());
-            let host_eapol_pending_before = net_status_needs_host_eapol_burst(&net.status_report());
+            let status_before = net.status_report();
+            let should_yield_before = net_status_should_yield_to_physical_input(&status_before);
+            let host_eapol_pending_before = net_status_needs_host_eapol_burst(&status_before);
+            let service_under_physical_pressure =
+                net_status_needs_physical_pressure_service(&status_before);
             let local_seat_input_pressure = net_physical_input_pressure_for_status(
                 physical_input_active,
                 local_seat_first_report_pending,
@@ -1937,6 +1944,7 @@ where
                 .unwrap_or(true);
             let yield_for_physical_input = local_seat_input_pressure
                 && !suppress_console_input
+                && !service_under_physical_pressure
                 && (should_yield_before || network_data_yields_to_input);
             let mut activity = false;
             let mut net_budget = DriverServiceBudget::new(net_contract).ok();
@@ -11789,13 +11797,15 @@ where
                             stats.tcp_smoke_outbound, stats.tcp_smoke_outbound_failures
                         ));
                         let line_four = format_message(format_args!(
-                            "netstats: tx_submit={} tx_complete={} tx_free={} tx_in_flight={} tx_double_submit={} tx_zero_len_attempt={}",
+                            "netstats: tx_submit={} tx_complete={} tx_free={} tx_in_flight={} tx_double_submit={} tx_zero_len_attempt={} arp_rx={} arp_tx={}",
                             stats.tx_submit,
                             stats.tx_complete,
                             stats.tx_free,
                             stats.tx_in_flight,
                             stats.tx_double_submit,
-                            stats.tx_zero_len_attempt
+                            stats.tx_zero_len_attempt,
+                            stats.arp_rx,
+                            stats.arp_tx,
                         ));
                         let line_five = format_message(format_args!(
                             "netstats: mode={} policy={} active={} standby={} addr_src={} ip={} gateway={} dhcp={}",
@@ -16439,6 +16449,25 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn wired_dhcp_lease_needs_physical_pressure_service() {
+        let mut wired = NetStatusReport::default();
+        wired.active_interface = "wired";
+        wired.address_source = "dhcp-lease";
+        wired.dhcp_phase = "bound";
+        assert!(net_status_needs_physical_pressure_service(&wired));
+
+        let mut wifi = wired.clone();
+        wifi.active_interface = "wifi";
+        assert!(!net_status_needs_physical_pressure_service(&wifi));
+
+        let mut pre_lease = wired.clone();
+        pre_lease.address_source = "dhcp-pending";
+        pre_lease.dhcp_phase = "requesting";
+        assert!(!net_status_needs_physical_pressure_service(&pre_lease));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn host_eapol_pending_does_not_delay_serial_echo() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
@@ -16627,6 +16656,32 @@ mod tests {
         assert_eq!(net.polls, 0);
         assert!(!emitted.is_empty());
         assert!(emitted.len() < 64);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn wired_dhcp_lease_services_network_under_serial_backlog() {
+        let driver = LoopbackSerial::<8>::new();
+        let serial = SerialPort::<_, 32, 128, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.active_interface = "wired";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().enqueue_tx(
+            b"serial backlog must coexist with Genet ARP and TCP setup after DHCP binds",
+        );
+        pump.poll();
+        let emitted = pump.serial_mut().driver_mut().drain_tx();
+        drop(pump);
+
+        assert_eq!(net.polls, 1);
+        assert!(!emitted.is_empty());
     }
 
     #[cfg(feature = "net-console")]
@@ -16879,6 +16934,12 @@ mod tests {
         assert!(
             rendered.contains(
                 "netstats: mode=dhcp policy=wired active=wired standby=none addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "netstats: tx_submit=0 tx_complete=0 tx_free=0 tx_in_flight=0 tx_double_submit=0 tx_zero_len_attempt=0 arp_rx=0 arp_tx=0"
             ),
             "{rendered}"
         );

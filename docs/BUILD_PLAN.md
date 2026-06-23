@@ -119,6 +119,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [28e](#28e) | VM Cap-Bundle Authority + Structured Fault Lifecycle | Pending |
 | [28f](#28f) | SwarmUI Desktop Workbench: Spectrum Shell + Live Hive Continuity | Pending |
 | [29](#29) | Edge Local Status (Pi 4 Host Tool) | Pending |
+| [29a](#29a) | Pi 4 Root-Shell Hardware Status (`hw-status`) | Pending |
 | [29b](#29b) | AI-Native Namespace Surfaces (Control-Plane Only) | Pending |
 | [30](#30) | AWS AMI (UEFI → Cohesix, ENA, Diskless 9door) | Pending |
 
@@ -10465,6 +10466,108 @@ Checks:
 Deliverables:
   - Field-tech read-only transcript fixtures and explicit docs.
 
+```
+
+## Milestone 29a — Pi 4 Root-Shell Hardware Status (`hw-status`)  <a id="29a"></a>
+[Milestones](#Milestones)
+
+**Why now (field diagnostics):** Milestone 29 gives field techs a host-side read-only status tool, but Pi 4 bring-up still needs a serial-local command when TCP, host tooling, or storage artifacts are unavailable. `hw-status` is a Pi 4 U-Boot profile diagnostic for quick board/firmware inspection from `cohesix>` without changing device state or promoting root-task back into steady-state hardware ownership.
+
+**As-built alignment note:** There is no `hw-status` command today. Current Pi 4 hardware facts are split across boot logs, framebuffer hints, driver-task progress lines, timer summaries, and linked-runtime diagnostics. Milestone 29a adds one bounded, read-only root-shell view; older prose must not claim a Pi 4 hardware-status command or firmware property snapshot until this milestone has implementation and transcript evidence.
+
+**Prerequisite**
+- Milestone **26a/26b** owner-state and linked-runtime proof restored for the selected Pi 4 profile.
+- Milestone **28** completed for shared read-only snapshot/evidence conventions.
+- Milestone **29** completed or explicitly scoped so `hw-status` field names can be reused by `coh-status` rather than creating a second status vocabulary.
+
+**Goal**
+Add a Pi 4-build-only `hw-status` command on the root shell that prints bounded, stable, read-only board status:
+- firmware-reported power-state flags,
+- selected clock rates,
+- selected voltage domains,
+- SoC temperature and throttle/undervoltage flags when exposed,
+- framebuffer geometry plus ARM/GPU memory split,
+- bounded firmware-managed device notification counters or last-notification summaries.
+
+**Non-Goals**
+- No firmware writes, power-state changes, clock changes, voltage changes, turbo/overclock controls, reboot policy changes, or recovery actions.
+- No root-owned HDMI, USB, Wi-Fi, GENET, SDIO, PCIe, or GPU driver path; linked runtimes remain the hardware owners for steady service.
+- No new in-VM TCP listener, 9P provider requirement, host RPC, or `cohsh-core` grammar expansion beyond the documented root-console command.
+- No direct physical-address probing or mailbox/MMIO access outside HAL-admitted Pi 4 resources.
+
+**Deliverables**
+- `hw-status` root-shell command available only for the Pi 4 U-Boot profile. Other profiles must omit it or return deterministic `ERR reason=unsupported` per generated grammar/docs.
+- HAL-mediated Pi 4 firmware-property/status helper with an explicit allowlist of read-only property tags, bounded buffers, timeout evidence, and failure rows.
+- Stable serial transcript format using sectioned rows such as `hw power`, `hw clock`, `hw voltage`, `hw thermal`, `hw memory`, `hw framebuffer`, and `hw firmware-notify`.
+- Optional read-only status mirror for `coh-status` only if it reuses the same field names and does not add authority or a second parser.
+- Documentation and regression fixtures proving the command is passive, Pi 4-profile gated, and does not count as linked-runtime hardware acceptance.
+
+**Commands**
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hw_status -- --test-threads=1`
+- `cargo test -p cohsh-core`
+- `SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
+- `scripts/check-generated.sh`
+- `scripts/ci/test_plan_run.sh --state-dir out/test-plan/m29a-hw-status`
+
+**Checks (DoD)**
+- `help` and `docs/USERLAND_AND_CLI.md` list `hw-status` only for the Pi 4 root-console surface; TCP/`cohsh` shared grammar does not accidentally accept undocumented raw hardware commands.
+- Mocked firmware-property tests cover success, unsupported tag, timeout, malformed response, and partial data without panics or unbounded waits.
+- Live Pi 4 acceptance, when claimed, includes a fresh serial transcript showing `hw-status` returning bounded rows while USB/local-seat, Wi-Fi/GENET, HDMI, and shell proof lanes remain separate.
+- No `hw-status` path writes firmware state, changes clocks/voltage/power domains, clears notifications, or touches linked-runtime device state.
+- Generated docs, fixtures, and trace-normalizer expectations remain aligned; command output drift is intentional only with matching docs/tests.
+
+**Compiler touchpoints**
+- `coh-rtc` owns the profile gate and generated command/help snippets for `hw-status`.
+- Manifest validation rejects enabling `hw-status` outside Pi 4 hardware profiles or without the HAL firmware-property resource declared.
+
+**Task Breakdown**
+```
+Title/ID: m29a-hw-status-ir
+Goal: Add the Pi 4-only generated command gate and status field vocabulary.
+Inputs: tools/coh-rtc, configs/root_task_pi4_uboot_aarch64.toml, docs/USERLAND_AND_CLI.md.
+Changes:
+  - tools/coh-rtc/src/** — profile-gated `hw-status` command/help generation and field-name constants.
+  - configs/root_task_pi4_uboot_aarch64.toml — declare read-only Pi 4 firmware-status capability for the root diagnostics surface.
+  - docs/snippets/* + docs/USERLAND_AND_CLI.md — generated and hand-maintained command reference updates.
+Commands: cargo test -p coh-rtc && scripts/check-generated.sh
+Checks: Non-Pi profiles reject the command gate; generated help/docs match resolved Pi 4 manifest truth.
+Deliverables: Compiler-owned `hw-status` profile gate and stable field vocabulary.
+
+Title/ID: m29a-hw-status-hal
+Goal: Implement bounded read-only Pi 4 firmware-property status queries behind HAL.
+Inputs: apps/root-task/src/hal/**, apps/root-task/src/arch/aarch64/**, seL4/build_UBOOT generated headers.
+Changes:
+  - apps/root-task/src/hal/** — Pi 4 firmware-property read helper with tag allowlist, bounded mailbox buffers, timeout/fault evidence, and no write/control tags.
+  - apps/root-task/src/arch/aarch64/** — reuse existing cache/MMIO primitives only through HAL-approved mappings.
+Commands: cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hw_status -- --test-threads=1
+Checks: Success, timeout, malformed response, unsupported tag, and partial-data fixtures return typed status rows without panics or unbounded waits.
+Deliverables: HAL-owned passive Pi 4 hardware-status snapshot provider.
+
+Title/ID: m29a-hw-status-shell
+Goal: Add the `hw-status` root-shell command and stable serial transcript.
+Inputs: apps/root-task/src/console, apps/root-task/src/event/mod.rs, docs/USERLAND_AND_CLI.md.
+Changes:
+  - apps/root-task/src/console/** + apps/root-task/src/event/mod.rs — parse and dispatch `hw-status` only on the Pi 4 root-console diagnostics surface.
+  - apps/root-task/src/event/mod.rs — emit bounded `hw ...` rows for power, clocks, voltage, thermal, framebuffer/GPU memory, and firmware notifications.
+  - docs/USERLAND_AND_CLI.md — document serial/local-only behavior and unsupported-profile result.
+Commands:
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hw_status -- --test-threads=1
+  - SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
+Checks: Output is stable, bounded, read-only, and does not change ACK/ERR/END semantics for existing commands.
+Deliverables: Pi 4 serial `cohesix> hw-status` command.
+
+Title/ID: m29a-hw-status-regressions
+Goal: Add fixtures and Pi 4 evidence parsing for passive hardware-status diagnostics.
+Inputs: docs/TEST_PLAN.md, scripts/pi4_trace_normalize.py, tests/fixtures/transcripts/.
+Changes:
+  - docs/TEST_PLAN.md — classify `hw-status` as passive Pi 4 diagnostics, not hardware acceptance for USB/Wi-Fi/GENET/HDMI.
+  - scripts/pi4_trace_normalize.py — parse optional `HW_STATUS_*` fields from captured transcripts without making them gate blockers.
+  - tests/fixtures/transcripts/ — add serial-local `hw-status` success and unsupported-profile fixtures.
+Commands:
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hw_status -- --test-threads=1
+  - pytest tests/test_pi4_trace_normalize.py
+Checks: Transcript and normalizer coverage prove passive behavior, stable field extraction, and no regression in existing Pi 4 gates.
+Deliverables: Repeatable host and Pi 4 validation for `hw-status`.
 ```
 
 ## Milestone 29b — AI-Native Namespace Surfaces (Control-Plane Only)  <a id="29b"></a> 

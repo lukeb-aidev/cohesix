@@ -153,7 +153,7 @@
 /* disabled: CONFIG_CLZ_NO_BUILTIN */
 /* disabled: CONFIG_CTZ_NO_BUILTIN */
 /* disabled: CONFIG_EXPORT_PCNT_USER */
-/* disabled: CONFIG_EXPORT_VCNT_USER */
+
 /* disabled: CONFIG_EXPORT_PTMR_USER */
 /* disabled: CONFIG_EXPORT_VTMR_USER */
 # 5 "/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/kernel/autoconf/autoconf.h" 2
@@ -12704,7 +12704,18 @@ static void check_export_pmu(void)
 static void check_export_arch_timer(void)
 {
     uint32_t val = 0;
-# 46 "/Users/lukasbower/seL4/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
+
+
+
+
+
+
+
+    val |= (1ul << (1));
+
+
+
+
     do { word_t _v = val; __asm__ volatile("msr " "CNTKCTL_EL1" ",%x0" :: "r" (_v)); }while(0);
 # 58 "/Users/lukasbower/seL4/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
 }

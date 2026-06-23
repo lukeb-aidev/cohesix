@@ -270,6 +270,15 @@ Host tools MUST remain protocol-faithful: they consume the as-built interfaces a
 - **All device authority, mapping, and resource admission goes through HAL.**
 - No direct physical-address discovery, device-untyped retyping, DMA allocation/publish, IRQ binding, or ad-hoc `unsafe` outside HAL.
 - Linked driver runtimes may touch only HAL-declared mapped pages and generated runtime-init resources delivered through the fixed driver-task ABI; any runtime MMIO helper must stay bounded, volatile, and documented at the call site.
+- Pi 4 hardware timing MUST use the selected seL4 build's generated timer
+  truth. Root-task and linked driver runtimes must use the read-only virtual
+  counter (`CNTVCT_EL0`) only when `KernelArmExportVCNTUser` /
+  `CONFIG_EXPORT_VCNT_USER` is enabled, and must scale timeouts from
+  `TIMER_CLOCK_HZ`. Hardware builds must not use `CNTPCT_EL0`, EL0 timer-control
+  registers, dummy timers, or raw CPU-speed spin loops for timeouts or settle
+  delays. Fixed retry counts are allowed only as protocol-attempt bounds and
+  must be paired with a virtual-counter deadline when they represent elapsed
+  time.
 - Drivers depend on HAL; subsystems depend only on driver traits.
 - Devices are selected by **role**, not model.
 - Multiple devices are supported by design.
