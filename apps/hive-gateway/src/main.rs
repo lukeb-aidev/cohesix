@@ -77,6 +77,9 @@ const CONTROL_WRITE_RETRY_MAX_SLEEP_MS: u64 = 120;
 const CACHE_INVALIDATE_CONTROL_NAMESPACES: &[&str] = &["/proc", "/queen", "/worker", "/gpu"];
 const CACHE_INVALIDATE_HOST_NAMESPACES: &[&str] = &["/host"];
 const CACHE_INVALIDATE_GPU_NAMESPACES: &[&str] = &["/gpu"];
+const CACHE_INVALIDATE_SCHEDULE_NAMESPACES: &[&str] = &["/proc/schedule"];
+const CACHE_INVALIDATE_LEASE_NAMESPACES: &[&str] = &["/proc/lease"];
+const CACHE_INVALIDATE_TELEMETRY_NAMESPACES: &[&str] = &["/gpu"];
 
 const OPENAPI_YAML: &str = include_str!("../../../resources/openapi/hive-gateway.yaml");
 
@@ -288,6 +291,8 @@ struct GatewayStatus {
 struct BrokerMetrics {
     control_waiters: AtomicU64,
     telemetry_waiters: AtomicU64,
+    control_waiters_high_water: AtomicU64,
+    telemetry_waiters_high_water: AtomicU64,
     control_checkouts: AtomicU64,
     telemetry_checkouts: AtomicU64,
     pool_exhausted: AtomicU64,
@@ -310,6 +315,13 @@ impl BrokerMetrics {
         }
     }
 
+    fn wait_high_water_counter(&self, kind: PoolKind) -> &AtomicU64 {
+        match kind {
+            PoolKind::Control => &self.control_waiters_high_water,
+            PoolKind::Telemetry => &self.telemetry_waiters_high_water,
+        }
+    }
+
     fn checkout_counter(&self, kind: PoolKind) -> &AtomicU64 {
         match kind {
             PoolKind::Control => &self.control_checkouts,
@@ -321,6 +333,8 @@ impl BrokerMetrics {
         BrokerStatusResponse {
             control_waiters: self.control_waiters.load(Ordering::Relaxed),
             telemetry_waiters: self.telemetry_waiters.load(Ordering::Relaxed),
+            control_waiters_high_water: self.control_waiters_high_water.load(Ordering::Relaxed),
+            telemetry_waiters_high_water: self.telemetry_waiters_high_water.load(Ordering::Relaxed),
             control_checkouts: self.control_checkouts.load(Ordering::Relaxed),
             telemetry_checkouts: self.telemetry_checkouts.load(Ordering::Relaxed),
             pool_exhausted: self.pool_exhausted.load(Ordering::Relaxed),
@@ -380,6 +394,8 @@ struct GatewayStatusResponse {
 struct BrokerStatusResponse {
     control_waiters: u64,
     telemetry_waiters: u64,
+    control_waiters_high_water: u64,
+    telemetry_waiters_high_water: u64,
     control_checkouts: u64,
     telemetry_checkouts: u64,
     pool_exhausted: u64,
@@ -1121,10 +1137,16 @@ impl AppState {
         loop {
             match tx.try_send(command) {
                 Ok(()) => {
-                    self.inner
+                    let waiters = self
+                        .inner
                         .broker
                         .wait_counter(kind)
-                        .fetch_add(1, Ordering::Relaxed);
+                        .fetch_add(1, Ordering::Relaxed)
+                        .saturating_add(1);
+                    self.inner
+                        .broker
+                        .wait_high_water_counter(kind)
+                        .fetch_max(waiters, Ordering::Relaxed);
                     break;
                 }
                 Err(TrySendError::Full(returned)) => {
@@ -1678,6 +1700,15 @@ fn cache_key_in_namespace(key: &str, namespace: &str) -> bool {
 }
 
 fn cache_invalidation_namespaces(write_path: &str) -> Option<&'static [&'static str]> {
+    if write_path == CLIENT_QUEEN_SCHEDULE_CTL_PATH {
+        return Some(CACHE_INVALIDATE_SCHEDULE_NAMESPACES);
+    }
+    if write_path == CLIENT_QUEEN_LEASE_CTL_PATH {
+        return Some(CACHE_INVALIDATE_LEASE_NAMESPACES);
+    }
+    if write_path.starts_with("/queen/telemetry/") {
+        return Some(CACHE_INVALIDATE_TELEMETRY_NAMESPACES);
+    }
     if write_path.starts_with("/queen/")
         || write_path == CLIENT_POLICY_CTL_PATH
         || write_path.starts_with("/actions/")
@@ -2112,7 +2143,15 @@ mod tests {
     fn cache_invalidation_namespaces_follow_write_scope() {
         assert_eq!(
             cache_invalidation_namespaces("/queen/schedule/ctl"),
-            Some(CACHE_INVALIDATE_CONTROL_NAMESPACES)
+            Some(CACHE_INVALIDATE_SCHEDULE_NAMESPACES)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/queen/lease/ctl"),
+            Some(CACHE_INVALIDATE_LEASE_NAMESPACES)
+        );
+        assert_eq!(
+            cache_invalidation_namespaces("/queen/telemetry/gpu0/segment"),
+            Some(CACHE_INVALIDATE_TELEMETRY_NAMESPACES)
         );
         assert_eq!(
             cache_invalidation_namespaces("/policy/ctl"),

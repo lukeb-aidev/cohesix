@@ -1030,15 +1030,21 @@ DHCP policy. After post-release Function 2 readiness, the linked runtime also mi
 interrupt path by writing CCCR `IENx=0x07` before the SDIO core `HOSTINTMASK` /
 `FUNCTIONINTMASK` programming, so association events and AP M1 can reach the
 Function 2 receive lane.
+Post-release firmware-mailbox readiness, CYW43 control replies, SDPCM TX
+credit, and RX retransmit acknowledgement waits use Pi-counter millisecond
+deadlines on timer-enabled builds; their legacy loop counts remain fallback or
+diagnostic context rather than live timeout authority. Bounded drain loops,
+retry counts, and sparse first-read sampling cadences remain count-based proof
+budgets.
 Root parses Broadcom association/link events delivered by the runtime on
 control/event or data frames, records `event_rx`, `associated`, `link_up`,
 `assoc_event`, `assoc_poll`, `post_assoc_polls`,
 `control_rx_firstread_*`, `rxsrc_*`, `control_rxsrc_*`, and only sends
 diagnostic EAPOL-Start after the
-post-association window reaches poll `8192`. It refreshes PAE multicast
-admission after `1024` post-association polls and runs the allmulti/promisc M1
-rescue after `4096` post-association polls or two starts. Before association
-proof, root keeps ordinary control/event and data polling active and adds a
+post-association window reaches 8192 ms. It refreshes PAE multicast admission
+after 1024 ms of post-association quiet and runs the allmulti/promisc M1 rescue
+after 4096 ms or two starts. Before association proof, root keeps ordinary
+control/event and data polling active and adds a
 sparse hintless Function 2 first-read cadence at polls `0`, `1`, `4`, `16`,
 `64`, `256`, `1024`, `4096`, and then every `8192` polls. That cadence gives
 association/link events or AP M1 a linked-runtime delivery path without
@@ -1058,12 +1064,12 @@ session remains pending for the normal bounded service path. A
 completion and must not be counted as association progress. If the join proof
 window lacks association/link evidence, root emits sparse
 `CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_PROBE` records at bounded pre-association
-poll milestones and uses `WLC_GET_BSSID` only as firmware-state telemetry and
-admission for continued host-EAPOL probing. BSSID alone is not association or
-carrier proof, and it does not release DHCP/data without link and EAPOL secure
-proof. If the primary Linux-shaped `bsscfg:join` returned success and a bounded
-probe later returns `BCME_NOTASSOCIATED`, root may spend exactly one linked-runtime
-`WLC_SET_SSID` rescue and records it as
+millisecond milestones and uses `WLC_GET_BSSID` only as firmware-state telemetry
+and admission for continued host-EAPOL probing. BSSID alone is not association
+or carrier proof, and it does not release DHCP/data without link and EAPOL
+secure proof. If the primary Linux-shaped `bsscfg:join` returned success and a
+bounded probe later returns `BCME_NOTASSOCIATED`, root may spend exactly one
+linked-runtime `WLC_SET_SSID` rescue and records it as
 `CYW43_DRIVER_TASK_HOST_EAPOL_ASSOC_RESCUE`; SET_SSID success or a SET_SSID
 event is not carrier proof. Gate 7 is reported with stable sub-gates:
 `7a=join-submit`, `7b=association`, `7c=eapol-rx`,
@@ -1175,8 +1181,10 @@ context and the retry/poll window.
   token after F2 clock forcing, and production boot still stops before F2 traffic
   unless real HT and live `IOR2` are both present.
 - Function 2 enable follows Linux's `SDIO_WAIT_F2RDY` contract: the strict
-  Cohesix path polls CCCR `IORx` for a 3000-sample F2-ready window before
-  declaring `sdio-function2-ready-timeout`.
+  linked-runtime path waits up to 3000 ms for CCCR `IORx` F2-ready when the Pi
+  counter is available, with the old 3000-poll CCCR loop retained only as the
+  no-counter fallback and diagnostic poll field before declaring
+  `sdio-function2-ready-timeout`.
 - Function 2 control-plane frames follow Linux SDIO host sizing: payloads that
   still fit CMD53 byte mode are four-byte aligned, while larger frames are
   padded to the 512-byte Function 2 block size so the HAL emits block-mode
@@ -2270,9 +2278,10 @@ Required Cohesix shape:
   gate 2 `sdio-card-select` evidence, not a HAL power/reset or DHCP failure.
 - Function 2 traffic is forbidden until firmware release, real
   `CHIPCLKCSR.HT_AVAIL`, and live Function 2 readiness are proven.
-- The Linux F2 enable timeout shape remains a 3000-sample CCCR `IORx` F2-ready
-  window, but `FORCE_HT` / `0x50 -> 0x52` evidence is diagnostic only and cannot
-  replace HT or `IOR2`.
+- The Linux F2 enable timeout shape remains a 3000 ms CCCR `IORx` F2-ready
+  window on timer-enabled Pi 4 builds, with the bounded 3000-poll loop retained
+  only as no-counter fallback/diagnostic context. `FORCE_HT` / `0x50 -> 0x52`
+  evidence is diagnostic only and cannot replace HT or `IOR2`.
 - NVRAM normalization is deterministic and logged.
 - Firmware upload proof distinguishes proven byte mismatch from readback
   unavailable.

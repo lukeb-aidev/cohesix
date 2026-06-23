@@ -26,7 +26,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
     DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX,
-    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
+    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED,
+    DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_READY,
@@ -2108,6 +2109,7 @@ const DRIVER_TASK_USB_ENUM_HUB_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 256;
 const DRIVER_TASK_USB_ENUM_HUB_EVENT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 1024;
 const DRIVER_TASK_PCIE_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 8;
+const DRIVER_TASK_NET_ENGINE_INIT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 64;
 const DRIVER_TASK_CYW43_SDIO_OWNER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 512;
 const DRIVER_TASK_CYW43_SDIO_OWNER_REPLY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32_768;
@@ -5879,9 +5881,7 @@ fn driver_task_ring_attempt_limit(
     {
         return DRIVER_TASK_LONG_INIT_RING_ATTEMPTS;
     }
-    if mode == DriverTaskRingCommandMode::NonBlocking
-        && command.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX
-    {
+    if mode == DriverTaskRingCommandMode::NonBlocking && driver_task_engine_init_aux(command.aux0) {
         return DRIVER_TASK_LONG_INIT_RING_ATTEMPTS;
     }
     if matches!(contract.kind, DriverTaskKind::WifiNic)
@@ -5935,18 +5935,25 @@ fn driver_task_ring_timeout_keep_active_limit(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
     ) && matches!(contract.kind, DriverTaskKind::PcieRoot)
-        && (command.aux0 == DRIVER_RUNTIME_INIT_AUX
-            || command.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX)
+        && (command.aux0 == DRIVER_RUNTIME_INIT_AUX || driver_task_engine_init_aux(command.aux0))
     {
         DRIVER_TASK_PCIE_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT
     } else if matches!(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
     ) && matches!(contract.kind, DriverTaskKind::SdioHost)
-        && (command.aux0 == DRIVER_RUNTIME_INIT_AUX
-            || command.aux0 == DRIVER_RUNTIME_ENGINE_INIT_AUX)
+        && (command.aux0 == DRIVER_RUNTIME_INIT_AUX || driver_task_engine_init_aux(command.aux0))
     {
         DRIVER_TASK_SDIO_PREREQ_TIMEOUT_KEEP_ACTIVE_LIMIT
+    } else if matches!(
+        mode,
+        DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
+    ) && matches!(
+        contract.kind,
+        DriverTaskKind::WiredNic | DriverTaskKind::WifiNic
+    ) && driver_task_engine_init_aux(command.aux0)
+    {
+        DRIVER_TASK_NET_ENGINE_INIT_TIMEOUT_KEEP_ACTIVE_LIMIT
     } else if matches!(
         mode,
         DriverTaskRingCommandMode::NonBlocking | DriverTaskRingCommandMode::PromptSlice
@@ -5964,6 +5971,14 @@ fn driver_task_ring_timeout_keep_active_limit(
     } else {
         0
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_engine_init_aux(aux0: u32) -> bool {
+    matches!(
+        aux0,
+        DRIVER_RUNTIME_ENGINE_INIT_AUX | DRIVER_RUNTIME_NET_INIT_AUX
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -9184,7 +9199,7 @@ fn write_driver_task_counter_line(
 
     write!(
         line,
-        "DRIVER_TASK_COUNTER contract={} hot_path={} source=root-ring sequence={} submitted={} completed={} idle={} fault={} budget={} frame={} desc={} staged_bytes={} clean_ops={} clean_bytes={} inv_ops={} inv_bytes={} sends={} yields={} busy={} same_request={} timeouts={} keep_active={} aborts={} overruns={} drops={} rx_frames={} rx_bytes={} tx_frames={} tx_bytes={}",
+        "DRIVER_TASK_COUNTER contract={} hot_path={} source=root-ring sequence={} submitted={} completed={} idle={} fault={} budget={} frame={} desc={} staged_bytes={} clean_ops={} clean_bytes={} inv_ops={} inv_bytes={} sends={} yields={} busy={} same_request={} timeouts={} keep_active={} aborts={} overruns={} drops={} rx_frames={} rx_bytes={} tx_frames={} tx_bytes={} role_aux0={} role_aux1={} role_aux2={} role_aux3={}",
         contract_name,
         DriverTaskHotPath::from_u32(counters.hot_path)
             .map_or("unknown", DriverTaskHotPath::as_str),
@@ -9214,6 +9229,10 @@ fn write_driver_task_counter_line(
         counters.rx_bytes,
         counters.tx_frames,
         counters.tx_bytes,
+        counters.role_aux0,
+        counters.role_aux1,
+        counters.role_aux2,
+        counters.role_aux3,
     )
 }
 
@@ -10293,6 +10312,10 @@ mod tests {
         counters.rx_bytes = u64::MAX;
         counters.tx_frames = u64::MAX;
         counters.tx_bytes = u64::MAX;
+        counters.role_aux0 = u64::MAX;
+        counters.role_aux1 = u64::MAX;
+        counters.role_aux2 = u64::MAX;
+        counters.role_aux3 = u64::MAX;
 
         let mut line = heapless::String::<DRIVER_TASK_COUNTER_LINE_BYTES>::new();
         assert!(write_driver_task_counter_line(
@@ -10301,7 +10324,7 @@ mod tests {
             counters
         )
         .is_ok());
-        assert!(line.as_str().ends_with("tx_bytes=18446744073709551615"));
+        assert!(line.as_str().ends_with("role_aux3=18446744073709551615"));
         assert!(line.len() < DRIVER_TASK_COUNTER_LINE_BYTES);
     }
 
@@ -10688,6 +10711,33 @@ mod tests {
         assert!(driver_task_ring_timeout_keeps_active(
             PCIE_ROOT_DRIVER_TASK_CONTRACT,
             pcie_command,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+
+        let mut genet_command = runtime_engine_init_command(
+            DriverTaskHotPath::GenetNic,
+            DriverTaskBudgetGrant::from_contract(GENET_DRIVER_TASK_CONTRACT),
+        );
+        genet_command.aux0 = DRIVER_RUNTIME_NET_INIT_AUX;
+        assert_eq!(
+            driver_task_ring_attempt_limit(
+                GENET_DRIVER_TASK_CONTRACT,
+                genet_command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_LONG_INIT_RING_ATTEMPTS
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                GENET_DRIVER_TASK_CONTRACT,
+                genet_command,
+                DriverTaskRingCommandMode::NonBlocking
+            ),
+            DRIVER_TASK_NET_ENGINE_INIT_TIMEOUT_KEEP_ACTIVE_LIMIT
+        );
+        assert!(driver_task_ring_timeout_keeps_active(
+            GENET_DRIVER_TASK_CONTRACT,
+            genet_command,
             DriverTaskRingCommandMode::NonBlocking
         ));
     }

@@ -202,11 +202,12 @@ def test_allocate_ids_are_monotonic() -> None:
         auto_approve=True,
         transient_retries=True,
         strict_control_errors=False,
+        run_token="abc123ef",
     )
-    assert rest_perf.allocate_schedule_id(state) == "sched-00000001"
-    assert rest_perf.allocate_schedule_id(state) == "sched-00000002"
-    assert rest_perf.allocate_lease_id(state) == "lease-00000001"
-    assert rest_perf.allocate_lease_id(state) == "lease-00000002"
+    assert rest_perf.allocate_schedule_id(state) == "sched-abc123ef-000001"
+    assert rest_perf.allocate_schedule_id(state) == "sched-abc123ef-000002"
+    assert rest_perf.allocate_lease_id(state) == "lease-abc123ef-000001"
+    assert rest_perf.allocate_lease_id(state) == "lease-abc123ef-000002"
 
 
 def test_telemetry_append_rotates_segment_on_quota() -> None:
@@ -610,6 +611,89 @@ def test_error_rate_helper() -> None:
     assert abs(rest_perf.error_rate(stats) - 0.5) < 1e-9
 
 
+def test_gateway_status_delta_saturates_missing_fields() -> None:
+    before = {
+        "broker": {
+            "control_waiters": 5,
+            "telemetry_waiters": 9,
+            "pool_exhausted": 2,
+            "connected": True,
+        }
+    }
+    after = {
+        "broker": {
+            "control_waiters": 8,
+            "telemetry_waiters": 7,
+            "pool_exhausted": 2,
+            "checkout_retries": 4,
+            "connected": False,
+        }
+    }
+    assert rest_perf.gateway_status_delta(before, after) == {
+        "broker": {
+            "control_waiters": 3,
+            "telemetry_waiters": 0,
+            "pool_exhausted": 0,
+        }
+    }
+    assert rest_perf.gateway_status_delta(None, after) is None
+
+
+def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Path) -> None:
+    log_path = tmp_path / "bench.log"
+    args = argparse.Namespace(
+        seed=123,
+        rest_url="http://127.0.0.1:8080",
+        workers_min=1,
+        workers_max=2,
+        multi_hive=False,
+        hives=1,
+        workers_per_hive=2,
+        intensity_min=1,
+        intensity_max=2,
+        duration_mins=1,
+        transient_retries=True,
+        strict_control_errors=False,
+        fast_ramp=False,
+        scenario=None,
+        telemetry_reference_chunk_bytes=rest_perf.DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES,
+        error_budget_rate=None,
+        gateway_pool_control_sessions=None,
+        gateway_pool_telemetry_sessions=None,
+        gateway_broker_control_response_timeout_ms=None,
+        gateway_broker_telemetry_response_timeout_ms=None,
+        summary_max_error_lines=rest_perf.DEFAULT_SUMMARY_MAX_ERROR_LINES,
+    )
+    overall = rest_perf.OpStats()
+    overall.record(0.01, True, None)
+    gateway_start = {"broker": {"proc_cache_hits": 10, "pool_exhausted": 0}}
+    gateway_end = {"broker": {"proc_cache_hits": 15, "pool_exhausted": 1}}
+    gateway_diff = rest_perf.gateway_status_delta(gateway_start, gateway_end)
+
+    with log_path.open("w", encoding="utf-8") as handle:
+        logger = rest_perf.RunLogger(str(log_path), handle, echo_stdout=False)
+        artifacts = rest_perf.write_simulation_artifacts(
+            args,
+            logger,
+            overall,
+            {},
+            [],
+            None,
+            0.0,
+            True,
+            gateway_start,
+            gateway_end,
+            gateway_diff,
+        )
+
+    payload = json.loads(pathlib.Path(artifacts["summary_json"]).read_text())
+    assert payload["gateway_status_start"] == gateway_start
+    assert payload["gateway_status_end"] == gateway_end
+    assert payload["gateway_status_delta"] == {
+        "broker": {"proc_cache_hits": 5, "pool_exhausted": 1}
+    }
+
+
 def test_parse_args_no_retries_alias_disables_transient_retries() -> None:
     original_argv = list(sys.argv)
     try:
@@ -632,6 +716,25 @@ def test_parse_args_no_retries_alias_disables_transient_retries() -> None:
     assert not args.transient_retries
     assert args.scenario == "telemetry-1mb"
     assert abs(args.error_budget_rate - 0.01) < 1e-9
+    assert args.timeout == rest_perf.DEFAULT_SIMULATE_TIMEOUT_SECS
+
+
+def test_parse_args_simulate_timeout_override_is_preserved() -> None:
+    original_argv = list(sys.argv)
+    try:
+        sys.argv = [
+            "rest_perf_harness.py",
+            "--mode",
+            "simulate",
+            "--auth-token",
+            "bootstrap",
+            "--timeout",
+            "4.5",
+        ]
+        args = rest_perf.parse_args()
+    finally:
+        sys.argv = original_argv
+    assert args.timeout == 4.5
 
 
 def test_parse_args_accepts_gateway_broker_timeout_overrides() -> None:

@@ -72,16 +72,16 @@ use crate::serial::DEFAULT_LINE_CAPACITY;
 use cohesix_proto::{REASON_INACTIVITY_TIMEOUT, REASON_RECV_ERROR};
 use spin::Mutex;
 
-const TCP_RX_BUFFER: usize = 4096;
-const TCP_TX_BUFFER: usize = 4096;
-const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 16;
-const MAX_CONSOLE_BYTES_PER_POLL: usize = 8_192;
+const TCP_RX_BUFFER: usize = 32 * 1024;
+const TCP_TX_BUFFER: usize = 32 * 1024;
+const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 32;
+const MAX_CONSOLE_BYTES_PER_POLL: usize = 32 * 1024;
 const SAME_TICK_STALL_WARN_POLLS: u16 = 256;
 const MAX_DHCP_RX_PACKETS_PER_POLL: usize = 2;
 const MAX_UDP_ECHO_PACKETS_PER_POLL: usize = 2;
 const TCP_CONSOLE_RECV_CHUNK_BYTES: usize = DEFAULT_LINE_CAPACITY + 4;
-const MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL: usize = 16;
-const MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL: usize = 4_096;
+const MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL: usize = 64;
+const MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL: usize = 32 * 1024;
 const MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL: usize = 2;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
@@ -1216,6 +1216,17 @@ impl BudgetedNetPhase {
             Self::SelfTest => Self::Interface,
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+fn budgeted_genet_tcp_fast_path_due(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    stage_policy: NetStagePolicy,
+    listener_defer_reason: Option<&str>,
+) -> bool {
+    contract == crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT
+        && stage_policy.allow_tcp
+        && listener_defer_reason.is_none()
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -3055,6 +3066,44 @@ impl<D: NetDevice> NetStack<D> {
         activity
     }
 
+    fn charge_tcp_budget(budget: &mut DriverServiceBudget) -> Result<(), DriverServiceBudgetError> {
+        budget.charge_ops(64)?;
+        budget.charge_frames(MAX_CONSOLE_FRAMES_PER_POLL as u16)?;
+        budget.charge_bytes((TCP_RX_BUFFER + TCP_TX_BUFFER) as u32)
+    }
+
+    fn budgeted_genet_tcp_fast_path_due(&self) -> bool {
+        #[cfg(feature = "kernel")]
+        {
+            budgeted_genet_tcp_fast_path_due(
+                D::driver_task_contract(),
+                self.stage_policy,
+                self.console_listener_defer_reason(),
+            )
+        }
+        #[cfg(not(feature = "kernel"))]
+        {
+            false
+        }
+    }
+
+    fn service_budgeted_tcp_turn(
+        &mut self,
+        timestamp: Instant,
+        now_ms: u64,
+        pre_label: &'static str,
+        post_label: &'static str,
+    ) -> bool {
+        let pre_activity = self.poll_smoltcp_once(timestamp, now_ms, pre_label);
+        let mut activity = pre_activity;
+        let tcp_activity = self.stage_policy.allow_tcp && self.process_tcp(now_ms);
+        activity |= tcp_activity;
+        if pre_activity || tcp_activity {
+            activity |= self.poll_smoltcp_once(timestamp, now_ms, post_label);
+        }
+        activity
+    }
+
     fn sync_interface_hardware_addr_value(
         interface: &mut Interface,
         device_mac: EthernetAddress,
@@ -3116,7 +3165,7 @@ impl<D: NetDevice> NetStack<D> {
             return activity;
         }
 
-        activity |= self.service_wifi_host_eapol_slice();
+        activity |= self.service_wifi_host_eapol_slice(now_ms);
         activity |= self.sync_interface_hardware_addr(now_ms);
         if wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
             self.finish_poll_turn(now_ms, activity);
@@ -3193,7 +3242,7 @@ impl<D: NetDevice> NetStack<D> {
                 return Ok(true);
             }
             let mut activity = self.sync_interface_hardware_addr(now_ms);
-            activity |= self.service_wifi_host_eapol_slice();
+            activity |= self.service_wifi_host_eapol_slice(now_ms);
             activity |= self.sync_interface_hardware_addr(now_ms);
             if !wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
                 activity |= self.start_dhcp_if_ready(now_ms);
@@ -3204,6 +3253,7 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         let phase = self.budgeted_phase;
+        let genet_tcp_fast_path = self.budgeted_genet_tcp_fast_path_due();
         match phase {
             BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush => {
                 budget.charge_ops(2)?;
@@ -3216,15 +3266,16 @@ impl<D: NetDevice> NetStack<D> {
                 budget.charge_bytes((MAX_DHCP_RX_PACKETS_PER_POLL as u32 + 1) * 1024)?;
             }
             BudgetedNetPhase::Tcp => {
-                budget.charge_ops(32)?;
-                budget.charge_frames(8)?;
-                budget.charge_bytes(16 * 1024)?;
+                Self::charge_tcp_budget(budget)?;
             }
             BudgetedNetPhase::SelfTest => {
                 budget.charge_ops(16)?;
                 budget.charge_frames(8)?;
                 budget.charge_bytes(8 * 1024)?;
             }
+        }
+        if genet_tcp_fast_path && phase != BudgetedNetPhase::Tcp {
+            Self::charge_tcp_budget(budget)?;
         }
 
         let timestamp = self.begin_poll_turn(now_ms);
@@ -3235,9 +3286,18 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         let mut activity = self.sync_interface_hardware_addr(now_ms);
-        activity |= self.service_wifi_host_eapol_slice();
+        activity |= self.service_wifi_host_eapol_slice(now_ms);
         activity |= self.sync_interface_hardware_addr(now_ms);
+        if genet_tcp_fast_path && phase != BudgetedNetPhase::Tcp {
+            activity |= self.service_budgeted_tcp_turn(
+                timestamp,
+                now_ms,
+                "budgeted-genet-pre-tcp",
+                "budgeted-genet-post-tcp",
+            );
+        }
         activity |= match phase {
+            BudgetedNetPhase::Interface if genet_tcp_fast_path => false,
             BudgetedNetPhase::Interface => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
             }
@@ -3246,7 +3306,13 @@ impl<D: NetDevice> NetStack<D> {
                 let service_activity = self.service_dhcp(now_ms);
                 start_activity || service_activity
             }
-            BudgetedNetPhase::Tcp => self.stage_policy.allow_tcp && self.process_tcp(now_ms),
+            BudgetedNetPhase::Tcp => self.service_budgeted_tcp_turn(
+                timestamp,
+                now_ms,
+                "budgeted-tcp-pre",
+                "budgeted-post-tcp",
+            ),
+            BudgetedNetPhase::InterfaceFlush if genet_tcp_fast_path => false,
             BudgetedNetPhase::InterfaceFlush => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
             }
@@ -3265,13 +3331,30 @@ impl<D: NetDevice> NetStack<D> {
                 }
             }
         };
+        if genet_tcp_fast_path && phase == BudgetedNetPhase::Tcp && activity {
+            for _ in 0..GENET_TCP_FAST_PATH_EXTRA_TURNS {
+                if Self::charge_tcp_budget(budget).is_err() {
+                    break;
+                }
+                let turn_activity = self.service_budgeted_tcp_turn(
+                    timestamp,
+                    now_ms,
+                    "budgeted-genet-extra-tcp",
+                    "budgeted-genet-extra-flush",
+                );
+                if !turn_activity {
+                    break;
+                }
+                activity = true;
+            }
+        }
 
         self.budgeted_phase = phase.next();
         self.finish_poll_turn(now_ms, activity);
         Ok(activity)
     }
 
-    fn service_wifi_host_eapol_slice(&mut self) -> bool {
+    fn service_wifi_host_eapol_slice(&mut self, now_ms: u64) -> bool {
         #[cfg(feature = "kernel")]
         {
             if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
@@ -3281,7 +3364,11 @@ impl<D: NetDevice> NetStack<D> {
             let Some(credentials) = self.wifi_credentials else {
                 return false;
             };
-            return crate::drivers::driver_task_net::service_cyw43_host_eapol_slice(credentials, 1);
+            return crate::drivers::driver_task_net::service_cyw43_host_eapol_slice(
+                credentials,
+                1,
+                now_ms,
+            );
         }
         #[cfg(not(feature = "kernel"))]
         {
@@ -5899,29 +5986,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     ) {
                         return self.poll_with_time(now_ms);
                     }
-                    let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-                        0,
-                        hot_path,
-                        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-                        crate::hal::driver_task::DriverFrameDescriptor {
-                            offset: 0,
-                            len: 0,
-                            flags: 0,
-                        },
-                    );
-                    if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
-                        let ring_progress =
-                            crate::drivers::driver_task_net::preserve_driver_task_pre_poll_completion(
-                                contract,
-                                hot_path,
-                                completion,
-                            );
-                        return self.poll_with_time(now_ms) || ring_progress;
-                    }
-                    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-                        return self.poll_with_time(now_ms);
-                    }
-                    return self.poll_with_time(now_ms);
+                    let ring_progress = service_driver_task_pre_poll_burst(contract, hot_path, 0);
+                    return self.poll_with_time(now_ms) || ring_progress;
                 }
                 let _ = hot_path;
                 return false;
@@ -5976,31 +6042,15 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     ) {
                         return self.poll_budgeted_with_time(now_ms, budget);
                     }
-                    let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-                        0,
+                    let ring_progress = service_driver_task_pre_poll_burst_budgeted(
+                        contract,
                         hot_path,
-                        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-                        crate::hal::driver_task::DriverFrameDescriptor {
-                            offset: 0,
-                            len: 0,
-                            flags: NET_RING_FLAG_BUDGETED,
-                        },
+                        NET_RING_FLAG_BUDGETED,
+                        budget,
                     );
-                    if let Some(completion) = run_net_driver_task_ring_service(contract, command) {
-                        let ring_progress =
-                            crate::drivers::driver_task_net::preserve_driver_task_pre_poll_completion(
-                                contract,
-                                hot_path,
-                                completion,
-                            );
-                        return self
-                            .poll_budgeted_with_time(now_ms, budget)
-                            .map(|root_progress| root_progress || ring_progress);
-                    }
-                    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-                        return self.poll_budgeted_with_time(now_ms, budget);
-                    }
-                    return self.poll_budgeted_with_time(now_ms, budget);
+                    return self
+                        .poll_budgeted_with_time(now_ms, budget)
+                        .map(|root_progress| root_progress || ring_progress);
                 }
                 let _ = hot_path;
                 return Err(DriverServiceBudgetError::OperationsExhausted);
@@ -6378,6 +6428,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 
 #[cfg(feature = "kernel")]
 const NET_RING_FLAG_BUDGETED: u16 = 1;
+const GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 8;
+const DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
+const GENET_DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
+const GENET_TCP_FAST_PATH_EXTRA_TURNS: usize = 1;
 
 #[cfg(feature = "kernel")]
 struct NetDriverTaskContext<D: NetDevice> {
@@ -6398,6 +6452,108 @@ fn net_driver_task_hot_path(
     } else {
         None
     }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_pre_poll_burst_limit(hot_path: crate::hal::driver_task::DriverTaskHotPath) -> usize {
+    if hot_path == crate::hal::driver_task::DriverTaskHotPath::GenetNic {
+        GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT
+    } else {
+        DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_pre_poll_command(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    hot_path: crate::hal::driver_task::DriverTaskHotPath,
+    flags: u16,
+) -> crate::hal::driver_task::DriverTaskCommandRecord {
+    crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+        0,
+        hot_path,
+        crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+        crate::hal::driver_task::DriverFrameDescriptor {
+            offset: 0,
+            len: 0,
+            flags,
+        },
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_pre_poll_completion_can_continue(
+    completion: &crate::hal::driver_task::DriverTaskCompletionRecord,
+) -> bool {
+    completion.code == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
+        || (completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+            && completion.result != 0)
+}
+
+#[cfg(feature = "kernel")]
+fn service_driver_task_pre_poll_once(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    hot_path: crate::hal::driver_task::DriverTaskHotPath,
+    flags: u16,
+) -> Option<(bool, bool)> {
+    let command = driver_task_pre_poll_command(contract, hot_path, flags);
+    let completion = run_net_driver_task_ring_service(contract, command)?;
+    let keep_draining = driver_task_pre_poll_completion_can_continue(&completion);
+    let progress = crate::drivers::driver_task_net::preserve_driver_task_pre_poll_completion(
+        contract, hot_path, completion,
+    );
+    Some((progress, keep_draining))
+}
+
+#[cfg(feature = "kernel")]
+fn service_driver_task_pre_poll_burst(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    hot_path: crate::hal::driver_task::DriverTaskHotPath,
+    flags: u16,
+) -> bool {
+    let mut activity = false;
+    for _ in 0..driver_task_pre_poll_burst_limit(hot_path) {
+        let Some((progress, keep_draining)) =
+            service_driver_task_pre_poll_once(contract, hot_path, flags)
+        else {
+            break;
+        };
+        activity |= progress;
+        if !keep_draining {
+            break;
+        }
+    }
+    activity
+}
+
+#[cfg(feature = "kernel")]
+fn service_driver_task_pre_poll_burst_budgeted(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    hot_path: crate::hal::driver_task::DriverTaskHotPath,
+    flags: u16,
+    budget: &mut DriverServiceBudget,
+) -> bool {
+    let mut activity = false;
+    for _ in 0..driver_task_pre_poll_burst_limit(hot_path) {
+        if budget.charge_ops(4).is_err()
+            || budget.charge_frames(1).is_err()
+            || budget
+                .charge_bytes(GENET_DRIVER_TASK_PRE_POLL_TURN_BYTES)
+                .is_err()
+        {
+            break;
+        }
+        let Some((progress, keep_draining)) =
+            service_driver_task_pre_poll_once(contract, hot_path, flags)
+        else {
+            break;
+        };
+        activity |= progress;
+        if !keep_draining {
+            break;
+        }
+    }
+    activity
 }
 
 #[cfg(feature = "kernel")]
@@ -6914,10 +7070,52 @@ mod tests {
         assert!(MAX_UDP_ECHO_PACKETS_PER_POLL <= 2);
         assert!(MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL <= 2);
         assert_eq!(TCP_CONSOLE_RECV_CHUNK_BYTES, DEFAULT_LINE_CAPACITY + 4);
-        assert!(MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL <= 16);
-        assert!(MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL <= 4_096);
-        assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 16);
-        assert!(MAX_CONSOLE_BYTES_PER_POLL <= 8_192);
+        assert!(MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL <= 64);
+        assert!(MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL <= TCP_RX_BUFFER);
+        assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 32);
+        assert!(MAX_CONSOLE_BYTES_PER_POLL <= TCP_TX_BUFFER);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_budgeted_tcp_fast_path_is_wired_only_after_listener_ready() {
+        let tcp_policy = NetStagePolicy {
+            allow_tcp: true,
+            allow_selftest: true,
+            allow_outbound_probe: false,
+            allow_console_io: true,
+            tx_only: false,
+        };
+        let no_tcp_policy = NetStagePolicy {
+            allow_tcp: false,
+            ..tcp_policy
+        };
+
+        assert!(budgeted_genet_tcp_fast_path_due(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None
+        ));
+        assert!(!budgeted_genet_tcp_fast_path_due(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            Some("dhcp-pending")
+        ));
+        assert!(!budgeted_genet_tcp_fast_path_due(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            no_tcp_policy,
+            None
+        ));
+        assert!(!budgeted_genet_tcp_fast_path_due(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None
+        ));
+        assert!(!budgeted_genet_tcp_fast_path_due(
+            crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None
+        ));
     }
 
     #[test]

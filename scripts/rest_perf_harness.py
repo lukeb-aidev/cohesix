@@ -40,6 +40,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Te
 DEFAULT_REST_URL = "http://127.0.0.1:8080"
 DEFAULT_RUNS = 3
 DEFAULT_TIMEOUT_SECS = 3.0
+DEFAULT_SIMULATE_TIMEOUT_SECS = 10.0
 DEFAULT_MAX_WORKERS = 4
 DEFAULT_TAIL_BYTES = 256
 DEFAULT_LOG_TAIL_BYTES = 32768
@@ -62,6 +63,19 @@ DEFAULT_ROLE = "queen"
 DEFAULT_SUMMARY_MAX_ERROR_LINES = 400
 DEFAULT_READY_TIMEOUT_SECS = 180
 DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES = 16 * 1024 * 1024
+GATEWAY_STATUS_BROKER_COUNTERS = (
+    "control_waiters",
+    "telemetry_waiters",
+    "control_checkouts",
+    "telemetry_checkouts",
+    "pool_exhausted",
+    "checkout_retries",
+    "timeout_rejections",
+    "telemetry_yields",
+    "proc_cache_hits",
+    "proc_cache_misses",
+    "proc_cache_evictions",
+)
 
 FAST_RAMP_WORKERS_MIN = 24
 FAST_RAMP_WORKERS_MAX = 120
@@ -307,6 +321,11 @@ class SimState:
     auto_approve: bool
     transient_retries: bool
     strict_control_errors: bool
+    run_token: str = field(
+        default_factory=lambda: hashlib.sha256(
+            f"{os.getpid()}-{time.time_ns()}".encode("ascii")
+        ).hexdigest()[:8]
+    )
     worker_cap: Optional[int] = None
     next_worker_seq: int = 1
     approval_seq: int = 0
@@ -400,6 +419,9 @@ class RestClient:
         payload = {"path": path, "line": line}
         return parse_gateway_response(self.post_json("/v1/fs/echo", payload))
 
+    def status(self) -> dict:
+        return self.get_json("/v1/meta/status")
+
     def request_auth_headers(self) -> Dict[str, str]:
         if self.request_auth_token is None:
             return {}
@@ -423,6 +445,57 @@ def fetch_json(url: str, timeout: float, headers: Optional[Dict[str, str]] = Non
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = response.read()
     return json.loads(payload)
+
+
+def fetch_gateway_status_snapshot(
+    client: RestClient,
+    logger: Optional[RunLogger],
+    label: str,
+) -> Optional[Dict[str, object]]:
+    """Fetch gateway broker counters without making benchmark success depend on them."""
+    try:
+        status = client.status()
+    except Exception as exc:
+        emit(logger, f"[gateway] status_{label}=unavailable error={exc}")
+        return None
+    broker = status.get("broker", {})
+    if isinstance(broker, dict):
+        counters = [
+            f"{key}={broker[key]}"
+            for key in GATEWAY_STATUS_BROKER_COUNTERS
+            if key in broker
+        ]
+        emit(logger, f"[gateway] status_{label} {' '.join(counters)}")
+    else:
+        emit(logger, f"[gateway] status_{label}=available")
+    return status
+
+
+def is_json_number(value: object) -> bool:
+    """Return true for JSON numeric values while excluding booleans."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def gateway_status_delta(
+    before: Optional[Dict[str, object]],
+    after: Optional[Dict[str, object]],
+) -> Optional[Dict[str, Dict[str, object]]]:
+    """Compute counter deltas for gateway status snapshots."""
+    if before is None or after is None:
+        return None
+    before_broker = before.get("broker")
+    after_broker = after.get("broker")
+    if not isinstance(before_broker, dict) or not isinstance(after_broker, dict):
+        return None
+    broker_delta: Dict[str, object] = {}
+    for key, after_value in after_broker.items():
+        before_value = before_broker.get(key)
+        if is_json_number(before_value) and is_json_number(after_value):
+            diff = after_value - before_value
+            broker_delta[key] = diff if diff >= 0 else 0
+    if not broker_delta:
+        return None
+    return {"broker": broker_delta}
 
 
 def normalize_rest_url(rest_url: str) -> str:
@@ -1058,6 +1131,9 @@ def parse_args() -> argparse.Namespace:
 
     argv_tokens = sys.argv[1:]
     args = parser.parse_args()
+    timeout_explicit = any(
+        token == "--timeout" or token.startswith("--timeout=") for token in argv_tokens
+    )
 
     env_tcp_token = (
         os.environ.get("COH_AUTH_TOKEN")
@@ -1080,6 +1156,8 @@ def parse_args() -> argparse.Namespace:
         args.request_auth_token = env_request_token
 
     if args.mode == "simulate":
+        if not timeout_explicit and args.timeout == DEFAULT_TIMEOUT_SECS:
+            args.timeout = DEFAULT_SIMULATE_TIMEOUT_SECS
         if args.no_retries:
             args.no_transient_retries = True
         args.auto_approve = not args.no_auto_approve
@@ -1504,13 +1582,13 @@ def remove_lease_id(state: SimState, lease_id: str) -> None:
 def allocate_schedule_id(state: SimState) -> str:
     with state.id_lock:
         state.next_schedule_seq += 1
-        return f"sched-{state.next_schedule_seq:08d}"
+        return f"sched-{state.run_token}-{state.next_schedule_seq:06d}"
 
 
 def allocate_lease_id(state: SimState) -> str:
     with state.id_lock:
         state.next_lease_seq += 1
-        return f"lease-{state.next_lease_seq:08d}"
+        return f"lease-{state.run_token}-{state.next_lease_seq:06d}"
 
 
 def echo_with_policy_retry(
@@ -2465,6 +2543,11 @@ def run_simulation(args: argparse.Namespace) -> int:
         )
         if not operations:
             raise SystemExit("No operations available to run.")
+        gateway_status_start = fetch_gateway_status_snapshot(
+            client,
+            args.logger,
+            "start",
+        )
 
         stats: Dict[str, OpStats] = {}
         stats_lock = threading.Lock()
@@ -2615,6 +2698,20 @@ def run_simulation(args: argparse.Namespace) -> int:
             f"budget={args.error_budget_rate if args.error_budget_rate is not None else 'none'} "
             f"pass={'yes' if error_budget_pass else 'no'}"
         )
+        gateway_status_end = fetch_gateway_status_snapshot(client, args.logger, "end")
+        gateway_status_diff = gateway_status_delta(
+            gateway_status_start,
+            gateway_status_end,
+        )
+        if gateway_status_diff is not None:
+            broker_delta = gateway_status_diff.get("broker", {})
+            if broker_delta:
+                args.logger.log(
+                    "[gateway] status_delta "
+                    + " ".join(
+                        f"{key}={value}" for key, value in sorted(broker_delta.items())
+                    )
+                )
         artifacts = write_simulation_artifacts(
             args,
             args.logger,
@@ -2624,6 +2721,9 @@ def run_simulation(args: argparse.Namespace) -> int:
             state.worker_cap,
             overall_err_rate,
             error_budget_pass,
+            gateway_status_start,
+            gateway_status_end,
+            gateway_status_diff,
         )
         for label, path in artifacts.items():
             args.logger.log(f"[artifact] {label}={path}")
@@ -2771,6 +2871,9 @@ def write_simulation_artifacts(
     worker_cap: Optional[int],
     overall_error_rate: float,
     error_budget_pass: bool,
+    gateway_status_start: Optional[Dict[str, object]] = None,
+    gateway_status_end: Optional[Dict[str, object]] = None,
+    gateway_status_diff: Optional[Dict[str, Dict[str, object]]] = None,
 ) -> Dict[str, str]:
     base_path = logger.path.rsplit(".", 1)[0]
     summary_json = f"{base_path}.summary.json"
@@ -2811,6 +2914,9 @@ def write_simulation_artifacts(
         "gateway_broker_telemetry_response_timeout_ms": (
             args.gateway_broker_telemetry_response_timeout_ms
         ),
+        "gateway_status_start": gateway_status_start,
+        "gateway_status_end": gateway_status_end,
+        "gateway_status_delta": gateway_status_diff,
         "overall": operation_summary(overall, args.summary_max_error_lines),
         "operations": {
             name: operation_summary(entry, args.summary_max_error_lines)
@@ -2878,6 +2984,11 @@ def run_perf(args: argparse.Namespace) -> int:
         args.logger.log(f"Failed to fetch bounds: {exc}")
         return 1
     status_specs = build_status_specs(bounds)
+    gateway_status_start = fetch_gateway_status_snapshot(
+        client,
+        args.logger,
+        "start",
+    )
     if args.suite in ("status", "all"):
         seq_times, par_times = measure(status_specs, client, args.runs)
         report("status", seq_times, par_times, args.assert_min_ratio, args.logger)
@@ -2927,6 +3038,20 @@ def run_perf(args: argparse.Namespace) -> int:
         }
 
     if perf_summary:
+        gateway_status_end = fetch_gateway_status_snapshot(client, args.logger, "end")
+        gateway_status_diff = gateway_status_delta(
+            gateway_status_start,
+            gateway_status_end,
+        )
+        if gateway_status_diff is not None:
+            broker_delta = gateway_status_diff.get("broker", {})
+            if broker_delta:
+                args.logger.log(
+                    "[gateway] status_delta "
+                    + " ".join(
+                        f"{key}={value}" for key, value in sorted(broker_delta.items())
+                    )
+                )
         base_path = args.logger.path.rsplit(".", 1)[0]
         summary_path = f"{base_path}.perf-summary.json"
         with open(summary_path, "w", encoding="utf-8") as handle:
@@ -2936,6 +3061,9 @@ def run_perf(args: argparse.Namespace) -> int:
                     "rest_url": args.rest_url,
                     "runs": args.runs,
                     "suite": args.suite,
+                    "gateway_status_start": gateway_status_start,
+                    "gateway_status_end": gateway_status_end,
+                    "gateway_status_delta": gateway_status_diff,
                     "results": perf_summary,
                 },
                 handle,

@@ -38,6 +38,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
     DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN, DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
     DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+    DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT,
@@ -608,6 +609,7 @@ const ENGINE_STATE_HW_READY: u32 = 1 << 5;
 
 const RUNTIME_LEGACY_SPINS_PER_SECOND: u64 = 100_000_000;
 const RUNTIME_TIMER_FALLBACK_HZ: u64 = 54_000_000;
+const RUNTIME_MILLIS_PER_SECOND: u64 = 1_000;
 
 const CHAR_WIDTH: usize = 8;
 const CHAR_HEIGHT: usize = 16;
@@ -830,7 +832,7 @@ const GENET_RX_PAD_BYTES: usize = 2;
 const GENET_RX_BUF_OFFSET: usize = GENET_STATUS_BLOCK_BYTES + GENET_RX_PAD_BYTES;
 const GENET_TX_BUF_OFFSET: usize = GENET_STATUS_BLOCK_BYTES;
 const GENET_MAX_FRAME_LEN: usize = 1536;
-const GENET_RX_DRAIN_BUDGET: usize = 8;
+const GENET_RX_DRAIN_BUDGET: usize = 16;
 const GENET_RX_QUEUE_CAP: usize = GENET_RX_DRAIN_BUDGET;
 const GENET_TX_COMPLETION_RECLAIM_BUDGET: usize = GENET_ACTIVE_RING_DESCS;
 const GENET_DRIVER_TASK_MAC: [u8; 6] = [0x02, 0x43, 0x4f, 0x48, 0x58, 0x31];
@@ -1149,6 +1151,7 @@ const CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES: usize =
 const CYW43_CDC_HEADER_BYTES: usize = 16;
 const CYW43_CDC_STATUS_SUCCESS: u32 = 0;
 const CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS: usize = 8_000;
+const CYW43_CONTROL_EXCHANGE_TIMEOUT_MS: u64 = 1_000;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_MAGIC: u32 = 0x4300_0000;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NOT_READY: u32 = 1;
 const CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_RFRAME_READ_FAILED: u32 = 2;
@@ -1185,7 +1188,7 @@ const CYW43_SDPCM_CHANNEL_EVENT: u8 = 1;
 const CYW43_SDPCM_CHANNEL_DATA: u8 = 2;
 const CYW43_SDPCM_CHANNEL_GLOM: u8 = 3;
 const CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES: usize = 16;
-const CYW43_RX_DRAIN_BUDGET: usize = 4;
+const CYW43_RX_DRAIN_BUDGET: usize = 8;
 const CYW43_TX_CREDIT_WAIT_LOOPS: usize = 2_000;
 const CYW43_RX_FRAME_FLAG_MASK_DATA: u16 = 1 << CYW43_SDPCM_CHANNEL_DATA;
 const CYW43_RX_FRAME_FLAG_MASK_CONTROL: u16 = 1 << CYW43_SDPCM_CHANNEL_CONTROL;
@@ -1202,7 +1205,7 @@ const CYW43_DHCP_SERVER_PORT: u16 = 67;
 const CYW43_DHCP_CLIENT_PORT: u16 = 68;
 const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
-const CYW43_RX_QUEUE_CAP: usize = 4;
+const CYW43_RX_QUEUE_CAP: usize = CYW43_RX_GLOM_SUBFRAME_CAP;
 const CYW43_FUNCTION2_BLOCK_BYTES: usize = SDIO_FUNCTION2_BLOCK_SIZE as usize;
 const CYW43_CONTROL_RX_FIRSTREAD_BYTES: usize = 64;
 const CYW43_CONTROL_RX_BLOCK_PROBE_BYTES: usize = CYW43_FUNCTION2_BLOCK_BYTES;
@@ -1217,7 +1220,7 @@ const CYW43_RUNTIME_RX_BUFFER_BYTES: usize = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_
 const CYW43_RUNTIME_RX_BUFFER_OFFSET: usize = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize;
 const CYW43_FIRMWARE_STAGE_BYTES: usize = CYW43_RUNTIME_RX_BUFFER_BYTES;
 const CYW43_FIRMWARE_STAGE_OFFSET: usize = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize;
-const CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY: bool = false;
+const CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY: bool = true;
 const CYW43_RAM_BASE_4345: u32 = 0x0019_8000;
 const CYW43_RAM_SIZE_4345_PI4: u32 = 0x000c_8000;
 const CYW43_FIRMWARE_RESET_VECTOR_ADDR: u32 = 0x0000_0000;
@@ -1364,12 +1367,17 @@ const I_CHIPACTIVE: u32 = 1 << 29;
 const HOSTINTMASK: u32 = I_HMB_SW_MASK | I_CHIPACTIVE;
 const FUNCTIONINTMASK: u32 = SDIO_FUNC_ENABLE_2 as u32;
 const CYW43_POST_RELEASE_MAILBOX_POLLS: usize = 1_000;
+const CYW43_POST_RELEASE_MAILBOX_TIMEOUT_MS: u64 = 1_000;
+const CYW43_POST_RELEASE_HT_TIMEOUT_MS: u64 = 1_600;
+const CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS: u64 = 3_000;
+const CYW43_TX_CREDIT_TIMEOUT_MS: u64 = 100;
 const CYW43_RX_SOURCE_SAMPLE_INTERVAL_EMPTY_POLLS: u32 = 1024;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS: usize = 1;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_FIRSTREAD_RETRIES: usize = 1;
 const CYW43_RX_SOURCE_RECOVERY_DRAIN_POLLS: usize = 16;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_RFRAME_POLLS: usize = 4;
 const CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS: usize = 32;
+const CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS: u64 = 20;
 const CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS: usize = 5_000;
 const CYW43_RX_IDLE_TRACE_MAGIC: u32 = 0x4352_5854;
 const CYW43_RX_IDLE_TRACE_VERSION: u16 = 3;
@@ -1511,7 +1519,7 @@ impl<T> RuntimeStateSlot<T> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 struct GenetRuntimeState {
     initialized: bool,
     tx_prod_index: u16,
@@ -1522,6 +1530,11 @@ struct GenetRuntimeState {
     link_speed: u32,
     rx_queue_head: u8,
     rx_queue_count: u8,
+    rx_queue_high_water: u8,
+    rx_queue_overflows: u32,
+    rx_drain_budget_hits: u32,
+    rx_byte_budget_hits: u32,
+    rx_max_drained_per_turn: u8,
     rx_queue_lens: [u16; GENET_RX_QUEUE_CAP],
     rx_queue_flags: [u16; GENET_RX_QUEUE_CAP],
     rx_queue_frames: [[u8; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
@@ -1546,6 +1559,11 @@ impl GenetRuntimeState {
             link_speed: 0,
             rx_queue_head: 0,
             rx_queue_count: 0,
+            rx_queue_high_water: 0,
+            rx_queue_overflows: 0,
+            rx_drain_budget_hits: 0,
+            rx_byte_budget_hits: 0,
+            rx_max_drained_per_turn: 0,
             rx_queue_lens: [0; GENET_RX_QUEUE_CAP],
             rx_queue_flags: [0; GENET_RX_QUEUE_CAP],
             rx_queue_frames: [[0; GENET_MAX_FRAME_LEN]; GENET_RX_QUEUE_CAP],
@@ -1560,7 +1578,32 @@ impl GenetRuntimeState {
     }
 
     fn reset(&mut self) {
-        *self = Self::new();
+        self.initialized = false;
+        self.tx_prod_index = 0;
+        self.tx_cons_index = 0;
+        self.rx_cons_index = 0;
+        self.phy_addr = 0xff;
+        self.link_ready = false;
+        self.link_speed = 0;
+        self.rx_queue_head = 0;
+        self.rx_queue_count = 0;
+        self.rx_queue_high_water = 0;
+        self.rx_queue_overflows = 0;
+        self.rx_drain_budget_hits = 0;
+        self.rx_byte_budget_hits = 0;
+        self.rx_max_drained_per_turn = 0;
+        self.rx_queue_lens.fill(0);
+        self.rx_queue_flags.fill(0);
+        for frame in self.rx_queue_frames.iter_mut() {
+            frame.fill(0);
+        }
+        self.tx_packets = 0;
+        self.tx_completions = 0;
+        self.tx_last_reclaim = 0;
+        self.tx_last_free = GENET_ACTIVE_RING_DESCS as u16;
+        self.tx_last_in_flight = 0;
+        self.rx_packets = 0;
+        self.tx_drops = 0;
     }
 }
 
@@ -1931,6 +1974,9 @@ struct Cyw43RuntimeState {
     rx_queue_head: u8,
     rx_queue_count: u8,
     rx_queue_high_water: u8,
+    rx_queue_overflows: u32,
+    rx_drain_budget_hits: u32,
+    rx_max_drained_per_turn: u8,
     rx_queue_slots: [u8; CYW43_RX_QUEUE_CAP],
     rx_queue_lens: [u16; CYW43_RX_QUEUE_CAP],
     rx_queue_flags: [u16; CYW43_RX_QUEUE_CAP],
@@ -2012,6 +2058,9 @@ impl Cyw43RuntimeState {
             rx_queue_head: 0,
             rx_queue_count: 0,
             rx_queue_high_water: 0,
+            rx_queue_overflows: 0,
+            rx_drain_budget_hits: 0,
+            rx_max_drained_per_turn: 0,
             rx_queue_slots: cyw43_rx_queue_initial_slots(),
             rx_queue_lens: [0; CYW43_RX_QUEUE_CAP],
             rx_queue_flags: [0; CYW43_RX_QUEUE_CAP],
@@ -2114,6 +2163,9 @@ impl Cyw43RuntimeState {
         self.rx_queue_head = 0;
         self.rx_queue_count = 0;
         self.rx_queue_high_water = 0;
+        self.rx_queue_overflows = 0;
+        self.rx_drain_budget_hits = 0;
+        self.rx_max_drained_per_turn = 0;
         for (slot_index, slot) in self.rx_queue_slots.iter_mut().enumerate() {
             *slot = slot_index as u8;
         }
@@ -4663,7 +4715,13 @@ fn cyw43_descriptor_invalid_result(desc: DriverRuntimeCyw43CommandDescriptor) ->
                     | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN)
                 == 0
         }
-        DRIVER_RUNTIME_CYW43_OP_RX_POLL | DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
+        DRIVER_RUNTIME_CYW43_OP_RX_POLL => {
+            desc.flags
+                & !(DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
+                    | DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN)
+                == 0
+        }
+        DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
             desc.flags & !DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD == 0
         }
         _ => desc.flags == 0,
@@ -5008,11 +5066,13 @@ fn service_cyw43_descriptor_command(
         }
         DRIVER_RUNTIME_CYW43_OP_RX_POLL => {
             let credit_observations_before = state.sdpcm_credit_observations;
-            match cyw43_runtime_poll_rx_detailed(
+            match cyw43_runtime_poll_rx_detailed_with_options(
                 state,
                 CYW43_RX_FRAME_FLAG_MASK_DATA,
                 command.sequence,
                 desc.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD != 0,
+                Cyw43AssertedEmptyPolicy::RequestRetransmit,
+                desc.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN != 0,
             ) {
                 Cyw43RxPollResult::Frame(frame) => {
                     frame_ready = Some(frame);
@@ -7163,8 +7223,14 @@ fn cyw43_require_post_release_ht_clock() -> Result<u8, u16> {
         if !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ) {
             return Err(FAULT_CYW43_POST_RELEASE_HT);
         }
-        let mut deadline = runtime_deadline_from_legacy_spins(SDHCI_INIT_SPINS);
-        while !runtime_deadline_expired(&mut deadline) {
+        let mut poll = 0usize;
+        let mut deadline = runtime_deadline_from_millis_or_iterations(
+            CYW43_POST_RELEASE_HT_TIMEOUT_MS,
+            SDHCI_INIT_SPINS,
+        );
+        while !runtime_deadline_iteration_cap_reached(&deadline, poll, SDHCI_INIT_SPINS)
+            && !runtime_deadline_expired(&mut deadline)
+        {
             let Some(chipclk) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR) else {
                 return Err(FAULT_CYW43_POST_RELEASE_HT);
             };
@@ -7178,6 +7244,7 @@ fn cyw43_require_post_release_ht_clock() -> Result<u8, u16> {
                 return Err(FAULT_CYW43_POST_RELEASE_HT);
             }
             runtime_poll_pause();
+            poll = poll.saturating_add(1);
         }
         cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, u32::from(last_chipclk));
         Err(FAULT_CYW43_POST_RELEASE_HT)
@@ -7260,7 +7327,10 @@ fn cyw43_enable_post_release_function2() -> Result<u8, u16> {
         };
         let desired_ioex = current_ioex | SDIO_FUNC_ENABLE_2;
         let mut last_iordy = 0u8;
+        let mut last_attempt = 0usize;
+        let mut last_poll_count = 0usize;
         for attempt in 0..=CYW43_SDIO_F2_READY_REENABLE_RETRIES {
+            last_attempt = attempt;
             if attempt != 0 {
                 let cleared = desired_ioex & !SDIO_FUNC_ENABLE_2;
                 if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, cleared) {
@@ -7295,8 +7365,15 @@ fn cyw43_enable_post_release_function2() -> Result<u8, u16> {
                 return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
             }
             let mut poll = 0usize;
-            let mut deadline = runtime_deadline_from_legacy_spins(CYW43_SDIO_WAIT_F2_READY_POLLS);
-            while poll < CYW43_SDIO_WAIT_F2_READY_POLLS && !runtime_deadline_expired(&mut deadline)
+            let mut deadline = runtime_deadline_from_millis_or_iterations(
+                CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS,
+                CYW43_SDIO_WAIT_F2_READY_POLLS,
+            );
+            while !runtime_deadline_iteration_cap_reached(
+                &deadline,
+                poll,
+                CYW43_SDIO_WAIT_F2_READY_POLLS,
+            ) && !runtime_deadline_expired(&mut deadline)
             {
                 let Some(iordy) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX) else {
                     cyw43_record_last_fault_with_result(
@@ -7331,13 +7408,14 @@ fn cyw43_enable_post_release_function2() -> Result<u8, u16> {
                 runtime_poll_pause();
                 poll = poll.saturating_add(1);
             }
+            last_poll_count = poll;
         }
         cyw43_record_last_fault_with_result(
             FAULT_CYW43_POST_RELEASE_F2_READY,
             cyw43_f2_ready_fault_detail(
                 CYW43_F2_READY_DETAIL_REASON_TIMEOUT,
-                CYW43_SDIO_F2_READY_REENABLE_RETRIES,
-                CYW43_SDIO_WAIT_F2_READY_POLLS,
+                last_attempt,
+                last_poll_count,
                 desired_ioex,
                 last_iordy,
             ),
@@ -7439,8 +7517,17 @@ fn cyw43_wait_for_firmware_mailbox_ready(_state: &mut Cyw43RuntimeState) -> Resu
     #[cfg(target_os = "none")]
     {
         let mut last_mailbox = 0u32;
-        let mut deadline = runtime_deadline_from_legacy_spins(CYW43_POST_RELEASE_MAILBOX_POLLS);
-        while !runtime_deadline_expired(&mut deadline) {
+        let mut poll = 0usize;
+        let mut deadline = runtime_deadline_from_millis_or_iterations(
+            CYW43_POST_RELEASE_MAILBOX_TIMEOUT_MS,
+            CYW43_POST_RELEASE_MAILBOX_POLLS,
+        );
+        while !runtime_deadline_iteration_cap_reached(
+            &deadline,
+            poll,
+            CYW43_POST_RELEASE_MAILBOX_POLLS,
+        ) && !runtime_deadline_expired(&mut deadline)
+        {
             let Some(mailbox) = cyw43_backplane_read_u32(
                 _state,
                 CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOHOSTMAILBOXDATA,
@@ -7460,6 +7547,7 @@ fn cyw43_wait_for_firmware_mailbox_ready(_state: &mut Cyw43RuntimeState) -> Resu
                 return Err(FAULT_CYW43_POST_RELEASE_PROTOCOL_VERSION);
             }
             runtime_poll_pause();
+            poll = poll.saturating_add(1);
         }
         cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_MAILBOX_READY, last_mailbox);
         Err(FAULT_CYW43_POST_RELEASE_MAILBOX_READY)
@@ -7941,7 +8029,7 @@ fn cyw43_backplane_write_chunk_shape_for_lane(
     if firmware_released {
         let chunk_len = remaining.min(SDIO_FUNCTION2_BLOCK_SIZE as usize);
         (chunk_len, chunk_len as u16, 1)
-    } else if byte_mode_fallback || CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY {
+    } else if byte_mode_fallback {
         let byte_chunk = if narrow_byte_mode_fallback {
             CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES
         } else {
@@ -8968,8 +9056,14 @@ fn cyw43_submit_sdpcm_frame(
 }
 
 fn cyw43_wait_for_sdpcm_tx_credit(state: &mut Cyw43RuntimeState) -> bool {
-    let mut deadline = runtime_deadline_from_legacy_spins(CYW43_TX_CREDIT_WAIT_LOOPS);
-    while !runtime_deadline_expired(&mut deadline) {
+    let mut polls = 0usize;
+    let mut deadline = runtime_deadline_from_millis_or_iterations(
+        CYW43_TX_CREDIT_TIMEOUT_MS,
+        CYW43_TX_CREDIT_WAIT_LOOPS,
+    );
+    while !runtime_deadline_iteration_cap_reached(&deadline, polls, CYW43_TX_CREDIT_WAIT_LOOPS)
+        && !runtime_deadline_expired(&mut deadline)
+    {
         if has_sdpcm_credit(state.sdpcm_seq, state.sdpcm_seq_max) {
             return true;
         }
@@ -8979,6 +9073,7 @@ fn cyw43_wait_for_sdpcm_tx_credit(state: &mut Cyw43RuntimeState) -> bool {
             Cyw43AssertedEmptyPolicy::RequestRetransmit,
         );
         runtime_poll_pause();
+        polls = polls.saturating_add(1);
     }
     has_sdpcm_credit(state.sdpcm_seq, state.sdpcm_seq_max)
 }
@@ -9015,16 +9110,42 @@ fn cyw43_runtime_poll_rx_detailed_with_policy(
     allow_hintless_firstread: bool,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
 ) -> Cyw43RxPollResult {
+    cyw43_runtime_poll_rx_detailed_with_options(
+        state,
+        wanted_mask,
+        sequence,
+        allow_hintless_firstread,
+        asserted_empty_policy,
+        false,
+    )
+}
+
+fn cyw43_runtime_poll_rx_detailed_with_options(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    sequence: u32,
+    allow_hintless_firstread: bool,
+    asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+    allow_steady_tail_drain: bool,
+) -> Cyw43RxPollResult {
     if !state.initialized || !state.transport_ready || !state.firmware_released {
         return Cyw43RxPollResult::Idle(Cyw43RxIdleReason::NotReady);
     }
     state.reset_rx_idle_trace();
     let mut decoded_unmatched = false;
     let mut decoded_valid_unmatched = false;
+    let mut drained = 0usize;
     for _ in 0..CYW43_RX_DRAIN_BUDGET {
         if let Some(frame) = cyw43_rx_queue_pop_matching(state, wanted_mask) {
             state.rx_frames = state.rx_frames.saturating_add(1);
             state.rx_retransmit_pending = false;
+            if allow_steady_tail_drain {
+                cyw43_runtime_tail_drain_after_data_frame(
+                    state,
+                    wanted_mask,
+                    asserted_empty_policy,
+                );
+            }
             return Cyw43RxPollResult::Frame(frame);
         }
         let frame_len = match cyw43_runtime_next_rx_frame_len(state) {
@@ -9070,19 +9191,34 @@ fn cyw43_runtime_poll_rx_detailed_with_policy(
             Cyw43RxDecodeResult::Frame(frame) => {
                 state.rx_frames = state.rx_frames.saturating_add(1);
                 state.rx_retransmit_pending = false;
+                drained = drained.saturating_add(1);
+                cyw43_record_rx_drain_turn(state, drained);
+                if allow_steady_tail_drain {
+                    cyw43_runtime_tail_drain_after_data_frame(
+                        state,
+                        wanted_mask,
+                        asserted_empty_policy,
+                    );
+                }
                 return Cyw43RxPollResult::Frame(frame);
             }
             Cyw43RxDecodeResult::QueuedOrConsumed => {
+                drained = drained.saturating_add(1);
                 decoded_unmatched = true;
                 decoded_valid_unmatched = true;
             }
             Cyw43RxDecodeResult::DecodeMiss => {
+                drained = drained.saturating_add(1);
                 decoded_unmatched = true;
             }
         }
         if state.sdpcm_next_frame_len == 0 && state.rx_queue_count >= CYW43_RX_QUEUE_CAP as u8 {
             break;
         }
+    }
+    cyw43_record_rx_drain_turn(state, drained);
+    if drained >= CYW43_RX_DRAIN_BUDGET {
+        state.rx_drain_budget_hits = state.rx_drain_budget_hits.saturating_add(1);
     }
     let reason = if decoded_valid_unmatched {
         Cyw43RxIdleReason::NoRframe
@@ -9541,10 +9677,16 @@ fn cyw43_runtime_recover_asserted_empty_firstread(
 
 fn cyw43_runtime_wait_for_retransmit_handled(state: &mut Cyw43RuntimeState) -> bool {
     let mut polls = 0usize;
-    let mut deadline = runtime_deadline_from_legacy_spins(
-        CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS.saturating_mul(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS),
+    let mut deadline = runtime_deadline_from_millis_or_iterations(
+        CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS,
+        CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS,
     );
-    while polls < CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS && !runtime_deadline_expired(&mut deadline) {
+    while !runtime_deadline_iteration_cap_reached(
+        &deadline,
+        polls,
+        CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS,
+    ) && !runtime_deadline_expired(&mut deadline)
+    {
         if let Some(mailbox_data) =
             cyw43_backplane_read_u32(state, CYW43_SDIO_CORE_BASE + SDPCMD_REG_TOHOSTMAILBOXDATA)
         {
@@ -9827,12 +9969,28 @@ fn cyw43_runtime_read_rframe_if_present(
     wanted_mask: u16,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
 ) -> Option<Cyw43RxPollResult> {
+    cyw43_runtime_read_rframe_if_present_with_budget(
+        state,
+        wanted_mask,
+        asserted_empty_policy,
+        CYW43_RX_DRAIN_BUDGET,
+    )
+}
+
+fn cyw43_runtime_read_rframe_if_present_with_budget(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+    drain_budget: usize,
+) -> Option<Cyw43RxPollResult> {
     let mut decoded_unmatched = false;
     let mut decoded_valid_unmatched = false;
-    for _ in 0..CYW43_RX_DRAIN_BUDGET {
+    let mut drained = 0usize;
+    for _ in 0..drain_budget {
         let frame_len = match cyw43_runtime_next_rx_frame_len(state) {
             Ok(Some(frame_len)) => frame_len,
             Ok(None) => {
+                cyw43_record_rx_drain_turn(state, drained);
                 return if decoded_valid_unmatched {
                     Some(Cyw43RxPollResult::Idle(Cyw43RxIdleReason::NoRframe))
                 } else if decoded_unmatched {
@@ -9856,13 +10014,17 @@ fn cyw43_runtime_read_rframe_if_present(
             Cyw43RxDecodeResult::Frame(frame) => {
                 state.rx_frames = state.rx_frames.saturating_add(1);
                 state.rx_retransmit_pending = false;
+                drained = drained.saturating_add(1);
+                cyw43_record_rx_drain_turn(state, drained);
                 return Some(Cyw43RxPollResult::Frame(frame));
             }
             Cyw43RxDecodeResult::QueuedOrConsumed => {
+                drained = drained.saturating_add(1);
                 decoded_unmatched = true;
                 decoded_valid_unmatched = true;
             }
             Cyw43RxDecodeResult::DecodeMiss => {
+                drained = drained.saturating_add(1);
                 decoded_unmatched = true;
             }
         }
@@ -9870,11 +10032,38 @@ fn cyw43_runtime_read_rframe_if_present(
             break;
         }
     }
+    cyw43_record_rx_drain_turn(state, drained);
+    if drain_budget != 0 && drained >= drain_budget {
+        state.rx_drain_budget_hits = state.rx_drain_budget_hits.saturating_add(1);
+    }
     if decoded_valid_unmatched {
         Some(Cyw43RxPollResult::Idle(Cyw43RxIdleReason::NoRframe))
     } else {
         decoded_unmatched.then_some(Cyw43RxPollResult::Idle(Cyw43RxIdleReason::SdpcmDecodeMiss))
     }
+}
+
+fn cyw43_runtime_tail_drain_after_data_frame(
+    state: &mut Cyw43RuntimeState,
+    wanted_mask: u16,
+    asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+) {
+    if wanted_mask == CYW43_RX_FRAME_FLAG_MASK_DATA
+        && state.rx_queue_count < CYW43_RX_QUEUE_CAP as u8
+    {
+        let _ = cyw43_runtime_read_rframe_if_present_with_budget(
+            state,
+            0,
+            asserted_empty_policy,
+            CYW43_RX_DRAIN_BUDGET.saturating_sub(1),
+        );
+    }
+}
+
+fn cyw43_record_rx_drain_turn(state: &mut Cyw43RuntimeState, drained: usize) {
+    state.rx_max_drained_per_turn = state
+        .rx_max_drained_per_turn
+        .max(drained.min(u8::MAX as usize) as u8);
 }
 
 fn cyw43_runtime_finish_hintless_firstread(
@@ -10366,9 +10555,15 @@ fn cyw43_control_exchange(
         DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
     );
     let mut attempt = 1usize;
-    let mut deadline = runtime_deadline_from_legacy_spins(CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS);
-    while attempt <= CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS
-        && !runtime_deadline_expired(&mut deadline)
+    let mut deadline = runtime_deadline_from_millis_or_iterations(
+        CYW43_CONTROL_EXCHANGE_TIMEOUT_MS,
+        CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS,
+    );
+    while !runtime_deadline_iteration_cap_reached(
+        &deadline,
+        attempt.saturating_sub(1),
+        CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS,
+    ) && !runtime_deadline_expired(&mut deadline)
     {
         let allow_firstread = cyw43_control_exchange_attempt_uses_firstread(attempt);
         let reply_frame = match cyw43_runtime_poll_rx_detailed(
@@ -11154,6 +11349,7 @@ fn cyw43_record_rx_queue_push_failure(
     state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_QUEUE_PUSH_FAILED;
     if usize::from(state.rx_queue_count) >= CYW43_RX_QUEUE_CAP {
         state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_QUEUE_FULL;
+        state.rx_queue_overflows = state.rx_queue_overflows.saturating_add(1);
     }
     if packet_len == 0 || packet_len > MAX_DRIVER_TASK_FRAME_BYTES {
         state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_QUEUE_INVALID_LEN;
@@ -11763,6 +11959,7 @@ fn genet_runtime_drain_rx_hardware(
 ) -> Result<Option<(usize, u16)>, u16> {
     let mut first_frame = None;
     let mut bytes_left = budget.max_bytes as usize;
+    let mut drained = 0usize;
     for _ in 0..drain_budget {
         let prod = genet_read32(GENET_RDMA_PROD_INDEX) as u16;
         if prod == state.rx_cons_index {
@@ -11780,12 +11977,14 @@ fn genet_runtime_drain_rx_hardware(
             continue;
         };
         if payload_len > budget.max_bytes as usize {
+            state.rx_byte_budget_hits = state.rx_byte_budget_hits.saturating_add(1);
             if first_frame.is_none() {
                 return Err(BUDGET_EXHAUSTED_BYTES);
             }
             break;
         }
         if payload_len > bytes_left {
+            state.rx_byte_budget_hits = state.rx_byte_budget_hits.saturating_add(1);
             if first_frame.is_none() {
                 return Err(BUDGET_EXHAUSTED_BYTES);
             }
@@ -11799,10 +11998,18 @@ fn genet_runtime_drain_rx_hardware(
         } else if !genet_rx_queue_push_from_dma(state, dma_vaddr, payload_len, flags) {
             break;
         }
+        drained = drained.saturating_add(1);
         bytes_left = bytes_left.saturating_sub(payload_len);
         genet_rearm_rx_slot(descriptor, dma_range, slot);
         state.rx_cons_index = state.rx_cons_index.wrapping_add(1);
         genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
+    }
+    genet_record_rx_drain_turn(state, drained);
+    if drained >= drain_budget {
+        let prod = genet_read32(GENET_RDMA_PROD_INDEX) as u16;
+        if prod != state.rx_cons_index {
+            state.rx_drain_budget_hits = state.rx_drain_budget_hits.saturating_add(1);
+        }
     }
     Ok(first_frame)
 }
@@ -11844,6 +12051,7 @@ fn genet_runtime_drain_rx_hardware_to_queue(
             continue;
         };
         if payload_len > bytes_left {
+            state.rx_byte_budget_hits = state.rx_byte_budget_hits.saturating_add(1);
             break;
         }
         let flags = genet_dma_frame_ethertype(dma_vaddr, payload_len);
@@ -11856,7 +12064,20 @@ fn genet_runtime_drain_rx_hardware_to_queue(
         genet_write32(GENET_RDMA_CONS_INDEX, state.rx_cons_index as u32);
         queued = queued.saturating_add(1);
     }
+    genet_record_rx_drain_turn(state, queued);
+    if queued >= drain_budget {
+        let prod = genet_read32(GENET_RDMA_PROD_INDEX) as u16;
+        if prod != state.rx_cons_index {
+            state.rx_drain_budget_hits = state.rx_drain_budget_hits.saturating_add(1);
+        }
+    }
     queued
+}
+
+fn genet_record_rx_drain_turn(state: &mut GenetRuntimeState, drained: usize) {
+    state.rx_max_drained_per_turn = state
+        .rx_max_drained_per_turn
+        .max(drained.min(u8::MAX as usize) as u8);
 }
 
 fn genet_rx_len_status_from_dma(dma_vaddr: usize, descriptor_len_status: u32) -> u32 {
@@ -11885,6 +12106,9 @@ fn genet_rx_queue_push_from_dma(
         || payload_len > GENET_MAX_FRAME_LEN
         || usize::from(state.rx_queue_count) >= GENET_RX_QUEUE_CAP
     {
+        if usize::from(state.rx_queue_count) >= GENET_RX_QUEUE_CAP {
+            state.rx_queue_overflows = state.rx_queue_overflows.saturating_add(1);
+        }
         return false;
     }
     let slot =
@@ -11895,6 +12119,7 @@ fn genet_rx_queue_push_from_dma(
     state.rx_queue_lens[slot] = payload_len as u16;
     state.rx_queue_flags[slot] = flags;
     state.rx_queue_count = state.rx_queue_count.saturating_add(1);
+    state.rx_queue_high_water = state.rx_queue_high_water.max(state.rx_queue_count);
     true
 }
 
@@ -11913,6 +12138,9 @@ fn genet_rx_queue_push_for_test(state: &mut GenetRuntimeState, payload: &[u8]) -
         || payload.len() > GENET_MAX_FRAME_LEN
         || usize::from(state.rx_queue_count) >= GENET_RX_QUEUE_CAP
     {
+        if usize::from(state.rx_queue_count) >= GENET_RX_QUEUE_CAP {
+            state.rx_queue_overflows = state.rx_queue_overflows.saturating_add(1);
+        }
         return false;
     }
     let slot =
@@ -11925,6 +12153,7 @@ fn genet_rx_queue_push_for_test(state: &mut GenetRuntimeState, payload: &[u8]) -
         0
     };
     state.rx_queue_count = state.rx_queue_count.saturating_add(1);
+    state.rx_queue_high_water = state.rx_queue_high_water.max(state.rx_queue_count);
     true
 }
 
@@ -15149,6 +15378,20 @@ fn runtime_legacy_spins_to_cycles_at_hz(spins: usize, freq_hz: u64) -> u64 {
     cycles.clamp(1, u64::MAX as u128) as u64
 }
 
+fn runtime_millis_to_cycles_at_hz(ms: u64, freq_hz: u64) -> u64 {
+    if ms == 0 || freq_hz == 0 {
+        return 0;
+    }
+    let cycles = (ms as u128)
+        .saturating_mul(freq_hz as u128)
+        .saturating_div(RUNTIME_MILLIS_PER_SECOND as u128);
+    cycles.clamp(1, u64::MAX as u128) as u64
+}
+
+fn runtime_millis_to_cycles(ms: u64) -> u64 {
+    runtime_millis_to_cycles_at_hz(ms, runtime_timer_freq_hz())
+}
+
 fn runtime_deadline_from_legacy_spins(spins: usize) -> RuntimeDeadline {
     let start = runtime_timer_counter_ticks();
     let cycles = runtime_legacy_spins_to_cycles(spins);
@@ -15157,6 +15400,29 @@ fn runtime_deadline_from_legacy_spins(spins: usize) -> RuntimeDeadline {
     } else {
         RuntimeDeadline::Iterations { remaining: spins }
     }
+}
+
+fn runtime_deadline_from_millis_or_iterations(
+    ms: u64,
+    fallback_iterations: usize,
+) -> RuntimeDeadline {
+    let start = runtime_timer_counter_ticks();
+    let cycles = runtime_millis_to_cycles(ms);
+    if start != 0 && cycles != 0 {
+        RuntimeDeadline::Counter { start, cycles }
+    } else {
+        RuntimeDeadline::Iterations {
+            remaining: fallback_iterations,
+        }
+    }
+}
+
+fn runtime_deadline_iteration_cap_reached(
+    deadline: &RuntimeDeadline,
+    attempts: usize,
+    fallback_cap: usize,
+) -> bool {
+    matches!(deadline, RuntimeDeadline::Iterations { .. }) && attempts >= fallback_cap
 }
 
 fn runtime_deadline_expired(deadline: &mut RuntimeDeadline) -> bool {
@@ -22632,6 +22898,29 @@ mod tests {
     }
 
     #[test]
+    fn runtime_millis_conversion_uses_counter_frequency() {
+        assert_eq!(runtime_millis_to_cycles_at_hz(1, 54_000_000), 54_000);
+        assert_eq!(
+            runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_HT_TIMEOUT_MS, 54_000_000),
+            86_400_000
+        );
+        assert_eq!(
+            runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS, 54_000_000),
+            162_000_000
+        );
+        assert_eq!(
+            runtime_millis_to_cycles_at_hz(CYW43_TX_CREDIT_TIMEOUT_MS, 54_000_000),
+            5_400_000
+        );
+        assert_eq!(
+            runtime_millis_to_cycles_at_hz(CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS, 54_000_000),
+            1_080_000
+        );
+        assert_eq!(runtime_millis_to_cycles_at_hz(0, 54_000_000), 0);
+        assert_eq!(runtime_millis_to_cycles_at_hz(1, 0), 0);
+    }
+
+    #[test]
     fn runtime_counter_deadline_handles_wraparound() {
         assert!(!runtime_counter_deadline_expired(100, 50, 149));
         assert!(runtime_counter_deadline_expired(100, 50, 150));
@@ -22888,6 +23177,8 @@ mod tests {
         let overflow_payload = [0xff; 4];
         assert!(!genet_rx_queue_push_for_test(&mut state, &overflow_payload));
         assert_eq!(usize::from(state.rx_queue_count), GENET_RX_QUEUE_CAP);
+        assert_eq!(usize::from(state.rx_queue_high_water), GENET_RX_QUEUE_CAP);
+        assert_eq!(state.rx_queue_overflows, 1);
 
         for slot in 0..GENET_RX_QUEUE_CAP {
             assert_eq!(genet_rx_queue_pop_to_ring(&mut state), Some((4, 0)));
@@ -22901,13 +23192,14 @@ mod tests {
             );
         }
         assert_eq!(genet_rx_queue_pop_to_ring(&mut state), None);
+        assert_eq!(usize::from(state.rx_queue_high_water), GENET_RX_QUEUE_CAP);
     }
 
     #[test]
     fn genet_rx_drain_budget_caps_one_service_turn() {
-        assert_eq!(GENET_RX_DRAIN_BUDGET, 8);
+        assert_eq!(GENET_RX_DRAIN_BUDGET, 16);
         assert_eq!(GENET_RX_QUEUE_CAP, GENET_RX_DRAIN_BUDGET);
-        assert!(GENET_RX_DRAIN_BUDGET < GENET_ACTIVE_RING_DESCS);
+        assert!(GENET_RX_QUEUE_CAP <= GENET_ACTIVE_RING_DESCS);
         assert!(GENET_MAX_FRAME_LEN <= MAX_DRIVER_TASK_FRAME_BYTES);
     }
 
@@ -23268,6 +23560,9 @@ mod tests {
         );
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
         assert_eq!(usize::from(state.rx_queue_count), 1);
+        assert_eq!(usize::from(state.rx_queue_high_water), 1);
+        assert_eq!(state.rx_drain_budget_hits, 0);
+        assert_eq!(state.rx_max_drained_per_turn, 2);
         assert_eq!(state.rx_packets, 1);
         assert_eq!(
             read_frame_prefix::<18>(DriverFrameDescriptor {
@@ -23287,6 +23582,9 @@ mod tests {
         );
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
         assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(usize::from(state.rx_queue_high_water), 1);
+        assert_eq!(state.rx_drain_budget_hits, 0);
+        assert_eq!(state.rx_max_drained_per_turn, 2);
         assert_eq!(state.rx_packets, 2);
         assert_eq!(
             read_frame_prefix::<18>(DriverFrameDescriptor {
@@ -23295,6 +23593,98 @@ mod tests {
                 flags: 0x0806,
             }),
             payload_b
+        );
+    }
+
+    #[test]
+    fn genet_rx_drain_budget_reports_deferred_hardware_backlog() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let descriptor = descriptor_for(HOT_PATH_GENET_NIC, ROLE_NET);
+        let dma_range = runtime_resource_range(
+            &descriptor,
+            DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+            DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+        )
+        .expect("Genet test descriptor must include a DMA arena");
+        RUNTIME_DESCRIPTOR.store(descriptor);
+        let frame_count = GENET_RX_DRAIN_BUDGET + 1;
+
+        for slot in 0..frame_count {
+            let mut payload = [0u8; 18];
+            payload[0..6].copy_from_slice(&[0xff; 6]);
+            payload[6..12].copy_from_slice(&GENET_DRIVER_TASK_MAC);
+            payload[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+            payload[14] = slot as u8;
+            payload[15] = (slot + 1) as u8;
+            payload[16] = (slot + 2) as u8;
+            payload[17] = (slot + 3) as u8;
+            let dma_vaddr = dma_range.vaddr as usize + slot * DRIVER_TASK_RING_PAGE_BYTES;
+            write_dma_u32(
+                dma_vaddr,
+                (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                    | GENET_DMA_OWN
+                    | GENET_DMA_SOP
+                    | GENET_DMA_EOP,
+            );
+            for (index, byte) in payload.iter().copied().enumerate() {
+                write_dma_byte(dma_vaddr + GENET_RX_BUF_OFFSET + index, byte);
+            }
+            genet_write_rx_desc(
+                slot,
+                runtime_resource_bus_addr_at(
+                    &descriptor,
+                    dma_range,
+                    slot * DRIVER_TASK_RING_PAGE_BYTES,
+                )
+                .expect("Genet test descriptor must resolve RX DMA buffers"),
+                (((payload.len() + GENET_RX_BUF_OFFSET) as u32) << GENET_DMA_BUFLENGTH_SHIFT)
+                    | GENET_DMA_OWN
+                    | GENET_DMA_SOP
+                    | GENET_DMA_EOP,
+            );
+        }
+        let mut state = GenetRuntimeState::new();
+        state.initialized = true;
+        genet_write32(GENET_RDMA_PROD_INDEX, frame_count as u32);
+
+        let budget = DriverTaskBudgetGrant {
+            max_ops: GENET_RX_DRAIN_BUDGET as u16,
+            max_frames: GENET_RX_DRAIN_BUDGET as u16,
+            max_bytes: (18 * GENET_RX_DRAIN_BUDGET) as u32,
+        };
+        assert_eq!(
+            genet_runtime_poll_rx(&mut state, budget),
+            GenetRxPoll::Frame {
+                len: 18,
+                flags: 0x0800,
+            }
+        );
+        assert_eq!(
+            read_frame_prefix::<18>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 18,
+                flags: 0x0800,
+            }),
+            [
+                0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02, 0x43, 0x4f, 0x48, 0x58, 0x31, 0x08, 0x00,
+                0x00, 0x01, 0x02, 0x03,
+            ]
+        );
+        assert_eq!(
+            genet_read32(GENET_RDMA_CONS_INDEX),
+            GENET_RX_DRAIN_BUDGET as u32
+        );
+        assert_eq!(usize::from(state.rx_queue_count), GENET_RX_DRAIN_BUDGET - 1);
+        assert_eq!(
+            usize::from(state.rx_queue_high_water),
+            GENET_RX_DRAIN_BUDGET - 1
+        );
+        assert_eq!(state.rx_drain_budget_hits, 1);
+        assert_eq!(state.rx_byte_budget_hits, 0);
+        assert_eq!(
+            usize::from(state.rx_max_drained_per_turn),
+            GENET_RX_DRAIN_BUDGET
         );
     }
 
@@ -23365,6 +23755,9 @@ mod tests {
         );
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 1);
         assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(state.rx_byte_budget_hits, 1);
+        assert_eq!(state.rx_drain_budget_hits, 0);
+        assert_eq!(state.rx_max_drained_per_turn, 1);
         assert_eq!(state.rx_packets, 1);
 
         let full_budget = DriverTaskBudgetGrant {
@@ -23381,6 +23774,9 @@ mod tests {
         );
         assert_eq!(genet_read32(GENET_RDMA_CONS_INDEX), 2);
         assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(state.rx_byte_budget_hits, 1);
+        assert_eq!(state.rx_drain_budget_hits, 0);
+        assert_eq!(state.rx_max_drained_per_turn, 1);
         assert_eq!(state.rx_packets, 2);
     }
 
@@ -25366,9 +25762,11 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_rx_glom_and_deferred_queue_caps_match_old_good_envelope() {
+    fn cyw43_rx_glom_and_deferred_queue_caps_stay_bounded() {
+        assert_eq!(CYW43_RX_DRAIN_BUDGET, 8);
         assert_eq!(CYW43_RX_GLOM_SUBFRAME_CAP, 8);
-        assert_eq!(CYW43_RX_QUEUE_CAP, 4);
+        assert_eq!(CYW43_RX_QUEUE_CAP, CYW43_RX_GLOM_SUBFRAME_CAP);
+        assert!(CYW43_RX_DRAIN_BUDGET <= CYW43_RX_QUEUE_CAP);
         assert!(CYW43_RX_QUEUE_CAP <= u8::MAX as usize);
     }
 
@@ -25392,6 +25790,10 @@ mod tests {
         state.glom_subframe_count = 1;
         state.rx_queue_head = 3;
         state.rx_queue_count = 2;
+        state.rx_queue_high_water = 2;
+        state.rx_queue_overflows = 3;
+        state.rx_drain_budget_hits = 4;
+        state.rx_max_drained_per_turn = 5;
         state.rx_queue_slots[3] = 99;
         state.rx_queue_lens[0] = 12;
         state.rx_queue_flags[0] = 0xbeef;
@@ -25438,6 +25840,10 @@ mod tests {
         assert_eq!(state.glom_subframe_count, 0);
         assert_eq!(state.rx_queue_head, 0);
         assert_eq!(state.rx_queue_count, 0);
+        assert_eq!(state.rx_queue_high_water, 0);
+        assert_eq!(state.rx_queue_overflows, 0);
+        assert_eq!(state.rx_drain_budget_hits, 0);
+        assert_eq!(state.rx_max_drained_per_turn, 0);
         assert_eq!(state.rx_queue_slots[3], 3);
         assert_eq!(state.rx_queue_lens[0], 0);
         assert_eq!(state.rx_queue_flags[0], 0);
@@ -26030,6 +26436,132 @@ mod tests {
         assert_eq!(state.sdpcm_next_frame_len, 0);
         assert_eq!(
             read_frame_prefix::<18>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: packet.len() as u16,
+                flags: 0,
+            }),
+            packet
+        );
+    }
+
+    #[test]
+    fn cyw43_data_rx_poll_without_tail_drain_preserves_next_hint() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        let packet = [
+            0x01, 0x80, 0xc2, 0x00, 0x00, 0x03, 0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10, 0x08, 0x00,
+            0x45, 0x00,
+        ];
+        let frame_len = CYW43_SDPCM_HEADER_BYTES + CYW43_BDC_HEADER_BYTES + packet.len();
+        assert_eq!(frame_len % CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES, 0);
+        state.sdpcm_next_frame_len = frame_len as u16;
+        stage_sdpcm_rx_header_with_next(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            frame_len,
+            frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_DATA,
+            6,
+            false,
+        );
+        stage_bdc_payload(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &packet,
+        );
+
+        assert_eq!(
+            cyw43_runtime_poll_rx_detailed(&mut state, CYW43_RX_FRAME_FLAG_MASK_DATA, 85, false),
+            Cyw43RxPollResult::Frame(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: packet.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 6),
+            })
+        );
+        assert_eq!(state.rx_queue_count, 0);
+        assert_eq!(state.rx_drain_budget_hits, 0);
+        assert_eq!(state.rx_max_drained_per_turn, 1);
+        assert_eq!(state.sdpcm_next_frame_len, frame_len as u16);
+    }
+
+    #[test]
+    fn cyw43_data_rx_poll_tail_drains_next_hinted_frames_into_queue() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        let packet = [
+            0x01, 0x80, 0xc2, 0x00, 0x00, 0x03, 0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10, 0x08, 0x00,
+            0x45, 0x00,
+        ];
+        let frame_len = CYW43_SDPCM_HEADER_BYTES + CYW43_BDC_HEADER_BYTES + packet.len();
+        assert_eq!(frame_len % CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES, 0);
+        state.sdpcm_next_frame_len = frame_len as u16;
+        stage_sdpcm_rx_header_with_next(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            frame_len,
+            frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_DATA,
+            6,
+            false,
+        );
+        stage_bdc_payload(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES,
+            &packet,
+        );
+
+        assert_eq!(
+            cyw43_runtime_poll_rx_detailed_with_options(
+                &mut state,
+                CYW43_RX_FRAME_FLAG_MASK_DATA,
+                86,
+                false,
+                Cyw43AssertedEmptyPolicy::RequestRetransmit,
+                true,
+            ),
+            Cyw43RxPollResult::Frame(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: packet.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 6),
+            })
+        );
+        assert_eq!(
+            read_frame_prefix::<16>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: packet.len() as u16,
+                flags: 0,
+            }),
+            packet
+        );
+        assert_eq!(state.rx_frames, 1);
+        assert_eq!(usize::from(state.rx_queue_count), CYW43_RX_DRAIN_BUDGET - 1);
+        assert_eq!(
+            usize::from(state.rx_queue_high_water),
+            CYW43_RX_DRAIN_BUDGET - 1
+        );
+        assert_eq!(state.rx_queue_overflows, 0);
+        assert_eq!(state.rx_drain_budget_hits, 1);
+        assert_eq!(
+            usize::from(state.rx_max_drained_per_turn),
+            CYW43_RX_DRAIN_BUDGET - 1
+        );
+        assert_eq!(state.sdpcm_next_frame_len, frame_len as u16);
+        assert_eq!(
+            cyw43_rx_queue_pop_matching(&mut state, CYW43_RX_FRAME_FLAG_MASK_DATA),
+            Some(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: packet.len() as u16,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 6),
+            })
+        );
+        assert_eq!(
+            read_frame_prefix::<16>(DriverFrameDescriptor {
                 offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
                 len: packet.len() as u16,
                 flags: 0,
@@ -27606,6 +28138,7 @@ mod tests {
         }
         assert_eq!(usize::from(state.rx_queue_count), CYW43_RX_QUEUE_CAP);
         assert_eq!(usize::from(state.rx_queue_high_water), CYW43_RX_QUEUE_CAP);
+        assert_eq!(state.rx_queue_overflows, 0);
 
         assert!(!cyw43_rx_queue_push_from_runtime(
             &mut state,
@@ -27623,6 +28156,7 @@ mod tests {
         );
         assert_eq!(usize::from(state.rx_queue_count), CYW43_RX_QUEUE_CAP);
         assert_eq!(usize::from(state.rx_queue_high_water), CYW43_RX_QUEUE_CAP);
+        assert_eq!(state.rx_queue_overflows, 1);
 
         for _ in 0..CYW43_RX_QUEUE_CAP {
             assert_eq!(
@@ -27644,8 +28178,10 @@ mod tests {
         }
         assert_eq!(state.rx_queue_count, 0);
         assert_eq!(usize::from(state.rx_queue_high_water), CYW43_RX_QUEUE_CAP);
+        assert_eq!(state.rx_queue_overflows, 1);
         state.reset_rx_queue_storage();
         assert_eq!(state.rx_queue_high_water, 0);
+        assert_eq!(state.rx_queue_overflows, 0);
     }
 
     #[test]
@@ -28156,6 +28692,46 @@ mod tests {
         assert_eq!(FAULT_CYW43_POST_RELEASE_MAILBOX_READY, 0x532d);
         assert_eq!(FAULT_CYW43_POST_RELEASE_PROTOCOL_VERSION, 0x532e);
         assert_eq!(CYW43_POST_RELEASE_MAILBOX_POLLS, 1_000);
+        assert_eq!(CYW43_POST_RELEASE_MAILBOX_TIMEOUT_MS, 1_000);
+        assert_eq!(CYW43_POST_RELEASE_HT_TIMEOUT_MS, 1_600);
+        assert_eq!(CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS, 3_000);
+        assert_eq!(CYW43_CONTROL_EXCHANGE_TIMEOUT_MS, 1_000);
+        assert_eq!(CYW43_TX_CREDIT_TIMEOUT_MS, 100);
+        assert_eq!(CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS, 20);
+        assert!(
+            runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_HT_TIMEOUT_MS, 54_000_000)
+                > runtime_legacy_spins_to_cycles_at_hz(SDHCI_INIT_SPINS, 54_000_000)
+        );
+        assert!(
+            runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS, 54_000_000)
+                > runtime_legacy_spins_to_cycles_at_hz(CYW43_SDIO_WAIT_F2_READY_POLLS, 54_000_000,)
+        );
+        assert!(
+            runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_MAILBOX_TIMEOUT_MS, 54_000_000)
+                > runtime_legacy_spins_to_cycles_at_hz(
+                    CYW43_POST_RELEASE_MAILBOX_POLLS,
+                    54_000_000
+                )
+        );
+        assert!(
+            runtime_millis_to_cycles_at_hz(CYW43_CONTROL_EXCHANGE_TIMEOUT_MS, 54_000_000)
+                > runtime_legacy_spins_to_cycles_at_hz(
+                    CYW43_CONTROL_EXCHANGE_POLL_ATTEMPTS,
+                    54_000_000,
+                )
+        );
+        assert!(
+            runtime_millis_to_cycles_at_hz(CYW43_TX_CREDIT_TIMEOUT_MS, 54_000_000)
+                > runtime_legacy_spins_to_cycles_at_hz(CYW43_TX_CREDIT_WAIT_LOOPS, 54_000_000)
+        );
+        assert!(
+            runtime_millis_to_cycles_at_hz(CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS, 54_000_000)
+                > runtime_legacy_spins_to_cycles_at_hz(
+                    CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS
+                        .saturating_mul(CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS),
+                    54_000_000,
+                )
+        );
         assert_eq!(CYW43_SDIO_F2_READY_REENABLE_RETRIES, 1);
         assert_eq!(CYW43_SDIO_F2_REENABLE_SETTLE_SPINS, 5_000);
         assert_eq!(cyw43_mailbox_version_payload(), 0x0004_0000);
@@ -28516,12 +29092,26 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_linked_pre_release_owner_upload_uses_block_primary_with_byte_replay() {
+    fn cyw43_linked_pre_release_owner_upload_uses_conservative_primary_with_block_lane_retained() {
+        assert!(CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY);
         assert_eq!(
             cyw43_backplane_write_chunk_shape_for_lane(
                 false,
                 CYW43_LINKED_PRE_RELEASE_BYTE_MODE_PRIMARY,
                 true,
+                CYW43_FIRMWARE_STAGE_BYTES
+            ),
+            (
+                CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES,
+                CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES as u16,
+                0,
+            )
+        );
+        assert_eq!(
+            cyw43_backplane_write_chunk_shape_for_lane(
+                false,
+                false,
+                false,
                 CYW43_FIRMWARE_STAGE_BYTES
             ),
             (
@@ -28538,7 +29128,17 @@ mod tests {
                 0,
             )
         );
-        let arg = sdio_cmd53_arg(
+        let byte_arg = sdio_cmd53_arg(
+            true,
+            1,
+            cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
+            true,
+            0,
+            CYW43_FIRMWARE_BYTE_MODE_NARROW_CHUNK_BYTES as u16,
+        );
+        assert_eq!(byte_arg & (1 << 27), 0);
+        assert_ne!(byte_arg & (1 << 26), 0);
+        let block_arg = sdio_cmd53_arg(
             true,
             1,
             cyw43_backplane_function_addr(CYW43_RAM_BASE_4345),
@@ -28546,8 +29146,8 @@ mod tests {
             (CYW43_FIRMWARE_BLOCK_MODE_CHUNK_BYTES / SDIO_FUNCTION1_BLOCK_SIZE as usize) as u16,
             SDIO_FUNCTION1_BLOCK_SIZE,
         );
-        assert_ne!(arg & (1 << 27), 0);
-        assert_ne!(arg & (1 << 26), 0);
+        assert_ne!(block_arg & (1 << 27), 0);
+        assert_ne!(block_arg & (1 << 26), 0);
         assert_eq!(
             sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, SDHCI_INT_ERROR),
             (SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT << 24) | SDHCI_INT_ERROR
@@ -29347,7 +29947,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_retryable_firmware_command_restarts_block_mode_ladder() {
+    fn cyw43_retryable_firmware_command_preserves_primary_lane() {
         let mut state = Cyw43RuntimeState::new();
         state.firmware_byte_mode_fallback = true;
         state.firmware_narrow_byte_mode_fallback = true;
@@ -29356,9 +29956,9 @@ mod tests {
 
         cyw43_prepare_retryable_firmware_command(&mut state);
 
-        assert!(!state.firmware_byte_mode_fallback);
-        assert!(!state.firmware_narrow_byte_mode_fallback);
-        assert_eq!(state.firmware_retry_clock_index, 0);
+        assert!(state.firmware_byte_mode_fallback);
+        assert!(state.firmware_narrow_byte_mode_fallback);
+        assert_eq!(state.firmware_retry_clock_index, 1);
         assert!(!state.backplane_window_valid);
     }
 

@@ -157,6 +157,8 @@ pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER: u16 = 1 << 1;
 pub const DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD: u16 = 1 << 2;
 /// CYW43 command flag: drain pending RX once before transmitting a control frame.
 pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN: u16 = 1 << 3;
+/// CYW43 command flag: after delivering steady data RX, queue bounded tail frames.
+pub const DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN: u16 = 1 << 4;
 /// CYW43 RX idle detail: no detailed RX result was reported.
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NONE: u16 = 0;
 /// CYW43 RX idle detail: firmware/channel state is not ready for RX.
@@ -1662,7 +1664,13 @@ impl DriverRuntimeCyw43CommandDescriptor {
                         | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN)
                     == 0
             }
-            DRIVER_RUNTIME_CYW43_OP_RX_POLL | DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL => {
+                self.flags
+                    & !(DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
+                        | DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN)
+                    == 0
+            }
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL => {
                 self.flags & !DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD == 0
             }
             _ => self.flags == 0,
@@ -2735,6 +2743,11 @@ mod tests {
         assert!(descriptor.valid());
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD;
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
+            | DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN;
+        assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN;
+        assert!(descriptor.valid());
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE;
         assert!(!descriptor.valid());
         descriptor.flags = 0;
@@ -2746,6 +2759,8 @@ mod tests {
         assert!(descriptor.valid());
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD;
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN;
+        assert!(!descriptor.valid());
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER;
         assert!(!descriptor.valid());
 
