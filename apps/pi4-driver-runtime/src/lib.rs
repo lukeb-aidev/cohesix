@@ -29,15 +29,15 @@ use font8x8::legacy::BASIC_LEGACY;
 #[cfg(target_os = "none")]
 use pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID;
 use pi4_driver_abi::{
-    DriverRuntimeCyw43CommandDescriptor, DriverRuntimeInitDescriptor,
-    DriverRuntimeResourceRangeDescriptor, DriverRuntimeSdioCommandDescriptor,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR, DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
-    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
-    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN, DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
-    DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+    driver_runtime_genet_completion_result, DriverRuntimeCyw43CommandDescriptor,
+    DriverRuntimeInitDescriptor, DriverRuntimeResourceRangeDescriptor,
+    DriverRuntimeSdioCommandDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
+    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+    DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE, DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
     DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
@@ -1131,6 +1131,7 @@ const BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ: u32 = 250_000_000;
 const CYW43_BACKPLANE_FORCE_ALP_SETTLE_SPINS: usize = 4_000;
 const CYW43_SDIO_WAIT_F2_READY_POLLS: usize = 3_000;
 const CYW43_SDIO_F2_READY_REENABLE_RETRIES: usize = 1;
+const CYW43_SDIO_F2_READY_IORX_READ_RETRIES: usize = 4;
 const CYW43_SDIO_F2_REENABLE_SETTLE_SPINS: usize = 5_000;
 
 const CYW43_SDPCM_HEADER_BYTES: usize = 12;
@@ -4064,6 +4065,19 @@ fn genet_runtime_init(state: &mut GenetRuntimeState) -> bool {
     })
 }
 
+fn genet_completion_result(state: &GenetRuntimeState, tx_free: u16, tx_in_flight: u16) -> u32 {
+    driver_runtime_genet_completion_result(
+        tx_free,
+        tx_in_flight,
+        state.rx_queue_count,
+        state.rx_queue_high_water,
+        state.rx_max_drained_per_turn,
+        state.rx_drain_budget_hits != 0,
+        state.rx_byte_budget_hits != 0,
+        state.rx_queue_overflows != 0,
+    )
+}
+
 fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
     if let Some(completion) = service_engine_init(command) {
         return completion;
@@ -4072,18 +4086,21 @@ fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE);
     }
     if command.frame.len == 0 {
-        let (poll, completed, tx_free, in_flight) = GENET_RUNTIME_STATE.with_mut(|state| {
+        let (poll, completed, tx_free, in_flight, result) = GENET_RUNTIME_STATE.with_mut(|state| {
             let poll = genet_runtime_poll_rx(state, command.budget);
+            let result =
+                genet_completion_result(state, state.tx_last_free, state.tx_last_in_flight);
             (
                 poll,
                 state.tx_last_reclaim,
                 state.tx_last_free,
                 state.tx_last_in_flight,
+                result,
             )
         });
         return match poll {
             GenetRxPoll::Idle => {
-                genet_tx_idle_completion(command.sequence, completed, tx_free, in_flight)
+                genet_tx_idle_completion(command.sequence, completed, tx_free, in_flight, result)
             }
             GenetRxPoll::Frame { len, flags } => {
                 GENET_RX_COUNT.fetch_add(1, Ordering::AcqRel);
@@ -4093,8 +4110,7 @@ fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
                     len as u16,
                     flags,
                     completed,
-                    tx_free,
-                    in_flight,
+                    result,
                 )
             }
             GenetRxPoll::BudgetExhausted(detail) => {
@@ -4108,17 +4124,19 @@ fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
     if let Err(detail) = genet_tx_budget_allows_frame(command.budget, command.frame.len) {
         return DriverTaskCompletionRecord::budget_exhausted(command.sequence, detail);
     }
-    let (written, completed, tx_free, in_flight) = GENET_RUNTIME_STATE.with_mut(|state| {
+    let (written, completed, tx_free, in_flight, result) = GENET_RUNTIME_STATE.with_mut(|state| {
         let written = genet_runtime_submit_tx(state, command.frame);
+        let result = genet_completion_result(state, state.tx_last_free, state.tx_last_in_flight);
         (
             written,
             state.tx_last_reclaim,
             state.tx_last_free,
             state.tx_last_in_flight,
+            result,
         )
     });
     if written == 0 {
-        genet_tx_idle_completion(command.sequence, completed, tx_free, in_flight)
+        genet_tx_idle_completion(command.sequence, completed, tx_free, in_flight, result)
     } else {
         GENET_TX_COUNT.fetch_add(1, Ordering::AcqRel);
         GENET_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_TX_PROGRESS, Ordering::AcqRel);
@@ -7312,50 +7330,34 @@ fn cyw43_enable_post_release_function2() -> Result<u8, u16> {
     }
     #[cfg(target_os = "none")]
     {
-        let Some(current_ioex) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IOEX) else {
-            cyw43_record_last_fault_with_result(
-                FAULT_CYW43_POST_RELEASE_F2_READY,
-                cyw43_f2_ready_fault_detail(
-                    CYW43_F2_READY_DETAIL_REASON_IOEX_READ_FAILED,
-                    0,
-                    0,
-                    0,
-                    0,
-                ),
-            );
-            return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
-        };
-        let desired_ioex = current_ioex | SDIO_FUNC_ENABLE_2;
-        let mut last_iordy = 0u8;
-        let mut last_attempt = 0usize;
-        let mut last_poll_count = 0usize;
-        for attempt in 0..=CYW43_SDIO_F2_READY_REENABLE_RETRIES {
-            last_attempt = attempt;
-            if attempt != 0 {
-                let cleared = desired_ioex & !SDIO_FUNC_ENABLE_2;
-                if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, cleared) {
-                    cyw43_record_last_fault_with_result(
-                        FAULT_CYW43_POST_RELEASE_F2_READY,
-                        cyw43_f2_ready_fault_detail(
-                            CYW43_F2_READY_DETAIL_REASON_IOEX_CLEAR_FAILED,
-                            attempt,
-                            0,
-                            desired_ioex,
-                            last_iordy,
-                        ),
-                    );
-                    return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
-                }
-                cyw43_spin_wait(CYW43_SDIO_F2_REENABLE_SETTLE_SPINS);
-                if let Err(detail) = cyw43_force_ht_clock_for_function2() {
-                    return Err(detail);
-                }
-            }
-            if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, desired_ioex) {
+        cyw43_enable_post_release_function2_poll()
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_enable_post_release_function2_poll() -> Result<u8, u16> {
+    let Some(current_ioex) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IOEX) else {
+        cyw43_record_last_fault_with_result(
+            FAULT_CYW43_POST_RELEASE_F2_READY,
+            cyw43_f2_ready_fault_detail(CYW43_F2_READY_DETAIL_REASON_IOEX_READ_FAILED, 0, 0, 0, 0),
+        );
+        return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
+    };
+    let desired_ioex = current_ioex | SDIO_FUNC_ENABLE_2;
+    let mut last_iordy = 0u8;
+    let mut last_attempt = 0usize;
+    let mut last_poll_count = 0usize;
+    let mut last_failure_reason = CYW43_F2_READY_DETAIL_REASON_TIMEOUT;
+    let mut last_iorx_fault_frame = DriverFrameDescriptor::empty();
+    for attempt in 0..=CYW43_SDIO_F2_READY_REENABLE_RETRIES {
+        last_attempt = attempt;
+        if attempt != 0 {
+            let cleared = desired_ioex & !SDIO_FUNC_ENABLE_2;
+            if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, cleared) {
                 cyw43_record_last_fault_with_result(
                     FAULT_CYW43_POST_RELEASE_F2_READY,
                     cyw43_f2_ready_fault_detail(
-                        CYW43_F2_READY_DETAIL_REASON_IOEX_SET_FAILED,
+                        CYW43_F2_READY_DETAIL_REASON_IOEX_CLEAR_FAILED,
                         attempt,
                         0,
                         desired_ioex,
@@ -7364,64 +7366,97 @@ fn cyw43_enable_post_release_function2() -> Result<u8, u16> {
                 );
                 return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
             }
-            let mut poll = 0usize;
-            let mut deadline = runtime_deadline_from_millis_or_iterations(
-                CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS,
-                CYW43_SDIO_WAIT_F2_READY_POLLS,
+            cyw43_spin_wait(CYW43_SDIO_F2_REENABLE_SETTLE_SPINS);
+            if let Err(detail) = cyw43_force_ht_clock_for_function2() {
+                return Err(detail);
+            }
+        }
+        if !cyw43_sdio_cmd52_write(0, SDIO_CCCR_IOEX, desired_ioex) {
+            cyw43_record_last_fault_with_result(
+                FAULT_CYW43_POST_RELEASE_F2_READY,
+                cyw43_f2_ready_fault_detail(
+                    CYW43_F2_READY_DETAIL_REASON_IOEX_SET_FAILED,
+                    attempt,
+                    0,
+                    desired_ioex,
+                    last_iordy,
+                ),
             );
-            while !runtime_deadline_iteration_cap_reached(
-                &deadline,
-                poll,
-                CYW43_SDIO_WAIT_F2_READY_POLLS,
-            ) && !runtime_deadline_expired(&mut deadline)
-            {
-                let Some(iordy) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX) else {
+            return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
+        }
+        let mut poll = 0usize;
+        let mut deadline = runtime_deadline_from_millis_or_iterations(
+            CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS,
+            CYW43_SDIO_WAIT_F2_READY_POLLS,
+        );
+        let mut iorx_read_misses = 0usize;
+        let mut exhausted_iorx_read_misses = false;
+        while !runtime_deadline_iteration_cap_reached(
+            &deadline,
+            poll,
+            CYW43_SDIO_WAIT_F2_READY_POLLS,
+        ) && !runtime_deadline_expired(&mut deadline)
+        {
+            let Some(iordy) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX) else {
+                let fault_frame = cyw43_take_last_fault_frame();
+                if fault_frame.len != 0 {
+                    last_iorx_fault_frame = fault_frame;
+                }
+                cyw43_clear_last_fault();
+                iorx_read_misses = iorx_read_misses.saturating_add(1);
+                if iorx_read_misses <= CYW43_SDIO_F2_READY_IORX_READ_RETRIES {
+                    runtime_poll_pause();
+                    poll = poll.saturating_add(1);
+                    continue;
+                }
+                exhausted_iorx_read_misses = true;
+                break;
+            };
+            iorx_read_misses = 0;
+            last_iordy = iordy;
+            if iordy & SDIO_FUNC_READY_2 != 0 {
+                if !cyw43_set_function_block_size(2, SDIO_FUNCTION2_BLOCK_SIZE) {
                     cyw43_record_last_fault_with_result(
                         FAULT_CYW43_POST_RELEASE_F2_READY,
                         cyw43_f2_ready_fault_detail(
-                            CYW43_F2_READY_DETAIL_REASON_IORX_READ_FAILED,
+                            CYW43_F2_READY_DETAIL_REASON_BLOCK_SIZE_FAILED,
                             attempt,
-                            poll,
+                            poll + 1,
                             desired_ioex,
                             last_iordy,
                         ),
                     );
                     return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
-                };
-                last_iordy = iordy;
-                if iordy & SDIO_FUNC_READY_2 != 0 {
-                    if !cyw43_set_function_block_size(2, SDIO_FUNCTION2_BLOCK_SIZE) {
-                        cyw43_record_last_fault_with_result(
-                            FAULT_CYW43_POST_RELEASE_F2_READY,
-                            cyw43_f2_ready_fault_detail(
-                                CYW43_F2_READY_DETAIL_REASON_BLOCK_SIZE_FAILED,
-                                attempt,
-                                poll + 1,
-                                desired_ioex,
-                                last_iordy,
-                            ),
-                        );
-                        return Err(FAULT_CYW43_POST_RELEASE_F2_READY);
-                    }
-                    return Ok(iordy);
                 }
-                runtime_poll_pause();
-                poll = poll.saturating_add(1);
+                cyw43_clear_last_fault();
+                return Ok(iordy);
             }
-            last_poll_count = poll;
+            runtime_poll_pause();
+            poll = poll.saturating_add(1);
         }
-        cyw43_record_last_fault_with_result(
-            FAULT_CYW43_POST_RELEASE_F2_READY,
-            cyw43_f2_ready_fault_detail(
-                CYW43_F2_READY_DETAIL_REASON_TIMEOUT,
-                last_attempt,
-                last_poll_count,
-                desired_ioex,
-                last_iordy,
-            ),
-        );
-        Err(FAULT_CYW43_POST_RELEASE_F2_READY)
+        last_poll_count = poll;
+        last_failure_reason = if exhausted_iorx_read_misses {
+            CYW43_F2_READY_DETAIL_REASON_IORX_READ_FAILED
+        } else {
+            CYW43_F2_READY_DETAIL_REASON_TIMEOUT
+        };
     }
+    cyw43_record_last_fault_with_result(
+        FAULT_CYW43_POST_RELEASE_F2_READY,
+        cyw43_f2_ready_fault_detail(
+            last_failure_reason,
+            last_attempt,
+            last_poll_count,
+            desired_ioex,
+            last_iordy,
+        ),
+    );
+    if last_failure_reason == CYW43_F2_READY_DETAIL_REASON_IORX_READ_FAILED
+        && last_iorx_fault_frame.len != 0
+    {
+        cyw43_record_last_fault_frame(last_iorx_fault_frame);
+    }
+    Err(FAULT_CYW43_POST_RELEASE_F2_READY)
 }
 
 fn cyw43_arm_post_release_function_interrupts() -> Result<(), u16> {
@@ -7890,12 +7925,12 @@ fn cyw43_sdio_cmd52_read(function: u8, addr: u32) -> Option<u8> {
         0,
     )?;
     #[cfg(all(not(target_os = "none"), test))]
-    if let Some(value) = test_sdio_cmd52_read_response(function, addr) {
-        return Some(value);
-    }
-    #[cfg(all(not(target_os = "none"), test))]
     if test_sdio_cmd52_read_none_response(function, addr) {
         return None;
+    }
+    #[cfg(all(not(target_os = "none"), test))]
+    if let Some(value) = test_sdio_cmd52_read_response(function, addr) {
+        return Some(value);
     }
     Some((response & 0xff) as u8)
 }
@@ -11832,11 +11867,12 @@ fn genet_tx_idle_completion(
     completed: u16,
     tx_free: u16,
     in_flight: u16,
+    result: u32,
 ) -> DriverTaskCompletionRecord {
     DriverTaskCompletionRecord::idle_with_detail_and_frame(
         sequence,
         completed,
-        0,
+        result,
         DriverFrameDescriptor {
             offset: 0,
             len: tx_free,
@@ -11850,14 +11886,13 @@ fn genet_rx_frame_ready_completion(
     len: u16,
     flags: u16,
     completed: u16,
-    tx_free: u16,
-    in_flight: u16,
+    result: u32,
 ) -> DriverTaskCompletionRecord {
     DriverTaskCompletionRecord {
         sequence,
         code: COMPLETION_FRAME_READY,
         detail: completed,
-        result: (u32::from(tx_free) << 16) | u32::from(in_flight),
+        result,
         frame: DriverFrameDescriptor {
             offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
             len,
@@ -23204,6 +23239,46 @@ mod tests {
     }
 
     #[test]
+    fn genet_completion_result_reports_rx_backlog() {
+        let mut state = GenetRuntimeState::new();
+        state.rx_queue_count = 3;
+        state.rx_queue_high_water = 9;
+        state.rx_max_drained_per_turn = 16;
+        state.rx_drain_budget_hits = 1;
+        state.rx_byte_budget_hits = 2;
+        state.rx_queue_overflows = 1;
+
+        let result = genet_completion_result(&state, 32, 4);
+
+        assert!(pi4_driver_abi::driver_runtime_genet_result_is_packed(
+            result
+        ));
+        assert_eq!(
+            pi4_driver_abi::driver_runtime_genet_result_tx_free(result),
+            32
+        );
+        assert_eq!(
+            pi4_driver_abi::driver_runtime_genet_result_tx_in_flight(result),
+            4
+        );
+        assert_eq!(
+            pi4_driver_abi::driver_runtime_genet_result_rx_queue_count(result),
+            3
+        );
+        assert_eq!(
+            pi4_driver_abi::driver_runtime_genet_result_rx_queue_high_water(result),
+            9
+        );
+        assert_eq!(
+            pi4_driver_abi::driver_runtime_genet_result_rx_max_drained_per_turn(result),
+            16
+        );
+        assert!(pi4_driver_abi::driver_runtime_genet_result_rx_drain_budget_hit(result));
+        assert!(pi4_driver_abi::driver_runtime_genet_result_rx_byte_budget_hit(result));
+        assert!(pi4_driver_abi::driver_runtime_genet_result_rx_overflow_seen(result));
+    }
+
+    #[test]
     fn genet_tx_completion_reclaim_budget_caps_one_service_turn() {
         assert_eq!(GENET_TX_COMPLETION_RECLAIM_BUDGET, GENET_ACTIVE_RING_DESCS);
         assert!(GENET_TX_COMPLETION_RECLAIM_BUDGET <= GENET_ACTIVE_RING_DESCS);
@@ -23376,9 +23451,19 @@ mod tests {
             ..tx
         };
 
+        let idle_result = driver_runtime_genet_completion_result(
+            GENET_ACTIVE_RING_DESCS as u16,
+            0,
+            0,
+            0,
+            0,
+            false,
+            false,
+            false,
+        );
         assert_eq!(
             service_command(0, poll),
-            genet_tx_idle_completion(32, 1, GENET_ACTIVE_RING_DESCS as u16, 0)
+            genet_tx_idle_completion(32, 1, GENET_ACTIVE_RING_DESCS as u16, 0, idle_result)
         );
     }
 
@@ -24891,10 +24976,13 @@ mod tests {
                 flags: 0,
             },
         };
-        assert_eq!(
-            service_command(0, tx),
-            DriverTaskCompletionRecord::progress(21, 64)
-        );
+        let mut expected_tx = DriverTaskCompletionRecord::progress(21, 64);
+        expected_tx.frame = DriverFrameDescriptor {
+            offset: 0,
+            len: (GENET_ACTIVE_RING_DESCS - 1) as u16,
+            flags: 1,
+        };
+        assert_eq!(service_command(0, tx), expected_tx);
 
         reset_runtime_for_test();
         init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -28686,6 +28774,10 @@ mod tests {
 
     #[test]
     fn cyw43_post_release_gate_requires_strict_function2_proof() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
+
         assert_eq!(FAULT_CYW43_POST_RELEASE_HT, 0x532a);
         assert_eq!(FAULT_CYW43_POST_RELEASE_F2_READY, 0x532b);
         assert_eq!(FAULT_CYW43_POST_RELEASE_CORECONTROL, 0x532c);
@@ -28733,6 +28825,7 @@ mod tests {
                 )
         );
         assert_eq!(CYW43_SDIO_F2_READY_REENABLE_RETRIES, 1);
+        assert_eq!(CYW43_SDIO_F2_READY_IORX_READ_RETRIES, 4);
         assert_eq!(CYW43_SDIO_F2_REENABLE_SETTLE_SPINS, 5_000);
         assert_eq!(cyw43_mailbox_version_payload(), 0x0004_0000);
         assert!(cyw43_firmware_mailbox_ready(
@@ -28818,6 +28911,22 @@ mod tests {
             ),
             0x9fff_0402
         );
+    }
+
+    #[test]
+    fn cyw43_function2_ready_tolerates_transient_iorx_read_failure() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        reset_test_sdio_transfer_log();
+        cyw43_record_last_fault_with_result(FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED, 0x0300_0001);
+        test_sdio_cmd52_read_none_once(0, SDIO_CCCR_IORX);
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2);
+
+        let iordy = cyw43_enable_post_release_function2_poll().unwrap();
+
+        assert_eq!(iordy & SDIO_FUNC_READY_2, SDIO_FUNC_READY_2);
+        assert_eq!(cyw43_take_last_fault_detail(), None);
+        assert!(test_sdio_cmd52_read_count(0, SDIO_CCCR_IORX) >= 2);
     }
 
     #[test]

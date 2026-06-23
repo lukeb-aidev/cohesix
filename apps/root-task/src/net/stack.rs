@@ -3104,6 +3104,51 @@ impl<D: NetDevice> NetStack<D> {
         activity
     }
 
+    fn flush_budgeted_tcp_with_time(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> bool {
+        if !self.stage_policy.allow_tcp {
+            return false;
+        }
+        if Self::charge_tcp_budget(budget).is_err() {
+            return false;
+        }
+        let timestamp = self.begin_poll_turn(now_ms);
+        if !self.validate_console_socket(now_ms) {
+            self.finish_poll_turn(now_ms, false);
+            return true;
+        }
+
+        let mut activity = self.service_budgeted_tcp_turn(
+            timestamp,
+            now_ms,
+            "budgeted-flush-tcp-pre",
+            "budgeted-flush-tcp-post",
+        );
+        if self.budgeted_genet_tcp_fast_path_due() && activity {
+            for _ in 0..GENET_TCP_POST_DISPATCH_EXTRA_TURNS {
+                if Self::charge_tcp_budget(budget).is_err() {
+                    break;
+                }
+                let turn_activity = self.service_budgeted_tcp_turn(
+                    timestamp,
+                    now_ms,
+                    "budgeted-genet-dispatch-tcp",
+                    "budgeted-genet-dispatch-flush",
+                );
+                if !turn_activity {
+                    break;
+                }
+                activity = true;
+            }
+        }
+
+        self.finish_poll_turn(now_ms, activity);
+        activity
+    }
+
     fn sync_interface_hardware_addr_value(
         interface: &mut Interface,
         device_mac: EthernetAddress,
@@ -3629,6 +3674,25 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.arp_tx = device_counters.arp_tx;
         self.counters.driver_rx_last_len = device_counters.driver_rx_last_len;
         self.counters.driver_rx_last_ethertype = device_counters.driver_rx_last_ethertype;
+        self.counters.genet_rx_runtime_queue_count = device_counters.genet_rx_runtime_queue_count;
+        self.counters.genet_rx_runtime_queue_high_water =
+            device_counters.genet_rx_runtime_queue_high_water;
+        self.counters.genet_rx_runtime_queue_overflow_seen =
+            device_counters.genet_rx_runtime_queue_overflow_seen;
+        self.counters.genet_rx_runtime_drain_budget_hit =
+            device_counters.genet_rx_runtime_drain_budget_hit;
+        self.counters.genet_rx_runtime_byte_budget_hit =
+            device_counters.genet_rx_runtime_byte_budget_hit;
+        self.counters.genet_rx_runtime_max_drained_per_turn =
+            device_counters.genet_rx_runtime_max_drained_per_turn;
+        self.counters.genet_rx_pending_queue_count = device_counters.genet_rx_pending_queue_count;
+        self.counters.genet_rx_pending_queue_high_water =
+            device_counters.genet_rx_pending_queue_high_water;
+        self.counters.genet_rx_pending_drops = device_counters.genet_rx_pending_drops;
+        self.counters.wifi_rx_pending_queue_count = device_counters.wifi_rx_pending_queue_count;
+        self.counters.wifi_rx_pending_queue_high_water =
+            device_counters.wifi_rx_pending_queue_high_water;
+        self.counters.wifi_rx_pending_drops = device_counters.wifi_rx_pending_drops;
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
         self.counters.wifi_assoc = device_counters.wifi_assoc;
         self.counters.wifi_link_up = device_counters.wifi_link_up;
@@ -3665,6 +3729,20 @@ impl<D: NetDevice> NetStack<D> {
             arp_tx: device_counters.arp_tx,
             driver_rx_last_len: device_counters.driver_rx_last_len,
             driver_rx_last_ethertype: device_counters.driver_rx_last_ethertype,
+            genet_rx_runtime_queue_count: device_counters.genet_rx_runtime_queue_count,
+            genet_rx_runtime_queue_high_water: device_counters.genet_rx_runtime_queue_high_water,
+            genet_rx_runtime_queue_overflow_seen: device_counters
+                .genet_rx_runtime_queue_overflow_seen,
+            genet_rx_runtime_drain_budget_hit: device_counters.genet_rx_runtime_drain_budget_hit,
+            genet_rx_runtime_byte_budget_hit: device_counters.genet_rx_runtime_byte_budget_hit,
+            genet_rx_runtime_max_drained_per_turn: device_counters
+                .genet_rx_runtime_max_drained_per_turn,
+            genet_rx_pending_queue_count: device_counters.genet_rx_pending_queue_count,
+            genet_rx_pending_queue_high_water: device_counters.genet_rx_pending_queue_high_water,
+            genet_rx_pending_drops: device_counters.genet_rx_pending_drops,
+            wifi_rx_pending_queue_count: device_counters.wifi_rx_pending_queue_count,
+            wifi_rx_pending_queue_high_water: device_counters.wifi_rx_pending_queue_high_water,
+            wifi_rx_pending_drops: device_counters.wifi_rx_pending_drops,
             dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
             wifi_assoc: device_counters.wifi_assoc,
             wifi_link_up: device_counters.wifi_link_up,
@@ -6080,6 +6158,30 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.poll_budgeted_with_time(now_ms, budget)
     }
 
+    fn flush_tcp_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        let contract = D::driver_task_contract();
+        #[cfg(feature = "kernel")]
+        {
+            if let Some(hot_path) = net_driver_task_hot_path(contract) {
+                if D::driver_task_runtime_client() {
+                    crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                        contract,
+                        hot_path.as_u32() as usize,
+                        crate::drivers::driver_task_net::runtime_ring_service,
+                    );
+                    return Ok(self.flush_budgeted_tcp_with_time(now_ms, budget));
+                }
+                let _ = hot_path;
+                return Err(DriverServiceBudgetError::OperationsExhausted);
+            }
+        }
+        Ok(self.flush_budgeted_tcp_with_time(now_ms, budget))
+    }
+
     fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {
         D::driver_task_contract()
     }
@@ -6442,6 +6544,7 @@ const GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 8;
 const DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
 const GENET_DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
 const GENET_TCP_FAST_PATH_EXTRA_TURNS: usize = 1;
+const GENET_TCP_POST_DISPATCH_EXTRA_TURNS: usize = 1;
 
 #[cfg(feature = "kernel")]
 struct NetDriverTaskContext<D: NetDevice> {
@@ -6662,6 +6765,20 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.poll_with_budget(now_ms, budget),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.poll_with_budget(now_ms, budget),
+        }
+    }
+
+    fn flush_tcp_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        match self {
+            Self::Rtl8139(stack) => stack.flush_tcp_with_budget(now_ms, budget),
+            Self::GenetDriverTask(stack) => stack.flush_tcp_with_budget(now_ms, budget),
+            Self::Cyw43DriverTask(stack) => stack.flush_tcp_with_budget(now_ms, budget),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.flush_tcp_with_budget(now_ms, budget),
         }
     }
 
@@ -7097,6 +7214,35 @@ mod tests {
         assert!(MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL <= TCP_RX_BUFFER);
         assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 32);
         assert!(MAX_CONSOLE_BYTES_PER_POLL <= TCP_TX_BUFFER);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn genet_tcp_fast_path_accounting_stays_inside_contract() {
+        let contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        let pre_poll_ops = (GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u16).saturating_mul(4);
+        let pre_poll_frames = GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u16;
+        let pre_poll_bytes = (GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u32)
+            .saturating_mul(GENET_DRIVER_TASK_PRE_POLL_TURN_BYTES);
+        let tcp_ops = 64u16;
+        let tcp_frames = MAX_CONSOLE_FRAMES_PER_POLL as u16;
+        let tcp_bytes = (TCP_RX_BUFFER + TCP_TX_BUFFER) as u32;
+
+        assert!(pre_poll_ops.saturating_add(tcp_ops) <= contract.budget.max_ops_per_turn);
+        assert!(pre_poll_frames.saturating_add(tcp_frames) <= contract.budget.max_frames_per_turn);
+        assert!(pre_poll_bytes.saturating_add(tcp_bytes) <= contract.budget.max_bytes_per_turn);
+        assert!(
+            (1u16 + GENET_TCP_POST_DISPATCH_EXTRA_TURNS as u16).saturating_mul(tcp_ops)
+                <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            (1u16 + GENET_TCP_POST_DISPATCH_EXTRA_TURNS as u16).saturating_mul(tcp_frames)
+                <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            (1u32 + GENET_TCP_POST_DISPATCH_EXTRA_TURNS as u32).saturating_mul(tcp_bytes)
+                <= contract.budget.max_bytes_per_turn
+        );
     }
 
     #[cfg(feature = "kernel")]

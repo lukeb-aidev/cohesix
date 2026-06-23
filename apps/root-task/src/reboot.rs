@@ -6,11 +6,9 @@
 //! Authenticated platform reboot support for root-task console commands.
 
 #[cfg(feature = "kernel")]
-use core::sync::atomic::compiler_fence;
-#[cfg(any(feature = "kernel", test))]
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{fence, Ordering as FenceOrdering};
 #[cfg(test)]
-use core::sync::atomic::{AtomicBool, AtomicUsize};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 #[cfg(feature = "kernel")]
 use crate::hal::{DeviceHal, HalError, MappedRegisterPages, MappedRegisterWindow};
@@ -19,11 +17,11 @@ use spin::Mutex;
 
 #[cfg(feature = "kernel")]
 const BCM2711_PM_BASE: usize = 0xfe10_0000;
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 const PM_RSTC_OFFSET: usize = 0x1c;
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 const PM_RSTS_OFFSET: usize = 0x20;
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 const PM_WDOG_OFFSET: usize = 0x24;
 #[cfg(any(feature = "kernel", test))]
 const PM_PASSWORD: u32 = 0x5a00_0000;
@@ -31,7 +29,7 @@ const PM_PASSWORD: u32 = 0x5a00_0000;
 const PM_RSTC_WRCFG_MASK: u32 = 0x0000_0030;
 #[cfg(any(feature = "kernel", test))]
 const PM_RSTC_WRCFG_FULL_RESET: u32 = 0x0000_0020;
-#[cfg(feature = "kernel")]
+#[cfg(any(feature = "kernel", test))]
 const PM_WDOG_RESET_TICKS: u32 = 10;
 #[cfg(any(feature = "kernel", test))]
 const PM_RSTS_PI_FIRMWARE_PARTITION_MASK: u32 = 0x0000_0555;
@@ -112,6 +110,11 @@ fn rsts_fastboot_reboot_value(current: u32) -> u32 {
 }
 
 #[cfg(any(feature = "kernel", test))]
+fn rsts_fastboot_reboot_fallback_value() -> u32 {
+    PM_PASSWORD | PM_RSTS_COHESIX_FASTBOOT_MAGIC | PM_RSTS_COHESIX_FASTBOOT_LOW_MASK
+}
+
+#[cfg(any(feature = "kernel", test))]
 fn rstc_full_reset_value(current: u32) -> u32 {
     PM_PASSWORD | (current & !PM_RSTC_WRCFG_MASK) | PM_RSTC_WRCFG_FULL_RESET
 }
@@ -125,19 +128,65 @@ const fn rsts_has_fastboot_marker(value: u32) -> bool {
 #[cfg(feature = "kernel")]
 #[inline(always)]
 fn pm_mmio_write_barrier() {
-    compiler_fence(Ordering::Release);
+    fence(FenceOrdering::SeqCst);
+}
+
+#[cfg(any(feature = "kernel", test))]
+trait Bcm2711PmAccess {
+    fn read_u32(&mut self, offset: usize) -> Result<u32, RebootError>;
+    fn write_u32(&mut self, offset: usize, value: u32) -> Result<(), RebootError>;
+    fn write_barrier(&mut self);
 }
 
 #[cfg(feature = "kernel")]
-fn write_u32_release(
-    watchdog: &MappedRegisterWindow,
-    offset: usize,
-    value: u32,
-) -> Result<(), RebootError> {
-    watchdog
-        .write_u32(offset, value)
-        .map_err(|_| RebootError::RegisterAccess)?;
-    pm_mmio_write_barrier();
+struct KernelBcm2711PmAccess<'a> {
+    watchdog: &'a MappedRegisterWindow,
+}
+
+#[cfg(feature = "kernel")]
+impl Bcm2711PmAccess for KernelBcm2711PmAccess<'_> {
+    fn read_u32(&mut self, offset: usize) -> Result<u32, RebootError> {
+        self.watchdog
+            .read_u32(offset)
+            .map_err(|_| RebootError::RegisterAccess)
+    }
+
+    fn write_u32(&mut self, offset: usize, value: u32) -> Result<(), RebootError> {
+        self.watchdog
+            .write_u32(offset, value)
+            .map_err(|_| RebootError::RegisterAccess)
+    }
+
+    fn write_barrier(&mut self) {
+        pm_mmio_write_barrier();
+    }
+}
+
+#[cfg(any(feature = "kernel", test))]
+fn write_u32_release<A>(access: &mut A, offset: usize, value: u32) -> Result<(), RebootError>
+where
+    A: Bcm2711PmAccess,
+{
+    access.write_u32(offset, value)?;
+    access.write_barrier();
+    Ok(())
+}
+
+#[cfg(any(feature = "kernel", test))]
+fn prepare_bcm2711_watchdog_reset<A>(access: &mut A) -> Result<(), RebootError>
+where
+    A: Bcm2711PmAccess,
+{
+    let rsts_value = match access.read_u32(PM_RSTS_OFFSET) {
+        Ok(rsts) => rsts_fastboot_reboot_value(rsts),
+        Err(_) => rsts_fastboot_reboot_fallback_value(),
+    };
+    write_u32_release(access, PM_RSTS_OFFSET, rsts_value)?;
+    let _ = access.read_u32(PM_RSTS_OFFSET);
+    access.write_barrier();
+    write_u32_release(access, PM_WDOG_OFFSET, PM_PASSWORD | PM_WDOG_RESET_TICKS)?;
+    let rstc = access.read_u32(PM_RSTC_OFFSET)?;
+    write_u32_release(access, PM_RSTC_OFFSET, rstc_full_reset_value(rstc))?;
     Ok(())
 }
 
@@ -155,14 +204,8 @@ pub fn request_reboot() -> Result<(), RebootError> {
         let Some(watchdog) = watchdog.as_ref() else {
             return Err(RebootError::BackendUnavailable);
         };
-        if let Ok(rsts) = watchdog.read_u32(PM_RSTS_OFFSET) {
-            let _ = write_u32_release(watchdog, PM_RSTS_OFFSET, rsts_fastboot_reboot_value(rsts));
-        }
-        write_u32_release(watchdog, PM_WDOG_OFFSET, PM_PASSWORD | PM_WDOG_RESET_TICKS)?;
-        let rstc = watchdog
-            .read_u32(PM_RSTC_OFFSET)
-            .map_err(|_| RebootError::RegisterAccess)?;
-        write_u32_release(watchdog, PM_RSTC_OFFSET, rstc_full_reset_value(rstc))?;
+        let mut access = KernelBcm2711PmAccess { watchdog };
+        prepare_bcm2711_watchdog_reset(&mut access)?;
         loop {
             core::hint::spin_loop();
         }
@@ -205,6 +248,47 @@ pub fn test_lock() -> std::sync::MutexGuard<'static, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+    use std::vec::Vec;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum FakeAccessEvent {
+        Read(usize),
+        Write(usize, u32),
+        Barrier,
+    }
+
+    struct FakePmAccess {
+        reads: VecDeque<Result<u32, RebootError>>,
+        events: Vec<FakeAccessEvent>,
+    }
+
+    impl FakePmAccess {
+        fn new(reads: impl IntoIterator<Item = Result<u32, RebootError>>) -> Self {
+            Self {
+                reads: reads.into_iter().collect(),
+                events: Vec::new(),
+            }
+        }
+    }
+
+    impl Bcm2711PmAccess for FakePmAccess {
+        fn read_u32(&mut self, offset: usize) -> Result<u32, RebootError> {
+            self.events.push(FakeAccessEvent::Read(offset));
+            self.reads
+                .pop_front()
+                .unwrap_or(Err(RebootError::RegisterAccess))
+        }
+
+        fn write_u32(&mut self, offset: usize, value: u32) -> Result<(), RebootError> {
+            self.events.push(FakeAccessEvent::Write(offset, value));
+            Ok(())
+        }
+
+        fn write_barrier(&mut self) {
+            self.events.push(FakeAccessEvent::Barrier);
+        }
+    }
 
     #[test]
     fn host_test_backend_tracks_reboot_requests() {
@@ -249,6 +333,55 @@ mod tests {
             current & preserved_payload_mask
         );
         assert_eq!(encoded & PM_PASSWORD, PM_PASSWORD);
+    }
+
+    #[test]
+    fn watchdog_reset_sequence_drains_fastboot_marker_before_arming_reset() {
+        let rsts = PM_RSTS_PI_FIRMWARE_PARTITION_MASK | 0x0000_a000 | 0x00aa_0000;
+        let rstc = 0x0000_0010;
+        let mut access = FakePmAccess::new([Ok(rsts), Ok(rsts), Ok(rstc)]);
+
+        assert_eq!(prepare_bcm2711_watchdog_reset(&mut access), Ok(()));
+
+        assert_eq!(
+            access.events,
+            vec![
+                FakeAccessEvent::Read(PM_RSTS_OFFSET),
+                FakeAccessEvent::Write(PM_RSTS_OFFSET, rsts_fastboot_reboot_value(rsts)),
+                FakeAccessEvent::Barrier,
+                FakeAccessEvent::Read(PM_RSTS_OFFSET),
+                FakeAccessEvent::Barrier,
+                FakeAccessEvent::Write(PM_WDOG_OFFSET, PM_PASSWORD | PM_WDOG_RESET_TICKS),
+                FakeAccessEvent::Barrier,
+                FakeAccessEvent::Read(PM_RSTC_OFFSET),
+                FakeAccessEvent::Write(PM_RSTC_OFFSET, rstc_full_reset_value(rstc)),
+                FakeAccessEvent::Barrier,
+            ]
+        );
+    }
+
+    #[test]
+    fn watchdog_reset_sequence_writes_fallback_marker_when_rsts_read_fails() {
+        let rstc = 0x0000_0030;
+        let mut access = FakePmAccess::new([Err(RebootError::RegisterAccess), Ok(0), Ok(rstc)]);
+
+        assert_eq!(prepare_bcm2711_watchdog_reset(&mut access), Ok(()));
+
+        assert_eq!(
+            access.events,
+            vec![
+                FakeAccessEvent::Read(PM_RSTS_OFFSET),
+                FakeAccessEvent::Write(PM_RSTS_OFFSET, rsts_fastboot_reboot_fallback_value()),
+                FakeAccessEvent::Barrier,
+                FakeAccessEvent::Read(PM_RSTS_OFFSET),
+                FakeAccessEvent::Barrier,
+                FakeAccessEvent::Write(PM_WDOG_OFFSET, PM_PASSWORD | PM_WDOG_RESET_TICKS),
+                FakeAccessEvent::Barrier,
+                FakeAccessEvent::Read(PM_RSTC_OFFSET),
+                FakeAccessEvent::Write(PM_RSTC_OFFSET, rstc_full_reset_value(rstc)),
+                FakeAccessEvent::Barrier,
+            ]
+        );
     }
 
     #[test]

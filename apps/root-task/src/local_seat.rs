@@ -654,7 +654,12 @@ const LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES: usize = 512;
 const LINKED_LOCAL_SEAT_HDMI_REDRAW_NO_REPLY_RETRY_LIMIT: u8 = 2;
 
 /// Quiet turns after a missed HDMI completion before retrying the display path.
-const LINKED_LOCAL_SEAT_HDMI_NO_REPLY_COOLDOWN_TURNS: u8 = 2;
+///
+/// A missing HDMI completion means the display runtime is not currently
+/// accepting frame work. Keep the mirrored snapshot queued, but back off long
+/// enough that REST/TCP response flushing and USB input do not repeatedly lose
+/// root-task service turns to the same no-reply display retry.
+const LINKED_LOCAL_SEAT_HDMI_NO_REPLY_COOLDOWN_TURNS: u8 = 64;
 
 /// Text cell width used by the linked HDMI runtime.
 const LINKED_LOCAL_SEAT_HDMI_CHAR_WIDTH: usize = 8;
@@ -7170,8 +7175,9 @@ mod tests {
             LINKED_LOCAL_SEAT_HDMI_NO_REPLY_COOLDOWN_TURNS
         );
 
-        assert!(runtime.linked_hdmi_retry_cooldown_active());
-        assert!(runtime.linked_hdmi_retry_cooldown_active());
+        for _ in 0..LINKED_LOCAL_SEAT_HDMI_NO_REPLY_COOLDOWN_TURNS {
+            assert!(runtime.linked_hdmi_retry_cooldown_active());
+        }
         assert!(!runtime.linked_hdmi_retry_cooldown_active());
         assert!(runtime.linked_hdmi_pending_work());
         assert_eq!(

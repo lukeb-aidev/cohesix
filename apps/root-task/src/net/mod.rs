@@ -554,6 +554,30 @@ pub struct NetDeviceCounters {
     pub driver_rx_last_len: u64,
     /// Last hardware RX Ethernet type reported by the driver task.
     pub driver_rx_last_ethertype: u64,
+    /// GENET linked-runtime RX queue depth from the latest completion.
+    pub genet_rx_runtime_queue_count: u64,
+    /// GENET linked-runtime RX queue high-water mark.
+    pub genet_rx_runtime_queue_high_water: u64,
+    /// GENET linked-runtime RX overflow flag, encoded as 0 or 1.
+    pub genet_rx_runtime_queue_overflow_seen: u64,
+    /// GENET linked-runtime RX drain-budget-hit flag, encoded as 0 or 1.
+    pub genet_rx_runtime_drain_budget_hit: u64,
+    /// GENET linked-runtime RX byte-budget-hit flag, encoded as 0 or 1.
+    pub genet_rx_runtime_byte_budget_hit: u64,
+    /// GENET linked-runtime max frames drained during one service turn.
+    pub genet_rx_runtime_max_drained_per_turn: u64,
+    /// Root preserved Genet RX queue depth.
+    pub genet_rx_pending_queue_count: u64,
+    /// Root preserved Genet RX queue high-water mark.
+    pub genet_rx_pending_queue_high_water: u64,
+    /// Root preserved Genet RX queue drops.
+    pub genet_rx_pending_drops: u64,
+    /// Root preserved CYW43 RX queue depth.
+    pub wifi_rx_pending_queue_count: u64,
+    /// Root preserved CYW43 RX queue high-water mark.
+    pub wifi_rx_pending_queue_high_water: u64,
+    /// Root preserved CYW43 RX queue drops.
+    pub wifi_rx_pending_drops: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
     /// TX publishes rejected due to duplicate or busy slot state.
@@ -629,6 +653,30 @@ pub struct NetCounters {
     pub driver_rx_last_len: u64,
     /// Last hardware RX Ethernet type reported by the driver task.
     pub driver_rx_last_ethertype: u64,
+    /// GENET linked-runtime RX queue depth from the latest completion.
+    pub genet_rx_runtime_queue_count: u64,
+    /// GENET linked-runtime RX queue high-water mark.
+    pub genet_rx_runtime_queue_high_water: u64,
+    /// GENET linked-runtime RX overflow flag, encoded as 0 or 1.
+    pub genet_rx_runtime_queue_overflow_seen: u64,
+    /// GENET linked-runtime RX drain-budget-hit flag, encoded as 0 or 1.
+    pub genet_rx_runtime_drain_budget_hit: u64,
+    /// GENET linked-runtime RX byte-budget-hit flag, encoded as 0 or 1.
+    pub genet_rx_runtime_byte_budget_hit: u64,
+    /// GENET linked-runtime max frames drained during one service turn.
+    pub genet_rx_runtime_max_drained_per_turn: u64,
+    /// Root preserved Genet RX queue depth.
+    pub genet_rx_pending_queue_count: u64,
+    /// Root preserved Genet RX queue high-water mark.
+    pub genet_rx_pending_queue_high_water: u64,
+    /// Root preserved Genet RX queue drops.
+    pub genet_rx_pending_drops: u64,
+    /// Root preserved CYW43 RX queue depth.
+    pub wifi_rx_pending_queue_count: u64,
+    /// Root preserved CYW43 RX queue high-water mark.
+    pub wifi_rx_pending_queue_high_water: u64,
+    /// Root preserved CYW43 RX queue drops.
+    pub wifi_rx_pending_drops: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
     /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.
@@ -964,6 +1012,15 @@ pub trait NetPoller {
         budget.charge_ops(1)?;
         budget.charge_frames(1)?;
         Ok(self.poll(now_ms))
+    }
+
+    /// Flush TCP console work through a HAL driver-task service budget.
+    fn flush_tcp_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        self.poll_with_budget(now_ms, budget)
     }
 
     /// Return the active network driver scheduling contract.

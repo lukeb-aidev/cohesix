@@ -473,6 +473,7 @@ impl NetDevice for Rtl8139Device {
             wifi_host_eapol_rx: 0,
             wifi_host_eapol_start: 0,
             wifi_host_eapol_secure: 0,
+            ..NetDeviceCounters::default()
         }
     }
 
