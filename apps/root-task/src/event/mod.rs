@@ -125,7 +125,7 @@ use crate::net::NetSelfTestStartResult;
 #[cfg(feature = "net-console")]
 use crate::net::{
     ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller,
-    NetStatusReport, NetTelemetry, CONSOLE_QUEUE_DEPTH, NET_DIAG, NET_DIAG_FEATURED,
+    NetStatusReport, NetTelemetry, CONSOLE_DISPATCH_BURST, NET_DIAG, NET_DIAG_FEATURED,
 };
 #[cfg(feature = "kernel")]
 use crate::ninedoor::TelemetryTailMeta;
@@ -224,6 +224,8 @@ const NET_DIAG_STUCK_MS: u64 = 3_000;
 const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 #[cfg(feature = "net-console")]
 const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
+#[cfg(feature = "net-console")]
+const NET_POST_DISPATCH_FLUSH_POLLS: usize = 2;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
@@ -2006,12 +2008,16 @@ where
             }
             let telemetry = net.telemetry();
             let conn_id = net.active_console_conn_id();
-            let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_QUEUE_DEPTH }> =
+            let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_DISPATCH_BURST }> =
                 HeaplessVec::new();
             if !yield_for_physical_input {
-                net.drain_console_lines(self.now_ms, &mut |line| {
-                    let _ = buffered.push(line);
-                });
+                let _ = net.drain_console_lines_bounded(
+                    self.now_ms,
+                    CONSOLE_DISPATCH_BURST,
+                    &mut |line| {
+                        let _ = buffered.push(line);
+                    },
+                );
             }
             let ingest_snapshot: IngestSnapshot = net.ingest_snapshot();
             Some((activity, telemetry, buffered, conn_id, ingest_snapshot))
@@ -2031,14 +2037,22 @@ where
                 ));
                 self.audit.info(message.as_str());
             }
+            let mut handled_network_lines = false;
             for line in buffered {
                 if !suppress_console_input {
+                    handled_network_lines = true;
                     self.handle_network_line(line.text);
                 }
             }
+            let ingest_snapshot = if handled_network_lines {
+                self.poll_net_after_network_dispatch()
+                    .unwrap_or(_ingest_snapshot)
+            } else {
+                _ingest_snapshot
+            };
             #[cfg(feature = "kernel")]
             if let Some(bridge) = self.ninedoor.as_mut() {
-                bridge.update_ingest_snapshot(_ingest_snapshot);
+                bridge.update_ingest_snapshot(ingest_snapshot);
             }
             self.drain_net_console_events();
         }
@@ -2049,6 +2063,49 @@ where
         #[cfg(feature = "kernel")]
         self.flush_pending_stream();
         self.service_pending_reboot();
+    }
+
+    #[cfg(feature = "net-console")]
+    fn poll_net_after_network_dispatch(&mut self) -> Option<IngestSnapshot> {
+        let Some(net) = self.net.as_mut() else {
+            return None;
+        };
+        let net_contract = net.driver_task_contract();
+        let mut net_budget = match DriverServiceBudget::new(net_contract) {
+            Ok(budget) => budget,
+            Err(err) => {
+                let message = format_message(format_args!(
+                    "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                    net_contract.name,
+                    err.reason(),
+                    net_contract.max_service_us(),
+                ));
+                self.audit.denied(message.as_str());
+                return Some(net.ingest_snapshot());
+            }
+        };
+
+        for _ in 0..NET_POST_DISPATCH_FLUSH_POLLS {
+            match net.poll_with_budget(self.now_ms, &mut net_budget) {
+                Ok(polled) => {
+                    if !polled {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    let message = format_message(format_args!(
+                        "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                        net_contract.name,
+                        err.reason(),
+                        net_contract.max_service_us(),
+                    ));
+                    self.audit.denied(message.as_str());
+                    break;
+                }
+            }
+        }
+
+        Some(net.ingest_snapshot())
     }
 
     fn service_pending_reboot(&mut self) {
@@ -15573,10 +15630,25 @@ mod tests {
         }
 
         fn drain_console_lines(&mut self, _now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
+            let _ = self.drain_console_lines_bounded(_now_ms, usize::MAX, visitor);
+        }
+
+        fn drain_console_lines_bounded(
+            &mut self,
+            _now_ms: u64,
+            max_lines: usize,
+            visitor: &mut dyn FnMut(ConsoleLine),
+        ) -> usize {
+            let mut drained = 0usize;
             while !self.lines.is_empty() {
+                if drained >= max_lines {
+                    break;
+                }
                 let line = self.lines.remove(0);
                 visitor(line);
+                drained = drained.saturating_add(1);
             }
+            drained
         }
 
         fn ingest_snapshot(&self) -> IngestSnapshot {
@@ -16391,6 +16463,31 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.poll();
         drop(pump);
+        assert!(net
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn network_dispatch_gets_bounded_post_response_flush() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 1)).is_ok());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        drop(pump);
+
+        assert_eq!(net.polls, 1 + NET_POST_DISPATCH_FLUSH_POLLS);
         assert!(net
             .sent
             .iter()

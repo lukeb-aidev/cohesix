@@ -111,6 +111,7 @@ const CYW43_RUNTIME_CONTROL_EXCHANGE_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_DATA_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_DATA_TX_NO_REPLY_RESUMES: usize = 63;
+const CYW43_CONTROL_TX_SUBMIT_RETRIES: usize = 1;
 const CYW43_RUNTIME_TRANSPORT_PHASE_ATTEMPTS: usize = 128;
 const CYW43_RUNTIME_FIRMWARE_OWNER_RECOVERY_ATTEMPTS: usize = 192;
 const CYW43_RUNTIME_FIRMWARE_OWNER_SAME_OFFSET_LIMIT: usize = 24;
@@ -1431,6 +1432,17 @@ fn cyw43_bssid_refresh_tx_retry_completion(
         return None;
     }
     err.same_command_retry_completion()
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_tx_submit_retry_completion(
+    completion: DriverTaskCompletionRecord,
+    retries_spent: usize,
+) -> Option<DriverTaskCompletionRecord> {
+    if retries_spent >= CYW43_CONTROL_TX_SUBMIT_RETRIES {
+        return None;
+    }
+    Cyw43CommandSubmitError::Completion(completion).same_command_retry_completion()
 }
 
 #[cfg(feature = "kernel")]
@@ -7246,15 +7258,58 @@ fn cyw43_submit_control_exchange_unmapped_with_options(
         );
     }
     let tx_descriptor = cyw43_control_frame_descriptor(payload.len(), header_mode, pre_tx_drain);
-    let Some(tx_completion) =
-        run_cyw43_runtime_descriptor_command(contract, tx_descriptor, payload)
-    else {
-        record_cyw43_control_split_failure(
+    let mut tx_retries_spent = 0usize;
+    let tx_completion = loop {
+        let Some(completion) =
+            run_cyw43_runtime_descriptor_command(contract, tx_descriptor, payload)
+        else {
+            let reason = if tx_retries_spent == 0 {
+                "cyw43-control-tx-no-reply"
+            } else {
+                "cyw43-control-tx-retry-no-reply"
+            };
+            record_cyw43_control_split_failure(
+                contract,
+                stage,
+                tx_descriptor,
+                reason,
+                None,
+                cmd,
+                id,
+                header_mode,
+                expected_response_len,
+                control_iovar,
+                0,
+                0,
+            );
+            let status = if tx_retries_spent == 0 {
+                "tx-no-reply"
+            } else {
+                "tx-retry-no-reply"
+            };
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                status,
+                None,
+            );
+            return Err(Cyw43CommandSubmitError::Runtime(
+                DriverTaskNetError::RuntimeInit("cyw43-command-completion"),
+            ));
+        };
+        let event = if tx_retries_spent == 0 {
+            "tx-complete"
+        } else {
+            "tx-retry-complete"
+        };
+        emit_cyw43_control_split_completion(
             contract,
             stage,
-            tx_descriptor,
-            "cyw43-control-tx-no-reply",
-            None,
+            event,
+            tx_retries_spent,
+            0,
+            completion,
             cmd,
             id,
             header_mode,
@@ -7263,39 +7318,28 @@ fn cyw43_submit_control_exchange_unmapped_with_options(
             0,
             0,
         );
-        crate::hal::driver_task::emit_driver_task_resource_init_status(
-            contract,
-            DriverTaskHotPath::Cyw43Wifi,
-            stage,
-            "tx-no-reply",
-            None,
-        );
-        return Err(Cyw43CommandSubmitError::Runtime(
-            DriverTaskNetError::RuntimeInit("cyw43-command-completion"),
-        ));
-    };
-    emit_cyw43_control_split_completion(
-        contract,
-        stage,
-        "tx-complete",
-        0,
-        0,
-        tx_completion,
-        cmd,
-        id,
-        header_mode,
-        expected_response_len,
-        control_iovar,
-        0,
-        0,
-    );
-    if !driver_task_tx_completion_submitted(tx_completion) {
+        if driver_task_tx_completion_submitted(completion) {
+            break completion;
+        }
+        if let Some(retry_completion) =
+            cyw43_control_tx_submit_retry_completion(completion, tx_retries_spent)
+        {
+            tx_retries_spent = tx_retries_spent.saturating_add(1);
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "tx-fault-retry",
+                Some(retry_completion),
+            );
+            continue;
+        }
         record_cyw43_control_split_failure(
             contract,
             stage,
             tx_descriptor,
             "cyw43-control-tx-not-submitted",
-            Some(tx_completion),
+            Some(completion),
             cmd,
             id,
             header_mode,
@@ -7309,10 +7353,10 @@ fn cyw43_submit_control_exchange_unmapped_with_options(
             DriverTaskHotPath::Cyw43Wifi,
             stage,
             "tx-submit-fail",
-            Some(tx_completion),
+            Some(completion),
         );
-        return Err(Cyw43CommandSubmitError::Completion(tx_completion));
-    }
+        return Err(Cyw43CommandSubmitError::Completion(completion));
+    };
     crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
         DriverTaskHotPath::Cyw43Wifi,
@@ -15090,6 +15134,45 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn control_tx_submit_retry_is_limited_to_descriptor_transfer_fault() {
+        let transfer_failed = DriverTaskCompletionRecord {
+            sequence: 20,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: 0x5103,
+            result: 0x0420_8000,
+            frame: DriverFrameDescriptor {
+                offset: 768,
+                len: 56,
+                flags: 0,
+            },
+        };
+        let descriptor_unavailable = DriverTaskCompletionRecord {
+            detail: 0x5102,
+            ..transfer_failed
+        };
+        let submitted = DriverTaskCompletionRecord {
+            code: DriverTaskCompletionCode::Progress.as_u16(),
+            ..transfer_failed
+        };
+
+        assert_eq!(CYW43_CONTROL_TX_SUBMIT_RETRIES, 1);
+        assert_eq!(
+            cyw43_control_tx_submit_retry_completion(transfer_failed, 0),
+            Some(transfer_failed)
+        );
+        assert_eq!(
+            cyw43_control_tx_submit_retry_completion(transfer_failed, 1),
+            None
+        );
+        assert_eq!(
+            cyw43_control_tx_submit_retry_completion(descriptor_unavailable, 0),
+            None
+        );
+        assert_eq!(cyw43_control_tx_submit_retry_completion(submitted, 0), None);
     }
 
     #[cfg(feature = "kernel")]

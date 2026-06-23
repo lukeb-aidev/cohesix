@@ -468,7 +468,19 @@ impl NetPoller for NetStack {
     }
 
     fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
-        self.server.drain_console_lines(now_ms, visitor);
+        let _ = self
+            .server
+            .drain_console_lines_bounded(now_ms, usize::MAX, visitor);
+    }
+
+    fn drain_console_lines_bounded(
+        &mut self,
+        now_ms: u64,
+        max_lines: usize,
+        visitor: &mut dyn FnMut(ConsoleLine),
+    ) -> usize {
+        self.server
+            .drain_console_lines_bounded(now_ms, max_lines, visitor)
     }
 
     fn ingest_snapshot(&self) -> IngestSnapshot {

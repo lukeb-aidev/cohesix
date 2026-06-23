@@ -6093,6 +6093,15 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     }
 
     fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
+        let _ = self.drain_console_lines_bounded(now_ms, usize::MAX, visitor);
+    }
+
+    fn drain_console_lines_bounded(
+        &mut self,
+        now_ms: u64,
+        max_lines: usize,
+        visitor: &mut dyn FnMut(ConsoleLine),
+    ) -> usize {
         if let Some((snapshot, reason)) = readiness::gate() {
             if !self.session_state.not_ready_logged {
                 self.session_state.not_ready_logged = true;
@@ -6107,10 +6116,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 let _ = self.server.enqueue_outbound(line.as_str());
             }
             self.server.drain_console_lines(now_ms, &mut |_line| {});
-            return;
+            return 0;
         }
         self.session_state.not_ready_logged = false;
-        self.server.drain_console_lines(now_ms, visitor);
+        self.server
+            .drain_console_lines_bounded(now_ms, max_lines, visitor)
     }
 
     fn ingest_snapshot(&self) -> IngestSnapshot {
@@ -6686,12 +6696,25 @@ impl NetPoller for DefaultNetStack {
     }
 
     fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
+        let _ = self.drain_console_lines_bounded(now_ms, usize::MAX, visitor);
+    }
+
+    fn drain_console_lines_bounded(
+        &mut self,
+        now_ms: u64,
+        max_lines: usize,
+        visitor: &mut dyn FnMut(ConsoleLine),
+    ) -> usize {
         match self {
-            Self::Rtl8139(stack) => stack.drain_console_lines(now_ms, visitor),
-            Self::GenetDriverTask(stack) => stack.drain_console_lines(now_ms, visitor),
-            Self::Cyw43DriverTask(stack) => stack.drain_console_lines(now_ms, visitor),
+            Self::Rtl8139(stack) => stack.drain_console_lines_bounded(now_ms, max_lines, visitor),
+            Self::GenetDriverTask(stack) => {
+                stack.drain_console_lines_bounded(now_ms, max_lines, visitor)
+            }
+            Self::Cyw43DriverTask(stack) => {
+                stack.drain_console_lines_bounded(now_ms, max_lines, visitor)
+            }
             #[cfg(feature = "net-backend-virtio")]
-            Self::Virtio(stack) => stack.drain_console_lines(now_ms, visitor),
+            Self::Virtio(stack) => stack.drain_console_lines_bounded(now_ms, max_lines, visitor),
         }
     }
 

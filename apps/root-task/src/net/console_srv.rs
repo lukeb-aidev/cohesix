@@ -11,7 +11,7 @@ use log::{debug, info, warn};
 use portable_atomic::{AtomicBool, Ordering};
 use secure9p_codec::MAX_MSIZE;
 
-use super::{ConsoleLine, AUTH_TIMEOUT_MS, CONSOLE_QUEUE_DEPTH};
+use super::{ConsoleLine, AUTH_TIMEOUT_MS, CONSOLE_INGEST_QUEUE_DEPTH, CONSOLE_QUEUE_DEPTH};
 use crate::console::proto::{render_ack, AckStatus, LineFormatError};
 use crate::observe::{IngestMetrics, IngestSnapshot};
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -24,6 +24,8 @@ const AUTH_PREFIX: &str = "AUTH ";
 const DETAIL_REASON_EXPECTED_TOKEN: &str = "reason=expected-token";
 const DETAIL_REASON_INVALID_LENGTH: &str = "reason=invalid-length";
 const DETAIL_REASON_INVALID_TOKEN: &str = "reason=invalid-token";
+const DETAIL_REASON_INGEST_BACKPRESSURE: &str = "reason=ingest-backpressure";
+const INGEST_BACKPRESSURE_VERB: &str = "CONSOLE";
 const FRAME_ERROR_VERB: &str = "FRAME";
 const PREAUTH_FIRST_CAPACITY: usize = 4;
 const PREAUTH_LAST_CAPACITY: usize = 4;
@@ -71,7 +73,7 @@ pub struct TcpConsoleServer {
     frame_len_pos: usize,
     frame_payload_len: Option<usize>,
     drop_remaining: usize,
-    inbound: Deque<ConsoleLine, CONSOLE_QUEUE_DEPTH>,
+    inbound: Deque<ConsoleLine, CONSOLE_INGEST_QUEUE_DEPTH>,
     priority_outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, { CONSOLE_QUEUE_DEPTH * 4 }>,
     outbound: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, CONSOLE_QUEUE_DEPTH>,
     // Retains the oldest and newest console lines while no authenticated client is
@@ -415,12 +417,10 @@ impl TcpConsoleServer {
             SessionState::WaitingAuth => self.process_auth(line),
             SessionState::Authenticated => {
                 let entry = ConsoleLine::new(line, now_ms);
-                if let Err(entry) = self.inbound.push_back(entry) {
-                    // Drop oldest to make space for high-priority lines.
-                    let _ = self.inbound.pop_front();
-                    let _ = self.inbound.push_back(entry);
+                if self.inbound.push_back(entry).is_err() {
                     self.ingest_metrics.record_backpressure();
                     self.ingest_metrics.record_drop();
+                    self.enqueue_ingest_backpressure();
                 }
                 SessionEvent::None
             }
@@ -561,11 +561,28 @@ impl TcpConsoleServer {
 
     /// Forward buffered console lines to the provided visitor.
     pub fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine)) {
+        let _ = self.drain_console_lines_bounded(now_ms, usize::MAX, visitor);
+    }
+
+    /// Forward a bounded number of buffered console lines to the provided visitor.
+    pub fn drain_console_lines_bounded(
+        &mut self,
+        now_ms: u64,
+        max_lines: usize,
+        visitor: &mut dyn FnMut(ConsoleLine),
+    ) -> usize {
+        let mut drained = 0usize;
         while let Some(line) = self.inbound.pop_front() {
+            if drained >= max_lines {
+                let _ = self.inbound.push_front(line);
+                break;
+            }
             let latency = now_ms.saturating_sub(line.ingest_ms);
             self.ingest_metrics.record_latency_ms(latency);
             visitor(line);
+            drained = drained.saturating_add(1);
         }
+        drained
     }
 
     /// Snapshot ingest metrics for observability providers.
@@ -691,6 +708,18 @@ impl TcpConsoleServer {
                 len, status
             );
         })
+    }
+
+    fn enqueue_ingest_backpressure(&mut self) {
+        let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+        let ack = AckLine {
+            status: AckStatus::Err,
+            verb: INGEST_BACKPRESSURE_VERB,
+            detail: Some(DETAIL_REASON_INGEST_BACKPRESSURE),
+        };
+        if render_ack(&mut line, &ack).is_ok() {
+            let _ = self.enqueue_live(line, true);
+        }
     }
 
     /// Buffer a console line while no authenticated client is attached, preserving
@@ -1097,6 +1126,57 @@ mod tests {
                 payloads
             );
         }
+    }
+
+    #[test]
+    fn authenticated_ingest_queue_reports_backpressure_without_evicting_oldest() {
+        let mut server = TcpConsoleServer::new(TOKEN, 10_000);
+        server.begin_session(0, Some(5));
+        let auth_payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("AUTH {TOKEN}"));
+        assert_eq!(
+            server.ingest(auth_payload.as_slice(), 1),
+            SessionEvent::Authenticated
+        );
+        while server.pop_outbound().is_some() {}
+
+        for idx in 0..CONSOLE_INGEST_QUEUE_DEPTH {
+            let payload = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>(&format!("cmd-{idx}"));
+            assert_eq!(server.ingest(payload.as_slice(), 2), SessionEvent::None);
+        }
+        let extra = frame_line::<{ DEFAULT_LINE_CAPACITY + 8 }>("cmd-extra");
+        assert_eq!(server.ingest(extra.as_slice(), 2), SessionEvent::None);
+
+        let snapshot = server.ingest_snapshot();
+        assert_eq!(snapshot.queued, CONSOLE_INGEST_QUEUE_DEPTH as u32);
+        assert_eq!(snapshot.backpressure, 1);
+        assert_eq!(snapshot.dropped, 1);
+        assert!(server
+            .pop_outbound()
+            .is_some_and(|line| line.as_str() == "ERR CONSOLE reason=ingest-backpressure"));
+
+        let mut first_batch: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, 3> =
+            HeaplessVec::new();
+        let drained = server.drain_console_lines_bounded(3, 3, &mut |line| {
+            first_batch.push(line.text).unwrap();
+        });
+        assert_eq!(drained, 3);
+        assert_eq!(first_batch[0].as_str(), "cmd-0");
+        assert_eq!(first_batch[2].as_str(), "cmd-2");
+        assert_eq!(
+            server.ingest_snapshot().queued,
+            CONSOLE_INGEST_QUEUE_DEPTH.saturating_sub(3) as u32
+        );
+
+        let mut remaining: HeaplessVec<
+            HeaplessString<DEFAULT_LINE_CAPACITY>,
+            { CONSOLE_INGEST_QUEUE_DEPTH },
+        > = HeaplessVec::new();
+        let _ = server.drain_console_lines_bounded(4, usize::MAX, &mut |line| {
+            remaining.push(line.text).unwrap();
+        });
+        assert!(remaining.iter().any(|line| line.as_str() == "cmd-3"));
+        assert!(remaining.iter().any(|line| line.as_str() == "cmd-31"));
+        assert!(!remaining.iter().any(|line| line.as_str() == "cmd-extra"));
     }
 
     #[test]

@@ -67,8 +67,12 @@ pub const AUTH_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
     10 * 60 * 1000
 };
 
-/// Number of console lines retained between pump cycles.
+/// Number of regular outbound console lines retained between pump cycles.
 pub const CONSOLE_QUEUE_DEPTH: usize = 8;
+/// Number of authenticated inbound console commands retained between pump cycles.
+pub const CONSOLE_INGEST_QUEUE_DEPTH: usize = 32;
+/// Maximum inbound console commands dispatched from the event pump in one turn.
+pub const CONSOLE_DISPATCH_BURST: usize = 8;
 
 pub(crate) fn cyw43_control_plane_bootstrap_replay_reason(_reason: &str) -> bool {
     // The bounded startup-link / sideband recovery ladder already retries
@@ -975,6 +979,14 @@ pub trait NetPoller {
 
     /// Drain any pending console lines produced by TCP listeners.
     fn drain_console_lines(&mut self, now_ms: u64, visitor: &mut dyn FnMut(ConsoleLine));
+
+    /// Drain a bounded number of pending console lines produced by TCP listeners.
+    fn drain_console_lines_bounded(
+        &mut self,
+        now_ms: u64,
+        max_lines: usize,
+        visitor: &mut dyn FnMut(ConsoleLine),
+    ) -> usize;
 
     /// Queue a console line for transmission to remote clients.
     fn send_console_line(&mut self, line: &str) -> bool;
