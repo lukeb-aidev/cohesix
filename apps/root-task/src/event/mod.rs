@@ -117,7 +117,7 @@ use crate::hal::{
     SdioBusWidth, WifiControlPlaneTrace, WifiDebugOps, WifiDebugSnapshot,
     WifiFirmwareContractTrace, WifiPowerState, WifiResetState, WifiSdhciContractTrace,
 };
-use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
+use crate::local_seat::{LocalSeatDisplayTrace, LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
@@ -229,6 +229,8 @@ const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
 // keep a small bounded flush window so replies are not deferred behind later
 // event-loop work during Genet bursts.
 const NET_POST_DISPATCH_FLUSH_POLLS: usize = 8;
+#[cfg(feature = "net-console")]
+const NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 16;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
@@ -381,6 +383,25 @@ fn net_status_should_yield_to_physical_input(status: &NetStatusReport) -> bool {
 #[cfg(feature = "net-console")]
 fn net_status_needs_physical_pressure_service(status: &NetStatusReport) -> bool {
     net_status_active_interface_is_wired(status) && status.address_source == "dhcp-lease"
+}
+
+#[cfg(feature = "net-console")]
+const fn net_post_dispatch_flush_limit_for_display(
+    display: Option<LocalSeatDisplayTrace>,
+) -> usize {
+    match display {
+        Some(trace)
+            if trace.pending_bytes != 0
+                || trace.pending_redraw
+                || trace.no_reply_cooldown_turns != 0
+                || trace.stale_after_retry_exhaustion
+                || (trace.no_reply_frames != 0
+                    && trace.deferred_frames > trace.submitted_frames) =>
+        {
+            NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        }
+        _ => NET_POST_DISPATCH_FLUSH_POLLS,
+    }
 }
 
 #[cfg_attr(not(any(test, feature = "kernel")), allow(dead_code))]
@@ -2090,13 +2111,18 @@ where
 
     #[cfg(feature = "net-console")]
     fn poll_net_after_network_dispatch(&mut self) -> Option<IngestSnapshot> {
+        let flush_limit = net_post_dispatch_flush_limit_for_display(
+            self.local_seat
+                .as_ref()
+                .map(|local_seat| local_seat.display_trace()),
+        );
         let Some(net) = self.net.as_mut() else {
             return None;
         };
         let net_contract = net.driver_task_contract();
         let mut flush_polls = 0u64;
         let mut flush_exhausted = false;
-        for _ in 0..NET_POST_DISPATCH_FLUSH_POLLS {
+        for _ in 0..flush_limit {
             let mut net_budget = match DriverServiceBudget::new(net_contract) {
                 Ok(budget) => budget,
                 Err(err) => {
@@ -2137,7 +2163,7 @@ where
             .metrics
             .net_post_dispatch_flush_polls
             .saturating_add(flush_polls);
-        if flush_exhausted && flush_polls >= NET_POST_DISPATCH_FLUSH_POLLS as u64 {
+        if flush_exhausted && flush_polls >= flush_limit as u64 {
             self.metrics.net_post_dispatch_flush_exhaustions = self
                 .metrics
                 .net_post_dispatch_flush_exhaustions
@@ -16859,6 +16885,50 @@ mod tests {
         pre_lease.address_source = "dhcp-pending";
         pre_lease.dhcp_phase = "requesting";
         assert!(!net_status_needs_physical_pressure_service(&pre_lease));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn post_dispatch_flush_limit_extends_under_display_pressure() {
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_display(None),
+            NET_POST_DISPATCH_FLUSH_POLLS
+        );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_display(Some(LocalSeatDisplayTrace::default())),
+            NET_POST_DISPATCH_FLUSH_POLLS
+        );
+
+        let mut pending = LocalSeatDisplayTrace {
+            pending_bytes: 1,
+            ..LocalSeatDisplayTrace::default()
+        };
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_display(Some(pending)),
+            NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        );
+
+        pending = LocalSeatDisplayTrace {
+            no_reply_frames: 1,
+            deferred_frames: 2,
+            submitted_frames: 1,
+            ..LocalSeatDisplayTrace::default()
+        };
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_display(Some(pending)),
+            NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        );
+
+        pending = LocalSeatDisplayTrace {
+            no_reply_frames: 1,
+            deferred_frames: 1,
+            submitted_frames: 2,
+            ..LocalSeatDisplayTrace::default()
+        };
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_display(Some(pending)),
+            NET_POST_DISPATCH_FLUSH_POLLS
+        );
     }
 
     #[cfg(feature = "net-console")]

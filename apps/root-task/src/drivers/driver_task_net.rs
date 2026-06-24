@@ -1299,6 +1299,8 @@ struct Cyw43HostEapolSession {
     progress: Cyw43HostEapolProgress,
     started_ms: Option<u64>,
     associated_ms: Option<u64>,
+    last_eapol_activity_ms: Option<u64>,
+    last_eapol_activity_poll: Option<u32>,
     last_eapol_start_ms: Option<u64>,
     last_timer_firstread_base_ms: Option<u64>,
     last_timer_firstread_slot: Option<u16>,
@@ -1322,6 +1324,8 @@ impl Cyw43HostEapolSession {
             progress: Cyw43HostEapolProgress::default(),
             started_ms: None,
             associated_ms: None,
+            last_eapol_activity_ms: None,
+            last_eapol_activity_poll: None,
             last_eapol_start_ms: None,
             last_timer_firstread_base_ms: None,
             last_timer_firstread_slot: None,
@@ -1352,6 +1356,24 @@ impl Cyw43HostEapolSession {
         self.associated_ms
             .map(|associated| now_ms.saturating_sub(associated))
             .unwrap_or(0)
+    }
+
+    fn record_eapol_activity(&mut self, now_ms: u64, poll: u32) {
+        self.last_eapol_activity_ms = Some(now_ms);
+        self.last_eapol_activity_poll = Some(poll);
+    }
+
+    fn post_assoc_eapol_idle_ms(&self, now_ms: u64) -> u64 {
+        self.last_eapol_activity_ms
+            .or(self.associated_ms)
+            .map(|last_activity| now_ms.saturating_sub(last_activity))
+            .unwrap_or(0)
+    }
+
+    fn post_assoc_eapol_idle_polls(&self) -> u32 {
+        self.last_eapol_activity_poll
+            .map(|last_activity| self.progress.polls.saturating_sub(last_activity))
+            .unwrap_or(self.progress.post_assoc_polls)
     }
 
     fn claim_timer_firstread_slot(&mut self, starts_sent: u32, now_ms: u64) -> bool {
@@ -4406,6 +4428,7 @@ fn process_cyw43_host_eapol_data_completion(
                 emit_cyw43_host_eapol_status(contract, "rx-observed", &session.progress);
             }
             if ethertype == Some(ETH_P_EAPOL) {
+                session.record_eapol_activity(crate::hal::timebase().now_ms(), poll as u32);
                 if let Some(proof) = cyw43_host_eapol::inspect_host_eapol_frame(frame) {
                     emit_cyw43_host_eapol_proof(contract, "rx", poll, frame.len(), proof);
                 }
@@ -4808,8 +4831,19 @@ fn cyw43_host_eapol_assoc_rescue_due_any(poll: u32, elapsed_ms: u64) -> bool {
 #[cfg(feature = "kernel")]
 fn cyw43_host_eapol_join_timeout_expired(session: &Cyw43HostEapolSession, now_ms: u64) -> bool {
     if session.progress.associated {
-        return session.post_assoc_elapsed_ms(now_ms) >= CYW43_HOST_EAPOL_POST_ASSOC_TIMEOUT_MS
-            || session.progress.post_assoc_polls >= CYW43_HOST_EAPOL_POST_ASSOC_POLLS as u32;
+        let (post_assoc_idle_ms, post_assoc_idle_polls) = if session.progress.eapol_rx == 0 {
+            (
+                session.post_assoc_elapsed_ms(now_ms),
+                session.progress.post_assoc_polls,
+            )
+        } else {
+            (
+                session.post_assoc_eapol_idle_ms(now_ms),
+                session.post_assoc_eapol_idle_polls(),
+            )
+        };
+        return post_assoc_idle_ms >= CYW43_HOST_EAPOL_POST_ASSOC_TIMEOUT_MS
+            || post_assoc_idle_polls >= CYW43_HOST_EAPOL_POST_ASSOC_POLLS as u32;
     }
     session.elapsed_ms(now_ms) >= CYW43_HOST_EAPOL_JOIN_TIMEOUT_MS
         || session.progress.polls >= CYW43_HOST_EAPOL_JOIN_POLLS as u32
@@ -13601,6 +13635,44 @@ mod tests {
             &session,
             associated_at + CYW43_HOST_EAPOL_POST_ASSOC_TIMEOUT_MS
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_activity_extends_post_assoc_timeout() {
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        let associated_at = 10_000;
+        session.progress.associated = true;
+        session.record_time(associated_at);
+        session.progress.post_assoc_polls = CYW43_HOST_EAPOL_POST_ASSOC_POLLS as u32;
+
+        let old_deadline = associated_at + CYW43_HOST_EAPOL_POST_ASSOC_TIMEOUT_MS;
+        assert!(
+            cyw43_host_eapol_join_timeout_expired(&session, old_deadline),
+            "without EAPOL activity the association-time deadline and poll cap still apply"
+        );
+
+        let m1_replay_ms = old_deadline.saturating_sub(1);
+        let m1_replay_poll = 12_288;
+        session.progress.eapol_rx = 2;
+        session.progress.polls = m1_replay_poll + 1;
+        session.record_eapol_activity(m1_replay_ms, m1_replay_poll);
+        assert!(
+            !cyw43_host_eapol_join_timeout_expired(&session, old_deadline),
+            "a fresh M1/M2 exchange must keep the handshake pending for late M3"
+        );
+        assert!(cyw43_host_eapol_join_timeout_expired(
+            &session,
+            m1_replay_ms + CYW43_HOST_EAPOL_POST_ASSOC_TIMEOUT_MS
+        ));
+        session.progress.polls = m1_replay_poll + CYW43_HOST_EAPOL_POST_ASSOC_POLLS as u32;
+        assert!(
+            cyw43_host_eapol_join_timeout_expired(&session, m1_replay_ms + 1),
+            "fresh EAPOL activity should also refresh the post-association poll cap"
+        );
     }
 
     #[cfg(feature = "kernel")]

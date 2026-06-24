@@ -852,6 +852,13 @@ const fn repeated_no_reply_log_visible(count: usize) -> bool {
         || (count != 0 && (count & count.saturating_sub(1)) == 0)
 }
 
+/// Return whether a visible no-reply HDMI diagnostic should include the
+/// detailed ring/queue/progress rows instead of just the submit summary.
+#[must_use]
+const fn repeated_no_reply_detail_log_visible(count: usize) -> bool {
+    count == 0 || (count >= 64 && (count & count.saturating_sub(1)) == 0)
+}
+
 #[must_use]
 fn keyboard_recovery_request_log_visible(count: usize, action: &str) -> bool {
     if action == "no-reply" {
@@ -4147,13 +4154,14 @@ fn emit_hdmi_frame_submit_state(
     };
     let status = local_seat_completion_status(completion, ready);
     let no_reply = completion.is_none() && !ready;
+    let mut emit_detail_rows = fatal || !root_console_ready;
     if no_reply {
         let repeat = LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOG_COUNT.fetch_add(1, Ordering::AcqRel);
         if !fatal && !repeated_no_reply_log_visible(repeat) {
             return;
         }
+        emit_detail_rows |= repeated_no_reply_detail_log_visible(repeat);
     } else {
-        LINKED_LOCAL_SEAT_DISPLAY_NO_REPLY_LOG_COUNT.store(0, Ordering::Release);
         if !fatal
             && !routine_hdmi_ready_log_visible(
                 reason,
@@ -4164,6 +4172,7 @@ fn emit_hdmi_frame_submit_state(
         {
             return;
         }
+        emit_detail_rows |= !matches!(reason, "queued-output" | "keyboard-scrollback");
     }
     let console_seq = boot_log::next_console_event_seq();
     let mut line = heapless::String::<384>::new();
@@ -4202,6 +4211,9 @@ fn emit_hdmi_frame_submit_state(
         );
     }
     emit_hdmi_diagnostic_line_with_console_seq(line.as_str(), console_seq);
+    if !emit_detail_rows {
+        return;
+    }
 
     let mut ring_line = heapless::String::<160>::new();
     let _ = write!(
@@ -7544,6 +7556,17 @@ mod tests {
         assert!(!repeated_no_reply_log_visible(6));
         assert!(!repeated_no_reply_log_visible(7));
         assert!(repeated_no_reply_log_visible(8));
+    }
+
+    #[test]
+    fn repeated_no_reply_detail_logging_keeps_detail_rows_sparse() {
+        assert!(repeated_no_reply_detail_log_visible(0));
+        assert!(!repeated_no_reply_detail_log_visible(1));
+        assert!(!repeated_no_reply_detail_log_visible(4));
+        assert!(!repeated_no_reply_detail_log_visible(32));
+        assert!(repeated_no_reply_detail_log_visible(64));
+        assert!(repeated_no_reply_detail_log_visible(128));
+        assert!(!repeated_no_reply_detail_log_visible(129));
     }
 
     #[test]
