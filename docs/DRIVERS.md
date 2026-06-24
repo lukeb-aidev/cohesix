@@ -54,24 +54,35 @@ behavior. Runtime progress returns only as bounded completions and breadcrumbs,
 so root can admit, observe, retry, or revoke without reclaiming steady
 physical-driver work.
 
-Performance counters are part of that contract. Linked runtimes and root-side
-ring clients expose bounded, activity-gated counter snapshots for turns, staged
+Performance counters are part of that contract. A counter is a fixed-layout,
+non-authority measurement of what happened at a driver boundary, emitted only
+after the relevant contract has activity. Linked runtimes and root-side ring
+clients expose bounded, activity-gated counter snapshots for turns, staged
 bytes, cache work, busy/backpressure, same-request resumes, timeouts, aborts,
-and RX/TX volume. These counters let benchmark runs explain contention and tune
-batching without high-volume UART logging or hidden root-side work. They remain
-diagnostic: invalid or missing counters block performance claims, but counters
-do not replace owner-state proof or a fresh same-harness Pi benchmark.
+and RX/TX volume. These counters shape driver design by making service-turn
+cost, queue pressure, retry behavior, cache overhead, and batching effects
+visible without high-volume UART logging or hidden root-side work. Optimization
+uses them to compare before/after behavior under the same harness and to choose
+where batching, budgets, or backpressure should change. They remain diagnostic:
+invalid or missing counters block performance claims, but counters do not
+replace owner-state proof or a fresh same-harness Pi benchmark.
 
 The performance expectation is lower root-task contention and bounded hot-path
-latency, not an unconditional throughput claim. A well-shaped runtime can batch
-device-local work, keep cache and DMA maintenance near the driver state machine,
-avoid UART-heavy steady telemetry, and use manifest affinity where the selected
-seL4 profile supports it. Saturation must appear as bounded busy, timeout,
-overrun, or owner-state fault evidence, never as unbounded queue growth or a
-hidden blocking call. Pi 4 performance acceptance requires fresh same-harness
-evidence with USB, Wi-Fi/GENET, HDMI, shell transport, flash, and
-SMP/service-bucket proof lanes kept separate; QEMU and host pressure tests
-remain semantic or regression evidence, not board-level throughput proof.
+latency, not an unconditional throughput claim. Concurrency and latency
+optimization is contract-first: move only device-local work into bounded
+linked-runtime service turns, keep root-task authority serialized, and accept
+latency gains only when counters and same-harness Pi evidence show no lost
+output, hidden blocking, or weakened owner proof. A well-shaped runtime can
+batch device-local work, keep cache and DMA maintenance near the driver state
+machine, avoid UART-heavy steady telemetry, and use manifest affinity where the
+selected seL4 profile supports it. Saturation must appear as bounded busy,
+timeout, overrun, or owner-state fault evidence, never as unbounded queue growth
+or a hidden blocking call. Pi 4 performance acceptance requires fresh
+same-harness evidence with USB, Wi-Fi/GENET, HDMI, shell transport, flash, and
+current `smp activity`/affinity proof lanes kept separate; future
+service-bucket proof is required only after the generated Milestone 27c surface
+lands. QEMU and host pressure tests remain semantic or regression evidence, not
+board-level throughput proof.
 
 The model is seL4-native. The kernel provides capabilities, VSpaces, endpoints,
 notifications, TCBs, scheduling policy, and device-frame mappings; Cohesix
@@ -99,16 +110,26 @@ failure condition is not progress.
 
 ## Scope
 
-This document is scoped to Cohesix's current linked-runtime driver model and
-the Pi 4 work authorized by `docs/BUILD_PLAN.md`:
+This document is scoped to Cohesix's current linked-runtime driver model and the
+active Pi 4 work authorized by `docs/BUILD_PLAN.md`:
 
 - Milestone 26: `m26-hal-boundary`, local diagnostics, and the U-Boot boot/DTB handoff.
 - Milestone 26a: `m26a-bcmgenet-driver` and the original Pi 4 wired/static baseline.
 - Milestone 26b: DHCP plus the profile-gated CYW43455 Wi-Fi path; the checked-in
-  Pi 4 U-Boot manifest now defaults to DHCP/`auto`.
-- Milestone 26c: behavior-preserving cleanup, characterization, and target-qualified
-  Test Plan evidence for the linked-runtime boundary.
-- Milestone 26d: seL4 15 baseline refresh and reference-manual realignment.
+  Pi 4 U-Boot profile manifest now defaults to DHCP/`auto`.
+
+Future and contextual milestones may constrain this guide but do not authorize
+implementation by being named here:
+
+- Milestone 26c is currently not started; its behavior-preserving cleanup and
+  target-qualified Test Plan work may audit this document but must not expand
+  driver behavior before `docs/BUILD_PLAN.md` activates that scope.
+- Milestone 26d is pending; seL4 15 references in this guide are alignment
+  targets, while local generated seL4 artifacts still define selected-profile
+  truth.
+- Milestone 27c is pending; core-local service buckets, generated per-core
+  budgets, and service-bucket throughput proof are future generated surfaces,
+  not current driver-runtime claims.
 - Later milestones may build on this model only when `docs/BUILD_PLAN.md`
   explicitly authorizes the driver, scheduling, or performance surface.
 
@@ -541,9 +562,10 @@ fourth-core placement only when the corresponding `DRIVER_TASK_BOOT` line
 reports `affinity_core=3` and the aggregate affinity proof remains applied; a
 `DRIVER_TASK_AFFINITY_DEFERRED` line is a stale placement regression, not a
 runtime-image or hardware-service success.
-The same Pi 4 manifest now defaults the first boot to DHCP/`auto` networking and
-requires the local-seat path, so a no-saved-policy boot exercises GENET DHCP and
-fails visibly if the HDMI/USB runtime cannot initialize.
+The Pi 4 U-Boot profile manifest, not the generic generated default, now
+defaults boot-time networking to DHCP/`auto` and requires the local-seat path,
+so a no-saved-policy Pi 4 boot exercises GENET DHCP and fails visibly if the
+HDMI/USB runtime cannot initialize.
 
 Physical Pi bootstrap creates only selected generated linked-runtime hardware
 contracts from the acceptance-eligible set: serial, SDIO, PCIe, USB/local-seat,
