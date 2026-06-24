@@ -156,6 +156,7 @@ const CYW43_HOST_EAPOL_RX_RESCUE_AFTER_POST_ASSOC_MS: u64 = 4_096;
 const CYW43_HOST_EAPOL_RX_RESCUE_AFTER_STARTS: u32 = 2;
 const CYW43_HOST_EAPOL_BSSID_REFRESH_TX_RETRIES: usize = 1;
 const CYW43_HOST_EAPOL_BSSID_REFRESH_PRE_TX_DRAIN: bool = false;
+const CYW43_HOST_EAPOL_PROMISC_PRE_TX_DRAIN: bool = true;
 const CYW43_HOST_EAPOL_ASSOC_PROBE_POLLS: [u32; 4] = [1_024, 4_096, 8_192, 16_384];
 const CYW43_HOST_EAPOL_ASSOC_RESCUE_POLL: u32 = CYW43_HOST_EAPOL_PRE_ASSOC_POLLS as u32;
 const CYW43_HOST_EAPOL_ASSOC_PROBE_MS: [u64; 4] = [1_024, 4_096, 8_192, 16_384];
@@ -2497,9 +2498,20 @@ fn cyw43_submit_bcdc_u32(
     value: u32,
     stage: &'static str,
 ) -> Result<(), DriverTaskNetError> {
+    cyw43_submit_bcdc_u32_with_options(contract, cmd, value, stage, false)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_u32_with_options(
+    contract: DriverTaskContract,
+    cmd: u32,
+    value: u32,
+    stage: &'static str,
+    pre_tx_drain: bool,
+) -> Result<(), DriverTaskNetError> {
     #[cfg(test)]
     if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
-        let _ = (contract, cmd, value);
+        let _ = (contract, cmd, value, pre_tx_drain);
         if stage == "cyw43-host-eapol-reassert-wsec" {
             CYW43_HOST_EAPOL_TEST_WSEC_REASSERTED.fetch_add(1, Ordering::AcqRel);
         }
@@ -2510,7 +2522,15 @@ fn cyw43_submit_bcdc_u32(
     let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
     let id = cyw43_next_bcdc_ioctl_id();
     let len = cyw43_write_bcdc_frame(&mut frame, cmd, CYW43_BCDC_FLAG_SET, id, &payload)?;
-    cyw43_submit_control_exchange_checked(contract, &frame[..len], cmd, id, stage)
+    cyw43_submit_control_exchange_checked_with_options(
+        contract,
+        &frame[..len],
+        cmd,
+        id,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+        pre_tx_drain,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -3918,7 +3938,13 @@ fn cyw43_configure_host_eapol_rx_mode(
     mcast[4..10].copy_from_slice(&CYW43_PAE_GROUP_ADDR);
     cyw43_submit_bcdc_iovar_bytes(contract, "mcast_list", &mcast, mcast_stage)?;
     cyw43_submit_bcdc_iovar_u32(contract, "allmulti", allmulti, allmulti_stage)?;
-    cyw43_submit_bcdc_u32(contract, CYW43_WLC_SET_PROMISC, promisc, promisc_stage)
+    cyw43_submit_bcdc_u32_with_options(
+        contract,
+        CYW43_WLC_SET_PROMISC,
+        promisc,
+        promisc_stage,
+        CYW43_HOST_EAPOL_PROMISC_PRE_TX_DRAIN,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -7634,8 +7660,19 @@ fn cyw43_submit_runtime_control_exchange(
 
 #[cfg(feature = "kernel")]
 fn cyw43_control_uses_runtime_exchange(stage: &'static str, control_iovar: &str) -> bool {
-    let _ = (stage, control_iovar);
-    false
+    let _ = control_iovar;
+    cyw43_control_stage_is_host_eapol_promisc(stage)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_stage_is_host_eapol_promisc(stage: &'static str) -> bool {
+    matches!(
+        stage,
+        "cyw43-host-eapol-promisc"
+            | "cyw43-host-eapol-refresh-promisc"
+            | "cyw43-host-eapol-rescue-promisc"
+            | "cyw43-host-eapol-restore-promisc"
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -13025,6 +13062,41 @@ mod tests {
             cyw43_control_exchange_poll_attempts("cyw43-host-eapol-ptk", "wsec_key"),
             CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS
         );
+    }
+
+    #[test]
+    fn host_eapol_promisc_uses_runtime_exchange_with_pre_tx_drain() {
+        let descriptor = cyw43_control_exchange_descriptor(
+            20,
+            CYW43_WLC_SET_PROMISC,
+            511,
+            Cyw43ControlHeaderMode::Extended,
+            CYW43_HOST_EAPOL_PROMISC_PRE_TX_DRAIN,
+        );
+
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+        assert_eq!(
+            descriptor.flags,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+        );
+        assert_eq!(descriptor.payload_len, 20);
+        assert_eq!(descriptor.total_len, 20);
+        assert_eq!(descriptor.arg0, CYW43_WLC_SET_PROMISC);
+        assert_eq!(descriptor.arg1, 511);
+        for stage in [
+            "cyw43-host-eapol-promisc",
+            "cyw43-host-eapol-refresh-promisc",
+            "cyw43-host-eapol-rescue-promisc",
+            "cyw43-host-eapol-restore-promisc",
+        ] {
+            assert!(cyw43_control_uses_runtime_exchange(stage, "none"));
+            assert!(cyw43_control_stage_is_host_eapol_promisc(stage));
+        }
+        assert!(!cyw43_control_uses_runtime_exchange(
+            "cyw43-control-infra",
+            "none"
+        ));
     }
 
     #[test]
