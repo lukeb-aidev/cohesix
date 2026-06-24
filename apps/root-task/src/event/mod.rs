@@ -117,7 +117,9 @@ use crate::hal::{
     SdioBusWidth, WifiControlPlaneTrace, WifiDebugOps, WifiDebugSnapshot,
     WifiFirmwareContractTrace, WifiPowerState, WifiResetState, WifiSdhciContractTrace,
 };
-use crate::local_seat::{LocalSeatDisplayTrace, LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
+#[cfg(feature = "net-console")]
+use crate::local_seat::LocalSeatDisplayTrace;
+use crate::local_seat::{LocalSeatRuntime, KEYBOARD_POLL_CHUNK_BYTES};
 #[cfg(feature = "kernel")]
 use crate::log_buffer;
 #[cfg(feature = "net-console")]
@@ -231,11 +233,17 @@ const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
 const NET_POST_DISPATCH_FLUSH_POLLS: usize = 8;
 #[cfg(feature = "net-console")]
 const NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 16;
+#[cfg(feature = "net-console")]
+const NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS: usize = 3;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
 const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
 const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 3;
+#[cfg(feature = "net-console")]
+const LOCAL_SEAT_HDMI_PUMP_PASSES_UNDER_NET_PRESSURE: usize = 1;
+const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 16;
+const LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE: u64 = 256;
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 32;
 const CONSOLE_OUTPUT_LINES_PER_IDLE_TURN: usize = 2;
 const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
@@ -272,6 +280,12 @@ const fn local_seat_usb_burst_proof(
         && accepted_bytes == echoed_bytes
         && dropped_bytes == 0
 }
+
+const fn local_seat_network_mirror_sample_allowed(ordinal: u64) -> bool {
+    ordinal < LOCAL_SEAT_NET_MIRROR_INITIAL_LINES
+        || ordinal % LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE == LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE - 1
+}
+
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
 const LOCAL_SEAT_SERIAL_OUTPUT_CHUNK_BYTES: usize = 32;
 
@@ -383,6 +397,23 @@ fn net_status_should_yield_to_physical_input(status: &NetStatusReport) -> bool {
 #[cfg(feature = "net-console")]
 fn net_status_needs_physical_pressure_service(status: &NetStatusReport) -> bool {
     net_status_active_interface_is_wired(status) && status.address_source == "dhcp-lease"
+}
+
+#[cfg(feature = "net-console")]
+fn net_status_linked_runtime_data_ready(status: &NetStatusReport) -> bool {
+    matches!(status.backend, "bcmgenet-v5" | "cyw43")
+        && matches!(status.active_interface, "wired" | "wifi")
+        && status.address_source == "dhcp-lease"
+        && status.dhcp_phase == "bound"
+}
+
+#[cfg(feature = "net-console")]
+fn net_hot_dispatch_rounds_for_status(status: &NetStatusReport) -> usize {
+    if net_status_linked_runtime_data_ready(status) {
+        NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS
+    } else {
+        1
+    }
 }
 
 #[cfg(feature = "net-console")]
@@ -1534,6 +1565,11 @@ struct PendingStream {
 }
 
 #[cfg(feature = "kernel")]
+const NET_PENDING_STREAM_FLUSH_LINES_PER_TURN: usize = 16;
+#[cfg(feature = "kernel")]
+const NET_PENDING_STREAM_FLUSH_BYTES_PER_TURN: usize = 4096;
+
+#[cfg(feature = "kernel")]
 impl PendingStream {
     fn new() -> Self {
         Self {
@@ -2050,6 +2086,7 @@ where
             }
             let telemetry = net.telemetry();
             let conn_id = net.active_console_conn_id();
+            let hot_dispatch_rounds = net_hot_dispatch_rounds_for_status(&net.status_report());
             let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_DISPATCH_BURST }> =
                 HeaplessVec::new();
             if !yield_for_physical_input {
@@ -2062,13 +2099,28 @@ where
                 );
             }
             let ingest_snapshot: IngestSnapshot = net.ingest_snapshot();
-            Some((activity, telemetry, buffered, conn_id, ingest_snapshot))
+            Some((
+                activity,
+                telemetry,
+                buffered,
+                conn_id,
+                ingest_snapshot,
+                hot_dispatch_rounds,
+            ))
         } else {
             None
         };
 
         #[cfg(feature = "net-console")]
-        if let Some((activity, telemetry, buffered, conn_id, _ingest_snapshot)) = net_poll {
+        if let Some((
+            activity,
+            telemetry,
+            buffered,
+            conn_id,
+            _ingest_snapshot,
+            hot_dispatch_rounds,
+        )) = net_poll
+        {
             self.net_conn_id = conn_id;
             if NET_DIAG_FEATURED {
                 self.log_net_diag(telemetry);
@@ -2079,19 +2131,41 @@ where
                 ));
                 self.audit.info(message.as_str());
             }
-            let mut handled_network_lines = false;
+            let mut ingest_snapshot = _ingest_snapshot;
             for line in buffered {
                 if !suppress_console_input {
-                    handled_network_lines = true;
                     self.handle_network_line(line.text);
+                    if let Some(snapshot) = self.poll_net_after_network_dispatch() {
+                        ingest_snapshot = snapshot;
+                    }
                 }
             }
-            let ingest_snapshot = if handled_network_lines {
-                self.poll_net_after_network_dispatch()
-                    .unwrap_or(_ingest_snapshot)
-            } else {
-                _ingest_snapshot
-            };
+            let mut remaining_hot_rounds = hot_dispatch_rounds.saturating_sub(1);
+            while !suppress_console_input && remaining_hot_rounds != 0 {
+                let mut buffered: HeaplessVec<ConsoleLine, { CONSOLE_DISPATCH_BURST }> =
+                    HeaplessVec::new();
+                let drained = if let Some(net) = self.net.as_mut() {
+                    net.drain_console_lines_bounded(
+                        self.now_ms,
+                        CONSOLE_DISPATCH_BURST,
+                        &mut |line| {
+                            let _ = buffered.push(line);
+                        },
+                    )
+                } else {
+                    0
+                };
+                if drained == 0 {
+                    break;
+                }
+                for line in buffered {
+                    self.handle_network_line(line.text);
+                    if let Some(snapshot) = self.poll_net_after_network_dispatch() {
+                        ingest_snapshot = snapshot;
+                    }
+                }
+                remaining_hot_rounds = remaining_hot_rounds.saturating_sub(1);
+            }
             #[cfg(not(feature = "kernel"))]
             let _ = ingest_snapshot;
             #[cfg(feature = "kernel")]
@@ -2744,11 +2818,12 @@ where
     }
 
     fn pump_local_seat_display_once(&mut self) {
+        let pass_limit = self.local_seat_hdmi_pump_pass_limit();
         let Some(runtime) = self.local_seat.as_mut() else {
             return;
         };
         let mut passes = 0usize;
-        while passes < LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN && runtime.linked_hdmi_pending_work() {
+        while passes < pass_limit && runtime.linked_hdmi_pending_work() {
             if !runtime.pump_linked_hdmi_once() {
                 break;
             }
@@ -2756,6 +2831,19 @@ where
                 self.metrics.local_seat_hdmi_pump_turns.saturating_add(1);
             passes = passes.saturating_add(1);
         }
+    }
+
+    fn local_seat_hdmi_pump_pass_limit(&self) -> usize {
+        #[cfg(feature = "net-console")]
+        {
+            if self.last_input_source == ConsoleInputSource::Net
+                && self.metrics.local_seat_net_mirror_suppressed
+                    > self.metrics.local_seat_net_mirror_lines
+            {
+                return LOCAL_SEAT_HDMI_PUMP_PASSES_UNDER_NET_PRESSURE;
+            }
+        }
+        LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN
     }
 
     #[cfg(feature = "kernel")]
@@ -2828,6 +2916,17 @@ where
             return;
         };
         if !runtime.root_console_ready() {
+            return;
+        }
+        let mirror_ordinal = self
+            .metrics
+            .local_seat_net_mirror_lines
+            .saturating_add(self.metrics.local_seat_net_mirror_suppressed);
+        if !local_seat_network_mirror_sample_allowed(mirror_ordinal) {
+            self.metrics.local_seat_net_mirror_suppressed = self
+                .metrics
+                .local_seat_net_mirror_suppressed
+                .saturating_add(1);
             return;
         }
         if runtime.can_accept_network_origin_mirror() {
@@ -3016,8 +3115,7 @@ where
                     crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
                 );
                 if verbose_attempt || keyboard_probe.attached() {
-                    let usb_frontier =
-                        "[drivers] USB frontier: prompt-settle linked-runtime probe armed; xHCI/keyboard state preserved";
+                    let usb_frontier = "[drivers] USB frontier: prompt-settle linked-runtime probe armed; xHCI/keyboard state preserved";
                     boot_log::force_uart_line_raw_without_prompt_refresh(usb_frontier);
                     runtime.mirror_high_impact_line(usb_frontier);
                 }
@@ -3036,11 +3134,14 @@ where
                 }
                 if verbose_attempt || keyboard_probe.attached() {
                     let mut line = HeaplessString::<160>::new();
-                    let _ =
-                        write!(
+                    let _ = write!(
                         line,
                         "[local-seat] prompt-settle attach end result=armed-cooperative linked_display={}",
-                        if linked_display_ready { "ready" } else { "deferred" }
+                        if linked_display_ready {
+                            "ready"
+                        } else {
+                            "deferred"
+                        }
                     );
                     boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
                     let mut probe_line = HeaplessString::<128>::new();
@@ -5070,21 +5171,24 @@ where
                 "linked-runtime-no-detail"
             };
             let mut runtime_line = HeaplessString::<384>::new();
-            let _ = FmtWrite::write_fmt(&mut runtime_line, format_args!(
-                "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x} result=0x{:08x} progress_gate={} progress_phase={} progress_phase_name={}",
-                Self::yes_no(keyboard_ready),
-                Self::yes_no(first_report),
-                Self::yes_no(first_byte),
-                first_byte_source,
-                proof_gate,
-                next_step,
-                blocker,
-                linked_detail,
-                linked_result,
-                linked_progress_gate,
-                linked_progress.map_or(0, |progress| progress.phase),
-                linked_progress.map_or("none", |progress| progress.phase_name),
-            ));
+            let _ = FmtWrite::write_fmt(
+                &mut runtime_line,
+                format_args!(
+                    "usb: runtime_gate keyboard={} first_report={} first_byte={} first_byte_source={} proof_gate={} target_gate=10 next={} blocker={} detail=0x{:04x} result=0x{:08x} progress_gate={} progress_phase={} progress_phase_name={}",
+                    Self::yes_no(keyboard_ready),
+                    Self::yes_no(first_report),
+                    Self::yes_no(first_byte),
+                    first_byte_source,
+                    proof_gate,
+                    next_step,
+                    blocker,
+                    linked_detail,
+                    linked_result,
+                    linked_progress_gate,
+                    linked_progress.map_or(0, |progress| progress.phase),
+                    linked_progress.map_or("none", |progress| progress.phase_name),
+                ),
+            );
             self.emit_console_line(runtime_line.as_str());
             let acceptance_line = format_message(format_args!(
                 "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} usable={} prompt_polling={} input_observation={} death_proof=no note=hid_keyboard_requires_first_byte_for_input",
@@ -5108,16 +5212,19 @@ where
             ));
             self.emit_console_line(runtime_contract.as_str());
             let mut linked_runtime_snapshot = HeaplessString::<384>::new();
-            let _ = FmtWrite::write_fmt(&mut linked_runtime_snapshot, format_args!(
-                "usb: linked_runtime_snapshot detail=0x{:04x} result=0x{:08x} proof_gate={} source=linked-runtime-progress-cache recovery_policy={} progress_gate={} progress_phase={} progress_phase_name={}",
-                linked_detail,
-                linked_result,
-                linked_gate,
-                Self::usb_runtime_recovery_policy_for_linked_detail(linked_detail),
-                linked_progress_gate,
-                linked_progress.map_or(0, |progress| progress.phase),
-                linked_progress.map_or("none", |progress| progress.phase_name),
-            ));
+            let _ = FmtWrite::write_fmt(
+                &mut linked_runtime_snapshot,
+                format_args!(
+                    "usb: linked_runtime_snapshot detail=0x{:04x} result=0x{:08x} proof_gate={} source=linked-runtime-progress-cache recovery_policy={} progress_gate={} progress_phase={} progress_phase_name={}",
+                    linked_detail,
+                    linked_result,
+                    linked_gate,
+                    Self::usb_runtime_recovery_policy_for_linked_detail(linked_detail),
+                    linked_progress_gate,
+                    linked_progress.map_or(0, |progress| progress.phase),
+                    linked_progress.map_or("none", |progress| progress.phase_name),
+                ),
+            );
             self.emit_console_line(linked_runtime_snapshot.as_str());
             if let Some(progress) = linked_progress {
                 let raw_progress_gate = Self::usb_runtime_gate_for_progress_phase(progress.phase);
@@ -5179,8 +5286,7 @@ where
             } else {
                 let runtime_progress = format_message(format_args!(
                     "usb: runtime_progress phase=enumeration detail=0x{:04x} result=0x{:08x} queue=not-applicable",
-                    linked_detail,
-                    linked_result,
+                    linked_detail, linked_result,
                 ));
                 self.emit_console_line(runtime_progress.as_str());
             }
@@ -8020,7 +8126,11 @@ where
                 "usb: evidence boundary console_client=event-pump hal=admission-descriptor-diagnostics-only linked_runtime_owner=usb-local-seat failure_domain={} proof_gate={} target_gate=10 proof_effect={}",
                 active_blocker,
                 proof_gate,
-                if proof_gate >= 10 { "acceptance-green" } else { "acceptance-red" },
+                if proof_gate >= 10 {
+                    "acceptance-green"
+                } else {
+                    "acceptance-red"
+                },
             ));
             self.emit_console_line(boundary.as_str());
             let next = format_message(format_args!(
@@ -8659,9 +8769,17 @@ where
             Self::format_optional_usize(trace.clm_len),
             trace.board_type,
             Self::format_optional_u32(trace.reset_vector),
-            if trace.firmware_download_verified { "yes" } else { "no" },
+            if trace.firmware_download_verified {
+                "yes"
+            } else {
+                "no"
+            },
             trace.armcr4_release_attempts,
-            if trace.sr_kso_clock_ready { "yes" } else { "no" },
+            if trace.sr_kso_clock_ready {
+                "yes"
+            } else {
+                "no"
+            },
             trace.current_clock_hz,
             trace.preferred_data_clock_hz,
         ));
@@ -9531,7 +9649,11 @@ where
         };
         let boundary = format_message(format_args!(
             "wifi: evidence boundary console_client=root-net-console hal=admission-descriptor-diagnostics-only linked_runtime_owner=cyw43+sdio failure_domain={} direct_proof_gate={} proof_gate={} frontier_gate={} failing_gate={} target_gate=10",
-            active_blocker, direct_proof_gate, reported_proof_gate, reported_proof_gate, failing_gate,
+            active_blocker,
+            direct_proof_gate,
+            reported_proof_gate,
+            reported_proof_gate,
+            failing_gate,
         ));
         self.emit_console_line(boundary.as_str());
         let next = format_message(format_args!(
@@ -13119,17 +13241,38 @@ where
         if !self.stream_end_pending {
             return;
         }
+        let network_origin = matches!(self.session_origin, Some(ConsoleInputSource::Net));
+        let line_limit = if network_origin {
+            NET_PENDING_STREAM_FLUSH_LINES_PER_TURN
+        } else {
+            usize::MAX
+        };
+        let byte_limit = if network_origin {
+            NET_PENDING_STREAM_FLUSH_BYTES_PER_TURN
+        } else {
+            usize::MAX
+        };
         let Some(mut pending) = self.pending_stream.take() else {
             self.emit_stream_end_if_pending();
             return;
         };
+        let mut emitted_lines = 0usize;
+        let mut emitted_bytes = 0usize;
         while pending.next_line < pending.lines.len() {
             let line = pending.lines[pending.next_line].as_str();
+            if emitted_lines >= line_limit
+                || (emitted_lines > 0 && emitted_bytes.saturating_add(line.len()) > byte_limit)
+            {
+                self.pending_stream = Some(pending);
+                return;
+            }
             if !self.try_emit_console_line(line) {
                 self.pending_stream = Some(pending);
                 return;
             }
             pending.next_line = pending.next_line.saturating_add(1);
+            emitted_lines = emitted_lines.saturating_add(1);
+            emitted_bytes = emitted_bytes.saturating_add(line.len());
         }
         self.consume_ticket_bandwidth(pending.bandwidth_bytes);
         if let Some(cursor) = pending.cursor {
@@ -13349,11 +13492,7 @@ where
         let ttl_s = claims.budget.ttl_s().unwrap_or(0);
         let message = format!(
             "ui-ticket outcome=deny reason=expired role={} ticket={} issued_at_ms={} ttl_s={} now_ms={}",
-            role_label,
-            ticket,
-            claims.issued_at_ms,
-            ttl_s,
-            self.now_ms
+            role_label, ticket, claims.issued_at_ms, ttl_s, self.now_ms
         );
         self.audit.denied(message.as_str());
     }
@@ -15266,6 +15405,66 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn net_origin_output_samples_bursts_after_initial_window() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_local_seat(&mut local_seat);
+        pump.last_input_source = ConsoleInputSource::Net;
+
+        for idx in 0..(LOCAL_SEAT_NET_MIRROR_INITIAL_LINES + 18) {
+            let line = format_message(format_args!("REST response line {}", idx));
+            pump.emit_console_line(line.as_str());
+        }
+
+        assert_eq!(pump.metrics().local_seat_net_mirror_lines, 16);
+        assert_eq!(pump.metrics().local_seat_net_mirror_suppressed, 18);
+        assert_eq!(pump.local_seat_hdmi_pump_pass_limit(), 1);
+        drop(pump);
+        assert_eq!(net.sent.len(), 34);
+        let mirrored = local_seat.mirrored_lines_snapshot();
+        assert!(mirrored
+            .iter()
+            .any(|line| line.as_str() == "REST response line 15"));
+        assert!(!mirrored
+            .iter()
+            .any(|line| line.as_str() == "REST response line 16"));
+        assert!(!mirrored
+            .iter()
+            .any(|line| line.as_str() == "REST response line 17"));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn net_origin_mirror_sampling_keeps_stride_samples() {
+        assert!(local_seat_network_mirror_sample_allowed(0));
+        assert!(local_seat_network_mirror_sample_allowed(15));
+        assert!(!local_seat_network_mirror_sample_allowed(16));
+        assert!(!local_seat_network_mirror_sample_allowed(254));
+        assert!(local_seat_network_mirror_sample_allowed(255));
+        assert!(!local_seat_network_mirror_sample_allowed(256));
+        assert!(local_seat_network_mirror_sample_allowed(511));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn pressured_hdmi_suppresses_net_origin_mirror_after_tcp_send() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -15808,13 +16007,14 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     struct FakeNet {
-        lines: heapless::Vec<ConsoleLine, 4>,
-        sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>,
+        lines: heapless::Vec<ConsoleLine, 32>,
+        sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 64>,
         start_result: NetSelfTestStartResult,
         status: NetStatusReport,
         counters: NetCounters,
         polls: usize,
         tcp_flushes: usize,
+        tcp_flush_send_counts: heapless::Vec<usize, 32>,
         tcp_flush_activity_remaining: usize,
         exhaust_poll_budget: bool,
         exhaust_flush_budget: bool,
@@ -15832,6 +16032,7 @@ mod tests {
                 counters: NetCounters::default(),
                 polls: 0,
                 tcp_flushes: 0,
+                tcp_flush_send_counts: heapless::Vec::new(),
                 tcp_flush_activity_remaining: 0,
                 exhaust_poll_budget: false,
                 exhaust_flush_budget: false,
@@ -15870,6 +16071,7 @@ mod tests {
                 budget.charge_bytes(self.driver_task_contract().budget.max_bytes_per_turn)?;
             }
             self.tcp_flushes = self.tcp_flushes.saturating_add(1);
+            let _ = self.tcp_flush_send_counts.push(self.sent.len());
             let activity = self.tcp_flush_activity_remaining != 0;
             self.tcp_flush_activity_remaining = self.tcp_flush_activity_remaining.saturating_sub(1);
             Ok(activity)
@@ -16799,6 +17001,107 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn network_dispatch_flushes_between_batched_commands() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.tcp_flush_activity_remaining = NET_POST_DISPATCH_FLUSH_POLLS * 2 + 4;
+        for conn_id in 1..=2 {
+            let mut line = HeaplessString::new();
+            assert!(line.push_str("ping").is_ok());
+            assert!(net.lines.push(ConsoleLine::new(line, conn_id)).is_ok());
+        }
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        let metrics = pump.metrics;
+        drop(pump);
+
+        assert_eq!(net.polls, 1);
+        assert_eq!(net.tcp_flushes, NET_POST_DISPATCH_FLUSH_POLLS * 2);
+        assert_eq!(
+            metrics.net_post_dispatch_flush_polls,
+            (NET_POST_DISPATCH_FLUSH_POLLS * 2) as u64
+        );
+        assert_eq!(metrics.net_post_dispatch_flush_exhaustions, 2);
+        assert!(net
+            .tcp_flush_send_counts
+            .iter()
+            .any(|count| *count > 0 && *count < net.sent.len()));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn linked_runtime_data_ready_drains_extra_console_dispatch_rounds() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_interface = "wired";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        let line_count = CONSOLE_DISPATCH_BURST + 2;
+        for conn_id in 1..=line_count {
+            let mut line = HeaplessString::new();
+            assert!(line.push_str("ping").is_ok());
+            assert!(net
+                .lines
+                .push(ConsoleLine::new(line, conn_id as u64))
+                .is_ok());
+        }
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        let metrics = pump.metrics;
+        drop(pump);
+
+        assert_eq!(metrics.accepted_commands, line_count as u64);
+        assert_eq!(net.lines.len(), 0);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn non_data_ready_net_dispatch_stays_single_burst() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_interface = "wired";
+        net.status.address_source = "dhcp-pending";
+        net.status.dhcp_phase = "requesting";
+        let line_count = CONSOLE_DISPATCH_BURST + 2;
+        for conn_id in 1..=line_count {
+            let mut line = HeaplessString::new();
+            assert!(line.push_str("ping").is_ok());
+            assert!(net
+                .lines
+                .push(ConsoleLine::new(line, conn_id as u64))
+                .is_ok());
+        }
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        let metrics = pump.metrics;
+        drop(pump);
+
+        assert_eq!(metrics.accepted_commands, CONSOLE_DISPATCH_BURST as u64);
+        assert_eq!(net.lines.len(), line_count - CONSOLE_DISPATCH_BURST);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn pre_root_network_poll_does_not_accept_console_input() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
@@ -16885,6 +17188,37 @@ mod tests {
         pre_lease.address_source = "dhcp-pending";
         pre_lease.dhcp_phase = "requesting";
         assert!(!net_status_needs_physical_pressure_service(&pre_lease));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn linked_runtime_data_ready_enables_hot_dispatch_rounds() {
+        let mut genet = NetStatusReport::default();
+        genet.backend = "bcmgenet-v5";
+        genet.active_interface = "wired";
+        genet.address_source = "dhcp-lease";
+        genet.dhcp_phase = "bound";
+        assert_eq!(
+            net_hot_dispatch_rounds_for_status(&genet),
+            NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS
+        );
+
+        let mut wifi = genet.clone();
+        wifi.backend = "cyw43";
+        wifi.active_interface = "wifi";
+        assert_eq!(
+            net_hot_dispatch_rounds_for_status(&wifi),
+            NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS
+        );
+
+        let mut pre_dhcp = genet.clone();
+        pre_dhcp.address_source = "dhcp-pending";
+        pre_dhcp.dhcp_phase = "requesting";
+        assert_eq!(net_hot_dispatch_rounds_for_status(&pre_dhcp), 1);
+
+        let mut virtio = genet.clone();
+        virtio.backend = "virtio-net";
+        assert_eq!(net_hot_dispatch_rounds_for_status(&virtio), 1);
     }
 
     #[cfg(feature = "net-console")]
@@ -18229,6 +18563,50 @@ mod tests {
             "{rendered}"
         );
         assert!(rendered.contains("END\r\n"), "{rendered}");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn net_origin_pending_stream_chunks_without_truncating() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let total_lines = NET_PENDING_STREAM_FLUSH_LINES_PER_TURN + 3;
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.session = Some(SessionRole::Worker);
+            pump.session_origin = Some(ConsoleInputSource::Net);
+            pump.last_input_source = ConsoleInputSource::Net;
+            pump.stream_end_pending = true;
+            pump.tail_active = true;
+
+            let mut pending = PendingStream::new();
+            for index in 0..total_lines {
+                let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+                let _ = write!(line, "line-{index:02}");
+                let _ = pending.lines.push(line);
+            }
+            pending.bandwidth_bytes = pending.lines.iter().map(|line| line.len() as u64).sum();
+            pump.pending_stream = Some(pending);
+
+            pump.flush_pending_stream();
+            assert!(pump.stream_end_pending);
+            assert!(pump.pending_stream.is_some());
+            pump.flush_pending_stream();
+            assert!(!pump.stream_end_pending);
+            assert!(pump.pending_stream.is_none());
+        }
+
+        assert_eq!(net.sent.len(), total_lines + 1);
+        for index in 0..total_lines {
+            assert_eq!(net.sent[index].as_str(), format!("line-{index:02}"));
+        }
+        assert_eq!(net.sent[total_lines].as_str(), "END");
     }
 
     #[cfg(feature = "kernel")]

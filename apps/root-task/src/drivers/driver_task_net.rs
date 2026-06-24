@@ -1299,6 +1299,8 @@ struct Cyw43HostEapolSession {
     progress: Cyw43HostEapolProgress,
     started_ms: Option<u64>,
     associated_ms: Option<u64>,
+    last_pre_assoc_activity_ms: Option<u64>,
+    last_pre_assoc_activity_poll: Option<u32>,
     last_eapol_activity_ms: Option<u64>,
     last_eapol_activity_poll: Option<u32>,
     last_eapol_start_ms: Option<u64>,
@@ -1324,6 +1326,8 @@ impl Cyw43HostEapolSession {
             progress: Cyw43HostEapolProgress::default(),
             started_ms: None,
             associated_ms: None,
+            last_pre_assoc_activity_ms: None,
+            last_pre_assoc_activity_poll: None,
             last_eapol_activity_ms: None,
             last_eapol_activity_poll: None,
             last_eapol_start_ms: None,
@@ -1352,6 +1356,32 @@ impl Cyw43HostEapolSession {
             .unwrap_or(0)
     }
 
+    fn record_pre_assoc_activity(&mut self, now_ms: u64, poll: u32) {
+        if !self.progress.associated {
+            self.last_pre_assoc_activity_ms = Some(now_ms);
+            self.last_pre_assoc_activity_poll = Some(poll);
+        }
+    }
+
+    fn pre_assoc_idle_ms(&self, now_ms: u64) -> u64 {
+        self.last_pre_assoc_activity_ms
+            .or(self.started_ms)
+            .map(|last_activity| now_ms.saturating_sub(last_activity))
+            .unwrap_or(0)
+    }
+
+    fn pre_assoc_idle_polls(&self) -> u32 {
+        self.last_pre_assoc_activity_poll
+            .map(|last_activity| self.progress.polls.saturating_sub(last_activity))
+            .unwrap_or(self.progress.polls)
+    }
+
+    fn pre_assoc_timebase_ready(&self) -> bool {
+        self.last_pre_assoc_activity_ms
+            .or(self.started_ms)
+            .is_some()
+    }
+
     fn post_assoc_elapsed_ms(&self, now_ms: u64) -> u64 {
         self.associated_ms
             .map(|associated| now_ms.saturating_sub(associated))
@@ -1374,6 +1404,10 @@ impl Cyw43HostEapolSession {
         self.last_eapol_activity_poll
             .map(|last_activity| self.progress.polls.saturating_sub(last_activity))
             .unwrap_or(self.progress.post_assoc_polls)
+    }
+
+    fn post_assoc_timebase_ready(&self) -> bool {
+        self.last_eapol_activity_ms.or(self.associated_ms).is_some()
     }
 
     fn claim_timer_firstread_slot(&mut self, starts_sent: u32, now_ms: u64) -> bool {
@@ -4511,18 +4545,13 @@ fn process_cyw43_host_eapol_data_completion(
                         };
                         CYW43_HOST_EAPOL_M4.fetch_add(1, Ordering::AcqRel);
                         emit_cyw43_host_eapol_message(contract, "m4", "send-m4", poll, len);
-                        if !wait_cyw43_host_eapol_tx_drain(
+                        let m4_drain_ready = wait_cyw43_host_eapol_tx_drain(
                             contract,
                             session,
                             "m4-before-wsec",
                             poll,
                             m4_completion,
-                        )? {
-                            session.progress.record_eapol_error("host-eapol-m4-drain");
-                            return Err(DriverTaskNetError::RuntimeInit(
-                                "host-eapol-tx-drain-timeout",
-                            ));
-                        }
+                        )?;
                         let pairwise_rsc = [0u8; 6];
                         if let Err(err) = cyw43_install_wsec_key_with_pre_tx_drain(
                             contract,
@@ -4532,7 +4561,7 @@ fn process_cyw43_host_eapol_data_completion(
                             Some(&pairwise_rsc),
                             false,
                             "cyw43-host-eapol-ptk",
-                            true,
+                            m4_drain_ready,
                         ) {
                             session
                                 .progress
@@ -4736,6 +4765,12 @@ fn record_cyw43_host_eapol_event(
     stage: &'static str,
 ) {
     session.progress.record_event_frame(flags, len, event, poll);
+    if cyw43_host_eapol_join_event_type(event.event_type) {
+        session.record_pre_assoc_activity(
+            crate::hal::timebase().now_ms(),
+            poll.min(u32::MAX as usize) as u32,
+        );
+    }
     let label = cyw43_host_eapol_event_trace_label(event);
     let retained = cyw43_event_association_state_update(event).is_some()
         || cyw43_event_link_state_update(event).is_some();
@@ -4769,12 +4804,12 @@ fn cyw43_service_host_eapol_pre_assoc(
     session: &mut Cyw43HostEapolSession,
     now_ms: u64,
 ) -> bool {
-    let elapsed_ms = session.elapsed_ms(now_ms);
+    let pre_assoc_idle_ms = session.pre_assoc_idle_ms(now_ms);
     let poll = session.progress.polls as usize;
     if session.progress.associated
         || !cyw43_host_eapol_assoc_probe_due_any(
             session.progress.polls,
-            elapsed_ms,
+            pre_assoc_idle_ms,
             session.assoc_probe_attempts,
         )
     {
@@ -4794,13 +4829,14 @@ fn cyw43_service_host_eapol_pre_assoc(
     if matches!(probe, Cyw43AssocProbeResult::NotAssociated)
         && !session.progress.assoc_join_rescue_attempted
         && CYW43_PRIMARY_BSSCFG_JOIN_READY.load(Ordering::Acquire) != 0
-        && cyw43_host_eapol_assoc_rescue_due_any(session.progress.polls, elapsed_ms)
+        && cyw43_host_eapol_assoc_rescue_due_any(session.progress.polls, pre_assoc_idle_ms)
     {
         cyw43_try_host_eapol_assoc_rescue(contract, credentials, session, poll, attempt);
     }
     true
 }
 
+#[cfg(test)]
 #[cfg(feature = "kernel")]
 fn cyw43_host_eapol_assoc_probe_due(poll: u32, attempts: u8) -> bool {
     let index = usize::from(attempts);
@@ -4818,14 +4854,13 @@ fn cyw43_host_eapol_assoc_probe_due_ms(elapsed_ms: u64, attempts: u8) -> bool {
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_host_eapol_assoc_probe_due_any(poll: u32, elapsed_ms: u64, attempts: u8) -> bool {
-    cyw43_host_eapol_assoc_probe_due(poll, attempts)
-        || cyw43_host_eapol_assoc_probe_due_ms(elapsed_ms, attempts)
+fn cyw43_host_eapol_assoc_probe_due_any(_poll: u32, elapsed_ms: u64, attempts: u8) -> bool {
+    cyw43_host_eapol_assoc_probe_due_ms(elapsed_ms, attempts)
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_host_eapol_assoc_rescue_due_any(poll: u32, elapsed_ms: u64) -> bool {
-    poll >= CYW43_HOST_EAPOL_ASSOC_RESCUE_POLL || elapsed_ms >= CYW43_HOST_EAPOL_ASSOC_RESCUE_MS
+fn cyw43_host_eapol_assoc_rescue_due_any(_poll: u32, elapsed_ms: u64) -> bool {
+    elapsed_ms >= CYW43_HOST_EAPOL_ASSOC_RESCUE_MS
 }
 
 #[cfg(feature = "kernel")]
@@ -4842,11 +4877,17 @@ fn cyw43_host_eapol_join_timeout_expired(session: &Cyw43HostEapolSession, now_ms
                 session.post_assoc_eapol_idle_polls(),
             )
         };
-        return post_assoc_idle_ms >= CYW43_HOST_EAPOL_POST_ASSOC_TIMEOUT_MS
-            || post_assoc_idle_polls >= CYW43_HOST_EAPOL_POST_ASSOC_POLLS as u32;
+        return if session.post_assoc_timebase_ready() {
+            post_assoc_idle_ms >= CYW43_HOST_EAPOL_POST_ASSOC_TIMEOUT_MS
+        } else {
+            post_assoc_idle_polls >= CYW43_HOST_EAPOL_POST_ASSOC_POLLS as u32
+        };
     }
-    session.elapsed_ms(now_ms) >= CYW43_HOST_EAPOL_JOIN_TIMEOUT_MS
-        || session.progress.polls >= CYW43_HOST_EAPOL_JOIN_POLLS as u32
+    if session.pre_assoc_timebase_ready() {
+        session.pre_assoc_idle_ms(now_ms) >= CYW43_HOST_EAPOL_JOIN_TIMEOUT_MS
+    } else {
+        session.pre_assoc_idle_polls() >= CYW43_HOST_EAPOL_JOIN_POLLS as u32
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -5001,30 +5042,42 @@ fn cyw43_try_host_eapol_assoc_rescue(
         credentials,
         "cyw43-host-eapol-join-rescue",
     ) {
-        Ok(()) => emit_cyw43_host_eapol_assoc_rescue(
-            contract,
-            poll,
-            attempt,
-            "ready",
-            "firmware-not-associated-limit",
-            "bsscfg-join",
-            0,
-        ),
+        Ok(()) => {
+            session.record_pre_assoc_activity(
+                crate::hal::timebase().now_ms(),
+                poll.min(u32::MAX as usize) as u32,
+            );
+            emit_cyw43_host_eapol_assoc_rescue(
+                contract,
+                poll,
+                attempt,
+                "ready",
+                "firmware-not-associated-limit",
+                "bsscfg-join",
+                0,
+            );
+        }
         Err(Cyw43CommandSubmitError::Completion(completion))
             if cyw43_join_iovar_completion_allows_set_ssid(completion) =>
         {
             session.progress.record_assoc_set_ssid_rescue_attempt();
             match cyw43_submit_bcdc_ssid(contract, credentials, "cyw43-host-eapol-set-ssid-rescue")
             {
-                Ok(()) => emit_cyw43_host_eapol_assoc_rescue(
-                    contract,
-                    poll,
-                    attempt,
-                    "ready",
-                    "bsscfg-join-unsupported-fallback",
-                    "set-ssid-fallback",
-                    0,
-                ),
+                Ok(()) => {
+                    session.record_pre_assoc_activity(
+                        crate::hal::timebase().now_ms(),
+                        poll.min(u32::MAX as usize) as u32,
+                    );
+                    emit_cyw43_host_eapol_assoc_rescue(
+                        contract,
+                        poll,
+                        attempt,
+                        "ready",
+                        "bsscfg-join-unsupported-fallback",
+                        "set-ssid-fallback",
+                        0,
+                    );
+                }
                 Err(_) => emit_cyw43_host_eapol_assoc_rescue(
                     contract,
                     poll,
@@ -5071,39 +5124,33 @@ fn cyw43_service_host_eapol_post_assoc(
     let post_assoc_elapsed_ms = session.post_assoc_elapsed_ms(now_ms);
     let mut activity = false;
     session.progress.post_assoc_polls = session.progress.post_assoc_polls.saturating_add(1);
-    if cyw43_host_eapol_post_assoc_refresh_due(&session.progress, session.refreshed_after_assoc)
-        || cyw43_host_eapol_post_assoc_refresh_due_ms(
-            &session.progress,
-            post_assoc_elapsed_ms,
-            session.refreshed_after_assoc,
-        )
-    {
+    if cyw43_host_eapol_post_assoc_refresh_due_ms(
+        &session.progress,
+        post_assoc_elapsed_ms,
+        session.refreshed_after_assoc,
+    ) {
         let _ = cyw43_refresh_host_eapol_rx_after_assoc(contract);
         session.refreshed_after_assoc = true;
         activity = true;
         emit_cyw43_host_eapol_status(contract, "rx-admission-refresh", &session.progress);
     }
-    if cyw43_host_eapol_post_assoc_rescue_due(&session.progress, session.rescued_after_assoc)
-        || cyw43_host_eapol_post_assoc_rescue_due_ms(
-            &session.progress,
-            post_assoc_elapsed_ms,
-            session.rescued_after_assoc,
-        )
-    {
+    if cyw43_host_eapol_post_assoc_rescue_due_ms(
+        &session.progress,
+        post_assoc_elapsed_ms,
+        session.rescued_after_assoc,
+    ) {
         let _ = cyw43_rescue_host_eapol_rx_after_assoc(contract);
         session.rescued_after_assoc = true;
         activity = true;
         emit_cyw43_host_eapol_status(contract, "rx-admission-rescue", &session.progress);
     }
     let start_sent = CYW43_HOST_EAPOL_START.load(Ordering::Acquire);
-    if cyw43_host_eapol_start_due(session.progress.post_assoc_polls as usize, start_sent)
-        || cyw43_host_eapol_start_due_ms(
-            post_assoc_elapsed_ms,
-            start_sent,
-            session.last_eapol_start_ms,
-            now_ms,
-        )
-    {
+    if cyw43_host_eapol_start_due_ms(
+        post_assoc_elapsed_ms,
+        start_sent,
+        session.last_eapol_start_ms,
+        now_ms,
+    ) {
         if cyw43_refresh_host_eapol_bssid_after_assoc(contract, station_mac, session) {
             activity = true;
         }
@@ -5256,6 +5303,7 @@ fn cyw43_try_send_host_eapol_start(
 }
 
 #[must_use]
+#[cfg(test)]
 const fn cyw43_host_eapol_start_due(poll: usize, sent: u32) -> bool {
     sent < CYW43_HOST_EAPOL_START_MAX
         && poll >= CYW43_HOST_EAPOL_START_FIRST_POLL
@@ -5263,6 +5311,7 @@ const fn cyw43_host_eapol_start_due(poll: usize, sent: u32) -> bool {
 }
 
 #[must_use]
+#[cfg(test)]
 const fn cyw43_host_eapol_start_poll_due(poll: usize) -> bool {
     poll % CYW43_HOST_EAPOL_START_INTERVAL_POLLS == 0
 }
@@ -5352,6 +5401,7 @@ const fn cyw43_host_eapol_pre_assoc_rx_firstread_due(poll: usize) -> bool {
         || (poll != 0 && poll % CYW43_HOST_EAPOL_START_INTERVAL_POLLS == 0)
 }
 
+#[cfg(test)]
 const fn cyw43_host_eapol_post_assoc_refresh_due(
     progress: &Cyw43HostEapolProgress,
     refreshed: bool,
@@ -5374,6 +5424,7 @@ const fn cyw43_host_eapol_post_assoc_refresh_due_ms(
 }
 
 #[cfg(feature = "kernel")]
+#[cfg(test)]
 fn cyw43_host_eapol_post_assoc_rescue_due(
     progress: &Cyw43HostEapolProgress,
     rescued: bool,
@@ -13414,7 +13465,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn host_eapol_m4_tx_drain_timeout_remains_fatal() {
+    fn host_eapol_m4_tx_drain_timeout_is_advisory_before_key_install() {
         let _guard = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 replay tests must serialize");
@@ -13454,7 +13505,7 @@ mod tests {
         let mut m3 = [0u8; MAX_FRAME_LEN];
         let m3_len = cyw43_host_eapol::write_test_m3_frame(&mut m3, &station, &session.eapol)
             .expect("test m3 frame");
-        let err = process_cyw43_host_eapol_data_completion(
+        let m3_result = process_cyw43_host_eapol_data_completion(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             EthernetAddress(station),
             &mut session,
@@ -13467,14 +13518,53 @@ mod tests {
             ),
             &mut tx_frame,
         )
-        .expect_err("M4 drain timeout must still stop key install");
+        .expect("M4 drain timeout after submitted M4 must not block key install");
+
+        assert!(m3_result.observed_frame);
+        assert!(m3_result.secure);
+        assert_eq!(session.progress.eapol_error, None);
+        assert_eq!(CYW43_HOST_EAPOL_M4.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_PTK.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_GTK.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_HOST_EAPOL_TEST_TX_DRAINED.load(Ordering::Acquire), 2);
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_PTK.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.load(Ordering::Acquire),
+            0
+        );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_missing_m4_tx_proof_remains_fatal() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 replay tests must serialize");
+        reset_cyw43_status_flags();
+
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+
+        let err = wait_cyw43_host_eapol_tx_drain(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &mut session,
+            "m4-before-wsec",
+            8197,
+            DriverTaskCompletionRecord::progress(0, 143),
+        )
+        .expect_err("missing submitted-sequence proof must stay fatal");
 
         assert_eq!(
             err,
-            DriverTaskNetError::RuntimeInit("host-eapol-tx-drain-timeout")
+            DriverTaskNetError::RuntimeInit("host-eapol-tx-drain-proof")
         );
-        assert_eq!(session.progress.eapol_error, Some("host-eapol-m4-drain"));
-        assert_eq!(CYW43_HOST_EAPOL_M4.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_HOST_EAPOL_PTK.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_HOST_EAPOL_GTK.load(Ordering::Acquire), 0);
         reset_cyw43_status_flags();
@@ -13599,8 +13689,8 @@ mod tests {
         assert!(!cyw43_host_eapol_join_timeout_expired(&session, 0));
         session.progress.polls = CYW43_HOST_EAPOL_JOIN_POLLS as u32;
         assert!(
-            cyw43_host_eapol_join_timeout_expired(&session, 0),
-            "poll progress must still bound join if the pump timebase is not advancing"
+            !cyw43_host_eapol_join_timeout_expired(&session, 0),
+            "poll progress must not stand in for elapsed association time"
         );
         session.progress.polls = 0;
         assert!(cyw43_host_eapol_join_timeout_expired(
@@ -13627,8 +13717,8 @@ mod tests {
         ));
         session.progress.post_assoc_polls = CYW43_HOST_EAPOL_POST_ASSOC_POLLS as u32;
         assert!(
-            cyw43_host_eapol_join_timeout_expired(&session, associated_at),
-            "post-association poll progress must bound the second half of the handshake"
+            !cyw43_host_eapol_join_timeout_expired(&session, associated_at),
+            "poll progress must not stand in for elapsed post-association time"
         );
         session.progress.post_assoc_polls = 0;
         assert!(cyw43_host_eapol_join_timeout_expired(
@@ -13652,7 +13742,7 @@ mod tests {
         let old_deadline = associated_at + CYW43_HOST_EAPOL_POST_ASSOC_TIMEOUT_MS;
         assert!(
             cyw43_host_eapol_join_timeout_expired(&session, old_deadline),
-            "without EAPOL activity the association-time deadline and poll cap still apply"
+            "without EAPOL activity the association-time deadline still applies"
         );
 
         let m1_replay_ms = old_deadline.saturating_sub(1);
@@ -13670,8 +13760,44 @@ mod tests {
         ));
         session.progress.polls = m1_replay_poll + CYW43_HOST_EAPOL_POST_ASSOC_POLLS as u32;
         assert!(
-            cyw43_host_eapol_join_timeout_expired(&session, m1_replay_ms + 1),
-            "fresh EAPOL activity should also refresh the post-association poll cap"
+            !cyw43_host_eapol_join_timeout_expired(&session, m1_replay_ms + 1),
+            "post-association poll progress must not expire a fresh EAPOL activity window"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_pre_assoc_activity_extends_join_timeout() {
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        let started_at = 10_000;
+        session.record_time(started_at);
+        session.progress.polls = CYW43_HOST_EAPOL_JOIN_POLLS as u32;
+
+        let old_deadline = started_at + CYW43_HOST_EAPOL_JOIN_TIMEOUT_MS;
+        assert!(
+            cyw43_host_eapol_join_timeout_expired(&session, old_deadline),
+            "without association activity the original join deadline still applies"
+        );
+
+        let rescue_ms = old_deadline.saturating_sub(1);
+        let rescue_poll = CYW43_HOST_EAPOL_PRE_ASSOC_POLLS as u32;
+        session.progress.polls = rescue_poll + 1;
+        session.record_pre_assoc_activity(rescue_ms, rescue_poll);
+        assert!(
+            !cyw43_host_eapol_join_timeout_expired(&session, old_deadline),
+            "a fresh auth event or join rescue must keep association pending"
+        );
+        assert!(cyw43_host_eapol_join_timeout_expired(
+            &session,
+            rescue_ms + CYW43_HOST_EAPOL_JOIN_TIMEOUT_MS
+        ));
+        session.progress.polls = rescue_poll + CYW43_HOST_EAPOL_JOIN_POLLS as u32;
+        assert!(
+            !cyw43_host_eapol_join_timeout_expired(&session, rescue_ms + 1),
+            "pre-association poll progress must not expire a fresh rescue window"
         );
     }
 
@@ -13820,10 +13946,10 @@ mod tests {
         assert!(!cyw43_host_eapol_assoc_probe_due_ms(1_023, 0));
         assert!(cyw43_host_eapol_assoc_probe_due_ms(4_096, 1));
         assert!(!cyw43_host_eapol_assoc_probe_due_ms(4_095, 1));
-        assert!(cyw43_host_eapol_assoc_probe_due_any(1_024, 0, 0));
+        assert!(!cyw43_host_eapol_assoc_probe_due_any(1_024, 0, 0));
         assert!(cyw43_host_eapol_assoc_probe_due_any(0, 1_024, 0));
         assert!(!cyw43_host_eapol_assoc_probe_due_any(1_023, 1_023, 0));
-        assert!(cyw43_host_eapol_assoc_rescue_due_any(
+        assert!(!cyw43_host_eapol_assoc_rescue_due_any(
             CYW43_HOST_EAPOL_ASSOC_RESCUE_POLL,
             0
         ));

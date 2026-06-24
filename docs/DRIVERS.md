@@ -1295,11 +1295,13 @@ context and the retry/poll window.
 - Host-EAPOL admits the PAE group multicast, sends bounded EAPOL-Start frames
   through the linked CYW43 `ETH_TX` descriptor while waiting for AP M1, derives
   PMK/PTK locally, writes M2/M4 in WPA2-PSK order, verifies M3 MIC/replay state,
-  drains the submitted M4 before PTK/GTK `wsec_key` install, sends those
-  `wsec_key` installs through the runtime `CONTROL_EXCHANGE` path with the
-  old-good reply window, unwraps GTK with AES-128 key unwrap, waits after Group
-  M2 before secure release when the GTK arrives in the group-key handshake,
-  restores the Linux-unicast-M1 RX admission mode, and only then reports secure
+  attempts a bounded post-M4 SDPCM credit drain, then treats a valid M4 TX
+  completion as enough to proceed to PTK/GTK `wsec_key` install when no later
+  credit is observed. Missing M4 TX proof and `wsec_key` failures remain fatal.
+  Those `wsec_key` installs use the runtime `CONTROL_EXCHANGE` path with the
+  old-good reply window, unwrap GTK with AES-128 key unwrap, wait after Group M2
+  before secure release when the GTK arrives in the group-key handshake, restore
+  the Linux-unicast-M1 RX admission mode, and only then report secure
   completion. EAPOL TX uses the extended SDPCM data shape with BDC priority `6`;
   control writes may wait for CDC replies, but data/event writes must not
   inherit a control-plane reply wait.

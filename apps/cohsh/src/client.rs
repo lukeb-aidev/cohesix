@@ -7,10 +7,10 @@
 
 use std::collections::VecDeque;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use cohesix_ticket::Role;
 use cohsh_core::{
-    normalize_ticket, Secure9pClient, Secure9pError, Secure9pTransport, TicketPolicy,
+    Secure9pClient, Secure9pError, Secure9pTransport, TicketPolicy, normalize_ticket,
 };
 use secure9p_codec::{OpenMode, Qid};
 

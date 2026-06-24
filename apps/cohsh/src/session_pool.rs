@@ -6,7 +6,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use cohesix_ticket::Role;
 
 use crate::{Session, Transport};
@@ -216,7 +216,7 @@ impl Drop for PoolLease {
 mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
-    use anyhow::{anyhow, Result};
+    use anyhow::{Result, anyhow};
     use cohesix_ticket::Role;
     use secure9p_codec::SessionId;
 
