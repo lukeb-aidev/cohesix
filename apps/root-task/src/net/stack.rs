@@ -6543,6 +6543,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 #[cfg(feature = "kernel")]
 const NET_RING_FLAG_BUDGETED: u16 = 1;
 const GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 8;
+const CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 4;
 const DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
 const DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
 const GENET_TCP_FAST_PATH_EXTRA_TURNS: usize = 1;
@@ -6571,10 +6572,14 @@ fn net_driver_task_hot_path(
 
 #[cfg(feature = "kernel")]
 fn driver_task_pre_poll_burst_limit(hot_path: crate::hal::driver_task::DriverTaskHotPath) -> usize {
-    if hot_path == crate::hal::driver_task::DriverTaskHotPath::GenetNic {
-        GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT
-    } else {
-        DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT
+    match hot_path {
+        crate::hal::driver_task::DriverTaskHotPath::GenetNic => {
+            GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT
+        }
+        crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi => {
+            CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT
+        }
+        _ => DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT,
     }
 }
 
@@ -7255,9 +7260,10 @@ mod tests {
     #[test]
     fn cyw43_tcp_phase_accounting_fits_after_pre_poll() {
         let contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
-        let pre_poll_ops = 4u16;
-        let pre_poll_frames = 1u16;
-        let pre_poll_bytes = DRIVER_TASK_PRE_POLL_TURN_BYTES;
+        let pre_poll_ops = (CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u16).saturating_mul(4);
+        let pre_poll_frames = CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u16;
+        let pre_poll_bytes = (CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u32)
+            .saturating_mul(DRIVER_TASK_PRE_POLL_TURN_BYTES);
         let tcp_ops = 64u16;
         let tcp_frames = MAX_CONSOLE_FRAMES_PER_POLL as u16;
         let tcp_bytes = TCP_SERVICE_BYTES_PER_TURN;
@@ -7265,6 +7271,25 @@ mod tests {
         assert!(pre_poll_ops.saturating_add(tcp_ops) <= contract.budget.max_ops_per_turn);
         assert!(pre_poll_frames.saturating_add(tcp_frames) <= contract.budget.max_frames_per_turn);
         assert!(pre_poll_bytes.saturating_add(tcp_bytes) <= contract.budget.max_bytes_per_turn);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn driver_task_pre_poll_burst_limits_are_role_scoped() {
+        assert_eq!(
+            driver_task_pre_poll_burst_limit(crate::hal::driver_task::DriverTaskHotPath::GenetNic),
+            GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT
+        );
+        assert_eq!(
+            driver_task_pre_poll_burst_limit(crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi),
+            CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT
+        );
+        assert_eq!(
+            driver_task_pre_poll_burst_limit(
+                crate::hal::driver_task::DriverTaskHotPath::SerialConsole
+            ),
+            DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT
+        );
     }
 
     #[cfg(feature = "kernel")]

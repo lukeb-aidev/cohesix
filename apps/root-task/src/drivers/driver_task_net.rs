@@ -31,7 +31,8 @@ use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
     DriverTaskCompletionCode, DriverTaskCompletionRecord, DriverTaskContract, DriverTaskFaultCode,
     DriverTaskHotPath, DriverTaskStagingSegment, CYW43_WIFI_DRIVER_TASK_CONTRACT,
-    GENET_DRIVER_TASK_CONTRACT, MAX_DRIVER_TASK_FRAME_BYTES, SDIO_HOST_DRIVER_TASK_CONTRACT,
+    DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH, GENET_DRIVER_TASK_CONTRACT, MAX_DRIVER_TASK_FRAME_BYTES,
+    SDIO_HOST_DRIVER_TASK_CONTRACT,
 };
 use crate::hal::{HalError, Hardware};
 use crate::net::{
@@ -6760,67 +6761,8 @@ const fn cyw43_data_tx_request_len(unpadded_len: usize) -> usize {
 }
 
 #[cfg(feature = "kernel")]
-const fn cyw43_data_tx_block_request_len(unpadded_len: usize) -> usize {
-    let aligned = align4(unpadded_len);
-    if aligned <= CYW43_FUNCTION2_BLOCK_BYTES {
-        CYW43_FUNCTION2_BLOCK_BYTES
-    } else {
-        let remainder = aligned % CYW43_FUNCTION2_BLOCK_BYTES;
-        if remainder == 0 {
-            aligned
-        } else {
-            aligned + (CYW43_FUNCTION2_BLOCK_BYTES - remainder)
-        }
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn cyw43_data_tx_request_len_for_frame(frame: &[u8], unpadded_len: usize) -> (usize, bool) {
-    if cyw43_data_tx_prefers_block_mode(frame) {
-        (cyw43_data_tx_block_request_len(unpadded_len), true)
-    } else {
-        (cyw43_data_tx_request_len(unpadded_len), false)
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn cyw43_data_tx_prefers_block_mode(frame: &[u8]) -> bool {
-    match cyw43_ethertype(frame) {
-        Some(CYW43_ETH_P_ARP) => true,
-        Some(CYW43_ETH_P_IPV4) => !cyw43_ipv4_udp_ports_are_dhcp(frame),
-        Some(ETH_P_EAPOL) => false,
-        _ => false,
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn cyw43_ipv4_udp_ports_are_dhcp(frame: &[u8]) -> bool {
-    if cyw43_ethertype(frame) != Some(CYW43_ETH_P_IPV4) {
-        return false;
-    }
-    let Some(version_ihl) = frame.get(ETH_HEADER_LEN).copied() else {
-        return false;
-    };
-    if version_ihl >> 4 != 4 {
-        return false;
-    }
-    let ip_header_len = usize::from(version_ihl & 0x0f) * 4;
-    if ip_header_len < 20 {
-        return false;
-    }
-    if frame.get(ETH_HEADER_LEN + 9).copied() != Some(CYW43_IP_PROTO_UDP) {
-        return false;
-    }
-    let Some(udp_offset) = ETH_HEADER_LEN.checked_add(ip_header_len) else {
-        return false;
-    };
-    let Some(udp_src) = cyw43_get_u16_be(frame, udp_offset) else {
-        return false;
-    };
-    let Some(udp_dst) = cyw43_get_u16_be(frame, udp_offset + 2) else {
-        return false;
-    };
-    cyw43_udp_ports_are_dhcp(udp_src, udp_dst)
+fn cyw43_data_tx_request_len_for_frame(_frame: &[u8], unpadded_len: usize) -> (usize, bool) {
+    (cyw43_data_tx_request_len(unpadded_len), false)
 }
 
 #[cfg(feature = "kernel")]
@@ -9596,6 +9538,14 @@ const fn cyw43_runtime_descriptor_uses_prompt_slice(op: u16) -> bool {
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_runtime_descriptor_quiet_hot_path(op: u16) -> bool {
+    matches!(
+        op,
+        DRIVER_RUNTIME_CYW43_OP_ETH_TX | DRIVER_RUNTIME_CYW43_OP_RX_POLL
+    )
+}
+
+#[cfg(feature = "kernel")]
 const fn cyw43_runtime_descriptor_blocks_net_pre_poll(op: u16) -> bool {
     cyw43_runtime_descriptor_uses_prompt_slice(op)
 }
@@ -11218,6 +11168,9 @@ fn run_cyw43_runtime_descriptor_command(
         staged_descriptor,
     );
     command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+    if cyw43_runtime_descriptor_quiet_hot_path(descriptor.op) {
+        command.flags |= DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH;
+    }
     let use_prompt_slice = cyw43_runtime_descriptor_uses_prompt_slice(descriptor.op);
     let no_reply_resume_limit = if use_prompt_slice {
         cyw43_runtime_no_reply_resume_limit(descriptor.op)
@@ -14192,7 +14145,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_shape_preserves_boot_frames_and_promotes_steady_frames() {
+    fn cyw43_data_tx_shape_keeps_short_single_frames_in_byte_mode() {
         let dhcp_discover =
             test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
         let dhcp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_discover.len();
@@ -14224,11 +14177,22 @@ mod tests {
         let (arp_request_len, arp_block_mode) =
             cyw43_data_tx_request_len_for_frame(&arp_reply, arp_total_len);
         assert_eq!(arp_total_len, 72);
-        assert_eq!(arp_request_len, CYW43_FUNCTION2_BLOCK_BYTES);
-        assert!(arp_block_mode);
+        assert_eq!(arp_request_len, cyw43_data_tx_request_len(arp_total_len));
+        assert!(!arp_block_mode);
         assert_eq!(
             cyw43_function2_data_tx_cmd53_shape(arp_request_len, arp_block_mode),
-            (CYW43_FUNCTION2_BLOCK_BYTES as u16, 1)
+            (arp_request_len as u16, 0)
+        );
+
+        let udp_frame = test_cyw43_dhcp_frame(3, 49152, 31337);
+        let udp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + udp_frame.len();
+        let (udp_request_len, udp_block_mode) =
+            cyw43_data_tx_request_len_for_frame(&udp_frame, udp_total_len);
+        assert_eq!(udp_request_len, cyw43_data_tx_request_len(udp_total_len));
+        assert!(!udp_block_mode);
+        assert_eq!(
+            cyw43_function2_data_tx_cmd53_shape(udp_request_len, udp_block_mode),
+            (udp_request_len as u16, 0)
         );
     }
 
@@ -16103,22 +16067,34 @@ mod tests {
         assert!(cyw43_runtime_descriptor_uses_prompt_slice(
             DRIVER_RUNTIME_CYW43_OP_RX_POLL
         ));
+        assert!(cyw43_runtime_descriptor_quiet_hot_path(
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL
+        ));
         assert!(cyw43_runtime_descriptor_blocks_net_pre_poll(
             DRIVER_RUNTIME_CYW43_OP_RX_POLL
         ));
         assert!(cyw43_runtime_descriptor_uses_prompt_slice(
             DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
         ));
+        assert!(!cyw43_runtime_descriptor_quiet_hot_path(
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
+        ));
         assert!(cyw43_runtime_descriptor_blocks_net_pre_poll(
             DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL
         ));
         assert!(cyw43_runtime_descriptor_uses_prompt_slice(
             DRIVER_RUNTIME_CYW43_OP_ETH_TX
         ));
+        assert!(cyw43_runtime_descriptor_quiet_hot_path(
+            DRIVER_RUNTIME_CYW43_OP_ETH_TX
+        ));
         assert!(cyw43_runtime_descriptor_blocks_net_pre_poll(
             DRIVER_RUNTIME_CYW43_OP_ETH_TX
         ));
         assert!(!cyw43_runtime_descriptor_uses_prompt_slice(
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+        ));
+        assert!(!cyw43_runtime_descriptor_quiet_hot_path(
             DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
         ));
         assert!(!cyw43_runtime_descriptor_blocks_net_pre_poll(

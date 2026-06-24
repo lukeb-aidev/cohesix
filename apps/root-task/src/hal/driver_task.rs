@@ -1300,6 +1300,9 @@ pub const DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE: u16 = 1 << 14;
 /// The linked runtime must not issue `Reply` for these commands because `NbSend`
 /// does not install a reply cap. Completion still travels through the shared ring.
 pub const DRIVER_TASK_RING_FLAG_ONE_WAY: u16 = DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+/// Command flag used by root to keep proven high-frequency dataplane turns out
+/// of serial timeout/progress tracing while preserving fault and budget traces.
+pub const DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH: u16 = 1 << 12;
 /// Any ring flag that prevents owner-state credit.
 pub const DRIVER_TASK_RING_NON_ACCEPTANCE_FLAGS: u16 =
     DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE
@@ -5774,12 +5777,21 @@ fn driver_task_ring_completion_trace_enabled(
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_ring_timeout_trace_enabled(trace_call: bool, contract: DriverTaskContract) -> bool {
-    trace_call
-        || matches!(
-            contract.kind,
-            DriverTaskKind::WiredNic | DriverTaskKind::WifiNic
-        )
+fn driver_task_ring_timeout_trace_enabled(
+    trace_call: bool,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> bool {
+    if trace_call {
+        return true;
+    }
+    if command.flags & DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH != 0 {
+        return false;
+    }
+    matches!(
+        contract.kind,
+        DriverTaskKind::WiredNic | DriverTaskKind::WifiNic
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -6707,7 +6719,8 @@ fn run_driver_task_ring_command_with_mode_and_staging(
         }
         if completion.sequence != request as u32 {
             driver_task_counter_add(&slot.counters.timeouts, 1);
-            let trace_timeout = driver_task_ring_timeout_trace_enabled(trace_call, contract);
+            let trace_timeout =
+                driver_task_ring_timeout_trace_enabled(trace_call, contract, command);
             let progress = driver_task_ring_read_progress_record(ring_root_ptr);
             timeout_progress = progress;
             progress_advanced = driver_task_ring_progress_advanced_for_request(
@@ -6823,7 +6836,9 @@ fn run_driver_task_ring_command_with_mode_and_staging(
     if keep_active_on_timeout {
         driver_task_counter_add(&slot.counters.keep_active_timeouts, 1);
     }
-    if keep_active_on_timeout && driver_task_ring_timeout_trace_enabled(trace_call, contract) {
+    if keep_active_on_timeout
+        && driver_task_ring_timeout_trace_enabled(trace_call, contract, command)
+    {
         emit_driver_task_ring_call_keep_active(
             contract,
             endpoint,
@@ -10557,8 +10572,19 @@ mod tests {
         ));
         assert!(driver_task_ring_timeout_trace_enabled(
             false,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            rx_command
         ));
+        let quiet_rx_command = DriverTaskCommandRecord {
+            flags: DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH,
+            ..rx_command
+        };
+        assert!(!driver_task_ring_timeout_trace_enabled(
+            false,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            quiet_rx_command
+        ));
+        assert!(quiet_rx_command.owner_state_credit_eligible());
 
         let non_acceptance_command = DriverTaskCommandRecord {
             flags: DRIVER_TASK_RING_FLAG_INIT_DESCRIPTOR_NON_ACCEPTANCE,
@@ -14467,7 +14493,8 @@ mod tests {
         ));
         assert!(driver_task_ring_timeout_trace_enabled(
             false,
-            GENET_DRIVER_TASK_CONTRACT
+            GENET_DRIVER_TASK_CONTRACT,
+            tx_command
         ));
 
         let init_command = DriverTaskCommandRecord {
