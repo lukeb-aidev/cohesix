@@ -222,7 +222,7 @@ _Generated from cohsh-core verb specs (20 verbs)._
 - `reboot` — requests a platform reboot and returns `OK REBOOT detail=scheduled` before the reset backend fires.
 - TCP `cohsh reboot` uses the existing TCP console auth token (`--auth-token`, `COHSH_AUTH_TOKEN`, or `COH_AUTH_TOKEN`) plus an attached Queen session; no new network listener or reboot-specific secret is introduced.
 - Serial/local-seat reboot requires a Queen session attached with a Queen ticket minted from the same manifest Queen secret. A bare `attach queen` remains usable for ordinary diagnostics but is refused for reboot with `ERR REBOOT reason=policy detail=secret-required`.
-- On Pi 4 U-Boot profiles, authenticated reboot best-effort marks one-shot BCM2711 PM RSTS fast-boot state before arming reset, using both the existing high marker and a low marker bit that is disjoint from the Raspberry Pi firmware partition selector. Root-task orders and drains the marker write before arming reset, but PM RSTS readback is not reliable enough to gate reset on live hardware. The generated `boot.cmd` accepts either marker, clears both when present, and boots saved `cohesix.env` policy or manifest defaults without showing the U-Boot wizard. Cold boots still enter the splash/menu path, where the default first action continues with saved policy or manifest defaults.
+- On Pi 4 U-Boot profiles, authenticated reboot best-effort marks one-shot BCM2711 PM RSTS fast-boot state before arming reset, using both the existing high marker and a low marker bit that is disjoint from the Raspberry Pi firmware partition selector. Root-task orders and drains the marker write before arming reset, but PM RSTS readback is not reliable enough to gate reset on live hardware. The generated `boot.cmd` forces serial input before loading Cohesix policy or checking the marker, accepts either marker, clears both when present, and boots saved `cohesix.env` policy or manifest defaults without showing the U-Boot wizard. Cold boots still enter the splash/menu path, where the default first action continues with saved policy or manifest defaults.
 - If the marker is not visible to U-Boot, the generated script emits one bounded `fast boot marker absent` line with the observed RSTS/high/low marker values before entering the normal cold-boot menu. This diagnostic does not bypass the menu and does not create persistent boot policy.
 - If the selected profile has no registered platform reset backend, root-task returns `ERR REBOOT reason=policy detail=reboot-backend-unavailable` and does not alter lifecycle state.
 
@@ -594,6 +594,16 @@ QEMU runs with `-serial mon:stdio` and a user-net device that forwards TCP/UDP p
   receive counters: `tcp_recv_ready=<count>` records receive-ready turns and
   `tcp_recv_budget_hits=<count>` records turns that exhausted the bounded
   receive budget.
+- `netstats` emits post-dispatch TCP response-flush counters:
+  `tcp_post_flush_polls=<count>` records bounded flush polls after
+  network-origin commands, and `tcp_post_flush_exhaustions=<count>` records
+  batches that still had TCP work at the flush cap.
+- `netstats` emits local-seat HDMI pressure counters for remote console output:
+  `local_seat_net_mirror=<count>` records network-origin lines accepted for
+  best-effort HDMI mirroring, `local_seat_net_mirror_suppressed=<count>`
+  records lines sent to TCP but skipped for HDMI because display work was
+  already pressured, and the same line reports bounded HDMI pending/no-reply
+  counters when a local seat is attached.
 - `netstats` emits driver TX and ARP edge counters:
   `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`.
 - `netstats` emits a Wi-Fi/EAPOL line: `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1> wifi_rxq_cur=<count> wifi_rxq_hwm=<count> wifi_rxq_drops=<count>`.

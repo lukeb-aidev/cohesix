@@ -11943,6 +11943,7 @@ fn genet_runtime_poll_rx(
     if !state.initialized {
         return GenetRxPoll::Idle;
     }
+    genet_runtime_poll_tx_completions(state);
     let drain_budget = match genet_rx_budget_limit(budget) {
         Ok(limit) => limit,
         Err(detail) => return GenetRxPoll::BudgetExhausted(detail),
@@ -11969,7 +11970,6 @@ fn genet_runtime_poll_rx(
             flags,
         };
     }
-    genet_runtime_poll_tx_completions(state);
     let descriptor = RUNTIME_DESCRIPTOR.load();
     let Some(dma_range) = runtime_resource_range(
         &descriptor,
@@ -23282,6 +23282,48 @@ mod tests {
     fn genet_tx_completion_reclaim_budget_caps_one_service_turn() {
         assert_eq!(GENET_TX_COMPLETION_RECLAIM_BUDGET, GENET_ACTIVE_RING_DESCS);
         assert!(GENET_TX_COMPLETION_RECLAIM_BUDGET <= GENET_ACTIVE_RING_DESCS);
+    }
+
+    #[test]
+    fn genet_rx_poll_reclaims_tx_before_preserved_rx_frame() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let payload = *b"queued-frame";
+        let mut state = GenetRuntimeState::new();
+        state.initialized = true;
+        state.tx_prod_index = 1;
+        state.tx_cons_index = 0;
+        genet_write32(GENET_TDMA_CONS_INDEX, 1);
+        assert!(genet_rx_queue_push_for_test(&mut state, &payload));
+
+        assert_eq!(
+            genet_runtime_poll_rx(
+                &mut state,
+                DriverTaskBudgetGrant {
+                    max_ops: 1,
+                    max_frames: 1,
+                    max_bytes: payload.len() as u32,
+                }
+            ),
+            GenetRxPoll::Frame {
+                len: payload.len(),
+                flags: 0,
+            }
+        );
+
+        assert_eq!(state.tx_completions, 1);
+        assert_eq!(state.tx_last_reclaim, 1);
+        assert_eq!(state.tx_last_in_flight, 0);
+        assert_eq!(state.tx_last_free, GENET_ACTIVE_RING_DESCS as u16);
+        assert_eq!(usize::from(state.rx_queue_count), 0);
+        assert_eq!(
+            read_frame_prefix::<12>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: payload.len() as u16,
+                flags: 0,
+            }),
+            payload
+        );
     }
 
     #[test]

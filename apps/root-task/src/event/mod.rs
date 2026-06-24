@@ -228,7 +228,7 @@ const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
 // Network-origin NineDoor commands may enqueue multiple TCP response segments;
 // keep a small bounded flush window so replies are not deferred behind later
 // event-loop work during Genet bursts.
-const NET_POST_DISPATCH_FLUSH_POLLS: usize = 6;
+const NET_POST_DISPATCH_FLUSH_POLLS: usize = 8;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
@@ -1073,6 +1073,14 @@ pub struct PumpMetrics {
     pub local_seat_output_keyboard_polls: u64,
     /// Queued HDMI mirror frames submitted during idle local-seat display turns.
     pub local_seat_hdmi_pump_turns: u64,
+    /// Network-origin lines accepted for best-effort HDMI mirroring.
+    pub local_seat_net_mirror_lines: u64,
+    /// Network-origin lines skipped because HDMI was already pressured.
+    pub local_seat_net_mirror_suppressed: u64,
+    /// Post-dispatch TCP flush polls run after network-origin commands.
+    pub net_post_dispatch_flush_polls: u64,
+    /// Network-origin command batches that still had TCP work after the flush cap.
+    pub net_post_dispatch_flush_exhaustions: u64,
     /// Physical-console output records deferred behind active keyboard input.
     pub physical_console_output_deferred: u64,
     /// Deferred physical-console output records flushed during idle turns.
@@ -1992,10 +2000,20 @@ where
                 if !net_status_needs_host_eapol_burst(&net.status_report()) {
                     break;
                 }
-                let Some(budget) = net_budget.as_mut() else {
-                    break;
+                let mut burst_budget = match DriverServiceBudget::new(net_contract) {
+                    Ok(budget) => budget,
+                    Err(err) => {
+                        let message = format_message(format_args!(
+                            "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                            net_contract.name,
+                            err.reason(),
+                            net_contract.max_service_us(),
+                        ));
+                        self.audit.denied(message.as_str());
+                        break;
+                    }
                 };
-                match net.poll_with_budget(self.now_ms, budget) {
+                match net.poll_with_budget(self.now_ms, &mut burst_budget) {
                     Ok(polled) => activity |= polled,
                     Err(err) => {
                         let message = format_message(format_args!(
@@ -2053,6 +2071,8 @@ where
             } else {
                 _ingest_snapshot
             };
+            #[cfg(not(feature = "kernel"))]
+            let _ = ingest_snapshot;
             #[cfg(feature = "kernel")]
             if let Some(bridge) = self.ninedoor.as_mut() {
                 bridge.update_ingest_snapshot(ingest_snapshot);
@@ -2074,26 +2094,30 @@ where
             return None;
         };
         let net_contract = net.driver_task_contract();
-        let mut net_budget = match DriverServiceBudget::new(net_contract) {
-            Ok(budget) => budget,
-            Err(err) => {
-                let message = format_message(format_args!(
-                    "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                    net_contract.name,
-                    err.reason(),
-                    net_contract.max_service_us(),
-                ));
-                self.audit.denied(message.as_str());
-                return Some(net.ingest_snapshot());
-            }
-        };
-
+        let mut flush_polls = 0u64;
+        let mut flush_exhausted = false;
         for _ in 0..NET_POST_DISPATCH_FLUSH_POLLS {
+            let mut net_budget = match DriverServiceBudget::new(net_contract) {
+                Ok(budget) => budget,
+                Err(err) => {
+                    let message = format_message(format_args!(
+                        "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                        net_contract.name,
+                        err.reason(),
+                        net_contract.max_service_us(),
+                    ));
+                    self.audit.denied(message.as_str());
+                    return Some(net.ingest_snapshot());
+                }
+            };
             match net.flush_tcp_with_budget(self.now_ms, &mut net_budget) {
                 Ok(polled) => {
+                    flush_polls = flush_polls.saturating_add(1);
                     if !polled {
+                        flush_exhausted = false;
                         break;
                     }
+                    flush_exhausted = true;
                 }
                 Err(err) => {
                     let message = format_message(format_args!(
@@ -2103,9 +2127,21 @@ where
                         net_contract.max_service_us(),
                     ));
                     self.audit.denied(message.as_str());
+                    flush_polls = flush_polls.saturating_add(1);
+                    flush_exhausted = false;
                     break;
                 }
             }
+        }
+        self.metrics.net_post_dispatch_flush_polls = self
+            .metrics
+            .net_post_dispatch_flush_polls
+            .saturating_add(flush_polls);
+        if flush_exhausted && flush_polls >= NET_POST_DISPATCH_FLUSH_POLLS as u64 {
+            self.metrics.net_post_dispatch_flush_exhaustions = self
+                .metrics
+                .net_post_dispatch_flush_exhaustions
+                .saturating_add(1);
         }
 
         Some(net.ingest_snapshot())
@@ -2211,9 +2247,12 @@ where
                 .check(NetDiagRateKind::Summary, self.now_ms)
             {
                 let line = format_message(format_args!(
-                    "NETDIAG in_bytes={} out_bytes={} tx_drops={} link={} q_lines={} q_bytes={} q_drops={} q_wblk={} suppressed={}",
+                    "NETDIAG in_bytes={} out_bytes={} rx_stack={} rx_smoltcp={} tx_smoltcp={} tx_drops={} link={} q_lines={} q_bytes={} q_drops={} q_wblk={} suppressed={}",
                     snapshot.bytes_read,
                     snapshot.bytes_written,
+                    snapshot.rx_frames_to_stack,
+                    snapshot.rx_frames_into_smoltcp,
+                    snapshot.tx_frames_from_smoltcp,
                     telemetry.tx_drops,
                     telemetry.link_up,
                     snapshot.outbound_queued_lines,
@@ -2752,6 +2791,31 @@ where
         }
     }
 
+    fn mirror_local_seat_network_line_if_ready(&mut self, line: &str) {
+        if self.local_seat_mirror_suppressed {
+            return;
+        }
+        if self.serial.interactive_input_active() {
+            return;
+        }
+        let Some(runtime) = self.local_seat.as_mut() else {
+            return;
+        };
+        if !runtime.root_console_ready() {
+            return;
+        }
+        if runtime.can_accept_network_origin_mirror() {
+            self.metrics.local_seat_net_mirror_lines =
+                self.metrics.local_seat_net_mirror_lines.saturating_add(1);
+            runtime.mirror_line(line);
+        } else {
+            self.metrics.local_seat_net_mirror_suppressed = self
+                .metrics
+                .local_seat_net_mirror_suppressed
+                .saturating_add(1);
+        }
+    }
+
     fn mirror_local_seat_prompt_if_ready(&mut self) {
         if self.local_seat_mirror_suppressed {
             return;
@@ -2997,11 +3061,15 @@ where
         }
         #[cfg(feature = "net-console")]
         if self.last_input_source == ConsoleInputSource::Net {
-            self.mirror_local_seat_line_if_ready(line);
-            if let Some(net) = self.net.as_mut() {
-                return net.send_console_line(line);
+            let sent = if let Some(net) = self.net.as_mut() {
+                net.send_console_line(line)
+            } else {
+                false
+            };
+            if sent {
+                self.mirror_local_seat_network_line_if_ready(line);
             }
-            return false;
+            return sent;
         }
         self.service_local_seat_keyboard_during_output();
         self.mirror_local_seat_line_if_ready(line);
@@ -3355,9 +3423,11 @@ where
         ));
         self.emit_console_line(line.as_str());
         let turns = format_message(format_args!(
-            "[smp] activity local-seat-turns output_polls={} hdmi_pump={} priority={} skipped={} serial_yield={} post_runtime={}",
+            "[smp] activity local-seat-turns output_polls={} hdmi_pump={} net_mirror={} net_suppressed={} priority={} skipped={} serial_yield={} post_runtime={}",
             metrics.local_seat_output_keyboard_polls,
             metrics.local_seat_hdmi_pump_turns,
+            metrics.local_seat_net_mirror_lines,
+            metrics.local_seat_net_mirror_suppressed,
             metrics.local_seat_keyboard_priority_turns,
             metrics.local_seat_runtime_skipped_turns,
             metrics.local_seat_serial_dispatch_yielded_turns,
@@ -3721,11 +3791,15 @@ where
         ));
         self.emit_console_line(io.as_str());
         let tcp = format_message(format_args!(
-            "[smp] activity net-tcp accepts={} auth={} rx_bytes={} tx_bytes={} smoke_ok={} smoke_fail={}",
+            "[smp] activity net-tcp accepts={} auth={} rx_bytes={} tx_bytes={} recv_ready={} recv_budget_hits={} flush_polls={} flush_exhaust={} smoke_ok={} smoke_fail={}",
             counters.tcp_accepts,
             counters.tcp_auth_sessions,
             counters.tcp_rx_bytes,
             counters.tcp_tx_bytes,
+            counters.tcp_console_recv_ready,
+            counters.tcp_console_recv_budget_hits,
+            self.metrics.net_post_dispatch_flush_polls,
+            self.metrics.net_post_dispatch_flush_exhaustions,
             counters.tcp_smoke_outbound,
             counters.tcp_smoke_outbound_failures,
         ));
@@ -11858,6 +11932,30 @@ where
                             "netstats: tcp_smoke_out={} tcp_smoke_out_failures={}",
                             stats.tcp_smoke_outbound, stats.tcp_smoke_outbound_failures
                         ));
+                        let line_flush = format_message(format_args!(
+                            "netstats: tcp_post_flush_polls={} tcp_post_flush_exhaustions={}",
+                            self.metrics.net_post_dispatch_flush_polls,
+                            self.metrics.net_post_dispatch_flush_exhaustions,
+                        ));
+                        let line_local_seat = if let Some(runtime) = self.local_seat.as_ref() {
+                            let display = runtime.display_trace();
+                            format_message(format_args!(
+                                "netstats: local_seat_net_mirror={} local_seat_net_mirror_suppressed={} hdmi_pending_bytes={} hdmi_pending_redraw={} hdmi_no_reply={} hdmi_deferred={} hdmi_submitted={}",
+                                self.metrics.local_seat_net_mirror_lines,
+                                self.metrics.local_seat_net_mirror_suppressed,
+                                display.pending_bytes,
+                                Self::yes_no(display.pending_redraw),
+                                display.no_reply_frames,
+                                display.deferred_frames,
+                                display.submitted_frames,
+                            ))
+                        } else {
+                            format_message(format_args!(
+                                "netstats: local_seat_net_mirror={} local_seat_net_mirror_suppressed={} hdmi=unavailable",
+                                self.metrics.local_seat_net_mirror_lines,
+                                self.metrics.local_seat_net_mirror_suppressed,
+                            ))
+                        };
                         let line_four = format_message(format_args!(
                             "netstats: tx_submit={} tx_complete={} tx_free={} tx_in_flight={} tx_double_submit={} tx_zero_len_attempt={} arp_rx={} arp_tx={}",
                             stats.tx_submit,
@@ -11925,6 +12023,8 @@ where
                         self.emit_console_line(line_one.as_str());
                         self.emit_console_line(line_two.as_str());
                         self.emit_console_line(line_three.as_str());
+                        self.emit_console_line(line_flush.as_str());
+                        self.emit_console_line(line_local_seat.as_str());
                         self.emit_console_line(line_four.as_str());
                         self.emit_console_line(line_five.as_str());
                         if net_status_active_interface_is_wifi(&status) {
@@ -15138,6 +15238,46 @@ mod tests {
             .any(|line| line.as_str() == "REST response line"));
     }
 
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn pressured_hdmi_suppresses_net_origin_mirror_after_tcp_send() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(2_048);
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_local_seat(&mut local_seat);
+        pump.last_input_source = ConsoleInputSource::Net;
+
+        pump.emit_console_line("REST response line");
+
+        assert_eq!(pump.metrics().local_seat_net_mirror_lines, 0);
+        assert_eq!(pump.metrics().local_seat_net_mirror_suppressed, 1);
+        drop(pump);
+        assert_eq!(net.sent.len(), 1);
+        assert_eq!(net.sent[0].as_str(), "REST response line");
+        assert!(!local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line.as_str() == "REST response line"));
+    }
+
     #[test]
     fn serial_input_skips_pre_runtime_local_seat_polling() {
         let driver = LoopbackSerial::<8192>::new();
@@ -15650,6 +15790,8 @@ mod tests {
         polls: usize,
         tcp_flushes: usize,
         tcp_flush_activity_remaining: usize,
+        exhaust_poll_budget: bool,
+        exhaust_flush_budget: bool,
         disconnect_requests: usize,
     }
 
@@ -15665,6 +15807,8 @@ mod tests {
                 polls: 0,
                 tcp_flushes: 0,
                 tcp_flush_activity_remaining: 0,
+                exhaust_poll_budget: false,
+                exhaust_flush_budget: false,
                 disconnect_requests: 0,
             }
         }
@@ -15677,11 +15821,28 @@ mod tests {
             true
         }
 
+        fn poll_with_budget(
+            &mut self,
+            _now_ms: u64,
+            budget: &mut DriverServiceBudget,
+        ) -> Result<bool, crate::hal::driver_task::DriverServiceBudgetError> {
+            if self.exhaust_poll_budget {
+                budget.charge_bytes(self.driver_task_contract().budget.max_bytes_per_turn)?;
+            } else {
+                budget.charge_ops(1)?;
+                budget.charge_frames(1)?;
+            }
+            Ok(self.poll(_now_ms))
+        }
+
         fn flush_tcp_with_budget(
             &mut self,
             _now_ms: u64,
-            _budget: &mut DriverServiceBudget,
+            budget: &mut DriverServiceBudget,
         ) -> Result<bool, crate::hal::driver_task::DriverServiceBudgetError> {
+            if self.exhaust_flush_budget {
+                budget.charge_bytes(self.driver_task_contract().budget.max_bytes_per_turn)?;
+            }
             self.tcp_flushes = self.tcp_flushes.saturating_add(1);
             let activity = self.tcp_flush_activity_remaining != 0;
             self.tcp_flush_activity_remaining = self.tcp_flush_activity_remaining.saturating_sub(1);
@@ -16546,6 +16707,39 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn network_dispatch_post_response_flushes_get_separate_service_turns() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.exhaust_flush_budget = true;
+        net.tcp_flush_activity_remaining = NET_POST_DISPATCH_FLUSH_POLLS + 4;
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 1)).is_ok());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        let metrics = pump.metrics;
+        drop(pump);
+
+        assert_eq!(net.tcp_flushes, NET_POST_DISPATCH_FLUSH_POLLS);
+        assert_eq!(
+            metrics.net_post_dispatch_flush_polls,
+            NET_POST_DISPATCH_FLUSH_POLLS as u64
+        );
+        assert_eq!(metrics.net_post_dispatch_flush_exhaustions, 1);
+        assert!(net
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn network_dispatch_gets_bounded_post_response_flush() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
@@ -16561,10 +16755,16 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
 
         pump.poll();
+        let metrics = pump.metrics;
         drop(pump);
 
         assert_eq!(net.polls, 1);
         assert_eq!(net.tcp_flushes, NET_POST_DISPATCH_FLUSH_POLLS);
+        assert_eq!(
+            metrics.net_post_dispatch_flush_polls,
+            NET_POST_DISPATCH_FLUSH_POLLS as u64
+        );
+        assert_eq!(metrics.net_post_dispatch_flush_exhaustions, 1);
         assert!(net
             .sent
             .iter()
@@ -16618,6 +16818,27 @@ mod tests {
         drop(pump);
 
         assert_eq!(WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS, 8);
+        assert_eq!(net.polls, WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS + 1);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn host_eapol_burst_polls_get_separate_service_turns() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.address_source = "wifi-host-eapol-pending";
+        net.status.dhcp_phase = "host-eapol-pending";
+        net.exhaust_poll_budget = true;
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.poll();
+        drop(pump);
+
         assert_eq!(net.polls, WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS + 1);
     }
 
@@ -17118,6 +17339,10 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered.contains("netstats: tcp_post_flush_polls=0 tcp_post_flush_exhaustions=0"),
+            "{rendered}"
+        );
+        assert!(
             rendered.contains(
                 "netstats: genet_rx_hw=0 genet_rx_last_len=0 genet_rx_last_ethertype=0x0000"
             ),
@@ -17192,6 +17417,10 @@ mod tests {
             rendered.contains(
                 "netstats: udp_rx=1 udp_tx=2 tcp_accepts=1 tcp_auth=1 tcp_rx_bytes=128 tcp_recv_ready=7 tcp_recv_budget_hits=2"
             ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("netstats: tcp_post_flush_polls=0 tcp_post_flush_exhaustions=0"),
             "{rendered}"
         );
         assert!(!rendered.contains("netstats: genet_rx_hw="), "{rendered}");

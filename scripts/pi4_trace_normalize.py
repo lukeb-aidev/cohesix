@@ -367,6 +367,7 @@ USB_BOOTLOADER_HANDOFF_VALUES = {
 }
 USB_COLD_BOOT_MARKERS = (
     "xhci state discarded before cohesix cold boot",
+    "xhci trust tokens cleared before cohesix cold boot",
     "xhci cold boot starts unseeded",
 )
 USB_STALE_UEFI_HINT_MARKERS = (

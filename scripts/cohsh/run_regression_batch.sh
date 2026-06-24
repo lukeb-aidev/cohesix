@@ -8,7 +8,53 @@
 # Note: live Pi runs use COHSH_BATCH_TARGET=pi4 COHSH_TCP_HOST=<pi-ip> COHSH_TCP_PORT=31337.
 # Note: archive root defaults to out/regression-logs; override via COHSH_LOG_ROOT=/path/to/logs.
 # Note: set COHSH_BATCH_CLEAN_TARGET=1 for a forced clean rebuild before batch execution.
+# Note: set COHSH_BATCH_GROUPS=base,base-telemetry,base-shard,gated to run a subset.
 # ** Note: typical end-to-end runtime is ~25 minutes; plan for >= 30 minutes to avoid repeated retries.
+#
+# Operator note for live Pi final reboot proof:
+# The Pi 4 batch uses TCP while Cohesix is running, but the final reboot/fresh-boot
+# proof crosses a reset and the U-Boot menu. Use the active minicom UART capture
+# for that section instead of trying to drive the Terminal UI. macOS may deny
+# scripted Terminal keystrokes; direct writes to /dev/cu.usbserial-* still reach
+# the same UART and minicom continues to capture the evidence.
+#
+# Repeatable flow:
+#   1. Identify the active minicom session and capture log:
+#        ps -ax -o pid=,tty=,command= | rg '[m]inicom'
+#        lsof -p <minicom-pid> | rg 'pi4-serial|usbserial'
+#      Use the lsof output as the source of truth for both the serial device and
+#      the log file; for example:
+#        serial_dev=/dev/cu.usbserial-0001
+#        capture_log=/Users/lukasbower/pi4-serial-YYYYMMDD-HHMMSS.log
+#      Ignore stale or zero-byte ~/pi4-serial-*.log files.
+#   2. Prove the serial injection lane before resetting:
+#        python3 -c 'import os, sys; fd=os.open(sys.argv[1], os.O_WRONLY | os.O_NOCTTY); os.write(fd, b"smp activity\r"); os.close(fd)' "$serial_dev"
+#      Then grep the same capture log for a new "smp activity" block with
+#      "OK SMP mode=activity" and, for Genet, "backend=bcmgenet-v5" plus the
+#      expected DHCP lease.
+#   3. Request reboot over authenticated cohsh while TCP is still up:
+#        tmp_script="$(mktemp /tmp/coh-reboot.XXXXXX.coh)"
+#        printf 'reboot\n' > "$tmp_script"
+#        "${COHSH_BIN:-target/debug/cohsh}" --transport tcp --tcp-host "$COHSH_TCP_HOST" --tcp-port "${COHSH_TCP_PORT:-31337}" --auth-token "$COHSH_AUTH_TOKEN" --role queen --script "$tmp_script"
+#        rc=$?; rm -f "$tmp_script"; test "$rc" -eq 0
+#      Expected console evidence is "OK REBOOT detail=scheduled" followed by a
+#      reset in the minicom log.
+#   4. When U-Boot reaches the menu, press Enter over the UART device:
+#        python3 -c 'import os, sys; fd=os.open(sys.argv[1], os.O_WRONLY | os.O_NOCTTY); os.write(fd, b"\r"); os.close(fd)' "$serial_dev"
+#      If U-Boot reports "fast boot marker absent", that is expected while the
+#      one-shot bypass is parked; pressing Enter should continue the normal boot.
+#   5. Wait for fresh Cohesix proof in the same capture log: DHCP bound,
+#      root prompt, then a new clean "smp activity" block. If USB/local-seat
+#      boot chatter interleaves with a partial command, send a blank line,
+#      retry "smp activity" after owner-state ready, and only count the full
+#      block ending in "OK SMP mode=activity".
+#   6. For scripts that require clean boot-local state, run one selected group
+#      per fresh boot, for example:
+#        COHSH_BATCH_TARGET=pi4 COHSH_BATCH_GROUPS=base ...
+#        <reboot using the UART flow above>
+#        COHSH_BATCH_TARGET=pi4 COHSH_BATCH_GROUPS=base-telemetry ...
+#      The default remains the full sequence for QEMU parity and quick live
+#      smoke runs; selected groups make the fresh-boot proof repeatable.
 
 set -euo pipefail
 
@@ -83,6 +129,48 @@ if [[ "$BATCH_TARGET" == "pi4" ]]; then
 else
     BATCH_CONTINUE_ON_FAIL="${COHSH_BATCH_CONTINUE_ON_FAIL:-0}"
 fi
+
+group_selected() {
+    local group="$1"
+    local selected="${COHSH_BATCH_GROUPS:-all}"
+    if [[ -z "$selected" || "$selected" == "all" ]]; then
+        return 0
+    fi
+    selected="${selected//,/ }"
+    local item
+    for item in $selected; do
+        if [[ "$item" == "$group" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+log_skip_group() {
+    local group="$1"
+    if [[ -n "${SUMMARY_LOG:-}" ]]; then
+        printf "SKIP group=%s reason=COHSH_BATCH_GROUPS\n" "$group" | tee -a "$SUMMARY_LOG"
+    else
+        printf "SKIP group=%s reason=COHSH_BATCH_GROUPS\n" "$group"
+    fi
+}
+
+selected_script_count() {
+    local total=0
+    if group_selected "base"; then
+        total=$((total + ${#BASE_SCRIPTS[@]}))
+    fi
+    if group_selected "base-telemetry"; then
+        total=$((total + ${#BASE_TELEMETRY_SCRIPTS[@]}))
+    fi
+    if group_selected "base-shard"; then
+        total=$((total + ${#BASE_SHARD_SCRIPTS[@]}))
+    fi
+    if group_selected "gated"; then
+        total=$((total + ${#GATED_SCRIPTS[@]}))
+    fi
+    printf "%s\n" "$total"
+}
 
 resolve_manifest_auth_token() {
     local manifest_path="$1"
@@ -642,19 +730,37 @@ run_pi4_batch() {
     pi_pass=0
     pi_fail=0
     pi_total=0
-    if ! run_live_group "base" "${BASE_SCRIPTS[@]}"; then
-        return 1
+    if group_selected "base"; then
+        if ! run_live_group "base" "${BASE_SCRIPTS[@]}"; then
+            return 1
+        fi
+    else
+        log_skip_group "base"
     fi
-    if ! run_live_group "base-telemetry" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
-        return 1
+    if group_selected "base-telemetry"; then
+        if ! run_live_group "base-telemetry" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
+            return 1
+        fi
+    else
+        log_skip_group "base-telemetry"
     fi
-    if ! run_live_group "base-shard" "${BASE_SHARD_SCRIPTS[@]}"; then
-        return 1
+    if group_selected "base-shard"; then
+        if ! run_live_group "base-shard" "${BASE_SHARD_SCRIPTS[@]}"; then
+            return 1
+        fi
+    else
+        log_skip_group "base-shard"
     fi
-    if ! run_live_group "gated" "${GATED_SCRIPTS[@]}"; then
-        return 1
+    if group_selected "gated"; then
+        if ! run_live_group "gated" "${GATED_SCRIPTS[@]}"; then
+            return 1
+        fi
+    else
+        log_skip_group "gated"
     fi
 
+    # Fresh-boot proof after this point is intentionally UART/operator-driven;
+    # TCP disappears during reset. Follow the top-of-file minicom notes.
     printf "RESULT pass=%s fail=%s total=%s log_root=%s\n" "$pi_pass" "$pi_fail" "$pi_total" "$ARCHIVE_ROOT" | tee -a "$SUMMARY_LOG"
     if (( pi_fail > 0 )); then
         return 1
@@ -699,20 +805,36 @@ rm -rf \
     "$ARCHIVE_ROOT"
 mkdir -p "$ARCHIVE_ROOT"
 
-if ! run_batch "base" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_SCRIPTS[@]}"; then
-    exit 1
+if group_selected "base"; then
+    if ! run_batch "base" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_SCRIPTS[@]}"; then
+        exit 1
+    fi
+else
+    log_skip_group "base"
 fi
 
-if ! run_batch "base-telemetry" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
-    exit 1
+if group_selected "base-telemetry"; then
+    if ! run_batch "base-telemetry" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_TELEMETRY_SCRIPTS[@]}"; then
+        exit 1
+    fi
+else
+    log_skip_group "base-telemetry"
 fi
 
-if ! run_batch "base-shard" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_SHARD_SCRIPTS[@]}"; then
-    exit 1
+if group_selected "base-shard"; then
+    if ! run_batch "base-shard" "$BASE_MANIFEST" "${PROJECT_ROOT}/out/cohesix" "${BASE_SHARD_SCRIPTS[@]}"; then
+        exit 1
+    fi
+else
+    log_skip_group "base-shard"
 fi
 
-if ! run_batch "gated" "$GATED_MANIFEST" "${PROJECT_ROOT}/out/cohesix-gated" "${GATED_SCRIPTS[@]}"; then
-    exit 1
+if group_selected "gated"; then
+    if ! run_batch "gated" "$GATED_MANIFEST" "${PROJECT_ROOT}/out/cohesix-gated" "${GATED_SCRIPTS[@]}"; then
+        exit 1
+    fi
+else
+    log_skip_group "gated"
 fi
 
 cargo run -p coh-rtc -- \
@@ -732,4 +854,4 @@ cargo run -p coh-rtc -- \
     --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
     --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
 
-echo "regression batch complete: $(( ${#BASE_SCRIPTS[@]} + ${#BASE_TELEMETRY_SCRIPTS[@]} + ${#BASE_SHARD_SCRIPTS[@]} + ${#GATED_SCRIPTS[@]} )) scripts passed"
+echo "regression batch complete: $(selected_script_count) scripts passed"

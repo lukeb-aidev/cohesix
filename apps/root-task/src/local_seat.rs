@@ -737,6 +737,11 @@ const LINKED_LOCAL_SEAT_HDMI_READY_VERBOSE_LIMIT: usize = 1;
 /// Sampling interval for routine successful HDMI frames after the prompt.
 const LINKED_LOCAL_SEAT_HDMI_READY_SAMPLE_STRIDE: usize = 256;
 
+/// Maximum queued HDMI bytes allowed before suppressing network-origin mirror
+/// lines. This keeps interactive cohsh output visible while REST burst replies
+/// stop competing with TCP response flushes once the display path is behind.
+const LINKED_LOCAL_SEAT_NET_MIRROR_PENDING_BYTE_LIMIT: usize = 1_024;
+
 /// HAL-enforced scheduling contract for USB local-seat input service.
 #[must_use]
 pub const fn driver_task_contract() -> DriverTaskContract {
@@ -758,9 +763,9 @@ pub(crate) fn usb_runtime_command_replay_ready(
 #[must_use]
 pub(crate) const fn local_seat_pre_root_runtime_init_allowed(
     physical_pi_owner_state: bool,
-    pointer_free_ipc_proof: bool,
+    _pointer_free_ipc_proof: bool,
 ) -> bool {
-    !physical_pi_owner_state || pointer_free_ipc_proof
+    !physical_pi_owner_state
 }
 
 /// Return whether display mirroring may submit a linked-runtime service turn.
@@ -1868,6 +1873,32 @@ impl LocalSeatRuntime {
     #[must_use]
     pub fn linked_hdmi_pending_work(&self) -> bool {
         self.linked_hdmi_redraw_pending() || !self.hdmi_pending_bytes.is_empty()
+    }
+
+    /// Return whether a network-origin console line should be mirrored to HDMI.
+    ///
+    /// Serial and local-seat traffic always use the normal mirror path. This
+    /// guard applies only to remote console output so REST/TCP bursts can flush
+    /// replies without letting a pressured HDMI runtime become the pacing item.
+    #[must_use]
+    pub fn can_accept_network_origin_mirror(&self) -> bool {
+        let queued_bytes = self
+            .hdmi_pending_bytes
+            .len()
+            .saturating_add(self.hdmi_redraw_bytes.len());
+        queued_bytes <= LINKED_LOCAL_SEAT_NET_MIRROR_PENDING_BYTE_LIMIT
+            && self.hdmi_no_reply_cooldown == 0
+            && self.hdmi_redraw_no_reply_streak == 0
+            && !self.hdmi_stale_after_retry_exhaustion
+            && self.hdmi_backpressure_bytes == 0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_linked_hdmi_pending_bytes_for_test(&mut self, count: usize) {
+        self.hdmi_pending_bytes.clear();
+        for _ in 0..count.min(DISPLAY_QUEUE_MAX_BYTES) {
+            self.hdmi_pending_bytes.push_back(b'x');
+        }
     }
 
     fn linked_hdmi_redraw_pending(&self) -> bool {
@@ -6556,9 +6587,9 @@ mod tests {
     }
 
     #[test]
-    fn local_seat_pre_root_runtime_init_requires_runtime_proof_on_physical_pi() {
+    fn local_seat_pre_root_runtime_init_defers_until_prompt_on_physical_pi() {
         assert!(!local_seat_pre_root_runtime_init_allowed(true, false));
-        assert!(local_seat_pre_root_runtime_init_allowed(true, true));
+        assert!(!local_seat_pre_root_runtime_init_allowed(true, true));
         assert!(local_seat_pre_root_runtime_init_allowed(false, false));
     }
 

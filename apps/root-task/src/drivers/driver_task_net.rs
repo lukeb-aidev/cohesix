@@ -36,7 +36,7 @@ use crate::hal::driver_task::{
 use crate::hal::{HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetInterfacePolicy, NetStage,
-    WifiCredentials, MAX_FRAME_LEN,
+    WifiCredentials, MAX_FRAME_LEN, NET_DIAG,
 };
 use pi4_driver_abi::{
     driver_runtime_genet_result_is_packed, driver_runtime_genet_result_rx_byte_budget_hit,
@@ -2214,7 +2214,7 @@ where
 fn cyw43_apply_linux_wpa2_rsn_capability_policy(
     contract: DriverTaskContract,
 ) -> Result<(), DriverTaskNetError> {
-    cyw43_submit_bcdc_iovar_u32_optional_unsupported(
+    cyw43_submit_bcdc_iovar_u32_optional_unsupported_or_submit_fault(
         contract,
         "mfp",
         CYW43_MFP_NONE,
@@ -2237,19 +2237,19 @@ fn cyw43_apply_linux_connect_station_policy(
     let (arpoe_name, arpoe_value) = CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS[2];
     let (ndoe_name, ndoe_value) = CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS[3];
     cyw43_submit_bcdc_iovar_u32(contract, mpc_name, mpc_value, "cyw43-control-connect-mpc")?;
-    cyw43_submit_bcdc_iovar_u32_optional_unsupported(
+    cyw43_submit_bcdc_iovar_u32_optional_unsupported_or_submit_fault(
         contract,
         arp_ol_name,
         arp_ol_value,
         "cyw43-control-connect-arp-ol",
     )?;
-    cyw43_submit_bcdc_iovar_u32_optional_unsupported(
+    cyw43_submit_bcdc_iovar_u32_optional_unsupported_or_submit_fault(
         contract,
         arpoe_name,
         arpoe_value,
         "cyw43-control-connect-arpoe",
     )?;
-    cyw43_submit_bcdc_iovar_u32_optional_unsupported(
+    cyw43_submit_bcdc_iovar_u32_optional_unsupported_or_submit_fault(
         contract,
         ndoe_name,
         ndoe_value,
@@ -2871,6 +2871,27 @@ fn cyw43_submit_bcdc_iovar_u32_optional_unsupported(
     value: u32,
     stage: &'static str,
 ) -> Result<(), DriverTaskNetError> {
+    cyw43_submit_bcdc_iovar_u32_optional_with_policy(contract, name, value, stage, false)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_iovar_u32_optional_unsupported_or_submit_fault(
+    contract: DriverTaskContract,
+    name: &str,
+    value: u32,
+    stage: &'static str,
+) -> Result<(), DriverTaskNetError> {
+    cyw43_submit_bcdc_iovar_u32_optional_with_policy(contract, name, value, stage, true)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_iovar_u32_optional_with_policy(
+    contract: DriverTaskContract,
+    name: &str,
+    value: u32,
+    stage: &'static str,
+    allow_optional_submit_fault: bool,
+) -> Result<(), DriverTaskNetError> {
     match cyw43_submit_bcdc_iovar_bytes_unmapped_with_header_mode(
         contract,
         name,
@@ -2910,8 +2931,37 @@ fn cyw43_submit_bcdc_iovar_u32_optional_unsupported(
             );
             Ok(())
         }
+        Err(Cyw43CommandSubmitError::Completion(completion))
+            if allow_optional_submit_fault
+                && cyw43_optional_iovar_submit_fault_is_fail_soft(name, stage, completion) =>
+        {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "optional-submit-fault",
+                Some(completion),
+            );
+            Ok(())
+        }
         Err(err) => Err(err.into_net_error()),
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_optional_iovar_submit_fault_is_fail_soft(
+    name: &str,
+    stage: &'static str,
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    matches!(
+        (name, stage),
+        ("mfp", "cyw43-control-rsn-mfp")
+            | ("arp_ol", "cyw43-control-connect-arp-ol")
+            | ("arpoe", "cyw43-control-connect-arpoe")
+            | ("ndoe", "cyw43-control-connect-ndoe")
+    ) && completion.code == DriverTaskCompletionCode::Fault.as_u16()
+        && cyw43_fault_detail_allows_same_command_retry(completion.detail)
 }
 
 #[cfg(feature = "kernel")]
@@ -7557,8 +7607,8 @@ fn cyw43_submit_runtime_control_exchange(
 
 #[cfg(feature = "kernel")]
 fn cyw43_control_uses_runtime_exchange(stage: &'static str, control_iovar: &str) -> bool {
-    control_iovar == "wsec_key"
-        && (stage == "cyw43-host-eapol-ptk" || stage == "cyw43-host-eapol-gtk")
+    let _ = (stage, control_iovar);
+    false
 }
 
 #[cfg(feature = "kernel")]
@@ -7615,6 +7665,16 @@ fn cyw43_poll_control_exchange_reply(
     let poll_attempts = cyw43_control_exchange_poll_attempts(stage, control_iovar);
     let timeout_ms = cyw43_control_exchange_timeout_ms(stage, control_iovar);
     let mut deadline = cyw43_poll_deadline_from_millis_or_polls(timeout_ms, poll_attempts);
+    emit_cyw43_control_deadline_trace(
+        contract,
+        stage,
+        "begin",
+        timeout_ms,
+        poll_attempts,
+        0,
+        &deadline,
+        control_iovar,
+    );
     let mut poll = 1usize;
     while cyw43_poll_deadline_open(&mut deadline) {
         let current_poll = poll;
@@ -7916,6 +7976,16 @@ fn cyw43_poll_control_exchange_reply(
     } else {
         "cyw43-control-split-no-reply"
     };
+    emit_cyw43_control_deadline_trace(
+        contract,
+        stage,
+        "timeout",
+        timeout_ms,
+        poll_attempts,
+        poll.saturating_sub(1),
+        &deadline,
+        control_iovar,
+    );
     record_cyw43_control_split_failure(
         contract,
         stage,
@@ -8067,9 +8137,7 @@ const fn cyw43_control_split_poll_flags(poll: usize) -> u16 {
 
 #[cfg(feature = "kernel")]
 fn cyw43_control_exchange_poll_attempts(stage: &'static str, control_iovar: &str) -> usize {
-    if control_iovar == "wsec_key"
-        && (stage == "cyw43-host-eapol-ptk" || stage == "cyw43-host-eapol-gtk")
-    {
+    if cyw43_control_uses_host_eapol_wsec_key_reply_window(stage, control_iovar) {
         CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS
     } else {
         CYW43_CONTROL_PLANE_POLL_ATTEMPTS
@@ -8078,13 +8146,19 @@ fn cyw43_control_exchange_poll_attempts(stage: &'static str, control_iovar: &str
 
 #[cfg(feature = "kernel")]
 fn cyw43_control_exchange_timeout_ms(stage: &'static str, control_iovar: &str) -> u64 {
-    if control_iovar == "wsec_key"
-        && (stage == "cyw43-host-eapol-ptk" || stage == "cyw43-host-eapol-gtk")
-    {
+    if cyw43_control_uses_host_eapol_wsec_key_reply_window(stage, control_iovar) {
         CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS
     } else {
         CYW43_CONTROL_PLANE_REPLY_TIMEOUT_MS
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_uses_host_eapol_wsec_key_reply_window(
+    stage: &'static str,
+    control_iovar: &str,
+) -> bool {
+    control_iovar == "wsec_key" && stage.starts_with("cyw43-host-eapol-")
 }
 
 #[cfg(feature = "kernel")]
@@ -8187,6 +8261,48 @@ fn cyw43_poll_deadline_open(deadline: &mut Cyw43PollDeadline) -> bool {
             }
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_poll_deadline_trace_fields(
+    deadline: &Cyw43PollDeadline,
+) -> (&'static str, u64, usize) {
+    match *deadline {
+        Cyw43PollDeadline::Counter { cycles, .. } => ("counter", cycles, 0),
+        Cyw43PollDeadline::Polls { remaining } => ("polls", 0, remaining),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn emit_cyw43_control_deadline_trace(
+    contract: DriverTaskContract,
+    stage: &'static str,
+    event: &'static str,
+    timeout_ms: u64,
+    poll_limit: usize,
+    poll: usize,
+    deadline: &Cyw43PollDeadline,
+    control_iovar: &str,
+) {
+    use core::fmt::Write;
+
+    let (backend, cycles, remaining_polls) = cyw43_poll_deadline_trace_fields(deadline);
+    let mut line = heapless::String::<384>::new();
+    let _ = write!(
+        line,
+        "CYW43_DRIVER_TASK_CONTROL_DEADLINE contract={} stage={} event={} backend={} timeout_ms={} poll_limit={} poll={} cycles={} remaining_polls={} iovar={}",
+        contract.name,
+        stage,
+        event,
+        backend,
+        timeout_ms,
+        poll_limit,
+        poll,
+        cycles,
+        remaining_polls,
+        control_iovar,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -10604,6 +10720,7 @@ impl phy::RxToken for DriverTaskNetRxToken {
     where
         F: FnOnce(&[u8]) -> R,
     {
+        NET_DIAG.record_smoltcp_rx();
         f(&self.buffer[..self.len])
     }
 }
@@ -10623,6 +10740,9 @@ impl phy::TxToken for DriverTaskNetTxToken {
     {
         let mut scratch = [0u8; MAX_FRAME_LEN];
         let frame_len = len.min(MAX_FRAME_LEN);
+        if frame_len != 0 {
+            NET_DIAG.record_smoltcp_tx();
+        }
         let result = f(&mut scratch[..frame_len]);
         if submit_driver_task_frame(self.contract, self.hot_path, &scratch[..frame_len]) {
             self.tx_submitted.fetch_add(1, Ordering::AcqRel);
@@ -11744,6 +11864,7 @@ macro_rules! driver_task_nic {
                 let rx = receive_driver_task_frame($contract, DriverTaskHotPath::$hot_path)?;
                 record_driver_task_arp_rx(DriverTaskHotPath::$hot_path, &rx.buffer[..rx.len]);
                 $rx_frames.fetch_add(1, Ordering::AcqRel);
+                NET_DIAG.record_rx_frame_to_stack();
                 Some((
                     rx,
                     DriverTaskNetTxToken {
@@ -12731,6 +12852,73 @@ mod tests {
         assert!(!cyw43_join_iovar_completion_allows_set_ssid(other_status));
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_optional_iovar_submit_fault_is_fail_soft_only_for_optional_controls() {
+        let submit_fault = DriverTaskCompletionRecord {
+            sequence: 7,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: 0x5103,
+            result: 0x0420_8000,
+            frame: DriverFrameDescriptor {
+                offset: 768,
+                len: 56,
+                flags: 0,
+            },
+        };
+        let descriptor_unavailable = DriverTaskCompletionRecord {
+            detail: 0x5102,
+            ..submit_fault
+        };
+        let reply_unsupported = DriverTaskCompletionRecord {
+            detail: CYW43_CONTROL_EXCHANGE_FAULT_DETAIL,
+            result: CYW43_BCME_UNSUPPORTED_STATUS,
+            ..submit_fault
+        };
+
+        for (name, stage) in [
+            ("mfp", "cyw43-control-rsn-mfp"),
+            ("arp_ol", "cyw43-control-connect-arp-ol"),
+            ("arpoe", "cyw43-control-connect-arpoe"),
+            ("ndoe", "cyw43-control-connect-ndoe"),
+        ] {
+            assert!(cyw43_optional_iovar_submit_fault_is_fail_soft(
+                name,
+                stage,
+                submit_fault
+            ));
+        }
+
+        assert!(!cyw43_optional_iovar_submit_fault_is_fail_soft(
+            "wme_bss_disable",
+            "cyw43-control-rsn-wme-bss-disable",
+            submit_fault
+        ));
+        assert!(!cyw43_optional_iovar_submit_fault_is_fail_soft(
+            "mpc",
+            "cyw43-control-connect-mpc",
+            submit_fault
+        ));
+        assert!(!cyw43_optional_iovar_submit_fault_is_fail_soft(
+            "ndoe",
+            "cyw43-control-join-ssid",
+            submit_fault
+        ));
+        assert!(!cyw43_optional_iovar_submit_fault_is_fail_soft(
+            "mfp",
+            "cyw43-control-rsn-mfp",
+            descriptor_unavailable
+        ));
+        assert!(!cyw43_optional_iovar_submit_fault_is_fail_soft(
+            "mfp",
+            "cyw43-control-rsn-mfp",
+            reply_unsupported
+        ));
+        assert!(cyw43_control_exchange_completion_is_unsupported(
+            reply_unsupported
+        ));
+    }
+
     #[test]
     fn cyw43_control_exchange_descriptor_uses_plain_startup_header_mode() {
         let descriptor = cyw43_control_exchange_descriptor(
@@ -12771,16 +12959,11 @@ mod tests {
     }
 
     #[test]
-    fn host_eapol_wsec_key_descriptor_uses_runtime_pre_tx_drain_exchange() {
-        let descriptor = cyw43_control_exchange_descriptor(
-            189,
-            CYW43_WLC_SET_VAR,
-            41,
-            Cyw43ControlHeaderMode::Extended,
-            true,
-        );
+    fn host_eapol_wsec_key_uses_split_pre_tx_drain_frame_path() {
+        let descriptor =
+            cyw43_control_frame_descriptor(189, Cyw43ControlHeaderMode::Extended, true);
 
-        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(
             descriptor.flags,
             DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
@@ -12788,13 +12971,11 @@ mod tests {
         );
         assert_eq!(descriptor.payload_len, 189);
         assert_eq!(descriptor.total_len, 189);
-        assert_eq!(descriptor.arg0, CYW43_WLC_SET_VAR);
-        assert_eq!(descriptor.arg1, 41);
-        assert!(cyw43_control_uses_runtime_exchange(
+        assert!(!cyw43_control_uses_runtime_exchange(
             "cyw43-host-eapol-ptk",
             "wsec_key"
         ));
-        assert!(cyw43_control_uses_runtime_exchange(
+        assert!(!cyw43_control_uses_runtime_exchange(
             "cyw43-host-eapol-gtk",
             "wsec_key"
         ));
@@ -16243,6 +16424,26 @@ mod tests {
             CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS
         );
         assert_eq!(
+            cyw43_control_exchange_poll_attempts("cyw43-host-eapol-post-secure-ptk", "wsec_key"),
+            CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS
+        );
+        assert_eq!(
+            cyw43_control_exchange_timeout_ms("cyw43-host-eapol-post-secure-ptk", "wsec_key"),
+            CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS
+        );
+        assert_eq!(
+            cyw43_control_exchange_poll_attempts("cyw43-host-eapol-post-secure-gtk", "wsec_key"),
+            CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS
+        );
+        assert_eq!(
+            cyw43_control_exchange_timeout_ms("cyw43-host-eapol-post-secure-gtk", "wsec_key"),
+            CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS
+        );
+        assert!(!cyw43_control_uses_runtime_exchange(
+            "cyw43-host-eapol-post-secure-ptk",
+            "wsec_key"
+        ));
+        assert_eq!(
             cyw43_control_exchange_poll_attempts("cyw43-control-security-wpa2-psk", "wsec"),
             CYW43_CONTROL_PLANE_POLL_ATTEMPTS
         );
@@ -16275,6 +16476,17 @@ mod tests {
         assert!(cyw43_poll_deadline_open(&mut fallback));
         assert!(cyw43_poll_deadline_open(&mut fallback));
         assert!(!cyw43_poll_deadline_open(&mut fallback));
+
+        let counter = Cyw43PollDeadline::Counter {
+            start: 123,
+            cycles: 108_000_000,
+        };
+        assert_eq!(
+            cyw43_poll_deadline_trace_fields(&counter),
+            ("counter", 108_000_000, 0)
+        );
+        let polls = Cyw43PollDeadline::Polls { remaining: 17 };
+        assert_eq!(cyw43_poll_deadline_trace_fields(&polls), ("polls", 0, 17));
     }
 
     #[cfg(feature = "kernel")]

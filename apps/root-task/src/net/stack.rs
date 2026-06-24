@@ -75,13 +75,15 @@ use spin::Mutex;
 const TCP_RX_BUFFER: usize = 32 * 1024;
 const TCP_TX_BUFFER: usize = 32 * 1024;
 const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 32;
-const MAX_CONSOLE_BYTES_PER_POLL: usize = 32 * 1024;
+const MAX_CONSOLE_BYTES_PER_POLL: usize = 20 * 1024;
 const SAME_TICK_STALL_WARN_POLLS: u16 = 256;
 const MAX_DHCP_RX_PACKETS_PER_POLL: usize = 2;
 const MAX_UDP_ECHO_PACKETS_PER_POLL: usize = 2;
 const TCP_CONSOLE_RECV_CHUNK_BYTES: usize = DEFAULT_LINE_CAPACITY + 4;
 const MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL: usize = 64;
-const MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL: usize = 32 * 1024;
+const MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL: usize = 20 * 1024;
+const TCP_SERVICE_BYTES_PER_TURN: u32 =
+    (MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL + MAX_CONSOLE_BYTES_PER_POLL) as u32;
 const MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL: usize = 2;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
@@ -3069,7 +3071,7 @@ impl<D: NetDevice> NetStack<D> {
     fn charge_tcp_budget(budget: &mut DriverServiceBudget) -> Result<(), DriverServiceBudgetError> {
         budget.charge_ops(64)?;
         budget.charge_frames(MAX_CONSOLE_FRAMES_PER_POLL as u16)?;
-        budget.charge_bytes((TCP_RX_BUFFER + TCP_TX_BUFFER) as u32)
+        budget.charge_bytes(TCP_SERVICE_BYTES_PER_TURN)
     }
 
     fn budgeted_genet_tcp_fast_path_due(&self) -> bool {
@@ -6542,9 +6544,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 const NET_RING_FLAG_BUDGETED: u16 = 1;
 const GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 8;
 const DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
-const GENET_DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
+const DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
 const GENET_TCP_FAST_PATH_EXTRA_TURNS: usize = 1;
-const GENET_TCP_POST_DISPATCH_EXTRA_TURNS: usize = 1;
+const GENET_TCP_POST_DISPATCH_EXTRA_TURNS: usize = 2;
 
 #[cfg(feature = "kernel")]
 struct NetDriverTaskContext<D: NetDevice> {
@@ -6651,7 +6653,7 @@ fn service_driver_task_pre_poll_burst_budgeted(
         if budget.charge_ops(4).is_err()
             || budget.charge_frames(1).is_err()
             || budget
-                .charge_bytes(GENET_DRIVER_TASK_PRE_POLL_TURN_BYTES)
+                .charge_bytes(DRIVER_TASK_PRE_POLL_TURN_BYTES)
                 .is_err()
         {
             break;
@@ -7214,6 +7216,10 @@ mod tests {
         assert!(MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL <= TCP_RX_BUFFER);
         assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 32);
         assert!(MAX_CONSOLE_BYTES_PER_POLL <= TCP_TX_BUFFER);
+        assert_eq!(
+            TCP_SERVICE_BYTES_PER_TURN,
+            (MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL + MAX_CONSOLE_BYTES_PER_POLL) as u32
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -7223,10 +7229,10 @@ mod tests {
         let pre_poll_ops = (GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u16).saturating_mul(4);
         let pre_poll_frames = GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u16;
         let pre_poll_bytes = (GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u32)
-            .saturating_mul(GENET_DRIVER_TASK_PRE_POLL_TURN_BYTES);
+            .saturating_mul(DRIVER_TASK_PRE_POLL_TURN_BYTES);
         let tcp_ops = 64u16;
         let tcp_frames = MAX_CONSOLE_FRAMES_PER_POLL as u16;
-        let tcp_bytes = (TCP_RX_BUFFER + TCP_TX_BUFFER) as u32;
+        let tcp_bytes = TCP_SERVICE_BYTES_PER_TURN;
 
         assert!(pre_poll_ops.saturating_add(tcp_ops) <= contract.budget.max_ops_per_turn);
         assert!(pre_poll_frames.saturating_add(tcp_frames) <= contract.budget.max_frames_per_turn);
@@ -7243,6 +7249,22 @@ mod tests {
             (1u32 + GENET_TCP_POST_DISPATCH_EXTRA_TURNS as u32).saturating_mul(tcp_bytes)
                 <= contract.budget.max_bytes_per_turn
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_tcp_phase_accounting_fits_after_pre_poll() {
+        let contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let pre_poll_ops = 4u16;
+        let pre_poll_frames = 1u16;
+        let pre_poll_bytes = DRIVER_TASK_PRE_POLL_TURN_BYTES;
+        let tcp_ops = 64u16;
+        let tcp_frames = MAX_CONSOLE_FRAMES_PER_POLL as u16;
+        let tcp_bytes = TCP_SERVICE_BYTES_PER_TURN;
+
+        assert!(pre_poll_ops.saturating_add(tcp_ops) <= contract.budget.max_ops_per_turn);
+        assert!(pre_poll_frames.saturating_add(tcp_frames) <= contract.budget.max_frames_per_turn);
+        assert!(pre_poll_bytes.saturating_add(tcp_bytes) <= contract.budget.max_bytes_per_turn);
     }
 
     #[cfg(feature = "kernel")]
