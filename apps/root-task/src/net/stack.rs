@@ -1231,6 +1231,25 @@ fn budgeted_genet_tcp_fast_path_due(
         && listener_defer_reason.is_none()
 }
 
+#[cfg(feature = "kernel")]
+fn budgeted_cyw43_tcp_fast_path_due(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    stage_policy: NetStagePolicy,
+    listener_defer_reason: Option<&str>,
+) -> bool {
+    contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && stage_policy.allow_tcp
+        && listener_defer_reason.is_none()
+}
+
+#[cfg(feature = "kernel")]
+const fn budgeted_cyw43_tcp_phase_borrow_allowed(phase: BudgetedNetPhase) -> bool {
+    matches!(
+        phase,
+        BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush
+    )
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct SelfTestState {
     enabled: bool,
@@ -3089,6 +3108,21 @@ impl<D: NetDevice> NetStack<D> {
         }
     }
 
+    fn budgeted_cyw43_tcp_fast_path_due(&self) -> bool {
+        #[cfg(feature = "kernel")]
+        {
+            budgeted_cyw43_tcp_fast_path_due(
+                D::driver_task_contract(),
+                self.stage_policy,
+                self.console_listener_defer_reason(),
+            )
+        }
+        #[cfg(not(feature = "kernel"))]
+        {
+            false
+        }
+    }
+
     fn service_budgeted_tcp_turn(
         &mut self,
         timestamp: Instant,
@@ -3301,6 +3335,9 @@ impl<D: NetDevice> NetStack<D> {
 
         let phase = self.budgeted_phase;
         let genet_tcp_fast_path = self.budgeted_genet_tcp_fast_path_due();
+        let cyw43_tcp_fast_path = self.budgeted_cyw43_tcp_fast_path_due();
+        let tcp_phase_borrow = genet_tcp_fast_path
+            || (cyw43_tcp_fast_path && budgeted_cyw43_tcp_phase_borrow_allowed(phase));
         match phase {
             BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush => {
                 budget.charge_ops(2)?;
@@ -3321,7 +3358,7 @@ impl<D: NetDevice> NetStack<D> {
                 budget.charge_bytes(8 * 1024)?;
             }
         }
-        if genet_tcp_fast_path && phase != BudgetedNetPhase::Tcp {
+        if tcp_phase_borrow && phase != BudgetedNetPhase::Tcp {
             Self::charge_tcp_budget(budget)?;
         }
 
@@ -3335,16 +3372,24 @@ impl<D: NetDevice> NetStack<D> {
         let mut activity = self.sync_interface_hardware_addr(now_ms);
         activity |= self.service_wifi_host_eapol_slice(now_ms);
         activity |= self.sync_interface_hardware_addr(now_ms);
-        if genet_tcp_fast_path && phase != BudgetedNetPhase::Tcp {
+        if tcp_phase_borrow && phase != BudgetedNetPhase::Tcp {
             activity |= self.service_budgeted_tcp_turn(
                 timestamp,
                 now_ms,
-                "budgeted-genet-pre-tcp",
-                "budgeted-genet-post-tcp",
+                if genet_tcp_fast_path {
+                    "budgeted-genet-pre-tcp"
+                } else {
+                    "budgeted-cyw43-pre-tcp"
+                },
+                if genet_tcp_fast_path {
+                    "budgeted-genet-post-tcp"
+                } else {
+                    "budgeted-cyw43-post-tcp"
+                },
             );
         }
         activity |= match phase {
-            BudgetedNetPhase::Interface if genet_tcp_fast_path => false,
+            BudgetedNetPhase::Interface if tcp_phase_borrow => false,
             BudgetedNetPhase::Interface => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
             }
@@ -3359,7 +3404,7 @@ impl<D: NetDevice> NetStack<D> {
                 "budgeted-tcp-pre",
                 "budgeted-post-tcp",
             ),
-            BudgetedNetPhase::InterfaceFlush if genet_tcp_fast_path => false,
+            BudgetedNetPhase::InterfaceFlush if tcp_phase_borrow => false,
             BudgetedNetPhase::InterfaceFlush => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
             }
@@ -6543,7 +6588,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 #[cfg(feature = "kernel")]
 const NET_RING_FLAG_BUDGETED: u16 = 1;
 const GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 8;
-const CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 4;
+const CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 8;
 const DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
 const DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
 const GENET_TCP_FAST_PATH_EXTRA_TURNS: usize = 1;
@@ -6589,6 +6634,12 @@ fn driver_task_pre_poll_command(
     hot_path: crate::hal::driver_task::DriverTaskHotPath,
     flags: u16,
 ) -> crate::hal::driver_task::DriverTaskCommandRecord {
+    let frame_flags = match hot_path {
+        crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi => {
+            flags | crate::hal::driver_task::DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH
+        }
+        _ => flags,
+    };
     crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
         0,
         hot_path,
@@ -6596,7 +6647,7 @@ fn driver_task_pre_poll_command(
         crate::hal::driver_task::DriverFrameDescriptor {
             offset: 0,
             len: 0,
-            flags,
+            flags: frame_flags,
         },
     )
 }
@@ -7271,6 +7322,10 @@ mod tests {
         assert!(pre_poll_ops.saturating_add(tcp_ops) <= contract.budget.max_ops_per_turn);
         assert!(pre_poll_frames.saturating_add(tcp_frames) <= contract.budget.max_frames_per_turn);
         assert!(pre_poll_bytes.saturating_add(tcp_bytes) <= contract.budget.max_bytes_per_turn);
+        assert!(
+            pre_poll_bytes.saturating_add(tcp_bytes.saturating_mul(2))
+                > contract.budget.max_bytes_per_turn
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -7289,6 +7344,35 @@ mod tests {
                 crate::hal::driver_task::DriverTaskHotPath::SerialConsole
             ),
             DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_pre_poll_commands_are_quiet_hot_path() {
+        let command = driver_task_pre_poll_command(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi,
+            NET_RING_FLAG_BUDGETED,
+        );
+
+        assert_ne!(
+            command.flags & crate::hal::driver_task::DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH,
+            0
+        );
+        assert_ne!(
+            command.frame.flags & crate::hal::driver_task::DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH,
+            0
+        );
+
+        let genet_command = driver_task_pre_poll_command(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            crate::hal::driver_task::DriverTaskHotPath::GenetNic,
+            NET_RING_FLAG_BUDGETED,
+        );
+        assert_eq!(
+            genet_command.flags & crate::hal::driver_task::DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH,
+            0
         );
     }
 
@@ -7331,6 +7415,59 @@ mod tests {
             crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
             tcp_policy,
             None
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_budgeted_tcp_fast_path_borrows_only_interface_phases() {
+        let tcp_policy = NetStagePolicy {
+            allow_tcp: true,
+            allow_selftest: true,
+            allow_outbound_probe: false,
+            allow_console_io: true,
+            tx_only: false,
+        };
+        let no_tcp_policy = NetStagePolicy {
+            allow_tcp: false,
+            ..tcp_policy
+        };
+
+        assert!(budgeted_cyw43_tcp_fast_path_due(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None
+        ));
+        assert!(!budgeted_cyw43_tcp_fast_path_due(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            Some("wifi-host-eapol-pending")
+        ));
+        assert!(!budgeted_cyw43_tcp_fast_path_due(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            no_tcp_policy,
+            None
+        ));
+        assert!(!budgeted_cyw43_tcp_fast_path_due(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None
+        ));
+
+        assert!(budgeted_cyw43_tcp_phase_borrow_allowed(
+            BudgetedNetPhase::Interface
+        ));
+        assert!(budgeted_cyw43_tcp_phase_borrow_allowed(
+            BudgetedNetPhase::InterfaceFlush
+        ));
+        assert!(!budgeted_cyw43_tcp_phase_borrow_allowed(
+            BudgetedNetPhase::Dhcp
+        ));
+        assert!(!budgeted_cyw43_tcp_phase_borrow_allowed(
+            BudgetedNetPhase::Tcp
+        ));
+        assert!(!budgeted_cyw43_tcp_phase_borrow_allowed(
+            BudgetedNetPhase::SelfTest
         ));
     }
 

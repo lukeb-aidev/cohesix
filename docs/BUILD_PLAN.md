@@ -6912,11 +6912,12 @@ Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-
 - HAL remains the only path for device authority, MMIO, DMA publication, IRQ binding, physical-address handling, firmware-service handoff, and cache-maintenance policy. SDIO/USB seams are extraction-only and must not introduce new hardware support or a parallel driver framework.
 - Pi 4 DMA truth is `bounded_no_iommu`: bounded HAL-managed DMA ownership and evidence, not malicious-device DMA confinement or SMMU/IOMMU isolation.
 - Linked Pi 4 runtime-image specs, `pi4-driver-abi`, runtime CPIO staging, owner-state descriptors, the 26b SDIO acceptance state, and fresh-Pi hardware proof remain separate evidence states; generated eligibility or QEMU proof is not board closure. Milestone 26c may audit and preserve this evidence split, but SDIO graduation belongs to 26b.
+- Linked-runtime performance evidence is counter-qualified: valid `DRIVER_TASK_COUNTER` snapshots, owner-state proof, and same-harness Pi benchmark evidence do not close latency claims unless the Pi profile proves `timers-arch-counter` with `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no`. Dummy-timer captures, stale serial logs, or physical-counter/timer-control exports leave performance proof red.
 - Multi-agent execution is mandatory. Each lane must leave a checked-in or attached handoff with inputs, files touched or intentionally skipped, commands, artifact paths, blockers, deferrals, residual gaps, and PASS/FAIL status.
 - Milestone closure requires a clear/deferred blocker ledger, complete lane handoffs, green task gates, and full target-qualified staged Test Plan PASS on QEMU and Pi 4 with no `INCOMPLETE` markers.
 
 ### Prerequisite
-- Reopened Milestones **26a** and **26b** completed, including checked-in Pi 4 USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load, driver-task scheduling evidence, GENET/static compatibility evidence, DHCP/Wi-Fi compatibility evidence, QEMU compatibility evidence, regenerated profile-specific manifest evidence, linked `pi4-driver-*` runtime image/ABI evidence, and explicit closure or deferral of any runtime-image owner-state proof boundary.
+- Reopened Milestones **26a** and **26b** completed, including checked-in Pi 4 USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load, driver-task scheduling evidence, arch-counter timer-backend proof, GENET/static compatibility evidence, DHCP/Wi-Fi compatibility evidence, QEMU compatibility evidence, regenerated profile-specific manifest evidence, linked `pi4-driver-*` runtime image/ABI evidence, and explicit closure or deferral of any runtime-image owner-state proof boundary.
 
 ### Goal
 Humanize and simplify Cohesix-authored code and documentation without losing behavioral proof. The milestone succeeds only if the audit artifacts, characterization gates, targeted worker/runtime additions, cleanup refactors, generated outputs, and QEMU/Pi 4 staged evidence all agree on the as-built system, and the final scorecard shows the main authored surfaces are easier to read, review, and maintain than the starting point.
@@ -6943,7 +6944,7 @@ Task blocks below own the exact file changes, commands, checks, and deliverables
 
 - Audit control: `docs/audit/M26C_AS_BUILT_BLOCKERS.md`, `M26C_AGENT_HANDOFFS.md`, `M26C_TARGET_RUNNER_BASELINE.md`, `M26C_REFACTOR_MAP.md`, `M26C_REFACTOR_RISK_RATCHET.csv`, `M26C_REFACTOR_OWNERSHIP.md`, `M26C_SIMPLICITY_SCORECARD.md`, `M26C_POST_BEHAVIOR_BASELINE.md`.
 - Documentation truth: `M26C_MARKDOWN_INVENTORY.{csv,md}`, `M26C_MERMAID_INVENTORY.csv`, `M26C_MERMAID_GITHUB_RENDER_AUDIT.md`, `M26C_DOCS_AS_BUILT_AUDIT.md`, `M26C_DOC_DRIFT_LEDGER.md`, `M26C_AI_FINGERPRINT_AUDIT.md`.
-- Runtime boundaries: `M26C_RUNTIME_BOUNDARY_AUDIT.md`, `M26C_NINEDOOR_PARITY_MATRIX.md`, VM-target dependency trees, generated manifest/snippet hashes, Pi 4 runtime/DMA proof classification, and DMA protection profile evidence.
+- Runtime boundaries: `M26C_RUNTIME_BOUNDARY_AUDIT.md`, `M26C_NINEDOOR_PARITY_MATRIX.md`, VM-target dependency trees, generated manifest/snippet hashes, Pi 4 runtime/DMA proof classification, arch-counter timer-backend proof, and DMA protection profile evidence.
 - Worker/runtime implementation evidence: worker architecture tests, cap-backed endpoint negative tests, notification lifecycle tests, MCS/non-MCS scheduling evidence, linked runtime ABI tests, and fresh-source provenance for staged Pi runtime artifacts.
 - Cleanup evidence: before/after characterization for each refactor wave, risk-ratchet review, no-std/HAL boundary evidence, simplification scorecard entries, and authoring cleanup decisions tied back to as-built facts.
 - Closure evidence: QEMU and Pi 4 state dirs with `stage_01.done` through `stage_05.done`, required target artifacts present before `stage_05.done`, no incomplete markers, due-diligence outputs, and a final planner reconciliation of all sub-agent handoffs.
@@ -6998,6 +6999,7 @@ Task blocks below own the exact file changes, commands, checks, and deliverables
 - The blocker ledger is clear or explicitly deferred to named later milestones, and no deferred item is used as satisfied evidence.
 - Markdown, Mermaid, docs-as-built, AI-fingerprint, runtime-boundary, NineDoor parity, refactor-map, risk-ratchet, and sub-agent handoff artifacts all exist and agree with generated/source truth.
 - Pi 4 runtime/DMA evidence separates generated eligibility, target compile, QEMU proof, fresh hardware proof, 26b SDIO owner-state evidence, and full board closure; Pi 4 DMA wording remains `bounded_no_iommu` and never implies SMMU/IOMMU isolation. Milestone 26c does not reopen SDIO graduation.
+- Pi 4 performance evidence separates valid `DRIVER_TASK_COUNTER` snapshots, owner-state proof, same-harness benchmark evidence, and timer-backend proof; any missing or dummy timer backend keeps latency proof red even when runtime/DMA proof is otherwise present.
 - Worker-heart, worker-gpu, and worker-lora have real VM-side worker loops; phase-1 VM worker authority requires matching badged endpoint caps; lifecycle delivery uses generated notifications where applicable; MCS claims are profile-qualified.
 - `docs/audit/M26C_POST_BEHAVIOR_BASELINE.md` records the external behavior snapshot after authorized worker/cap/notification/MCS additions and before cleanup begins; later refactor waves compare against that baseline rather than the pre-26c placeholder behavior.
 - Cleanup/refactor waves have before/after characterization, preserve console/Secure9P/manifest/telemetry/release behavior, keep HAL-only device authority, keep VM builds `no_std`, and do not increase non-test risk indicators without approved exceptions.
@@ -7015,6 +7017,7 @@ Task blocks below own the exact file changes, commands, checks, and deliverables
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, `scripts/ci/check_test_plan.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
 - Generated `root_task.driver_images` records, `crates/pi4-driver-abi`, linked `pi4-driver-*` runtime image artifacts, and driver-runtime CPIO packaging are authoritative boundary artifacts for Pi 4 driver-task cleanup; 26c may audit, test, and refactor around them only without changing acceptance status or hand-editing generated descriptors.
 - Pi 4 runtime/DMA proof fields, descriptor resource totals, owner-state evidence, and source artifact freshness are 26c audit/test-plan surfaces; later operator tooling may project them only after this milestone defines the evidence semantics.
+- Pi 4 timer-backend fields are 26c audit/test-plan surfaces for performance claims. The accepted Pi profile uses read-only EL0 virtual-counter telemetry only when `KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER` is enabled, scales elapsed-time proof from `TIMER_CLOCK_HZ`, and rejects physical counter or EL0 timer-control exports for linked-runtime latency evidence.
 - DMA protection profile fields are compiler-owned surfaces. Pi 4 profiles must resolve to bounded no-IOMMU discipline, while SMMU-backed profiles are future hardware targets that require generated per-device DMA-domain state before code or docs may claim hardware-enforced isolation.
 - Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe, must not import host-side capabilities, transports, or provider crates into the VM build, and must be reviewed against the archived per-profile dependency trees.
 - Worker role/task manifests, ticket scopes, lease bindings, telemetry paths, and lifecycle gates are compiler-owned surfaces; any new worker implementation fields must enter `coh-rtc` IR and generated docs before code depends on them.
@@ -7218,7 +7221,7 @@ Changes:
   - crates/pi4-driver-abi/src/** — add or tighten descriptor-resource tests for runtime MMIO, DMA, shared-buffer, IRQ, bus-alias, and framebuffer ranges emitted by generated Pi 4 driver-image records.
   - apps/pi4-driver-runtime/src/** — add runtime tests that classify DMA reservation/allocation and owner-state evidence without relying on root-owned fallback paths.
   - apps/root-task/src/hal/** + apps/root-task/src/local_seat.rs — surface bounded evidence for DMA arena reservation, bus-address publication, cache maintenance, runtime-init descriptor delivery, and hardware-state handoff while preserving HAL-only authority.
-  - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md + docs/TEST_PLAN.md + docs/HARDWARE_BRINGUP.md — define absent, stale, generated-only, target-build, QEMU, and fresh Pi hardware proof states and require source artifact provenance for each claim.
+  - docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md + docs/TEST_PLAN.md + docs/HARDWARE_BRINGUP.md — define absent, stale, generated-only, target-build, QEMU, fresh Pi hardware proof, valid counter snapshot, and arch-counter timer-backend proof states and require source artifact provenance for each claim.
   - scripts/ci/test_plan_run.sh + stage checks where needed — fail 26c Pi closure if runtime/DMA proof is absent, stale, or inferred from generated eligibility alone.
 Commands:
   - cargo test -p pi4-driver-abi
@@ -7227,10 +7230,12 @@ Commands:
   - cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   - scripts/check-generated.sh
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
+  - scripts/pi4_gate_proof.sh --require-driver-task-proof
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26c-pi4
 Checks:
   - Runtime-image eligibility, descriptor resource totals, DMA reservation/allocation evidence, owner-state fields, and source artifact freshness are reported separately.
   - Missing DMA proof is a blocking absent-evidence state, not inferred success from manifest generation, target compilation, QEMU smoke output, or stale serial logs.
+  - Linked-runtime performance proof requires valid `DRIVER_TASK_COUNTER` evidence plus Pi arch-counter proof (`TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`); counters alone remain diagnostic.
   - DMA ownership, cache maintenance, bus-address publication, runtime-init descriptor delivery, and hardware handoff remain behind HAL/generated interfaces with no direct MMIO or ad-hoc physical-address path.
   - Fresh Pi evidence, when claimed, names the exact serial log, manifest hash, image build, and test-plan state directory used for the claim.
 Deliverables:
@@ -7587,6 +7592,7 @@ Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM
 - Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
 - Older manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 15 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
 - Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 15 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
+- The seL4 15 refresh must preserve the Pi 4 hardware-counter contract used by linked-runtime performance proof: `release-pi4` / `timers-arch-counter` builds expose only the read-only EL0 virtual counter (`KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`), keep physical counter and EL0 timer-control exports disabled, and derive elapsed-time proof from refreshed `TIMER_CLOCK_HZ=54000000` generated headers. Kernel refresh work must not reclassify dummy-timer or physical-counter captures as valid latency evidence.
 - QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
 
 ### Prerequisite
@@ -7600,6 +7606,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - **Kernel baseline refresh**
   - Refresh external seL4 build inputs used by Cohesix bring-up, CI, and Pi 4 image flows to seL4 15.0.0.
   - Record the exact upstream seL4 version/commit accepted for Cohesix in canonical docs and test evidence.
+  - Record refreshed Pi 4 counter-export evidence for `KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`, forbidden physical-counter/timer-control exports, and `TIMER_CLOCK_HZ`.
 
 - **Reference-manual and docs realignment**
   - Update `docs/BUILD_PLAN.md`, `docs/TOOLCHAIN_MAC_ARM64.md`, `README.md`, and other canonical docs that currently describe the normative seL4 manual/baseline so they align with seL4 15.0.0 as built and link the official seL4 Reference Manual v15.0.0 PDF (`https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf`).
@@ -7610,6 +7617,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
   - Audit `crates/sel4-sys`, `crates/sel4-runtime`, `crates/pi4-driver-abi`, linked `apps/pi4-driver-runtime` images, generated `root_task.driver_images` descriptors, and root-task bootstrap code against seL4 15 headers and generated metadata.
   - Preserve Cohesix’s explicit TLS and IPC-buffer installation path unless a compatibility fix requires adjustment.
   - Keep SMP affinity, boot-info handling, CSpace assumptions, and debug-syscall guards aligned with seL4 15 generated headers for both single-core and SMP builds.
+  - Keep root-task and linked-driver-runtime timer build guards aligned with seL4 15 generated `TIMER_CLOCK_HZ` and VCNT export truth; compatibility fixes may not introduce `CNTPCT_EL0`, EL0 timer-control register use, or raw CPU-speed spin loops for elapsed time.
 
 - **Domain-schedule debt removal**
   - Audit build caches and Pi 4/U-Boot kernel configuration for stale `KernelDomainSchedule` / `domain_schedule.c` assumptions.
@@ -7618,7 +7626,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 
 - **Regression and evidence refresh**
   - Re-run generated-artifact guards, root-task checks/tests, QEMU bring-up, Pi 4 image build, and the full target-qualified Test Plan on the seL4 15 baseline.
-  - Publish refreshed audit artifacts proving that operator-visible semantics remain unchanged and that the VM build remains `no_std`.
+  - Publish refreshed audit artifacts proving that operator-visible semantics remain unchanged, that the VM build remains `no_std`, and that Pi 4 latency/performance proof still uses the virtual-counter backend rather than dummy timers or physical-counter exports.
 
 ### Commands
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
@@ -7643,11 +7651,13 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - QEMU and Pi 4 target-qualified Test Plan runs pass on the refreshed kernel baseline with no `*.incomplete` markers and no undocumented operator-visible output drift.
 - Secure9P bounds, console grammar, manifest outputs, release semantics, and host/VM runtime boundaries remain unchanged unless separately documented as defects fixed in the same change.
 - Build artifacts and documentation no longer rely on an accidental `sel4test`-provided `domain_schedule.c` dependency for one-domain Cohesix configurations; any remaining dependency is explicit, justified, and documented.
+- Pi 4 refreshed evidence reports `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no`; any missing/mismatched counter export leaves linked-runtime latency proof red until fixed or explicitly scoped back to reopened 26a/26b acceptance.
 - The carried seL4 manual/reference artifacts, if tracked in-repo, match the accepted kernel baseline or are explicitly relinked to the authoritative upstream 15.0.0 source.
 
 ### Compiler / docsystem touchpoints
 - `coh-rtc` outputs, docs snippets, and manifest fingerprints remain authoritative; 26d may update generators or schemas only when required by the seL4 15 baseline refresh, and any such change must be reflected in the same evidence set.
 - Pi 4 linked driver-runtime ABI/descriptors/images remain authoritative for driver-task bootstrap evidence during the kernel refresh; 26d may adapt them only for seL4 15 compatibility and must not reclassify runtime-spec acceptance or board-proof boundaries without reopened 26a/26b hardware acceptance evidence.
+- Root-task and linked-driver-runtime hardware-counter guards remain authoritative for performance proof during the kernel refresh. Generated seL4 headers and CMake/cache config must agree before `timers-arch-counter` evidence can satisfy 26d closure.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and target-qualified state-dir evidence remain the source of truth for QEMU/Pi 4 pass semantics during the kernel refresh.
 
 ### Atomic tasks
@@ -7680,6 +7690,28 @@ Commands:
   - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
 Checks: direct-seL4 Cohesix builds compile on all supported kernel profiles, and linked driver-runtime ABI/build evidence stays green, without changing system model or operator-visible semantics.
 Deliverables: passing workspace/build-target checks and refreshed low-level compatibility evidence.
+```
+
+```
+Title/ID: m26d-pi4-counter-contract-refresh
+Goal: Reprove the Pi 4 virtual-counter timer contract on the seL4 15 baseline before accepting linked-runtime latency or performance evidence.
+Inputs: seL4/build_UBOOT/CMakeCache.txt, seL4/build_UBOOT/kernel/gen_headers/plat/platform_gen.h, apps/root-task/build.rs, apps/root-task/src/arch/aarch64/timer.rs, apps/pi4-driver-runtime/build.rs, apps/pi4-driver-runtime/src/lib.rs, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, scripts/pi4_trace_normalize.py, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
+Changes:
+  - scripts/pi4-image-build.sh — keep seL4 15 Pi 4 staging blocked unless VCNT export is enabled, physical counter/timer-control exports are disabled, and generated `TIMER_CLOCK_HZ` matches the accepted Pi profile.
+  - apps/root-task/build.rs + apps/root-task/src/arch/aarch64/timer.rs — preserve root-task build/runtime checks that use `CNTVCT_EL0` only under the `timers-arch-counter` profile and scale elapsed-time proof from generated frequency.
+  - apps/pi4-driver-runtime/build.rs + apps/pi4-driver-runtime/src/lib.rs — preserve linked-runtime build/runtime checks and `RuntimeDeadline` conversion from legacy retry counts to counter-backed deadlines.
+  - scripts/pi4_gate_proof.sh + scripts/pi4_trace_normalize.py + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — ensure refreshed Pi 4 proof gates require `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no` before latency proof is accepted.
+Commands:
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir seL4/build_UBOOT
+  - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"
+  - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
+  - scripts/pi4_gate_proof.sh --require-driver-task-proof
+Checks:
+  - Refreshed seL4 15 Pi 4 generated headers and cache expose only the accepted virtual-counter path for EL0 timing.
+  - Root-task and linked-runtime builds fail on missing VCNT export, nonzero physical-counter/timer-control export, or missing/nonzero-invalid `TIMER_CLOCK_HZ`.
+  - Runtime latency telemetry and proof normalizer output reject dummy-timer captures, stale logs, physical-counter exports, and missing timer frequency as performance evidence.
+Deliverables:
+  - Checked-in 26d evidence tying seL4 15 provenance, Pi 4 counter configuration, linked-runtime deadline behavior, and target-qualified performance proof into one refreshed contract.
 ```
 
 ```
