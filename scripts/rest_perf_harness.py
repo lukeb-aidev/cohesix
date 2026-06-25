@@ -76,6 +76,11 @@ GATEWAY_STATUS_BROKER_COUNTERS = (
     "proc_cache_hits",
     "proc_cache_misses",
     "proc_cache_evictions",
+    "control_write_retryable_errors",
+    "control_write_retries",
+    "control_write_retry_sleep_ms",
+    "control_write_retry_exhaustions",
+    "control_write_success_after_retry",
 )
 
 FAST_RAMP_WORKERS_MIN = 24
@@ -952,6 +957,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     launch.add_argument(
+        "--gateway-control-write-retry-window-ms",
+        type=int,
+        default=None,
+        help=(
+            "Override hive-gateway retry window for retryable control writes in "
+            "milliseconds; 0 surfaces bounded VM backpressure immediately."
+        ),
+    )
+    launch.add_argument(
         "--no-gateway",
         action="store_true",
         help="Skip launching hive-gateway (assume already running).",
@@ -1235,6 +1249,13 @@ def parse_args() -> argparse.Namespace:
                 5000,
                 1_200_000,
                 "gateway-broker-telemetry-response-timeout-ms",
+            )
+        if args.gateway_control_write_retry_window_ms is not None:
+            args.gateway_control_write_retry_window_ms = clamp_int(
+                args.gateway_control_write_retry_window_ms,
+                0,
+                60_000,
+                "gateway-control-write-retry-window-ms",
             )
 
     return args
@@ -2524,6 +2545,16 @@ def run_simulation(args: argparse.Namespace) -> int:
                         str(args.gateway_broker_telemetry_response_timeout_ms),
                     ]
                 )
+            if args.gateway_control_write_retry_window_ms is not None:
+                env["HIVE_GATEWAY_CONTROL_WRITE_RETRY_WINDOW_MS"] = str(
+                    args.gateway_control_write_retry_window_ms
+                )
+                gateway_cmd.extend(
+                    [
+                        "--control-write-retry-window-ms",
+                        str(args.gateway_control_write_retry_window_ms),
+                    ]
+                )
             gateway_proc = launch_process(
                 gateway_cmd,
                 env,
@@ -2599,6 +2630,11 @@ def run_simulation(args: argparse.Namespace) -> int:
         duration_s = args.duration_mins * 60
         ramp_step = max(1, args.ramp_step_secs)
         end_time = time.time() + duration_s
+        gateway_control_retry_window = (
+            args.gateway_control_write_retry_window_ms
+            if args.gateway_control_write_retry_window_ms is not None
+            else "default"
+        )
 
         args.logger.log(
             f"[simulate] duration={args.duration_mins}m "
@@ -2616,6 +2652,8 @@ def run_simulation(args: argparse.Namespace) -> int:
             f"{args.gateway_broker_control_response_timeout_ms or 'default'} "
             f"gateway_broker_telemetry_response_timeout_ms="
             f"{args.gateway_broker_telemetry_response_timeout_ms or 'default'} "
+            f"gateway_control_write_retry_window_ms="
+            f"{gateway_control_retry_window} "
             f"scenario={scenario.name if scenario else 'mixed'} "
             f"error_budget_rate={args.error_budget_rate if args.error_budget_rate is not None else 'none'}"
         )
@@ -2968,6 +3006,9 @@ def write_simulation_artifacts(
         ),
         "gateway_broker_telemetry_response_timeout_ms": (
             args.gateway_broker_telemetry_response_timeout_ms
+        ),
+        "gateway_control_write_retry_window_ms": (
+            args.gateway_control_write_retry_window_ms
         ),
         "gateway_status_start": gateway_status_start,
         "gateway_status_end": gateway_status_end,

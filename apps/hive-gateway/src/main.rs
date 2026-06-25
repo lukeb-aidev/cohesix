@@ -71,7 +71,8 @@ const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
 const BROKER_CONTROL_BURST: usize = 6;
 const BROKER_IDLE_WAIT_MS: u64 = 20;
-const CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
+const DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
+const MAX_CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 60_000;
 const CONTROL_WRITE_RETRY_SLEEP_MS: u64 = 15;
 const CONTROL_WRITE_RETRY_MAX_SLEEP_MS: u64 = 120;
 const CACHE_INVALIDATE_CONTROL_NAMESPACES: &[&str] = &["/proc", "/queen", "/worker", "/gpu"];
@@ -156,6 +157,9 @@ struct Cli {
         alias = "broker-telemetry-timeout-ms"
     )]
     broker_telemetry_response_timeout_ms: Option<u64>,
+    /// Max milliseconds to retry retryable control writes before surfacing bounded backpressure.
+    #[arg(long)]
+    control_write_retry_window_ms: Option<u64>,
     /// Use the in-process mock NineDoor backend.
     #[arg(long, default_value_t = false)]
     mock: bool,
@@ -174,6 +178,7 @@ struct GatewayInner {
     status: Mutex<GatewayStatus>,
     shutdown: Arc<AtomicBool>,
     broker_timeouts: BrokerTimeouts,
+    control_write_retry_window_ms: u64,
     bounds: BoundsResponse,
     policy: CohshPolicy,
     broker: Arc<BrokerMetrics>,
@@ -302,6 +307,11 @@ struct BrokerMetrics {
     proc_cache_hits: AtomicU64,
     proc_cache_misses: AtomicU64,
     proc_cache_evictions: AtomicU64,
+    control_write_retryable_errors: AtomicU64,
+    control_write_retries: AtomicU64,
+    control_write_retry_sleep_ms: AtomicU64,
+    control_write_retry_exhaustions: AtomicU64,
+    control_write_success_after_retry: AtomicU64,
     relay_queue_depth: AtomicU64,
     relay_deduped: AtomicU64,
     relay_remote_write_failures: AtomicU64,
@@ -344,6 +354,17 @@ impl BrokerMetrics {
             proc_cache_hits: self.proc_cache_hits.load(Ordering::Relaxed),
             proc_cache_misses: self.proc_cache_misses.load(Ordering::Relaxed),
             proc_cache_evictions: self.proc_cache_evictions.load(Ordering::Relaxed),
+            control_write_retryable_errors: self
+                .control_write_retryable_errors
+                .load(Ordering::Relaxed),
+            control_write_retries: self.control_write_retries.load(Ordering::Relaxed),
+            control_write_retry_sleep_ms: self.control_write_retry_sleep_ms.load(Ordering::Relaxed),
+            control_write_retry_exhaustions: self
+                .control_write_retry_exhaustions
+                .load(Ordering::Relaxed),
+            control_write_success_after_retry: self
+                .control_write_success_after_retry
+                .load(Ordering::Relaxed),
             relay_queue_depth: self.relay_queue_depth.load(Ordering::Relaxed),
             relay_deduped: self.relay_deduped.load(Ordering::Relaxed),
             relay_remote_write_failures: self.relay_remote_write_failures.load(Ordering::Relaxed),
@@ -405,6 +426,11 @@ struct BrokerStatusResponse {
     proc_cache_hits: u64,
     proc_cache_misses: u64,
     proc_cache_evictions: u64,
+    control_write_retryable_errors: u64,
+    control_write_retries: u64,
+    control_write_retry_sleep_ms: u64,
+    control_write_retry_exhaustions: u64,
+    control_write_success_after_retry: u64,
     relay_queue_depth: u64,
     relay_deduped: u64,
     relay_remote_write_failures: u64,
@@ -510,6 +536,7 @@ async fn main() -> Result<()> {
             status: Mutex::new(GatewayStatus::default()),
             shutdown,
             broker_timeouts: config.broker_timeouts,
+            control_write_retry_window_ms: config.control_write_retry_window_ms,
             bounds,
             policy,
             broker: broker_metrics,
@@ -567,6 +594,7 @@ struct GatewayConfig {
     pool_control_sessions: Option<u16>,
     pool_telemetry_sessions: Option<u16>,
     broker_timeouts: BrokerTimeouts,
+    control_write_retry_window_ms: u64,
     mock: bool,
     allow_non_loopback_bind: bool,
 }
@@ -639,6 +667,13 @@ impl GatewayConfig {
             DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS,
             "broker telemetry response timeout",
         )?;
+        let control_write_retry_window_ms = env_override_opt_u64(
+            cli.control_write_retry_window_ms,
+            &["HIVE_GATEWAY_CONTROL_WRITE_RETRY_WINDOW_MS"],
+        )
+        .unwrap_or(DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS);
+        let control_write_retry_window_ms =
+            validate_control_write_retry_window_ms(control_write_retry_window_ms)?;
         let allow_non_loopback_bind =
             cli.allow_non_loopback_bind || env_flag("HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND");
         let auth_token = normalize_required_secret("tcp auth token", auth_token, mock)?;
@@ -658,6 +693,7 @@ impl GatewayConfig {
                 control_response_ms: broker_control_response_timeout_ms,
                 telemetry_response_ms: broker_telemetry_response_timeout_ms,
             },
+            control_write_retry_window_ms,
             mock,
             allow_non_loopback_bind,
         })
@@ -731,6 +767,15 @@ fn broker_response_timeout_ms(value: Option<u64>, default_ms: u64, label: &str) 
         anyhow::bail!("{label} must be >= broker queue wait limit {BROKER_QUEUE_WAIT_LIMIT_MS}ms");
     }
     Ok(timeout_ms)
+}
+
+fn validate_control_write_retry_window_ms(value: u64) -> Result<u64> {
+    if value > MAX_CONTROL_WRITE_RETRY_WINDOW_MS {
+        anyhow::bail!(
+            "control write retry window must be <= {MAX_CONTROL_WRITE_RETRY_WINDOW_MS}ms"
+        );
+    }
+    Ok(value)
 }
 
 fn seed_relay_metrics_from_env(metrics: &BrokerMetrics) {
@@ -1121,6 +1166,15 @@ fn next_delay(current: Duration, ceiling: Duration) -> Duration {
     }
 }
 
+fn duration_millis_u64(duration: Duration) -> u64 {
+    let millis = duration.as_millis();
+    if millis > u128::from(u64::MAX) {
+        u64::MAX
+    } else {
+        millis as u64
+    }
+}
+
 async fn shutdown_signal(state: AppState) {
     let _ = signal::ctrl_c().await;
     state.inner.shutdown.store(true, Ordering::SeqCst);
@@ -1328,7 +1382,8 @@ impl AppState {
         self.ensure_connected()?;
         let write_path = path.to_owned();
         let payload = payload.to_vec();
-        let deadline = Instant::now() + Duration::from_millis(CONTROL_WRITE_RETRY_WINDOW_MS);
+        let retry_window = Duration::from_millis(self.inner.control_write_retry_window_ms);
+        let deadline = Instant::now() + retry_window;
         let retry_deadline_enabled = is_retryable_control_write_path(write_path.as_str());
         let mut first_retryable_error: Option<String> = None;
         let mut retry_delay = Duration::from_millis(CONTROL_WRITE_RETRY_SLEEP_MS);
@@ -1342,6 +1397,12 @@ impl AppState {
             );
             match result {
                 Ok(_) => {
+                    if first_retryable_error.is_some() {
+                        self.inner
+                            .broker
+                            .control_write_success_after_retry
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
                     self.read_cache_invalidate_for_write(write_path.as_str());
                     return Ok(());
                 }
@@ -1359,16 +1420,35 @@ impl AppState {
                         }
                         return Err(err);
                     }
+                    self.inner
+                        .broker
+                        .control_write_retryable_errors
+                        .fetch_add(1, Ordering::Relaxed);
                     if first_retryable_error.is_none() {
                         first_retryable_error = Some(message.clone());
                     }
-                    if Instant::now() >= deadline {
+                    let now = Instant::now();
+                    if retry_window.is_zero() || now >= deadline {
+                        self.inner
+                            .broker
+                            .control_write_retry_exhaustions
+                            .fetch_add(1, Ordering::Relaxed);
                         return Err(anyhow::anyhow!(final_control_write_error(
                             &first_retryable_error,
                             message.as_str()
                         )));
                     }
-                    thread::sleep(retry_delay);
+                    let remaining = deadline.saturating_duration_since(now);
+                    let bounded_delay = retry_delay.min(remaining);
+                    self.inner
+                        .broker
+                        .control_write_retries
+                        .fetch_add(1, Ordering::Relaxed);
+                    self.inner
+                        .broker
+                        .control_write_retry_sleep_ms
+                        .fetch_add(duration_millis_u64(bounded_delay), Ordering::Relaxed);
+                    thread::sleep(bounded_delay);
                     retry_delay = next_delay(
                         retry_delay,
                         Duration::from_millis(CONTROL_WRITE_RETRY_MAX_SLEEP_MS),
@@ -2232,6 +2312,42 @@ mod tests {
     }
 
     #[test]
+    fn retry_budget_defaults_preserve_existing_control_write_window() {
+        assert_eq!(DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS, 1_200);
+        assert_eq!(validate_control_write_retry_window_ms(0).unwrap(), 0);
+        assert!(
+            validate_control_write_retry_window_ms(MAX_CONTROL_WRITE_RETRY_WINDOW_MS + 1).is_err()
+        );
+        assert_eq!(duration_millis_u64(Duration::from_millis(17)), 17);
+    }
+
+    #[test]
+    fn broker_status_snapshot_includes_control_write_retry_counters() {
+        let metrics = BrokerMetrics::default();
+        metrics
+            .control_write_retryable_errors
+            .store(3, Ordering::Relaxed);
+        metrics.control_write_retries.store(4, Ordering::Relaxed);
+        metrics
+            .control_write_retry_sleep_ms
+            .store(75, Ordering::Relaxed);
+        metrics
+            .control_write_retry_exhaustions
+            .store(2, Ordering::Relaxed);
+        metrics
+            .control_write_success_after_retry
+            .store(1, Ordering::Relaxed);
+
+        let snapshot = metrics.snapshot();
+
+        assert_eq!(snapshot.control_write_retryable_errors, 3);
+        assert_eq!(snapshot.control_write_retries, 4);
+        assert_eq!(snapshot.control_write_retry_sleep_ms, 75);
+        assert_eq!(snapshot.control_write_retry_exhaustions, 2);
+        assert_eq!(snapshot.control_write_success_after_retry, 1);
+    }
+
+    #[test]
     fn apply_policy_overrides_updates_pool_sizes_when_requested() {
         let mut config = GatewayConfig {
             bind: "127.0.0.1:8080".to_owned(),
@@ -2247,6 +2363,7 @@ mod tests {
                 control_response_ms: DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS,
                 telemetry_response_ms: DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS,
             },
+            control_write_retry_window_ms: DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS,
             mock: true,
             allow_non_loopback_bind: false,
         };

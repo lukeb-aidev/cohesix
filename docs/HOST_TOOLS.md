@@ -550,6 +550,8 @@ Host-only REST gateway that projects Cohesix console/file semantics (`LS`, `CAT`
                                 Override pooled control session capacity
       --pool-telemetry-sessions <POOL_TELEMETRY_SESSIONS>
                                 Override pooled telemetry session capacity
+      --control-write-retry-window-ms <CONTROL_WRITE_RETRY_WINDOW_MS>
+                                Retry window for retryable control writes
       --mock                     Use the in-process mock NineDoor backend
   -h, --help                     Print help
   -V, --version                  Print version
@@ -567,7 +569,7 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 ```
 
 ### Notes
-- Environment overrides: `HIVE_GATEWAY_BIND`, `HIVE_GATEWAY_MOCK`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_TCP_HOST`, `COH_TCP_PORT`, `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`), `COH_ROLE`, `COH_TICKET`, `HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND`, `HIVE_GATEWAY_ALLOW_INSECURE_CONSOLE_AUTH`, `COHESIX_ALLOW_INSECURE_CONSOLE_AUTH`.
+- Environment overrides: `HIVE_GATEWAY_BIND`, `HIVE_GATEWAY_MOCK`, `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_TCP_HOST`, `COH_TCP_PORT`, `COH_AUTH_TOKEN` (or `COHSH_AUTH_TOKEN`), `COH_ROLE`, `COH_TICKET`, `HIVE_GATEWAY_CONTROL_WRITE_RETRY_WINDOW_MS`, `HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND`, `HIVE_GATEWAY_ALLOW_INSECURE_CONSOLE_AUTH`, `COHESIX_ALLOW_INSECURE_CONSOLE_AUTH`.
 - Pool overrides: `HIVE_GATEWAY_POOL_CONTROL_SESSIONS`, `HIVE_GATEWAY_POOL_TELEMETRY_SESSIONS`.
 - OpenAPI spec + examples live in `docs/HOST_API.md` and are served at `/v1/openapi.yaml`.
 - Swagger UI is served at `/docs` and uses public CDN assets; use the YAML spec for air-gapped environments.
@@ -575,8 +577,9 @@ curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 - `--auth-token` and `--request-auth-token` are required in non-mock mode, and placeholder `changeme` is rejected by default.
 - Non-loopback binds are blocked by default; use `--allow-non-loopback-bind` (or `HIVE_GATEWAY_ALLOW_NON_LOOPBACK_BIND=1`) only when exposure is intentional.
 - Gateway role/ticket is fixed at startup; REST clients inherit that single role and ticket. There is no per-request ticket.
-- Request handling is brokered through bounded control/telemetry queues with fair scheduling; write/read pressure returns deterministic `429` (`gateway backpressure`) instead of hidden retries.
-- `/v1/meta/status` includes broker counters (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`, `telemetry_yields`) and relay counters (`relay_queue_depth`, `relay_deduped`, `relay_remote_write_failures`) for federation triage.
+- Request handling is brokered through bounded control/telemetry queues with fair scheduling; broker queue pressure returns deterministic `429` (`gateway backpressure`) instead of hidden retries.
+- Retryable VM control-write backpressure uses `--control-write-retry-window-ms` (default `1200`); stress runs may set it to `0` to surface bounded `buffer-full` responses immediately while preserving gateway counters.
+- `/v1/meta/status` includes broker counters (`control_waiters`, `telemetry_waiters`, `pool_exhausted`, `timeout_rejections`, `telemetry_yields`), control-write retry counters (`control_write_retryable_errors`, `control_write_retries`, `control_write_retry_sleep_ms`, `control_write_retry_exhaustions`, `control_write_success_after_retry`), and relay counters (`relay_queue_depth`, `relay_deduped`, `relay_remote_write_failures`) for federation triage.
 - Bind the gateway to loopback and expose it remotely via SSH tunneling.
 
 ### Remote access pattern (SSH tunnel)

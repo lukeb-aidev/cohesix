@@ -32,6 +32,15 @@ HIVE_GATEWAY_BIND=127.0.0.1:8080
 curl -sS http://127.0.0.1:8080/v1/meta/bounds | jq .
 ```
 
+**1b) Inspect gateway broker and control-write backpressure counters**
+```
+curl -sS http://127.0.0.1:8080/v1/meta/status | jq '.broker'
+```
+The broker object includes waiters, pool/backpressure counters, cache counters,
+relay counters, and control-write retry counters such as
+`control_write_retryable_errors`, `control_write_retry_sleep_ms`, and
+`control_write_retry_exhaustions`.
+
 **2) Append a schedule entry**
 ```
 curl -sS -X POST http://127.0.0.1:8080/v1/fs/echo \

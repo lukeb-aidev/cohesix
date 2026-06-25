@@ -465,6 +465,8 @@ components:
       required:
         - control_waiters
         - telemetry_waiters
+        - control_waiters_high_water
+        - telemetry_waiters_high_water
         - control_checkouts
         - telemetry_checkouts
         - pool_exhausted
@@ -474,11 +476,25 @@ components:
         - proc_cache_hits
         - proc_cache_misses
         - proc_cache_evictions
+        - control_write_retryable_errors
+        - control_write_retries
+        - control_write_retry_sleep_ms
+        - control_write_retry_exhaustions
+        - control_write_success_after_retry
+        - relay_queue_depth
+        - relay_deduped
+        - relay_remote_write_failures
       properties:
         control_waiters:
           type: integer
           minimum: 0
         telemetry_waiters:
+          type: integer
+          minimum: 0
+        control_waiters_high_water:
+          type: integer
+          minimum: 0
+        telemetry_waiters_high_water:
           type: integer
           minimum: 0
         control_checkouts:
@@ -506,5 +522,29 @@ components:
           type: integer
           minimum: 0
         proc_cache_evictions:
+          type: integer
+          minimum: 0
+        control_write_retryable_errors:
+          type: integer
+          minimum: 0
+        control_write_retries:
+          type: integer
+          minimum: 0
+        control_write_retry_sleep_ms:
+          type: integer
+          minimum: 0
+        control_write_retry_exhaustions:
+          type: integer
+          minimum: 0
+        control_write_success_after_retry:
+          type: integer
+          minimum: 0
+        relay_queue_depth:
+          type: integer
+          minimum: 0
+        relay_deduped:
+          type: integer
+          minimum: 0
+        relay_remote_write_failures:
           type: integer
           minimum: 0
