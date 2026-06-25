@@ -1291,6 +1291,9 @@ context and the retry/poll window.
   admission, and `WLC_SET_SSID`/primary-BSS join.
   The prejoin association sequence stays inside the isolated runtime:
   `cyw43-control-prejoin-mpc` sends `mpc=1`,
+  using the runtime's bounded control pre-TX drain so stale control/event frames
+  cannot leave the next SDPCM submit behind an uncleared F2 condition on real
+  Pi 4 WiFi,
   `cyw43-control-prejoin-join-pref` sends the captured
   `04 02 08 01 01 02 00 00` `join_pref` bytes,
   `cyw43-control-prejoin-if-event-message` gets global `event_msgs`, sets the
@@ -1298,16 +1301,17 @@ context and the retry/poll window.
   channel and unassociated dwell times are set to `40 ms`.
   `cyw43-control-prejoin-txbf` is
   best-effort with only matched `BCME_UNSUPPORTED` tolerated.
-  Immediately before join, root replays the Linux connect-time station policy as
-  isolated runtime control exchanges: `mpc=0` is required, while `arp_ol=0`,
-  `arpoe=0`, and `ndoe=0` are best-effort and tolerate only matched
-  `BCME_UNSUPPORTED` replies.
+  After `WLC_UP`/`WLC_SET_INFRA`, root sends `WLC_SET_PM=0` (`PM_OFF`) so the
+  dongle stays in the same low-latency power policy Linux applies when power
+  save is disabled. Immediately before join, root replays the Linux
+  connect-time station policy as isolated runtime control exchanges: `mpc=0` is
+  required, while `arp_ol=0`, `arpoe=0`, and `ndoe=0` are best-effort and
+  tolerate only matched `BCME_UNSUPPORTED` replies.
   Additional Linux probe telemetry such as firmware `ver`, `clmver`, and
   event-mask setup remains useful comparison evidence, but it is not accepted as
   proof unless the isolated runtime observes the corresponding CDC reply. Do not
   send AP/P2P-only or local legacy station writes such as `apsta=1`, early `country`,
-  `WLC_SET_GMODE`,
-  `WLC_SET_BAND`, `WLC_SET_ANTDIV`, early AMPDU-limit writes, or `WLC_SET_PM`
+  `WLC_SET_GMODE`, `WLC_SET_BAND`, `WLC_SET_ANTDIV`, or early AMPDU-limit writes
   unless a later Linux-equivalent gate proves they belong. `BCME_UNSUPPORTED` on
   non-captured compatibility knobs is nonfatal; transport errors are fatal.
   Function 1 host-latch/no-dongle-source stalls during join programming report

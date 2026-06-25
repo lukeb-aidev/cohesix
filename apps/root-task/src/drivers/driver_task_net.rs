@@ -195,6 +195,7 @@ const CYW43_WLC_SET_PROMISC: u32 = 10;
 const CYW43_WLC_SET_INFRA: u32 = 20;
 const CYW43_WLC_GET_BSSID: u32 = 23;
 const CYW43_WLC_SET_SSID: u32 = 26;
+const CYW43_WLC_SET_PM: u32 = 86;
 const CYW43_WLC_GET_REVINFO: u32 = 98;
 const CYW43_WLC_SET_SCAN_CHANNEL_TIME: u32 = 185;
 const CYW43_WLC_SET_SCAN_UNASSOC_TIME: u32 = 187;
@@ -208,7 +209,9 @@ const CYW43_WSEC_NONE: u32 = 0;
 const CYW43_WSEC_AES: u32 = 4;
 const CYW43_MFP_NONE: u32 = 0;
 const CYW43_WME_BSS_DISABLE_RSN_DEFAULT: u32 = 1;
+const CYW43_PM_OFF: u32 = 0;
 const CYW43_LINUX_PREJOIN_MPC_ENABLED: u32 = 1;
+const CYW43_LINUX_PREJOIN_MPC_PRE_TX_DRAIN: bool = true;
 const CYW43_LINUX_SCAN_CHANNEL_TIME_MS: u32 = 40;
 const CYW43_LINUX_SCAN_UNASSOC_TIME_MS: u32 = 40;
 const CYW43_BSSCFG_PRIMARY_INDEX: u32 = 0;
@@ -2414,6 +2417,12 @@ where
     cyw43_enable_join_event_messages(contract, "cyw43-control-event-mask")?;
     cyw43_submit_bcdc_empty(contract, CYW43_WLC_UP, "cyw43-control-up")?;
     cyw43_submit_bcdc_u32(contract, CYW43_WLC_SET_INFRA, 1, "cyw43-control-infra")?;
+    cyw43_submit_bcdc_u32(
+        contract,
+        CYW43_WLC_SET_PM,
+        CYW43_PM_OFF,
+        "cyw43-control-pm-off",
+    )?;
     let _ = cyw43_poll_control_plane_frames("cyw43-control-post-up-event-drain");
     cyw43_enable_join_event_messages(contract, "cyw43-control-event-mask-post-up")?;
     cyw43_apply_linux_connect_station_policy(contract)?;
@@ -3168,12 +3177,25 @@ fn cyw43_submit_bcdc_iovar_u32_with_header_mode(
     stage: &'static str,
     header_mode: Cyw43ControlHeaderMode,
 ) -> Result<(), DriverTaskNetError> {
-    cyw43_submit_bcdc_iovar_bytes_with_header_mode(
+    cyw43_submit_bcdc_iovar_u32_with_options(contract, name, value, stage, header_mode, false)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_iovar_u32_with_options(
+    contract: DriverTaskContract,
+    name: &str,
+    value: u32,
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
+) -> Result<(), DriverTaskNetError> {
+    cyw43_submit_bcdc_iovar_bytes_with_options(
         contract,
         name,
         &value.to_le_bytes(),
         stage,
         header_mode,
+        pre_tx_drain,
     )
 }
 
@@ -3708,11 +3730,13 @@ fn cyw43_prepare_runtime_control_plane(
 fn cyw43_apply_linux_prejoin_association_policy(
     contract: DriverTaskContract,
 ) -> Result<(), DriverTaskNetError> {
-    cyw43_submit_bcdc_iovar_u32(
+    cyw43_submit_bcdc_iovar_u32_with_options(
         contract,
         "mpc",
         CYW43_LINUX_PREJOIN_MPC_ENABLED,
         "cyw43-control-prejoin-mpc",
+        Cyw43ControlHeaderMode::Extended,
+        CYW43_LINUX_PREJOIN_MPC_PRE_TX_DRAIN,
     )?;
     cyw43_submit_bcdc_iovar_bytes(
         contract,
@@ -13117,11 +13141,13 @@ mod tests {
     #[test]
     fn cyw43_control_preflight_matches_linux_ordered_primitives() {
         assert_eq!(CYW43_WLC_GET_REVINFO, 98);
+        assert_eq!(CYW43_WLC_SET_PM, 86);
         assert_eq!(CYW43_CONTROL_EXCHANGE_FAULT_DETAIL, 0x530b);
         assert_eq!(CYW43_BCME_UNSUPPORTED_STATUS, 0xffff_ffe9);
         assert_eq!(CYW43_BCME_NOTASSOCIATED_STATUS, 0xffff_ffef);
         assert_eq!(CYW43_MFP_NONE, 0);
         assert_eq!(CYW43_WME_BSS_DISABLE_RSN_DEFAULT, 1);
+        assert_eq!(CYW43_PM_OFF, 0);
         let unsupported = DriverTaskCompletionRecord {
             sequence: 0,
             code: DriverTaskCompletionCode::Fault.as_u16(),
@@ -13187,6 +13213,32 @@ mod tests {
         for (name, value) in CYW43_LINUX_CONNECT_STATION_POLICY_IOVARS {
             assert_cyw43_u32_iovar_frame(name, value);
         }
+    }
+
+    #[test]
+    fn cyw43_low_latency_power_policy_matches_linux_command_shape() {
+        let mut payload = [0u8; 4];
+        payload.copy_from_slice(&CYW43_PM_OFF.to_le_bytes());
+
+        let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+        let len = cyw43_write_bcdc_frame(
+            &mut frame,
+            CYW43_WLC_SET_PM,
+            CYW43_BCDC_FLAG_SET,
+            1,
+            &payload,
+        )
+        .expect("PM_OFF BCDC frame should fit");
+
+        assert_eq!(cyw43_read_le_u32(&frame[..len], 0), Some(CYW43_WLC_SET_PM));
+        assert_eq!(
+            cyw43_read_le_u16(&frame[..len], 8),
+            Some(CYW43_BCDC_FLAG_SET)
+        );
+        assert_eq!(
+            cyw43_read_le_u32(&frame[..len], CYW43_BCDC_HEADER_BYTES),
+            Some(0)
+        );
     }
 
     #[test]
@@ -13655,6 +13707,28 @@ mod tests {
         assert_eq!(descriptor.total_len, 16);
         assert_eq!(descriptor.arg0, CYW43_WLC_GET_REVINFO);
         assert_eq!(descriptor.arg1, 4);
+    }
+
+    #[test]
+    fn cyw43_prejoin_mpc_exchange_drains_before_tx() {
+        let descriptor = cyw43_control_exchange_descriptor(
+            24,
+            CYW43_WLC_SET_VAR,
+            11,
+            Cyw43ControlHeaderMode::Extended,
+            CYW43_LINUX_PREJOIN_MPC_PRE_TX_DRAIN,
+        );
+
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+        assert_eq!(
+            descriptor.flags,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+        );
+        assert_eq!(descriptor.payload_len, 24);
+        assert_eq!(descriptor.total_len, 24);
+        assert_eq!(descriptor.arg0, CYW43_WLC_SET_VAR);
+        assert_eq!(descriptor.arg1, 11);
     }
 
     #[test]

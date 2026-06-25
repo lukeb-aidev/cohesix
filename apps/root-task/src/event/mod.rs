@@ -350,9 +350,7 @@ fn net_status_allows_root_console(status: &NetStatusReport) -> bool {
 #[cfg(feature = "net-console")]
 fn net_status_terminal_failure_reason(status: &NetStatusReport) -> Option<&'static str> {
     match status.address_source {
-        "wifi-host-eapol-required" | "wifi-association-failed" | "dhcp-failed" => {
-            Some(status.address_source)
-        }
+        "wifi-host-eapol-required" | "wifi-association-failed" => Some(status.address_source),
         _ => None,
     }
 }
@@ -15044,10 +15042,12 @@ mod tests {
             Some("wifi-association-failed")
         );
         status.address_source = "dhcp-failed";
+        status.dhcp_phase = "failed";
         assert!(!super::net_status_allows_root_console(&status));
+        assert_eq!(super::net_status_terminal_failure_reason(&status), None);
         assert_eq!(
-            super::net_status_terminal_failure_reason(&status),
-            Some("dhcp-failed")
+            super::net_status_pre_root_serial_release_reason(&status),
+            None
         );
         status.address_source = "future-intermediate-state";
         status.dhcp_phase = "probing";

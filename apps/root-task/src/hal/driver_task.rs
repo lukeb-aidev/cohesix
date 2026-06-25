@@ -3241,7 +3241,7 @@ fn emit_driver_task_runtime_entry_status(
             progress.aux0,
         ),
     );
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
 }
 
 /// Wait for a linked runtime to enter its receive loop before descriptor replay.
@@ -4707,7 +4707,7 @@ fn emit_driver_task_ring_call_return(
         completion.result,
     );
     if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
-        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+        crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
     } else {
         crate::bootstrap::log::force_uart_line(line.as_str());
     }
@@ -4758,7 +4758,7 @@ fn emit_driver_task_ring_call_timeout(
     if repeat_count > 1 {
         let _ = write!(line, " repeat_count={}", repeat_count);
     }
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
