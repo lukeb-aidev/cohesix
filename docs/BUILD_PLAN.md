@@ -7233,7 +7233,7 @@ Deliverables:
   - Auditable runtime-boundary report and semantic-parity matrix that establish the proof surface required before boundary-sensitive runtime refactors.
 
 Title/ID: m26c-pi-runtime-dma-proof-closure
-Goal: Define and prove Pi 4 isolated-runtime descriptor, DMA, owner-state, and artifact-freshness evidence before 26c cleanup or later operator tooling cites the runtime path as closed.
+Goal: Define and prove Pi 4 isolated runtime descriptor, DMA, owner-state, and artifact-freshness evidence before 26c cleanup or later operator tooling cites the runtime path as closed.
 Inputs: apps/root-task/src/hal/**, apps/root-task/src/local_seat.rs, apps/root-task/src/generated/**, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, configs/root_task_pi4_uboot_aarch64.toml, scripts/pi4-image-build.sh, scripts/ci/test_plan_run.sh, docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
 Changes:
   - crates/pi4-driver-abi/src/** — add or tighten descriptor-resource tests for runtime MMIO, DMA, shared-buffer, IRQ, bus-alias, and framebuffer ranges emitted by generated Pi 4 driver-image records.
@@ -7365,7 +7365,7 @@ Deliverables:
   - Event-driven worker and driver lifecycle signaling with seL4 notification objects, bounded tests, and no new Cohesix protocol surface.
 
 Title/ID: m26c-worker-driver-mcs-budget-evidence
-Goal: Bind worker and manifest-declared isolated driver-runtime bounded-execution claims to generated scheduling-context evidence on MCS profiles while preserving explicit non-MCS fallback evidence.
+Goal: Bind worker and manifest-declared isolated driver runtime bounded-execution claims to generated scheduling-context evidence on MCS profiles while preserving explicit non-MCS fallback evidence.
 Inputs: apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/worker-heart/src/**, apps/worker-gpu/src/**, apps/worker-lora/src/**, apps/pi4-driver-runtime/src/**, tools/coh-rtc/src/**, docs/ROLES_AND_SCHEDULING.md, docs/SECURITY.md, docs/TEST_PLAN.md, docs/audit/M26C_DOCS_AS_BUILT_AUDIT.md
 Changes:
   - tools/coh-rtc/src/** — add profile-qualified worker/driver scheduling fields for MCS budget, period, timeout endpoint, consumed-budget reporting, and non-MCS priority/domain fallback state.
@@ -7523,7 +7523,7 @@ Inputs: apps/root-task/src/lib.rs, apps/root-task/src/ninedoor.rs, apps/root-tas
 Changes:
   - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** + apps/root-task/src/console/** — split parsing, dispatch, event pumping, completion formatting, and permission-denial paths into narrowly named modules without changing console grammar or Secure9P namespace semantics.
   - apps/root-task/src/log_buffer.rs + selected `/proc` emitters — extract append-only, cursor, and evidence formatting helpers while preserving current output fixtures.
-  - apps/root-task/src/lib.rs + apps/root-task/src/bootstrap/** + apps/root-task/src/hal/driver_task.rs — clarify initialization sequencing, generated-manifest handoff boundaries, and manifest-declared isolated driver-runtime descriptor ownership without moving authority out of compiler-generated artifacts.
+  - apps/root-task/src/lib.rs + apps/root-task/src/bootstrap/** + apps/root-task/src/hal/driver_task.rs — clarify initialization sequencing, generated-manifest handoff boundaries, and manifest-declared isolated driver runtime descriptor ownership without moving authority out of compiler-generated artifacts.
   - apps/pi4-driver-runtime/** + crates/pi4-driver-abi/** — keep ABI and runtime changes behavior-preserving, pointer-free, and aligned with generated `root_task.driver_images` records.
   - apps/root-task/tests/** + apps/nine-door/tests/*.rs — preserve and extend parity fixtures before and after the decomposition.
   - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURE9P.md + docs/TEST_PLAN.md — update as-built module ownership only when public contracts or evidence paths become clearer.
@@ -7674,7 +7674,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 
 ### Compiler / docsystem touchpoints
 - `coh-rtc` outputs, docs snippets, and manifest fingerprints remain authoritative; 26d may update generators or schemas only when required by the seL4 15 baseline refresh, and any such change must be reflected in the same evidence set.
-- Pi 4 manifest-declared isolated driver-runtime ABI/descriptors/images remain authoritative for driver-task bootstrap evidence during the kernel refresh; 26d may adapt them only for seL4 15 compatibility and must not reclassify runtime-spec acceptance or board-proof boundaries without reopened 26a/26b hardware acceptance evidence.
+- Pi 4 manifest-declared isolated driver runtime ABI/descriptors/images remain authoritative for driver-task bootstrap evidence during the kernel refresh; 26d may adapt them only for seL4 15 compatibility and must not reclassify runtime-spec acceptance or board-proof boundaries without reopened 26a/26b hardware acceptance evidence.
 - Root-task and linked-driver-runtime hardware-counter guards remain authoritative for performance proof during the kernel refresh. Generated seL4 headers and CMake/cache config must agree before `timers-arch-counter` evidence can satisfy 26d closure.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and target-qualified state-dir evidence remain the source of truth for QEMU/Pi 4 pass semantics during the kernel refresh.
 
@@ -7706,7 +7706,7 @@ Commands:
   - cargo test -p pi4-driver-abi
   - cargo test -p pi4-driver-runtime
   - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
-Checks: direct-seL4 Cohesix builds compile on all supported kernel profiles, and manifest-declared isolated driver-runtime ABI/build evidence stays green, without changing system model or operator-visible semantics.
+Checks: direct-seL4 Cohesix builds compile on all supported kernel profiles, and manifest-declared isolated driver runtime ABI/build evidence stays green, without changing system model or operator-visible semantics.
 Deliverables: passing workspace/build-target checks and refreshed low-level compatibility evidence.
 ```
 
@@ -8170,7 +8170,7 @@ Deliverables:
 
 **Why now (core-local performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Milestone 26b closes the immediate linked-runtime same-harness benchmark parity gate. Milestones 26c, 26d, 27, and 27b add the missing enforcement substrate around generated worker/driver scheduling evidence, seL4 baseline alignment, persistence drains, profile-qualified MCS/non-MCS budget fields, proof witnesses, HAL authority checks, and verification gates. Milestone 27c is the right point to turn affinity placement and the 26b hot-path evidence into compiler-owned core-local service scheduling without weakening authority, replay, or hardware-proof boundaries.
 
-**As-built alignment note:** Cohesix already has manifest affinity, `smp activity`, manifest-declared isolated driver-runtime active-slot rules, bounded service-turn language, and host-safe pressure evidence. Milestone 26b owns the first linked-runtime benchmark comparator, same-harness Pi/QEMU parity result, and immediate bounded driver hot-path fixes. Cohesix does **not** yet have compiler-owned core-local service buckets, generated per-core service-turn budgets, per-core telemetry/spool drain policy, IRQ-locality witnesses, or Pi/QEMU evidence proving that hot paths stay local to their assigned core under mixed load. Older prose must not claim core-local hot-path scheduling or multicore throughput closure until this milestone has passing evidence.
+**As-built alignment note:** Cohesix already has manifest affinity, `smp activity`, manifest-declared isolated driver runtime active-slot rules, bounded service-turn language, and host-safe pressure evidence. Milestone 26b owns the first linked-runtime benchmark comparator, same-harness Pi/QEMU parity result, and immediate bounded driver hot-path fixes. Cohesix does **not** yet have compiler-owned core-local service buckets, generated per-core service-turn budgets, per-core telemetry/spool drain policy, IRQ-locality witnesses, or Pi/QEMU evidence proving that hot paths stay local to their assigned core under mixed load. Older prose must not claim core-local hot-path scheduling or multicore throughput closure until this milestone has passing evidence.
 
 **Non-negotiable constraints**
 - No POSIX threads, general SMP runtime, async executor, shared work-stealing queue, or bulky SMP library inside the VM.
@@ -8291,7 +8291,7 @@ Checks: Each loop respects max work, bytes, completions, and deterministic busy/
 Deliverables: Core-local event-pump execution without a VM thread pool or work-stealing runtime.
 
 Title/ID: m27c-linked-driver-hotpath-batching
-Goal: Bind Milestone 26b manifest-declared isolated driver-runtime batching and counters to generated core-local service buckets while preserving staged active-slot semantics.
+Goal: Bind Milestone 26b manifest-declared isolated driver runtime batching and counters to generated core-local service buckets while preserving staged active-slot semantics.
 Inputs: apps/pi4-driver-runtime, crates/pi4-driver-abi, apps/root-task/src/hal/driver_task.rs, docs/DRIVERS.md.
 Changes:
   - apps/pi4-driver-runtime/src/** — assign GENET, CYW43, SDIO, USB, HDMI, serial, and PCIe bursts/counters to generated service buckets.
@@ -10526,7 +10526,7 @@ Deliverables:
 **As-built alignment note:** There is no `hw-status` command today. Current Pi 4 hardware facts are split across boot logs, framebuffer hints, driver-task progress lines, timer summaries, and linked-runtime diagnostics. Milestone 29a adds one bounded, read-only root-shell view; older prose must not claim a Pi 4 hardware-status command or firmware property snapshot until this milestone has implementation and transcript evidence.
 
 **Prerequisite**
-- Milestone **26a/26b** owner-state and isolated-runtime proof restored for the selected Pi 4 profile.
+- Milestone **26a/26b** owner-state and isolated runtime proof restored for the selected Pi 4 profile.
 - Milestone **28** completed for shared read-only snapshot/evidence conventions.
 - Milestone **29** completed or explicitly scoped so `hw-status` field names can be reused by `coh-status` rather than creating a second status vocabulary.
 

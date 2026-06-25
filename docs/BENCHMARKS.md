@@ -47,7 +47,7 @@ The existing `out/bench/pi4-*` and `out/bench/qemu-*` paths are local diagnostic
 
 | Area | As-built status | Proof boundary |
 | --- | --- | --- |
-| Hot-path shape | CYW43, GENET, SDIO, USB, HDMI, PCIe, and serial work has moved toward bounded isolated-runtime service turns with fixed rings and descriptor-backed resources. | Code-level readiness only; not a throughput verdict. |
+| Hot-path shape | CYW43, GENET, SDIO, USB, HDMI, PCIe, and serial work has moved toward bounded isolated runtime service turns with fixed rings and descriptor-backed resources. | Code-level readiness only; not a throughput verdict. |
 | Runtime specs | Seven generated Pi 4 runtime specs are acceptance-capable (`root_context_required=false`, `hardware_state_migrated=true`) with descriptor-backed MMIO/shared/DMA budgets. | Each runtime still needs target log proof for owner state and active service. |
 | Runtime engines | Serial, HDMI, PCIe, USB, GENET, SDIO, and CYW43 contain real service code behind `pi4-driver-abi`. | QEMU transport-substrate and host wire-layout proof do not prove Pi 4 hardware performance. |
 | Driver counters | `DRIVER_TASK_COUNTER` snapshots and normalized `DRIVER_TASK_COUNTER_*` fields explain turns, staged bytes, cache work, busy/backpressure, same-request resumes, timeouts, aborts, and RX/TX volume. | Counters must be valid (`DRIVER_TASK_COUNTER_INVALID=0`) for performance claims, but they do not replace owner-state proof or fresh same-harness Pi measurements. |

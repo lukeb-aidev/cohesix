@@ -91,7 +91,7 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
    - All heavy ecosystems (CUDA, NVML, networking sidecars) remain host-side.
    - Physical-hardware drivers are linked-runtime only. On Pi 4 and any future
      physical target, USB, HDMI/display, Ethernet, Wi-Fi, SDIO, PCIe, MMIO-backed
-     devices, and other steady hardware drivers must run as manifest-declared isolated driver-runtime
+     devices, and other steady hardware drivers must run as manifest-declared isolated driver runtime
      child images over the fixed driver-task ABI after HAL admission. Root-task
      may construct seL4/HAL resources, validate manifests, publish descriptors,
      submit bounded service turns, record diagnostics, and keep the emergency

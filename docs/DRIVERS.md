@@ -70,7 +70,7 @@ replace owner-state proof or a fresh same-harness Pi benchmark.
 The performance expectation is lower root-task contention and bounded hot-path
 latency, not an unconditional throughput claim. Concurrency and latency
 optimization is contract-first: move only device-local work into bounded
-isolated-runtime service turns, keep root-task authority serialized, and accept
+isolated runtime service turns, keep root-task authority serialized, and accept
 latency gains only when counters and same-harness Pi evidence show no lost
 output, hidden blocking, or weakened owner proof. A well-shaped runtime can
 batch device-local work, keep cache and DMA maintenance near the driver state
@@ -373,7 +373,7 @@ architecture must preserve, not authority to restore root-resident drivers. They
 prove useful expectations such as a clean serial shell, cold USB/VL805 progress,
 USB keyboard input, selected Wi-Fi DHCP progress, and visible local-seat
 feedback; reopened 26a/26b closure still requires fresh driver-task owner-state
-proof from the isolated-runtime model.
+proof from the isolated runtime model.
 
 `scripts/pi4_trace_normalize.py --gate-summary` now reports the old-good replay
 contract beside the existing frontier gates. `USB_GATE` / `USB_BLOCKER` and
@@ -620,7 +620,7 @@ root-shared payload pages are HAL-mapped into isolated runtimes; runtime-side
 coherency on those pages is volatile load/store plus barriers only. Root-side
 publication additionally cleans staged descriptor/payload bytes and
 command/completion records before sequence publication, and root invalidates
-completion/progress records before consuming isolated-runtime evidence.
+completion/progress records before consuming isolated runtime evidence.
 Runtime-side cache clean/invalidate instructions are reserved for
 descriptor-declared device DMA buffers and must not be used to publish or
 consume shared-ring progress, commands, completions, or CYW43-to-SDIO owner
@@ -676,7 +676,7 @@ detail:
   `DRIVER_TASK_RING_CALL_RETURN`, `DRIVER_TASK_RING_CALL_TIMEOUT`,
   `DRIVER_TASK_RING_CALL_KEEP_ACTIVE`, `DRIVER_TASK_RING_CALL_ABORT`, and
   `DRIVER_TASK_RING_PROGRESS` report each bounded descriptor, init, and service
-  turn, including isolated-runtime owner/root-action fields, active request and
+  turn, including isolated runtime owner/root-action fields, active request and
   child-progress correlation, explicit expected-request/expected-aux validity
   for submitted turns, same-request resume status, the first blocker, the
   current blocker, and the next action to take. Repeated timeout, keep-active,
@@ -935,7 +935,7 @@ returns `0x5500` (`ready`), and faults preserve the exact subgate as
 (`reset-cmd-data-failed`), `0x5512` (`clock-failed`), or `0x5513`
 (`inhibit-failed`). Root projects those details through
 `SDIO_DRIVER_TASK_REPLAY_STATUS ... stage=engine-init blocker=<status>
-owner=isolated-runtime proof_effect=<effect> next_action=<action>` and
+owner=linked-runtime proof_effect=<effect> next_action=<action>` and
 `DRIVER_TASK_RESOURCE_INIT ... stage=sdio-engine-init status=<status>
 owner=linked-runtime root_action=<action> next_action=<action>`; a generic
 `DeviceUnavailable` detail is no longer acceptable for this gate because it
@@ -959,7 +959,7 @@ until host-EAPOL security completes. Pi 4 image builds must force a fresh
 when tracked local changes are present, so serial evidence can distinguish a
 new hardware run from a stale image marker.
 
-Empty first-read RX-source telemetry stays inside the isolated-runtime boundary.
+Empty first-read RX-source telemetry stays inside the isolated runtime boundary.
 When CYW43 is using the SDIO bus-link, it samples CCCR `IENx`, CCCR `IORx`, and
 the CYW43 SDIO-core interrupt status through bounded SDIO-owner commands on the
 first empty completion and then every 1024 empty completions. Intermediate
@@ -983,7 +983,7 @@ Extended control TX and pre-TX RX draining are separate linked-runtime policy
 bits. Startup controls such as `cur_etheraddr` and `BRCMF_C_GET_REVINFO` keep
 the direct txctl-to-rxctl path that proved the control plane in prior boots,
 even when they use the Linux SDPCM hardware-extension header. `WLC_GET_BSSID`
-is not a pre-association proof source in the isolated-runtime path: the May 18-19
+is not a pre-association proof source in the isolated runtime path: the May 18-19
 root-owned behavior used association/link events to prove carrier, then treated
 `WLC_GET_BSSID` only as AP-MAC metadata for the host-EAPOL path. The
 linked-runtime replay now follows that contract. A one-shot post-association
@@ -1214,7 +1214,7 @@ context and the retry/poll window.
   token after F2 clock forcing, and production boot still stops before F2 traffic
   unless real HT and live `IOR2` are both present.
 - Function 2 enable follows Linux's `SDIO_WAIT_F2RDY` contract: the strict
-  isolated-runtime path waits up to 3000 ms for CCCR `IORx` F2-ready when the Pi
+  isolated runtime path waits up to 3000 ms for CCCR `IORx` F2-ready when the Pi
   counter is available, with the old 3000-poll CCCR loop retained only as the
   no-counter fallback and diagnostic poll field before declaring
   `sdio-function2-ready-timeout`.
@@ -1273,7 +1273,7 @@ context and the retry/poll window.
   matches the generated CYW43455 address and normalized length. Exhausted
   retained-stage recovery reports `0x5329`.
 - Station attach follows the captured Linux shape while staying bounded to the
-  isolated-runtime proof surface. The as-built control path first sends
+  isolated runtime proof surface. The as-built control path first sends
   `bus:txglomalign=8`, tolerates only a matched `BCME_UNSUPPORTED` reply for the
   optional `ulp_sdioctrl` query, sends `bus:rxglom=1`, reads `cur_etheraddr`,
   issues `BRCMF_C_GET_REVINFO` (`cmd=98`) with a 68-byte zeroed response window,
@@ -1380,7 +1380,7 @@ context and the retry/poll window.
   before submitting their control frame unless the descriptor carries the
   explicit pre-TX drain flag.
   Prompt-side `wifi diag` and `wifi dump-state` render cached or
-  isolated-runtime evidence; bounded `wifi probe-ht` and stateful `wifi load-fw` /
+  isolated runtime evidence; bounded `wifi probe-ht` and stateful `wifi load-fw` /
   `wifi retry` fail closed with `pi4-wifi-driver-task-runtime-required` when no
   isolated runtime can satisfy the request. Post-join `EVENT_LINK` without the
   link flag is `wifi-link-down`, not DHCP progress.
@@ -1876,7 +1876,7 @@ active path is Cohesix-owned cold start:
   PCIe/VL805 proof remain pre-shell failures. Cold boot may spend the larger
   finite USB enumeration resume window before Wi-Fi so `command-ring-ready`
   continues into root-port sampling and descriptor/HID/hub gates on the same
-  isolated-runtime path. Runtime no-reply, controller, HID-report, or PCIe
+  isolated runtime path. Runtime no-reply, controller, HID-report, or PCIe
   owner-state failures are red acceptance states that must emit
   `DRIVER_TASK_SELECTED`, `DRIVER_TASK_OWNER_STATE`, and `DRIVER_TASK_ACCEPTANCE`
   before halt or degraded diagnostics. `DRIVER_TASK_SELECTED` carries
@@ -2307,7 +2307,7 @@ Required Cohesix shape:
   and CMD7 through the pointer-free SDIO owner descriptor during transport init,
   preserving nested SDHCI present-state, interrupt-status, response, host
   control, clock, and payload digest telemetry on owner faults.
-  That card-adoption sequence is sliced across bounded isolated-runtime turns:
+  That card-adoption sequence is sliced across bounded isolated runtime turns:
   host-config, CMD0, CMD5 OCR, CMD5 ready, CMD3 RCA, and CMD7 select each publish
   progress before issuing the owner command. A no-reply at this layer is Wi-Fi
   gate 2 `sdio-card-select` evidence, not a HAL power/reset or DHCP failure.
@@ -2401,10 +2401,10 @@ Required Cohesix shape:
   ring, event ring, EP0 control path, interrupt-IN keyboard queue, DMA report
   buffers, HID decode, and local-seat first-byte publication under the
   driver-task contract.
-- Root-task local-seat code is a isolated-runtime client only. It may report
+- Root-task local-seat code is an isolated runtime client only. It may report
   local queue and prompt evidence, but it does not contain a root-task USB/xHCI
   implementation and does not close Pi 4 driver-task acceptance by itself.
-  Hardware acceptance requires isolated-runtime owner-state proof plus the USB
+  Hardware acceptance requires isolated runtime owner-state proof plus the USB
   10-gate evidence below.
 - PCIe root-complex and VL805 BAR/COMMAND proof belongs to HAL.
 - Bootloader stop-state evidence is diagnostic. Pi 4 USB profiles have
@@ -2636,7 +2636,7 @@ applies. Use the focused aliases:
   contracts.
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::`
   covers target-neutral local-seat parser, keyboard queue, mirror, and USB/Wi-Fi
-  command policy helpers for the isolated-runtime client path.
+  command policy helpers for the isolated runtime client path.
 - `cargo test -p root-task --no-default-features --features cache-maintenance --test cache_maintenance`
   covers HAL cache-clean/invalidate/error paths and DMA pin/sync/unpin audit
   ordering.
