@@ -111,7 +111,6 @@ fn validate_arch_counter_config(build_dir: &Path) {
         panic!("linked Pi 4 runtimes require nonzero TIMER_CLOCK_HZ");
     }
     println!("cargo:rustc-env=PI4_DRIVER_RUNTIME_TIMER_CLOCK_HZ={timer_clock_hz}");
-    println!("cargo:rustc-env=PI4_DRIVER_RUNTIME_TIMER_COUNTER_KIND=virtual");
 
     let vcnt_user = probe_any_config_flag(
         build_dir,
@@ -119,7 +118,13 @@ fn validate_arch_counter_config(build_dir: &Path) {
     );
     if vcnt_user == Some(true) {
         println!("cargo:rustc-cfg=sel4_config_export_vcnt_user");
+        println!("cargo:rustc-env=PI4_DRIVER_RUNTIME_TIMER_COUNTER_KIND=virtual");
     } else {
+        println!("cargo:rustc-env=PI4_DRIVER_RUNTIME_TIMER_COUNTER_KIND=iterations");
+    }
+
+    let pi4_platform = selected_pi4_platform(build_dir);
+    if pi4_platform && vcnt_user != Some(true) {
         panic!(
             "linked Pi 4 runtimes require the selected seL4 build to expose \
              CNTVCT_EL0/CNTFRQ_EL0 to EL0 (KernelArmExportVCNTUser=ON or \
@@ -127,19 +132,25 @@ fn validate_arch_counter_config(build_dir: &Path) {
         );
     }
 
-    for flag in [
-        ("KernelArmExportPCNTUser", "CONFIG_EXPORT_PCNT_USER"),
-        ("KernelArmExportPTMRUser", "CONFIG_EXPORT_PTMR_USER"),
-        ("KernelArmExportVTMRUser", "CONFIG_EXPORT_VTMR_USER"),
-    ] {
-        if probe_any_config_flag(build_dir, &[flag.0, flag.1]) == Some(true) {
-            panic!(
-                "linked Pi 4 runtimes expect only the read-only virtual counter; \
-                 disable {} / {}",
-                flag.0, flag.1
-            );
+    if pi4_platform {
+        for flag in [
+            ("KernelArmExportPCNTUser", "CONFIG_EXPORT_PCNT_USER"),
+            ("KernelArmExportPTMRUser", "CONFIG_EXPORT_PTMR_USER"),
+            ("KernelArmExportVTMRUser", "CONFIG_EXPORT_VTMR_USER"),
+        ] {
+            if probe_any_config_flag(build_dir, &[flag.0, flag.1]) == Some(true) {
+                panic!(
+                    "linked Pi 4 runtimes expect only the read-only virtual counter; \
+                     disable {} / {}",
+                    flag.0, flag.1
+                );
+            }
         }
     }
+}
+
+fn selected_pi4_platform(build_dir: &Path) -> bool {
+    probe_any_config_flag(build_dir, &["CONFIG_PLAT_BCM2711", "KernelPlatformRpi4"]) == Some(true)
 }
 
 fn find_timer_clock_hz(build_dir: &Path) -> Option<u64> {

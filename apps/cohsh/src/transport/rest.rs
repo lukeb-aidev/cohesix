@@ -6,11 +6,11 @@
 
 use std::collections::VecDeque;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use cohesix_rest::{BoundsResponse, GatewayClient};
 use cohesix_ticket::Role;
-use cohsh_core::wire::{AckLine, AckStatus, render_ack};
-use cohsh_core::{ConsoleVerb, TicketPolicy, normalize_ticket, role_label};
+use cohsh_core::wire::{render_ack, AckLine, AckStatus};
+use cohsh_core::{normalize_ticket, role_label, ConsoleVerb, TicketPolicy};
 use secure9p_codec::SessionId;
 
 use crate::{CohshPolicy, Session, Transport, TransportMetrics};

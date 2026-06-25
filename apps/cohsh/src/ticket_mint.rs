@@ -8,9 +8,9 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
-use cohsh_core::{RoleParseMode, parse_role};
+use cohsh_core::{parse_role, RoleParseMode};
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

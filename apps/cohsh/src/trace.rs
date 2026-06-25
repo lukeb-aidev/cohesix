@@ -6,15 +6,15 @@
 use std::collections::VecDeque;
 use std::fmt;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use cohesix_ticket::Role;
 use cohsh_core::trace::{TraceError, TraceLogBuilderRef};
-use cohsh_core::wire::{AckLine, AckStatus, render_ack};
-use cohsh_core::{ConsoleVerb, Secure9pTransport, role_label};
+use cohsh_core::wire::{render_ack, AckLine, AckStatus};
+use cohsh_core::{role_label, ConsoleVerb, Secure9pTransport};
 use secure9p_codec::OpenMode;
 
 use crate::client::{CohClient, TailEvent};
-use crate::{QUEEN_CTL_PATH, Session, Transport, TransportMetrics};
+use crate::{Session, Transport, TransportMetrics, QUEEN_CTL_PATH};
 
 /// Ack handling mode for trace record/replay.
 pub enum TraceAckMode {

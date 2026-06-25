@@ -5,7 +5,7 @@
 
 //! Helpers for constructing `/queen/ctl` JSON payloads.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 /// Return the manifest-derived queen control path.
 #[must_use]

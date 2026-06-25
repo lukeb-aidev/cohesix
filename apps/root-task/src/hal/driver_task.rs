@@ -16,7 +16,11 @@ use core::sync::atomic::AtomicU64;
 #[cfg(feature = "kernel")]
 use core::sync::atomic::{fence, AtomicU32, AtomicUsize, Ordering};
 
-#[cfg(all(feature = "kernel", target_arch = "aarch64"))]
+#[cfg(all(
+    feature = "kernel",
+    target_arch = "aarch64",
+    feature = "timers-arch-counter"
+))]
 use crate::arch::aarch64::timer::{timer_counter_ticks, timer_freq_hz};
 use heapless::Deque;
 #[cfg(feature = "kernel")]

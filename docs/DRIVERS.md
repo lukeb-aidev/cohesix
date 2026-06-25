@@ -1006,6 +1006,13 @@ checks the runtime frame channel before CDC parsing: event-channel frames are
 decoded as Broadcom events, association/link events are retained in a single
 pending host-EAPOL slot, and host-EAPOL arming or later service slices fold that
 pending event into `event_rx`, `associated`, `link_up`, and `assoc_event`
+without treating it as a CDC reply. Valid CDC replies that arrive while root is
+waiting for another `(cmd,id)` are not discarded. Root copies those replies into
+a bounded pending-control queue keyed by exact CDC command and ioctl id, and the
+next matching exchange restages the copied frame into the driver-task ring before
+validating length/status and returning the response body. This preserves Linux's
+concurrent control/data receive tolerance without extending the fatal reply
+deadline or weakening the `wsec_key` PTK/GTK gate.
 progress. Those lines emit `CYW43_DRIVER_TASK_EVENT_RX` and remain linked
 runtime evidence; they do not release DHCP/data without EAPOL secure proof.
 Linked-runtime RX polls now request

@@ -425,6 +425,7 @@ where
             | ConsoleCommand::Test
             | ConsoleCommand::NetTest
             | ConsoleCommand::NetStats
+            | ConsoleCommand::Reboot
             | ConsoleCommand::CacheLog { .. } => SwarmUiTranscript::err(vec![render_ack_line(
                 AckStatus::Err,
                 verb_label,
@@ -1718,6 +1719,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             | ConsoleCommand::Test
             | ConsoleCommand::NetTest
             | ConsoleCommand::NetStats
+            | ConsoleCommand::Reboot
             | ConsoleCommand::CacheLog { .. } => SwarmUiTranscript::err(vec![render_ack_line(
                 AckStatus::Err,
                 verb_label,
@@ -3282,6 +3284,7 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use secure9p_codec::SessionId;
+    use std::convert::Infallible;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -3327,6 +3330,26 @@ mod tests {
         }
     }
 
+    struct RejectSecure9pTransport;
+
+    impl cohsh_core::Secure9pTransport for RejectSecure9pTransport {
+        type Error = Infallible;
+
+        fn exchange(&mut self, _batch: &[u8]) -> std::result::Result<Vec<u8>, Self::Error> {
+            unreachable!("unsupported SwarmUI command must not open Secure9P transport")
+        }
+    }
+
+    struct RejectFactory;
+
+    impl SwarmUiTransportFactory for RejectFactory {
+        type Transport = RejectSecure9pTransport;
+
+        fn connect(&self) -> std::result::Result<Self::Transport, SwarmUiError> {
+            unreachable!("unsupported SwarmUI command must not connect")
+        }
+    }
+
     #[test]
     fn console_hive_status_cache_respects_interval() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
@@ -3342,6 +3365,33 @@ mod tests {
         let _ = backend.read_hive_status_cached(Role::Queen, None, 1000);
         let second_reads = reads.load(Ordering::SeqCst);
         assert_eq!(first_reads, second_reads);
+    }
+
+    #[test]
+    fn read_only_backend_rejects_reboot_without_transport() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = SwarmUiConfig::from_generated(temp_dir.path().to_path_buf());
+        let mut backend = SwarmUiBackend::new(config, RejectFactory);
+
+        let transcript = backend.console_command("reboot");
+
+        assert!(!transcript.ok);
+        assert_eq!(transcript.lines, vec!["ERR REBOOT reason=unsupported"]);
+    }
+
+    #[test]
+    fn console_backend_rejects_reboot_without_transport_command() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = SwarmUiConfig::from_generated(temp_dir.path().to_path_buf());
+        let reads = Arc::new(AtomicUsize::new(0));
+        let transport = TestTransport::new(reads.clone());
+        let mut backend = SwarmUiConsoleBackend::with_transport(config, transport);
+
+        let transcript = backend.console_command("reboot");
+
+        assert!(!transcript.ok);
+        assert_eq!(transcript.lines, vec!["ERR REBOOT reason=unsupported"]);
+        assert_eq!(reads.load(Ordering::SeqCst), 0);
     }
 }
 

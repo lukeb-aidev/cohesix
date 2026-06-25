@@ -18,7 +18,11 @@
     clippy::too_many_arguments
 )]
 
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+#[cfg(all(
+    target_os = "none",
+    target_arch = "aarch64",
+    sel4_config_export_vcnt_user
+))]
 use core::arch::asm;
 use core::{
     cell::UnsafeCell,
@@ -15419,19 +15423,27 @@ fn runtime_spin(iterations: usize) {
 #[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
 fn runtime_spin(_iterations: usize) {}
 
-#[cfg(all(target_os = "none", target_arch = "aarch64"))]
+#[cfg(all(
+    target_os = "none",
+    target_arch = "aarch64",
+    sel4_config_export_vcnt_user
+))]
 fn runtime_timer_counter_ticks() -> u64 {
     let value: u64;
-    // SAFETY: `apps/pi4-driver-runtime/build.rs` rejects linked Pi 4 runtime
-    // builds unless the selected seL4 kernel exports the read-only virtual
-    // counter to EL0. The runtime never writes timer-control registers.
+    // SAFETY: this function only compiles when `build.rs` proved the selected
+    // seL4 build exports the read-only virtual counter to EL0. The runtime
+    // never writes timer-control registers.
     unsafe {
         asm!("mrs {value}, cntvct_el0", value = out(reg) value, options(nomem, nostack, preserves_flags));
     }
     value
 }
 
-#[cfg(not(all(target_os = "none", target_arch = "aarch64")))]
+#[cfg(not(all(
+    target_os = "none",
+    target_arch = "aarch64",
+    sel4_config_export_vcnt_user
+)))]
 fn runtime_timer_counter_ticks() -> u64 {
     0
 }

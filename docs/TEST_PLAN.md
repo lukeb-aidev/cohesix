@@ -208,6 +208,12 @@ active request sequence and CYW43 aux tag, the marker phase is preserved as
 runtime no-reply. Split-control `poll-complete` and nonmatching reply samples are
 context only until the same attempt emits a terminal
 `CYW43_DRIVER_TASK_CONTROL_SPLIT` / `CYW43_DRIVER_TASK_COMMAND_FAULT` pair.
+Valid nonmatching CDC replies may also be preserved for a later exact `(cmd,id)`
+match; when that happens the later attempt must emit `cached-matched-reply` and
+`cached-response-ready` split-control evidence, and must still validate CDC
+status and response length through the normal matched-reply path. These cached
+reply records are proof of correlation repair only, not a longer reply deadline
+or a relaxed host-EAPOL `wsec_key` gate.
 
 Reopened Milestones 26a/26b also require HAL driver-task contract coverage before hardware claims: `hal::driver_task` must validate the serial, USB/local-seat, HDMI, GENET, CYW43, SDIO host, PCIe root, RTL8139, and virtio-net contracts. Historical M26B completion evidence remains a compatibility baseline, not reopened acceptance proof. Reopened Pi 4 captures must include compact `DRIVER_TASK_*`, `SCHED_CONTRACT`, `BUDGET_OVERRUN`, observed per-driver latency, `SERIAL_ECHO`, `USB_BURST`, and `HDMI_RESPONSIVE` evidence; `scripts/pi4_trace_normalize.py --gate-summary` exposes those as machine-checkable hardware proof fields.
 
