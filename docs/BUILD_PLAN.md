@@ -5895,7 +5895,7 @@ The next planned releases target official Raspberry Pi 4 bare-metal boot (`U-Boo
 **Status:** In Progress — pivoted on February 23, 2026 from UEFI `BOOTAA64.EFI` bring-up to the official upstream seL4 Raspberry Pi 4 flow (`U-Boot + binary image`).
 
 **Why now (context):**  
-Upstream seL4 Pi 4 bring-up documentation originally used direct U-Boot image loading examples on `bcm2711`, not a UEFI handoff chain. Cohesix now follows the active staged U-Boot path: `scripts/pi4-image-build.sh` builds `seL4/build_UBOOT`, stages the seL4 binary image, driver-runtime CPIO, and padded DTB, then hands off with `bootm <image> <runtime-cpio> <dtb>`. This preserves deterministic control at the U-Boot prompt while matching the linked-runtime layout used by Milestone 26a/26b.
+Upstream seL4 Pi 4 bring-up documentation originally used direct U-Boot image loading examples on `bcm2711`, not a UEFI handoff chain. Cohesix now follows the active staged U-Boot path: `scripts/pi4-image-build.sh` builds `seL4/build_UBOOT`, stages the seL4 binary image, driver-runtime CPIO, and padded DTB, then hands off with `bootm <image> <runtime-cpio> <dtb>`. This preserves deterministic control at the U-Boot prompt while matching the isolated runtime layout used by Milestone 26a/26b.
 
 **Non-negotiable constraints:**  
 - Boot chain for Pi 4 Milestone 26 is: `Pi firmware (start4/fixup) -> U-Boot -> seL4 image -> root-task`.
@@ -6134,12 +6134,12 @@ Add the HAL-enforced driver-task substrate, migrate serial/display and GENET beh
   - Add root-owned wrappers for driver TCB creation, CSpace/VSpace setup, IPC-buffer installation, badged endpoints, notifications, IRQ binding, fault endpoints, scheduling-context parameters where available, and revocation.
   - As-built substrate work now includes non-MCS TCB priority/scheduling/resume/notification wrappers, CNode revoke, a remote-safe IPC-buffer bind helper, AArch64 VSpace root and boot-ASID-pool assignment wrappers, explicit page/page-table map wrappers for non-root VSpaces, bounded HAL driver-task command/completion rings, Pi 4 bootstrap-created driver TCB attempts for the manifest-selected subset of the seven acceptance-eligible Pi hardware runtime contracts, restricted child CSpaces, command endpoints, notifications, fault endpoint slots, stacks, manifest-selected per-driver SMP affinity through the same `seL4_TCB_SetAffinity` path used by NineDoor and worker TCBs, and tolerant handling for boot-seeded intermediate page tables while mapping driver IPC/stack frames. Physical Pi 4 owner-state boots must show `DRIVER_TASK_BOOT ... affinity_core=<manifest-core>` for the active selected contracts plus aggregate applied affinity before placement proof closes; any `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence and keeps affinity proof red. Physical Pi 4 owner-state boots still defer the optional early TCB-bound notification syscall and emit `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard`; endpoint-backed command-ring startup may continue, but notification lifecycle proof remains red until the bind path is reproved. QEMU compatibility smoke may still create all nine declared contracts, including RTL8139 and virtio-net, after virtio networking is ready.
     QEMU virtio compatibility builds keep the same contract set but publish an inactive `qemu-virtio-pre-net-resource-guard` report before network init so failed live-task bootstrap cannot exhaust resources needed by the virtio TCP regression path; with the explicit `qemu-driver-task-smoke` feature, they create all nine declared driver-task TCBs after virtio networking is ready, allocate per-driver VSpaces, assign ASIDs, map only a one-page driver trampoline plus stack/IPC/ring frames, complete a fixed-layout ring command without callback/context pointers, unmap root aliases for code/IPC/stack after the isolated task starts, and emit console-visible `DRIVER_TASK_BOOT_SMOKE phase=post-net-qemu status=summary ... vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes owner_state=not-proven` as QEMU transport-substrate proof.
-    Physical Pi 4 builds now require the isolated VSpace constructor for normal driver bootstrap and reject virtual NIC trampoline work from the physical bootstrap set. For generated Pi 4 hot paths, root loads linked `pi4-driver-*` runtime artifacts only from the raw driver-runtime CPIO embedded into the root-task image by `scripts/pi4-image-build.sh`; when an artifact is found by generated path, HAL maps every bounded `PT_LOAD` page from the runtime ELF plus stack/IPC/ring and declared MMIO/DMA/shared-buffer regions, stages a pointer-free `pi4-driver-abi` runtime-init descriptor containing physical page metadata, semantic resource ranges, bus-alias policy, optional IRQ descriptors, USB/PCIe and CYW43/SDIO bus-link descriptors, and framebuffer metadata, then starts the linked fixed-ring runtime entry. Physical Pi pre-root bootstrap turns do not sample timer registers; later steady ring latency telemetry uses the EL0 virtual counter. Physical Pi ring turns use `seL4_Call` and isolated runtimes reply after publishing the primitive completion record, so lower-priority driver TCBs do not depend on `Yield` for service time. Runtime-init commands deliver topology and must be followed by hardware service turns before board proof can close.
-    Per-driver runtime-image specs are compiler IR under `root_task.driver_images`, generated into the root-task manifest tables, and backed by separately linked `pi4-driver-*` runtime image artifacts staged by both `scripts/cohesix-build-run.sh` and `scripts/pi4-image-build.sh`; `scripts/pi4-image-build.sh` packages the raw CPIO before the root-task build so the physical Pi image carries the required embedded runtime source. The staged U-Boot CPIO remains audit/packaging evidence and is not a runtime fallback for physical Pi owner-state boots. Generated `code-pages=128` covers the current multi-segment runtime images, including the observed 108-page linked ELF spans, and the USB xHCI manifest aperture is now 16 pages instead of the earlier 2-page stub.
+    Physical Pi 4 builds now require the isolated VSpace constructor for normal driver bootstrap and reject virtual NIC trampoline work from the physical bootstrap set. For generated Pi 4 hot paths, root loads isolated `pi4-driver-*` runtime artifacts only from the raw driver-runtime CPIO embedded into the root-task image by `scripts/pi4-image-build.sh`; when an artifact is found by generated path, HAL maps every bounded `PT_LOAD` page from the runtime ELF plus stack/IPC/ring and declared MMIO/DMA/shared-buffer regions, stages a pointer-free `pi4-driver-abi` runtime-init descriptor containing physical page metadata, semantic resource ranges, bus-alias policy, optional IRQ descriptors, USB/PCIe and CYW43/SDIO bus-link descriptors, and framebuffer metadata, then starts the isolated fixed-ring runtime entry. Physical Pi pre-root bootstrap turns do not sample timer registers; later steady ring latency telemetry uses the EL0 virtual counter. Physical Pi ring turns use `seL4_Call` and isolated runtimes reply after publishing the primitive completion record, so lower-priority driver TCBs do not depend on `Yield` for service time. Runtime-init commands deliver topology and must be followed by hardware service turns before board proof can close.
+    Per-driver runtime-image specs are compiler IR under `root_task.driver_images`, generated into the root-task manifest tables, and backed by separately isolated `pi4-driver-*` runtime image artifacts staged by both `scripts/cohesix-build-run.sh` and `scripts/pi4-image-build.sh`; `scripts/pi4-image-build.sh` packages the raw CPIO before the root-task build so the physical Pi image carries the required embedded runtime source. The staged U-Boot CPIO remains audit/packaging evidence and is not a runtime fallback for physical Pi owner-state boots. Generated `code-pages=128` covers the current multi-segment runtime images, including the observed 108-page runtime ELF spans, and the USB xHCI manifest aperture is now 16 pages instead of the earlier 2-page stub.
     Runtime DMA/shared budgets are descriptor-backed and sized to current runtime use: serial shared=4 pages, USB DMA/shared=128/32 pages, HDMI DMA/shared=0/16 pages plus framebuffer, GENET DMA/shared=64/32 pages for a 32-RX/32-TX ring shape, CYW43 DMA/shared=0/64 pages, SDIO DMA/shared=0/32 pages, and PCIe shared=16 pages. The child VSpace layout keeps MMIO at `0x70200000`, DMA at `0x70800000`, and shared control at `0x70c00000`; semantic resource ranges carry aggregate page counts while per-page DMA descriptors cover every DMA page currently consumed by USB and GENET.
     Those artifacts implement fixed-ring production service engines rather than smoke-only stubs: serial handles bounded mini-UART init/RX/TX; HDMI renders into the mapped framebuffer; PCIe services primitive mapped-aperture read/write/flush operations; SDIO owns the HAL-declared SDHCI page and fixed-layout CMD52/CMD53/POLL_IRQ service records; USB owns a direct-root-port xHCI boot-keyboard path with command/event/EP0/interrupt-IN rings; GENET owns MDIO/MAC setup plus bounded RX/TX descriptor-ring turns; and CYW43 owns the shared-control SDPCM command surface behind the pointer-free CYW43/SDIO bus-link descriptor without receiving direct SDHCI MMIO. Seven generated runtime specs are acceptance-eligible (`root_context_required=false`, `hardware_state_migrated=true`), including `sdio-host` with one HAL-declared SDHCI MMIO page, but fresh Pi boots activate the selected network role only: Wi-Fi boots select SDIO plus CYW43, while wired boots select GENET. Fresh Pi hardware proof still has to show useful USB keyboard, HDMI, GENET/DHCP or Wi-Fi/DHCP, SDIO owner-state for Wi-Fi, and PCIe/VL805 behavior from those isolated runtimes before the implementation can be called board-proven.
-  - QEMU/host compatibility profiles may still dispatch bounded service callbacks through live driver TCBs or root compatibility paths so existing virtual-device tests keep running. Those paths now enter through a single HAL callback-compatibility gate and a single HAL root-compatibility admission gate; physical Pi 4 builds compile out the callback slot state and both gates fail closed for steady-state hardware service. If the independent ring-backed path is unavailable, the service turn fails closed and acceptance remains red. The May 20 Pi 4 proof is not closure because every driver-task bootstrap failed with `seL4_DeleteFirst` and hot paths stayed root-task compatibility. CYW43, SDIO, and PCIe now have owner-ring service queues: SDIO records CMD52/CMD53/POLL_IRQ completion through the isolated runtime before owner-state can credit `sdio-host`, CYW43 firmware/NVRAM/SDPCM command records return from linked-runtime completions before root hardware execution, and PCIe port read/write/flush helpers return from linked-runtime completions before root hardware execution. Their current acceptance specs still need fresh Pi hardware proof to show the complete SDIO, CYW43, USB, and PCIe hardware state machines are live in the isolated runtimes.
-  - The normal physical Pi 4 service path now uses linked-image command/completion rings where implemented and fails closed otherwise. Serial still keeps emergency boot logging alive, but normal UART runtime initialization now runs through the linked `pi4-driver-serial` image and the event pump receives only a `driver-task-serial-client` after that command succeeds. Physical Pi network init selects ring-backed `GenetDriverTaskDevice` / `Cyw43DriverTaskDevice` clients; the linked GENET image now owns MDIO/MAC plus bounded RX/TX descriptor-ring turns when wired is selected, and the linked CYW43 image owns shared-control SDPCM command records while SDIO transport authority sits with the linked `sdio-host` image when Wi-Fi is selected. Local-seat init has the same boundary: root has USB/HDMI ring-client shells, the linked HDMI runtime can render with framebuffer metadata, and the linked USB runtime owns the xHCI boot-keyboard path. The older `Pi4LocalSeat` root-resident selector handler and root-owned USB support crate have been removed and are not acceptance evidence. The physical Pi `KernelHal` no longer carries a direct `Pi4WifiState` slot and direct Wi-Fi HAL construction returns `pi4-wifi-driver-task-runtime-required`. The HAL still splits root-context diagnostic ring registration from pointer-free selector ring registration; QEMU/host compatibility can keep root-context diagnostic services, while physical Pi linked-image hardware service uses the fixed ring or fails closed. Shared-ring completions are tracked as `shared_ring_roles` and do not satisfy `hot_path=dedicated` or full acceptance; idle completions and zero-result progress completions cannot credit hot-path ownership. The proof layer also requires `DRIVER_TASK_OWNER_STATE_PROOF=yes` backed by per-active-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no` lines for the selected boot set, acceptance-eligible runtime-image specs, and the runtime transport mapping mask complete; `sdio-host` must prove the linked SDIO runtime completed non-root-context hardware progress before it can credit Wi-Fi owner-state. Owner-state descriptor registration is rejected if the corresponding runtime-image spec is not acceptance-eligible. The QEMU smoke path proves the isolated trampoline, per-driver VSpace/ASID allocation, restricted mapping set, runtime-image declaration accounting, actual transport-region mapping, and pointer-free ring transport, but that is transport-substrate proof rather than Pi hardware hot-path ownership. Any callback-pointer, root-task compatibility, or root-resident selector service turn remains QEMU/host or migration evidence only and fails reopened Pi closure.
+  - QEMU/host compatibility profiles may still dispatch bounded service callbacks through live driver TCBs or root compatibility paths so existing virtual-device tests keep running. Those paths now enter through a single HAL callback-compatibility gate and a single HAL root-compatibility admission gate; physical Pi 4 builds compile out the callback slot state and both gates fail closed for steady-state hardware service. If the independent ring-backed path is unavailable, the service turn fails closed and acceptance remains red. The May 20 Pi 4 proof is not closure because every driver-task bootstrap failed with `seL4_DeleteFirst` and hot paths stayed root-task compatibility. CYW43, SDIO, and PCIe now have owner-ring service queues: SDIO records CMD52/CMD53/POLL_IRQ completion through the isolated runtime before owner-state can credit `sdio-host`, CYW43 firmware/NVRAM/SDPCM command records return from isolated runtime completions before root hardware execution, and PCIe port read/write/flush helpers return from isolated runtime completions before root hardware execution. Their current acceptance specs still need fresh Pi hardware proof to show the complete SDIO, CYW43, USB, and PCIe hardware state machines are live in the isolated runtimes.
+  - The normal physical Pi 4 service path now uses linked-image command/completion rings where implemented and fails closed otherwise. Serial still keeps emergency boot logging alive, but normal UART runtime initialization now runs through the profile-selected `pi4-driver-serial` image and the event pump receives only a `driver-task-serial-client` after that command succeeds. Physical Pi network init selects ring-backed `GenetDriverTaskDevice` / `Cyw43DriverTaskDevice` clients; the isolated GENET image now owns MDIO/MAC plus bounded RX/TX descriptor-ring turns when wired is selected, and the isolated CYW43 image owns shared-control SDPCM command records while SDIO transport authority sits with the profile-selected `sdio-host` image when Wi-Fi is selected. Local-seat init has the same boundary: root has USB/HDMI ring-client shells, the isolated HDMI runtime can render with framebuffer metadata, and the isolated USB runtime owns the xHCI boot-keyboard path. The older `Pi4LocalSeat` root-resident selector handler and root-owned USB support crate have been removed and are not acceptance evidence. The physical Pi `KernelHal` no longer carries a direct `Pi4WifiState` slot and direct Wi-Fi HAL construction returns `pi4-wifi-driver-task-runtime-required`. The HAL still splits root-context diagnostic ring registration from pointer-free selector ring registration; QEMU/host compatibility can keep root-context diagnostic services, while physical Pi linked-image hardware service uses the fixed ring or fails closed. Shared-ring completions are tracked as `shared_ring_roles` and do not satisfy `hot_path=dedicated` or full acceptance; idle completions and zero-result progress completions cannot credit hot-path ownership. The proof layer also requires `DRIVER_TASK_OWNER_STATE_PROOF=yes` backed by per-active-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no` lines for the selected boot set, acceptance-eligible runtime-image specs, and the runtime transport mapping mask complete; `sdio-host` must prove the isolated SDIO runtime completed non-root-context hardware progress before it can credit Wi-Fi owner-state. Owner-state descriptor registration is rejected if the corresponding runtime-image spec is not acceptance-eligible. The QEMU smoke path proves the isolated trampoline, per-driver VSpace/ASID allocation, restricted mapping set, runtime-image declaration accounting, actual transport-region mapping, and pointer-free ring transport, but that is transport-substrate proof rather than Pi hardware hot-path ownership. Any callback-pointer, root-task compatibility, or root-resident selector service turn remains QEMU/host or migration evidence only and fails reopened Pi closure.
   - Root keeps authority and revocation; driver tasks receive only compiler-declared caps and bounded shared rings.
   - seL4 scheduling-context fields are profile-qualified: MCS builds bind explicit scheduling contexts, while non-MCS builds enforce the same contract with TCB priority/domain plus bounded IPC/poll budgets.
   - The substrate must not introduce POSIX threads, implicit async runtimes, unbounded queues, or a second listener/protocol.
@@ -6181,7 +6181,7 @@ Add the HAL-enforced driver-task substrate, migrate serial/display and GENET beh
 ### Checks (DoD)
 - HAL driver-task contracts exist and validate for serial, USB/local-seat, HDMI text, GENET, CYW43, SDIO host, PCIe root, RTL8139, and virtio-net.
 - Network stack construction rejects missing or invalid driver scheduling contracts before device initialisation.
-- Pi 4 and QEMU driver-task acceptance must distinguish contract declaration from isolation: root-task compatibility service turns are useful diagnostic evidence only, while reopened physical Pi closure requires the manifest-selected active driver-task set to report `DRIVER_TASK_COMPATIBILITY=0`, `DRIVER_TASK_DEDICATED_READY=yes`, role-specific `DRIVER_TASK_SERIAL_DEDICATED=yes`, `DRIVER_TASK_USB_DEDICATED=yes`, `DRIVER_TASK_DISPLAY_DEDICATED=yes`, `DRIVER_TASK_NET_DEDICATED=yes`, selected-role `DRIVER_TASK_SDIO_DEDICATED=yes` for Wi-Fi, and `DRIVER_TASK_PCIE_DEDICATED=yes`, plus `DRIVER_TASK_SUBSTRATE_READY=yes`, `DRIVER_TASK_FAILED_COUNT=0`, `DRIVER_TASK_CAPSET_PROOF=yes`, `DRIVER_TASK_FAULT_PROOF=yes`, `DRIVER_TASK_REVOKE_PROOF=yes`, `DRIVER_TASK_SCHED_PROOF=yes`, `DRIVER_TASK_AFFINITY_PROOF=yes`, selected active affinity configured/applied proof, `DRIVER_TASK_AFFINITY_MANIFEST_PROOF=yes`, `DRIVER_TASK_VSPACE_PROOF=yes`, `DRIVER_TASK_POINTER_FREE_IPC_PROOF=yes`, `DRIVER_TASK_OWNER_STATE_PROOF=yes`, and active-net identity proof under `scripts/pi4_gate_proof.sh --require-driver-task-proof`; QEMU compatibility smoke may still prove all nine declared contracts as transport-substrate evidence only. `DRIVER_TASK_OWNER_STATE_PROOF=yes` requires concrete descriptor proof for `serial-console`, `usb-keyboard`, `hdmi-text`, `pcie-root`, and the selected network role (`genet-nic` for wired, or `cyw43-wifi` plus `sdio-host` for Wi-Fi); SDIO only credits after a non-root-context linked-runtime CMD52/CMD53/POLL_IRQ completion proves hardware progress. Aggregate `owner_state=driver-owned` text is not closure. A `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence, not affinity proof; it must keep `DRIVER_TASK_AFFINITY_PROOF` and `DRIVER_TASK_AFFINITY_MANIFEST_PROOF` red. A `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard` line likewise is current mitigation evidence, not notification lifecycle proof. Host tests must keep the pointer-free ring records fixed-layout and primitive-only, prove the physical Pi profile cuts over to driver-task client shells instead of root-owned hardware constructors, and cover the Pi 4 hot-path command catalog for serial console, USB keyboard, HDMI text, GENET RX/TX, CYW43 RX/TX, SDIO host, and PCIe root service. Callback-pointer service turns, including live-TCB callback turns, remain compatibility evidence until the driver state boundary is owned by a ring-backed task. The Pi 4 manifest defaults assign both `bcmgenet-v5` and `cyw43455` to core `3`; boot evidence must show `affinity_core=3` for the selected contract before claiming fourth-core execution.
+- Pi 4 and QEMU driver-task acceptance must distinguish contract declaration from isolation: root-task compatibility service turns are useful diagnostic evidence only, while reopened physical Pi closure requires the manifest-selected active driver-task set to report `DRIVER_TASK_COMPATIBILITY=0`, `DRIVER_TASK_DEDICATED_READY=yes`, role-specific `DRIVER_TASK_SERIAL_DEDICATED=yes`, `DRIVER_TASK_USB_DEDICATED=yes`, `DRIVER_TASK_DISPLAY_DEDICATED=yes`, `DRIVER_TASK_NET_DEDICATED=yes`, selected-role `DRIVER_TASK_SDIO_DEDICATED=yes` for Wi-Fi, and `DRIVER_TASK_PCIE_DEDICATED=yes`, plus `DRIVER_TASK_SUBSTRATE_READY=yes`, `DRIVER_TASK_FAILED_COUNT=0`, `DRIVER_TASK_CAPSET_PROOF=yes`, `DRIVER_TASK_FAULT_PROOF=yes`, `DRIVER_TASK_REVOKE_PROOF=yes`, `DRIVER_TASK_SCHED_PROOF=yes`, `DRIVER_TASK_AFFINITY_PROOF=yes`, selected active affinity configured/applied proof, `DRIVER_TASK_AFFINITY_MANIFEST_PROOF=yes`, `DRIVER_TASK_VSPACE_PROOF=yes`, `DRIVER_TASK_POINTER_FREE_IPC_PROOF=yes`, `DRIVER_TASK_OWNER_STATE_PROOF=yes`, and active-net identity proof under `scripts/pi4_gate_proof.sh --require-driver-task-proof`; QEMU compatibility smoke may still prove all nine declared contracts as transport-substrate evidence only. `DRIVER_TASK_OWNER_STATE_PROOF=yes` requires concrete descriptor proof for `serial-console`, `usb-keyboard`, `hdmi-text`, `pcie-root`, and the selected network role (`genet-nic` for wired, or `cyw43-wifi` plus `sdio-host` for Wi-Fi); SDIO only credits after a non-root-context isolated runtime CMD52/CMD53/POLL_IRQ completion proves hardware progress. Aggregate `owner_state=driver-owned` text is not closure. A `DRIVER_TASK_AFFINITY_DEFERRED ... reason=pi4-child-tcb-affinity-boot-stall-guard` line is stale mitigation evidence, not affinity proof; it must keep `DRIVER_TASK_AFFINITY_PROOF` and `DRIVER_TASK_AFFINITY_MANIFEST_PROOF` red. A `DRIVER_TASK_NOTIFICATION_BIND_DEFERRED ... reason=pi4-early-tcb-notification-bind-boot-stall-guard` line likewise is current mitigation evidence, not notification lifecycle proof. Host tests must keep the pointer-free ring records fixed-layout and primitive-only, prove the physical Pi profile cuts over to driver-task client shells instead of root-owned hardware constructors, and cover the Pi 4 hot-path command catalog for serial console, USB keyboard, HDMI text, GENET RX/TX, CYW43 RX/TX, SDIO host, and PCIe root service. Callback-pointer service turns, including live-TCB callback turns, remain compatibility evidence until the driver state boundary is owned by a ring-backed task. The Pi 4 manifest defaults assign both `bcmgenet-v5` and `cyw43455` to core `3`; boot evidence must show `affinity_core=3` for the selected contract before claiming fourth-core execution.
 - Root-owned driver-task substrate can create, monitor, fault-report, and revoke at least one non-authority driver task without changing console grammar.
 - Serial and HDMI service remain responsive while synthetic GENET traffic consumes its full allowed budget.
 - Pi 4 U-Boot boot reaches root-task network init and reports `GENETv5` backend with static IPv4 from manifest-generated config.
@@ -6282,7 +6282,7 @@ Goal: Promote GENET from in-root compatibility driver to isolated frame driver t
 Inputs: apps/root-task/src/drivers/driver_task_net.rs, apps/root-task/src/net/*, apps/pi4-driver-runtime/src/lib.rs.
 Changes:
   - apps/root-task/src/drivers/driver_task_net.rs — keep root as the GENET ring client only and fail closed when the isolated runtime has not returned owner progress.
-  - apps/pi4-driver-runtime/src/lib.rs — keep DMA ring ownership, TX reclaim, RX refill, and service turns in the linked `driver-genet` runtime.
+  - apps/pi4-driver-runtime/src/lib.rs — keep DMA ring ownership, TX reclaim, RX refill, and service turns in the isolated `driver-genet` runtime.
   - apps/root-task/src/net/* — consume bounded Ethernet-frame IPC from the GENET task while keeping smoltcp/listener semantics in root.
 Commands:
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml
@@ -6294,11 +6294,11 @@ Deliverables:
 Compatibility baseline tasks below are retained because they describe the original 26a GENET/static-IPv4 behavior that must keep working. They do not close reopened 26a by themselves; closure now requires both the baseline behavior and the driver-task substrate/migration checks above.
 
 Title/ID: m26a-bcmgenet-driver
-Goal: Preserve HAL-declared Broadcom GENETv5 NIC behavior through the linked Pi driver runtime.
+Goal: Preserve HAL-declared Broadcom GENETv5 NIC behavior through the isolated Pi driver runtime.
 Inputs: apps/root-task/src/net/*, apps/root-task/src/drivers/driver_task_net.rs, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, apps/root-task/src/hal/*, docs/SECURITY.md, Linux `bcmgenet` + Linux `bcm2711` DT binding notes + U-Boot `bcmgenet` bring-up notes (reference-only).
 Changes:
   - apps/root-task/src/drivers/driver_task_net.rs — keep root as the GENET ring client only and fail closed when isolated runtime owner-state proof is missing.
-  - apps/pi4-driver-runtime/src/lib.rs — carry the GENETv5 register/ring/IRQ/PHY implementation inside the linked `driver-genet` runtime with HAL-declared MMIO/IRQ/DMA/MDIO resources only.
+  - apps/pi4-driver-runtime/src/lib.rs — carry the GENETv5 register/ring/IRQ/PHY implementation inside the isolated `driver-genet` runtime with HAL-declared MMIO/IRQ/DMA/MDIO resources only.
   - apps/root-task/src/net/mod.rs + apps/root-task/src/net/stack.rs — backend selection and ring-client init wiring.
   - docs/ARCHITECTURE.md + docs/SECURITY.md — record GENET design-reference provenance and explicit no-code-lift policy.
 Commands:
@@ -6310,7 +6310,7 @@ Checks:
   - Link-up, RX/TX smoke, and deterministic error paths are covered by unit/integration tests.
   - GENET hardware service remains in the isolated runtime with HAL-declared resources; root exposes only the bounded ring client.
 Deliverables:
-  - Pi 4 GENETv5 linked-runtime backend integrated behind existing net abstractions with documented source provenance order (Linux `bcmgenet` -> Linux `bcm2711` DT -> U-Boot `bcmgenet`) and reference-only compliance.
+  - Pi 4 GENETv5 isolated runtime backend integrated behind existing net abstractions with documented source provenance order (Linux `bcmgenet` -> Linux `bcm2711` DT -> U-Boot `bcmgenet`) and reference-only compliance.
 
 Title/ID: m26a-static-ipv4-profile-gate
 Goal: Make Pi 4 U-Boot static IPv4 config manifest-authoritative and profile-gated.
@@ -6367,7 +6367,7 @@ Deliverables:
 ## Milestone 26b — Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency <a id="26b"></a>
 [Milestones](#Milestones)
 
-**Status:** Reopened — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi, and QEMU compatibility guardrails remain the compatibility baseline. The reopened scope moves USB/xHCI/HID and CYW43/SDIO behind dedicated driver-task scheduling contracts and adds concurrency/performance gates so Wi-Fi work cannot regress USB keyboard, serial console, or HDMI responsiveness. Closure also requires the selected linked-runtime Pi path to meet or exceed the accepted best-QEMU throughput reference under the same harness, with latency recorded but excluded from the pass/fail verdict.
+**Status:** Reopened — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi, and QEMU compatibility guardrails remain the compatibility baseline. The reopened scope moves USB/xHCI/HID and CYW43/SDIO behind dedicated driver-task scheduling contracts and adds concurrency/performance gates so Wi-Fi work cannot regress USB keyboard, serial console, or HDMI responsiveness. Closure also requires the selected isolated runtime Pi path to meet or exceed the accepted best-QEMU throughput reference under the same harness, with latency recorded but excluded from the pass/fail verdict.
 
 **Why now (operator continuity):**  
 Reopened Milestone 26b depends on reopened 26a providing the driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi and selected-network performance must improve by moving SDIO/firmware/RX/TX or GENET RX/TX progress onto bounded manifest-declared isolated driver runtimes, not by extending the root event-loop turn.
@@ -6384,36 +6384,36 @@ Reopened Milestone 26b depends on reopened 26a providing the driver-task substra
 - CYW43/SDIO runs under separate network-control and network-data budgets. EAPOL, DHCP, ARP, and TCP ACK progress may preempt Wi-Fi bulk data, but neither class may preempt USB/local-seat or serial input.
 - Runtime RX aggregation/glom may be enabled only after bounded superframe storage, capped deaggregation work, drop counters, and recovery gates are implemented inside the Wi-Fi driver task.
 - Performance claims use normalized parity: raw `cohsh` over Pi Wi-Fi is measured first, REST gateway overhead is measured separately, QEMU remains a compatibility/capacity reference by itself, and any Pi parity claim must come from a fresh same-harness Pi run that meets or exceeds the selected best-QEMU throughput reference.
-- The linked-runtime throughput verdict excludes latency only after recording latency fields in the artifacts. Throughput, successful operation count, error rate, and bounded-backpressure behavior remain verdict inputs.
+- The isolated runtime throughput verdict excludes latency only after recording latency fields in the artifacts. Throughput, successful operation count, error rate, and bounded-backpressure behavior remain verdict inputs.
 - Backward compatibility is mandatory: Milestone 26b must not break existing macOS/Linux QEMU workflows, fixtures, or transport semantics.
 
 ### Prerequisite
 - Reopened Milestone **26a** must be completed before 26b closure, including the HAL driver-task admission substrate, serial/display isolation, GENET driver-task migration, and preserved Pi 4 GENETv5/static-IPv4 compatibility behavior.
 
 ### Goal
-Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task contracts, preserve DHCP and single-interface policy behavior, prove Wi-Fi/network load cannot degrade USB keyboard, serial console, or HDMI responsiveness, and close same-harness linked-runtime throughput parity against the accepted best-QEMU reference.
+Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task contracts, preserve DHCP and single-interface policy behavior, prove Wi-Fi/network load cannot degrade USB keyboard, serial console, or HDMI responsiveness, and close same-harness isolated runtime throughput parity against the accepted best-QEMU reference.
 
 ### Deliverables
 - **USB/xHCI/HID driver task**
   - Promote Pi 4 VL805/xHCI/HID keyboard service from in-root compatibility polling to a `driver-usb` task with a realtime-input scheduling contract.
   - Preserve the poll-only xHCI lane until hardware proves interrupt delivery; timer IRQ 27 remains timer-only evidence, not USB evidence.
   - Preserve the 128 armed keyboard interrupt-IN runway, bounded HID event draining, bounded EP0 `GET_REPORT` input fallback, and Gate 10 first-byte/first-printable-byte acceptance criteria.
-  - Preserve the May 18-19 old-good hub-keyboard order as an additive linked-runtime replay contract. Reopened USB closure requires both `USB_GATE=10` / `USB_BLOCKER=none` and `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none`; late Gate 10 text without controller, hub, interrupt-IN, first-report, and first-byte sequence evidence is not closure.
+  - Preserve the May 18-19 old-good hub-keyboard order as an additive isolated runtime replay contract. Reopened USB closure requires both `USB_GATE=10` / `USB_BLOCKER=none` and `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none`; late Gate 10 text without controller, hub, interrupt-IN, first-report, and first-byte sequence evidence is not closure.
   - Root consumes only bounded local-seat byte events; it does not own xHCI registers, rings, DMA, or HID polling after driver-task handoff.
 
 - **CYW43/SDIO Wi-Fi driver task**
   - Promote SDIO host I/O, CYW43 firmware/control plane, EAPOL admission, RX/TX queues, credit handling, and optional glom/deaggregation into `driver-wifi`.
   - Graduate standalone `sdio-host` into the 26b acceptance set with one HAL-declared SDHCI MMIO page, fixed-layout CMD52/CMD53/POLL_IRQ service records, and required owner-state proof.
   - Split Wi-Fi work into network-control and network-data budgets so EAPOL/DHCP/TCP ACK progress cannot be starved by bulk RX/TX, while USB/serial still preempt both.
-  - Preserve the May 18-19 Linux-shaped host-EAPOL order as an additive linked-runtime replay contract. Reopened Wi-Fi closure requires both `WIFI_GATE=10` / `WIFI_BLOCKER=none` and `WIFI_OLDGOOD_REPLAY=yes` / `WIFI_OLDGOOD_MISSING=none`; DHCP/netstats and condensed `join complete` summaries cannot substitute for ordered SDIO/CYW43 owner-state, control setup, association/link, M1/M2/M3/M4, PTK/GTK, secure release, DHCP, nettest, and final netstats proof.
+  - Preserve the May 18-19 Linux-shaped host-EAPOL order as an additive isolated runtime replay contract. Reopened Wi-Fi closure requires both `WIFI_GATE=10` / `WIFI_BLOCKER=none` and `WIFI_OLDGOOD_REPLAY=yes` / `WIFI_OLDGOOD_MISSING=none`; DHCP/netstats and condensed `join complete` summaries cannot substitute for ordered SDIO/CYW43 owner-state, control setup, association/link, M1/M2/M3/M4, PTK/GTK, secure release, DHCP, nettest, and final netstats proof.
   - Root receives Ethernet frames through bounded IPC/rings and never waits synchronously on SDIO credit, CMD52/CMD53 loops, firmware replies, or glom deaggregation.
   - CYW43 startup preserves Linux's `bus:rxglom=1` through `event_msgs_ext` and `WLC_UP`; aggregated RX is bounded in the driver task, and any future runtime disable/superframe expansion must run only after secure carrier proof with capped work and recovery gates.
   - Runtime Wi-Fi data/glom RX is separated from control-plane reply reads: control replies retain the conservative Linux first-read/remainder shape, while runtime RX uses one 512-byte block-aligned Function 2 read into an 8192-byte bounded buffer and caps deaggregation at 16 subframes plus a 16-entry ready queue.
 
-- **Normalized benchmark and linked-runtime parity gates**
+- **Normalized benchmark and isolated runtime parity gates**
   - Add benchmark reporting that separates raw `cohsh` over Pi Wi-Fi, REST cold gateway overhead, and REST hot/cache projection.
   - Define the accepted best-QEMU reference by artifact path, harness command, worker count, request suite, gateway/auth mode, QEMU SMP topology, pressure settings, and error-budget policy.
-  - Compare QEMU and Pi linked-runtime artifacts with the same harness and matched workload/provenance. QEMU results alone remain semantic/capacity references; Pi hardware parity requires fresh Pi evidence.
+  - Compare QEMU and Pi isolated runtime artifacts with the same harness and matched workload/provenance. QEMU results alone remain semantic/capacity references; Pi hardware parity requires fresh Pi evidence.
   - Exclude latency from pass/fail only after preserving latency fields in JSON and human summaries; throughput, successful operation count, error rate, and bounded-backpressure behavior decide the verdict.
   - Pi 4 performance acceptance requires zero USB/serial/HDMI responsiveness regression during Wi-Fi/NIC load and no root-owned steady-state physical-driver service path.
 
@@ -6464,7 +6464,7 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 - `driver-usb` proves `USB_GATE=10`, `USB_BLOCKER=none`, first-byte/first-printable-byte evidence, and fast typing remains fluid while the manifest-selected network driver consumes its data budget.
 - Serial command echo p50/p95 and HDMI mirror progress remain bounded while Wi-Fi or wired network tasks consume their data budgets; GENET/CYW43 pre-root runtime-init may defer before the root shell when pointer-free ring proof is incomplete, and that deferral must not be counted as selected-NIC proof.
 - `driver-wifi` reports bounded control/data service counters: SDIO ops, bytes, RX/TX frames, credit waits, budget exhaustion/yield count, queued frames, drops, and max service latency.
-- `driver-sdio` reports dedicated-role and owner-state proof from non-root-context linked-runtime SDIO hardware progress before `sdio-host` can count toward Pi 4 acceptance.
+- `driver-sdio` reports dedicated-role and owner-state proof from non-root-context isolated runtime SDIO hardware progress before `sdio-host` can count toward Pi 4 acceptance.
 - Wi-Fi accepts load only through the driver-task frame ABI; root never spins on SDIO credit, CMD52/CMD53 loops, firmware replies, or glom deaggregation.
 - Pi 4 wired path acquires a DHCP lease within bounded retries/timeouts and exposes acquired config through existing diagnostics surfaces.
 - Pi 4 Wi-Fi path (when enabled in profile and credentials are present) reaches link-up and acquires DHCP with deterministic failure modes and audited errors.
@@ -6473,8 +6473,8 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 - Existing macOS/Linux QEMU workflows remain backward compatible, including serial/TCP console behavior and existing regression fixtures.
 - CYW43xx Wi-Fi path demonstrates HAL-only access in runtime code and tests; no direct MMIO/bootloader-service usage exists outside HAL-owned modules.
 - Raw Pi `cohsh` Wi-Fi latency, REST cold gateway overhead, and REST hot projection latency are reported separately; QEMU benchmark results are not used as Pi Wi-Fi hardware proof without a matched fresh Pi run.
-- A comparator identifies the selected best-QEMU benchmark artifact and the matched Pi linked-runtime artifact, rejects workload/provenance mismatches, excludes latency from pass/fail, and reports a deterministic PASS only when Pi throughput meets or exceeds QEMU with the accepted error budget.
-- Linked-runtime hot-path changes remain bounded and preserve active-slot, fingerprint, completion, and busy-on-conflict invariants; no root-owned physical driver service path is added or re-enabled to win the benchmark.
+- A comparator identifies the selected best-QEMU benchmark artifact and the matched Pi isolated runtime artifact, rejects workload/provenance mismatches, excludes latency from pass/fail, and reports a deterministic PASS only when Pi throughput meets or exceeds QEMU with the accepted error budget.
+- Isolated runtime hot-path changes remain bounded and preserve active-slot, fingerprint, completion, and busy-on-conflict invariants; no root-owned physical driver service path is added or re-enabled to win the benchmark.
 - Pi benchmark evidence is fresh, non-empty, normalized, and separated from flash, shell, USB/local-seat, HDMI, and serial-responsiveness proof lanes.
 - Full regression pack remains green on QEMU; any profile-gated divergence is explicitly documented and fixture-backed.
 
@@ -6495,8 +6495,8 @@ Title/ID: m26b-usb-driver-task
 Goal: Move Pi 4 xHCI/HID keyboard service behind the realtime USB driver-task contract.
 Inputs: apps/root-task/src/local_seat.rs, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, apps/root-task/src/event/*, scripts/pi4_trace_normalize.py, tests/test_pi4_trace_normalize.py, docs/DRIVERS.md.
 Changes:
-  - apps/root-task/src/local_seat.rs — route local-seat keyboard-byte consumption through the linked `driver-usb` runtime.
-  - apps/pi4-driver-runtime/src/lib.rs — own the direct-root-port xHCI command/event/EP0/interrupt-IN rings, root-port reset, slot/address/configuration, HID boot-protocol setup, and DMA report polling in the linked USB runtime.
+  - apps/root-task/src/local_seat.rs — route local-seat keyboard-byte consumption through the isolated `driver-usb` runtime.
+  - apps/pi4-driver-runtime/src/lib.rs — own the direct-root-port xHCI command/event/EP0/interrupt-IN rings, root-port reset, slot/address/configuration, HID boot-protocol setup, and DMA report polling in the isolated USB runtime.
   - apps/root-task/src/local_seat.rs — keep root-task as a ring-client/prompt consumer only; no root-owned USB implementation crate remains.
   - apps/root-task/src/event/* — consume bounded local-seat byte events and preserve USB priority over serial dispatch and all network work.
 Commands:
@@ -6514,8 +6514,8 @@ Goal: Move CYW43/SDIO Wi-Fi service behind a dedicated driver task with bounded 
 Inputs: apps/root-task/src/drivers/driver_task_net.rs, apps/root-task/src/hal/pi4_wifi.rs, apps/root-task/src/hal/driver_task.rs, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, apps/root-task/src/net/*, scripts/pi4_trace_normalize.py, scripts/pi4_compare_driver_models.py, tests/test_pi4_trace_normalize.py, tests/test_pi4_compare_driver_models.py, docs/DRIVERS.md.
 Changes:
   - apps/root-task/src/hal/pi4_wifi.rs — grant only SDIO, power/reset, firmware-bundle, IRQ/OOB, and DMA/ring resources declared for `driver-wifi`.
-  - apps/root-task/src/drivers/driver_task_net.rs — keep root as the CYW43 ring client only and fail closed when linked SDIO/CYW43 service has not returned owner progress.
-  - crates/pi4-driver-abi/src/lib.rs + apps/pi4-driver-runtime/src/lib.rs — define fixed-layout SDIO CMD52/CMD53/POLL_IRQ command records and service them in the linked SDIO runtime as the bus-owner ABI that CYW43 must use.
+  - apps/root-task/src/drivers/driver_task_net.rs — keep root as the CYW43 ring client only and fail closed when isolated SDIO/CYW43 service has not returned owner progress.
+  - crates/pi4-driver-abi/src/lib.rs + apps/pi4-driver-runtime/src/lib.rs — define fixed-layout SDIO CMD52/CMD53/POLL_IRQ command records and service them in the isolated SDIO runtime as the bus-owner ABI that CYW43 must use.
   - apps/root-task/src/net/* — consume bounded Ethernet-frame IPC without changing authenticated TCP console semantics.
 Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::pi4_wifi
@@ -6534,7 +6534,7 @@ Goal: Graduate standalone SDIO host service from diagnostic runtime to 26b accep
 Inputs: configs/root_task*.toml, apps/root-task/src/hal/{mod.rs,driver_task.rs,pi4_wifi.rs}, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, scripts/pi4_gate_proof.sh, scripts/pi4_trace_normalize.py, docs/DRIVERS.md, docs/TEST_PLAN.md.
 Changes:
   - configs/root_task*.toml + generated manifest artifacts — declare `sdio-host` with one HAL-declared SDHCI MMIO page, DMA/shared budgets, and `hardware_state_migrated=true`.
-  - apps/root-task/src/hal/* — map SDHCI into the SDIO linked-runtime resource set, keep runtime commands pointer-free, and register `sdio-host` owner-state only after non-root-context CMD52/CMD53/POLL_IRQ hardware progress.
+  - apps/root-task/src/hal/* — map SDHCI into the SDIO isolated runtime resource set, keep runtime commands pointer-free, and register `sdio-host` owner-state only after non-root-context CMD52/CMD53/POLL_IRQ hardware progress.
   - scripts/pi4_gate_proof.sh + scripts/pi4_trace_normalize.py — require SDIO dedicated-role and owner-state evidence as part of reopened 26a/26b Pi 4 acceptance.
   - docs/BUILD_PLAN.md + docs/DRIVERS.md + docs/TEST_PLAN.md + docs/HARDWARE_BRINGUP.md — record SDIO as a 26b acceptance hot path rather than a future diagnostic guard.
 Commands:
@@ -6585,7 +6585,7 @@ Deliverables:
   - Honest Pi Wi-Fi benchmark model that optimizes toward QEMU semantics without claiming impossible physical loopback parity.
 
 Title/ID: m26b-benchmark-comparator
-Goal: Define and enforce same-harness QEMU-vs-Pi linked-runtime throughput parity while excluding latency from the verdict.
+Goal: Define and enforce same-harness QEMU-vs-Pi isolated runtime throughput parity while excluding latency from the verdict.
 Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, tests/test_pi4_compare_driver_models.py, docs/BENCHMARKS.md, existing out/bench QEMU and Pi summaries.
 Changes:
   - scripts/rest_perf_harness.py or scripts/pi4_compare_driver_models.py — emit/compare benchmark provenance, reject mismatched workloads, and calculate pass/fail from throughput/error metrics only.
@@ -6597,7 +6597,7 @@ Checks: comparator rejects stale or mismatched artifacts and produces determinis
 Deliverables: benchmark comparator, tests, and documented parity rule.
 
 Title/ID: m26b-linked-runtime-counters
-Goal: Add bounded counters required to explain linked-runtime benchmark misses without UART spam.
+Goal: Add bounded counters required to explain isolated runtime benchmark misses without UART spam.
 Inputs: crates/pi4-driver-abi, apps/pi4-driver-runtime, apps/root-task/src/hal/driver_task.rs, apps/root-task/src/drivers/driver_task_net.rs.
 Changes:
   - crates/pi4-driver-abi/src/** — fixed-layout counter fields for turns, drained descriptors, staged bytes, cache work, busy/backpressure, and overruns where existing records are insufficient.
@@ -6613,7 +6613,7 @@ Checks: counters are fixed-layout, bounded, non-authority-bearing, activity-gate
 Deliverables: counter ABI, runtime updates, root-side evidence snapshots, normalizer guard fields, and tests.
 
 Title/ID: m26b-linked-driver-hotpath-closure
-Goal: Remove avoidable single-frame or single-descriptor overhead while preserving linked-runtime active-slot invariants.
+Goal: Remove avoidable single-frame or single-descriptor overhead while preserving isolated runtime active-slot invariants.
 Inputs: apps/pi4-driver-runtime, crates/pi4-driver-abi, apps/root-task/src/hal/driver_task.rs, docs/DRIVERS.md.
 Changes:
   - apps/pi4-driver-runtime/src/** — bounded local batching for descriptor drain, cache maintenance, completion publication, and telemetry counters where benchmark evidence shows contention.
@@ -6624,19 +6624,19 @@ Commands:
   - cargo test -p pi4-driver-runtime
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib
 Checks: batching is bounded, cannot overwrite active payload-bearing turns, and does not add root-owned physical-driver service.
-Deliverables: lower-contention linked-runtime hot paths with contract-local backpressure evidence.
+Deliverables: lower-contention isolated runtime hot paths with contract-local backpressure evidence.
 
 Title/ID: m26b-target-benchmark-proof
-Goal: Produce fresh same-harness QEMU and Pi 4 linked-runtime benchmark evidence before 26b closes.
+Goal: Produce fresh same-harness QEMU and Pi 4 isolated runtime benchmark evidence before 26b closes.
 Inputs: scripts/rest_perf_harness.py, selected QEMU reference, Pi 4 serial capture, active wired or Wi-Fi profile, docs/TEST_PLAN.md.
 Changes:
-  - out/bench/m26b-* — archived QEMU reference, Pi linked-runtime run, comparator output, and normalized serial evidence.
+  - out/bench/m26b-* — archived QEMU reference, Pi isolated runtime run, comparator output, and normalized serial evidence.
   - docs/BENCHMARKS.md — update benchmark verdict and artifact table after proof is produced.
   - docs/TEST_PLAN.md and scripts/ci/test_plan_run.sh — add 26b QEMU/Pi benchmark stages if not already covered by target-qualified runner configuration.
 Commands:
   - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26b-qemu-reference
   - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26b-pi4-linked-runtime
-Checks: Pi linked-runtime throughput meets or exceeds the selected QEMU reference under matched workload/provenance, latency remains recorded but excluded from verdict, and side proof lanes stay separate.
+Checks: Pi isolated runtime throughput meets or exceeds the selected QEMU reference under matched workload/provenance, latency remains recorded but excluded from verdict, and side proof lanes stay separate.
 Deliverables: fresh benchmark artifacts, comparator PASS/FAIL, normalized Pi proof, and updated benchmark docs.
 
 Title/ID: m26b-authenticated-cohsh-reboot
@@ -6912,7 +6912,7 @@ Deliverables:
 [Milestones](#Milestones)
 
 **Why now (reviewer trust):**
-Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-up evidence, and linked-runtime benchmark closure, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window after linked-runtime benchmark closure and before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
+Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-up evidence, and isolated runtime benchmark closure, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window after isolated runtime benchmark closure and before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
 **Current planning status:** Not Started. Milestones 26a and 26b have been reopened for the Pi 4 driver-task migration, so 26c is blocked until those reopened acceptance gates close. No 26c cleanup, refactor, target-qualified runner implementation, or closure evidence has started yet.
 
@@ -6930,12 +6930,12 @@ Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-
 - HAL remains the only path for device authority, MMIO, DMA publication, IRQ binding, physical-address handling, firmware-service handoff, and cache-maintenance policy. SDIO/USB seams are extraction-only and must not introduce new hardware support or a parallel driver framework.
 - Pi 4 DMA truth is `bounded_no_iommu`: bounded HAL-managed DMA ownership and evidence, not malicious-device DMA confinement or SMMU/IOMMU isolation.
 - Linked Pi 4 runtime-image specs, `pi4-driver-abi`, runtime CPIO staging, owner-state descriptors, the 26b SDIO acceptance state, and fresh-Pi hardware proof remain separate evidence states; generated eligibility or QEMU proof is not board closure. Milestone 26c may audit and preserve this evidence split, but SDIO graduation belongs to 26b.
-- Linked-runtime performance evidence is counter-qualified: valid `DRIVER_TASK_COUNTER` snapshots, owner-state proof, and same-harness Pi benchmark evidence do not close latency claims unless the Pi profile proves `timers-arch-counter` with `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no`. Dummy-timer captures, stale serial logs, or physical-counter/timer-control exports leave performance proof red.
+- Isolated runtime performance evidence is counter-qualified: valid `DRIVER_TASK_COUNTER` snapshots, owner-state proof, and same-harness Pi benchmark evidence do not close latency claims unless the Pi profile proves `timers-arch-counter` with `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no`. Dummy-timer captures, stale serial logs, or physical-counter/timer-control exports leave performance proof red.
 - Multi-agent execution is mandatory. Each lane must leave a checked-in or attached handoff with inputs, files touched or intentionally skipped, commands, artifact paths, blockers, deferrals, residual gaps, and PASS/FAIL status.
 - Milestone closure requires a clear/deferred blocker ledger, complete lane handoffs, green task gates, and full target-qualified staged Test Plan PASS on QEMU and Pi 4 with no `INCOMPLETE` markers.
 
 ### Prerequisite
-- Reopened Milestones **26a** and **26b** completed, including checked-in Pi 4 USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load, driver-task scheduling evidence, arch-counter timer-backend proof, GENET/static compatibility evidence, DHCP/Wi-Fi compatibility evidence, QEMU compatibility evidence, regenerated profile-specific manifest evidence, linked `pi4-driver-*` runtime image/ABI evidence, and explicit closure or deferral of any runtime-image owner-state proof boundary.
+- Reopened Milestones **26a** and **26b** completed, including checked-in Pi 4 USB/serial/HDMI responsiveness evidence under wired and Wi-Fi load, driver-task scheduling evidence, arch-counter timer-backend proof, GENET/static compatibility evidence, DHCP/Wi-Fi compatibility evidence, QEMU compatibility evidence, regenerated profile-specific manifest evidence, isolated `pi4-driver-*` runtime image/ABI evidence, and explicit closure or deferral of any runtime-image owner-state proof boundary.
 
 ### Goal
 Humanize and simplify Cohesix-authored code and documentation without losing behavioral proof. The milestone succeeds only if the audit artifacts, characterization gates, targeted worker/runtime additions, cleanup refactors, generated outputs, and QEMU/Pi 4 staged evidence all agree on the as-built system, and the final scorecard shows the main authored surfaces are easier to read, review, and maintain than the starting point.
@@ -7033,9 +7033,9 @@ Task blocks below own the exact file changes, commands, checks, and deliverables
 - Mermaid diagrams inside generated, release-derived, vendored, or reference-only Markdown follow the same disposition rules as their containing file; 26c may audit and report them, but edits must occur through the proper source, release-cut, or provenance flow.
 - Tracked release-cut documentation under `releases/RELEASE_NOTES-*.md`, `releases/*/{README.md,QUICKSTART.md,RELEASE_NOTES.md}`, `releases/*/docs/**/*.md`, and `releases/*/python/**/README.md` remains derived from canonical docs and release packaging; if snapshot wording changes, the corresponding release-cut flow and notes must change in the same work. Release-local validation outputs under `releases/**/out/**`, embedded virtualenv content under `releases/**/.venv*/**`, and other untracked byproducts are provenance inputs only and are not part of the 26c inventory.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, `scripts/ci/check_test_plan.sh`, and the stage scripts become authoritative for both QEMU and Pi 4 `PASS` semantics.
-- Generated `root_task.driver_images` records, `crates/pi4-driver-abi`, linked `pi4-driver-*` runtime image artifacts, and driver-runtime CPIO packaging are authoritative boundary artifacts for Pi 4 driver-task cleanup; 26c may audit, test, and refactor around them only without changing acceptance status or hand-editing generated descriptors.
+- Generated `root_task.driver_images` records, `crates/pi4-driver-abi`, isolated `pi4-driver-*` runtime image artifacts, and driver-runtime CPIO packaging are authoritative boundary artifacts for Pi 4 driver-task cleanup; 26c may audit, test, and refactor around them only without changing acceptance status or hand-editing generated descriptors.
 - Pi 4 runtime/DMA proof fields, descriptor resource totals, owner-state evidence, and source artifact freshness are 26c audit/test-plan surfaces; later operator tooling may project them only after this milestone defines the evidence semantics.
-- Pi 4 timer-backend fields are 26c audit/test-plan surfaces for performance claims. The accepted Pi profile uses read-only EL0 virtual-counter telemetry only when `KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER` is enabled, scales elapsed-time proof from `TIMER_CLOCK_HZ`, and rejects physical counter or EL0 timer-control exports for linked-runtime latency evidence.
+- Pi 4 timer-backend fields are 26c audit/test-plan surfaces for performance claims. The accepted Pi profile uses read-only EL0 virtual-counter telemetry only when `KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER` is enabled, scales elapsed-time proof from `TIMER_CLOCK_HZ`, and rejects physical counter or EL0 timer-control exports for isolated runtime latency evidence.
 - DMA protection profile fields are compiler-owned surfaces. Pi 4 profiles must resolve to bounded no-IOMMU discipline, while SMMU-backed profiles are future hardware targets that require generated per-device DMA-domain state before code or docs may claim hardware-enforced isolation.
 - Any future shared semantic helpers introduced to reduce host/VM drift must remain explicitly `no_std`-safe, must not import host-side capabilities, transports, or provider crates into the VM build, and must be reviewed against the archived per-profile dependency trees.
 - Worker role/task manifests, ticket scopes, lease bindings, telemetry paths, and lifecycle gates are compiler-owned surfaces; any new worker implementation fields must enter `coh-rtc` IR and generated docs before code depends on them.
@@ -7060,7 +7060,7 @@ Commands:
   - cargo test -p secure9p-codec
   - scripts/ci/check_test_plan.sh
 Checks:
-  - Initial blocker entries cover 26b evidence, linked Pi 4 runtime-image acceptance gaps, Pi 4 network IR/docs validation drift, target-qualified runner, Secure9P path validation, non-console in-VM TCP, HAL MMIO ownership, generated-doc drift, fixture/default secrets, placeholder auth defaults, worker-task docs/implementation mismatch, and later-milestone as-built overclaims for persistence, `coh-status`, delegated REST identity, writer-epoch fencing, AI namespace roots, and AWS/ENA/IMDS support.
+  - Initial blocker entries cover 26b evidence, isolated Pi 4 runtime-image acceptance gaps, Pi 4 network IR/docs validation drift, target-qualified runner, Secure9P path validation, non-console in-VM TCP, HAL MMIO ownership, generated-doc drift, fixture/default secrets, placeholder auth defaults, worker-task docs/implementation mismatch, and later-milestone as-built overclaims for persistence, `coh-status`, delegated REST identity, writer-epoch fencing, AI namespace roots, and AWS/ENA/IMDS support.
   - No structural cleanup task starts until blockers are fixed or explicitly deferred with dependency impact.
 Deliverables:
   - Auditable 26c blocker ledger that prevents downstream milestones from inheriting unresolved as-built drift silently.
@@ -7253,7 +7253,7 @@ Commands:
 Checks:
   - Runtime-image eligibility, descriptor resource totals, DMA reservation/allocation evidence, owner-state fields, and source artifact freshness are reported separately.
   - Missing DMA proof is a blocking absent-evidence state, not inferred success from manifest generation, target compilation, QEMU smoke output, or stale serial logs.
-  - Linked-runtime performance proof requires valid `DRIVER_TASK_COUNTER` evidence plus Pi arch-counter proof (`TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`); counters alone remain diagnostic.
+  - Isolated runtime performance proof requires valid `DRIVER_TASK_COUNTER` evidence plus Pi arch-counter proof (`TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`); counters alone remain diagnostic.
   - DMA ownership, cache maintenance, bus-address publication, runtime-init descriptor delivery, and hardware handoff remain behind HAL/generated interfaces with no direct MMIO or ad-hoc physical-address path.
   - Fresh Pi evidence, when claimed, names the exact serial log, manifest hash, image build, and test-plan state directory used for the claim.
 Deliverables:
@@ -7464,7 +7464,7 @@ Commands:
   - cargo tree -p pi4-driver-runtime --target aarch64-unknown-none -e normal > out/audit/m26c_pi4_driver_runtime_tree.txt
   - scripts/ci/check_test_plan.sh
 Checks:
-  - The VM-target root-task build and linked Pi 4 driver runtime build remain `no_std` and succeed without host-side operator/tooling dependencies across the closure profiles.
+  - The VM-target root-task build and Pi 4 isolated driver runtime build remain `no_std` and succeed without host-side operator/tooling dependencies across the closure profiles.
   - The dependency-tree artifacts are reviewed as part of 26c evidence and show no accidental pull-in of host-only surfaces.
   - Cleanup work cannot merge if boundary evidence is missing or contradicts the documented VM/host split.
 Deliverables:
@@ -7551,7 +7551,7 @@ Goal: Refactor Pi 4 HAL-facing network, Wi-Fi, and local-seat code into clearer 
 Inputs: apps/root-task/src/hal/**, apps/root-task/src/net/**, apps/root-task/src/drivers/**, apps/root-task/src/local_seat.rs, apps/root-task/src/generated/**, apps/pi4-driver-runtime/**, crates/pi4-driver-abi/**, configs/root_task_pi4_uboot_aarch64.toml, docs/HARDWARE_BRINGUP.md, docs/NETWORK_CONFIG.md, docs/BOOT_REFERENCE.md, docs/TEST_PLAN.md
 Changes:
   - apps/root-task/src/net/** — separate policy parsing, DHCP state, static IPv4 validation, active/standby interface selection, and evidence formatting while preserving manifest and DTB override semantics.
-  - apps/root-task/src/hal/** + apps/root-task/src/drivers/** + apps/pi4-driver-runtime/** + crates/pi4-driver-abi/** — keep all device access behind HAL traits, split device-state and firmware/handoff bookkeeping from transcript emission, preserve linked-runtime command ownership, extract current-behavior-only SDIO host and USB platform/DMA seams after characterization tests exist, and remove duplicated bounds checks under the same evidence gate.
+  - apps/root-task/src/hal/** + apps/root-task/src/drivers/** + apps/pi4-driver-runtime/** + crates/pi4-driver-abi/** — keep all device access behind HAL traits, split device-state and firmware/handoff bookkeeping from transcript emission, preserve isolated runtime command ownership, extract current-behavior-only SDIO host and USB platform/DMA seams after characterization tests exist, and remove duplicated bounds checks under the same evidence gate.
   - apps/root-task/src/local_seat.rs — isolate local-seat input/display policy from boot evidence and network policy handoff code without changing first-boot operator behavior.
   - docs/HARDWARE_BRINGUP.md + docs/NETWORK_CONFIG.md + docs/BOOT_REFERENCE.md + docs/TEST_PLAN.md — update as-built explanations and evidence commands for any clearer module boundaries.
 Commands:
@@ -7567,7 +7567,7 @@ Checks:
   - HAL access remains centralized behind HAL traits; no direct MMIO, physical address, DMA publication, IRQ binding, or firmware-service shortcuts are introduced outside HAL.
   - New SDIO/USB seams are extraction-only, have before/after characterization evidence, and do not add new hardware support or generic future-driver behavior.
   - Each HAL/network/local-seat wave is isolated to one preserved behavior surface and records the exact tests plus Pi 4/QEMU evidence needed to prove no transcript or authority drift.
-  - Linked-runtime acceptance eligibility and the separate fresh-Pi board-proof boundary remain explicit until owner-state proof and fresh Pi hardware evidence close them.
+  - Isolated runtime acceptance eligibility and the separate fresh-Pi board-proof boundary remain explicit until owner-state proof and fresh Pi hardware evidence close them.
   - Boot transcripts, `netstats`, `netstatus`, DHCP/static policy evidence, Wi-Fi fallback semantics, and no-NIC compatibility remain unchanged unless a separately approved breaking-change path is followed.
   - Pi 4 staged evidence proves the refactor did not regress local-seat, network-policy, or U-Boot handoff behavior.
 Deliverables:
@@ -7610,12 +7610,12 @@ Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM
 - Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
 - Older manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 15 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
 - Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 15 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
-- The seL4 15 refresh must preserve the Pi 4 hardware-counter contract used by linked-runtime performance proof: `release-pi4` / `timers-arch-counter` builds expose only the read-only EL0 virtual counter (`KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`), keep physical counter and EL0 timer-control exports disabled, and derive elapsed-time proof from refreshed `TIMER_CLOCK_HZ=54000000` generated headers. Kernel refresh work must not reclassify dummy-timer or physical-counter captures as valid latency evidence.
+- The seL4 15 refresh must preserve the Pi 4 hardware-counter contract used by isolated runtime performance proof: `release-pi4` / `timers-arch-counter` builds expose only the read-only EL0 virtual counter (`KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`), keep physical counter and EL0 timer-control exports disabled, and derive elapsed-time proof from refreshed `TIMER_CLOCK_HZ=54000000` generated headers. Kernel refresh work must not reclassify dummy-timer or physical-counter captures as valid latency evidence.
 - QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
 
 ### Prerequisite
 - Milestone **26c** completed (target-qualified test-plan runner, docs-as-built audit, refactor map, risk-ratchet baseline, and no-std boundary evidence available).
-- Reopened Milestones **26a** and **26b** completed or explicitly scoped where their driver-task and benchmark artifacts are inputs to the kernel refresh; no linked-runtime performance assumption may be rewritten under the kernel-refresh label.
+- Reopened Milestones **26a** and **26b** completed or explicitly scoped where their driver-task and benchmark artifacts are inputs to the kernel refresh; no isolated runtime performance assumption may be rewritten under the kernel-refresh label.
 
 ### Goal
 Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0 while preserving root-task authority plus the reopened 26a/26b hardware driver-task model, and prove zero operator-visible drift across QEMU and Pi 4.
@@ -7632,7 +7632,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
   - Record any seL4 15 changes that are intentionally irrelevant to Cohesix today, especially domain-schedule features tied to Microkit/CAmkES/capDL workflows.
 
 - **Direct-API compatibility audit and fixes**
-  - Audit `crates/sel4-sys`, `crates/sel4-runtime`, `crates/pi4-driver-abi`, linked `apps/pi4-driver-runtime` images, generated `root_task.driver_images` descriptors, and root-task bootstrap code against seL4 15 headers and generated metadata.
+  - Audit `crates/sel4-sys`, `crates/sel4-runtime`, `crates/pi4-driver-abi`, profile-selected `apps/pi4-driver-runtime` images, generated `root_task.driver_images` descriptors, and root-task bootstrap code against seL4 15 headers and generated metadata.
   - Preserve Cohesix’s explicit TLS and IPC-buffer installation path unless a compatibility fix requires adjustment.
   - Keep SMP affinity, boot-info handling, CSpace assumptions, and debug-syscall guards aligned with seL4 15 generated headers for both single-core and SMP builds.
   - Keep root-task and linked-driver-runtime timer build guards aligned with seL4 15 generated `TIMER_CLOCK_HZ` and VCNT export truth; compatibility fixes may not introduce `CNTPCT_EL0`, EL0 timer-control register use, or raw CPU-speed spin loops for elapsed time.
@@ -7669,7 +7669,7 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - QEMU and Pi 4 target-qualified Test Plan runs pass on the refreshed kernel baseline with no `*.incomplete` markers and no undocumented operator-visible output drift.
 - Secure9P bounds, console grammar, manifest outputs, release semantics, and host/VM runtime boundaries remain unchanged unless separately documented as defects fixed in the same change.
 - Build artifacts and documentation no longer rely on an accidental `sel4test`-provided `domain_schedule.c` dependency for one-domain Cohesix configurations; any remaining dependency is explicit, justified, and documented.
-- Pi 4 refreshed evidence reports `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no`; any missing/mismatched counter export leaves linked-runtime latency proof red until fixed or explicitly scoped back to reopened 26a/26b acceptance.
+- Pi 4 refreshed evidence reports `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no`; any missing/mismatched counter export leaves isolated runtime latency proof red until fixed or explicitly scoped back to reopened 26a/26b acceptance.
 - The carried seL4 manual/reference artifacts, if tracked in-repo, match the accepted kernel baseline or are explicitly relinked to the authoritative upstream 15.0.0 source.
 
 ### Compiler / docsystem touchpoints
@@ -7712,12 +7712,12 @@ Deliverables: passing workspace/build-target checks and refreshed low-level comp
 
 ```
 Title/ID: m26d-pi4-counter-contract-refresh
-Goal: Reprove the Pi 4 virtual-counter timer contract on the seL4 15 baseline before accepting linked-runtime latency or performance evidence.
+Goal: Reprove the Pi 4 virtual-counter timer contract on the seL4 15 baseline before accepting isolated runtime latency or performance evidence.
 Inputs: seL4/build_UBOOT/CMakeCache.txt, seL4/build_UBOOT/kernel/gen_headers/plat/platform_gen.h, apps/root-task/build.rs, apps/root-task/src/arch/aarch64/timer.rs, apps/pi4-driver-runtime/build.rs, apps/pi4-driver-runtime/src/lib.rs, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, scripts/pi4_trace_normalize.py, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
 Changes:
   - scripts/pi4-image-build.sh — keep seL4 15 Pi 4 staging blocked unless VCNT export is enabled, physical counter/timer-control exports are disabled, and generated `TIMER_CLOCK_HZ` matches the accepted Pi profile.
   - apps/root-task/build.rs + apps/root-task/src/arch/aarch64/timer.rs — preserve root-task build/runtime checks that use `CNTVCT_EL0` only under the `timers-arch-counter` profile and scale elapsed-time proof from generated frequency.
-  - apps/pi4-driver-runtime/build.rs + apps/pi4-driver-runtime/src/lib.rs — preserve linked-runtime build/runtime checks and `RuntimeDeadline` conversion from legacy retry counts to counter-backed deadlines.
+  - apps/pi4-driver-runtime/build.rs + apps/pi4-driver-runtime/src/lib.rs — preserve isolated runtime build/runtime checks and `RuntimeDeadline` conversion from legacy retry counts to counter-backed deadlines.
   - scripts/pi4_gate_proof.sh + scripts/pi4_trace_normalize.py + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — ensure refreshed Pi 4 proof gates require `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no` before latency proof is accepted.
 Commands:
   - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir seL4/build_UBOOT
@@ -7726,10 +7726,10 @@ Commands:
   - scripts/pi4_gate_proof.sh --require-driver-task-proof
 Checks:
   - Refreshed seL4 15 Pi 4 generated headers and cache expose only the accepted virtual-counter path for EL0 timing.
-  - Root-task and linked-runtime builds fail on missing VCNT export, nonzero physical-counter/timer-control export, or missing/nonzero-invalid `TIMER_CLOCK_HZ`.
+  - Root-task and isolated runtime builds fail on missing VCNT export, nonzero physical-counter/timer-control export, or missing/nonzero-invalid `TIMER_CLOCK_HZ`.
   - Runtime latency telemetry and proof normalizer output reject dummy-timer captures, stale logs, physical-counter exports, and missing timer frequency as performance evidence.
 Deliverables:
-  - Checked-in 26d evidence tying seL4 15 provenance, Pi 4 counter configuration, linked-runtime deadline behavior, and target-qualified performance proof into one refreshed contract.
+  - Checked-in 26d evidence tying seL4 15 provenance, Pi 4 counter configuration, isolated runtime deadline behavior, and target-qualified performance proof into one refreshed contract.
 ```
 
 ```
@@ -7763,7 +7763,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 
 **Why now (resilience):** After Pi 4 U-Boot boot + identity (26), edge deployments need store/forward for telemetry and minimal settings that survive reboots and link outages without introducing a general filesystem or new protocols.
 
-**As-built alignment note:** Current code has host-side sidecar buffering, telemetry ring snapshot helpers, and U-Boot-owned network/Wi-Fi persistence, but it does **not** have VM-local persistent spool/settings storage, `persistence.*` manifest IR, linked storage-runtime block service, root-task persistent-store client plumbing, or `/proc/spool/*` and `/queen/spool/*` providers. Milestone 27 introduces those surfaces; older docs or code comments that mention persistent spool as already available are drift unless backed by this milestone's acceptance evidence.
+**As-built alignment note:** Current code has host-side sidecar buffering, telemetry ring snapshot helpers, and U-Boot-owned network/Wi-Fi persistence, but it does **not** have VM-local persistent spool/settings storage, `persistence.*` manifest IR, isolated storage-runtime block service, root-task persistent-store client plumbing, or `/proc/spool/*` and `/queen/spool/*` providers. Milestone 27 introduces those surfaces; older docs or code comments that mention persistent spool as already available are drift unless backed by this milestone's acceptance evidence.
 
 **Non-negotiable constraints**
 - No changes to console grammar, 9P semantics, or TCP behavior vs VM unless profile‑gated and documented.
@@ -7772,7 +7772,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 - Persistence is exposed only through NineDoor nodes (file‑shaped, bounded).
 - `/proc` remains read-only observability. Milestone 27 must not introduce write-only or append-only controls under `/proc`; mutating spool/settings controls live under explicit role-scoped control roots.
 - Storage selection is profile-gated and role-selected. The default Pi 4 hardware profile uses a manifest-declared raw SD/MMC block region on the boot microSD card, separate from the FAT boot partition and separate from U-Boot-owned `cohesix.env` policy storage.
-- Physical Pi 4 block-device service is linked-runtime only. Root-task may admit HAL resources, publish region descriptors, submit bounded block service turns, validate records, and expose NineDoor state, but it must not contain a root-owned SD/MMC storage driver or direct steady-state SD/MMC MMIO path.
+- Physical Pi 4 block-device service must use a manifest-declared isolated storage runtime. Root-task may admit HAL resources, publish region descriptors, submit bounded block service turns, validate records, and expose NineDoor state, but it must not contain a root-owned SD/MMC storage driver or direct steady-state SD/MMC MMIO path.
 - The Pi 4 CYW43 SDIO Wi-Fi transport is not a persistence backend. Its `sdio-host` role remains a CYW43 bus role, not a generic SD-card block role.
 - USB mass storage is not the Milestone 27 default path. It may be added only as a later optional removable-media profile after USB local-seat/xHCI ownership is hardware-proved and cannot be a boot-critical dependency.
 
@@ -7796,7 +7796,7 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
   - storage device/region declaration for profiles that enable persistence
 - Storage roles are explicit:
   - `virtio-blk` for QEMU and CI parity.
-  - `pi4-sdmmc-raw` for the default Pi 4 hardware profile, backed by a fixed raw block region/partition on the boot microSD card and serviced by a linked storage runtime over the fixed driver-task ABI.
+  - `pi4-sdmmc-raw` for the default Pi 4 hardware profile, backed by a fixed raw block region/partition on the boot microSD card and serviced by an isolated storage runtime over the fixed driver-task ABI.
   - `usb-mass-storage` is optional/future and must be rejected unless that profile explicitly admits removable media.
 - Pi 4 validation rejects persistence if the profile attempts to bind storage to `cyw43455`, the CYW43 `sdio-host` bus role, `usb-local-seat`, root-task SD/MMC MMIO, or any FAT-path/U-Boot policy file. Runtime persistence must not read or write `cohesix.env`.
 - Persistence config is **separate** from existing `sidecars.*.adapters[].spool`; the names must not be reused or overloaded.
@@ -7804,15 +7804,15 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 
 #### B) Storage plumbing (hardware + QEMU parity)
 - Block-device abstraction in HAL (role-selected devices, not model-selected) plus a fixed-layout block-service ABI for physical storage runtimes.
-- Root-task persistent-store semantics and NineDoor namespace are authoritative for the Pi 4 / seL4 path; physical block I/O is performed only by the linked storage runtime, and host `nine-door` may mirror the same semantics for tests but does not define them.
-- QEMU reference uses `virtio-blk`; the Pi 4 default hardware path uses `pi4-sdmmc-raw`, a bounded SD/MMC block role for a manifest-declared raw region and a linked `driver-storage` runtime image.
+- Root-task persistent-store semantics and NineDoor namespace are authoritative for the Pi 4 / seL4 path; physical block I/O is performed only by the isolated storage runtime, and host `nine-door` may mirror the same semantics for tests but does not define them.
+- QEMU reference uses `virtio-blk`; the Pi 4 default hardware path uses `pi4-sdmmc-raw`, a bounded SD/MMC block role for a manifest-declared raw region and an isolated `driver-storage` runtime image.
 - `pi4-sdmmc-raw` is a new storage role and must not reuse the CYW43 SDIO transport APIs, Wi-Fi SDIO runtime image, Wi-Fi SDHCI proof markers, or a root-owned SD/MMC compatibility driver as block-device proof.
 - The Pi 4 raw region must be outside the FAT boot assets used by firmware/U-Boot and outside any U-Boot environment/policy file. Root-task must access it only as a ring client through bounded block service turns, not a FAT parser or direct SD/MMC driver.
 - USB mass storage support, if later admitted, must be a separate optional profile with explicit removal/error semantics, lower priority than USB keyboard/local-seat service, and tests proving keyboard responsiveness under storage I/O.
 - No `std` dependencies, no POSIX VFS, no general filesystem.
 
 #### C) Telemetry spool store (append‑only ring log)
-- Backing: fixed-size block region/partition serviced by the profile-selected block backend; on Pi 4 hardware that backend is the linked storage runtime, not root-task SD/MMC code.
+- Backing: fixed-size block region/partition serviced by the profile-selected block backend; on Pi 4 hardware that backend is the isolated storage runtime, not root-task SD/MMC code.
 - Record format (versioned, bounded): `magic | version | kind | seq | ts | len | crc | payload`.
 - Crash rule: a record is valid only if header + checksum validate; partial tail records are ignored.
 - Bounded behavior:
@@ -7859,7 +7859,7 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 - Store/forward works offline and resumes correctly after reboot.
 - Settings updates are atomic across power loss (A/B semantics).
 - Runtime settings do not duplicate or override the Pi 4 U-Boot-owned network/Wi-Fi persistence contract.
-- Pi 4 default persistence uses only the manifest-declared raw SD/MMC region through the linked storage runtime. CYW43 SDIO, USB keyboard/local-seat, FAT boot files, `cohesix.env`, and root-owned SD/MMC/MMIO paths are rejected as storage backends.
+- Pi 4 default persistence uses only the manifest-declared raw SD/MMC region through the isolated storage runtime. CYW43 SDIO, USB keyboard/local-seat, FAT boot files, `cohesix.env`, and root-owned SD/MMC/MMIO paths are rejected as storage backends.
 - No general filesystem or POSIX surface introduced.
 - `/proc` remains read-only; spool append/ack writes are accepted only through documented role-scoped control paths.
 - VM vs Pi 4 boot profile semantics remain byte‑stable unless explicitly profile‑gated.
@@ -7867,7 +7867,7 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 
 ### Compiler touchpoints
 - `coh-rtc` emits persistence limits (record size, max bytes, policy mode), settings bounds, profile storage declarations, and physical storage-runtime descriptors into manifest IR; docs import the generated snippets.
-- Manifest validation rejects persistence when storage devices or required linked storage-runtime descriptors are missing or mis-declared for the selected boot profile, including attempts to bind Pi 4 runtime persistence to CYW43 SDIO, USB local-seat, FAT boot files, U-Boot policy files, or root-owned SD/MMC MMIO.
+- Manifest validation rejects persistence when storage devices or required isolated storage-runtime descriptors are missing or mis-declared for the selected boot profile, including attempts to bind Pi 4 runtime persistence to CYW43 SDIO, USB local-seat, FAT boot files, U-Boot policy files, or root-owned SD/MMC MMIO.
 - Persistence IR is distinct from existing sidecar spool IR; docs and generated clients must keep those surfaces disambiguated.
 
 ### Task Breakdown
@@ -7882,7 +7882,7 @@ Commands:
   - cargo test -p coh-rtc
 Checks:
   - Persistence and sidecar spool configs are distinct; invalid storage declarations are rejected.
-  - Pi 4 admits `pi4-sdmmc-raw` only when a bounded raw region and linked storage-runtime descriptor are declared, and rejects CYW43 SDIO, USB local-seat, FAT, root-task SD/MMC, or `cohesix.env` storage bindings.
+  - Pi 4 admits `pi4-sdmmc-raw` only when a bounded raw region and isolated storage-runtime descriptor are declared, and rejects CYW43 SDIO, USB local-seat, FAT, root-task SD/MMC, or `cohesix.env` storage bindings.
 Deliverables:
   - Compiler-enforced persistence admission with docs snippets refreshed.
 
@@ -7893,17 +7893,17 @@ Changes:
   - apps/root-task/src/hal/block.rs — block traits, role-selected storage admission, and root-side ring-client binding.
   - apps/root-task/src/storage/layout.rs — persistent region selection and bounds.
   - crates/pi4-driver-abi/src/** — fixed-layout block read/write/flush records and bounded completion evidence for physical storage runtimes.
-  - apps/pi4-driver-runtime/src/** — linked `driver-storage` service for Pi 4 raw SD/MMC block-region access, separate from CYW43 SDIO and U-Boot FAT policy storage.
+  - apps/pi4-driver-runtime/src/** — isolated `driver-storage` service for Pi 4 raw SD/MMC block-region access, separate from CYW43 SDIO and U-Boot FAT policy storage.
 Commands:
   - cargo test -p root-task --test spool
   - cargo test -p pi4-driver-abi
   - cargo test -p pi4-driver-runtime
 Checks:
-  - QEMU `virtio-blk` path and Pi 4 linked `pi4-sdmmc-raw` path resolve the same bounded block contract.
-  - Physical Pi 4 tests fail closed if persistence attempts direct root-task SD/MMC MMIO or a missing linked storage-runtime descriptor.
+  - QEMU `virtio-blk` path and Pi 4 isolated runtime `pi4-sdmmc-raw` path resolve the same bounded block contract.
+  - Physical Pi 4 tests fail closed if persistence attempts direct root-task SD/MMC MMIO or a missing isolated storage-runtime descriptor.
   - USB mass storage is absent from the default Pi 4 persistence profile and cannot preempt USB keyboard/local-seat service.
 Deliverables:
-  - HAL storage admission plus linked-runtime block service plumbing for the persistent spool/settings layers.
+  - HAL storage admission plus isolated runtime block service plumbing for the persistent spool/settings layers.
 
 Title/ID: m27-root-spool-namespace
 Goal: Implement persistent spool semantics in root-task and expose read-only `/proc/spool/*` plus role-scoped spool controls via the in-VM NineDoor bridge.
@@ -8168,22 +8168,22 @@ Deliverables:
 ## Milestone 27c — Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) <a id="27c"></a>
 [Milestones](#Milestones)
 
-**Why now (core-local performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Milestone 26b closes the immediate linked-runtime same-harness benchmark parity gate. Milestones 26c, 26d, 27, and 27b add the missing enforcement substrate around generated worker/driver scheduling evidence, seL4 baseline alignment, persistence drains, profile-qualified MCS/non-MCS budget fields, proof witnesses, HAL authority checks, and verification gates. Milestone 27c is the right point to turn affinity placement and the 26b hot-path evidence into compiler-owned core-local service scheduling without weakening authority, replay, or hardware-proof boundaries.
+**Why now (core-local performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Milestone 26b closes the immediate isolated runtime same-harness benchmark parity gate. Milestones 26c, 26d, 27, and 27b add the missing enforcement substrate around generated worker/driver scheduling evidence, seL4 baseline alignment, persistence drains, profile-qualified MCS/non-MCS budget fields, proof witnesses, HAL authority checks, and verification gates. Milestone 27c is the right point to turn affinity placement and the 26b hot-path evidence into compiler-owned core-local service scheduling without weakening authority, replay, or hardware-proof boundaries.
 
-**As-built alignment note:** Cohesix already has manifest affinity, `smp activity`, manifest-declared isolated driver runtime active-slot rules, bounded service-turn language, and host-safe pressure evidence. Milestone 26b owns the first linked-runtime benchmark comparator, same-harness Pi/QEMU parity result, and immediate bounded driver hot-path fixes. Cohesix does **not** yet have compiler-owned core-local service buckets, generated per-core service-turn budgets, per-core telemetry/spool drain policy, IRQ-locality witnesses, or Pi/QEMU evidence proving that hot paths stay local to their assigned core under mixed load. Older prose must not claim core-local hot-path scheduling or multicore throughput closure until this milestone has passing evidence.
+**As-built alignment note:** Cohesix already has manifest affinity, `smp activity`, manifest-declared isolated driver runtime active-slot rules, bounded service-turn language, and host-safe pressure evidence. Milestone 26b owns the first isolated runtime benchmark comparator, same-harness Pi/QEMU parity result, and immediate bounded driver hot-path fixes. Cohesix does **not** yet have compiler-owned core-local service buckets, generated per-core service-turn budgets, per-core telemetry/spool drain policy, IRQ-locality witnesses, or Pi/QEMU evidence proving that hot paths stay local to their assigned core under mixed load. Older prose must not claim core-local hot-path scheduling or multicore throughput closure until this milestone has passing evidence.
 
 **Non-negotiable constraints**
 - No POSIX threads, general SMP runtime, async executor, shared work-stealing queue, or bulky SMP library inside the VM.
 - No new in-VM protocols, console grammar, Secure9P verbs, namespace authority, or root-owned physical-driver hot paths.
 - Authoritative state remains serialized through the authority path; parallelism is only at bounded, manifest-declared service edges.
-- Driver runtimes remain linked-runtime only on physical hardware. Root-task may admit HAL resources, publish descriptors, and observe counters; it must not regain steady-state device ownership.
+- Physical hardware driver service remains restricted to manifest-declared isolated driver runtimes. Root-task may admit HAL resources, publish descriptors, and observe counters; it must not regain steady-state device ownership.
 - Backpressure is explicit and deterministic: saturated service buckets return bounded busy/overrun evidence, not unbounded queue growth.
 - Physical Pi 4 multicore throughput claims require fresh target evidence and must stay separate from shell transport, USB keyboard, Wi-Fi, HDMI, and flash proof lanes.
 
 ### Prerequisite
 - Milestone **26c** completed for the selected profile, including worker/driver scheduling evidence, notification lifecycle evidence, and the MCS/non-MCS budget distinction.
 - Milestone **27b** completed for the selected profile, including proof witnesses, HAL/driver-task authority checks, and verification-gate evidence.
-- Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to Pi 4 driver-runtime, linked-runtime benchmark parity, affinity, seL4 baseline, and target-qualified proof.
+- Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to Pi 4 driver-runtime, isolated runtime benchmark parity, affinity, seL4 baseline, and target-qualified proof.
 
 ### Goal
 Convert existing manifest affinity into **core-local, bounded service-turn execution** for workers, manifest-declared isolated driver runtimes, NineDoor/provider paths, telemetry drains, and persistent-spool drains while preserving Cohesix's file-shaped control plane, deterministic ordering, and tiny TCB.
@@ -8299,7 +8299,7 @@ Changes:
   - apps/root-task/src/hal/driver_task.rs — preserve staged active-slot submit, busy-on-conflict, and completion publication invariants under batching.
 Commands: cargo test -p pi4-driver-abi && cargo test -p pi4-driver-runtime && cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib
 Checks: Service-bucket integration keeps batching bounded, does not add root-owned physical-driver paths, and cannot overwrite active payload-bearing turns.
-Deliverables: Core-local linked-runtime hot paths with contract-local backpressure.
+Deliverables: Core-local isolated runtime hot paths with contract-local backpressure.
 
 Title/ID: m27c-telemetry-spool-sharded-drain
 Goal: Keep telemetry and persistent-spool drains core-local while preserving existing namespace and persistence semantics.
@@ -8344,7 +8344,7 @@ Deliverables: Repeatable validation lanes for core-local SMP optimization.
 [Milestones](#Milestones)
 
 **Why now (operator & adoption):**  
-After Milestones 26b, 26c, 26d, 27, 27b, and 27c close, Cohesix should have the Pi 4 linked-runtime benchmark baseline, refreshed seL4 baseline, persistence evidence, formal-verification claim register, and core-local SMP service-bucket evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
+After Milestones 26b, 26c, 26d, 27, 27b, and 27c close, Cohesix should have the Pi 4 isolated runtime benchmark baseline, refreshed seL4 baseline, persistence evidence, formal-verification claim register, and core-local SMP service-bucket evidence needed for read-only operator tooling. Milestone 28 is deliberately read-only: it gives operators and integrators deterministic tools to understand, reproduce, compare, and prove system behavior without expanding the VM TCB or introducing new protocols. Mutating authority hardening remains Milestone 28b, not a hidden prerequisite inside 28.
 
 **As-built alignment note:** `coh evidence pack` and `coh evidence timeline` already exist and are reused here. `coh inspect`, a first-class trace diagnostics command, `coh diff`, `coh attest`, and any `coh bundle` alias are not implemented as of the 26c planning audit and must be added as thin, read-only projections over existing file-shaped state and evidence packs.
 
@@ -10523,7 +10523,7 @@ Deliverables:
 
 **Why now (field diagnostics):** Milestone 29 gives field techs a host-side read-only status tool, but Pi 4 bring-up still needs a serial-local command when TCP, host tooling, or storage artifacts are unavailable. `hw-status` is a Pi 4 U-Boot profile diagnostic for quick board/firmware inspection from `cohesix>` without changing device state or promoting root-task back into steady-state hardware ownership.
 
-**As-built alignment note:** There is no `hw-status` command today. Current Pi 4 hardware facts are split across boot logs, framebuffer hints, driver-task progress lines, timer summaries, and linked-runtime diagnostics. Milestone 29a adds one bounded, read-only root-shell view; older prose must not claim a Pi 4 hardware-status command or firmware property snapshot until this milestone has implementation and transcript evidence.
+**As-built alignment note:** There is no `hw-status` command today. Current Pi 4 hardware facts are split across boot logs, framebuffer hints, driver-task progress lines, timer summaries, and isolated runtime diagnostics. Milestone 29a adds one bounded, read-only root-shell view; older prose must not claim a Pi 4 hardware-status command or firmware property snapshot until this milestone has implementation and transcript evidence.
 
 **Prerequisite**
 - Milestone **26a/26b** owner-state and isolated runtime proof restored for the selected Pi 4 profile.
@@ -10550,7 +10550,7 @@ Add a Pi 4-build-only `hw-status` command on the root shell that prints bounded,
 - HAL-mediated Pi 4 firmware-property/status helper with an explicit allowlist of read-only property tags, bounded buffers, timeout evidence, and failure rows.
 - Stable serial transcript format using sectioned rows such as `hw power`, `hw clock`, `hw voltage`, `hw thermal`, `hw memory`, `hw framebuffer`, and `hw firmware-notify`.
 - Optional read-only status mirror for `coh-status` only if it reuses the same field names and does not add authority or a second parser.
-- Documentation and regression fixtures proving the command is passive, Pi 4-profile gated, and does not count as linked-runtime hardware acceptance.
+- Documentation and regression fixtures proving the command is passive, Pi 4-profile gated, and does not count as isolated runtime hardware acceptance.
 
 **Commands**
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hw_status -- --test-threads=1`
@@ -10563,7 +10563,7 @@ Add a Pi 4-build-only `hw-status` command on the root shell that prints bounded,
 - `help` and `docs/USERLAND_AND_CLI.md` list `hw-status` only for the Pi 4 root-console surface; TCP/`cohsh` shared grammar does not accidentally accept undocumented raw hardware commands.
 - Mocked firmware-property tests cover success, unsupported tag, timeout, malformed response, and partial data without panics or unbounded waits.
 - Live Pi 4 acceptance, when claimed, includes a fresh serial transcript showing `hw-status` returning bounded rows while USB/local-seat, Wi-Fi/GENET, HDMI, and shell proof lanes remain separate.
-- No `hw-status` path writes firmware state, changes clocks/voltage/power domains, clears notifications, or touches linked-runtime device state.
+- No `hw-status` path writes firmware state, changes clocks/voltage/power domains, clears notifications, or touches isolated runtime device state.
 - Generated docs, fixtures, and trace-normalizer expectations remain aligned; command output drift is intentional only with matching docs/tests.
 
 **Compiler touchpoints**
@@ -10751,20 +10751,20 @@ Deliverables:
 Cohesix is ready to operate as the operating system. To make EC2 a first-class, production target without Linux, agents, or filesystems, Cohesix must boot directly from UEFI and bring up Nitro networking natively. ENA is mandatory on AWS. This milestone establishes a diskless, stateless AMI whose only persistent artifact is the read-only ESP image (UEFI loader + kernel + rootserver + manifest).
 
 **Goal**  
-Boot Cohesix on AWS EC2 (Arm64) via **UEFI -> elfloader.efi -> seL4 -> root-task**, then bring up ENA networking through a linked AWS network runtime admitted by root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
+Boot Cohesix on AWS EC2 (Arm64) via **UEFI -> elfloader.efi -> seL4 -> root-task**, then bring up ENA networking through a manifest-declared isolated AWS network runtime admitted by root-task and mount the Cohesix 9door namespace over the network with **no local filesystem**, **no Linux**, and **no virtio**.
 
 Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently described by the repo with the newer Pi 4 U-Boot path, then adds the **AWS-specific delta**: AWS profile admission, ENA, outbound bootstrap, optional IMDSv2, and AMI registration.
 
-**As-built alignment note:** The repo currently has UEFI profile/configuration material, a UEFI shim crate, and `scripts/uefi/*` helpers, but it does not have AWS profile admission, `scripts/aws/*`, linked ENA runtime descriptors/images, outbound 9door mount code, or approved root-task TLS/HTTP/IMDS support. Milestone 30 must start with boot-chain and TCB reconciliation before runtime code depends on UEFI, TLS/HTTP, IMDS, or AWS-specific assumptions.
+**As-built alignment note:** The repo currently has UEFI profile/configuration material, a UEFI shim crate, and `scripts/uefi/*` helpers, but it does not have AWS profile admission, `scripts/aws/*`, isolated ENA runtime descriptors/images, outbound 9door mount code, or approved root-task TLS/HTTP/IMDS support. Milestone 30 must start with boot-chain and TCB reconciliation before runtime code depends on UEFI, TLS/HTTP, IMDS, or AWS-specific assumptions.
 
 **Non-negotiable constraints**
 - Milestone 30 may not assume the UEFI/ESP baseline is authoritative until the first AWS task reconciles it against the current Pi 4 U-Boot pivot, `scripts/uefi/esp-build.sh`, `docs/BOOT_REFERENCE.md`, `docs/HARDWARE_BRINGUP.md`, and the charter rule for UEFI tooling. If the baseline is stale, AWS work starts by refreshing or reintroducing it under this milestone with docs and tests.
 - In-VM TLS, HTTP, and IMDSv2 are a deliberate TCB expansion, not a routine AWS delta. They are disabled by default until `docs/ARCHITECTURE.md`, `docs/NETWORK_CONFIG.md`, `docs/SECURITY.md`, `docs/SECURITY_NIST_800_53.md`, and `docs/AWS_AMI.md` explicitly approve the bounded client-only threat model and generated manifest gates.
-- AWS VM profiles require dependency-closure evidence before runtime code lands: no `std`, libc, POSIX filesystem/process API, DNS resolver, web framework, unapproved TLS/HTTP stack, or host-only ecosystem dependency may enter the root-task or linked-runtime closure.
+- AWS VM profiles require dependency-closure evidence before runtime code lands: no `std`, libc, POSIX filesystem/process API, DNS resolver, web framework, unapproved TLS/HTTP stack, or host-only ecosystem dependency may enter the root-task or isolated runtime closure.
 - No listener is introduced in the VM. AWS networking is outbound-only after seL4, and any Secure9P fabric mount must preserve existing frame bounds, role-scoped authority, and deterministic error behavior.
 - AWS ecosystem coexistence remains host/fabric-side unless explicitly admitted by the TCB gate. Cloud-side adapters, observability, deployment automation, and policy workflows must reuse `/host/tickets/*`, provider registry evidence, and host/fabric termination where the security review rejects in-VM TLS/HTTP.
 - If the security review rejects in-VM TLS/HTTP, the milestone must use a signed bootstrap manifest and a host/fabric-side termination design instead of importing a web/TLS stack into the root-task closure.
-- ENA is PCIe/MMIO/DMA-backed physical hardware. Steady ENA admin queue, IO queue, interrupt/poll, RX/TX descriptor, and DMA/cache service must live in a linked AWS network runtime over the fixed driver-task ABI after HAL admission. Root-task remains the HAL/resource admitter, descriptor publisher, bounded service-turn client, network stack owner, and diagnostics publisher; it must not contain a root-owned steady ENA driver.
+- ENA is PCIe/MMIO/DMA-backed physical hardware. Steady ENA admin queue, IO queue, interrupt/poll, RX/TX descriptor, and DMA/cache service must live in a manifest-declared isolated AWS network runtime over the fixed driver-task ABI after HAL admission. Root-task remains the HAL/resource admitter, descriptor publisher, bounded service-turn client, network stack owner, and diagnostics publisher; it must not contain a root-owned steady ENA driver.
 - The initial single TX/RX queue polling path is bootstrap evidence only. Peak-performance AWS claims require a later generated multi-queue, MSI-X or equivalent notification, queue-affinity, and core-local service-bucket evidence phase.
 
 **Deliverables**
@@ -10785,17 +10785,17 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
   - `manifest.json` and `manifest.sha256`
   - embedded, signed fabric bootstrap manifest (≥2 endpoints, root trust anchors)
 
-#### C) ENA linked network runtime (adminq + single TX/RX queue bootstrap)
-- ENA PCIe discovery, BAR admission, adminq, completion path, and single TX/RX queue pair run in a linked AWS network runtime using HAL-declared PCIe/MMIO/DMA/shared-buffer resources.
+#### C) ENA isolated network runtime (adminq + single TX/RX queue bootstrap)
+- ENA PCIe discovery, BAR admission, adminq, completion path, and single TX/RX queue pair run in a manifest-declared isolated AWS network runtime using HAL-declared PCIe/MMIO/DMA/shared-buffer resources.
 - Root-task owns only generated descriptor publication, bounded ENA service turns, net-stack integration, and diagnostics.
 - Minimal polling dataplane with single TX/RX queue pair is accepted only as first-link/bootstrap evidence, not as peak AWS throughput closure.
 
 #### D) Outbound bootstrap core after seL4
-- Reuse the Milestone 26b `no_std` DHCP core over the root-task net stack fed by linked ENA runtime RX/TX service turns
+- Reuse the Milestone 26b `no_std` DHCP core over the root-task net stack fed by isolated ENA runtime RX/TX service turns
 - Add bounded **outbound** TCP connection management
 - Add bounded TLS client support only after the AWS security/TCB expansion gate accepts it for the selected profile
 - Add a minimal outbound Secure9P/9door mount client
-- Diskless bootstrap path **after seL4**: HAL-admitted linked ENA runtime -> DHCP (26b core) -> outbound TCP -> approved security/session layer -> 9door mount
+- Diskless bootstrap path **after seL4**: HAL-admitted isolated ENA runtime -> DHCP (26b core) -> outbound TCP -> approved security/session layer -> 9door mount
 
 #### D2) AWS ENA performance closure (post-bootstrap)
 - Add generated queue-count, queue-affinity, notification/MSI-X or poll-budget policy, burst, and backpressure bounds after first-link smoke passes.
@@ -10824,7 +10824,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 - EC2 instance boots directly into Cohesix with no intermediate OS.
 - AWS dependency-closure gate proves the VM profile remains `no_std` and excludes libc, POSIX filesystem/process APIs, DNS resolver, web framework, and unapproved TLS/HTTP dependencies.
 - ENA link comes up deterministically; DHCP lease acquired within bounded time.
-- ENA hardware service is linked-runtime-only; root-task direct ENA MMIO/DMA paths fail profile validation outside explicitly named QEMU/host compatibility tests.
+- ENA hardware service must use a manifest-declared isolated ENA runtime; root-task direct ENA MMIO/DMA paths fail profile validation outside explicitly named QEMU/host compatibility tests.
 - 9door namespace mounts successfully and control plane is reachable.
 - Single-queue polling evidence is classified as bootstrap/link proof. Peak AWS performance claims require the D2 multi-queue/core-local evidence lane.
 - IMDSv2 metadata fetch is absent by default or optional and bounded after approval; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
@@ -10836,7 +10836,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 **Compiler touchpoints**
 - `coh-rtc` emits:
   - AWS profile / backend admission for `ena`
-  - linked ENA runtime descriptors, ENA queue bounds, bootstrap retry limits, and later multi-queue/core-local performance gates.
+  - isolated ENA runtime descriptors, ENA queue bounds, bootstrap retry limits, and later multi-queue/core-local performance gates.
   - Fabric bootstrap manifest schema and signature requirements.
   - dependency-closure allow/deny lists for AWS VM profile crates.
   - IMDSv2 allowlist, max response bytes, and retry bounds (optional gate).
@@ -10863,7 +10863,7 @@ Title/ID: m30-aws-profile
 Goal: Admit AWS/ENA/IMDS bootstrap in compiler IR and profile selection before runtime implementation.
 Inputs: tools/coh-rtc, configs/, docs/AWS_AMI.md.
 Changes:
-- tools/coh-rtc/src/ir.rs — AWS profile, `ena` backend, linked ENA runtime descriptor schema, bounded bootstrap schema, and later performance-gate fields.
+- tools/coh-rtc/src/ir.rs — AWS profile, `ena` backend, isolated ENA runtime descriptor schema, bounded bootstrap schema, and later performance-gate fields.
 - tools/coh-rtc/src/codegen/{docs,rust}.rs — generated AWS/profile snippets and dependency allow/deny policy summaries.
 Commands:
 - cargo test -p coh-rtc
@@ -10878,7 +10878,7 @@ Goal: Prove AWS VM profiles do not import unapproved host, POSIX, web, or TLS/HT
 Inputs: Cargo.toml workspace metadata, apps/root-task, apps/aws-driver-runtime, tools/coh-rtc, deny configuration, docs/AWS_AMI.md.
 Changes:
 - tools/coh-rtc/src/validate.rs — generated AWS dependency allow/deny policy for selected VM profiles.
-- scripts/ci/aws_dependency_closure.sh — target-qualified `cargo tree`/deny check for root-task and linked AWS runtime closure.
+- scripts/ci/aws_dependency_closure.sh — target-qualified `cargo tree`/deny check for root-task and isolated AWS runtime closure.
 - docs/AWS_AMI.md + docs/SECURITY.md — accepted dependency posture and approved exceptions, if any.
 Commands:
 - scripts/ci/aws_dependency_closure.sh
@@ -10904,12 +10904,12 @@ Deliverables:
 - Documented ESP layout and build recipe for Arm64.
 
 Title/ID: m30-ena-runtime-adminq
-Goal: Implement ENA PCIe discovery and admin queue in a linked AWS network runtime.
+Goal: Implement ENA PCIe discovery and admin queue in a manifest-declared isolated AWS network runtime.
 Inputs: apps/root-task HAL admission, shared driver-task ABI, apps/aws-driver-runtime, docs/AWS_AMI.md.
 Changes:
 - apps/root-task/src/hal/aws_ena.rs — HAL admission for ENA PCIe BARs, IRQ/notification policy, DMA/shared-buffer descriptors, and runtime image selection.
 - crates/driver-task-abi/src/** — fixed-layout ENA init/adminq command records and completion evidence, preserving compatibility with the Pi 4 driver-task ABI shape.
-- apps/aws-driver-runtime/src/** — linked ENA runtime adminq and completion queue service.
+- apps/aws-driver-runtime/src/** — isolated ENA runtime adminq and completion queue service.
 - apps/root-task/src/net/ena.rs — root-side ENA ring-client/net-stack wiring only.
 Commands:
 - cargo test -p root-task --test ena_adminq
@@ -10922,12 +10922,12 @@ Deliverables:
 - AdminQ protocol notes in docs/AWS_AMI.md.
 
 Title/ID: m30-ena-runtime-io-bootstrap
-Goal: Bring up minimal linked-runtime ENA dataplane for first-link bootstrap.
-Inputs: linked AWS network runtime, root-task net stack abstractions, generated ENA descriptors.
+Goal: Bring up minimal isolated runtime ENA dataplane for first-link bootstrap.
+Inputs: manifest-declared isolated AWS network runtime, root-task net stack abstractions, generated ENA descriptors.
 Changes:
 - apps/aws-driver-runtime/src/** — single TX/RX SQ + CQ and polling dataplane service turns.
 - crates/driver-task-abi/src/** — fixed-layout RX/TX descriptor service records, queue bounds, and completion counters.
-- apps/root-task/src/net/mod.rs — integrate linked ENA runtime RX/TX service into the root-task net stack.
+- apps/root-task/src/net/mod.rs — integrate isolated ENA runtime RX/TX service into the root-task net stack.
 Commands:
 - cargo test -p root-task --test ena_ioq
 - cargo test -p driver-task-abi
@@ -10939,11 +10939,11 @@ Deliverables:
 
 Title/ID: m30-ena-performance-closure
 Goal: Add peak-performance AWS ENA evidence after first-link bootstrap without changing the authority model.
-Inputs: generated ENA queue policy, Milestone 27c service-bucket outputs, linked AWS network runtime, docs/BENCHMARKS.md, docs/AWS_AMI.md.
+Inputs: generated ENA queue policy, Milestone 27c service-bucket outputs, manifest-declared isolated AWS network runtime, docs/BENCHMARKS.md, docs/AWS_AMI.md.
 Changes:
 - tools/coh-rtc/src/ir.rs — generated ENA queue-count, queue-affinity, notification/MSI-X or poll-budget, burst, and backpressure limits.
 - apps/aws-driver-runtime/src/** — bounded multi-queue service turns and queue-local counters where the platform profile admits them.
-- apps/root-task/src/net/ena.rs — deterministic merge/backpressure handling for linked-runtime queue completions.
+- apps/root-task/src/net/ena.rs — deterministic merge/backpressure handling for isolated runtime queue completions.
 - docs/BENCHMARKS.md + docs/AWS_AMI.md — classify bootstrap link proof separately from peak-throughput proof.
 Commands:
 - cargo test -p coh-rtc

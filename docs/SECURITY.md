@@ -8,7 +8,7 @@ The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 
 
 ## 1. Deterministic Memory Envelope
 - `root-task::net::NetStack` binds smoltcp to HAL-provided NICs on QEMU
-  profiles and to linked-runtime GENETv5 or CYW43455 evidence on Pi 4 profiles.
+  profiles and to isolated runtime GENETv5 or CYW43455 evidence on Pi 4 profiles.
   DMA frames are admitted through HAL-owned ranges and device mappings flow
   through HAL coverage checks so drivers never bypass allocator accounting,
   cache policy, or no-IOMMU quarantine rules.
@@ -47,7 +47,7 @@ The threat model applies to Cohesix running on ARM64 hardware booted via the Pi 
 - Boot logs include deterministic network evidence lines (`manifest.hw.network.enabled`, `manifest.hw.network.backend`, `manifest.hw.network.mode`, `manifest.hw.network.interface`, `manifest.hw.networking=...`) for audited before/after proofs.
 - The DHCP client path is bounded and client-only: DHCPv4 DISCOVER/OFFER/REQUEST/ACK, fixed buffers, bounded retry/timeouts, strict packet validation, and no new listeners or protocol surfaces.
 - Pi 4 boot scripts may persist only Cohesix policy fields in `cohesix.env`, reload them on boot, mirror `coh_net_mode`, `coh_net_interface`, `coh_static_ip`, `coh_static_prefix_len`, `coh_static_gateway`, `coh_wifi_ssid`, and `coh_wifi_psk` into a staged padded DTB under `/chosen/cohesix,*`, and hand that DTB to the elfloader through the U-Boot `uImage`/`bootm` path. Root-task accepts only bounded values and falls back to manifest defaults when the DTB handoff is absent or invalid; the build-time manifest is never rewritten on the SD card.
-- The runtime now routes Pi 4 `wifi` policy through linked CYW43455 plus SDIO
+- The runtime now routes Pi 4 `wifi` policy through isolated CYW43455 plus SDIO
   runtime clients admitted by HAL descriptors. Explicit `wifi` accepts bounded
   `static` or `dhcp`; SSIDs are limited to 1-32 printable ASCII bytes, and PSKs
   are empty for open networks, 8-63 printable ASCII bytes, or exactly 64 ASCII

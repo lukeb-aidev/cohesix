@@ -7,7 +7,7 @@
 ## Benchmark Verdicts (As-Built)
 - **Historical 25b worker-capacity benchmark:** PASS for the `1500` hard cap in real VM/TCP/gateway mode. Reviewable evidence is committed under `docs/bench/`.
 - **Historical 25f large-telemetry reliability gate:** PASS was recorded for the required no-retry scenarios (`telemetry-1mb`, `telemetry-10mb`, `telemetry-100mb`, `telemetry-1gb`) with `error_budget_rate=0.01`, but the cited summaries live under ignored `logs/`. Treat those rows as local diagnostic history unless the exact summaries are promoted into `docs/bench/`.
-- **Current 26b Pi linked-runtime parity:** no verdict yet. Closure requires fresh same-harness QEMU and Pi artifacts, comparator output, and separate serial/USB/HDMI/driver-task proof lanes.
+- **Current 26b Pi isolated runtime parity:** no verdict yet. Closure requires fresh same-harness QEMU and Pi artifacts, comparator output, and separate serial/USB/HDMI/driver-task proof lanes.
 
 ## Hive-Gateway Worker Capacity (Milestone 25b)
 
@@ -58,7 +58,7 @@ Same-harness means the QEMU and Pi runs use matched workload, tool version, scen
 | Evidence item | Required content |
 | --- | --- |
 | Selected QEMU reference | Best eligible committed or archived QEMU artifact for the exact workload, with harness provenance and no mock mode. |
-| Matched Pi artifact | Fresh Pi linked-runtime run for the same workload, with normalized serial evidence and active Wi-Fi or GENET service markers. |
+| Matched Pi artifact | Fresh Pi isolated runtime run for the same workload, with normalized serial evidence and active Wi-Fi or GENET service markers. |
 | Comparator command | `scripts/pi4_compare_driver_models.py` or successor invoked with both artifacts and workload/provenance validation enabled. |
 | Verdict fields | Throughput and error-budget metrics decide PASS/FAIL. Latency is recorded and compared, but excluded from the pass/fail verdict for 26b. |
 | Required proof lanes | `DRIVER_TASK_BOOT`, `DRIVER_TASK_OWNER_STATE_PROOF=yes`, valid `DRIVER_TASK_COUNTER_*`, DHCP/IP or static-IP proof, USB keyboard responsiveness, HDMI responsiveness, and clean emergency serial. |

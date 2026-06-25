@@ -1114,7 +1114,12 @@ mod tests {
             Ok("pong".to_owned())
         }
 
-        fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+        fn tail(
+            &mut self,
+            _session: &Session,
+            path: &str,
+            _lines: Option<u16>,
+        ) -> Result<Vec<String>> {
             self.read(_session, path)
         }
 

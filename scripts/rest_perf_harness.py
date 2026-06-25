@@ -63,6 +63,7 @@ DEFAULT_ROLE = "queen"
 DEFAULT_SUMMARY_MAX_ERROR_LINES = 400
 DEFAULT_READY_TIMEOUT_SECS = 180
 DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES = 16 * 1024 * 1024
+BENCHMARK_MARKER_SETTLE_SECS = 1.0
 GATEWAY_STATUS_BROKER_COUNTERS = (
     "control_waiters",
     "telemetry_waiters",
@@ -1383,7 +1384,7 @@ def emit_benchmark_marker(
     phase: str,
     run_token: str,
     status: str,
-) -> None:
+) -> bool:
     """Best-effort queen log marker outside measured benchmark loops."""
     line = (
         f"benchmark mode={mode} phase={phase} run={run_token} "
@@ -1391,11 +1392,20 @@ def emit_benchmark_marker(
     )
     try:
         response = client.echo("/log/queen.log", line)
-        if response.status != "ok":
+        if response.status != "OK":
             raise RestError(response.error or "gateway rejected benchmark marker", response)
         emit(logger, f"[queen-log] marker phase={phase} status={status} run={run_token}")
+        if phase == "end":
+            time.sleep(BENCHMARK_MARKER_SETTLE_SECS)
+            emit(
+                logger,
+                "[queen-log] marker visibility settled "
+                f"phase={phase} seconds={BENCHMARK_MARKER_SETTLE_SECS:.1f}",
+            )
+        return True
     except Exception as exc:
         emit(logger, f"[queen-log] marker skipped phase={phase} run={run_token}: {exc}")
+        return False
 
 
 def resolve_bundle_path(version: Optional[str], bundle: Optional[str]) -> Optional[str]:

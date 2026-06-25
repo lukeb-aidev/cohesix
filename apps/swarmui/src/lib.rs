@@ -422,8 +422,8 @@ where
                 }
                 transcript
             }
-            ConsoleCommand::Tail { path } => self.console_tail(path.as_str()),
-            ConsoleCommand::Log => self.console_tail(QUEEN_LOG_PATH),
+            ConsoleCommand::Tail { path, lines } => self.console_tail(path.as_str(), lines),
+            ConsoleCommand::Log => self.console_tail(QUEEN_LOG_PATH, None),
             ConsoleCommand::Cat { path } => self.console_cat(path.as_str()),
             ConsoleCommand::Ls { path } => self.console_ls(path.as_str()),
             ConsoleCommand::Ping => self.console_ping(),
@@ -533,7 +533,7 @@ where
         ])
     }
 
-    fn console_tail(&mut self, path: &str) -> SwarmUiTranscript {
+    fn console_tail(&mut self, path: &str, line_limit: Option<u16>) -> SwarmUiTranscript {
         if self.config.offline {
             return SwarmUiTranscript::err(vec![render_ack_line(
                 AckStatus::Err,
@@ -552,7 +552,8 @@ where
                 ConsoleVerb::Tail.ack_label(),
                 Some(detail.as_str()),
             )];
-            let mut payload_lines = tail_lines(&mut session.client, path)?;
+            let mut payload_lines =
+                limit_tail_lines(tail_lines(&mut session.client, path)?, line_limit);
             let has_end = payload_lines
                 .last()
                 .map(|line| line == END_LINE)
@@ -1720,8 +1721,8 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 };
                 self.attach(role, ticket.as_deref())
             }
-            ConsoleCommand::Tail { path } => self.console_tail(path.as_str()),
-            ConsoleCommand::Log => self.console_tail(QUEEN_LOG_PATH),
+            ConsoleCommand::Tail { path, lines } => self.console_tail(path.as_str(), lines),
+            ConsoleCommand::Log => self.console_tail(QUEEN_LOG_PATH, None),
             ConsoleCommand::Cat { path } => self.console_cat(path.as_str()),
             ConsoleCommand::Ls { path } => self.console_ls(path.as_str()),
             ConsoleCommand::Echo { path, payload } => {
@@ -1831,7 +1832,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         }
     }
 
-    fn console_tail(&mut self, path: &str) -> SwarmUiTranscript {
+    fn console_tail(&mut self, path: &str, line_limit: Option<u16>) -> SwarmUiTranscript {
         if self.config.offline {
             return SwarmUiTranscript::err(vec![render_ack_line(
                 AckStatus::Err,
@@ -1864,7 +1865,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 return SwarmUiTranscript::err(lines);
             }
             let detail = format!("path={path}");
-            match self.transport.tail(&session.session, path) {
+            match self.transport.tail(&session.session, path, line_limit) {
                 Ok(mut payload_lines) => {
                     let _ = self.transport.drain_acknowledgements();
                     lines.push(render_ack_line(
@@ -2212,7 +2213,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             }
 
             let detail = format!("path={path}");
-            match self.transport.tail(&session.session, &path) {
+            match self.transport.tail(&session.session, &path, None) {
                 Ok(payload_lines) => {
                     let _ = self.transport.drain_acknowledgements();
                     lines.push(render_ack_line(
@@ -3252,8 +3253,8 @@ fn console_help_lines() -> Vec<String> {
         "  attach <role> [ticket]       - Attach to a NineDoor session".to_owned(),
         "  login <role> [ticket]        - Alias for attach".to_owned(),
         "  detach                       - Close the current session".to_owned(),
-        "  tail <path>                  - Stream a file via NineDoor".to_owned(),
-        "  log                          - Tail /log/queen.log".to_owned(),
+        "  tail <path> [lines]          - Stream a bounded file tail via NineDoor".to_owned(),
+        "  log                          - Tail /log/queen.log (64 lines)".to_owned(),
         "  ping                         - Report attachment status for health checks".to_owned(),
         "  ls <path>                    - Enumerate directory entries".to_owned(),
         "  cat <path>                   - Read file contents".to_owned(),
@@ -3348,7 +3349,12 @@ mod tests {
             Ok("pong".to_owned())
         }
 
-        fn tail(&mut self, _session: &CohshSession, _path: &str) -> Result<Vec<String>> {
+        fn tail(
+            &mut self,
+            _session: &CohshSession,
+            _path: &str,
+            _lines: Option<u16>,
+        ) -> Result<Vec<String>> {
             Ok(Vec::new())
         }
 
@@ -3498,6 +3504,24 @@ fn tail_lines<T: cohsh_core::Secure9pTransport>(
         }
     }
     Ok(lines)
+}
+
+fn limit_tail_lines(mut lines: Vec<String>, limit: Option<u16>) -> Vec<String> {
+    let Some(limit) = limit.map(usize::from) else {
+        return lines;
+    };
+    let end = if lines.last().map(|line| line == END_LINE).unwrap_or(false) {
+        lines.pop()
+    } else {
+        None
+    };
+    if lines.len() > limit {
+        lines = lines.split_off(lines.len().saturating_sub(limit));
+    }
+    if let Some(end) = end {
+        lines.push(end);
+    }
+    lines
 }
 
 fn read_single_line<T: cohsh_core::Secure9pTransport>(

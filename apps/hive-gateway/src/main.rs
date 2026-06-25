@@ -42,7 +42,7 @@ use cohsh::{
 use cohsh::{NineDoorTransport, PooledTcpTransport, TcpTransport};
 use cohsh_core::{
     parse_role, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN,
-    MAX_TICKET_LEN,
+    MAX_TAIL_LINES, MAX_TICKET_LEN,
 };
 use nine_door::NineDoor;
 use serde::{Deserialize, Serialize};
@@ -427,7 +427,7 @@ enum BrokerRequest {
     Ping,
     List { path: String },
     Read { path: String },
-    Tail { path: String },
+    Tail { path: String, lines: Option<u16> },
     Write { path: String, payload: Vec<u8> },
 }
 
@@ -451,6 +451,7 @@ struct CatQuery {
 struct TailQuery {
     path: String,
     max_bytes: Option<u32>,
+    lines: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1036,9 +1037,13 @@ fn execute_broker_request(
         BrokerRequest::Read { path } => with_pool_once(pool, kind, move |transport, session| {
             transport.read(session, &path).map(BrokerResponse::Lines)
         }),
-        BrokerRequest::Tail { path } => with_pool_once(pool, kind, move |transport, session| {
-            transport.tail(session, &path).map(BrokerResponse::Lines)
-        }),
+        BrokerRequest::Tail { path, lines } => {
+            with_pool_once(pool, kind, move |transport, session| {
+                transport
+                    .tail(session, &path, lines)
+                    .map(BrokerResponse::Lines)
+            })
+        }
         BrokerRequest::Write { path, payload } => {
             with_pool_once(pool, kind, move |transport, session| {
                 transport.write(session, path.as_str(), payload.as_slice())?;
@@ -1305,12 +1310,13 @@ impl AppState {
         Ok(lines)
     }
 
-    fn tail(&self, path: &str) -> Result<Vec<String>> {
+    fn tail(&self, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
         self.ensure_connected()?;
         match self.submit_broker(
             PoolKind::Telemetry,
             BrokerRequest::Tail {
                 path: path.to_owned(),
+                lines,
             },
         )? {
             BrokerResponse::Lines(lines) => Ok(lines),
@@ -1620,8 +1626,12 @@ async fn handle_tail(state: AppState, query: TailQuery) -> impl axum::response::
             );
         }
     }
+    let lines = match validate_tail_lines(query.lines) {
+        Ok(lines) => lines,
+        Err(err) => return response_err(verb, &query.path, err, StatusCode::BAD_REQUEST),
+    };
     let path = query.path.clone();
-    let result = tokio::task::spawn_blocking(move || state.tail(&path)).await;
+    let result = tokio::task::spawn_blocking(move || state.tail(&path, lines)).await;
     match result {
         Ok(Ok(lines)) => {
             let bytes = lines.join("\n").len();
@@ -1642,6 +1652,16 @@ async fn handle_tail(state: AppState, query: TailQuery) -> impl axum::response::
             err.to_string(),
             StatusCode::INTERNAL_SERVER_ERROR,
         ),
+    }
+}
+
+fn validate_tail_lines(lines: Option<u16>) -> Result<Option<u16>, String> {
+    match lines {
+        Some(0) => Err("lines must be >= 1".to_owned()),
+        Some(count) if count > MAX_TAIL_LINES => Err(format!(
+            "lines {count} exceeds max_tail_lines {MAX_TAIL_LINES}"
+        )),
+        _ => Ok(lines),
     }
 }
 
@@ -1996,6 +2016,18 @@ mod tests {
             .as_ref()
             .expect("error")
             .contains("reason=policy"));
+    }
+
+    #[test]
+    fn validate_tail_lines_enforces_cli_bound() {
+        assert_eq!(validate_tail_lines(None).unwrap(), None);
+        assert_eq!(validate_tail_lines(Some(1)).unwrap(), Some(1));
+        assert_eq!(
+            validate_tail_lines(Some(MAX_TAIL_LINES)).unwrap(),
+            Some(MAX_TAIL_LINES)
+        );
+        assert!(validate_tail_lines(Some(0)).is_err());
+        assert!(validate_tail_lines(Some(MAX_TAIL_LINES + 1)).is_err());
     }
 
     #[test]

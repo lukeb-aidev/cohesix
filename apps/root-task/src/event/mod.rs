@@ -3369,6 +3369,24 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn prepare_log_tail_pending_stream(&mut self, requested_lines: Option<u16>) -> u64 {
+        let default_lines =
+            log_buffer::LOG_SNAPSHOT_LINES.min(usize::from(cohsh_core::command::MAX_TAIL_LINES));
+        let lines = requested_lines
+            .map(usize::from)
+            .unwrap_or(default_lines)
+            .clamp(1, usize::from(cohsh_core::command::MAX_TAIL_LINES));
+        let mut cursor = log_buffer::tail_cursor(lines);
+        let stream_bytes = cursor.bytes();
+        let pending = self.pending_stream.get_or_insert_with(PendingStream::new);
+        pending.reset();
+        let exhausted = log_buffer::read_cursor_lines_into(&mut cursor, &mut pending.lines);
+        pending.log_cursor = if exhausted { None } else { Some(cursor) };
+        pending.bandwidth_bytes = stream_bytes;
+        stream_bytes
+    }
+
+    #[cfg(feature = "kernel")]
     fn refill_log_pending_stream(pending: &mut PendingStream) -> bool {
         if pending.next_line < pending.lines.len() {
             return true;
@@ -12289,7 +12307,7 @@ where
                     forwarded = matches!(self.session, Some(_));
                 }
             }
-            Command::Tail { path } => {
+            Command::Tail { path, lines } => {
                 if self.ensure_worker_session(verb_label) {
                     let path_str = path.as_str();
                     if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Read) {
@@ -12311,7 +12329,7 @@ where
                         {
                             let cursor_offset = self.ticket_cursor_offset(path_str).unwrap_or(0);
                             if path_str == "/log/queen.log" {
-                                stream_bytes = self.prepare_log_pending_stream();
+                                stream_bytes = self.prepare_log_tail_pending_stream(lines);
                                 path_supported = true;
                             } else if path_str == "/proc/ingest/watch" {
                                 if let Some(bridge) = self.ninedoor.as_mut() {
@@ -12883,7 +12901,7 @@ where
                         cmd_status = "err";
                     } else {
                         #[cfg(feature = "kernel")]
-                        let stream_bytes = self.prepare_log_pending_stream();
+                        let stream_bytes = self.prepare_log_tail_pending_stream(None);
                         #[cfg(not(feature = "kernel"))]
                         let stream_bytes = 0u64;
                         if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
@@ -13065,7 +13083,7 @@ where
                     let sid = self.session_id.unwrap_or(0);
                     let err_msg = format_message(format_args!("{source}"));
                     match &command_clone {
-                        Command::Tail { path } => {
+                        Command::Tail { path, .. } => {
                             self.audit_ninedoor_err(sid, "TAIL", path.as_str(), err_msg.as_str());
                         }
                         Command::Log => {
@@ -13099,10 +13117,10 @@ where
             } else {
                 match &command_clone {
                     Command::Log => self.emit_log_snapshot(),
-                    Command::Tail { path } if path.as_str() == "/log/queen.log" => {
+                    Command::Tail { path, .. } if path.as_str() == "/log/queen.log" => {
                         self.emit_log_snapshot();
                     }
-                    Command::Tail { path } if path.as_str() == "/proc/ingest/watch" => {
+                    Command::Tail { path, .. } if path.as_str() == "/proc/ingest/watch" => {
                         if let Some(bridge) = self.ninedoor.as_mut() {
                             if let Ok(lines) =
                                 bridge.ingest_watch_lines(self.now_ms, &mut *self.audit)
@@ -13167,7 +13185,7 @@ where
                     .attach(role.as_str(), ticket_str, audit)
                     .map_err(|source| CommandDispatchError::Bridge { verb, source })?;
             }
-            Command::Tail { path } => {
+            Command::Tail { path, .. } => {
                 let audit = &mut *self.audit;
                 bridge
                     .tail(path.as_str(), audit)
@@ -18704,6 +18722,92 @@ mod tests {
             .rfind(last_marker)
             .expect("last marker must be emitted");
         assert!(last < end, "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn tail_queen_log_honors_default_and_requested_line_counts() {
+        let _root_guard = ReachableRootGuard::new(1);
+        fn append_tail_markers(prefix: &str) -> (String, String) {
+            let first_marker = format!("[test] {prefix} marker=batch-first index=00");
+            let last_marker = format!("[test] {prefix} marker=batch-last index=69");
+            for index in 0..70 {
+                let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+                let label = if index == 69 {
+                    "batch-last"
+                } else {
+                    "batch-first"
+                };
+                let _ = write!(line, "[test] {prefix} marker={} index={index:02}", label);
+                log_buffer::append_log_line(line.as_str());
+            }
+            (first_marker, last_marker)
+        }
+
+        fn run_tail(command: &[u8]) -> String {
+            let driver = LoopbackSerial::<16384>::new();
+            let serial = SerialPort::<_, 16384, 16384, DEFAULT_LINE_CAPACITY>::new(driver);
+            let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+            let ipc = NullIpc;
+            let store: TicketTable<4> = TicketTable::new();
+            let mut audit = AuditLog::new();
+            let mut bridge = NineDoorBridge::new();
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
+            pump.session = Some(SessionRole::Worker);
+            {
+                let driver = pump.serial_mut().driver_mut();
+                driver.push_rx(command);
+            }
+            for _ in 0..8 {
+                pump.poll();
+            }
+            let transcript = {
+                let driver = pump.serial_mut().driver_mut();
+                driver.drain_tx()
+            };
+            String::from_utf8(transcript.into_iter().collect()).expect("serial output must be utf8")
+        }
+
+        let (first_marker, last_marker) = append_tail_markers("tail-default-lines");
+        let rendered = run_tail(b"tail /log/queen.log\n");
+        assert!(
+            rendered.contains("OK TAIL path=/log/queen.log"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered
+                .lines()
+                .any(|line| line.trim_end_matches('\r') == first_marker),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.trim_end_matches('\r') == last_marker),
+            "{rendered}"
+        );
+        assert!(rendered.contains("END\r\n"), "{rendered}");
+
+        let (first_marker, last_marker) = append_tail_markers("tail-requested-lines");
+        let rendered = run_tail(b"tail /log/queen.log 70\n");
+        assert!(
+            rendered.contains("OK TAIL path=/log/queen.log"),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.trim_end_matches('\r') == first_marker),
+            "{rendered}"
+        );
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.trim_end_matches('\r') == last_marker),
+            "{rendered}"
+        );
+        assert!(rendered.contains("END\r\n"), "{rendered}");
     }
 
     #[cfg(feature = "kernel")]

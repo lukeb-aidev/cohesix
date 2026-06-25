@@ -26,7 +26,12 @@ impl Transport for RecordingTransport {
         Ok(format!("attached as {:?}", session.role()))
     }
 
-    fn tail(&mut self, _session: &cohsh::Session, _path: &str) -> anyhow::Result<Vec<String>> {
+    fn tail(
+        &mut self,
+        _session: &cohsh::Session,
+        _path: &str,
+        _lines: Option<u16>,
+    ) -> anyhow::Result<Vec<String>> {
         unimplemented!("tail not expected in attach tests")
     }
 

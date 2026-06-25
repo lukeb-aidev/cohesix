@@ -65,7 +65,7 @@ fn tcp_transport_handles_attach_and_tail() {
     assert_eq!(attach.verb, "ATTACH");
 
     let logs = transport
-        .tail(&session, "/log/queen.log")
+        .tail(&session, "/log/queen.log", None)
         .expect("tail log");
     assert_eq!(logs, vec!["boot line".to_owned()]);
     let tail_ack = transport.drain_acknowledgements();

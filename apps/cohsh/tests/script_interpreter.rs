@@ -36,7 +36,12 @@ impl Transport for ScriptTransport {
         Ok("pong".to_owned())
     }
 
-    fn tail(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+    fn tail(
+        &mut self,
+        _session: &Session,
+        _path: &str,
+        _lines: Option<u16>,
+    ) -> Result<Vec<String>> {
         if let Some(ack) = self.tail_ack.as_ref() {
             self.pending_ack.push_back(ack.clone());
         }
@@ -85,7 +90,12 @@ impl Transport for ErrReadTransport {
         Ok("pong".to_owned())
     }
 
-    fn tail(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+    fn tail(
+        &mut self,
+        _session: &Session,
+        _path: &str,
+        _lines: Option<u16>,
+    ) -> Result<Vec<String>> {
         Ok(Vec::new())
     }
 

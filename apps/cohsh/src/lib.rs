@@ -547,7 +547,7 @@ pub trait Transport {
     fn ping(&mut self, session: &Session) -> Result<String>;
 
     /// Stream a log-like file and return the accumulated contents.
-    fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
+    fn tail(&mut self, session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>>;
 
     /// Read a file and return the accumulated contents.
     fn read(&mut self, session: &Session, path: &str) -> Result<Vec<String>>;
@@ -633,8 +633,8 @@ where
         (**self).ping(session)
     }
 
-    fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
-        (**self).tail(session, path)
+    fn tail(&mut self, session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
+        (**self).tail(session, path, lines)
     }
 
     fn read(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
@@ -849,7 +849,8 @@ impl Transport for NineDoorTransport {
         Ok(format!("attached as {:?} via mock", session.role()))
     }
 
-    fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+    fn tail(&mut self, _session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
+        let line_limit = ensure_valid_tail_lines(lines)?;
         match self.read_lines(path) {
             Ok(lines) => {
                 let detail = format!("path={path}");
@@ -858,7 +859,7 @@ impl Transport for NineDoorTransport {
                     ConsoleVerb::Tail.ack_label(),
                     Some(detail.as_str()),
                 );
-                Ok(lines)
+                Ok(apply_tail_line_limit(lines, line_limit))
             }
             Err(err) => {
                 let detail = format!("path={path} reason={err}");
@@ -1387,7 +1388,8 @@ impl Transport for QemuTransport {
         Err(anyhow!("attach via QEMU before issuing ping"))
     }
 
-    fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+    fn tail(&mut self, _session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
+        let line_limit = ensure_valid_tail_lines(lines)?;
         if path != QUEEN_LOG_PATH {
             return Err(anyhow!(
                 "QEMU transport currently supports tailing {QUEEN_LOG_PATH} only"
@@ -1396,7 +1398,7 @@ impl Transport for QemuTransport {
         let raw_lines = self.wait_for_log(Duration::from_secs(15))?;
         let cleaned = Self::filter_root_log(&raw_lines);
         self.stop_child();
-        Ok(cleaned)
+        Ok(apply_tail_line_limit(cleaned, line_limit))
     }
 
     fn read(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
@@ -2358,12 +2360,10 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 let Some(path) = parts.next() else {
                     return CommandExecution::err(anyhow!("tail requires a path"), transcript);
                 };
-                if parts.next().is_some() {
-                    return CommandExecution::err(
-                        anyhow!("tail takes exactly one argument: path"),
-                        transcript,
-                    );
-                }
+                let line_count = match parse_tail_line_count(parts.next(), parts.next()) {
+                    Ok(value) => value,
+                    Err(err) => return CommandExecution::err(err, transcript),
+                };
                 let session = match self.session.as_ref() {
                     Some(session) => session,
                     None => {
@@ -2373,7 +2373,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 if let Err(err) = ensure_valid_path(path) {
                     return CommandExecution::err(err, transcript);
                 }
-                match self.transport.tail(session, path) {
+                match self.transport.tail(session, path, line_count) {
                     Ok(lines) => {
                         transcript.ack_lines = self.transport.drain_acknowledgements();
                         transcript.output_lines = lines;
@@ -2649,7 +2649,7 @@ impl<T: Transport, W: Write> Shell<T, W> {
             match self.attach(auto.role, auto.ticket.as_deref()) {
                 Ok(()) => {
                     if auto.auto_log {
-                        if let Err(err) = self.tail_path(QUEEN_LOG_PATH) {
+                        if let Err(err) = self.tail_path(QUEEN_LOG_PATH, None) {
                             self.write_line(&format!("auto-log failed: {err}"))?;
                         }
                     }
@@ -2782,13 +2782,14 @@ impl<T: Transport, W: Write> Shell<T, W> {
         Ok(())
     }
 
-    fn tail_path(&mut self, path: &str) -> Result<()> {
+    fn tail_path(&mut self, path: &str, lines: Option<u16>) -> Result<()> {
         ensure_valid_path(path)?;
+        let lines = ensure_valid_tail_lines(lines)?;
         let session = self
             .session
             .as_ref()
             .context("attach to a session before running tail")?;
-        let result = self.transport.tail(session, path);
+        let result = self.transport.tail(session, path, lines);
         let drain_result = self.drain_ack_lines();
         match result {
             Ok(lines) => {
@@ -3427,16 +3428,14 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 let Some(path) = parts.next() else {
                     return Err(anyhow!("tail requires a path"));
                 };
-                if parts.next().is_some() {
-                    return Err(anyhow!("tail takes exactly one argument: path"));
-                }
-                self.tail_path(path)?;
+                let line_count = parse_tail_line_count(parts.next(), parts.next())?;
+                self.tail_path(path, line_count)?;
                 Ok(CommandStatus::Continue)
             }
             "log" => {
                 let args: Vec<&str> = parts.collect();
                 if args.is_empty() {
-                    self.tail_path(QUEEN_LOG_PATH)?;
+                    self.tail_path(QUEEN_LOG_PATH, None)?;
                     return Ok(CommandStatus::Continue);
                 }
                 if args[0] != "dump" {
@@ -3967,6 +3966,42 @@ pub struct AutoAttach {
 fn ensure_valid_path(path: &str) -> Result<()> {
     parse_path(path)?;
     Ok(())
+}
+
+fn ensure_valid_tail_lines(lines: Option<u16>) -> Result<Option<u16>> {
+    if matches!(lines, Some(0))
+        || lines.is_some_and(|count| count > cohsh_core::command::MAX_TAIL_LINES)
+    {
+        bail!(
+            "tail line count must be between 1 and {}",
+            cohsh_core::command::MAX_TAIL_LINES
+        );
+    }
+    Ok(lines)
+}
+
+fn parse_tail_line_count(raw: Option<&str>, extra: Option<&str>) -> Result<Option<u16>> {
+    if extra.is_some() {
+        bail!("tail takes at most two arguments: path [lines]");
+    }
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let count = raw
+        .parse::<u16>()
+        .map_err(|_| anyhow!("tail line count must be numeric"))?;
+    ensure_valid_tail_lines(Some(count))
+}
+
+fn apply_tail_line_limit(mut lines: Vec<String>, limit: Option<u16>) -> Vec<String> {
+    let Some(limit) = limit.map(usize::from) else {
+        return lines;
+    };
+    if lines.len() > limit {
+        lines.split_off(lines.len().saturating_sub(limit))
+    } else {
+        lines
+    }
 }
 
 fn validate_log_dump_path(path: &Path) -> Result<()> {
@@ -4911,7 +4946,12 @@ mod tests {
             Ok("ping: ok".to_owned())
         }
 
-        fn tail(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+        fn tail(
+            &mut self,
+            _session: &Session,
+            _path: &str,
+            _lines: Option<u16>,
+        ) -> Result<Vec<String>> {
             Ok(vec!["tail".to_owned()])
         }
 

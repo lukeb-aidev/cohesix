@@ -157,8 +157,8 @@ pub const VERB_SPECS: [VerbSpec; VERB_SPEC_COUNT] = [
     },
     VerbSpec {
         verb: ConsoleVerb::Tail,
-        usage: "tail <path>",
-        example: "tail /log/queen.log",
+        usage: "tail <path> [lines]",
+        example: "tail /log/queen.log 64",
     },
     VerbSpec {
         verb: ConsoleVerb::Cat,

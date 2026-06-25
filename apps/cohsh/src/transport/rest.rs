@@ -17,17 +17,6 @@ use crate::{CohshPolicy, Session, Transport, TransportMetrics};
 
 const DEFAULT_SESSION_ID: SessionId = SessionId::BOOTSTRAP;
 
-#[allow(dead_code)]
-trait GatewayClientTail {
-    fn tail(&self, path: &str, max_bytes: u32) -> Result<Vec<String>>;
-}
-
-impl GatewayClientTail for GatewayClient {
-    fn tail(&self, path: &str, max_bytes: u32) -> Result<Vec<String>> {
-        self.read(path, max_bytes)
-    }
-}
-
 /// REST transport backed by the hive-gateway API.
 #[derive(Debug)]
 pub struct RestTransport {
@@ -239,10 +228,11 @@ impl Transport for RestTransport {
         Ok(format!("gateway ok manifest={}", bounds.manifest_sha256))
     }
 
-    fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+    fn tail(&mut self, _session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
         self.ensure_attached()?;
+        let line_limit = crate::ensure_valid_tail_lines(lines)?;
         let max_bytes = self.tail_max_bytes(path);
-        match self.client.tail(path, max_bytes) {
+        match self.client.tail_with_lines(path, max_bytes, line_limit) {
             Ok(lines) => {
                 let detail = format!("path={path}");
                 self.push_ack(
@@ -250,7 +240,7 @@ impl Transport for RestTransport {
                     ConsoleVerb::Tail.ack_label(),
                     Some(detail.as_str()),
                 );
-                Ok(lines)
+                Ok(crate::apply_tail_line_limit(lines, line_limit))
             }
             Err(err) => {
                 let detail = format!("path={path} reason={err}");

@@ -82,7 +82,7 @@ impl CohAccess for TransportAccess<'_> {
     }
 
     fn tail_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
-        let lines = self.transport.tail(self.session, path)?;
+        let lines = self.transport.tail(self.session, path, None)?;
         lines_to_bytes(&lines, max_bytes)
     }
 
@@ -130,7 +130,7 @@ pub fn read_last_line(
     session: &Session,
     path: &str,
 ) -> Result<Option<String>> {
-    let lines = transport.tail(session, path)?;
+    let lines = transport.tail(session, path, None)?;
     Ok(lines
         .iter()
         .rev()

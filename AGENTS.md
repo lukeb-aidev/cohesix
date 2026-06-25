@@ -21,7 +21,7 @@ Violations block merge. Warn of violations BEFORE completing tasks.
 - **Target VM**: QEMU `aarch64/virt` with GICv3.
 - **Target Hardware**: Raspberry Pi 4 (`bcm2711`) via Pi firmware -> U-Boot -> seL4 binary image -> root-task. UEFI/AWS targets are future/profile-scoped work only when authorized by `docs/BUILD_PLAN.md`.
 - **Kernel**: Upstream seL4 (external; never vendored).
-- **Userspace**: Pure Rust root task, linked Pi 4 driver runtimes, NineDoor 9P server, worker roles, host-side client and GPU bridge tools.
+- **Userspace**: Pure Rust root task, manifest-declared isolated Pi 4 driver runtimes, NineDoor 9P server, worker roles, host-side client and GPU bridge tools.
 
 ## Kernel Build Artifacts
 Kernel reference outputs (headers, slot layouts, generated metadata) live in the active profile-specific seL4 build directory, including current local paths such as:
@@ -89,7 +89,7 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
    - No libc-style abstractions.
    - No in-VM GPU stacks.
    - All heavy ecosystems (CUDA, NVML, networking sidecars) remain host-side.
-   - Physical-hardware drivers are linked-runtime only. On Pi 4 and any future
+   - Physical-hardware drivers must use manifest-declared isolated driver runtimes. On Pi 4 and any future
      physical target, USB, HDMI/display, Ethernet, Wi-Fi, SDIO, PCIe, MMIO-backed
      devices, and other steady hardware drivers must run as manifest-declared isolated driver runtime
      child images over the fixed driver-task ABI after HAL admission. Root-task

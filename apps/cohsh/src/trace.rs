@@ -206,7 +206,8 @@ impl<T: Secure9pTransport> Transport for TraceShellTransport<T> {
         ))
     }
 
-    fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+    fn tail(&mut self, _session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
+        let line_limit = crate::ensure_valid_tail_lines(lines)?;
         let result = (|| {
             let client = self
                 .client
@@ -230,7 +231,7 @@ impl<T: Secure9pTransport> Transport for TraceShellTransport<T> {
                     ConsoleVerb::Tail.ack_label(),
                     Some(detail.as_str()),
                 )?;
-                Ok(lines)
+                Ok(crate::apply_tail_line_limit(lines, line_limit))
             }
             Err(err) => {
                 let detail = format!("path={path} reason={err}");

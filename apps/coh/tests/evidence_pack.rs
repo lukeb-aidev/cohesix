@@ -4,7 +4,7 @@
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use coh::evidence::{build_local_bounds, export_pack, EvidencePackSpec};
 use coh::policy::CohPolicy;
 use coh::CohAudit;
@@ -15,6 +15,8 @@ use nine_door::{
     ReplayConfig,
 };
 use tempfile::TempDir;
+
+const EXPECTED_RETAINED_LOG_BYTES: usize = 2048 * (256 + 1);
 
 #[test]
 fn evidence_pack_redacts_ticket_payloads() -> Result<()> {
@@ -113,4 +115,76 @@ fn evidence_pack_redacts_host_ticket_sensitive_fields() -> Result<()> {
     assert!(captured.contains("<redacted>"));
 
     Ok(())
+}
+
+#[test]
+fn evidence_pack_log_capture_covers_retained_queen_log_window() -> Result<()> {
+    let temp = TempDir::new().expect("tempdir");
+    let out_dir = temp.path().join("pack");
+    let spec = EvidencePackSpec {
+        out_dir: out_dir.clone(),
+        with_telemetry: false,
+    };
+    let policy = CohPolicy::from_generated();
+    let bounds = build_local_bounds();
+    let mut audit = CohAudit::new();
+    let mut client = RecordingAccess::default();
+
+    export_pack(&mut client, &policy, &bounds, &spec, &mut audit)?;
+
+    assert_eq!(
+        client.log_read_limit,
+        Some(EXPECTED_RETAINED_LOG_BYTES),
+        "evidence pack should read /log/queen.log with the full retained-window cap"
+    );
+    assert_eq!(
+        client.log_tail_limit, None,
+        "evidence pack should not use the default tail window for /log/queen.log"
+    );
+    let log_path = out_dir.join("log").join("queen.log");
+    let captured = std::fs::metadata(&log_path)
+        .with_context(|| format!("stat {}", log_path.display()))?
+        .len();
+    assert_eq!(captured, EXPECTED_RETAINED_LOG_BYTES as u64);
+
+    Ok(())
+}
+
+#[derive(Default)]
+struct RecordingAccess {
+    log_read_limit: Option<usize>,
+    log_tail_limit: Option<usize>,
+}
+
+impl coh::CohAccess for RecordingAccess {
+    fn list_dir(&mut self, _path: &str, _max_bytes: usize) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
+    fn read_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        match path {
+            "/proc/boot" => Ok(b"boot=ok\n".to_vec()),
+            "/proc/schedule/summary" => Ok(b"schedule=ok\n".to_vec()),
+            "/proc/schedule/queue" => Ok(b"queue=empty\n".to_vec()),
+            "/proc/lease/summary" => Ok(b"lease=ok\n".to_vec()),
+            "/proc/lease/active" => Ok(b"active=none\n".to_vec()),
+            "/proc/lease/preemptions" => Ok(b"preemptions=0\n".to_vec()),
+            "/log/queen.log" => {
+                self.log_read_limit = Some(max_bytes);
+                Ok(vec![b'x'; max_bytes])
+            }
+            _ => Err(anyhow!("not found")),
+        }
+    }
+
+    fn tail_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
+        if path == "/log/queen.log" {
+            self.log_tail_limit = Some(max_bytes);
+        }
+        Err(anyhow!("not found"))
+    }
+
+    fn write_append(&mut self, _path: &str, payload: &[u8]) -> Result<usize> {
+        Ok(payload.len())
+    }
 }

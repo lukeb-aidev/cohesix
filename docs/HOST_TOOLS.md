@@ -120,8 +120,8 @@ Canonical operator shell for Cohesix. Runs on the host and attaches to NineDoor 
 | `attach <role> [ticket]` | Start a session (`login` is an alias). |
 | `ls <path>` | Enumerate directory entries. |
 | `cat <path>` | Read file contents once. |
-| `tail <path>` | Stream a file. |
-| `log` | Alias for `tail /log/queen.log`. |
+| `tail <path> [lines]` | Stream a bounded file tail; default is 64 lines and explicit counts are capped at 256. |
+| `log` | Alias for `tail /log/queen.log` using the 64-line default. |
 | `log dump <file.txt> [--force]` | Host-side dump of `/log/queen.log`; writes payload lines only and refuses existing files unless `--force` is supplied. |
 | `echo <text> > <path>` | Append a single line; adds a newline. |
 | `spawn <role> ...` | Queue worker spawn (see examples below). |
@@ -145,7 +145,7 @@ coh> spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=120 priority=3 budget_tt
 ```
 
 ### Queen log diagnostics
-`/log/queen.log` retains up to 2048 bounded lines. `cohsh log dump queen-log.txt` reads that log through the existing session transport and writes only retained payload lines to the local text file, with no `OK`/`END` transcript sent into the file. After a REST performance harness run, expect the dump to contain boot/log-retention markers, benchmark start/end markers when the gateway allowed the best-effort marker writes, host write summaries, lifecycle/policy denials, telemetry quota/wrap summaries, and bounded backpressure/error summaries. Routine Pi 4 driver dataplane chatter is intentionally excluded so benchmark hot paths are not slowed by log writes.
+`/log/queen.log` retains up to 2048 bounded lines. `tail /log/queen.log` and `log` keep the old 64-line default; `tail /log/queen.log <lines>` may request up to 256 lines. `cohsh log dump queen-log.txt` reads the full retained log through the existing session transport and writes only retained payload lines to the local text file, with no `OK`/`END` transcript sent into the file. After a REST performance harness run, expect the dump to contain the retained boot/log-retention markers, benchmark markers that are still inside the retained window, host write summaries, lifecycle/policy denials, telemetry quota/wrap summaries, and bounded backpressure/error summaries. QEMU `cohesix-dev` net tracing can churn the retained window quickly, so dump immediately after the benchmark when marker correlation matters. Routine Pi 4 driver dataplane chatter is intentionally excluded so benchmark hot paths are not slowed by log writes.
 
 ### Tests
 `test` executes the bundled `.coh` scripts under `/proc/tests/` (for example `selftest_smp.coh`). Default timeout is 30s; maximum is 120s.
@@ -280,7 +280,7 @@ Pack layout (relative to `--out`):
 - `bounds.json` - `GET /v1/meta/bounds` snapshot (or an equivalent local snapshot when not using REST).
 - `summary.json` - captured/missing inventory.
 - `proc/` - bounded `/proc/*` snapshots (when enabled).
-- `log/queen.log` - bounded `/log/queen.log` tail snapshot.
+- `log/queen.log` - bounded `/log/queen.log` retained-window snapshot, sized to cover the current 2048-line ring.
 - `audit/` - `/audit/export`, redacted `/audit/journal`, redacted `/audit/decisions` (when audit is enabled).
 - `replay/status` - `/replay/status` snapshot (when replay is enabled).
 - `telemetry/` - downloaded telemetry segments (when `--with-telemetry` is set).
@@ -311,7 +311,7 @@ python3 tools/cohesix-py/examples/siem_export_ndjson.py --pack ./out/evidence/li
 - `coh gpu --nvml` seeds the mock backend from NVML and requires `--features nvml` (it is mutually exclusive with `--mock`); if NVML is feature-limited, CUDA is used as a fallback.
 - `coh run` executes a host command locally after validating a lease and appends bounded breadcrumbs to `/gpu/<id>/status`.
 - `coh run` requires an active lease in `/gpu/<id>/lease` and will refuse to execute without one.
-- `coh evidence pack` exports a deterministic on-disk snapshot sourced only from existing Cohesix surfaces (`/proc`, `/log`, `/audit`, `/replay`, telemetry). Exported audit JSONL hashes ticket fields (`ticket` → `sha256:<hex>`) so evidence packs do not leak raw capability tickets.
+- `coh evidence pack` exports a deterministic on-disk snapshot sourced only from existing Cohesix surfaces (`/proc`, `/log`, `/audit`, `/replay`, telemetry). The `log/queen.log` capture reads the retained log window after the run rather than tailing the 64-line default. Exported audit JSONL hashes ticket fields (`ticket` → `sha256:<hex>`) so evidence packs do not leak raw capability tickets.
 - `coh evidence timeline` generates `timeline.ndjson` and `timeline.md` offline from an evidence pack directory. For federated host tickets, timeline rows include `source_hive`, `target_hive`, `relay_hop`, and correlate with `id + idempotency_key + source_hive + target_hive`.
 - `coh fleet` commands are read-only fan-in views over `/proc` surfaces (`status`, `lease-summary`, `pressure`). They never mutate hive state.
 - Policy enforcement is manifest-driven; `COH_POLICY` (or `configs/generated/coh_policy.toml`) must hash-match the compiled defaults.

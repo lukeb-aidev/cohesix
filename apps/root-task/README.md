@@ -76,7 +76,7 @@ release bundles are the supported target configurations when using
 `release-qemu`. Focused driver validation uses `driver-tests-qemu` and
 `driver-tests-pi4` so the two target surfaces can be tested without ad hoc
 feature strings. Both release bundles include TCP and the `usb` feature. On the
-Pi 4 profile, USB acceptance comes only from the linked `pi4-driver-usb` runtime
+Pi 4 profile, USB acceptance comes only from the isolated `pi4-driver-usb` runtime
 and its owner-state proof; root-task local-seat code is a ring client and does
 not select a root-owned USB implementation crate.
 

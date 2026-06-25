@@ -16,7 +16,7 @@
 - `log`
 - `cachelog [n]`
 - `quit`
-- `tail <path>`
+- `tail <path> [lines]`
 - `cat <path>`
 - `ls <path>`
 - `echo <path> <payload>`

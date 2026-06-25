@@ -125,7 +125,8 @@ fn run_console_replay(commands: &[String]) -> Result<Vec<String>> {
             "tail" => {
                 let session = session.as_ref().context("attach before tail")?;
                 let path = args.first().context("tail requires a path")?;
-                let result = transport.tail(session, path);
+                let lines = parse_tail_lines(args.get(1).map(String::as_str))?;
+                let result = transport.tail(session, path, lines);
                 transcript.extend(transport.drain_acknowledgements());
                 match result {
                     Ok(lines) => {
@@ -209,6 +210,7 @@ fn run_client_replay(commands: &[String]) -> Result<Vec<String>> {
             "tail" => {
                 let client = client.as_mut().context("attach before tail")?;
                 let path = args.first().context("tail requires a path")?;
+                let lines = parse_tail_lines(args.get(1).map(String::as_str))?.map(usize::from);
                 match client.tail(path) {
                     Ok(stream) => {
                         let detail = format!("path={path}");
@@ -217,12 +219,20 @@ fn run_client_replay(commands: &[String]) -> Result<Vec<String>> {
                             ConsoleVerb::Tail.ack_label(),
                             Some(detail.as_str()),
                         ));
+                        let mut payload = Vec::new();
                         for event in stream {
                             match event? {
-                                TailEvent::Line(line) => transcript.push(line),
-                                TailEvent::End => transcript.push(END_LINE.to_owned()),
+                                TailEvent::Line(line) => payload.push(line),
+                                TailEvent::End => {}
                             }
                         }
+                        if let Some(lines) = lines {
+                            if payload.len() > lines {
+                                payload = payload.split_off(payload.len() - lines);
+                            }
+                        }
+                        transcript.extend(payload);
+                        transcript.push(END_LINE.to_owned());
                     }
                     Err(err) => {
                         let detail = format!("path={path} reason={err}");
@@ -276,6 +286,22 @@ fn parse_role_arg(input: Option<&String>) -> Result<Role> {
         return Err(anyhow!("attach requires a role"));
     };
     parse_role(value, RoleParseMode::Strict).ok_or_else(|| anyhow!("unknown role '{value}'"))
+}
+
+fn parse_tail_lines(input: Option<&str>) -> Result<Option<u16>> {
+    let Some(value) = input else {
+        return Ok(None);
+    };
+    let count = value
+        .parse::<u16>()
+        .map_err(|_| anyhow!("tail line count must be numeric"))?;
+    if count == 0 || count > cohsh_core::command::MAX_TAIL_LINES {
+        return Err(anyhow!(
+            "tail line count must be between 1 and {}",
+            cohsh_core::command::MAX_TAIL_LINES
+        ));
+    }
+    Ok(Some(count))
 }
 
 fn is_abuse_path(path: &str) -> bool {

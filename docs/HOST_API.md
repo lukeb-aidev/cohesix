@@ -1,4 +1,4 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Document the Cohesix host-only REST gateway API. -->
 <!-- Author: Lukas Bower -->
@@ -47,7 +47,7 @@ curl -sS 'http://127.0.0.1:8080/v1/fs/cat?path=/proc/schedule/queue&max_bytes=25
 
 **4) Tail queen log**
 ```
-curl -sS 'http://127.0.0.1:8080/v1/fs/tail?path=/log/queen.log&max_bytes=512'
+curl -sS 'http://127.0.0.1:8080/v1/fs/tail?path=/log/queen.log&max_bytes=512&lines=64'
 ```
 
 **5) Apply policy revision**
@@ -134,6 +134,14 @@ paths:
           schema:
             type: integer
             minimum: 1
+        - in: query
+          name: lines
+          required: false
+          description: Optional tail line count. Values must be between 1 and 256.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 256
       responses:
         "200":
           description: Read operation response.

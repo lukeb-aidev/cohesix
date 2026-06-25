@@ -25,7 +25,12 @@ impl Transport for StubTransport {
         Ok(format!("attached as {:?} via stub", session.role()))
     }
 
-    fn tail(&mut self, _session: &Session, _path: &str) -> anyhow::Result<Vec<String>> {
+    fn tail(
+        &mut self,
+        _session: &Session,
+        _path: &str,
+        _lines: Option<u16>,
+    ) -> anyhow::Result<Vec<String>> {
         unimplemented!("tail not used in ping tests")
     }
 

@@ -85,7 +85,7 @@ impl CohAccess for ConsoleSession {
     }
 
     fn tail_file(&mut self, path: &str, max_bytes: usize) -> Result<Vec<u8>> {
-        let lines = self.transport.tail(&self.session, path);
+        let lines = self.transport.tail(&self.session, path, None);
         self.drain_acks();
         let lines = lines?;
         let payload = Self::join_lines(&lines);

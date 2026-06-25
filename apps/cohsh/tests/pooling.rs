@@ -70,7 +70,12 @@ impl Transport for SleepyTransport {
         Ok("pong".to_owned())
     }
 
-    fn tail(&mut self, _session: &Session, _path: &str) -> Result<Vec<String>> {
+    fn tail(
+        &mut self,
+        _session: &Session,
+        _path: &str,
+        _lines: Option<u16>,
+    ) -> Result<Vec<String>> {
         Err(anyhow!("sleepy transport does not support tail"))
     }
 

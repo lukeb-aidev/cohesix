@@ -154,7 +154,7 @@ impl ConsoleHarness {
             ConsoleCommand::Attach { role, ticket } => {
                 self.handle_attach(role.as_str(), ticket.as_deref())
             }
-            ConsoleCommand::Tail { path } => {
+            ConsoleCommand::Tail { path, lines: count } => {
                 if self.session.is_none() {
                     return vec![render_ack_line(
                         AckStatus::Err,
@@ -163,13 +163,21 @@ impl ConsoleHarness {
                     )];
                 }
                 let mut lines = Vec::new();
-                let detail = format!("path={}", path.as_str());
+                let detail = match count {
+                    Some(count) => format!("path={} lines={count}", path.as_str()),
+                    None => format!("path={}", path.as_str()),
+                };
                 lines.push(render_ack_line(
                     AckStatus::Ok,
                     verb_label,
                     Some(detail.as_str()),
                 ));
-                for line in tail_lines(path.as_str()) {
+                let payload = tail_lines(path.as_str());
+                let keep_from = count
+                    .map(usize::from)
+                    .map(|count| payload.len().saturating_sub(count))
+                    .unwrap_or(0);
+                for line in payload.iter().skip(keep_from) {
                     lines.push((*line).to_owned());
                 }
                 lines.push("END".to_owned());

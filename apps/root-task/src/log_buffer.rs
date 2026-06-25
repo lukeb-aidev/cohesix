@@ -125,6 +125,34 @@ impl LogRing {
         }
     }
 
+    fn tail_cursor(&self, limit: usize) -> LogCursor {
+        if limit == 0 {
+            return LogCursor {
+                next_seq: self.next_seq,
+                end_seq: self.next_seq,
+                bytes: 0,
+            };
+        }
+
+        let mut selected = 0usize;
+        let mut bytes = 0u64;
+        let mut next_seq = self.next_seq;
+        for entry in self.lines.iter().rev() {
+            if selected >= limit {
+                break;
+            }
+            next_seq = entry.seq;
+            bytes = bytes.saturating_add(entry.line.len() as u64);
+            selected = selected.saturating_add(1);
+        }
+
+        LogCursor {
+            next_seq,
+            end_seq: self.next_seq,
+            bytes,
+        }
+    }
+
     fn read_cursor_into<const LINE: usize, const LIMIT: usize>(
         &self,
         cursor: &mut LogCursor,
@@ -144,11 +172,24 @@ impl LogRing {
             return true;
         }
 
-        for line in self.lines.iter() {
+        let Some(first) = self.lines.iter().next() else {
+            cursor.next_seq = cursor.end_seq;
+            return true;
+        };
+        let mut offset = cursor.next_seq.saturating_sub(first.seq) as usize;
+        let total = self.lines.len();
+        let (head, tail) = self.lines.as_slices();
+        while offset < total {
             if output.is_full() {
                 break;
             }
+            let line = if offset < head.len() {
+                &head[offset]
+            } else {
+                &tail[offset.saturating_sub(head.len())]
+            };
             if line.seq < cursor.next_seq {
+                offset = offset.saturating_add(1);
                 continue;
             }
             if line.seq >= cursor.end_seq {
@@ -159,6 +200,7 @@ impl LogRing {
             let _ = entry.push_str(line.line.as_str());
             let _ = output.push(entry);
             cursor.next_seq = line.seq.saturating_add(1);
+            offset = offset.saturating_add(1);
         }
 
         if output.is_empty() && cursor.next_seq < cursor.end_seq {
@@ -273,6 +315,10 @@ pub fn snapshot_lines_into<const LINE: usize, const LIMIT: usize>(
 
 pub fn export_cursor() -> LogCursor {
     LOG_RING.lock().cursor()
+}
+
+pub fn tail_cursor(lines: usize) -> LogCursor {
+    LOG_RING.lock().tail_cursor(lines)
 }
 
 pub fn read_cursor_lines_into<const LINE: usize, const LIMIT: usize>(

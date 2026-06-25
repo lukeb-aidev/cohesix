@@ -1,3 +1,7 @@
+# Copyright 2026 Lukas Bower
+# SPDX-License-Identifier: Apache-2.0
+# Purpose: Define the OpenAPI description for the Cohesix hive-gateway REST API.
+# Author: Lukas Bower
 openapi: 3.1.0
 info:
   title: Cohesix Hive Gateway
@@ -83,6 +87,14 @@ paths:
           schema:
             type: integer
             minimum: 1
+        - in: query
+          name: lines
+          required: false
+          description: Optional tail line count. Values must be between 1 and 256.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 256
       responses:
         "200":
           description: Read operation response.

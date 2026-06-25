@@ -918,7 +918,7 @@ impl ConsoleHiveSessionState {
             }
             let path = format!("{worker_root}/{worker_id}/telemetry");
             let mut lines = transport
-                .tail(session, &path)
+                .tail(session, &path, None)
                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
             let _ = transport.drain_acknowledgements();
             poller.mark_polled(now_ms);
@@ -1040,7 +1040,7 @@ impl ConsoleHiveSessionState {
                                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
                             let path = format!("{worker_root}/{worker_id}/telemetry");
                             let lines = transport
-                                .tail(&session, &path)
+                                .tail(&session, &path, None)
                                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
                             Ok::<(String, Vec<String>), SwarmUiError>((worker_id, lines))
                         }));

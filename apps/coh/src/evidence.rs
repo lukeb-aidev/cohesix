@@ -27,7 +27,9 @@ const DEFAULT_AUDIT_EXPORT_MAX_BYTES: usize = 1024;
 const DEFAULT_AUDIT_FALLBACK_MAX_BYTES: usize = 16 * 1024;
 const DEFAULT_REPLAY_STATUS_MAX_BYTES: usize = 1024;
 const DEFAULT_PROC_BOOT_MAX_BYTES: usize = 64 * 1024;
-const DEFAULT_LOG_MAX_BYTES: usize = 128 * 1024;
+const DEFAULT_LOG_RETENTION_LINES: usize = 2048;
+const DEFAULT_LOG_LINE_MAX_BYTES: usize = 256;
+const DEFAULT_LOG_MAX_BYTES: usize = DEFAULT_LOG_RETENTION_LINES * (DEFAULT_LOG_LINE_MAX_BYTES + 1);
 const DEFAULT_HOST_TICKET_MAX_BYTES: usize = 128 * 1024;
 const REDACTED_VALUE: &str = "<redacted>";
 
@@ -88,14 +90,12 @@ struct EvidenceItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaptureVerb {
     Cat,
-    Tail,
 }
 
 impl CaptureVerb {
     fn as_str(self) -> &'static str {
         match self {
             Self::Cat => "CAT",
-            Self::Tail => "TAIL",
         }
     }
 }
@@ -143,7 +143,7 @@ pub fn export_pack<C: CohAccess>(
         client,
         &spec.out_dir,
         log_path,
-        CaptureVerb::Tail,
+        CaptureVerb::Cat,
         DEFAULT_LOG_MAX_BYTES,
         audit,
         &mut items,
@@ -516,73 +516,42 @@ fn capture_file<C: CohAccess>(
     items: &mut Vec<EvidenceItem>,
     override_saved_as: Option<&str>,
 ) -> Result<()> {
-    match verb {
-        CaptureVerb::Cat => match client.read_file(path, max_bytes) {
-            Ok(payload) => {
-                audit.push_ack(AckStatus::Ok, "CAT", Some(format!("path={path}").as_str()));
-                write_payload(out_dir, path, &payload)?;
-                items.push(EvidenceItem {
-                    path: path.to_owned(),
-                    saved_as: override_saved_as
-                        .unwrap_or_else(|| strip_leading_slash(path))
-                        .to_owned(),
-                    verb: verb.as_str().to_owned(),
-                    status: "captured".to_owned(),
-                    bytes: Some(payload.len()),
-                    detail: None,
-                });
-                Ok(())
-            }
-            Err(err) if is_missing(&err) => {
-                items.push(missing_item(
-                    path,
-                    override_saved_as.unwrap_or(strip_leading_slash(path)),
-                ));
-                Ok(())
-            }
-            Err(err) => {
-                items.push(error_item(
-                    path,
-                    override_saved_as.unwrap_or(strip_leading_slash(path)),
-                    verb,
-                    &err,
-                ));
-                Err(err)
-            }
-        },
-        CaptureVerb::Tail => match client.tail_file(path, max_bytes) {
-            Ok(payload) => {
-                audit.push_ack(AckStatus::Ok, "TAIL", Some(format!("path={path}").as_str()));
-                write_payload(out_dir, path, &payload)?;
-                items.push(EvidenceItem {
-                    path: path.to_owned(),
-                    saved_as: override_saved_as
-                        .unwrap_or_else(|| strip_leading_slash(path))
-                        .to_owned(),
-                    verb: verb.as_str().to_owned(),
-                    status: "captured".to_owned(),
-                    bytes: Some(payload.len()),
-                    detail: None,
-                });
-                Ok(())
-            }
-            Err(err) if is_missing(&err) => {
-                items.push(missing_item(
-                    path,
-                    override_saved_as.unwrap_or(strip_leading_slash(path)),
-                ));
-                Ok(())
-            }
-            Err(err) => {
-                items.push(error_item(
-                    path,
-                    override_saved_as.unwrap_or(strip_leading_slash(path)),
-                    verb,
-                    &err,
-                ));
-                Err(err)
-            }
-        },
+    match client.read_file(path, max_bytes) {
+        Ok(payload) => {
+            audit.push_ack(
+                AckStatus::Ok,
+                verb.as_str(),
+                Some(format!("path={path}").as_str()),
+            );
+            write_payload(out_dir, path, &payload)?;
+            items.push(EvidenceItem {
+                path: path.to_owned(),
+                saved_as: override_saved_as
+                    .unwrap_or_else(|| strip_leading_slash(path))
+                    .to_owned(),
+                verb: verb.as_str().to_owned(),
+                status: "captured".to_owned(),
+                bytes: Some(payload.len()),
+                detail: None,
+            });
+            Ok(())
+        }
+        Err(err) if is_missing(&err) => {
+            items.push(missing_item(
+                path,
+                override_saved_as.unwrap_or(strip_leading_slash(path)),
+            ));
+            Ok(())
+        }
+        Err(err) => {
+            items.push(error_item(
+                path,
+                override_saved_as.unwrap_or(strip_leading_slash(path)),
+                verb,
+                &err,
+            ));
+            Err(err)
+        }
     }
 }
 
@@ -594,10 +563,7 @@ fn read_optional<C: CohAccess>(
     audit: &mut CohAudit,
     items: &mut Vec<EvidenceItem>,
 ) -> Result<Option<Vec<u8>>> {
-    let payload = match verb {
-        CaptureVerb::Cat => client.read_file(path, max_bytes),
-        CaptureVerb::Tail => client.tail_file(path, max_bytes),
-    };
+    let payload = client.read_file(path, max_bytes);
     match payload {
         Ok(payload) => {
             audit.push_ack(

@@ -852,7 +852,6 @@ impl TcpTransport {
 
     fn frame_len(line: &str) -> Result<usize, io::Error> {
         let total_len = line
-            .as_bytes()
             .len()
             .checked_add(4)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "frame too large"))?;
@@ -1412,11 +1411,20 @@ impl TcpTransport {
 
     fn stream_command(&mut self, verb: &str, path: &str) -> Result<Vec<String>> {
         let command = format!("{verb} {path}");
+        self.stream_command_line(verb, path, &command)
+    }
+
+    fn stream_command_line(
+        &mut self,
+        verb: &str,
+        path: &str,
+        command: &str,
+    ) -> Result<Vec<String>> {
         let mut attempts = 0usize;
         let mut lines = Vec::new();
         let mut summary_line: Option<String> = None;
         loop {
-            self.send_line_attached(&command)?;
+            self.send_line_attached(command)?;
             loop {
                 let deadline = self.stream_deadline();
                 match self.next_protocol_line_with_deadline(deadline, false) {
@@ -1779,8 +1787,13 @@ impl Transport for TcpTransport {
         }
     }
 
-    fn tail(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
-        self.stream_command("TAIL", path)
+    fn tail(&mut self, _session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
+        let lines = crate::ensure_valid_tail_lines(lines)?;
+        let command = match lines {
+            Some(lines) => format!("TAIL {path} {lines}"),
+            None => format!("TAIL {path}"),
+        };
+        self.stream_command_line("TAIL", path, &command)
     }
 
     fn read(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
@@ -2011,9 +2024,9 @@ impl Transport for SharedTcpTransport {
         inner.ping(session)
     }
 
-    fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+    fn tail(&mut self, session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
         let mut inner = self.lock();
-        inner.tail(session, path)
+        inner.tail(session, path, lines)
     }
 
     fn read(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
@@ -2097,9 +2110,9 @@ impl Transport for PooledTcpTransport {
         inner.ping(session)
     }
 
-    fn tail(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
+    fn tail(&mut self, session: &Session, path: &str, lines: Option<u16>) -> Result<Vec<String>> {
         let mut inner = self.lock();
-        inner.tail(session, path)
+        inner.tail(session, path, lines)
     }
 
     fn read(&mut self, session: &Session, path: &str) -> Result<Vec<String>> {
@@ -2459,7 +2472,7 @@ mod tests {
         assert!(attach_ack
             .iter()
             .any(|ack| ack.starts_with("OK ATTACH role=queen")));
-        let logs = transport.tail(&session, "/log/queen.log").unwrap();
+        let logs = transport.tail(&session, "/log/queen.log", None).unwrap();
         assert_eq!(logs, vec!["line one".to_owned(), "line two".to_owned()]);
         let tail_ack = transport.drain_acknowledgements();
         assert!(tail_ack

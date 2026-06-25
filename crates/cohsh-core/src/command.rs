@@ -26,6 +26,8 @@ pub const MAX_JSON_LEN: usize = 192;
 pub const MAX_ID_LEN: usize = 32;
 /// Maximum number of characters accepted for echo payloads.
 pub const MAX_ECHO_LEN: usize = 224;
+/// Maximum line count accepted by the `tail <path> [lines]` command.
+pub const MAX_TAIL_LINES: u16 = 256;
 
 /// Diagnostic mode selected for the `smp` console command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +72,7 @@ pub enum Command {
     },
     Tail {
         path: String<MAX_PATH_LEN>,
+        lines: Option<u16>,
     },
     Cat {
         path: String<MAX_PATH_LEN>,
@@ -320,12 +323,28 @@ fn parse_line_inner(line: &str) -> Result<Command, ConsoleError> {
             if remainder.is_empty() {
                 return Err(ConsoleError::MissingArgument("path"));
             }
-            let path = remainder.split_whitespace().next().unwrap();
+            let mut tail_parts = remainder.split_whitespace();
+            let path = tail_parts.next().unwrap();
+            let lines = match tail_parts.next() {
+                Some(raw) => {
+                    let count = raw
+                        .parse::<u16>()
+                        .map_err(|_| ConsoleError::InvalidValue("lines"))?;
+                    if count == 0 || count > MAX_TAIL_LINES {
+                        return Err(ConsoleError::InvalidValue("lines"));
+                    }
+                    Some(count)
+                }
+                None => None,
+            };
+            if tail_parts.next().is_some() {
+                return Err(ConsoleError::InvalidValue("tail"));
+            }
             let mut owned = String::new();
             owned
                 .push_str(path)
                 .map_err(|_| ConsoleError::ValueTooLong("path"))?;
-            Ok(Command::Tail { path: owned })
+            Ok(Command::Tail { path: owned, lines })
         }
         ConsoleVerb::Cat => {
             if remainder.is_empty() {
@@ -483,6 +502,7 @@ mod tests {
             Command::Quit,
             Command::Tail {
                 path: heapless_str("/log/queen.log"),
+                lines: None,
             },
             Command::Cat {
                 path: heapless_str("/log/queen.log"),
@@ -557,9 +577,44 @@ mod tests {
     fn tail_accepts_paths() {
         let cmd = parse("tail /log/queen.log\n").unwrap();
         match cmd {
-            Command::Tail { path } => assert_eq!(path.as_str(), "/log/queen.log"),
+            Command::Tail { path, lines } => {
+                assert_eq!(path.as_str(), "/log/queen.log");
+                assert_eq!(lines, None);
+            }
             other => panic!("unexpected command {other:?}"),
         }
+    }
+
+    #[test]
+    fn tail_accepts_bounded_line_count() {
+        let cmd = parse("tail /log/queen.log 128\n").unwrap();
+        match cmd {
+            Command::Tail { path, lines } => {
+                assert_eq!(path.as_str(), "/log/queen.log");
+                assert_eq!(lines, Some(128));
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tail_rejects_invalid_line_count() {
+        assert_eq!(
+            parse("tail /log/queen.log 0\n").unwrap_err(),
+            ConsoleError::InvalidValue("lines")
+        );
+        assert_eq!(
+            parse("tail /log/queen.log 257\n").unwrap_err(),
+            ConsoleError::InvalidValue("lines")
+        );
+        assert_eq!(
+            parse("tail /log/queen.log nope\n").unwrap_err(),
+            ConsoleError::InvalidValue("lines")
+        );
+        assert_eq!(
+            parse("tail /log/queen.log 32 extra\n").unwrap_err(),
+            ConsoleError::InvalidValue("tail")
+        );
     }
 
     #[test]

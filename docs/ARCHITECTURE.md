@@ -27,8 +27,8 @@ Non-goals:
 - The only in-VM TCP listener is the root-task console; all other TCP services remain host-only.
 - Device authority (MMIO, DMA admission/publication, cache ops, IRQ binding, and physical-address discovery) goes through the HAL; no direct device access outside HAL.
 - The HAL is capability-layered rather than board-layered: generic MMIO/DMA access lives in `DeviceHal`, PCI-backed discovery/configuration lives in `PciHal`, and the Pi 4 CYW43-over-SDIO bring-up path lives in `Cyw43Hal`. The compatibility `Hardware` façade remains for call sites that still span multiple backends, but drivers are expected to depend on the narrowest HAL layer they actually need.
-- On the physical Pi 4 profile, driver bootstrap now requires isolated child VSpaces and fixed command/completion rings. Root loads linked `pi4-driver-*` runtime images only from the raw driver-runtime CPIO embedded into the Pi 4 root-task image by `scripts/pi4-image-build.sh`; the staged U-Boot CPIO remains an audit/packaging artifact, not a runtime fallback. QEMU and host profiles keep compatibility paths for virtual-device testing.
-- The intended isolated-image contract is represented in compiler IR under `root_task.driver_images` and generated into root-task tables. The build produces and stages linked `pi4-driver-*` image artifacts with fixed-ring service engines. Root maps every bounded runtime ELF `PT_LOAD` page declared by `code-pages` plus stack/IPC/ring and declared device regions, then sends each linked Pi 4 runtime a bounded pointer-free `pi4-driver-abi` runtime-init descriptor containing primitive MMIO/DMA/shared page metadata, semantic resource ranges, bus-address policy, optional IRQ descriptors, USB/PCIe and CYW43/SDIO bus links, and framebuffer metadata. Physical Pi one-way service turns are bounded shared-ring turns; isolated runtimes consume the shared command ring and poll the endpoint for reply-cap-bearing calls, replying only when a real reply cap is present. Runtime init is topology transport only and cannot credit owner-state by itself. Runtime code windows are generated as `code-pages=128`, which covers the current 108-page linked ELF span. Runtime DMA/shared budgets are now bounded by the descriptor ABI and current use: USB gets 64 DMA pages, GENET gets 64 DMA pages for a 32-RX/32-TX ring shape, HDMI uses framebuffer plus shared pages without a DMA arena, CYW43 gets shared-control pages without direct SDHCI MMIO or DMA, and SDIO gets one HAL-declared SDHCI MMIO page plus shared pages. Seven linked Pi 4 runtime specs are acceptance-eligible in the generated manifest. The serial image handles bounded mini-UART init/RX/TX, USB owns a direct-root-port xHCI boot-keyboard state machine, GENET owns MDIO/MAC plus bounded RX/TX descriptor rings, HDMI renders into the mapped framebuffer, PCIe services bounded MMIO operations, SDIO services fixed-layout CMD52/CMD53/POLL_IRQ records from its isolated runtime, and CYW43 owns the pointer-free shared-control SDPCM command surface behind the CYW43/SDIO bus-link descriptor. Fresh Pi hardware proof still has to show useful Wi-Fi/DHCP or GENET/DHCP plus USB keyboard, HDMI, serial, SDIO owner-state, and PCIe/VL805 behavior before those engines are board-proven.
+- On the physical Pi 4 profile, driver bootstrap now requires isolated child VSpaces and fixed command/completion rings. Root loads isolated `pi4-driver-*` runtime images only from the raw driver-runtime CPIO embedded into the Pi 4 root-task image by `scripts/pi4-image-build.sh`; the staged U-Boot CPIO remains an audit/packaging artifact, not a runtime fallback. QEMU and host profiles keep compatibility paths for virtual-device testing.
+- The intended isolated-image contract is represented in compiler IR under `root_task.driver_images` and generated into root-task tables. The build produces and stages profile-selected `pi4-driver-*` image artifacts with fixed-ring service engines. Root maps every bounded runtime ELF `PT_LOAD` page declared by `code-pages` plus stack/IPC/ring and declared device regions, then sends each isolated Pi 4 runtime a bounded pointer-free `pi4-driver-abi` runtime-init descriptor containing primitive MMIO/DMA/shared page metadata, semantic resource ranges, bus-address policy, optional IRQ descriptors, USB/PCIe and CYW43/SDIO bus links, and framebuffer metadata. Physical Pi one-way service turns are bounded shared-ring turns; isolated runtimes consume the shared command ring and poll the endpoint for reply-cap-bearing calls, replying only when a real reply cap is present. Runtime init is topology transport only and cannot credit owner-state by itself. Runtime code windows are generated as `code-pages=128`, which covers the current 108-page runtime ELF span. Runtime DMA/shared budgets are now bounded by the descriptor ABI and current use: USB gets 64 DMA pages, GENET gets 64 DMA pages for a 32-RX/32-TX ring shape, HDMI uses framebuffer plus shared pages without a DMA arena, CYW43 gets shared-control pages without direct SDHCI MMIO or DMA, and SDIO gets one HAL-declared SDHCI MMIO page plus shared pages. Seven isolated Pi 4 runtime specs are acceptance-eligible in the generated manifest. The serial image handles bounded mini-UART init/RX/TX, USB owns a direct-root-port xHCI boot-keyboard state machine, GENET owns MDIO/MAC plus bounded RX/TX descriptor rings, HDMI renders into the mapped framebuffer, PCIe services bounded MMIO operations, SDIO services fixed-layout CMD52/CMD53/POLL_IRQ records from its isolated runtime, and CYW43 owns the pointer-free shared-control SDPCM command surface behind the CYW43/SDIO bus-link descriptor. Fresh Pi hardware proof still has to show useful Wi-Fi/DHCP or GENET/DHCP plus USB keyboard, HDMI, serial, SDIO owner-state, and PCIe/VL805 behavior before those engines are board-proven.
 - Isolated runtimes and root-side ring clients publish bounded `DRIVER_TASK_COUNTER` snapshots for service turns, staged bytes, cache work, busy/backpressure, same-request resumes, timeouts, aborts, and RX/TX volume. Valid counters are required for Milestone 26b performance claims, but they remain diagnostic: they do not credit owner-state proof or replace a fresh same-harness Pi benchmark.
 
 ## 2.1 SMP Execution Model (Task Isolation)
@@ -55,7 +55,7 @@ Non-goals:
 - The path layout and constraints are shared between the host NineDoor server and the in-VM console bridge; host-only providers may be absent in the seL4 build.
 
 ### Console surfaces
-- Serial console: platform-selected `cohesix>` prompt when `serial-console` is built. QEMU/dev profiles use PL011 where configured; Pi 4 uses the mini-UART emergency path until linked serial runtime proof moves steady serial service behind the ring-backed runtime.
+- Serial console: platform-selected `cohesix>` prompt when `serial-console` is built. QEMU/dev profiles use PL011 where configured; Pi 4 uses the mini-UART emergency path until isolated serial runtime proof moves steady serial service behind the ring-backed runtime.
 - TCP console: smoltcp-based listener when `net-console` is built; frames are length-prefixed (4-byte little-endian) and capped by Secure9P bounds (`msize <= 8192`).
 - Session guard: `AUTH <token>` handshake before any console verbs; failed auth is rate-limited.
 - Command grammar: shared with `cohsh-core`; acknowledgements (`OK` / `ERR`) precede side effects and streamed commands terminate with `END`.
@@ -72,7 +72,7 @@ Non-goals:
 ## 5. Boot and Bring-Up Flow
 1. seL4 elfloader enters the root-task entry point.
 2. Root task reconstructs canonical CSpace addressing using `seL4_CapInitThreadCNode` and `bootinfo.initThreadCNodeSizeBits`, validates the `bootinfo.empty` window, and logs copy/mint/retype tuples before consuming slots.
-3. UART boot diagnostics are emitted through the emergency path, then physical Pi 4 skips installing a steady-state root UART mapping and defers linked mini-UART serial driver-task runtime proof until after the first prompt. Root may map the HAL-owned mini-UART frame as a diagnostic shell fallback and keep serial RX/TX on that direct MMIO path until the isolated runtime attaches; that path remains acceptance-red and does not credit serial owner-state proof. When prompt-side linked-runtime init succeeds, the steady-state event pump receives only a ring-backed serial client.
+3. UART boot diagnostics are emitted through the emergency path, then physical Pi 4 skips installing a steady-state root UART mapping and defers isolated mini-UART serial driver-task runtime proof until after the first prompt. Root may map the HAL-owned mini-UART frame as a diagnostic shell fallback and keep serial RX/TX on that direct MMIO path until the isolated runtime attaches; that path remains acceptance-red and does not credit serial owner-state proof. When prompt-side isolated runtime init succeeds, the steady-state event pump receives only a ring-backed serial client.
 4. HAL setup, timer initialization, and IPC endpoints are established.
 5. Manifest-generated tables (tickets, Secure9P limits, policy/audit flags) are loaded from `apps/root-task/src/generated`.
 6. Milestone 26 hardware gates execute before ticket publication:
@@ -121,7 +121,7 @@ Mount and bind semantics:
 - Rootfs CPIO remains < 4 MiB (`scripts/ci/size_guard.sh`).
 - VM artifacts remain `no_std`; no POSIX or libc-style emulation layers.
 - All device authority goes through HAL; no ad-hoc MMIO, physical-address/DMA publication, IRQ binding, or unsafe device access outside HAL.
-- Physical hardware drivers are linked-runtime only; root-task may admit resources, publish descriptors, submit bounded service turns, observe counters, and revoke authority, but it must not regain steady device ownership.
+- Physical hardware drivers must use manifest-declared isolated driver runtimes; root-task may admit resources, publish descriptors, submit bounded service turns, observe counters, and revoke authority, but it must not regain steady device ownership.
 - GPU access is host-only; worker-gpu is file-driven and lease-bound.
 
 ## 8. Data Flows
@@ -224,7 +224,7 @@ flowchart LR
     end
     subgraph U["Userspace (CPIO rootfs)"]
       RT["root-task\n(event pump + console + HAL)"]
-      DRT["linked Pi 4 driver runtimes\n(serial, USB, HDMI, GENET, CYW43, SDIO, PCIe)"]
+      DRT["manifest-declared isolated Pi 4 driver runtimes\n(serial, USB, HDMI, GENET, CYW43, SDIO, PCIe)"]
       ND["NineDoor\n(Secure9P namespace; bridge in seL4 build)"]
       WH["worker-heart"]
       WG["worker-gpu"]
@@ -275,7 +275,7 @@ sequenceDiagram
   autonumber
   participant Root as root-task / HAL
   participant Ring as fixed command/completion ring
-  participant Runtime as linked Pi 4 driver runtime
+  participant Runtime as isolated Pi 4 driver runtime
   participant Device as HAL-declared resources
   participant Evidence as proof log / normalizer
 

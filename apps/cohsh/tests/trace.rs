@@ -113,7 +113,7 @@ fn record_trace(server: &NineDoor) -> Result<(TraceLog, Vec<String>)> {
     transcript.extend(list_lines);
 
     let telemetry_path = telemetry_path();
-    let tail_lines = transport.tail(&session, &telemetry_path)?;
+    let tail_lines = transport.tail(&session, &telemetry_path, None)?;
     transcript.extend(transport.drain_acknowledgements());
     transcript.extend(tail_lines);
 
@@ -147,7 +147,7 @@ fn replay_trace(trace: TraceLog) -> Result<Vec<String>> {
     transcript.extend(list_lines);
 
     let telemetry_path = telemetry_path();
-    let tail_lines = transport.tail(&session, &telemetry_path)?;
+    let tail_lines = transport.tail(&session, &telemetry_path, None)?;
     transcript.extend(transport.drain_acknowledgements());
     transcript.extend(tail_lines);
 

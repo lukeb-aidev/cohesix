@@ -22,7 +22,7 @@ pub const ROOT_CONSOLE_HELP_LINES: &[&str] = &[
 pub const COHSH_CONSOLE_HELP_LINES: &[&str] = &[
     "  help                         - Show this help message",
     "  attach <role> [ticket]       - Attach to a NineDoor session",
-    "  tail <path>                  - Stream a file via NineDoor",
+    "  tail <path> [lines]          - Stream a bounded file tail via NineDoor",
     "  log                          - Tail /log/queen.log",
     "  ping                         - Report attachment status for health checks",
     "  test [--mode <quick|full|smp>] [--json] [--timeout <s>] [--no-mutate] - Run self-tests",

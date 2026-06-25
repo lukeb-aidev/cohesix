@@ -102,11 +102,25 @@ impl GatewayClient {
 
     /// Issue a TAIL request via the gateway.
     pub fn tail(&self, path: &str, max_bytes: u32) -> Result<Vec<String>> {
+        self.tail_with_lines(path, max_bytes, None)
+    }
+
+    /// Issue a TAIL request via the gateway with an optional line limit.
+    pub fn tail_with_lines(
+        &self,
+        path: &str,
+        max_bytes: u32,
+        lines: Option<u16>,
+    ) -> Result<Vec<String>> {
         let path = urlencoding::encode(path);
-        let url = format!(
+        let mut url = format!(
             "{}/v1/fs/tail?path={}&max_bytes={}",
             self.base_url, path, max_bytes
         );
+        if let Some(lines) = lines {
+            url.push_str("&lines=");
+            url.push_str(&lines.to_string());
+        }
         let response = self.with_auth(self.agent.get(&url)).call();
         let parsed = handle_response("TAIL", response)?;
         Ok(parsed.lines)
