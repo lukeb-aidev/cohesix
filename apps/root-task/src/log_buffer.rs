@@ -12,19 +12,47 @@ use spin::Mutex;
 
 use crate::serial::DEFAULT_LINE_CAPACITY;
 
-const LOG_RING_CAPACITY: usize = 128;
+pub const LOG_RETENTION_LINES: usize = 2048;
 pub const LOG_SNAPSHOT_LINES: usize = 64;
+pub const LOG_EXPORT_BATCH_LINES: usize = LOG_SNAPSHOT_LINES;
 const USER_RING_CAPACITY: usize = 16;
 pub const LOG_USER_SNAPSHOT_LINES: usize = 16;
 
+#[derive(Clone)]
+struct LogEntry {
+    seq: u64,
+    line: HeaplessString<DEFAULT_LINE_CAPACITY>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LogCursor {
+    next_seq: u64,
+    end_seq: u64,
+    bytes: u64,
+}
+
+impl LogCursor {
+    pub fn is_exhausted(&self) -> bool {
+        self.next_seq >= self.end_seq
+    }
+
+    pub fn bytes(&self) -> u64 {
+        self.bytes
+    }
+}
+
 struct LogRing {
-    lines: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, LOG_RING_CAPACITY>,
+    lines: Deque<LogEntry, LOG_RETENTION_LINES>,
+    next_seq: u64,
+    evicted: u64,
 }
 
 impl LogRing {
     const fn new() -> Self {
         Self {
             lines: Deque::new(),
+            next_seq: 0,
+            evicted: 0,
         }
     }
 
@@ -36,8 +64,11 @@ impl LogRing {
         let _ = entry.push_str(line);
         if self.lines.is_full() {
             let _ = self.lines.pop_front();
+            self.evicted = self.evicted.saturating_add(1);
         }
-        let _ = self.lines.push_back(entry);
+        let seq = self.next_seq;
+        self.next_seq = self.next_seq.saturating_add(1);
+        let _ = self.lines.push_back(LogEntry { seq, line: entry });
     }
 
     fn append_bytes(&mut self, payload: &[u8]) {
@@ -67,7 +98,7 @@ impl LogRing {
                 break;
             }
             let mut entry: HeaplessString<LINE> = HeaplessString::new();
-            let _ = entry.push_str(line.as_str());
+            let _ = entry.push_str(line.line.as_str());
             let _ = output.push(entry);
         }
         let slice = output.as_mut_slice();
@@ -78,6 +109,73 @@ impl LogRing {
             head = head.saturating_add(1);
             tail = tail.saturating_sub(1);
         }
+    }
+
+    fn cursor(&self) -> LogCursor {
+        let next_seq = self
+            .lines
+            .iter()
+            .next()
+            .map_or(self.next_seq, |entry| entry.seq);
+        let bytes = self.lines.iter().map(|entry| entry.line.len() as u64).sum();
+        LogCursor {
+            next_seq,
+            end_seq: self.next_seq,
+            bytes,
+        }
+    }
+
+    fn read_cursor_into<const LINE: usize, const LIMIT: usize>(
+        &self,
+        cursor: &mut LogCursor,
+        output: &mut HeaplessVec<HeaplessString<LINE>, LIMIT>,
+    ) -> bool {
+        output.clear();
+        if cursor.is_exhausted() {
+            return true;
+        }
+
+        if let Some(first) = self.lines.iter().next() {
+            if cursor.next_seq < first.seq {
+                cursor.next_seq = first.seq;
+            }
+        } else {
+            cursor.next_seq = cursor.end_seq;
+            return true;
+        }
+
+        for line in self.lines.iter() {
+            if output.is_full() {
+                break;
+            }
+            if line.seq < cursor.next_seq {
+                continue;
+            }
+            if line.seq >= cursor.end_seq {
+                cursor.next_seq = cursor.end_seq;
+                break;
+            }
+            let mut entry: HeaplessString<LINE> = HeaplessString::new();
+            let _ = entry.push_str(line.line.as_str());
+            let _ = output.push(entry);
+            cursor.next_seq = line.seq.saturating_add(1);
+        }
+
+        if output.is_empty() && cursor.next_seq < cursor.end_seq {
+            cursor.next_seq = self.next_seq.min(cursor.end_seq);
+        }
+        cursor.is_exhausted()
+    }
+
+    fn evicted(&self) -> u64 {
+        self.evicted
+    }
+
+    #[cfg(test)]
+    fn clear_for_test(&mut self) {
+        self.lines.clear();
+        self.next_seq = 0;
+        self.evicted = 0;
     }
 }
 
@@ -173,6 +271,21 @@ pub fn snapshot_lines_into<const LINE: usize, const LIMIT: usize>(
     LOG_RING.lock().snapshot_into(output);
 }
 
+pub fn export_cursor() -> LogCursor {
+    LOG_RING.lock().cursor()
+}
+
+pub fn read_cursor_lines_into<const LINE: usize, const LIMIT: usize>(
+    cursor: &mut LogCursor,
+    output: &mut HeaplessVec<HeaplessString<LINE>, LIMIT>,
+) -> bool {
+    LOG_RING.lock().read_cursor_into(cursor, output)
+}
+
+pub fn evicted_lines() -> u64 {
+    LOG_RING.lock().evicted()
+}
+
 pub fn snapshot_user_lines<const LINE: usize, const LIMIT: usize>(
 ) -> HeaplessVec<HeaplessString<LINE>, LIMIT> {
     USER_RING.lock().snapshot::<LINE, LIMIT>()
@@ -182,4 +295,47 @@ pub fn snapshot_user_lines_into<const LINE: usize, const LIMIT: usize>(
     output: &mut HeaplessVec<HeaplessString<LINE>, LIMIT>,
 ) {
     USER_RING.lock().snapshot_into(output);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::fmt::Write;
+
+    static TEST_RING: Mutex<LogRing> = Mutex::new(LogRing::new());
+
+    #[test]
+    fn cursor_reads_retained_lines_in_order_across_batches() {
+        let mut ring_guard = TEST_RING.lock();
+        let ring = &mut *ring_guard;
+        ring.clear_for_test();
+        for index in 0..LOG_RETENTION_LINES + 2 {
+            let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+            write!(line, "line-{index:04}").unwrap();
+            ring.push_line(line.as_str());
+        }
+
+        assert_eq!(ring.evicted(), 2);
+        let mut cursor = ring.cursor();
+        let mut seen = 0usize;
+        loop {
+            let mut batch: HeaplessVec<
+                HeaplessString<DEFAULT_LINE_CAPACITY>,
+                { LOG_EXPORT_BATCH_LINES },
+            > = HeaplessVec::new();
+            let exhausted = ring.read_cursor_into(&mut cursor, &mut batch);
+            for line in batch.iter() {
+                let mut expected: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+                write!(expected, "line-{:04}", seen + 2).unwrap();
+                assert_eq!(line.as_str(), expected.as_str());
+                seen = seen.saturating_add(1);
+            }
+            if exhausted {
+                break;
+            }
+        }
+
+        assert_eq!(seen, LOG_RETENTION_LINES);
+        assert!(cursor.is_exhausted());
+    }
 }

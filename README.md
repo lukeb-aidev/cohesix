@@ -36,7 +36,7 @@ Cohesix is a research operating system for secure edge orchestration. It asks ho
 
 The system is intentionally narrow:
 - upstream seL4 on QEMU `aarch64/virt` and the Raspberry Pi 4 U-Boot profile family;
-- a static CPIO userspace containing the root task, worker roles, and profile-selected linked driver-runtime images;
+- a static CPIO userspace containing the root task, worker roles, and profile-selected manifest-declared isolated driver-runtime images;
 - Secure9P-style namespaces for `/queen`, `/shard/<label>/worker/<id>`, `/log`, `/proc`, and host-projected `/gpu` state;
 - console-backed VM access, with no separate in-VM 9P/TCP listener or ad-hoc RPC channel;
 - host-side CUDA, NVML, sidecars, model registries, and UI tooling.
@@ -60,7 +60,7 @@ flowchart TB
   ROOT --> SEL4["seL4\ncapabilities and scheduling"]
   ROOT --> NS["Secure9P namespace\n/queen, /shard, /log, /proc, /gpu"]
   NS --> ROLES["Queen and workers\ncontrol and telemetry"]
-  ROOT --> DRIVERS["Linked driver runtimes\nfixed ABI, bounded turns, counters"]
+  ROOT --> DRIVERS["Manifest-declared isolated driver runtimes\nfixed ABI, bounded turns, counters"]
   DRIVERS --> BOARD["Profile-gated hardware\nPi 4 MMIO, DMA, IRQ, framebuffer"]
   ROOT --> EVIDENCE["Evidence surfaces\nlogs, proc views, driver counters"]
   DRIVERS --> EVIDENCE
@@ -75,7 +75,7 @@ For the full architecture, diagrams, namespace contracts, and driver-runtime ABI
 - **root-task** — seL4 bootstrap, authority root, HAL admission, recovery, and console handling.
 - **NineDoor / Secure9P** — synthetic namespace for role-scoped control, telemetry, logs, and host-projected GPU state.
 - **Queen and workers** — file-driven orchestration roles, including heartbeat and GPU lease telemetry.
-- **linked driver runtimes** — profile-selected no-std child images for Pi 4 hardware service turns and driver counters.
+- **manifest-declared isolated driver runtimes** — profile-selected no-std child images for Pi 4 hardware service turns and driver counters.
 - **host tools** — `cohsh`, `coh`, SwarmUI, `gpu-bridge-host`, and sidecar bridges; heavy ecosystems stay outside the VM TCB.
 
 SwarmUI is the host-side desktop UI for Cohesix. It renders Live Hive telemetry and replays while reusing the same console-backed path as `cohsh`.

@@ -1558,16 +1558,22 @@ struct PendingCursor {
 #[cfg(feature = "kernel")]
 #[derive(Debug)]
 struct PendingStream {
-    lines: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, { log_buffer::LOG_SNAPSHOT_LINES }>,
+    lines:
+        HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, { log_buffer::LOG_EXPORT_BATCH_LINES }>,
     next_line: usize,
     bandwidth_bytes: u64,
     cursor: Option<PendingCursor>,
+    log_cursor: Option<log_buffer::LogCursor>,
 }
 
 #[cfg(feature = "kernel")]
 const NET_PENDING_STREAM_FLUSH_LINES_PER_TURN: usize = 16;
 #[cfg(feature = "kernel")]
 const NET_PENDING_STREAM_FLUSH_BYTES_PER_TURN: usize = 4096;
+#[cfg(feature = "kernel")]
+const LOCAL_PENDING_STREAM_FLUSH_LINES_PER_TURN: usize = log_buffer::LOG_EXPORT_BATCH_LINES;
+#[cfg(feature = "kernel")]
+const LOCAL_PENDING_STREAM_FLUSH_BYTES_PER_TURN: usize = 16 * 1024;
 
 #[cfg(feature = "kernel")]
 impl PendingStream {
@@ -1577,6 +1583,7 @@ impl PendingStream {
             next_line: 0,
             bandwidth_bytes: 0,
             cursor: None,
+            log_cursor: None,
         }
     }
 
@@ -1585,6 +1592,7 @@ impl PendingStream {
         self.next_line = 0;
         self.bandwidth_bytes = 0;
         self.cursor = None;
+        self.log_cursor = None;
     }
 }
 
@@ -3346,6 +3354,33 @@ where
         for line in lines {
             self.emit_console_line(line.as_str());
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn prepare_log_pending_stream(&mut self) -> u64 {
+        let mut cursor = log_buffer::export_cursor();
+        let stream_bytes = cursor.bytes();
+        let pending = self.pending_stream.get_or_insert_with(PendingStream::new);
+        pending.reset();
+        let exhausted = log_buffer::read_cursor_lines_into(&mut cursor, &mut pending.lines);
+        pending.log_cursor = if exhausted { None } else { Some(cursor) };
+        pending.bandwidth_bytes = stream_bytes;
+        stream_bytes
+    }
+
+    #[cfg(feature = "kernel")]
+    fn refill_log_pending_stream(pending: &mut PendingStream) -> bool {
+        if pending.next_line < pending.lines.len() {
+            return true;
+        }
+        let Some(mut cursor) = pending.log_cursor.take() else {
+            return false;
+        };
+        pending.lines.clear();
+        pending.next_line = 0;
+        let exhausted = log_buffer::read_cursor_lines_into(&mut cursor, &mut pending.lines);
+        pending.log_cursor = if exhausted { None } else { Some(cursor) };
+        !pending.lines.is_empty()
     }
 
     #[cfg(feature = "kernel")]
@@ -12276,14 +12311,7 @@ where
                         {
                             let cursor_offset = self.ticket_cursor_offset(path_str).unwrap_or(0);
                             if path_str == "/log/queen.log" {
-                                let bytes = {
-                                    let pending =
-                                        self.pending_stream.get_or_insert_with(PendingStream::new);
-                                    pending.reset();
-                                    log_buffer::snapshot_lines_into(&mut pending.lines);
-                                    pending.lines.iter().map(|line| line.len() as u64).sum()
-                                };
-                                stream_bytes = bytes;
+                                stream_bytes = self.prepare_log_pending_stream();
                                 path_supported = true;
                             } else if path_str == "/proc/ingest/watch" {
                                 if let Some(bridge) = self.ninedoor.as_mut() {
@@ -12443,20 +12471,33 @@ where
                         #[cfg(feature = "kernel")]
                         {
                             if let Some(bridge_ref) = self.ninedoor.as_mut() {
+                                let log_path = path_str == "/log/queen.log";
                                 let (data_bytes, cat_err) = {
                                     let pending =
                                         self.pending_stream.get_or_insert_with(PendingStream::new);
                                     pending.reset();
-                                    match bridge_ref.cat_into(path_str, &mut pending.lines) {
-                                        Ok(()) => {
-                                            let data_bytes = pending
-                                                .lines
-                                                .iter()
-                                                .map(|line| line.len() as u64)
-                                                .sum();
-                                            (data_bytes, None)
+                                    if log_path {
+                                        let mut cursor = log_buffer::export_cursor();
+                                        let data_bytes = cursor.bytes();
+                                        let exhausted = log_buffer::read_cursor_lines_into(
+                                            &mut cursor,
+                                            &mut pending.lines,
+                                        );
+                                        pending.log_cursor =
+                                            if exhausted { None } else { Some(cursor) };
+                                        (data_bytes, None)
+                                    } else {
+                                        match bridge_ref.cat_into(path_str, &mut pending.lines) {
+                                            Ok(()) => {
+                                                let data_bytes = pending
+                                                    .lines
+                                                    .iter()
+                                                    .map(|line| line.len() as u64)
+                                                    .sum();
+                                                (data_bytes, None)
+                                            }
+                                            Err(err) => (0, Some(err)),
                                         }
-                                        Err(err) => (0, Some(err)),
                                     }
                                 };
                                 if let Some(err) = cat_err {
@@ -12466,7 +12507,6 @@ where
                                     self.audit_ninedoor_err(sid, "CAT", path_str, err_msg.as_str());
                                     self.emit_ninedoor_refusal(verb_label, Some(path_str), &err);
                                 } else {
-                                    let log_path = path_str == "/log/queen.log";
                                     let stream_bytes = if log_path { 0 } else { data_bytes };
                                     if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
                                         self.record_ticket_denial(
@@ -12843,20 +12883,7 @@ where
                         cmd_status = "err";
                     } else {
                         #[cfg(feature = "kernel")]
-                        let (stream_bytes, pending_stream) = {
-                            let lines = log_buffer::snapshot_lines::<
-                                DEFAULT_LINE_CAPACITY,
-                                { log_buffer::LOG_SNAPSHOT_LINES },
-                            >();
-                            let stream_bytes = lines.iter().map(|line| line.len() as u64).sum();
-                            let pending_stream = Some(PendingStream {
-                                lines,
-                                next_line: 0,
-                                bandwidth_bytes: stream_bytes,
-                                cursor: None,
-                            });
-                            (stream_bytes, pending_stream)
-                        };
+                        let stream_bytes = self.prepare_log_pending_stream();
                         #[cfg(not(feature = "kernel"))]
                         let stream_bytes = 0u64;
                         if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
@@ -12874,7 +12901,6 @@ where
                             self.audit_tail_start(sid, path_str);
                             #[cfg(feature = "kernel")]
                             {
-                                self.pending_stream = pending_stream;
                                 forwarded = true;
                             }
                         }
@@ -13220,7 +13246,7 @@ where
         if self.stream_end_pending {
             #[cfg(feature = "kernel")]
             if let Some(pending) = self.pending_stream.as_ref() {
-                if pending.next_line < pending.lines.len() {
+                if pending.next_line < pending.lines.len() || pending.log_cursor.is_some() {
                     return;
                 }
             }
@@ -13245,12 +13271,12 @@ where
         let line_limit = if network_origin {
             NET_PENDING_STREAM_FLUSH_LINES_PER_TURN
         } else {
-            usize::MAX
+            LOCAL_PENDING_STREAM_FLUSH_LINES_PER_TURN
         };
         let byte_limit = if network_origin {
             NET_PENDING_STREAM_FLUSH_BYTES_PER_TURN
         } else {
-            usize::MAX
+            LOCAL_PENDING_STREAM_FLUSH_BYTES_PER_TURN
         };
         let Some(mut pending) = self.pending_stream.take() else {
             self.emit_stream_end_if_pending();
@@ -13258,21 +13284,26 @@ where
         };
         let mut emitted_lines = 0usize;
         let mut emitted_bytes = 0usize;
-        while pending.next_line < pending.lines.len() {
-            let line = pending.lines[pending.next_line].as_str();
-            if emitted_lines >= line_limit
-                || (emitted_lines > 0 && emitted_bytes.saturating_add(line.len()) > byte_limit)
-            {
-                self.pending_stream = Some(pending);
-                return;
+        loop {
+            while pending.next_line < pending.lines.len() {
+                let line = pending.lines[pending.next_line].as_str();
+                if emitted_lines >= line_limit
+                    || (emitted_lines > 0 && emitted_bytes.saturating_add(line.len()) > byte_limit)
+                {
+                    self.pending_stream = Some(pending);
+                    return;
+                }
+                if !self.try_emit_console_line(line) {
+                    self.pending_stream = Some(pending);
+                    return;
+                }
+                pending.next_line = pending.next_line.saturating_add(1);
+                emitted_lines = emitted_lines.saturating_add(1);
+                emitted_bytes = emitted_bytes.saturating_add(line.len());
             }
-            if !self.try_emit_console_line(line) {
-                self.pending_stream = Some(pending);
-                return;
+            if !Self::refill_log_pending_stream(&mut pending) {
+                break;
             }
-            pending.next_line = pending.next_line.saturating_add(1);
-            emitted_lines = emitted_lines.saturating_add(1);
-            emitted_bytes = emitted_bytes.saturating_add(line.len());
         }
         self.consume_ticket_bandwidth(pending.bandwidth_bytes);
         if let Some(cursor) = pending.cursor {
@@ -18613,10 +18644,24 @@ mod tests {
     #[test]
     fn cat_queen_log_streams_full_payload_after_ack() {
         let _root_guard = ReachableRootGuard::new(1);
-        let marker = "[test] cat-queen-log-streams-full-payload marker=serial-must-not-only-see-the-ack-summary";
-        log_buffer::append_log_line(marker);
-        let driver = LoopbackSerial::<8192>::new();
-        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let first_marker = "[test] cat-queen-log-streams-full-payload marker=batch-first index=00";
+        let last_marker = "[test] cat-queen-log-streams-full-payload marker=batch-last index=69";
+        for index in 0..70 {
+            let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+            let label = if index == 69 {
+                "batch-last"
+            } else {
+                "batch-first"
+            };
+            let _ = write!(
+                line,
+                "[test] cat-queen-log-streams-full-payload marker={} index={index:02}",
+                label
+            );
+            log_buffer::append_log_line(line.as_str());
+        }
+        let driver = LoopbackSerial::<16384>::new();
+        let serial = SerialPort::<_, 16384, 16384, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let store: TicketTable<4> = TicketTable::new();
@@ -18629,7 +18674,9 @@ mod tests {
             let driver = pump.serial_mut().driver_mut();
             driver.push_rx(b"cat /log/queen.log\n");
         }
-        pump.poll();
+        for _ in 0..4 {
+            pump.poll();
+        }
         let transcript = {
             let driver = pump.serial_mut().driver_mut();
             driver.drain_tx()
@@ -18643,10 +18690,20 @@ mod tests {
         assert!(
             rendered
                 .lines()
-                .any(|line| line.trim_end_matches('\r') == marker),
+                .any(|line| line.trim_end_matches('\r') == first_marker),
             "{rendered}"
         );
-        assert!(rendered.contains("END\r\n"), "{rendered}");
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.trim_end_matches('\r') == last_marker),
+            "{rendered}"
+        );
+        let end = rendered.rfind("END\r\n").expect("END must be emitted");
+        let last = rendered
+            .rfind(last_marker)
+            .expect("last marker must be emitted");
+        assert!(last < end, "{rendered}");
     }
 
     #[cfg(feature = "kernel")]

@@ -2828,6 +2828,33 @@ impl<T: Transport, W: Write> Shell<T, W> {
         }
     }
 
+    fn dump_queen_log(&mut self, local_path: &Path, force: bool) -> Result<()> {
+        validate_log_dump_path(local_path)?;
+        let session = self
+            .session
+            .as_ref()
+            .context("attach to a session before running log dump")?;
+        let result = self.transport.read(session, QUEEN_LOG_PATH);
+        let drain_result = self.drain_ack_lines();
+        match result {
+            Ok(lines) => {
+                drain_result?;
+                let bytes = write_log_dump_file(local_path, &lines, force)?;
+                self.write_line(&format!(
+                    "log dump: wrote lines={} bytes={} path={}",
+                    lines.len(),
+                    bytes,
+                    local_path.display()
+                ))?;
+                Ok(())
+            }
+            Err(err) => {
+                let _ = drain_result;
+                Err(err)
+            }
+        }
+    }
+
     fn list_path(&mut self, path: &str) -> Result<()> {
         ensure_valid_path(path)?;
         let session = self
@@ -3375,6 +3402,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                     "  tcp-diag [port]              - Debug TCP connectivity without protocol traffic",
                 )?;
                 self.write_line(console_lines[6])?;
+                self.write_line(
+                    "  log dump <file.txt> [--force] - Dump /log/queen.log to a local text file",
+                )?;
                 self.write_line(console_lines[7])?;
                 self.write_line(console_lines[8])?;
                 self.write_line(console_lines[9])?;
@@ -3404,10 +3434,18 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 Ok(CommandStatus::Continue)
             }
             "log" => {
-                if parts.next().is_some() {
-                    return Err(anyhow!("log does not take any arguments"));
+                let args: Vec<&str> = parts.collect();
+                if args.is_empty() {
+                    self.tail_path(QUEEN_LOG_PATH)?;
+                    return Ok(CommandStatus::Continue);
                 }
-                self.tail_path(QUEEN_LOG_PATH)?;
+                if args[0] != "dump" {
+                    return Err(anyhow!(
+                        "log takes no arguments unless using: log dump <file.txt> [--force]"
+                    ));
+                }
+                let (path, force) = parse_log_dump_args(&args[1..])?;
+                self.dump_queen_log(&path, force)?;
                 Ok(CommandStatus::Continue)
             }
             "ping" => {
@@ -3929,6 +3967,108 @@ pub struct AutoAttach {
 fn ensure_valid_path(path: &str) -> Result<()> {
     parse_path(path)?;
     Ok(())
+}
+
+fn validate_log_dump_path(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty() {
+        bail!("log dump requires a local .txt file path");
+    }
+    if path.to_string_lossy().contains('\0') {
+        bail!("log dump path contains an unsupported NUL byte");
+    }
+    if path.extension().and_then(|value| value.to_str()) != Some("txt") {
+        bail!("log dump destination must use a .txt extension");
+    }
+    if path.is_dir() {
+        bail!("log dump destination must be a file, not a directory");
+    }
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        if !parent.exists() {
+            bail!(
+                "log dump parent directory does not exist: {}",
+                parent.display()
+            );
+        }
+        if !parent.is_dir() {
+            bail!(
+                "log dump parent path is not a directory: {}",
+                parent.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn write_log_dump_file(path: &Path, lines: &[String], force: bool) -> Result<usize> {
+    let mut payload = String::new();
+    for line in lines {
+        payload.push_str(line);
+        payload.push('\n');
+    }
+    if !force {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .with_context(|| format!("create log dump file {}", path.display()))?;
+        file.write_all(payload.as_bytes())
+            .with_context(|| format!("write log dump file {}", path.display()))?;
+        return Ok(payload.len());
+    }
+
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .context("log dump destination must include a file name")?
+        .to_string_lossy();
+    let temp_path = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .with_context(|| format!("create temporary log dump file {}", temp_path.display()))?;
+    if let Err(err) = file.write_all(payload.as_bytes()) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err).with_context(|| format!("write log dump file {}", temp_path.display()));
+    }
+    drop(file);
+    if let Err(err) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err).with_context(|| format!("replace log dump file {}", path.display()));
+    }
+    Ok(payload.len())
+}
+
+fn parse_log_dump_args(args: &[&str]) -> Result<(PathBuf, bool)> {
+    let mut force = false;
+    let mut path: Option<PathBuf> = None;
+    for arg in args {
+        match *arg {
+            "--force" => {
+                if force {
+                    bail!("log dump received --force more than once");
+                }
+                force = true;
+            }
+            value if value.starts_with("--") => {
+                bail!("unknown log dump option: {value}");
+            }
+            value => {
+                if path.is_some() {
+                    bail!("log dump takes exactly one destination path");
+                }
+                path = Some(PathBuf::from(value));
+            }
+        }
+    }
+    let path = path.context("log dump requires a destination .txt file")?;
+    Ok((path, force))
 }
 
 pub(crate) fn ensure_json_string<'a>(value: &'a str, label: &str) -> Result<&'a str> {
@@ -4624,6 +4764,46 @@ mod tests {
         let rendered = String::from_utf8(output).unwrap();
         assert!(rendered.contains("Cohesix boot: root-task online"));
         assert!(rendered.contains("tick 1"));
+    }
+
+    #[test]
+    fn log_dump_writes_queen_log_payload_file() {
+        let transport = NineDoorTransport::new(NineDoor::new());
+        let buffer = Vec::new();
+        let mut shell = Shell::new(transport, Cursor::new(buffer));
+        shell.attach(Role::Queen, None).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let dump_path = dir.path().join("queen-log.txt");
+
+        shell
+            .execute(&format!("log dump {}", dump_path.display()))
+            .unwrap();
+
+        let payload = std::fs::read_to_string(&dump_path).unwrap();
+        assert!(payload.contains("Cohesix boot: root-task online"));
+        assert!(!payload.contains("OK CAT"));
+        assert!(!payload.contains("END"));
+        let (_transport, cursor) = shell.into_parts();
+        let rendered = String::from_utf8(cursor.into_inner()).unwrap();
+        assert!(rendered.contains("log dump: wrote lines="));
+    }
+
+    #[test]
+    fn log_dump_refuses_existing_file_without_force() {
+        let transport = NineDoorTransport::new(NineDoor::new());
+        let buffer = Vec::new();
+        let mut shell = Shell::new(transport, Cursor::new(buffer));
+        shell.attach(Role::Queen, None).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let dump_path = dir.path().join("queen-log.txt");
+        std::fs::write(&dump_path, "existing\n").unwrap();
+
+        let err = shell
+            .execute(&format!("log dump {}", dump_path.display()))
+            .expect_err("existing file should be refused");
+
+        assert!(err.to_string().contains("create log dump file"));
+        assert_eq!(std::fs::read_to_string(&dump_path).unwrap(), "existing\n");
     }
 
     #[test]

@@ -201,6 +201,19 @@ impl SwarmUiTranscript {
     }
 }
 
+/// Text payload returned by the queen log dump projection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiLogDump {
+    /// Browser download file name.
+    pub filename: String,
+    /// Full text payload to write to disk.
+    pub text: String,
+    /// Number of payload lines included.
+    pub lines: usize,
+    /// Number of UTF-8 bytes in `text`.
+    pub bytes: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SessionKey {
     role: Role,
@@ -566,6 +579,18 @@ where
 
     fn console_cat(&mut self, path: &str) -> SwarmUiTranscript {
         self.console_read_path(path, ConsoleVerb::Cat.ack_label())
+    }
+
+    /// Dump `/log/queen.log` through the active console session.
+    pub fn dump_queen_log(&mut self) -> Result<SwarmUiLogDump, SwarmUiError> {
+        if self.config.offline {
+            return Err(SwarmUiError::Offline);
+        }
+        let (role, ticket) = self.current_console_session()?;
+        let session = self.session_for(role, ticket.as_deref())?;
+        ensure_role_allowed(session.role, session.claims.as_ref(), QUEEN_LOG_PATH)?;
+        let lines = read_lines(&mut session.client, QUEEN_LOG_PATH)?;
+        Ok(queen_log_dump_from_lines(lines))
     }
 
     fn console_ls(&mut self, path: &str) -> SwarmUiTranscript {
@@ -1924,6 +1949,17 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 SwarmUiTranscript::err(lines)
             }
         }
+    }
+
+    /// Dump `/log/queen.log` through the active console transport session.
+    pub fn dump_queen_log(&mut self) -> Result<SwarmUiLogDump, SwarmUiError> {
+        if self.config.offline {
+            return Err(SwarmUiError::Offline);
+        }
+        let session = self.current_console_session()?;
+        ensure_role_allowed(session.role, session.claims.as_ref(), QUEEN_LOG_PATH)?;
+        let lines = read_lines_console(&mut self.transport, &session.session, QUEEN_LOG_PATH)?;
+        Ok(queen_log_dump_from_lines(lines))
     }
 
     fn console_ls(&mut self, path: &str) -> SwarmUiTranscript {
@@ -3400,6 +3436,20 @@ fn trim_payload_newline(mut payload: String) -> String {
         payload.pop();
     }
     payload
+}
+
+fn queen_log_dump_from_lines(lines: Vec<String>) -> SwarmUiLogDump {
+    let mut text = String::new();
+    for line in &lines {
+        text.push_str(line);
+        text.push('\n');
+    }
+    SwarmUiLogDump {
+        filename: "queen.log.txt".to_owned(),
+        bytes: text.len(),
+        lines: lines.len(),
+        text,
+    }
 }
 
 fn read_lines<T: cohsh_core::Secure9pTransport>(

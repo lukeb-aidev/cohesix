@@ -1014,6 +1014,236 @@ struct Cyw43HostEapolProgress {
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43HostEapolTraceKey {
+    valid: bool,
+    flags: u16,
+    detail: u16,
+    probe_len: u16,
+    source_result: u32,
+    prefix_signature: u32,
+    prefix_digest: u32,
+    rframe_len: u16,
+    firstread_reads: u16,
+    block_reads: u16,
+    rframe_reads: u16,
+    request_len: u16,
+    block_size: u16,
+    block_count: u16,
+    retransmit_sample: u16,
+    queue_depth: u16,
+    queue_high_water: u16,
+    cmd53_arg: u32,
+    transfer_result: u32,
+    payload_before_digest: u32,
+    payload_after_digest: u32,
+    pre_source_result: u32,
+    post_source_result: u32,
+    source_flags: u16,
+    first_nonzero_offset: u16,
+    first_nonzero_byte: u16,
+    fifo_window_flags: u16,
+    pre_intstatus: u32,
+    post_intstatus: u32,
+    pre_sdhci_status: u32,
+    post_sdhci_status: u32,
+    fifo_window_requested: u32,
+    fifo_window_programmed: u32,
+    fifo_window_readback: u32,
+    source_empty_polls: u32,
+}
+
+#[cfg(feature = "kernel")]
+impl From<Cyw43RxIdleTrace> for Cyw43HostEapolTraceKey {
+    fn from(trace: Cyw43RxIdleTrace) -> Self {
+        Self {
+            valid: trace.valid,
+            flags: trace.flags,
+            detail: trace.detail,
+            probe_len: trace.probe_len,
+            source_result: trace.source_result,
+            prefix_signature: trace.prefix_signature,
+            prefix_digest: trace.prefix_digest,
+            rframe_len: trace.rframe_len,
+            firstread_reads: trace.firstread_reads,
+            block_reads: trace.block_reads,
+            rframe_reads: trace.rframe_reads,
+            request_len: trace.request_len,
+            block_size: trace.block_size,
+            block_count: trace.block_count,
+            retransmit_sample: trace.retransmit_sample,
+            queue_depth: trace.queue_depth,
+            queue_high_water: trace.queue_high_water,
+            cmd53_arg: trace.cmd53_arg,
+            transfer_result: trace.transfer_result,
+            payload_before_digest: trace.payload_before_digest,
+            payload_after_digest: trace.payload_after_digest,
+            pre_source_result: trace.pre_source_result,
+            post_source_result: trace.post_source_result,
+            source_flags: trace.source_flags,
+            first_nonzero_offset: trace.first_nonzero_offset,
+            first_nonzero_byte: trace.first_nonzero_byte,
+            fifo_window_flags: trace.fifo_window_flags,
+            pre_intstatus: trace.pre_intstatus,
+            post_intstatus: trace.post_intstatus,
+            pre_sdhci_status: trace.pre_sdhci_status,
+            post_sdhci_status: trace.post_sdhci_status,
+            fifo_window_requested: trace.fifo_window_requested,
+            fifo_window_programmed: trace.fifo_window_programmed,
+            fifo_window_readback: trace.fifo_window_readback,
+            source_empty_polls: trace.source_empty_polls,
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43HostEapolStatusKey {
+    status: &'static str,
+    reason: &'static str,
+    next_action: &'static str,
+    starts: u32,
+    tx_retries: u32,
+    data_rx: u32,
+    eapol_rx: u32,
+    non_eapol_rx: u32,
+    event_rx: u32,
+    control_rx: u32,
+    associated: bool,
+    link_up: bool,
+    assoc_event: &'static str,
+    assoc_probe: &'static str,
+    assoc_probe_result: u32,
+    assoc_join_rescue: bool,
+    assoc_set_ssid_rescue: bool,
+    firstread_class: &'static str,
+    rx_idle_detail: u16,
+    rx_idle_result: u32,
+    control_rx_idle_detail: u16,
+    control_rx_idle_result: u32,
+    rx_source: Option<Cyw43RxSourceResult>,
+    control_rx_source: Option<Cyw43RxSourceResult>,
+    rx_trace: Cyw43HostEapolTraceKey,
+    control_rx_trace: Cyw43HostEapolTraceKey,
+    eapol_error: Option<&'static str>,
+    last_assoc_event_type: u8,
+    last_assoc_event_status: u32,
+    last_assoc_event_reason: u32,
+    last_assoc_event_auth: u32,
+    last_flags: u16,
+    last_len: u16,
+    last_ethertype: u16,
+    last_ethertype_valid: bool,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cyw43HostEapolStatusThrottle {
+    last_key: Option<Cyw43HostEapolStatusKey>,
+    suppressed: u32,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43HostEapolStatusLogDecision {
+    emit_full: bool,
+    suppressed_before: u32,
+}
+
+#[cfg(feature = "kernel")]
+const CYW43_HOST_EAPOL_STATUS_SUPPRESS_MILESTONE: u32 = 64;
+
+#[cfg(feature = "kernel")]
+static CYW43_HOST_EAPOL_STATUS_THROTTLE: Mutex<Cyw43HostEapolStatusThrottle> =
+    Mutex::new(Cyw43HostEapolStatusThrottle {
+        last_key: None,
+        suppressed: 0,
+    });
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_status_suppressible(status: &'static str) -> bool {
+    status == "pending"
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_status_key(
+    status: &'static str,
+    reason: &'static str,
+    next_action: &'static str,
+    starts: u32,
+    tx_retries: u32,
+    progress: &Cyw43HostEapolProgress,
+) -> Cyw43HostEapolStatusKey {
+    Cyw43HostEapolStatusKey {
+        status,
+        reason,
+        next_action,
+        starts,
+        tx_retries,
+        data_rx: progress.data_rx,
+        eapol_rx: progress.eapol_rx,
+        non_eapol_rx: progress.non_eapol_rx,
+        event_rx: progress.event_rx,
+        control_rx: progress.control_rx,
+        associated: progress.associated,
+        link_up: progress.link_up,
+        assoc_event: progress.association_event.unwrap_or("none"),
+        assoc_probe: progress.assoc_probe_status.unwrap_or("none"),
+        assoc_probe_result: progress.assoc_probe_result,
+        assoc_join_rescue: progress.assoc_join_rescue_attempted,
+        assoc_set_ssid_rescue: progress.assoc_set_ssid_rescue_attempted,
+        firstread_class: cyw43_host_eapol_firstread_class(progress),
+        rx_idle_detail: progress.last_rx_idle_detail,
+        rx_idle_result: progress.last_rx_idle_result,
+        control_rx_idle_detail: progress.last_control_rx_idle_detail,
+        control_rx_idle_result: progress.last_control_rx_idle_result,
+        rx_source: progress.last_rx_source,
+        control_rx_source: progress.last_control_rx_source,
+        rx_trace: progress.last_rx_trace.into(),
+        control_rx_trace: progress.last_control_rx_trace.into(),
+        eapol_error: progress.eapol_error,
+        last_assoc_event_type: progress.last_assoc_event_type,
+        last_assoc_event_status: progress.last_assoc_event_status,
+        last_assoc_event_reason: progress.last_assoc_event_reason,
+        last_assoc_event_auth: progress.last_assoc_event_auth,
+        last_flags: progress.last_flags,
+        last_len: progress.last_len,
+        last_ethertype: progress.last_ethertype,
+        last_ethertype_valid: progress.last_ethertype_valid,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_status_log_decision(
+    throttle: &mut Cyw43HostEapolStatusThrottle,
+    key: Cyw43HostEapolStatusKey,
+) -> Cyw43HostEapolStatusLogDecision {
+    if cyw43_host_eapol_status_suppressible(key.status) && throttle.last_key == Some(key) {
+        let next_suppressed = throttle.suppressed.saturating_add(1);
+        if next_suppressed < CYW43_HOST_EAPOL_STATUS_SUPPRESS_MILESTONE {
+            throttle.suppressed = next_suppressed;
+            return Cyw43HostEapolStatusLogDecision {
+                emit_full: false,
+                suppressed_before: 0,
+            };
+        }
+    }
+
+    let suppressed_before = throttle.suppressed;
+    throttle.last_key = Some(key);
+    throttle.suppressed = 0;
+    Cyw43HostEapolStatusLogDecision {
+        emit_full: true,
+        suppressed_before,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_host_eapol_status_throttle() {
+    *CYW43_HOST_EAPOL_STATUS_THROTTLE.lock() = Cyw43HostEapolStatusThrottle::default();
+}
+
+#[cfg(feature = "kernel")]
 impl Cyw43HostEapolProgress {
     fn record_data_frame(&mut self, flags: u16, len: usize, ethertype: Option<u16>) {
         self.data_rx = self.data_rx.saturating_add(1);
@@ -6281,6 +6511,17 @@ fn emit_cyw43_host_eapol_status(
         "none"
     };
     let next_action = cyw43_host_eapol_next_action(status, progress);
+    let starts = CYW43_HOST_EAPOL_START.load(Ordering::Acquire);
+    let tx_retries = CYW43_HOST_EAPOL_TX_RETRIES.load(Ordering::Acquire);
+    let status_key =
+        cyw43_host_eapol_status_key(status, reason, next_action, starts, tx_retries, progress);
+    let log_decision = {
+        let mut throttle = CYW43_HOST_EAPOL_STATUS_THROTTLE.lock();
+        cyw43_host_eapol_status_log_decision(&mut throttle, status_key)
+    };
+    if !log_decision.emit_full {
+        return;
+    }
     let assoc_event = progress.association_event.unwrap_or("none");
     let rx_source_mode = cyw43_rx_source_mode(progress.last_rx_source);
     let control_rx_source_mode = cyw43_rx_source_mode(progress.last_control_rx_source);
@@ -6293,13 +6534,14 @@ fn emit_cyw43_host_eapol_status(
     let mut line = heapless::String::<4096>::new();
     let _ = write!(
         line,
-        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} assoc_probe={} assoc_probe_result=0x{:08x} assoc_join_rescue={} assoc_set_ssid_rescue={} firstread_class={} rx_probe_poll={} rx_probe_flags=0x{:04x} control_rx_probe_poll={} control_rx_probe_flags=0x{:04x} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} rxsrc_mode={} rxsrc_probe_len={} rxsrc_ien=0x{:02x} rxsrc_frame_ind={} rxsrc_host_int={} rxsrc_card_int={} rxsrc_f2_ready={} control_rxsrc_mode={} control_rxsrc_probe_len={} control_rxsrc_ien=0x{:02x} control_rxsrc_frame_ind={} control_rxsrc_host_int={} control_rxsrc_card_int={} control_rxsrc_f2_ready={} rxtrace_valid={} rxtrace_flags=0x{:04x} rxtrace_detail=0x{:04x} rxtrace_probe_len={} rxtrace_source=0x{:08x} rxtrace_prefix=0x{:08x} rxtrace_digest=0x{:08x} rxtrace_rframe=0x{:04x} rxtrace_firstread_reads={} rxtrace_block_reads={} rxtrace_rframe_reads={} rxtrace_request_len={} rxtrace_block_size={} rxtrace_block_count={} rxtrace_retx_sample=0x{:04x} rxtrace_retx_action={} rxtrace_queue_depth={} rxtrace_queue_high_water={} rxtrace_cmd53_arg=0x{:08x} rxtrace_cmd53_fn={} rxtrace_cmd53_addr=0x{:05x} rxtrace_cmd53_write={} rxtrace_cmd53_mode={} rxtrace_cmd53_inc={} rxtrace_cmd53_count={} rxtrace_transfer_result=0x{:08x} rxtrace_payload_before=0x{:08x} rxtrace_payload_after=0x{:08x} control_rxtrace_valid={} control_rxtrace_flags=0x{:04x} control_rxtrace_detail=0x{:04x} control_rxtrace_probe_len={} control_rxtrace_source=0x{:08x} control_rxtrace_prefix=0x{:08x} control_rxtrace_digest=0x{:08x} control_rxtrace_rframe=0x{:04x} control_rxtrace_firstread_reads={} control_rxtrace_block_reads={} control_rxtrace_rframe_reads={} control_rxtrace_request_len={} control_rxtrace_block_size={} control_rxtrace_block_count={} control_rxtrace_retx_sample=0x{:04x} control_rxtrace_retx_action={} control_rxtrace_queue_depth={} control_rxtrace_queue_high_water={} control_rxtrace_cmd53_arg=0x{:08x} control_rxtrace_cmd53_fn={} control_rxtrace_cmd53_addr=0x{:05x} control_rxtrace_cmd53_write={} control_rxtrace_cmd53_mode={} control_rxtrace_cmd53_inc={} control_rxtrace_cmd53_count={} control_rxtrace_transfer_result=0x{:08x} control_rxtrace_payload_before=0x{:08x} control_rxtrace_payload_after=0x{:08x} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract={} status={} reason={} polls={} starts={} tx_retries={} suppressed_status={} data_rx={} eapol_rx={} non_eapol_rx={} event_rx={} control_rx={} empty_polls={} associated={} link_up={} assoc_event={} assoc_poll={} post_assoc_polls={} assoc_probe={} assoc_probe_result=0x{:08x} assoc_join_rescue={} assoc_set_ssid_rescue={} firstread_class={} rx_probe_poll={} rx_probe_flags=0x{:04x} control_rx_probe_poll={} control_rx_probe_flags=0x{:04x} rx_firstread_attempts={} rx_firstread_empty={} rx_firstread_invalid={} rx_firstread_failed={} rx_firstread_remainder_failed={} rx_firstread_decode_miss={} control_rx_firstread_attempts={} control_rx_firstread_empty={} control_rx_firstread_failed={} last_rx_idle_detail=0x{:04x} last_rx_idle_result=0x{:08x} last_control_rx_idle_detail=0x{:04x} last_control_rx_idle_result=0x{:08x} rxsrc_mode={} rxsrc_probe_len={} rxsrc_ien=0x{:02x} rxsrc_frame_ind={} rxsrc_host_int={} rxsrc_card_int={} rxsrc_f2_ready={} control_rxsrc_mode={} control_rxsrc_probe_len={} control_rxsrc_ien=0x{:02x} control_rxsrc_frame_ind={} control_rxsrc_host_int={} control_rxsrc_card_int={} control_rxsrc_f2_ready={} rxtrace_valid={} rxtrace_flags=0x{:04x} rxtrace_detail=0x{:04x} rxtrace_probe_len={} rxtrace_source=0x{:08x} rxtrace_prefix=0x{:08x} rxtrace_digest=0x{:08x} rxtrace_rframe=0x{:04x} rxtrace_firstread_reads={} rxtrace_block_reads={} rxtrace_rframe_reads={} rxtrace_request_len={} rxtrace_block_size={} rxtrace_block_count={} rxtrace_retx_sample=0x{:04x} rxtrace_retx_action={} rxtrace_queue_depth={} rxtrace_queue_high_water={} rxtrace_cmd53_arg=0x{:08x} rxtrace_cmd53_fn={} rxtrace_cmd53_addr=0x{:05x} rxtrace_cmd53_write={} rxtrace_cmd53_mode={} rxtrace_cmd53_inc={} rxtrace_cmd53_count={} rxtrace_transfer_result=0x{:08x} rxtrace_payload_before=0x{:08x} rxtrace_payload_after=0x{:08x} control_rxtrace_valid={} control_rxtrace_flags=0x{:04x} control_rxtrace_detail=0x{:04x} control_rxtrace_probe_len={} control_rxtrace_source=0x{:08x} control_rxtrace_prefix=0x{:08x} control_rxtrace_digest=0x{:08x} control_rxtrace_rframe=0x{:04x} control_rxtrace_firstread_reads={} control_rxtrace_block_reads={} control_rxtrace_rframe_reads={} control_rxtrace_request_len={} control_rxtrace_block_size={} control_rxtrace_block_count={} control_rxtrace_retx_sample=0x{:04x} control_rxtrace_retx_action={} control_rxtrace_queue_depth={} control_rxtrace_queue_high_water={} control_rxtrace_cmd53_arg=0x{:08x} control_rxtrace_cmd53_fn={} control_rxtrace_cmd53_addr=0x{:05x} control_rxtrace_cmd53_write={} control_rxtrace_cmd53_mode={} control_rxtrace_cmd53_inc={} control_rxtrace_cmd53_count={} control_rxtrace_transfer_result=0x{:08x} control_rxtrace_payload_before=0x{:08x} control_rxtrace_payload_after=0x{:08x} last_flags=0x{:04x} last_len={} last_ethertype=0x{:04x} last_ethertype_valid={} next_action={}",
         contract.name,
         status,
         reason,
         progress.polls,
-        CYW43_HOST_EAPOL_START.load(Ordering::Acquire),
-        CYW43_HOST_EAPOL_TX_RETRIES.load(Ordering::Acquire),
+        starts,
+        tx_retries,
+        log_decision.suppressed_before,
         progress.data_rx,
         progress.eapol_rx,
         progress.non_eapol_rx,
@@ -8773,6 +9015,7 @@ fn reset_cyw43_control_plane_state() {
     *CYW43_HOST_EAPOL_PENDING_EVENT.lock() = None;
     clear_cyw43_active_prompt_poll();
     clear_cyw43_pending_control_replies();
+    clear_cyw43_host_eapol_status_throttle();
     CYW43_BCDC_IOCTL_ID.store(0, Ordering::Release);
     *CYW43_RUNTIME_MAC.lock() = CYW43_DRIVER_TASK_MAC;
 }
@@ -12655,6 +12898,7 @@ mod tests {
         CYW43_HOST_EAPOL_TEST_RX_RESTORED.store(0, Ordering::Release);
         while take_cyw43_pending_rx_token().is_some() {}
         clear_cyw43_pending_control_replies();
+        clear_cyw43_host_eapol_status_throttle();
         *CYW43_HOST_EAPOL_SESSION.lock() = None;
         *CYW43_HOST_EAPOL_PENDING_EVENT.lock() = None;
         clear_cyw43_active_prompt_poll();
@@ -14411,6 +14655,83 @@ mod tests {
         );
 
         reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_status_throttle_suppresses_poll_only_pending_repeats() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+
+        let progress = Cyw43HostEapolProgress::default();
+        let next_action = cyw43_host_eapol_next_action("pending", &progress);
+        let key = cyw43_host_eapol_status_key("pending", "none", next_action, 0, 0, &progress);
+        let mut throttle = Cyw43HostEapolStatusThrottle::default();
+
+        let first = cyw43_host_eapol_status_log_decision(&mut throttle, key);
+        let second = cyw43_host_eapol_status_log_decision(&mut throttle, key);
+
+        assert!(first.emit_full);
+        assert_eq!(first.suppressed_before, 0);
+        assert!(!second.emit_full);
+        assert_eq!(throttle.suppressed, 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_status_throttle_emits_real_progress_and_terminal_status() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+
+        let mut throttle = Cyw43HostEapolStatusThrottle::default();
+        let mut progress = Cyw43HostEapolProgress::default();
+        let pending_action = cyw43_host_eapol_next_action("pending", &progress);
+        let pending_key =
+            cyw43_host_eapol_status_key("pending", "none", pending_action, 0, 0, &progress);
+        assert!(cyw43_host_eapol_status_log_decision(&mut throttle, pending_key).emit_full);
+        assert!(!cyw43_host_eapol_status_log_decision(&mut throttle, pending_key).emit_full);
+
+        progress.polls = 4096;
+        progress.empty_polls = 4096;
+        let poll_only_key =
+            cyw43_host_eapol_status_key("pending", "none", pending_action, 0, 0, &progress);
+        assert_eq!(pending_key, poll_only_key);
+        assert!(!cyw43_host_eapol_status_log_decision(&mut throttle, poll_only_key).emit_full);
+
+        progress.last_rx_trace.valid = true;
+        progress.last_rx_trace.pre_intstatus = 0x20;
+        progress.last_rx_trace.source_empty_polls = 1;
+        let trace_key =
+            cyw43_host_eapol_status_key("pending", "none", pending_action, 0, 0, &progress);
+        let trace_decision = cyw43_host_eapol_status_log_decision(&mut throttle, trace_key);
+        assert!(trace_decision.emit_full);
+        assert_eq!(trace_decision.suppressed_before, 2);
+        assert!(!cyw43_host_eapol_status_log_decision(&mut throttle, trace_key).emit_full);
+
+        progress.record_data_frame(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            42,
+            Some(ETH_P_EAPOL),
+        );
+        let progress_action = cyw43_host_eapol_next_action("pending", &progress);
+        let progress_key =
+            cyw43_host_eapol_status_key("pending", "none", progress_action, 0, 0, &progress);
+        let progress_decision = cyw43_host_eapol_status_log_decision(&mut throttle, progress_key);
+        assert!(progress_decision.emit_full);
+        assert_eq!(progress_decision.suppressed_before, 1);
+
+        let required_reason = cyw43_host_eapol_required_reason(&progress);
+        let required_action = cyw43_host_eapol_next_action("required", &progress);
+        let required_key = cyw43_host_eapol_status_key(
+            "required",
+            required_reason,
+            required_action,
+            0,
+            0,
+            &progress,
+        );
+        assert!(cyw43_host_eapol_status_log_decision(&mut throttle, required_key).emit_full);
+        assert!(cyw43_host_eapol_status_log_decision(&mut throttle, required_key).emit_full);
     }
 
     #[cfg(feature = "kernel")]

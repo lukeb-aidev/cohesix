@@ -127,11 +127,12 @@ const setConsoleAvailability = (enabled, reason) => {
   const sendNode = document.getElementById("console-send");
   const clearNode = document.getElementById("console-clear");
   const stopNode = document.getElementById("console-stop");
+  const dumpLogNode = document.getElementById("console-dump-log");
 
   panel?.classList.toggle("is-disabled", !enabled);
   panel?.setAttribute("aria-disabled", enabled ? "false" : "true");
 
-  [inputNode, sendNode, clearNode].forEach((node) => {
+  [inputNode, sendNode, clearNode, dumpLogNode].forEach((node) => {
     if (node) {
       node.disabled = !enabled;
     }

@@ -25,7 +25,7 @@ use swarmui::resolve_rest_auth_token;
 use swarmui::{
     mint_ticket_for_role, parse_mint_args, parse_replay_path, parse_role_label,
     parse_trace_replay_path, resolve_console_auth_token, resolve_replay_path, SwarmUiBackend,
-    SwarmUiConfig, SwarmUiConsoleBackend, SwarmUiTranscript, TcpTransportFactory,
+    SwarmUiConfig, SwarmUiConsoleBackend, SwarmUiLogDump, SwarmUiTranscript, TcpTransportFactory,
     TraceTransportFactory,
 };
 
@@ -197,6 +197,24 @@ impl SwarmUiService {
             SwarmUiService::Rest(backend) => Ok(backend.console_command(line)),
         }
     }
+
+    fn dump_queen_log(&mut self) -> Result<SwarmUiLogDump, String> {
+        match self {
+            SwarmUiService::Secure9p(backend) => {
+                backend.dump_queen_log().map_err(|err| err.to_string())
+            }
+            SwarmUiService::Trace(backend) => {
+                backend.dump_queen_log().map_err(|err| err.to_string())
+            }
+            SwarmUiService::Console(backend) => {
+                backend.dump_queen_log().map_err(|err| err.to_string())
+            }
+            #[cfg(feature = "rest")]
+            SwarmUiService::Rest(backend) => {
+                backend.dump_queen_log().map_err(|err| err.to_string())
+            }
+        }
+    }
 }
 
 struct AppState {
@@ -272,6 +290,12 @@ fn swarmui_console_command(
 ) -> Result<SwarmUiTranscript, String> {
     let mut backend = state.backend.lock().map_err(|_| "state locked")?;
     backend.console_command(&line)
+}
+
+#[tauri::command]
+fn swarmui_dump_queen_log(state: State<'_, AppState>) -> Result<SwarmUiLogDump, String> {
+    let mut backend = state.backend.lock().map_err(|_| "state locked")?;
+    backend.dump_queen_log()
 }
 
 #[tauri::command]
@@ -474,6 +498,7 @@ fn main() {
             swarmui_list_namespace,
             swarmui_fleet_snapshot,
             swarmui_console_command,
+            swarmui_dump_queen_log,
             swarmui_hive_bootstrap,
             swarmui_hive_poll,
             swarmui_hive_reset,

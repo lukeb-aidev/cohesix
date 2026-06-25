@@ -210,6 +210,44 @@ def test_allocate_ids_are_monotonic() -> None:
     assert rest_perf.allocate_lease_id(state) == "lease-abc123ef-000002"
 
 
+def test_emit_benchmark_marker_writes_queen_log_line() -> None:
+    class DummyClient:
+        rest_url = "http://127.0.0.1:8080"
+
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, str]] = []
+
+        def echo(self, path: str, line: str) -> rest_perf.GatewayResponse:
+            self.calls.append((path, line))
+            return rest_perf.GatewayResponse(
+                status="ok",
+                verb="ECHO",
+                path=path,
+                end=True,
+                lines=[],
+                bytes=None,
+                error=None,
+            )
+
+    client = DummyClient()
+    rest_perf.emit_benchmark_marker(
+        client,
+        None,
+        mode="perf",
+        phase="start",
+        run_token="abc123ef",
+        status="running",
+    )
+
+    assert client.calls == [
+        (
+            "/log/queen.log",
+            "benchmark mode=perf phase=start run=abc123ef "
+            "status=running rest=http://127.0.0.1:8080",
+        )
+    ]
+
+
 def test_telemetry_append_rotates_segment_on_quota() -> None:
     def gateway_response(
         status: str,

@@ -122,6 +122,7 @@ Canonical operator shell for Cohesix. Runs on the host and attaches to NineDoor 
 | `cat <path>` | Read file contents once. |
 | `tail <path>` | Stream a file. |
 | `log` | Alias for `tail /log/queen.log`. |
+| `log dump <file.txt> [--force]` | Host-side dump of `/log/queen.log`; writes payload lines only and refuses existing files unless `--force` is supplied. |
 | `echo <text> > <path>` | Append a single line; adds a newline. |
 | `spawn <role> ...` | Queue worker spawn (see examples below). |
 | `kill <worker_id>` | Queue worker termination. |
@@ -142,6 +143,9 @@ coh> spawn heartbeat ticks=50 ttl_s=60 ops=500
 coh> spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=120
 coh> spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=1 ttl_s=120 priority=3 budget_ttl_s=300 budget_ops=500
 ```
+
+### Queen log diagnostics
+`/log/queen.log` retains up to 2048 bounded lines. `cohsh log dump queen-log.txt` reads that log through the existing session transport and writes only retained payload lines to the local text file, with no `OK`/`END` transcript sent into the file. After a REST performance harness run, expect the dump to contain boot/log-retention markers, benchmark start/end markers when the gateway allowed the best-effort marker writes, host write summaries, lifecycle/policy denials, telemetry quota/wrap summaries, and bounded backpressure/error summaries. Routine Pi 4 driver dataplane chatter is intentionally excluded so benchmark hot paths are not slowed by log writes.
 
 ### Tests
 `test` executes the bundled `.coh` scripts under `/proc/tests/` (for example `selftest_smp.coh`). Default timeout is 30s; maximum is 120s.
@@ -342,6 +346,7 @@ SWARMUI_TRANSPORT=9p SWARMUI_9P_HOST=127.0.0.1 SWARMUI_9P_PORT=31337 ./bin/swarm
 - REST request-auth uses `SWARMUI_REST_AUTH_TOKEN` (fallback `HIVE_GATEWAY_REQUEST_AUTH_TOKEN`, `COHSH_REST_AUTH_TOKEN`, `COH_REST_AUTH_TOKEN`).
 - `SWARMUI_TRANSPORT=rest|gateway` is enabled by default. Use `--no-default-features` to strip REST support and rebuild with `--features rest` when needed.
 - SwarmUI console auth resolution order is `SWARMUI_AUTH_TOKEN`, `COHSH_AUTH_TOKEN`, `COH_AUTH_TOKEN`, then the queen ticket secret from `SWARMUI_TICKET_CONFIG` / `COHSH_TICKET_CONFIG` (default `configs/root_task.toml`). If the resolved token is the placeholder `changeme`, SwarmUI warns in the attach transcript, but listeners that reject insecure console auth will still refuse the session.
+- The Console panel's `Dump log` action downloads the same `/log/queen.log` payload as `cohsh log dump` through the active SwarmUI transport/session. It does not add a UI-owned evidence format, hidden polling, or a second live console session.
 - Ticket minting uses `SWARMUI_TICKET_CONFIG`/`SWARMUI_TICKET_SECRET` (fallback to `COHSH_*`).
 - `--replay` resolves relative paths first against the current working directory, then the app data directory under `snapshots/`, forces offline mode, and disables the interactive console prompt because snapshot replay only carries Hive state.
 - `--replay-trace` resolves relative paths under `traces/`, auto-loads a sibling `*.hive.cbor` if present, and keeps the embedded console available through the trace-backed shell transport.

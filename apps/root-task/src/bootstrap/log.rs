@@ -1087,6 +1087,9 @@ pub fn switch_logger_to_log_buffer() -> bool {
         return false;
     }
     log_buffer::append_log_line("[INFO audit] log.channel=LOGFILE path=/log/queen.log");
+    log_buffer::append_log_line(
+        "[INFO audit] log.retention path=/log/queen.log lines=2048 export_batch=64",
+    );
     true
 }
 

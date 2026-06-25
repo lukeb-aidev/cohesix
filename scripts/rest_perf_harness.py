@@ -1375,6 +1375,29 @@ def emit(logger: Optional[RunLogger], message: str) -> None:
         logger.log(message)
 
 
+def emit_benchmark_marker(
+    client: RestClient,
+    logger: Optional[RunLogger],
+    *,
+    mode: str,
+    phase: str,
+    run_token: str,
+    status: str,
+) -> None:
+    """Best-effort queen log marker outside measured benchmark loops."""
+    line = (
+        f"benchmark mode={mode} phase={phase} run={run_token} "
+        f"status={status} rest={client.rest_url}"
+    )
+    try:
+        response = client.echo("/log/queen.log", line)
+        if response.status != "ok":
+            raise RestError(response.error or "gateway rejected benchmark marker", response)
+        emit(logger, f"[queen-log] marker phase={phase} status={status} run={run_token}")
+    except Exception as exc:
+        emit(logger, f"[queen-log] marker skipped phase={phase} run={run_token}: {exc}")
+
+
 def resolve_bundle_path(version: Optional[str], bundle: Optional[str]) -> Optional[str]:
     """Resolve release bundle directory from version or explicit path."""
     if bundle:
@@ -2531,6 +2554,14 @@ def run_simulation(args: argparse.Namespace) -> int:
             telemetry_scenario=scenario,
             telemetry_reference_chunk_bytes=args.telemetry_reference_chunk_bytes,
         )
+        emit_benchmark_marker(
+            client,
+            args.logger,
+            mode="simulate",
+            phase="start",
+            run_token=state.run_token,
+            status="running",
+        )
 
         worker_ids, spawned = ensure_workers(client, state, args.workers_min)
 
@@ -2727,6 +2758,20 @@ def run_simulation(args: argparse.Namespace) -> int:
         )
         for label, path in artifacts.items():
             args.logger.log(f"[artifact] {label}={path}")
+
+        final_status = "ok"
+        if run_error is not None:
+            final_status = "error"
+        elif not error_budget_pass:
+            final_status = "error-budget"
+        emit_benchmark_marker(
+            client,
+            args.logger,
+            mode="simulate",
+            phase="end",
+            run_token=state.run_token,
+            status=final_status,
+        )
 
         if not args.no_cleanup and args.no_qemu:
             for worker_id in list(spawned):
@@ -2978,11 +3023,22 @@ def run_perf(args: argparse.Namespace) -> int:
     client = RestClient(args.rest_url, args.timeout, args.request_auth_token)
     bounds_url = f"{normalize_rest_url(args.rest_url)}/v1/meta/bounds"
     perf_summary: Dict[str, Dict[str, object]] = {}
+    run_token = hashlib.sha256(
+        f"perf-{os.getpid()}-{time.time_ns()}".encode("ascii")
+    ).hexdigest()[:8]
     try:
         bounds = fetch_json(bounds_url, args.timeout, client.request_auth_headers())
     except Exception as exc:  # pragma: no cover - CLI error reporting
         args.logger.log(f"Failed to fetch bounds: {exc}")
         return 1
+    emit_benchmark_marker(
+        client,
+        args.logger,
+        mode="perf",
+        phase="start",
+        run_token=run_token,
+        status="running",
+    )
     status_specs = build_status_specs(bounds)
     gateway_status_start = fetch_gateway_status_snapshot(
         client,
@@ -3008,15 +3064,39 @@ def run_perf(args: argparse.Namespace) -> int:
             workers = list_workers(client)
         except Exception as exc:  # pragma: no cover - CLI error reporting
             args.logger.log(f"Failed to list workers: {exc}")
+            emit_benchmark_marker(
+                client,
+                args.logger,
+                mode="perf",
+                phase="end",
+                run_token=run_token,
+                status="error",
+            )
             return 1
         if not workers:
             args.logger.log("telemetry: no workers found; skipping telemetry suite.")
+            emit_benchmark_marker(
+                client,
+                args.logger,
+                mode="perf",
+                phase="end",
+                run_token=run_token,
+                status="skipped",
+            )
             return 0
         telemetry_specs = build_telemetry_specs(
             workers, args.max_workers, args.tail_bytes
         )
         if not telemetry_specs:
             args.logger.log("telemetry: no telemetry specs; skipping telemetry suite.")
+            emit_benchmark_marker(
+                client,
+                args.logger,
+                mode="perf",
+                phase="end",
+                run_token=run_token,
+                status="skipped",
+            )
             return 0
         seq_times, par_times = measure(telemetry_specs, client, args.runs)
         report(
@@ -3072,6 +3152,14 @@ def run_perf(args: argparse.Namespace) -> int:
             )
         args.logger.log(f"[artifact] perf_summary_json={summary_path}")
 
+    emit_benchmark_marker(
+        client,
+        args.logger,
+        mode="perf",
+        phase="end",
+        run_token=run_token,
+        status="ok",
+    )
     return 0
 
 

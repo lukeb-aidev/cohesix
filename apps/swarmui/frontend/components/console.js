@@ -36,6 +36,7 @@ export const setupConsole = (invoke) => {
   const send = document.getElementById("console-send");
   const clear = document.getElementById("console-clear");
   const stop = document.getElementById("console-stop");
+  const dumpLog = document.getElementById("console-dump-log");
 
   if (!output || !input || !send) {
     return;
@@ -141,6 +142,42 @@ export const setupConsole = (invoke) => {
     streamLines(res.result?.lines || []);
   };
 
+  const downloadText = (filename, text) => {
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename || "queen.log.txt";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const dumpQueenLog = async () => {
+    if (dumpLog) {
+      dumpLog.disabled = true;
+    }
+    const res = await invoke("swarmui_dump_queen_log");
+    if (!res.ok) {
+      appendLine(`ERR LOGDUMP ${res.error}`);
+      if (dumpLog) {
+        dumpLog.disabled = false;
+      }
+      return;
+    }
+    const dump = res.result || {};
+    const text = typeof dump.text === "string" ? dump.text : "";
+    const filename = typeof dump.filename === "string" ? dump.filename : "queen.log.txt";
+    downloadText(filename, text);
+    appendLine(
+      `OK LOGDUMP file=${filename} lines=${dump.lines || 0} bytes=${dump.bytes || text.length}`,
+    );
+    if (dumpLog) {
+      dumpLog.disabled = false;
+    }
+  };
+
   send.addEventListener("click", async () => {
     await runCommand(readValue());
     clearValue();
@@ -166,4 +203,6 @@ export const setupConsole = (invoke) => {
     }
     endStream();
   });
+
+  dumpLog?.addEventListener("click", dumpQueenLog);
 };

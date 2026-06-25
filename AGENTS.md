@@ -91,7 +91,7 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
    - All heavy ecosystems (CUDA, NVML, networking sidecars) remain host-side.
    - Physical-hardware drivers are linked-runtime only. On Pi 4 and any future
      physical target, USB, HDMI/display, Ethernet, Wi-Fi, SDIO, PCIe, MMIO-backed
-     devices, and other steady hardware drivers must run as linked driver-runtime
+     devices, and other steady hardware drivers must run as manifest-declared isolated driver-runtime
      child images over the fixed driver-task ABI after HAL admission. Root-task
      may construct seL4/HAL resources, validate manifests, publish descriptors,
      submit bounded service turns, record diagnostics, and keep the emergency
@@ -269,9 +269,9 @@ Host tools MUST remain protocol-faithful: they consume the as-built interfaces a
 
 - **All device authority, mapping, and resource admission goes through HAL.**
 - No direct physical-address discovery, device-untyped retyping, DMA allocation/publish, IRQ binding, or ad-hoc `unsafe` outside HAL.
-- Linked driver runtimes may touch only HAL-declared mapped pages and generated runtime-init resources delivered through the fixed driver-task ABI; any runtime MMIO helper must stay bounded, volatile, and documented at the call site.
+- Manifest-declared isolated driver runtimes may touch only HAL-declared mapped pages and generated runtime-init resources delivered through the fixed driver-task ABI; any runtime MMIO helper must stay bounded, volatile, and documented at the call site.
 - Pi 4 hardware timing MUST use the selected seL4 build's generated timer
-  truth. Root-task and linked driver runtimes must use the read-only virtual
+  truth. Root-task and manifest-declared isolated driver runtimes must use the read-only virtual
   counter (`CNTVCT_EL0`) only when `KernelArmExportVCNTUser` /
   `CONFIG_EXPORT_VCNT_USER` is enabled, and must scale timeouts from
   `TIMER_CLOCK_HZ`. Hardware builds must not use `CNTPCT_EL0`, EL0 timer-control
