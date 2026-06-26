@@ -1203,16 +1203,11 @@ const CYW43_RX_FRAME_FLAG_MASK_CONTROL_EVENT: u16 =
 const CYW43_BDC_VERSION: u8 = 2;
 const CYW43_BDC_VERSION_SHIFT: u8 = 4;
 const CYW43_ETH_HEADER_BYTES: usize = 14;
-#[cfg(test)]
 const CYW43_ETH_P_IPV4: u16 = 0x0800;
-#[cfg(test)]
 const CYW43_ETH_P_ARP: u16 = 0x0806;
 const CYW43_ETH_P_EAPOL: u16 = 0x888e;
-#[cfg(test)]
 const CYW43_IP_PROTO_UDP: u8 = 17;
-#[cfg(test)]
 const CYW43_DHCP_SERVER_PORT: u16 = 67;
-#[cfg(test)]
 const CYW43_DHCP_CLIENT_PORT: u16 = 68;
 const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
@@ -1383,6 +1378,7 @@ const CYW43_POST_RELEASE_HT_TIMEOUT_MS: u64 = 1_600;
 const CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS: u64 = 3_000;
 const CYW43_TX_CREDIT_TIMEOUT_MS: u64 = 100;
 const CYW43_DATA_TX_CREDIT_TIMEOUT_MS: u64 = 20;
+const CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS: u64 = CYW43_TX_CREDIT_TIMEOUT_MS;
 const CYW43_FUNCTION2_FIFO_WINDOW_ATTEMPTS: usize = 2;
 const CYW43_RX_SOURCE_SAMPLE_INTERVAL_EMPTY_POLLS: u32 = 1024;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS: usize = 1;
@@ -9052,7 +9048,8 @@ fn cyw43_submit_sdpcm_frame(
         return 0;
     }
     let total_len = payload_len + header_len;
-    if !cyw43_wait_for_sdpcm_tx_credit(state, data_frame) {
+    let credit_timeout_ms = cyw43_tx_credit_timeout_ms(data_frame, frame);
+    if !cyw43_wait_for_sdpcm_tx_credit(state, credit_timeout_ms) {
         return 0;
     }
     let seq = state.sdpcm_seq;
@@ -9132,20 +9129,59 @@ fn cyw43_submit_sdpcm_frame(
     total_len
 }
 
-const fn cyw43_tx_credit_timeout_ms(data_frame: bool) -> u64 {
-    if data_frame {
-        CYW43_DATA_TX_CREDIT_TIMEOUT_MS
-    } else {
+fn cyw43_tx_credit_timeout_ms(data_frame: bool, frame: DriverFrameDescriptor) -> u64 {
+    if !data_frame {
         CYW43_TX_CREDIT_TIMEOUT_MS
+    } else if cyw43_data_tx_uses_control_credit_timeout(frame) {
+        CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS
+    } else {
+        CYW43_DATA_TX_CREDIT_TIMEOUT_MS
     }
 }
 
-fn cyw43_wait_for_sdpcm_tx_credit(state: &mut Cyw43RuntimeState, data_frame: bool) -> bool {
+fn cyw43_data_tx_uses_control_credit_timeout(frame: DriverFrameDescriptor) -> bool {
+    let offset = frame.offset as usize;
+    let len = usize::from(frame.len);
+    if len < CYW43_ETH_HEADER_BYTES {
+        return false;
+    }
+    let ethertype = cyw43_ring_be_u16(offset + 12);
+    if matches!(ethertype, CYW43_ETH_P_EAPOL | CYW43_ETH_P_ARP) {
+        return true;
+    }
+    if ethertype != CYW43_ETH_P_IPV4 || len < CYW43_ETH_HEADER_BYTES + 20 {
+        return false;
+    }
+    let ip_offset = offset + CYW43_ETH_HEADER_BYTES;
+    let version_ihl = read_ring_byte(ip_offset);
+    if version_ihl >> 4 != 4 {
+        return false;
+    }
+    let ihl = usize::from(version_ihl & 0x0f) * 4;
+    if ihl < 20 || len < CYW43_ETH_HEADER_BYTES + ihl + 4 {
+        return false;
+    }
+    if read_ring_byte(ip_offset + 9) != CYW43_IP_PROTO_UDP {
+        return false;
+    }
+    let udp_offset = ip_offset + ihl;
+    let src_port = cyw43_ring_be_u16(udp_offset);
+    let dst_port = cyw43_ring_be_u16(udp_offset + 2);
+    matches!(
+        (src_port, dst_port),
+        (CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT)
+            | (CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT)
+    )
+}
+
+fn cyw43_ring_be_u16(offset: usize) -> u16 {
+    (u16::from(read_ring_byte(offset)) << 8) | u16::from(read_ring_byte(offset + 1))
+}
+
+fn cyw43_wait_for_sdpcm_tx_credit(state: &mut Cyw43RuntimeState, timeout_ms: u64) -> bool {
     let mut polls = 0usize;
-    let mut deadline = runtime_deadline_from_millis_or_iterations(
-        cyw43_tx_credit_timeout_ms(data_frame),
-        CYW43_TX_CREDIT_WAIT_LOOPS,
-    );
+    let mut deadline =
+        runtime_deadline_from_millis_or_iterations(timeout_ms, CYW43_TX_CREDIT_WAIT_LOOPS);
     while !runtime_deadline_iteration_cap_reached(&deadline, polls, CYW43_TX_CREDIT_WAIT_LOOPS)
         && !runtime_deadline_expired(&mut deadline)
     {
@@ -25321,18 +25357,79 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_data_tx_credit_timeout_is_shorter_than_control_timeout() {
+    fn cyw43_data_tx_credit_timeout_is_adaptive_for_boot_control_frames() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         assert_eq!(CYW43_TX_CREDIT_TIMEOUT_MS, 100);
         assert_eq!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 20);
         assert_eq!(
-            cyw43_tx_credit_timeout_ms(false),
+            CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS,
+            CYW43_TX_CREDIT_TIMEOUT_MS
+        );
+        let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
+        let mut ipv4_tcp = [0u8; 60];
+        ipv4_tcp[12..14].copy_from_slice(&CYW43_ETH_P_IPV4.to_be_bytes());
+        ipv4_tcp[14] = 0x45;
+        ipv4_tcp[14 + 9] = 6;
+        stage_bytes(payload_offset, &ipv4_tcp);
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: ipv4_tcp.len() as u16,
+            flags: 0,
+        };
+        assert_eq!(
+            cyw43_tx_credit_timeout_ms(false, frame),
             CYW43_TX_CREDIT_TIMEOUT_MS
         );
         assert_eq!(
-            cyw43_tx_credit_timeout_ms(true),
+            cyw43_tx_credit_timeout_ms(true, frame),
             CYW43_DATA_TX_CREDIT_TIMEOUT_MS
         );
         assert!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS < CYW43_TX_CREDIT_TIMEOUT_MS);
+
+        let mut dhcp_discover = [0u8; 300];
+        dhcp_discover[12..14].copy_from_slice(&CYW43_ETH_P_IPV4.to_be_bytes());
+        dhcp_discover[14] = 0x45;
+        dhcp_discover[14 + 9] = CYW43_IP_PROTO_UDP;
+        let udp = 14 + 20;
+        dhcp_discover[udp..udp + 2].copy_from_slice(&CYW43_DHCP_CLIENT_PORT.to_be_bytes());
+        dhcp_discover[udp + 2..udp + 4].copy_from_slice(&CYW43_DHCP_SERVER_PORT.to_be_bytes());
+        stage_bytes(payload_offset, &dhcp_discover);
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: dhcp_discover.len() as u16,
+            flags: 0,
+        };
+        assert_eq!(
+            cyw43_tx_credit_timeout_ms(true, frame),
+            CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS
+        );
+
+        let mut arp = [0u8; 42];
+        arp[12..14].copy_from_slice(&CYW43_ETH_P_ARP.to_be_bytes());
+        stage_bytes(payload_offset, &arp);
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: arp.len() as u16,
+            flags: 0,
+        };
+        assert_eq!(
+            cyw43_tx_credit_timeout_ms(true, frame),
+            CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS
+        );
+
+        let mut eapol = [0u8; CYW43_ETH_HEADER_BYTES];
+        eapol[12..14].copy_from_slice(&CYW43_ETH_P_EAPOL.to_be_bytes());
+        stage_bytes(payload_offset, &eapol);
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: eapol.len() as u16,
+            flags: 0,
+        };
+        assert_eq!(
+            cyw43_tx_credit_timeout_ms(true, frame),
+            CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS
+        );
     }
 
     #[test]

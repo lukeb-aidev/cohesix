@@ -679,6 +679,10 @@ const PRE_ROOT_NET_CONSOLE_WAIT_STATUS_MS: u64 = 5_000;
 #[cfg(all(feature = "net-console", feature = "kernel"))]
 const PRE_ROOT_NET_CONSOLE_WAIT_POLL_LIMIT: u32 = 250_000;
 #[cfg(all(feature = "net-console", feature = "kernel"))]
+const PRE_ROOT_NET_CONSOLE_SLOW_POLL_TRACE_MS: u64 = 1_000;
+#[cfg(all(feature = "net-console", feature = "kernel"))]
+const PRE_ROOT_NET_CONSOLE_SLOW_POLL_TRACE_LIMIT: u8 = 4;
+#[cfg(all(feature = "net-console", feature = "kernel"))]
 fn wait_for_net_console_before_root_console<
     'a,
     D,
@@ -703,6 +707,7 @@ fn wait_for_net_console_before_root_console<
     let start_ms = crate::hal::timebase().now_ms();
     let mut next_status_ms = PRE_ROOT_NET_CONSOLE_WAIT_STATUS_MS;
     let mut polls = 0u32;
+    let mut slow_poll_traces = 0u8;
     let active_interface = pump.net_console_active_interface().unwrap_or("net");
     let wifi_wait = active_interface == "wifi";
     if wifi_wait {
@@ -788,8 +793,36 @@ fn wait_for_net_console_before_root_console<
             return;
         }
 
+        let poll_start_ms = crate::hal::timebase().now_ms();
         pump.poll_pre_root_network();
         polls = polls.saturating_add(1);
+        let mut followup_polls = 0u32;
+        if wifi_wait {
+            followup_polls = pump.poll_pre_root_wifi_dhcp_followup();
+            polls = polls.saturating_add(followup_polls);
+        }
+        let poll_elapsed_ms = crate::hal::timebase()
+            .now_ms()
+            .saturating_sub(poll_start_ms);
+        if wifi_wait
+            && poll_elapsed_ms >= PRE_ROOT_NET_CONSOLE_SLOW_POLL_TRACE_MS
+            && slow_poll_traces < PRE_ROOT_NET_CONSOLE_SLOW_POLL_TRACE_LIMIT
+        {
+            slow_poll_traces = slow_poll_traces.saturating_add(1);
+            let mut line = HeaplessString::<192>::new();
+            let _ = write!(
+                line,
+                "[net-console] root console wait slow-poll poll_ms={} followup_polls={} total_polls={} action=continue-driver-settle",
+                poll_elapsed_ms, followup_polls, polls,
+            );
+            boot_log::force_uart_line(line.as_str());
+            pump.publish_pre_root_boot_progress(line.as_str());
+        }
+        if pump.net_console_ready_for_root()
+            || pump.net_console_pre_root_serial_release_reason().is_some()
+        {
+            continue;
+        }
         sel4::yield_now();
     }
 }

@@ -60,11 +60,23 @@ pub struct FlushOutcome {
     pub blocked_for_tokens: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LineSlot {
     offset: u16,
     len: u16,
     in_use: bool,
+    lane: OutboundLane,
+}
+
+impl Default for LineSlot {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            len: 0,
+            in_use: false,
+            lane: OutboundLane::Log,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -281,6 +293,7 @@ impl OutboundCoalescer {
         slot.offset = offset;
         slot.len = stored.len;
         slot.in_use = true;
+        slot.lane = lane;
         let start = usize::from(offset);
         let end = start.saturating_add(len);
         if end > OUTBOUND_RING_CAP {
@@ -424,7 +437,24 @@ impl OutboundCoalescer {
         }
     }
 
+    pub fn enqueue_log_lossless(&mut self, line: &[u8]) -> Result<(), ()> {
+        self.try_enqueue_line(OutboundLane::Log, line)
+    }
+
     pub fn flush<F>(&mut self, now_ms: u64, mut send: F) -> FlushOutcome
+    where
+        F: FnMut(&[u8], OutboundLane) -> Result<(), SendError>,
+    {
+        self.flush_bounded(now_ms, MAX_FRAMES_PER_POLL, MAX_BYTES_PER_POLL, &mut send)
+    }
+
+    pub fn flush_bounded<F>(
+        &mut self,
+        now_ms: u64,
+        max_frames: usize,
+        max_bytes: usize,
+        mut send: F,
+    ) -> FlushOutcome
     where
         F: FnMut(&[u8], OutboundLane) -> Result<(), SendError>,
     {
@@ -432,17 +462,12 @@ impl OutboundCoalescer {
         let mut outcome = FlushOutcome::default();
         let mut bytes_sent_this_poll: usize = 0;
 
-        for _ in 0..MAX_FRAMES_PER_POLL {
-            if bytes_sent_this_poll >= MAX_BYTES_PER_POLL {
+        for _ in 0..max_frames {
+            if bytes_sent_this_poll >= max_bytes {
                 break;
             }
-            let lane = if self.ctrl_q.is_empty() {
-                if self.log_q.is_empty() {
-                    break;
-                }
-                OutboundLane::Log
-            } else {
-                OutboundLane::Control
+            let Some(lane) = self.next_fifo_lane() else {
+                break;
             };
 
             if lane == OutboundLane::Log && self.tokens == 0 {
@@ -450,7 +475,8 @@ impl OutboundCoalescer {
                 break;
             }
 
-            let Some(plan) = self.prepare_payload(lane) else {
+            let remaining_bytes = max_bytes.saturating_sub(bytes_sent_this_poll);
+            let Some(plan) = self.prepare_payload_bounded(lane, remaining_bytes) else {
                 break;
             };
             if lane == OutboundLane::Log
@@ -459,7 +485,7 @@ impl OutboundCoalescer {
                 outcome.blocked_for_tokens = true;
                 break;
             }
-            if bytes_sent_this_poll.saturating_add(plan.payload_len) > MAX_BYTES_PER_POLL {
+            if bytes_sent_this_poll.saturating_add(plan.payload_len) > max_bytes {
                 break;
             }
 
@@ -484,27 +510,31 @@ impl OutboundCoalescer {
         outcome
     }
 
-    fn prepare_payload(&self, lane: OutboundLane) -> Option<PlannedPayload> {
+    fn prepare_payload_bounded(
+        &self,
+        lane: OutboundLane,
+        max_payload_bytes: usize,
+    ) -> Option<PlannedPayload> {
         let mut payload: HeaplessVec<u8, MAX_PAYLOAD> = HeaplessVec::new();
         let mut consumed = 0usize;
         let mut consumed_bytes = 0usize;
-        let mut iter = match lane {
-            OutboundLane::Control => self.ctrl_q.iter(),
-            OutboundLane::Log => self.log_q.iter(),
-        };
 
-        while let Some(slot_idx) = iter.next() {
+        for slot_idx in self.alloc_order.iter() {
+            let slot = &self.slots[*slot_idx as usize];
+            if !slot.in_use || slot.lane != lane {
+                break;
+            }
             let Some(line_slice) = self.slot_slice(*slot_idx) else {
-                consumed = consumed.saturating_add(1);
-                continue;
+                break;
             };
             let line_len = line_slice.len();
             if line_len == 0 {
-                consumed = consumed.saturating_add(1);
-                continue;
+                break;
             }
             let required = line_len.saturating_add(4);
-            if payload.len().saturating_add(required) > MAX_PAYLOAD {
+            if payload.len().saturating_add(required) > MAX_PAYLOAD
+                || payload.len().saturating_add(required) > max_payload_bytes
+            {
                 break;
             }
             let total_len: u32 = line_len.saturating_add(4).try_into().unwrap_or(u32::MAX);
@@ -528,6 +558,16 @@ impl OutboundCoalescer {
                 consumed_lines: consumed,
                 consumed_bytes,
             })
+        }
+    }
+
+    fn next_fifo_lane(&self) -> Option<OutboundLane> {
+        let front = self.alloc_order.front().copied()?;
+        let slot = self.slots.get(front as usize)?;
+        if !slot.in_use {
+            None
+        } else {
+            Some(slot.lane)
         }
     }
 
@@ -675,16 +715,88 @@ mod tests {
     }
 
     #[test]
-    fn control_flushes_before_logs() {
+    fn flush_preserves_command_stream_order_across_lanes() {
         let mut coalescer = OutboundCoalescer::new();
+        coalescer.enqueue_log(b"data");
+        coalescer.enqueue_control(b"ok").unwrap();
+        coalescer.enqueue_control(b"end").unwrap();
+        let mut lanes: HeaplessVec<OutboundLane, 2> = HeaplessVec::new();
+        let mut payloads: HeaplessVec<HeaplessVec<u8, MAX_PAYLOAD>, 2> = HeaplessVec::new();
+        let outcome = coalescer.flush_bounded(0, 3, MAX_BYTES_PER_POLL, |payload, lane| {
+            let _ = lanes.push(lane);
+            let mut buf = HeaplessVec::<u8, MAX_PAYLOAD>::new();
+            let _ = buf.extend_from_slice(payload);
+            let _ = payloads.push(buf);
+            Ok(())
+        });
+        assert_eq!(outcome.sent_frames, 2);
+        assert_eq!(
+            lanes.as_slice(),
+            &[OutboundLane::Log, OutboundLane::Control]
+        );
+        assert_eq!(
+            payloads[0].as_slice(),
+            &[8, 0, 0, 0, b'd', b'a', b't', b'a']
+        );
+        assert_eq!(
+            payloads[1].as_slice(),
+            &[6, 0, 0, 0, b'o', b'k', 7, 0, 0, 0, b'e', b'n', b'd']
+        );
+    }
+
+    #[test]
+    fn token_bucket_does_not_let_control_overtake_log_head() {
+        let mut coalescer = OutboundCoalescer::new();
+        coalescer.tokens = 0;
+        coalescer.last_refill_ms = 1;
         coalescer.enqueue_log(LOG_LINE);
         coalescer.enqueue_control(b"control").unwrap();
         let mut lanes: HeaplessVec<OutboundLane, 2> = HeaplessVec::new();
-        let _ = coalescer.flush(0, |_, lane| {
+        let outcome = coalescer.flush(1, |_, lane| {
             let _ = lanes.push(lane);
             Ok(())
         });
-        assert_eq!(lanes.first().copied(), Some(OutboundLane::Control));
+        assert_eq!(outcome.sent_frames, 0);
+        assert!(outcome.blocked_for_tokens);
+        assert!(lanes.is_empty());
+        assert!(coalescer.has_pending());
+    }
+
+    #[test]
+    fn lossless_log_enqueue_reports_backpressure_without_drops() {
+        let mut coalescer = OutboundCoalescer::new();
+        let line = [b'x'; LINE_CAP];
+        while coalescer.enqueue_log_lossless(&line).is_ok() {}
+        let stats = coalescer.stats();
+        assert_eq!(stats.drops, 0);
+        assert!(stats.queued_lines > 0);
+    }
+
+    #[test]
+    fn bounded_flush_respects_zero_frame_budget() {
+        let mut coalescer = OutboundCoalescer::new();
+        coalescer.enqueue_control(b"control").unwrap();
+        let outcome = coalescer.flush_bounded(0, 0, MAX_BYTES_PER_POLL, |_payload, _lane| Ok(()));
+        assert_eq!(outcome.sent_frames, 0);
+        assert!(coalescer.has_pending());
+    }
+
+    #[test]
+    fn bounded_flush_plans_within_byte_budget() {
+        let mut coalescer = OutboundCoalescer::new();
+        coalescer.enqueue_control(LOG_LINE).unwrap();
+        coalescer.enqueue_control(LOG_LINE).unwrap();
+        let mut payloads: HeaplessVec<HeaplessVec<u8, MAX_PAYLOAD>, 1> = HeaplessVec::new();
+        let outcome = coalescer.flush_bounded(0, MAX_FRAMES_PER_POLL, 8, |payload, _lane| {
+            let mut buf = HeaplessVec::<u8, MAX_PAYLOAD>::new();
+            let _ = buf.extend_from_slice(payload);
+            let _ = payloads.push(buf);
+            Ok(())
+        });
+        assert_eq!(outcome.sent_frames, 1);
+        assert_eq!(outcome.sent_bytes, 8);
+        assert_eq!(payloads.len(), 1);
+        assert!(coalescer.has_pending());
     }
 
     #[test]

@@ -106,6 +106,7 @@ const DHCP_RESTART_BACKOFF_MS: u64 = if cfg!(feature = "timers-arch-counter") {
     64_000
 };
 const CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS: u64 = 500;
+const CYW43_DHCP_POST_SECURE_EAPOL_OVERSHOOT_LOG_MS: u64 = 1_000;
 const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
@@ -249,25 +250,54 @@ fn dhcp_start_defer_reason_for(bringup_status: Option<&'static str>) -> Option<&
     }
 }
 
-fn cyw43_dhcp_post_secure_eapol_quiet(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43DhcpPostSecureEapolSettle {
+    ready: bool,
+    changed: bool,
+    quiet_ms: u64,
+    remaining_ms: u64,
+    next_ready_ms: Option<u64>,
+}
+
+fn cyw43_dhcp_post_secure_eapol_settle(
     now_ms: u64,
     eapol_secure: u64,
     eapol_rx: u64,
     last_eapol_rx: &mut u64,
     quiet_since_ms: &mut Option<u64>,
-) -> bool {
+) -> Cyw43DhcpPostSecureEapolSettle {
     if eapol_secure == 0 || eapol_rx == 0 {
         *last_eapol_rx = eapol_rx;
         *quiet_since_ms = None;
-        return false;
+        return Cyw43DhcpPostSecureEapolSettle {
+            ready: false,
+            changed: false,
+            quiet_ms: 0,
+            remaining_ms: CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS,
+            next_ready_ms: None,
+        };
     }
     if eapol_rx != *last_eapol_rx {
         *last_eapol_rx = eapol_rx;
         *quiet_since_ms = Some(now_ms);
-        return false;
+        return Cyw43DhcpPostSecureEapolSettle {
+            ready: false,
+            changed: true,
+            quiet_ms: 0,
+            remaining_ms: CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS,
+            next_ready_ms: Some(now_ms.saturating_add(CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS)),
+        };
     }
     let since_ms = quiet_since_ms.get_or_insert(now_ms);
-    now_ms.saturating_sub(*since_ms) >= CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS
+    let quiet_ms = now_ms.saturating_sub(*since_ms);
+    let ready = quiet_ms >= CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS;
+    Cyw43DhcpPostSecureEapolSettle {
+        ready,
+        changed: false,
+        quiet_ms,
+        remaining_ms: CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS.saturating_sub(quiet_ms),
+        next_ready_ms: Some(since_ms.saturating_add(CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS)),
+    }
 }
 
 #[cfg(feature = "net-backend-virtio")]
@@ -3217,6 +3247,28 @@ impl<D: NetDevice> NetStack<D> {
         )
     }
 
+    #[cfg(feature = "kernel")]
+    fn service_cyw43_data_pre_poll_burst_budgeted(
+        &self,
+        contract: crate::hal::driver_task::DriverTaskContract,
+        budget: &mut DriverServiceBudget,
+    ) -> bool {
+        if net_driver_task_hot_path(contract)
+            != Some(crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi)
+            || !self.cyw43_flush_pre_poll_data_ready()
+            || wifi_host_eapol_blocks_driver_task_pre_poll(self.device.bringup_status_label())
+            || !crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(contract)
+        {
+            return false;
+        }
+        service_driver_task_pre_poll_burst_budgeted(
+            contract,
+            crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi,
+            NET_RING_FLAG_BUDGETED,
+            budget,
+        )
+    }
+
     fn service_budgeted_dhcp_turn(&mut self, timestamp: Instant, now_ms: u64) -> bool {
         let mut activity = self.poll_smoltcp_once(timestamp, now_ms, "budgeted-pre-dhcp");
         activity |= self.start_dhcp_if_ready(now_ms);
@@ -3526,7 +3578,12 @@ impl<D: NetDevice> NetStack<D> {
             return Ok(true);
         }
 
-        let mut activity = self.sync_interface_hardware_addr(now_ms);
+        #[cfg(feature = "kernel")]
+        let mut activity =
+            self.service_cyw43_data_pre_poll_burst_budgeted(D::driver_task_contract(), budget);
+        #[cfg(not(feature = "kernel"))]
+        let mut activity = false;
+        activity |= self.sync_interface_hardware_addr(now_ms);
         activity |= self.service_wifi_host_eapol_slice(now_ms);
         activity |= self.sync_interface_hardware_addr(now_ms);
         if tcp_phase_borrow && phase != BudgetedNetPhase::Tcp {
@@ -3794,24 +3851,41 @@ impl<D: NetDevice> NetStack<D> {
                 return None;
             }
             let counters = self.device.counters();
-            if cyw43_dhcp_post_secure_eapol_quiet(
+            let settle = cyw43_dhcp_post_secure_eapol_settle(
                 now_ms,
                 counters.wifi_host_eapol_secure,
                 counters.wifi_host_eapol_rx,
                 &mut self.wifi_dhcp_last_eapol_rx,
                 &mut self.wifi_dhcp_eapol_quiet_since_ms,
-            ) {
+            );
+            if settle.ready {
+                if let Some(next_ready_ms) = settle.next_ready_ms {
+                    let overshoot_ms = now_ms.saturating_sub(next_ready_ms);
+                    if overshoot_ms >= CYW43_DHCP_POST_SECURE_EAPOL_OVERSHOOT_LOG_MS {
+                        info!(
+                            "[dhcp] start settle ready reason=wifi-post-secure-eapol-settle eapol_rx={} quiet_ms={} target_ms={} overshoot_ms={} now_ms={}",
+                            counters.wifi_host_eapol_rx,
+                            settle.quiet_ms,
+                            CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS,
+                            overshoot_ms,
+                            now_ms
+                        );
+                    }
+                }
                 self.wifi_dhcp_eapol_settle_logged = false;
                 return None;
             }
             if counters.wifi_host_eapol_secure != 0 && counters.wifi_host_eapol_rx != 0 {
-                if !self.wifi_dhcp_eapol_settle_logged {
+                if settle.changed || !self.wifi_dhcp_eapol_settle_logged {
                     info!(
-                        "[dhcp] start deferred reason=wifi-post-secure-eapol-settle eapol_rx={} quiet_ms={} now_ms={}",
+                        "[dhcp] start deferred reason=wifi-post-secure-eapol-settle eapol_secure={} eapol_rx={} changed={} quiet_ms={} target_ms={} remaining_ms={} next_ready_ms={} now_ms={}",
+                        counters.wifi_host_eapol_secure,
                         counters.wifi_host_eapol_rx,
-                        self.wifi_dhcp_eapol_quiet_since_ms
-                            .map(|since_ms| now_ms.saturating_sub(since_ms))
-                            .unwrap_or(0),
+                        settle.changed,
+                        settle.quiet_ms,
+                        CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS,
+                        settle.remaining_ms,
+                        settle.next_ready_ms.unwrap_or(0),
                         now_ms
                     );
                     self.wifi_dhcp_eapol_settle_logged = true;
@@ -5963,14 +6037,14 @@ impl<D: NetDevice> NetStack<D> {
             session_state.last_flush_log_ms = now_ms;
         }
         session_state.flush_blocked_since = None;
-        let mut sent_frames: u32 = 0;
-        let mut sent_bytes: usize = 0;
+        let mut staged_frames: u32 = 0;
+        let mut staged_bytes: usize = 0;
         while let Some(line) = server.pop_outbound() {
             if pre_auth && !(line.starts_with("OK AUTH") || line.starts_with("ERR AUTH")) {
                 server.push_outbound_front(line);
                 break;
             }
-            if sent_frames >= max_frames || sent_bytes >= max_bytes {
+            if staged_frames >= max_frames || staged_bytes >= max_bytes {
                 server.push_outbound_front(line);
                 break;
             }
@@ -5979,55 +6053,44 @@ impl<D: NetDevice> NetStack<D> {
             } else {
                 OutboundLane::Log
             };
-            let mut frame: HeaplessVec<u8, { DEFAULT_LINE_CAPACITY + 4 }> = HeaplessVec::new();
             let total_len = line.len().saturating_add(4);
-            let total_len_u32 = match u32::try_from(total_len) {
-                Ok(value) => value,
-                Err(_) => {
-                    server.push_outbound_front(line);
-                    break;
-                }
+            if staged_bytes.saturating_add(total_len) > max_bytes {
+                server.push_outbound_front(line);
+                break;
+            }
+            let staged = match lane {
+                OutboundLane::Control => outbound.enqueue_control(line.as_bytes()),
+                OutboundLane::Log => outbound.enqueue_log_lossless(line.as_bytes()),
             };
-            if frame
-                .extend_from_slice(&total_len_u32.to_le_bytes())
-                .is_err()
-                || frame.extend_from_slice(line.as_bytes()).is_err()
-            {
+            if staged.is_err() {
                 server.push_outbound_front(line);
                 break;
             }
-            if sent_bytes.saturating_add(frame.len()) > max_bytes {
-                server.push_outbound_front(line);
-                break;
-            }
-            match Self::send_payload(
-                server,
-                conn_bytes_written,
-                counters,
-                socket,
-                conn_id,
-                auth_state,
-                session_state,
-                now_ms,
-                frame.as_slice(),
-                lane,
-                pre_auth,
-            ) {
-                Ok(()) => {
-                    sent_frames = sent_frames.saturating_add(1);
-                    sent_bytes = sent_bytes.saturating_add(frame.len());
-                    activity = true;
-                }
-                Err(SendError::WouldBlock) => {
-                    telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
-                    server.push_outbound_front(line);
-                    break;
-                }
-                Err(SendError::Fault) => {
-                    server.push_outbound_front(line);
-                    break;
-                }
-            }
+            staged_frames = staged_frames.saturating_add(1);
+            staged_bytes = staged_bytes.saturating_add(total_len);
+        }
+        let max_payload_frames = usize::try_from(max_frames).unwrap_or(usize::MAX);
+        let outcome =
+            outbound.flush_bounded(now_ms, max_payload_frames, max_bytes, |payload, lane| {
+                Self::send_payload(
+                    server,
+                    conn_bytes_written,
+                    counters,
+                    socket,
+                    conn_id,
+                    auth_state,
+                    session_state,
+                    now_ms,
+                    payload,
+                    lane,
+                    pre_auth,
+                )
+            });
+        if outcome.sent_frames != 0 {
+            activity = true;
+        }
+        if outcome.would_block {
+            telemetry.tx_drops = telemetry.tx_drops.saturating_add(1);
         }
         let stats = outbound.stats();
         NET_DIAG.update_outbound_stats(
@@ -6465,27 +6528,12 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         hot_path.as_u32() as usize,
                         crate::drivers::driver_task_net::runtime_ring_service,
                     );
-                    let ring_progress = if hot_path
-                        == crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi
-                        // This is a post-DHCP latency accelerator only. Boot,
-                        // association, and host-EAPOL recovery keep their
-                        // existing bounded service path.
-                        && self.cyw43_flush_pre_poll_data_ready()
-                        && !wifi_host_eapol_blocks_driver_task_pre_poll(
-                            self.device.bringup_status_label(),
-                        )
-                        && crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(
-                            contract,
-                        ) {
-                        service_driver_task_pre_poll_burst_budgeted(
-                            contract,
-                            hot_path,
-                            NET_RING_FLAG_BUDGETED,
-                            budget,
-                        )
-                    } else {
-                        false
-                    };
+                    let ring_progress =
+                        if hot_path == crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi {
+                            self.service_cyw43_data_pre_poll_burst_budgeted(contract, budget)
+                        } else {
+                            false
+                        };
                     return Ok(self.flush_budgeted_tcp_with_time(now_ms, budget) || ring_progress);
                 }
                 let _ = hot_path;
@@ -7431,36 +7479,42 @@ mod tests {
         let mut last_rx = 0;
         let mut quiet_since_ms = None;
 
-        assert!(!cyw43_dhcp_post_secure_eapol_quiet(
-            1_000,
-            1,
-            18,
-            &mut last_rx,
-            &mut quiet_since_ms
-        ));
+        let first =
+            cyw43_dhcp_post_secure_eapol_settle(1_000, 1, 18, &mut last_rx, &mut quiet_since_ms);
+        assert!(!first.ready);
+        assert!(first.changed);
+        assert_eq!(first.quiet_ms, 0);
+        assert_eq!(first.remaining_ms, CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS);
+        assert_eq!(first.next_ready_ms, Some(1_500));
         assert_eq!(last_rx, 18);
         assert_eq!(quiet_since_ms, Some(1_000));
-        assert!(!cyw43_dhcp_post_secure_eapol_quiet(
-            1_499,
-            1,
-            18,
-            &mut last_rx,
-            &mut quiet_since_ms
-        ));
-        assert!(cyw43_dhcp_post_secure_eapol_quiet(
-            1_500,
-            1,
-            18,
-            &mut last_rx,
-            &mut quiet_since_ms
-        ));
-        assert!(!cyw43_dhcp_post_secure_eapol_quiet(
-            1_600,
-            1,
-            19,
-            &mut last_rx,
-            &mut quiet_since_ms
-        ));
+
+        let early =
+            cyw43_dhcp_post_secure_eapol_settle(1_499, 1, 18, &mut last_rx, &mut quiet_since_ms);
+        assert!(!early.ready);
+        assert!(!early.changed);
+        assert_eq!(early.quiet_ms, 499);
+        assert_eq!(early.remaining_ms, 1);
+        assert_eq!(early.next_ready_ms, Some(1_500));
+
+        let ready =
+            cyw43_dhcp_post_secure_eapol_settle(1_500, 1, 18, &mut last_rx, &mut quiet_since_ms);
+        assert!(ready.ready);
+        assert!(!ready.changed);
+        assert_eq!(ready.quiet_ms, CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS);
+        assert_eq!(ready.remaining_ms, 0);
+        assert_eq!(ready.next_ready_ms, Some(1_500));
+
+        let retransmit =
+            cyw43_dhcp_post_secure_eapol_settle(1_600, 1, 19, &mut last_rx, &mut quiet_since_ms);
+        assert!(!retransmit.ready);
+        assert!(retransmit.changed);
+        assert_eq!(retransmit.quiet_ms, 0);
+        assert_eq!(
+            retransmit.remaining_ms,
+            CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS
+        );
+        assert_eq!(retransmit.next_ready_ms, Some(2_100));
         assert_eq!(last_rx, 19);
         assert_eq!(quiet_since_ms, Some(1_600));
     }

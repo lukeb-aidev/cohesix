@@ -227,6 +227,8 @@ const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 #[cfg(feature = "net-console")]
 const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
 #[cfg(feature = "net-console")]
+const PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS: usize = 4;
+#[cfg(feature = "net-console")]
 // Network-origin NineDoor commands may enqueue multiple TCP response segments;
 // keep a small bounded flush window so replies are not deferred behind later
 // event-loop work during Genet bursts.
@@ -241,6 +243,8 @@ const NET_CYW43_HOT_DISPATCH_ROUNDS: usize = 6;
 const NET_CYW43_POST_DISPATCH_FLUSH_POLLS: usize = 12;
 #[cfg(feature = "net-console")]
 const NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 24;
+#[cfg(feature = "net-console")]
+const NET_CYW43_POST_FLUSH_INGEST_POLLS: usize = 4;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
@@ -377,6 +381,15 @@ fn net_status_active_interface_is_wifi(status: &NetStatusReport) -> bool {
 }
 
 #[cfg(feature = "net-console")]
+fn net_status_needs_wifi_pre_root_dhcp_followup(status: &NetStatusReport) -> bool {
+    net_status_active_interface_is_wifi(status)
+        && !net_status_allows_root_console(status)
+        && net_status_terminal_failure_reason(status).is_none()
+        && (matches!(status.address_source, "dhcp-pending")
+            || matches!(status.dhcp_phase, "selecting" | "requesting"))
+}
+
+#[cfg(feature = "net-console")]
 fn net_status_wifi_relevant(status: &NetStatusReport) -> bool {
     matches!(status.interface_policy, "wifi" | "auto")
         || status.active_interface == "wifi"
@@ -505,7 +518,8 @@ fn net_status_should_yield_to_physical_input(status: &NetStatusReport) -> bool {
 
 #[cfg(feature = "net-console")]
 fn net_status_needs_physical_pressure_service(status: &NetStatusReport) -> bool {
-    net_status_active_interface_is_wired(status) && status.address_source == "dhcp-lease"
+    (net_status_active_interface_is_wired(status) && status.address_source == "dhcp-lease")
+        || net_status_cyw43_data_ready(status)
 }
 
 #[cfg(feature = "net-console")]
@@ -2115,6 +2129,22 @@ where
         self.poll_runtime(true, false);
     }
 
+    #[cfg(feature = "net-console")]
+    pub fn poll_pre_root_wifi_dhcp_followup(&mut self) -> u32 {
+        let mut polls = 0u32;
+        for _ in 0..PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS {
+            if !self.net_console_needs_wifi_pre_root_dhcp_followup() {
+                break;
+            }
+            self.poll_pre_root_network();
+            polls = polls.saturating_add(1);
+            if self.net_console_ready_for_root() {
+                break;
+            }
+        }
+        polls
+    }
+
     fn poll_runtime(&mut self, suppress_console_input: bool, physical_input_active: bool) {
         #[cfg(not(feature = "net-console"))]
         let _ = suppress_console_input;
@@ -2346,6 +2376,7 @@ where
         let net_contract = net.driver_task_contract();
         let mut flush_polls = 0u64;
         let mut flush_exhausted = false;
+        let mut flush_activity = false;
         for _ in 0..flush_limit {
             let mut net_budget = match DriverServiceBudget::new(net_contract) {
                 Ok(budget) => budget,
@@ -2367,6 +2398,7 @@ where
                         flush_exhausted = false;
                         break;
                     }
+                    flush_activity = true;
                     flush_exhausted = true;
                 }
                 Err(err) => {
@@ -2392,6 +2424,37 @@ where
                 .metrics
                 .net_post_dispatch_flush_exhaustions
                 .saturating_add(1);
+        }
+        if flush_activity && net_status_cyw43_data_ready(&net.status_report()) {
+            for _ in 0..NET_CYW43_POST_FLUSH_INGEST_POLLS {
+                let mut net_budget = match DriverServiceBudget::new(net_contract) {
+                    Ok(budget) => budget,
+                    Err(err) => {
+                        let message = format_message(format_args!(
+                            "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                            net_contract.name,
+                            err.reason(),
+                            net_contract.max_service_us(),
+                        ));
+                        self.audit.denied(message.as_str());
+                        break;
+                    }
+                };
+                match net.poll_with_budget(self.now_ms, &mut net_budget) {
+                    Ok(true) => {}
+                    Ok(false) => break,
+                    Err(err) => {
+                        let message = format_message(format_args!(
+                            "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                            net_contract.name,
+                            err.reason(),
+                            net_contract.max_service_us(),
+                        ));
+                        self.audit.denied(message.as_str());
+                        break;
+                    }
+                }
+            }
         }
 
         Some(net.ingest_snapshot())
@@ -2801,6 +2864,14 @@ where
         self.net
             .as_ref()
             .and_then(|net| net_status_pre_root_serial_release_reason(&net.status_report()))
+    }
+
+    #[cfg(feature = "net-console")]
+    pub fn net_console_needs_wifi_pre_root_dhcp_followup(&self) -> bool {
+        match self.net.as_ref() {
+            Some(net) => net_status_needs_wifi_pre_root_dhcp_followup(&net.status_report()),
+            None => false,
+        }
     }
 
     /// Returns whether the NineDoor bridge is enabled.
@@ -16364,9 +16435,12 @@ mod tests {
         tcp_flushes: usize,
         tcp_flush_send_counts: heapless::Vec<usize, 32>,
         tcp_flush_activity_remaining: usize,
+        release_line_after_flush_poll: bool,
+        released_line_after_flush_poll: bool,
         exhaust_poll_budget: bool,
         exhaust_flush_budget: bool,
         disconnect_requests: usize,
+        driver_contract: crate::hal::driver_task::DriverTaskContract,
     }
 
     #[cfg(feature = "net-console")]
@@ -16382,9 +16456,12 @@ mod tests {
                 tcp_flushes: 0,
                 tcp_flush_send_counts: heapless::Vec::new(),
                 tcp_flush_activity_remaining: 0,
+                release_line_after_flush_poll: false,
+                released_line_after_flush_poll: false,
                 exhaust_poll_budget: false,
                 exhaust_flush_budget: false,
                 disconnect_requests: 0,
+                driver_contract: crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
             }
         }
     }
@@ -16393,6 +16470,15 @@ mod tests {
     impl NetPoller for FakeNet {
         fn poll(&mut self, _now_ms: u64) -> bool {
             self.polls = self.polls.saturating_add(1);
+            if self.release_line_after_flush_poll
+                && !self.released_line_after_flush_poll
+                && self.tcp_flushes != 0
+            {
+                let mut line = HeaplessString::new();
+                assert!(line.push_str("ping").is_ok());
+                assert!(self.lines.push(ConsoleLine::new(line, 9001)).is_ok());
+                self.released_line_after_flush_poll = true;
+            }
             true
         }
 
@@ -16426,7 +16512,7 @@ mod tests {
         }
 
         fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {
-            crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
+            self.driver_contract
         }
 
         fn telemetry(&self) -> NetTelemetry {
@@ -17454,6 +17540,45 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn cyw43_post_flush_ingest_pulls_next_request_into_hot_dispatch_turn() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.backend = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.tcp_flush_activity_remaining = 1;
+        net.release_line_after_flush_poll = true;
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 1)).is_ok());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        let metrics = pump.metrics;
+        drop(pump);
+
+        assert_eq!(metrics.accepted_commands, 2);
+        assert!(net.released_line_after_flush_poll);
+        assert_eq!(net.lines.len(), 0);
+        assert!(net.polls > 1);
+        assert!(
+            net.sent
+                .iter()
+                .filter(|line| line.as_str().starts_with("OK PING"))
+                .count()
+                >= 2
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn non_data_ready_net_dispatch_stays_single_burst() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
@@ -17516,6 +17641,73 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn wifi_pre_root_dhcp_followup_is_limited_to_wifi_dhcp_progress() {
+        let mut wifi = NetStatusReport::default();
+        wifi.active_interface = "wifi";
+        wifi.address_source = "dhcp-pending";
+        wifi.dhcp_phase = "selecting";
+        assert!(net_status_needs_wifi_pre_root_dhcp_followup(&wifi));
+
+        let mut wired = wifi.clone();
+        wired.active_interface = "wired";
+        assert!(!net_status_needs_wifi_pre_root_dhcp_followup(&wired));
+
+        let mut bound = wifi.clone();
+        bound.address_source = "dhcp-lease";
+        bound.dhcp_phase = "bound";
+        assert!(!net_status_needs_wifi_pre_root_dhcp_followup(&bound));
+
+        let mut terminal = wifi.clone();
+        terminal.address_source = "wifi-association-failed";
+        terminal.dhcp_phase = "wifi-association-failed";
+        assert!(!net_status_needs_wifi_pre_root_dhcp_followup(&terminal));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn pre_root_wifi_dhcp_followup_polls_bounded_extra_turns() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-pending";
+        net.status.dhcp_phase = "selecting";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        assert_eq!(
+            pump.poll_pre_root_wifi_dhcp_followup(),
+            PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS as u32
+        );
+        drop(pump);
+        assert_eq!(net.polls, PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn pre_root_wifi_dhcp_followup_skips_wired_paths() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.active_interface = "wired";
+        net.status.address_source = "dhcp-pending";
+        net.status.dhcp_phase = "selecting";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        assert_eq!(pump.poll_pre_root_wifi_dhcp_followup(), 0);
+        drop(pump);
+        assert_eq!(net.polls, 0);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn host_eapol_pending_uses_small_runtime_burst_without_input_pressure() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
@@ -17558,7 +17750,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn wired_dhcp_lease_needs_physical_pressure_service() {
+    fn dhcp_lease_data_paths_need_physical_pressure_service() {
         let mut wired = NetStatusReport::default();
         wired.active_interface = "wired";
         wired.address_source = "dhcp-lease";
@@ -17566,13 +17758,28 @@ mod tests {
         assert!(net_status_needs_physical_pressure_service(&wired));
 
         let mut wifi = wired.clone();
+        wifi.backend = "cyw43";
         wifi.active_interface = "wifi";
-        assert!(!net_status_needs_physical_pressure_service(&wifi));
+        assert!(net_status_needs_physical_pressure_service(&wifi));
+
+        let mut stack_reported_wifi = wired.clone();
+        stack_reported_wifi.backend = "bcmgenet-v5";
+        stack_reported_wifi.active_interface = "wifi";
+        assert!(net_status_needs_physical_pressure_service(
+            &stack_reported_wifi
+        ));
 
         let mut pre_lease = wired.clone();
         pre_lease.address_source = "dhcp-pending";
         pre_lease.dhcp_phase = "requesting";
         assert!(!net_status_needs_physical_pressure_service(&pre_lease));
+
+        let mut wifi_host_eapol = wifi.clone();
+        wifi_host_eapol.address_source = "wifi-host-eapol-required";
+        wifi_host_eapol.dhcp_phase = "host-eapol-required";
+        assert!(!net_status_needs_physical_pressure_service(
+            &wifi_host_eapol
+        ));
     }
 
     #[cfg(feature = "net-console")]
@@ -17917,6 +18124,33 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.serial_mut().enqueue_tx(
             b"serial backlog must coexist with Genet ARP and TCP setup after DHCP binds",
+        );
+        pump.poll();
+        let emitted = pump.serial_mut().driver_mut().drain_tx();
+        drop(pump);
+
+        assert_eq!(net.polls, 1);
+        assert!(!emitted.is_empty());
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn wifi_dhcp_lease_services_network_under_serial_backlog() {
+        let driver = LoopbackSerial::<8>::new();
+        let serial = SerialPort::<_, 32, 128, 64>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.backend = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().enqueue_tx(
+            b"serial backlog must coexist with CYW43 ARP and TCP setup after DHCP binds",
         );
         pump.poll();
         let emitted = pump.serial_mut().driver_mut().drain_tx();
@@ -19104,11 +19338,18 @@ mod tests {
             let driver = pump.serial_mut().driver_mut();
             driver.push_rx(b"tail /log/queen.log\n");
         }
-        pump.poll();
-        let transcript = {
-            let driver = pump.serial_mut().driver_mut();
-            driver.drain_tx()
-        };
+        let mut transcript = Vec::new();
+        for _ in 0..64 {
+            pump.poll();
+            let tx = {
+                let driver = pump.serial_mut().driver_mut();
+                driver.drain_tx()
+            };
+            transcript.extend(tx);
+            if transcript.windows(5).any(|window| window == b"END\r\n") {
+                break;
+            }
+        }
         let rendered = String::from_utf8(transcript.into_iter().collect())
             .expect("serial output must be utf8");
         assert!(

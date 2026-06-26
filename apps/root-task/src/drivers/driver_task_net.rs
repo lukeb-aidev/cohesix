@@ -11524,6 +11524,11 @@ fn cyw43_tx_retry_should_yield(
     }
     match completion {
         Some(completion) => {
+            if completion.code == DriverTaskCompletionCode::Fault.as_u16()
+                && cyw43_fault_detail_allows_same_command_retry(completion.detail)
+            {
+                return false;
+            }
             completion.code == DriverTaskCompletionCode::Idle.as_u16()
                 || completion.code == DriverTaskCompletionCode::BudgetExhausted.as_u16()
                 || completion.code == DriverTaskCompletionCode::Fault.as_u16()
@@ -19261,6 +19266,20 @@ mod tests {
             false
         ));
         assert!(!cyw43_tx_retry_should_yield(
+            Some(DriverTaskCompletionRecord {
+                sequence: 7,
+                code: DriverTaskCompletionCode::Fault.as_u16(),
+                detail: CYW43_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL,
+                result: 0x0500_0800,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            }),
+            false
+        ));
+        assert!(!cyw43_tx_retry_should_yield(
             Some(DriverTaskCompletionRecord::idle(7)),
             true
         ));
@@ -19295,7 +19314,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_fault_completion_yields_without_hammering_retries() {
+    fn cyw43_data_tx_retries_retryable_fault_completion() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -19303,12 +19322,39 @@ mod tests {
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS.store(1, Ordering::Release);
 
-        assert!(!submit_cyw43_driver_task_eth_frame(
+        assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             b"dhcp-discover"
         ));
-        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
         assert_eq!(CYW43_DATA_TX_RETRIES.load(Ordering::Acquire), 1);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_data_tx_retryable_fault_window_remains_bounded() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS
+            .store(CYW43_DATA_TX_ATTEMPTS as u32, Ordering::Release);
+
+        assert!(!submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"dhcp-request"
+        ));
+        assert_eq!(
+            CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
+            CYW43_DATA_TX_ATTEMPTS as u32
+        );
+        assert_eq!(
+            CYW43_DATA_TX_RETRIES.load(Ordering::Acquire),
+            CYW43_DATA_TX_ATTEMPTS.saturating_sub(1) as u32
+        );
 
         reset_cyw43_status_flags();
     }
