@@ -4758,7 +4758,7 @@ fn emit_driver_task_ring_call_timeout(
     if repeat_count > 1 {
         let _ = write!(line, " repeat_count={}", repeat_count);
     }
-    crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+    emit_driver_task_ring_prompt_progress_line(contract, mode, line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -5517,6 +5517,7 @@ fn emit_driver_task_ring_call_progress(
     contract: DriverTaskContract,
     request: usize,
     command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
     progress: DriverTaskRingProgressRecord,
 ) {
     use core::fmt::Write;
@@ -5555,7 +5556,7 @@ fn emit_driver_task_ring_call_progress(
     if repeat_count > 1 {
         let _ = write!(line, " repeat_count={}", repeat_count);
     }
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    emit_driver_task_ring_prompt_progress_line(contract, mode, line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -5666,7 +5667,29 @@ fn emit_driver_task_ring_call_keep_active(
     if repeat_count > 1 {
         let _ = write!(line, " repeat_count={}", repeat_count);
     }
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    emit_driver_task_ring_prompt_progress_line(contract, mode, line.as_str());
+}
+
+#[cfg(feature = "kernel")]
+fn emit_driver_task_ring_prompt_progress_line(
+    contract: DriverTaskContract,
+    mode: DriverTaskRingCommandMode,
+    line: &str,
+) {
+    if driver_task_ring_prompt_progress_logs_to_buffer(contract, mode) {
+        crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line);
+    } else {
+        crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line);
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_prompt_progress_logs_to_buffer(
+    contract: DriverTaskContract,
+    mode: DriverTaskRingCommandMode,
+) -> bool {
+    matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+        && matches!(mode, DriverTaskRingCommandMode::PromptSlice)
 }
 
 #[cfg(feature = "kernel")]
@@ -5773,11 +5796,29 @@ fn driver_task_ring_call_trace_enabled(
 #[cfg(feature = "kernel")]
 fn driver_task_ring_completion_trace_enabled(
     trace_call: bool,
+    command: DriverTaskCommandRecord,
     completion: DriverTaskCompletionRecord,
 ) -> bool {
-    trace_call
-        || completion.code == DriverTaskCompletionCode::Fault.as_u16()
+    if trace_call {
+        return true;
+    }
+    if command.flags & DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH != 0
+        && driver_task_ring_completion_is_quiet_expected(completion)
+    {
+        return false;
+    }
+    completion.code == DriverTaskCompletionCode::Fault.as_u16()
         || completion.code == DriverTaskCompletionCode::BudgetExhausted.as_u16()
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_ring_completion_is_quiet_expected(
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    completion.code == DriverTaskCompletionCode::Idle.as_u16()
+        || (completion.code == DriverTaskCompletionCode::Fault.as_u16()
+            && completion.detail == DriverTaskFaultCode::RejectedCommand.as_u16()
+            && completion.result == 0)
 }
 
 #[cfg(feature = "kernel")]
@@ -6710,7 +6751,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
                     if completion.sequence != request as u32 {
                         continue;
                     }
-                    if driver_task_ring_completion_trace_enabled(trace_call, completion) {
+                    if driver_task_ring_completion_trace_enabled(trace_call, command, completion) {
                         emit_driver_task_ring_call_return(contract, endpoint, request, completion);
                     }
                     break;
@@ -6718,7 +6759,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
             }
             driver_task_counter_add(&slot.counters.send_attempts, send_attempts);
             driver_task_counter_add(&slot.counters.yield_count, yield_count);
-        } else if driver_task_ring_completion_trace_enabled(trace_call, completion) {
+        } else if driver_task_ring_completion_trace_enabled(trace_call, command, completion) {
             emit_driver_task_ring_call_return(contract, endpoint, request, completion);
         }
         if completion.sequence != request as u32 {
@@ -6747,7 +6788,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
                 );
             }
             if trace_timeout {
-                emit_driver_task_ring_call_progress(contract, request, command, progress);
+                emit_driver_task_ring_call_progress(contract, request, command, mode, progress);
             }
         }
     } else if physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs))
@@ -6777,7 +6818,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
         // page; the reply boundary guarantees the isolated runtime had a chance
         // to publish the shared-frame result.
         completion = unsafe { core::ptr::read_volatile(completion_ptr) };
-        if driver_task_ring_completion_trace_enabled(trace_call, completion) {
+        if driver_task_ring_completion_trace_enabled(trace_call, command, completion) {
             emit_driver_task_ring_call_return(contract, endpoint, request, completion);
         }
     } else {
@@ -6877,7 +6918,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
     if completion.sequence == request as u32 {
         driver_task_record_completion_counters(slot, completion);
         if completion.code == DriverTaskCompletionCode::Fault.as_u16()
-            && driver_task_ring_completion_trace_enabled(trace_call, completion)
+            && driver_task_ring_completion_trace_enabled(trace_call, command, completion)
         {
             let progress = driver_task_ring_read_progress_record(ring_root_ptr);
             if driver_task_ring_progress_should_record_for_request(
@@ -6888,7 +6929,7 @@ fn run_driver_task_ring_command_with_mode_and_staging(
             ) {
                 record_driver_task_ring_progress(slot, progress);
             }
-            emit_driver_task_ring_call_progress(contract, request, command, progress);
+            emit_driver_task_ring_call_progress(contract, request, command, mode, progress);
         }
         if let (Some(start_ticks), Some(end_ticks), Some(counter_frequency)) = (
             start_ticks,
@@ -7138,8 +7179,10 @@ fn emit_driver_task_resource_init_status_with_context(
     if repeat_count > 1 {
         let _ = write!(line, " repeat_count={}", repeat_count);
     }
-    if driver_task_resource_status_requires_uart(status) {
+    if driver_task_resource_status_requires_uart(contract, hot_path, stage, status) {
         crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    } else if driver_task_resource_status_logs_to_buffer(contract, hot_path, stage, status) {
+        crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
     } else {
         crate::bootstrap::log::force_uart_line(line.as_str());
     }
@@ -7183,7 +7226,15 @@ fn driver_task_resource_next_action(stage: &str, status: &str) -> &'static str {
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_resource_status_requires_uart(status: &str) -> bool {
+fn driver_task_resource_status_requires_uart(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    stage: &str,
+    status: &str,
+) -> bool {
+    if driver_task_resource_status_logs_to_buffer(contract, hot_path, stage, status) {
+        return false;
+    }
     status == "failed"
         || status == "no-reply"
         || status == "invalid-contract"
@@ -7195,6 +7246,64 @@ fn driver_task_resource_status_requires_uart(status: &str) -> bool {
         || status == "tx-no-reply"
         || status == "tx-submit-fail"
         || status.starts_with("blocked")
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_resource_status_logs_to_buffer(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    stage: &str,
+    status: &str,
+) -> bool {
+    let _ = contract;
+    hot_path == DriverTaskHotPath::UsbKeyboard
+        && driver_task_usb_resource_status_logs_to_buffer(stage, status)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_usb_resource_status_logs_to_buffer(stage: &str, status: &str) -> bool {
+    if matches!(
+        status,
+        "failed"
+            | "fault"
+            | "invalid-contract"
+            | "slot-missing"
+            | "no-endpoint"
+            | "ring-missing"
+            | "busy"
+            | "poll-timeout"
+            | "tx-no-reply"
+            | "tx-submit-fail"
+            | "unexpected-completion"
+            | "descriptor-rejected"
+            | "no-reply"
+    ) || status.ends_with("failed")
+    {
+        return false;
+    }
+    matches!(
+        stage,
+        "usb-runtime-descriptor-replay"
+            | "runtime-descriptor-replay"
+            | "usb-engine-init"
+            | "usb-xhci-init"
+            | "usb-owner-state"
+            | "usb-keyboard-enumeration"
+            | "usb-keyboard-enumeration-resume"
+            | "usb-keyboard-enumeration-retry"
+            | "usb-keyboard-first-report"
+    ) && (matches!(status, "ready" | "resumed" | "pending" | "progress")
+        || status.starts_with("blocked")
+        || matches!(
+            status,
+            "command-ring-ready"
+                | "root-port-connected"
+                | "device-addressed"
+                | "device-descriptor"
+                | "config-descriptor"
+                | "hid-endpoint-not-ready"
+                | "hub-topology-no-keyboard"
+        ))
 }
 
 #[cfg(feature = "kernel")]
@@ -7278,45 +7387,17 @@ fn driver_task_usb_resource_status_mirrors_to_hdmi(stage: &str, status: &str) ->
         || status == "no-endpoint"
         || status == "ring-missing"
         || status == "busy"
+        || status == "no-reply"
         || status == "poll-timeout"
         || status == "tx-no-reply"
         || status == "tx-submit-fail"
         || status == "unexpected-completion"
         || status == "descriptor-rejected"
         || status.ends_with("failed")
-        || status.starts_with("blocked")
     {
         return true;
     }
-    if matches!(
-        stage,
-        "usb-runtime-descriptor-replay"
-            | "runtime-descriptor-replay"
-            | "usb-engine-init"
-            | "usb-xhci-init"
-            | "usb-owner-state"
-            | "usb-keyboard-first-report"
-    ) {
-        return matches!(status, "ready" | "resumed");
-    }
-    if matches!(
-        stage,
-        "usb-keyboard-enumeration"
-            | "usb-keyboard-enumeration-resume"
-            | "usb-keyboard-enumeration-retry"
-    ) {
-        return matches!(
-            status,
-            "command-ring-ready"
-                | "root-port-connected"
-                | "device-addressed"
-                | "device-descriptor"
-                | "config-descriptor"
-                | "hid-endpoint-not-ready"
-                | "hub-topology-no-keyboard"
-                | "ready"
-        );
-    }
+    let _ = stage;
     false
 }
 
@@ -10561,10 +10642,12 @@ mod tests {
         ));
         assert!(!driver_task_ring_completion_trace_enabled(
             false,
+            rx_command,
             DriverTaskCompletionRecord::progress(92, 1)
         ));
         assert!(driver_task_ring_completion_trace_enabled(
             false,
+            rx_command,
             DriverTaskCompletionRecord::budget_exhausted(
                 92,
                 DriverServiceBudgetError::BytesExhausted
@@ -10572,6 +10655,7 @@ mod tests {
         ));
         assert!(driver_task_ring_completion_trace_enabled(
             false,
+            rx_command,
             DriverTaskCompletionRecord::fault(92, DriverTaskFaultCode::RejectedCommand)
         ));
         assert!(driver_task_ring_timeout_trace_enabled(
@@ -10587,6 +10671,16 @@ mod tests {
             false,
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             quiet_rx_command
+        ));
+        assert!(!driver_task_ring_completion_trace_enabled(
+            false,
+            quiet_rx_command,
+            DriverTaskCompletionRecord::fault(92, DriverTaskFaultCode::RejectedCommand)
+        ));
+        assert!(driver_task_ring_completion_trace_enabled(
+            false,
+            quiet_rx_command,
+            DriverTaskCompletionRecord::fault(92, DriverTaskFaultCode::DeviceUnavailable)
         ));
         assert!(quiet_rx_command.owner_state_credit_eligible());
 
@@ -10906,6 +11000,61 @@ mod tests {
         assert_eq!(slot.timeout_resumes.load(Ordering::Acquire), 0);
 
         clear_driver_task_transport(contract);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_prompt_slice_progress_routes_to_log_buffer_after_prompt() {
+        assert!(driver_task_ring_prompt_progress_logs_to_buffer(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskRingCommandMode::PromptSlice
+        ));
+        assert!(!driver_task_ring_prompt_progress_logs_to_buffer(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskRingCommandMode::NonBlocking
+        ));
+        assert!(!driver_task_ring_prompt_progress_logs_to_buffer(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskRingCommandMode::PromptSlice
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_transient_resource_progress_stays_off_interactive_surfaces() {
+        assert!(driver_task_resource_status_logs_to_buffer(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-owner-state",
+            "blocked-keyboard-enumeration"
+        ));
+        assert!(!driver_task_resource_status_requires_uart(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-owner-state",
+            "blocked-keyboard-enumeration"
+        ));
+        assert!(!driver_task_usb_resource_status_mirrors_to_hdmi(
+            "usb-owner-state",
+            "blocked-keyboard-enumeration"
+        ));
+
+        assert!(driver_task_resource_status_requires_uart(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-first-report",
+            "no-reply"
+        ));
+        assert!(driver_task_usb_resource_status_mirrors_to_hdmi(
+            "usb-keyboard-first-report",
+            "no-reply"
+        ));
+        assert!(driver_task_resource_status_requires_uart(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-owner-state",
+            "blocked-runtime"
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -12834,13 +12983,36 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn routine_resource_statuses_can_leave_interactive_uart() {
-        assert!(!driver_task_resource_status_requires_uart("begin"));
-        assert!(!driver_task_resource_status_requires_uart("ready"));
+        assert!(!driver_task_resource_status_requires_uart(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-owner-state",
+            "begin"
+        ));
+        assert!(!driver_task_resource_status_requires_uart(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-owner-state",
+            "ready"
+        ));
         assert!(driver_task_resource_status_requires_uart(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-owner-state",
             "blocked-live-proof-missing"
         ));
-        assert!(driver_task_resource_status_requires_uart("no-reply"));
-        assert!(driver_task_resource_status_requires_uart("failed"));
+        assert!(driver_task_resource_status_requires_uart(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-owner-state",
+            "no-reply"
+        ));
+        assert!(driver_task_resource_status_requires_uart(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-owner-state",
+            "failed"
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -14482,10 +14654,12 @@ mod tests {
         ));
         assert!(!driver_task_ring_completion_trace_enabled(
             false,
+            tx_command,
             DriverTaskCompletionRecord::progress(91, 1)
         ));
         assert!(driver_task_ring_completion_trace_enabled(
             false,
+            tx_command,
             DriverTaskCompletionRecord::budget_exhausted(
                 91,
                 DriverServiceBudgetError::BytesExhausted
@@ -14493,6 +14667,7 @@ mod tests {
         ));
         assert!(driver_task_ring_completion_trace_enabled(
             false,
+            tx_command,
             DriverTaskCompletionRecord::fault(91, DriverTaskFaultCode::RejectedCommand)
         ));
         assert!(driver_task_ring_timeout_trace_enabled(

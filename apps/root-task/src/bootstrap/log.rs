@@ -401,6 +401,27 @@ fn append_ordered_log_line(line: &str, suffix: &str) {
     log_buffer::append_log_line(ordered.as_str());
 }
 
+/// Retain an ordered diagnostic in `/log/queen.log` after log handoff without
+/// touching the interactive UART. Before handoff, fall back to raw UART so early
+/// boot evidence is not lost.
+pub fn force_log_buffer_line_or_uart_without_prompt_refresh(line: &str) {
+    force_log_buffer_line_or_uart_with_console_seq(line, next_console_event_seq());
+}
+
+/// Retain an ordered diagnostic in `/log/queen.log` with a caller-provided
+/// ordering id, falling back to raw UART before the log channel exists.
+pub fn force_log_buffer_line_or_uart_with_console_seq(line: &str, console_seq: u32) {
+    if line.trim().is_empty() {
+        return;
+    }
+    if log_buffer::log_channel_active() {
+        let suffix = console_ordering_suffix(console_seq, "queen-log", false);
+        append_ordered_log_line(line, suffix.as_str());
+        return;
+    }
+    force_uart_line_raw_with_console_seq_inner(line, console_seq, false);
+}
+
 fn emit_uart_payload(payload: &[u8], append_crlf: bool) {
     emit_uart_payload_with_suffix(payload, None, append_crlf, true);
 }
@@ -845,6 +866,18 @@ mod tests {
         assert_eq!(
             captured.as_slice(),
             b"[bootstrap-test] hdmi diagnostic console_seq=42 telemetry_sinks=serial prompt_refresh=no\r\n"
+        );
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    #[test]
+    fn force_log_buffer_line_falls_back_to_raw_before_handoff() {
+        sel4::clear_debug_uart_capture();
+        force_log_buffer_line_or_uart_with_console_seq("[bootstrap-test] log-buffer fallback", 44);
+        let captured = sel4::take_debug_uart_capture();
+        assert_eq!(
+            captured.as_slice(),
+            b"[bootstrap-test] log-buffer fallback console_seq=44 telemetry_sinks=serial prompt_refresh=no\r\n"
         );
     }
 

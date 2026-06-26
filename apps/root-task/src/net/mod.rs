@@ -578,6 +578,16 @@ pub struct NetDeviceCounters {
     pub wifi_rx_pending_queue_high_water: u64,
     /// Root preserved CYW43 RX queue drops.
     pub wifi_rx_pending_drops: u64,
+    /// CYW43 linked-runtime RX queue depth from the latest idle trace.
+    pub wifi_rx_runtime_queue_count: u64,
+    /// CYW43 linked-runtime RX queue high-water mark.
+    pub wifi_rx_runtime_queue_high_water: u64,
+    /// CYW43 linked-runtime RX overflow flag, encoded as 0 or 1.
+    pub wifi_rx_runtime_queue_overflow_seen: u64,
+    /// CYW43 linked-runtime RX drain-budget-hit flag, encoded as 0 or 1.
+    pub wifi_rx_runtime_drain_budget_hit: u64,
+    /// CYW43 linked-runtime max frames drained during one service turn.
+    pub wifi_rx_runtime_max_drained_per_turn: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
     /// TX publishes rejected due to duplicate or busy slot state.
@@ -677,6 +687,16 @@ pub struct NetCounters {
     pub wifi_rx_pending_queue_high_water: u64,
     /// Root preserved CYW43 RX queue drops.
     pub wifi_rx_pending_drops: u64,
+    /// CYW43 linked-runtime RX queue depth from the latest idle trace.
+    pub wifi_rx_runtime_queue_count: u64,
+    /// CYW43 linked-runtime RX queue high-water mark.
+    pub wifi_rx_runtime_queue_high_water: u64,
+    /// CYW43 linked-runtime RX overflow flag, encoded as 0 or 1.
+    pub wifi_rx_runtime_queue_overflow_seen: u64,
+    /// CYW43 linked-runtime RX drain-budget-hit flag, encoded as 0 or 1.
+    pub wifi_rx_runtime_drain_budget_hit: u64,
+    /// CYW43 linked-runtime max frames drained during one service turn.
+    pub wifi_rx_runtime_max_drained_per_turn: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
     /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.

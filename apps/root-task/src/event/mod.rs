@@ -126,8 +126,8 @@ use crate::log_buffer;
 use crate::net::NetSelfTestStartResult;
 #[cfg(feature = "net-console")]
 use crate::net::{
-    ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetDiagSnapshot, NetPoller,
-    NetStatusReport, NetTelemetry, CONSOLE_DISPATCH_BURST, NET_DIAG, NET_DIAG_FEATURED,
+    ConsoleLine, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDiagSnapshot,
+    NetPoller, NetStatusReport, NetTelemetry, CONSOLE_DISPATCH_BURST, NET_DIAG, NET_DIAG_FEATURED,
 };
 #[cfg(feature = "kernel")]
 use crate::ninedoor::TelemetryTailMeta;
@@ -368,6 +368,111 @@ fn net_status_needs_host_eapol_burst(status: &NetStatusReport) -> bool {
 #[cfg(feature = "net-console")]
 fn net_status_active_interface_is_wifi(status: &NetStatusReport) -> bool {
     status.active_interface == "wifi"
+}
+
+#[cfg(feature = "net-console")]
+fn net_status_wifi_relevant(status: &NetStatusReport) -> bool {
+    matches!(status.interface_policy, "wifi" | "auto")
+        || status.active_interface == "wifi"
+        || status.standby_interface == "wifi"
+        || status.address_source.starts_with("wifi-")
+        || status.dhcp_phase.starts_with("wifi-")
+}
+
+#[cfg(feature = "net-console")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WifiCredentialWarning {
+    code: &'static str,
+    detail: &'static str,
+    action: &'static str,
+}
+
+#[cfg(feature = "net-console")]
+fn wifi_credential_warning_from_reason(reason: &str) -> Option<WifiCredentialWarning> {
+    match reason {
+        "wifi-psk-invalid" | "invalid-wifi-psk" => Some(WifiCredentialWarning {
+            code: "invalid-config",
+            detail: "psk-format-invalid",
+            action: "check-wifi-password-format",
+        }),
+        "wifi-psk-too-short" => Some(WifiCredentialWarning {
+            code: "invalid-config",
+            detail: "psk-too-short",
+            action: "check-wifi-password-length",
+        }),
+        "wifi-psk-too-long" => Some(WifiCredentialWarning {
+            code: "invalid-config",
+            detail: "psk-too-long",
+            action: "check-wifi-password-length",
+        }),
+        "wifi-ssid-empty" | "wifi-ssid-missing" | "invalid-wifi-ssid" => {
+            Some(WifiCredentialWarning {
+                code: "invalid-config",
+                detail: "ssid-missing-or-invalid",
+                action: "check-wifi-ssid",
+            })
+        }
+        "wifi-ssid-too-long" => Some(WifiCredentialWarning {
+            code: "invalid-config",
+            detail: "ssid-too-long",
+            action: "check-wifi-ssid",
+        }),
+        "host-eapol-m3-mic" | "host-eapol-group-mic" => Some(WifiCredentialWarning {
+            code: "password-or-security-mismatch",
+            detail: "wpa2-key-mic-failed",
+            action: "check-ssid-password-and-wpa2-security",
+        }),
+        "cyw43-association-auth-timeout" => Some(WifiCredentialWarning {
+            code: "ssid-or-security-unavailable",
+            detail: "association-auth-timeout",
+            action: "check-ssid-password-security-and-range",
+        }),
+        "cyw43-association-set-ssid-failed" => Some(WifiCredentialWarning {
+            code: "ssid-or-security-unavailable",
+            detail: "set-ssid-failed",
+            action: "check-ssid-and-ap-availability",
+        }),
+        "cyw43-association-not-associated"
+        | "cyw43-association-event-missing"
+        | "wifi-association-failed" => Some(WifiCredentialWarning {
+            code: "ssid-or-ap-unavailable",
+            detail: "association-not-complete",
+            action: "check-ssid-ap-range-and-security",
+        }),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "net-console")]
+fn wifi_credentials_already_proven(status: &NetStatusReport, stats: &NetCounters) -> bool {
+    status.address_source == "dhcp-lease"
+        || status.dhcp_phase == "bound"
+        || (stats.wifi_assoc != 0 && stats.wifi_link_up != 0 && stats.wifi_host_eapol_secure != 0)
+}
+
+#[cfg(feature = "net-console")]
+fn wifi_credential_warning_for_status(
+    status: &NetStatusReport,
+    stats: &NetCounters,
+    exact_reason: Option<&'static str>,
+) -> Option<WifiCredentialWarning> {
+    if !net_status_wifi_relevant(status) || wifi_credentials_already_proven(status, stats) {
+        return None;
+    }
+    exact_reason
+        .and_then(wifi_credential_warning_from_reason)
+        .or_else(|| wifi_credential_warning_from_reason(status.address_source))
+        .or_else(|| wifi_credential_warning_from_reason(status.dhcp_phase))
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn wifi_runtime_credential_warning_reason() -> Option<&'static str> {
+    crate::drivers::driver_task_net::latest_cyw43_wifi_credential_warning()
+}
+
+#[cfg(all(not(feature = "kernel"), feature = "net-console"))]
+const fn wifi_runtime_credential_warning_reason() -> Option<&'static str> {
+    None
 }
 
 #[cfg(feature = "net-console")]
@@ -1565,9 +1670,9 @@ struct PendingStream {
 }
 
 #[cfg(feature = "kernel")]
-const NET_PENDING_STREAM_FLUSH_LINES_PER_TURN: usize = 16;
+const NET_PENDING_STREAM_FLUSH_LINES_PER_TURN: usize = 48;
 #[cfg(feature = "kernel")]
-const NET_PENDING_STREAM_FLUSH_BYTES_PER_TURN: usize = 4096;
+const NET_PENDING_STREAM_FLUSH_BYTES_PER_TURN: usize = 16 * 1024;
 #[cfg(feature = "kernel")]
 const LOCAL_PENDING_STREAM_FLUSH_LINES_PER_TURN: usize = log_buffer::LOG_EXPORT_BATCH_LINES;
 #[cfg(feature = "kernel")]
@@ -1639,6 +1744,8 @@ where
     net_diag_limiter: RateLimiter<NET_DIAG_RATE_KINDS>,
     #[cfg(feature = "net-console")]
     net_diag_stuck_logged: bool,
+    #[cfg(feature = "net-console")]
+    wifi_credential_warning_emitted: bool,
     #[cfg(feature = "kernel")]
     ninedoor: Option<&'a mut NineDoorBridge>,
     #[cfg(feature = "kernel")]
@@ -1754,6 +1861,8 @@ where
             net_diag_limiter: RateLimiter::<NET_DIAG_RATE_KINDS>::new(NET_DIAG_RATE_LIMIT_MS),
             #[cfg(feature = "net-console")]
             net_diag_stuck_logged: false,
+            #[cfg(feature = "net-console")]
+            wifi_credential_warning_emitted: false,
             #[cfg(feature = "kernel")]
             ninedoor: None,
             #[cfg(feature = "kernel")]
@@ -2301,10 +2410,33 @@ where
     fn net_diag_changed(prev: NetDiagSnapshot, curr: NetDiagSnapshot) -> bool {
         let mut prev = prev;
         let mut curr = curr;
-        // Ignore rapidly changing TX bookkeeping during sustained link failure;
-        // these counters can churn continuously without any meaningful traffic.
+        // Ignore per-packet throughput counters here. NETDIAG remains useful for
+        // structural changes and backpressure, while healthy benchmark traffic
+        // should not keep adding diagnostic lines to the measured log path.
+        prev.rx_irq_count = 0;
+        curr.rx_irq_count = 0;
+        prev.rx_kicks = 0;
+        curr.rx_kicks = 0;
+        prev.rx_desc_posted = 0;
+        curr.rx_desc_posted = 0;
+        prev.rx_used_seen = 0;
+        curr.rx_used_seen = 0;
+        prev.rx_frames_to_stack = 0;
+        curr.rx_frames_to_stack = 0;
         prev.poll_calls = 0;
         curr.poll_calls = 0;
+        prev.rx_frames_into_smoltcp = 0;
+        curr.rx_frames_into_smoltcp = 0;
+        prev.accept_attempts = 0;
+        curr.accept_attempts = 0;
+        prev.bytes_read = 0;
+        curr.bytes_read = 0;
+        prev.bytes_written = 0;
+        curr.bytes_written = 0;
+        prev.rx_cache_clean = 0;
+        curr.rx_cache_clean = 0;
+        prev.rx_cache_invalidate = 0;
+        curr.rx_cache_invalidate = 0;
         prev.tx_submits = 0;
         curr.tx_submits = 0;
         prev.tx_kicks = 0;
@@ -2438,6 +2570,8 @@ where
     pub fn announce_console_ready(&mut self) {
         self.emit_serial_line("Cohesix console ready");
         self.emit_help_serial_only();
+        #[cfg(feature = "net-console")]
+        self.emit_wifi_credential_warning_current_before_prompt();
         debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
         #[cfg(feature = "kernel")]
         boot_log::force_uart_line_raw_without_prompt_refresh(
@@ -2456,7 +2590,6 @@ where
             runtime.mirror_line("Cohesix console ready");
             runtime.mirror_prompt(CONSOLE_PROMPT);
         }
-        self.schedule_post_prompt_local_seat_attach();
         #[cfg(feature = "kernel")]
         if self.ninedoor.is_some() {
             if boot_log::switch_logger_to_log_buffer() {
@@ -2469,6 +2602,7 @@ where
                 );
             }
         }
+        self.schedule_post_prompt_local_seat_attach();
         self.audit.info("console: attach uart");
         #[cfg(feature = "kernel")]
         if let Some(bridge) = self.ninedoor.as_mut() {
@@ -2984,7 +3118,7 @@ where
                 .now_ms
                 .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS);
             #[cfg(all(target_arch = "aarch64", target_os = "none"))]
-            boot_log::force_uart_line_raw_without_prompt_refresh(
+            boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
                 "[local-seat] prompt-settle attach scheduled action=idle-cooperative",
             );
         }
@@ -3055,7 +3189,7 @@ where
                 "[local-seat] post-prompt attach deferred reason={} idle_turns={} now_ms={}",
                 reason, self.post_prompt_local_seat_attach_idle_turns, self.now_ms
             );
-            boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+            boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
         }
     }
 
@@ -3084,7 +3218,7 @@ where
                 "[local-seat] prompt-settle attach active-usb action=arm-cooperative retry_ms={}",
                 POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS
             );
-            boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+            boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
         }
     }
 
@@ -3107,7 +3241,7 @@ where
                     .saturating_add(1);
                 let verbose_attempt = attempt < POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS;
                 if verbose_attempt {
-                    boot_log::force_uart_line_raw_without_prompt_refresh(
+                    boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
                         "[local-seat] prompt-settle attach begin action=arm-cooperative",
                     );
                 }
@@ -3122,8 +3256,7 @@ where
                 );
                 if verbose_attempt || keyboard_probe.attached() {
                     let usb_frontier = "[drivers] USB frontier: prompt-settle linked-runtime probe armed; xHCI/keyboard state preserved";
-                    boot_log::force_uart_line_raw_without_prompt_refresh(usb_frontier);
-                    runtime.mirror_high_impact_line(usb_frontier);
+                    boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(usb_frontier);
                 }
                 #[cfg(feature = "net-console")]
                 {
@@ -3132,10 +3265,9 @@ where
                             "[drivers] WiFi frontier: driver-task replay state preserved {}",
                             wifi_detail
                         ));
-                        boot_log::force_uart_line_raw_without_prompt_refresh(
+                        boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
                             wifi_frontier.as_str(),
                         );
-                        runtime.mirror_high_impact_line(wifi_frontier.as_str());
                     }
                 }
                 if verbose_attempt || keyboard_probe.attached() {
@@ -3149,14 +3281,16 @@ where
                             "deferred"
                         }
                     );
-                    boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+                    boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
                     let mut probe_line = HeaplessString::<128>::new();
                     let _ = write!(
                         probe_line,
                         "[local-seat] prompt-settle usb probe result={}",
                         keyboard_probe.as_str()
                     );
-                    boot_log::force_uart_line_raw_without_prompt_refresh(probe_line.as_str());
+                    boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
+                        probe_line.as_str(),
+                    );
                 }
                 let retry_policy = if keyboard_probe.attached() {
                     None
@@ -3176,10 +3310,12 @@ where
                             "[local-seat] prompt-settle attach retry scheduled action={} retry_ms={}",
                             retry_action, retry_ms
                         );
-                        boot_log::force_uart_line_raw_without_prompt_refresh(retry_line.as_str());
+                        boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
+                            retry_line.as_str(),
+                        );
                     }
                 } else if usb_no_reply {
-                    boot_log::force_uart_line_raw_without_prompt_refresh(
+                    boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
                         "[local-seat] prompt-settle attach suspended reason=driver-task-no-reply action=serial-shell explicit=usb-probe-kbd",
                     );
                 }
@@ -10868,16 +11004,72 @@ where
     }
 
     #[cfg(feature = "net-console")]
+    fn wifi_credential_warning_line(
+        warning: WifiCredentialWarning,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi warning: code={} detail={} action={}",
+            warning.code, warning.detail, warning.action
+        ))
+    }
+
+    #[cfg(feature = "net-console")]
+    fn emit_wifi_credential_warning_for_status(
+        &mut self,
+        status: &NetStatusReport,
+        stats: &NetCounters,
+        force: bool,
+    ) {
+        if self.wifi_credential_warning_emitted && !force {
+            return;
+        }
+        let Some(warning) = wifi_credential_warning_for_status(
+            status,
+            stats,
+            wifi_runtime_credential_warning_reason(),
+        ) else {
+            return;
+        };
+        let line = Self::wifi_credential_warning_line(warning);
+        self.emit_console_line(line.as_str());
+        self.wifi_credential_warning_emitted = true;
+    }
+
+    #[cfg(feature = "net-console")]
+    fn emit_wifi_credential_warning_current_before_prompt(&mut self) {
+        if self.wifi_credential_warning_emitted {
+            return;
+        }
+        let Some(net) = self.net.as_ref() else {
+            return;
+        };
+        let status = net.status_report();
+        let stats = net.stats();
+        let Some(warning) = wifi_credential_warning_for_status(
+            &status,
+            &stats,
+            wifi_runtime_credential_warning_reason(),
+        ) else {
+            return;
+        };
+        let line = Self::wifi_credential_warning_line(warning);
+        self.emit_serial_line(line.as_str());
+        if let Some(runtime) = self.local_seat.as_mut() {
+            if !runtime.root_console_ready() {
+                let _ = runtime.mirror_high_impact_line(line.as_str());
+            }
+        }
+        self.wifi_credential_warning_emitted = true;
+    }
+
+    #[cfg(feature = "net-console")]
     fn emit_wifi_network_status(&mut self) {
         let Some(net) = self.net.as_ref() else {
             return;
         };
         let status = net.status_report();
-        let wifi_relevant = matches!(status.interface_policy, "wifi" | "auto")
-            || status.active_interface == "wifi"
-            || status.standby_interface == "wifi"
-            || status.address_source.starts_with("wifi-");
-        if !wifi_relevant {
+        let stats = net.stats();
+        if !net_status_wifi_relevant(&status) {
             return;
         }
         let line = format_message(format_args!(
@@ -10891,6 +11083,7 @@ where
             status.dhcp_phase,
         ));
         self.emit_console_line(line.as_str());
+        self.emit_wifi_credential_warning_for_status(&status, &stats, true);
     }
 
     #[cfg(feature = "kernel")]
@@ -12178,7 +12371,7 @@ where
                             status.dhcp_phase
                         ));
                         let line_wifi = format_message(format_args!(
-                            "netstats: wifi_assoc={} wifi_link={} eapol_rx={} eapol_start={} eapol_secure={} wifi_rxq_cur={} wifi_rxq_hwm={} wifi_rxq_drops={}",
+                            "netstats: wifi_assoc={} wifi_link={} eapol_rx={} eapol_start={} eapol_secure={} wifi_rxq_cur={} wifi_rxq_hwm={} wifi_rxq_drops={} wifi_runtime_rxq_cur={} wifi_runtime_rxq_hwm={} wifi_runtime_rxq_ovf={} wifi_runtime_rxq_max_drain={} wifi_runtime_rxq_drain_hit={}",
                             stats.wifi_assoc,
                             stats.wifi_link_up,
                             stats.wifi_host_eapol_rx,
@@ -12187,6 +12380,11 @@ where
                             stats.wifi_rx_pending_queue_count,
                             stats.wifi_rx_pending_queue_high_water,
                             stats.wifi_rx_pending_drops,
+                            stats.wifi_rx_runtime_queue_count,
+                            stats.wifi_rx_runtime_queue_high_water,
+                            stats.wifi_rx_runtime_queue_overflow_seen,
+                            stats.wifi_rx_runtime_max_drained_per_turn,
+                            stats.wifi_rx_runtime_drain_budget_hit,
                         ));
                         let line_wired = format_message(format_args!(
                             "netstats: genet_rx_hw={} genet_rx_last_len={} genet_rx_last_ethertype=0x{:04x}",
@@ -12228,6 +12426,7 @@ where
                         self.emit_console_line(line_five.as_str());
                         if net_status_active_interface_is_wifi(&status) {
                             self.emit_console_line(line_wifi.as_str());
+                            self.emit_wifi_credential_warning_for_status(&status, &stats, true);
                         }
                         if net_status_active_interface_is_wired(&status) {
                             self.emit_console_line(line_wired.as_str());
@@ -14912,6 +15111,18 @@ mod tests {
     fn net_diag_changed_ignores_tx_churn_counters() {
         let prev = NetDiagSnapshot::default();
         let mut curr = prev;
+        curr.rx_irq_count = 8;
+        curr.rx_kicks = 8;
+        curr.rx_desc_posted = 8;
+        curr.rx_used_seen = 8;
+        curr.rx_frames_to_stack = 8;
+        curr.poll_calls = 8;
+        curr.rx_frames_into_smoltcp = 8;
+        curr.accept_attempts = 8;
+        curr.bytes_read = 4_096;
+        curr.bytes_written = 8_192;
+        curr.rx_cache_clean = 8;
+        curr.rx_cache_invalidate = 8;
         curr.tx_submits = 10;
         curr.tx_kicks = 10;
         curr.tx_used_seen = 7;
@@ -14932,10 +15143,10 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn net_diag_changed_detects_real_io_progress() {
+    fn net_diag_changed_detects_backpressure_progress() {
         let prev = NetDiagSnapshot::default();
         let mut curr = prev;
-        curr.bytes_written = 1;
+        curr.outbound_would_block = 1;
         assert!(EventPump::<
             LoopbackSerial<16>,
             TestTimer,
@@ -15138,6 +15349,59 @@ mod tests {
             .mirrored_lines_snapshot()
             .iter()
             .any(|line| line.as_str() == CONSOLE_PROMPT));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn console_ready_wifi_warning_reaches_serial_and_hdmi_before_prompt() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status = NetStatusReport {
+            backend: "cyw43",
+            mode: "dhcp",
+            interface_policy: "wifi",
+            active_interface: "wifi",
+            standby_interface: "wired",
+            address_source: "wifi-psk-too-short",
+            ip: HeaplessString::new(),
+            gateway: HeaplessString::new(),
+            dhcp_phase: "disabled",
+        };
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 160,
+            buffer_lines: 8,
+        });
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_local_seat(&mut local_seat);
+
+        pump.announce_console_ready();
+        let ready_emitted = pump.serial_mut().driver_mut().drain_tx();
+        let ready_transcript = core::str::from_utf8(ready_emitted.as_slice()).unwrap();
+
+        assert!(
+            ready_transcript.contains(
+                "wifi warning: code=invalid-config detail=psk-too-short action=check-wifi-password-length"
+            ),
+            "{ready_transcript}"
+        );
+        assert!(ready_transcript.ends_with(CONSOLE_PROMPT));
+        drop(pump);
+        assert!(local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line.as_str().contains("wifi warning: code=invalid-config")));
     }
 
     #[test]
@@ -17625,6 +17889,74 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn wifi_warning_names_password_mic_failure() {
+        let mut status = NetStatusReport {
+            backend: "cyw43",
+            mode: "dhcp",
+            interface_policy: "wifi",
+            active_interface: "wifi",
+            standby_interface: "wired",
+            address_source: "wifi-host-eapol-required",
+            ip: HeaplessString::new(),
+            gateway: HeaplessString::new(),
+            dhcp_phase: "host-eapol-required",
+        };
+        let stats = NetCounters::default();
+
+        assert_eq!(
+            wifi_credential_warning_for_status(
+                &status,
+                &stats,
+                Some("host-eapol-post-secure-ptk-install")
+            ),
+            None
+        );
+
+        let warning =
+            wifi_credential_warning_for_status(&status, &stats, Some("host-eapol-m3-mic"))
+                .expect("M3 MIC failure should warn");
+        assert_eq!(warning.code, "password-or-security-mismatch");
+        assert_eq!(warning.detail, "wpa2-key-mic-failed");
+
+        status.address_source = "dhcp-lease";
+        status.dhcp_phase = "bound";
+        assert_eq!(
+            wifi_credential_warning_for_status(&status, &stats, Some("host-eapol-m3-mic")),
+            None
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn wifi_warning_names_invalid_config_and_association_failure() {
+        let mut status = NetStatusReport {
+            backend: "cyw43",
+            mode: "dhcp",
+            interface_policy: "wifi",
+            active_interface: "wifi",
+            standby_interface: "wired",
+            address_source: "wifi-psk-too-short",
+            ip: HeaplessString::new(),
+            gateway: HeaplessString::new(),
+            dhcp_phase: "disabled",
+        };
+        let stats = NetCounters::default();
+
+        let invalid = wifi_credential_warning_for_status(&status, &stats, None)
+            .expect("invalid PSK should warn");
+        assert_eq!(invalid.code, "invalid-config");
+        assert_eq!(invalid.detail, "psk-too-short");
+
+        status.address_source = "wifi-association-failed";
+        status.dhcp_phase = "wifi-association-failed";
+        let assoc = wifi_credential_warning_for_status(&status, &stats, None)
+            .expect("association failure should warn");
+        assert_eq!(assoc.code, "ssid-or-ap-unavailable");
+        assert_eq!(assoc.detail, "association-not-complete");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn nettest_reports_dhcp_pending_detail() {
         let driver = LoopbackSerial::<128>::new();
         let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -17836,6 +18168,11 @@ mod tests {
         net.counters.wifi_host_eapol_rx = 2;
         net.counters.wifi_host_eapol_start = 1;
         net.counters.wifi_host_eapol_secure = 1;
+        net.counters.wifi_rx_runtime_queue_count = 3;
+        net.counters.wifi_rx_runtime_queue_high_water = 5;
+        net.counters.wifi_rx_runtime_queue_overflow_seen = 0;
+        net.counters.wifi_rx_runtime_max_drained_per_turn = 4;
+        net.counters.wifi_rx_runtime_drain_budget_hit = 1;
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.session = Some(SessionRole::Queen);
         pump.serial_mut().driver_mut().push_rx(b"netstats\n");
@@ -17862,7 +18199,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1 wifi_rxq_cur=0 wifi_rxq_hwm=0 wifi_rxq_drops=0"
+                "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1 wifi_rxq_cur=0 wifi_rxq_hwm=0 wifi_rxq_drops=0 wifi_runtime_rxq_cur=3 wifi_runtime_rxq_hwm=5 wifi_runtime_rxq_ovf=0 wifi_runtime_rxq_max_drain=4 wifi_runtime_rxq_drain_hit=1"
             ),
             "{rendered}"
         );
@@ -17877,6 +18214,43 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("netstats: genet_rx_hw="), "{rendered}");
+        assert!(!rendered.contains("wifi warning:"), "{rendered}");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn netstats_emits_wifi_warning_for_association_failure() {
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.mode = "dhcp";
+        net.status.interface_policy = "wifi";
+        net.status.active_interface = "wifi";
+        net.status.standby_interface = "wired";
+        net.status.address_source = "wifi-association-failed";
+        net.status.dhcp_phase = "wifi-association-failed";
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"netstats\n");
+
+        pump.poll();
+
+        let transcript = {
+            let driver = pump.serial_mut().driver_mut();
+            driver.drain_tx()
+        };
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "wifi warning: code=ssid-or-ap-unavailable detail=association-not-complete action=check-ssid-ap-range-and-security"
+            ),
+            "{rendered}"
+        );
     }
 
     #[test]

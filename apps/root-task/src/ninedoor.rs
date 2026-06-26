@@ -6090,10 +6090,13 @@ impl LeaseState {
         &self,
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<(), NineDoorBridgeError> {
-        let mut out = String::new();
+        output.clear();
+        let mut used_bytes = 0usize;
         for entry in &self.active {
-            let line = format!(
-                "id={} subject={} resource={} ttl_s={} priority={} state={} seq={}\n",
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            write!(
+                line,
+                "id={} subject={} resource={} ttl_s={} priority={} state={} seq={}",
                 entry.id,
                 entry.subject,
                 entry.resource,
@@ -6101,16 +6104,14 @@ impl LeaseState {
                 entry.priority,
                 entry.state,
                 entry.seq
-            );
-            if line.len() > DEFAULT_LINE_CAPACITY {
-                return Err(NineDoorBridgeError::BufferFull);
-            }
-            if !push_bounded_line(&mut out, &line, self.proc_active_bytes) {
+            )
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+            if !push_newline_accounted_line(output, line, &mut used_bytes, self.proc_active_bytes)?
+            {
                 break;
             }
         }
-        output.clear();
-        lines_from_bytes_into(out.as_bytes(), output)
+        Ok(())
     }
 
     fn preemptions_lines(
@@ -6128,21 +6129,26 @@ impl LeaseState {
         &self,
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<(), NineDoorBridgeError> {
-        let mut out = String::new();
+        output.clear();
+        let mut used_bytes = 0usize;
         for entry in &self.preemptions {
-            let line = format!(
-                "id={} subject={} resource={} reason={} seq={}\n",
+            let mut line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            write!(
+                line,
+                "id={} subject={} resource={} reason={} seq={}",
                 entry.id, entry.subject, entry.resource, entry.reason, entry.seq
-            );
-            if line.len() > DEFAULT_LINE_CAPACITY {
-                return Err(NineDoorBridgeError::BufferFull);
-            }
-            if !push_bounded_line(&mut out, &line, self.proc_preemptions_bytes) {
+            )
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+            if !push_newline_accounted_line(
+                output,
+                line,
+                &mut used_bytes,
+                self.proc_preemptions_bytes,
+            )? {
                 break;
             }
         }
-        output.clear();
-        lines_from_bytes_into(out.as_bytes(), output)
+        Ok(())
     }
 }
 
@@ -7238,6 +7244,26 @@ fn push_list_entry(
     output
         .push(line)
         .map_err(|_| NineDoorBridgeError::BufferFull)
+}
+
+fn push_newline_accounted_line(
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    line: HeaplessString<DEFAULT_LINE_CAPACITY>,
+    used_bytes: &mut usize,
+    max_bytes: usize,
+) -> Result<bool, NineDoorBridgeError> {
+    let serialized_len = line.len().saturating_add(1);
+    if serialized_len > DEFAULT_LINE_CAPACITY {
+        return Err(NineDoorBridgeError::BufferFull);
+    }
+    if used_bytes.saturating_add(serialized_len) > max_bytes {
+        return Ok(false);
+    }
+    output
+        .push(line)
+        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+    *used_bytes = used_bytes.saturating_add(serialized_len);
+    Ok(true)
 }
 
 fn lines_from_bytes_into(
@@ -8945,6 +8971,106 @@ mod tests {
         let mut log = Vec::new();
         let err = append_log_bytes(&mut log, "0123456789", 8).unwrap_err();
         assert!(matches!(err, NineDoorBridgeError::InvalidPayload));
+    }
+
+    #[test]
+    fn lease_proc_lines_emit_exact_state_without_temp_buffer() {
+        let control = generated::LeaseControlConfig {
+            enable: true,
+            active_max_entries: 4,
+            preemptions_max_entries: 4,
+            ctl_max_bytes: 1024,
+        };
+        let observability = generated::ProcLeaseConfig {
+            summary: true,
+            active: true,
+            preemptions: true,
+            summary_bytes: 1024,
+            active_bytes: 1024,
+            preemptions_bytes: 1024,
+        };
+        let mut lease = LeaseState::new(control, observability);
+
+        lease
+            .append_ctl(
+                r#"{"op":"grant","id":"lease-1","subject":"worker-1","resource":"gpu0","ttl_s":30,"priority":7}"#,
+            )
+            .expect("grant lease");
+
+        let mut active: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        lease
+            .active_lines_into(&mut active)
+            .expect("render active leases");
+        assert_eq!(active.len(), 1);
+        assert_eq!(
+            active[0].as_str(),
+            "id=lease-1 subject=worker-1 resource=gpu0 ttl_s=30 priority=7 state=ACTIVE seq=1"
+        );
+
+        lease
+            .append_ctl(r#"{"op":"preempt","id":"lease-1","reason":"quota"}"#)
+            .expect("preempt lease");
+
+        lease
+            .active_lines_into(&mut active)
+            .expect("render empty active leases");
+        assert!(active.is_empty());
+
+        let mut preemptions: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        lease
+            .preemptions_lines_into(&mut preemptions)
+            .expect("render preemptions");
+        assert_eq!(preemptions.len(), 1);
+        assert_eq!(
+            preemptions[0].as_str(),
+            "id=lease-1 subject=worker-1 resource=gpu0 reason=quota seq=2"
+        );
+    }
+
+    #[test]
+    fn lease_proc_lines_preserve_newline_counted_byte_budget() {
+        let control = generated::LeaseControlConfig {
+            enable: true,
+            active_max_entries: 4,
+            preemptions_max_entries: 4,
+            ctl_max_bytes: 1024,
+        };
+        let mut observability = generated::ProcLeaseConfig {
+            summary: true,
+            active: true,
+            preemptions: true,
+            summary_bytes: 1024,
+            active_bytes: 1024,
+            preemptions_bytes: 1024,
+        };
+        let mut lease = LeaseState::new(control, observability);
+        lease
+            .append_ctl(
+                r#"{"op":"grant","id":"lease-1","subject":"worker-1","resource":"gpu0","ttl_s":30,"priority":7}"#,
+            )
+            .expect("grant lease");
+
+        let mut active: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        lease
+            .active_lines_into(&mut active)
+            .expect("render active leases");
+        let line_len_without_newline = active[0].len();
+
+        observability.active_bytes = line_len_without_newline as u32;
+        let mut budgeted = LeaseState::new(control, observability);
+        budgeted
+            .append_ctl(
+                r#"{"op":"grant","id":"lease-1","subject":"worker-1","resource":"gpu0","ttl_s":30,"priority":7}"#,
+            )
+            .expect("grant budgeted lease");
+        active.clear();
+        budgeted
+            .active_lines_into(&mut active)
+            .expect("render budgeted active leases");
+        assert!(active.is_empty());
     }
 
     #[test]

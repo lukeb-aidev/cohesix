@@ -3700,7 +3700,40 @@ fn publish_linked_local_seat_usb_first_report_event(
             completion.result,
         );
         boot_log::force_uart_line_raw(line.as_str());
+        emit_linked_local_seat_usb_keyboard_ready_alert(contract, completion, accepted);
     }
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn linked_local_seat_usb_keyboard_ready_alert_line(
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+    accepted: usize,
+) -> heapless::String<192> {
+    use core::fmt::Write;
+
+    let mut line = heapless::String::<192>::new();
+    let _ = write!(
+        line,
+        "usb keyboard ready: first_report=yes first_byte=yes input=local-seat source=linked-runtime-hid accepted={} detail=0x{:04x} result=0x{:08x}",
+        accepted, completion.detail, completion.result,
+    );
+    line
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn emit_linked_local_seat_usb_keyboard_ready_alert(
+    _contract: crate::hal::driver_task::DriverTaskContract,
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+    accepted: usize,
+) {
+    let line = linked_local_seat_usb_keyboard_ready_alert_line(completion, accepted);
+    boot_log::force_uart_line_raw_and_log(line.as_str());
+    let _ = mirror_driver_start_progress_line(line.as_str());
 }
 
 #[cfg(all(
@@ -3830,7 +3863,7 @@ fn emit_linked_local_seat_usb_hub_port_trace(
         progress.map_or("none", |progress| progress.phase_name),
         progress.map_or(0, |progress| progress.aux0),
     );
-    emit_hdmi_diagnostic_line(line.as_str());
+    emit_usb_runtime_progress_diagnostic_line(line.as_str());
 }
 
 #[cfg(all(
@@ -3905,7 +3938,7 @@ fn emit_linked_local_seat_usb_enumeration_snapshot(
             local_seat_yes_no(progress.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX)
         }),
     );
-    boot_log::force_uart_line(line.as_str());
+    emit_usb_runtime_progress_diagnostic_line(line.as_str());
 }
 
 #[cfg(all(
@@ -4294,6 +4327,16 @@ fn emit_hdmi_diagnostic_line(line: &str) {
 ))]
 fn emit_hdmi_diagnostic_line_with_console_seq(line: &str, console_seq: u32) {
     boot_log::force_uart_line_raw_and_log_without_prompt_refresh(line, console_seq);
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+fn emit_usb_runtime_progress_diagnostic_line(line: &str) {
+    boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(line);
 }
 
 #[cfg(all(
@@ -7736,6 +7779,29 @@ mod tests {
         assert!(
             !local_seat_usb_first_report_requires_reenumeration_with_first_byte(completion, true)
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn linked_usb_keyboard_ready_alert_requires_first_byte_proof() {
+        let completion = crate::hal::driver_task::DriverTaskCompletionRecord {
+            sequence: 9,
+            code: crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16(),
+            detail: DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
+            result: 0x0f00_0001,
+            frame: crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 1,
+                flags: 0,
+            },
+        };
+
+        let line = linked_local_seat_usb_keyboard_ready_alert_line(completion, 1);
+
+        assert!(line.contains("usb keyboard ready: first_report=yes first_byte=yes"));
+        assert!(line.contains("input=local-seat"));
+        assert!(line.contains("source=linked-runtime-hid"));
+        assert!(line.contains("accepted=1"));
     }
 
     #[test]

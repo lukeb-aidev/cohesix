@@ -76,6 +76,8 @@ const TCP_RX_BUFFER: usize = 32 * 1024;
 const TCP_TX_BUFFER: usize = 32 * 1024;
 const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 32;
 const MAX_CONSOLE_BYTES_PER_POLL: usize = 20 * 1024;
+const CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN: u32 = 8;
+const CYW43_RESPONSE_FLUSH_BYTES_PER_TURN: usize = 8 * 1024;
 const SAME_TICK_STALL_WARN_POLLS: u16 = 256;
 const MAX_DHCP_RX_PACKETS_PER_POLL: usize = 2;
 const MAX_UDP_ECHO_PACKETS_PER_POLL: usize = 2;
@@ -84,6 +86,7 @@ const MAX_TCP_CONSOLE_RECV_CHUNKS_PER_POLL: usize = 64;
 const MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL: usize = 20 * 1024;
 const TCP_SERVICE_BYTES_PER_TURN: u32 =
     (MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL + MAX_CONSOLE_BYTES_PER_POLL) as u32;
+const TCP_RESPONSE_FLUSH_BYTES_PER_TURN: u32 = CYW43_RESPONSE_FLUSH_BYTES_PER_TURN as u32;
 const MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL: usize = 2;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
@@ -177,6 +180,10 @@ fn dhcp_restart_required_after_mac_sync(
     dhcp_started: bool,
 ) -> bool {
     dhcp_started && matches!(mode, NetMode::Dhcp) && ip == Ipv4Address::UNSPECIFIED
+}
+
+fn budgeted_dhcp_service_required(mode: NetMode, ip: Ipv4Address, dhcp_socket_ready: bool) -> bool {
+    dhcp_socket_ready && matches!(mode, NetMode::Dhcp) && ip == Ipv4Address::UNSPECIFIED
 }
 
 fn console_listener_defer_reason_for(
@@ -1244,10 +1251,7 @@ fn budgeted_cyw43_tcp_fast_path_due(
 
 #[cfg(feature = "kernel")]
 const fn budgeted_cyw43_tcp_phase_borrow_allowed(phase: BudgetedNetPhase) -> bool {
-    matches!(
-        phase,
-        BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush
-    )
+    !matches!(phase, BudgetedNetPhase::Tcp)
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -3093,6 +3097,26 @@ impl<D: NetDevice> NetStack<D> {
         budget.charge_bytes(TCP_SERVICE_BYTES_PER_TURN)
     }
 
+    fn charge_tcp_response_flush_budget(
+        budget: &mut DriverServiceBudget,
+    ) -> Result<(), DriverServiceBudgetError> {
+        budget.charge_ops(16)?;
+        budget.charge_frames(CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN as u16)?;
+        budget.charge_bytes(TCP_RESPONSE_FLUSH_BYTES_PER_TURN)
+    }
+
+    fn charge_dhcp_budget(
+        budget: &mut DriverServiceBudget,
+    ) -> Result<(), DriverServiceBudgetError> {
+        budget.charge_ops(16)?;
+        budget.charge_frames(MAX_DHCP_RX_PACKETS_PER_POLL as u16 + 1)?;
+        budget.charge_bytes((MAX_DHCP_RX_PACKETS_PER_POLL as u32 + 1) * 1024)
+    }
+
+    fn budgeted_dhcp_service_required(&self) -> bool {
+        budgeted_dhcp_service_required(self.mode, self.ip, self.dhcp_handle.is_some())
+    }
+
     fn budgeted_genet_tcp_fast_path_due(&self) -> bool {
         #[cfg(feature = "kernel")]
         {
@@ -3123,6 +3147,17 @@ impl<D: NetDevice> NetStack<D> {
         }
     }
 
+    fn service_budgeted_dhcp_turn(&mut self, timestamp: Instant, now_ms: u64) -> bool {
+        let mut activity = self.poll_smoltcp_once(timestamp, now_ms, "budgeted-pre-dhcp");
+        activity |= self.start_dhcp_if_ready(now_ms);
+        let dhcp_activity = self.service_dhcp(now_ms);
+        activity |= dhcp_activity;
+        if dhcp_activity {
+            activity |= self.poll_smoltcp_once(timestamp, now_ms, "budgeted-post-dhcp");
+        }
+        activity
+    }
+
     fn service_budgeted_tcp_turn(
         &mut self,
         timestamp: Instant,
@@ -3138,6 +3173,42 @@ impl<D: NetDevice> NetStack<D> {
             activity |= self.poll_smoltcp_once(timestamp, now_ms, post_label);
         }
         activity
+    }
+
+    fn service_budgeted_tcp_response_flush_turn(
+        &mut self,
+        timestamp: Instant,
+        now_ms: u64,
+        post_label: &'static str,
+    ) -> bool {
+        if !self.stage_policy.allow_tcp || !self.session_active {
+            return false;
+        }
+        let activity = {
+            let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
+            if socket.state() != TcpState::Established {
+                return false;
+            }
+            Self::flush_outbound(
+                &mut self.server,
+                &mut self.outbound,
+                &mut self.telemetry,
+                &mut self.conn_bytes_written,
+                &mut self.counters,
+                socket,
+                now_ms,
+                self.active_client_id,
+                self.auth_state,
+                &mut self.session_state,
+                CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN,
+                CYW43_RESPONSE_FLUSH_BYTES_PER_TURN,
+            )
+        };
+        if activity {
+            self.poll_smoltcp_once(timestamp, now_ms, post_label)
+        } else {
+            false
+        }
     }
 
     fn flush_budgeted_tcp_with_time(
@@ -3173,6 +3244,21 @@ impl<D: NetDevice> NetStack<D> {
                     now_ms,
                     "budgeted-genet-dispatch-tcp",
                     "budgeted-genet-dispatch-flush",
+                );
+                if !turn_activity {
+                    break;
+                }
+                activity = true;
+            }
+        } else if self.budgeted_cyw43_tcp_fast_path_due() && activity {
+            for _ in 0..CYW43_TCP_POST_DISPATCH_EXTRA_TURNS {
+                if Self::charge_tcp_response_flush_budget(budget).is_err() {
+                    break;
+                }
+                let turn_activity = self.service_budgeted_tcp_response_flush_turn(
+                    timestamp,
+                    now_ms,
+                    "budgeted-cyw43-response-flush",
                 );
                 if !turn_activity {
                     break;
@@ -3317,7 +3403,7 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         if wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
-            self.begin_poll_turn(now_ms);
+            let timestamp = self.begin_poll_turn(now_ms);
             if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
                 self.finish_poll_turn(now_ms, false);
                 return Ok(true);
@@ -3326,7 +3412,10 @@ impl<D: NetDevice> NetStack<D> {
             activity |= self.service_wifi_host_eapol_slice(now_ms);
             activity |= self.sync_interface_hardware_addr(now_ms);
             if !wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
-                activity |= self.start_dhcp_if_ready(now_ms);
+                if self.budgeted_dhcp_service_required() {
+                    Self::charge_dhcp_budget(budget)?;
+                    activity |= self.service_budgeted_dhcp_turn(timestamp, now_ms);
+                }
                 self.budgeted_phase = BudgetedNetPhase::Dhcp;
             }
             self.finish_poll_turn(now_ms, activity);
@@ -3345,9 +3434,7 @@ impl<D: NetDevice> NetStack<D> {
                 budget.charge_bytes(2048)?;
             }
             BudgetedNetPhase::Dhcp => {
-                budget.charge_ops(16)?;
-                budget.charge_frames(MAX_DHCP_RX_PACKETS_PER_POLL as u16 + 1)?;
-                budget.charge_bytes((MAX_DHCP_RX_PACKETS_PER_POLL as u32 + 1) * 1024)?;
+                Self::charge_dhcp_budget(budget)?;
             }
             BudgetedNetPhase::Tcp => {
                 Self::charge_tcp_budget(budget)?;
@@ -3393,11 +3480,7 @@ impl<D: NetDevice> NetStack<D> {
             BudgetedNetPhase::Interface => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
             }
-            BudgetedNetPhase::Dhcp => {
-                let start_activity = self.start_dhcp_if_ready(now_ms);
-                let service_activity = self.service_dhcp(now_ms);
-                start_activity || service_activity
-            }
+            BudgetedNetPhase::Dhcp => self.service_budgeted_dhcp_turn(timestamp, now_ms),
             BudgetedNetPhase::Tcp => self.service_budgeted_tcp_turn(
                 timestamp,
                 now_ms,
@@ -3740,6 +3823,15 @@ impl<D: NetDevice> NetStack<D> {
         self.counters.wifi_rx_pending_queue_high_water =
             device_counters.wifi_rx_pending_queue_high_water;
         self.counters.wifi_rx_pending_drops = device_counters.wifi_rx_pending_drops;
+        self.counters.wifi_rx_runtime_queue_count = device_counters.wifi_rx_runtime_queue_count;
+        self.counters.wifi_rx_runtime_queue_high_water =
+            device_counters.wifi_rx_runtime_queue_high_water;
+        self.counters.wifi_rx_runtime_queue_overflow_seen =
+            device_counters.wifi_rx_runtime_queue_overflow_seen;
+        self.counters.wifi_rx_runtime_drain_budget_hit =
+            device_counters.wifi_rx_runtime_drain_budget_hit;
+        self.counters.wifi_rx_runtime_max_drained_per_turn =
+            device_counters.wifi_rx_runtime_max_drained_per_turn;
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
         self.counters.wifi_assoc = device_counters.wifi_assoc;
         self.counters.wifi_link_up = device_counters.wifi_link_up;
@@ -3790,6 +3882,13 @@ impl<D: NetDevice> NetStack<D> {
             wifi_rx_pending_queue_count: device_counters.wifi_rx_pending_queue_count,
             wifi_rx_pending_queue_high_water: device_counters.wifi_rx_pending_queue_high_water,
             wifi_rx_pending_drops: device_counters.wifi_rx_pending_drops,
+            wifi_rx_runtime_queue_count: device_counters.wifi_rx_runtime_queue_count,
+            wifi_rx_runtime_queue_high_water: device_counters.wifi_rx_runtime_queue_high_water,
+            wifi_rx_runtime_queue_overflow_seen: device_counters
+                .wifi_rx_runtime_queue_overflow_seen,
+            wifi_rx_runtime_drain_budget_hit: device_counters.wifi_rx_runtime_drain_budget_hit,
+            wifi_rx_runtime_max_drained_per_turn: device_counters
+                .wifi_rx_runtime_max_drained_per_turn,
             dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
             wifi_assoc: device_counters.wifi_assoc,
             wifi_link_up: device_counters.wifi_link_up,
@@ -4886,6 +4985,8 @@ impl<D: NetDevice> NetStack<D> {
                         self.active_client_id,
                         self.auth_state,
                         &mut self.session_state,
+                        MAX_CONSOLE_FRAMES_PER_POLL,
+                        MAX_CONSOLE_BYTES_PER_POLL,
                     );
                     if activity {
                         debug!(
@@ -5072,6 +5173,8 @@ impl<D: NetDevice> NetStack<D> {
                                         self.active_client_id,
                                         self.auth_state,
                                         &mut self.session_state,
+                                        MAX_CONSOLE_FRAMES_PER_POLL,
+                                        MAX_CONSOLE_BYTES_PER_POLL,
                                     );
                                     activity = true;
                                 }
@@ -5097,6 +5200,8 @@ impl<D: NetDevice> NetStack<D> {
                                         self.active_client_id,
                                         self.auth_state,
                                         &mut self.session_state,
+                                        MAX_CONSOLE_FRAMES_PER_POLL,
+                                        MAX_CONSOLE_BYTES_PER_POLL,
                                     );
                                     if self.conn_bytes_written == bytes_before {
                                         if Self::send_auth_failure_ack(
@@ -5156,6 +5261,8 @@ impl<D: NetDevice> NetStack<D> {
                                         self.active_client_id,
                                         self.auth_state,
                                         &mut self.session_state,
+                                        MAX_CONSOLE_FRAMES_PER_POLL,
+                                        MAX_CONSOLE_BYTES_PER_POLL,
                                     );
                                     Self::log_session_closed(
                                         &mut self.session_state,
@@ -5313,6 +5420,8 @@ impl<D: NetDevice> NetStack<D> {
                     self.active_client_id,
                     self.auth_state,
                     &mut self.session_state,
+                    MAX_CONSOLE_FRAMES_PER_POLL,
+                    MAX_CONSOLE_BYTES_PER_POLL,
                 );
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
@@ -5370,6 +5479,8 @@ impl<D: NetDevice> NetStack<D> {
                     self.active_client_id,
                     self.auth_state,
                     &mut self.session_state,
+                    MAX_CONSOLE_FRAMES_PER_POLL,
+                    MAX_CONSOLE_BYTES_PER_POLL,
                 );
                 Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
                 socket.close();
@@ -5493,6 +5604,8 @@ impl<D: NetDevice> NetStack<D> {
                     self.active_client_id,
                     self.auth_state,
                     &mut self.session_state,
+                    MAX_CONSOLE_FRAMES_PER_POLL,
+                    MAX_CONSOLE_BYTES_PER_POLL,
                 );
                 outbound_pending |= self.server.has_outbound();
             }
@@ -5619,6 +5732,8 @@ impl<D: NetDevice> NetStack<D> {
         conn_id: Option<u64>,
         auth_state: AuthState,
         session_state: &mut SessionState,
+        max_frames: u32,
+        max_bytes: usize,
     ) -> bool {
         if !socket.can_send() {
             #[cfg(feature = "cohesix-dev")]
@@ -5723,9 +5838,7 @@ impl<D: NetDevice> NetStack<D> {
                 server.push_outbound_front(line);
                 break;
             }
-            if sent_frames >= MAX_CONSOLE_FRAMES_PER_POLL
-                || sent_bytes >= MAX_CONSOLE_BYTES_PER_POLL
-            {
+            if sent_frames >= max_frames || sent_bytes >= max_bytes {
                 server.push_outbound_front(line);
                 break;
             }
@@ -5751,7 +5864,7 @@ impl<D: NetDevice> NetStack<D> {
                 server.push_outbound_front(line);
                 break;
             }
-            if sent_bytes.saturating_add(frame.len()) > MAX_CONSOLE_BYTES_PER_POLL {
+            if sent_bytes.saturating_add(frame.len()) > max_bytes {
                 server.push_outbound_front(line);
                 break;
             }
@@ -6334,6 +6447,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 self.active_client_id,
                 self.auth_state,
                 &mut self.session_state,
+                MAX_CONSOLE_FRAMES_PER_POLL,
+                MAX_CONSOLE_BYTES_PER_POLL,
             );
         }
         true
@@ -6593,6 +6708,7 @@ const DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
 const DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
 const GENET_TCP_FAST_PATH_EXTRA_TURNS: usize = 1;
 const GENET_TCP_POST_DISPATCH_EXTRA_TURNS: usize = 2;
+const CYW43_TCP_POST_DISPATCH_EXTRA_TURNS: usize = 1;
 
 #[cfg(feature = "kernel")]
 struct NetDriverTaskContext<D: NetDevice> {
@@ -6667,8 +6783,12 @@ fn service_driver_task_pre_poll_once(
     hot_path: crate::hal::driver_task::DriverTaskHotPath,
     flags: u16,
 ) -> Option<(bool, bool)> {
-    let command = driver_task_pre_poll_command(contract, hot_path, flags);
-    let completion = run_net_driver_task_ring_service(contract, command)?;
+    let completion = if hot_path == crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi {
+        crate::drivers::driver_task_net::poll_cyw43_driver_task_steady_data_completion(contract)?
+    } else {
+        let command = driver_task_pre_poll_command(contract, hot_path, flags);
+        run_net_driver_task_ring_service(contract, command)?
+    };
     let keep_draining = driver_task_pre_poll_completion_can_continue(&completion);
     let progress = crate::drivers::driver_task_net::preserve_driver_task_pre_poll_completion(
         contract, hot_path, completion,
@@ -7232,6 +7352,30 @@ mod tests {
     }
 
     #[test]
+    fn budgeted_dhcp_service_is_limited_to_unbound_dhcp_socket() {
+        assert!(budgeted_dhcp_service_required(
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            true
+        ));
+        assert!(!budgeted_dhcp_service_required(
+            NetMode::Dhcp,
+            Ipv4Address::new(192, 168, 86, 154),
+            true
+        ));
+        assert!(!budgeted_dhcp_service_required(
+            NetMode::Static,
+            Ipv4Address::UNSPECIFIED,
+            true
+        ));
+        assert!(!budgeted_dhcp_service_required(
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            false
+        ));
+    }
+
+    #[test]
     fn bootinfo_net_mark_ok_logs_stay_short_and_canary_free() {
         for mark in [
             "net.init.begin",
@@ -7272,9 +7416,15 @@ mod tests {
         assert!(MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL <= TCP_RX_BUFFER);
         assert!(MAX_CONSOLE_FRAMES_PER_POLL <= 32);
         assert!(MAX_CONSOLE_BYTES_PER_POLL <= TCP_TX_BUFFER);
+        assert!(CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN <= MAX_CONSOLE_FRAMES_PER_POLL);
+        assert!(CYW43_RESPONSE_FLUSH_BYTES_PER_TURN <= MAX_CONSOLE_BYTES_PER_POLL);
         assert_eq!(
             TCP_SERVICE_BYTES_PER_TURN,
             (MAX_TCP_CONSOLE_RECV_BYTES_PER_POLL + MAX_CONSOLE_BYTES_PER_POLL) as u32
+        );
+        assert_eq!(
+            TCP_RESPONSE_FLUSH_BYTES_PER_TURN,
+            CYW43_RESPONSE_FLUSH_BYTES_PER_TURN as u32
         );
     }
 
@@ -7318,13 +7468,75 @@ mod tests {
         let tcp_ops = 64u16;
         let tcp_frames = MAX_CONSOLE_FRAMES_PER_POLL as u16;
         let tcp_bytes = TCP_SERVICE_BYTES_PER_TURN;
+        let response_flush_ops = 16u16;
+        let response_flush_frames = CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN as u16;
+        let response_flush_bytes = TCP_RESPONSE_FLUSH_BYTES_PER_TURN;
+        let dhcp_ops = 16u16;
+        let dhcp_frames = MAX_DHCP_RX_PACKETS_PER_POLL as u16 + 1;
+        let dhcp_bytes = (MAX_DHCP_RX_PACKETS_PER_POLL as u32 + 1) * 1024;
+        let selftest_ops = 16u16;
+        let selftest_frames = 8u16;
+        let selftest_bytes = 8 * 1024u32;
 
         assert!(pre_poll_ops.saturating_add(tcp_ops) <= contract.budget.max_ops_per_turn);
         assert!(pre_poll_frames.saturating_add(tcp_frames) <= contract.budget.max_frames_per_turn);
         assert!(pre_poll_bytes.saturating_add(tcp_bytes) <= contract.budget.max_bytes_per_turn);
         assert!(
+            pre_poll_ops
+                .saturating_add(tcp_ops)
+                .saturating_add(dhcp_ops)
+                <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            pre_poll_frames
+                .saturating_add(tcp_frames)
+                .saturating_add(dhcp_frames)
+                <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            pre_poll_bytes
+                .saturating_add(tcp_bytes)
+                .saturating_add(dhcp_bytes)
+                <= contract.budget.max_bytes_per_turn
+        );
+        assert!(
+            pre_poll_ops
+                .saturating_add(tcp_ops)
+                .saturating_add(selftest_ops)
+                <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            pre_poll_frames
+                .saturating_add(tcp_frames)
+                .saturating_add(selftest_frames)
+                <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            pre_poll_bytes
+                .saturating_add(tcp_bytes)
+                .saturating_add(selftest_bytes)
+                <= contract.budget.max_bytes_per_turn
+        );
+        assert!(
             pre_poll_bytes.saturating_add(tcp_bytes.saturating_mul(2))
                 > contract.budget.max_bytes_per_turn
+        );
+        assert!(tcp_bytes.saturating_mul(2) > contract.budget.max_bytes_per_turn);
+        assert_eq!(CYW43_TCP_POST_DISPATCH_EXTRA_TURNS, 1);
+        assert!(response_flush_bytes < tcp_bytes);
+        assert!(tcp_ops.saturating_add(response_flush_ops) <= contract.budget.max_ops_per_turn);
+        assert!(
+            tcp_frames.saturating_add(response_flush_frames) <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            tcp_bytes.saturating_add(response_flush_bytes) <= contract.budget.max_bytes_per_turn
+        );
+
+        let mut dhcp_budget = DriverServiceBudget::new(contract).expect("valid CYW43 contract");
+        dhcp_budget.charge_ops(1).expect("base budget charge fits");
+        assert!(
+            NetStack::<DefaultNetDevice>::charge_dhcp_budget(&mut dhcp_budget).is_ok(),
+            "budgeted DHCP turn must fit after base poll charge"
         );
     }
 
@@ -7420,7 +7632,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_budgeted_tcp_fast_path_borrows_only_interface_phases() {
+    fn cyw43_budgeted_tcp_fast_path_borrows_non_tcp_phases() {
         let tcp_policy = NetStagePolicy {
             allow_tcp: true,
             allow_selftest: true,
@@ -7460,13 +7672,13 @@ mod tests {
         assert!(budgeted_cyw43_tcp_phase_borrow_allowed(
             BudgetedNetPhase::InterfaceFlush
         ));
-        assert!(!budgeted_cyw43_tcp_phase_borrow_allowed(
+        assert!(budgeted_cyw43_tcp_phase_borrow_allowed(
             BudgetedNetPhase::Dhcp
         ));
         assert!(!budgeted_cyw43_tcp_phase_borrow_allowed(
             BudgetedNetPhase::Tcp
         ));
-        assert!(!budgeted_cyw43_tcp_phase_borrow_allowed(
+        assert!(budgeted_cyw43_tcp_phase_borrow_allowed(
             BudgetedNetPhase::SelfTest
         ));
     }
