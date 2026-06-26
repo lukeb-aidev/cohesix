@@ -235,6 +235,12 @@ const NET_POST_DISPATCH_FLUSH_POLLS: usize = 8;
 const NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 16;
 #[cfg(feature = "net-console")]
 const NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS: usize = 3;
+#[cfg(feature = "net-console")]
+const NET_CYW43_HOT_DISPATCH_ROUNDS: usize = 6;
+#[cfg(feature = "net-console")]
+const NET_CYW43_POST_DISPATCH_FLUSH_POLLS: usize = 12;
+#[cfg(feature = "net-console")]
+const NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 24;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
@@ -511,8 +517,18 @@ fn net_status_linked_runtime_data_ready(status: &NetStatusReport) -> bool {
 }
 
 #[cfg(feature = "net-console")]
+fn net_status_cyw43_data_ready(status: &NetStatusReport) -> bool {
+    status.backend == "cyw43"
+        && status.active_interface == "wifi"
+        && status.address_source == "dhcp-lease"
+        && status.dhcp_phase == "bound"
+}
+
+#[cfg(feature = "net-console")]
 fn net_hot_dispatch_rounds_for_status(status: &NetStatusReport) -> usize {
-    if net_status_linked_runtime_data_ready(status) {
+    if net_status_cyw43_data_ready(status) {
+        NET_CYW43_HOT_DISPATCH_ROUNDS
+    } else if net_status_linked_runtime_data_ready(status) {
         NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS
     } else {
         1
@@ -535,6 +551,24 @@ const fn net_post_dispatch_flush_limit_for_display(
             NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
         }
         _ => NET_POST_DISPATCH_FLUSH_POLLS,
+    }
+}
+
+#[cfg(feature = "net-console")]
+fn net_post_dispatch_flush_limit_for_status(
+    status: &NetStatusReport,
+    display: Option<LocalSeatDisplayTrace>,
+) -> usize {
+    if net_status_cyw43_data_ready(status) {
+        if net_post_dispatch_flush_limit_for_display(display)
+            == NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        {
+            NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        } else {
+            NET_CYW43_POST_DISPATCH_FLUSH_POLLS
+        }
+    } else {
+        net_post_dispatch_flush_limit_for_display(display)
     }
 }
 
@@ -2300,14 +2334,15 @@ where
 
     #[cfg(feature = "net-console")]
     fn poll_net_after_network_dispatch(&mut self) -> Option<IngestSnapshot> {
-        let flush_limit = net_post_dispatch_flush_limit_for_display(
-            self.local_seat
-                .as_ref()
-                .map(|local_seat| local_seat.display_trace()),
-        );
+        let display_trace = self
+            .local_seat
+            .as_ref()
+            .map(|local_seat| local_seat.display_trace());
         let Some(net) = self.net.as_mut() else {
             return None;
         };
+        let flush_limit =
+            net_post_dispatch_flush_limit_for_status(&net.status_report(), display_trace);
         let net_contract = net.driver_task_contract();
         let mut flush_polls = 0u64;
         let mut flush_exhausted = false;
@@ -16320,7 +16355,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     struct FakeNet {
-        lines: heapless::Vec<ConsoleLine, 32>,
+        lines: heapless::Vec<ConsoleLine, 64>,
         sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 64>,
         start_result: NetSelfTestStartResult,
         status: NetStatusReport,
@@ -17382,6 +17417,43 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn cyw43_data_ready_uses_wifi_only_deeper_dispatch_rounds() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.backend = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        let line_count = CONSOLE_DISPATCH_BURST * NET_CYW43_HOT_DISPATCH_ROUNDS + 2;
+        for conn_id in 1..=line_count {
+            let mut line = HeaplessString::new();
+            assert!(line.push_str("ping").is_ok());
+            assert!(net
+                .lines
+                .push(ConsoleLine::new(line, conn_id as u64))
+                .is_ok());
+        }
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        let metrics = pump.metrics;
+        drop(pump);
+
+        assert_eq!(
+            metrics.accepted_commands,
+            (CONSOLE_DISPATCH_BURST * NET_CYW43_HOT_DISPATCH_ROUNDS) as u64
+        );
+        assert_eq!(net.lines.len(), 2);
+        assert_eq!(NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS, 3);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn non_data_ready_net_dispatch_stays_single_burst() {
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
@@ -17521,7 +17593,7 @@ mod tests {
         wifi.active_interface = "wifi";
         assert_eq!(
             net_hot_dispatch_rounds_for_status(&wifi),
-            NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS
+            NET_CYW43_HOT_DISPATCH_ROUNDS
         );
 
         let mut pre_dhcp = genet.clone();
@@ -17537,6 +17609,15 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn post_dispatch_flush_limit_extends_under_display_pressure() {
+        let mut genet = NetStatusReport::default();
+        genet.backend = "bcmgenet-v5";
+        genet.active_interface = "wired";
+        genet.address_source = "dhcp-lease";
+        genet.dhcp_phase = "bound";
+        let mut wifi = genet.clone();
+        wifi.backend = "cyw43";
+        wifi.active_interface = "wifi";
+
         assert_eq!(
             net_post_dispatch_flush_limit_for_display(None),
             NET_POST_DISPATCH_FLUSH_POLLS
@@ -17544,6 +17625,14 @@ mod tests {
         assert_eq!(
             net_post_dispatch_flush_limit_for_display(Some(LocalSeatDisplayTrace::default())),
             NET_POST_DISPATCH_FLUSH_POLLS
+        );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&genet, None),
+            NET_POST_DISPATCH_FLUSH_POLLS
+        );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&wifi, None),
+            NET_CYW43_POST_DISPATCH_FLUSH_POLLS
         );
 
         let mut pending = LocalSeatDisplayTrace {
@@ -17553,6 +17642,14 @@ mod tests {
         assert_eq!(
             net_post_dispatch_flush_limit_for_display(Some(pending)),
             NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&genet, Some(pending)),
+            NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
+            NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS
         );
 
         pending = LocalSeatDisplayTrace {
@@ -17565,6 +17662,14 @@ mod tests {
             net_post_dispatch_flush_limit_for_display(Some(pending)),
             NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
         );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&genet, Some(pending)),
+            NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
+            NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        );
 
         pending = LocalSeatDisplayTrace {
             no_reply_frames: 1,
@@ -17575,6 +17680,14 @@ mod tests {
         assert_eq!(
             net_post_dispatch_flush_limit_for_display(Some(pending)),
             NET_POST_DISPATCH_FLUSH_POLLS
+        );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&genet, Some(pending)),
+            NET_POST_DISPATCH_FLUSH_POLLS
+        );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
+            NET_CYW43_POST_DISPATCH_FLUSH_POLLS
         );
     }
 

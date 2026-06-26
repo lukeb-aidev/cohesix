@@ -76,7 +76,7 @@ const TCP_RX_BUFFER: usize = 32 * 1024;
 const TCP_TX_BUFFER: usize = 32 * 1024;
 const MAX_CONSOLE_FRAMES_PER_POLL: u32 = 32;
 const MAX_CONSOLE_BYTES_PER_POLL: usize = 20 * 1024;
-const CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN: u32 = 8;
+const CYW43_RESPONSE_FLUSH_FRAMES_PER_TURN: u32 = 16;
 const CYW43_RESPONSE_FLUSH_BYTES_PER_TURN: usize = 8 * 1024;
 const SAME_TICK_STALL_WARN_POLLS: u16 = 256;
 const MAX_DHCP_RX_PACKETS_PER_POLL: usize = 2;
@@ -6333,7 +6333,24 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         hot_path.as_u32() as usize,
                         crate::drivers::driver_task_net::runtime_ring_service,
                     );
-                    return Ok(self.flush_budgeted_tcp_with_time(now_ms, budget));
+                    let ring_progress = if hot_path
+                        == crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi
+                        && !wifi_host_eapol_blocks_driver_task_pre_poll(
+                            self.device.bringup_status_label(),
+                        )
+                        && crate::drivers::driver_task_net::driver_task_runtime_pre_poll_allowed(
+                            contract,
+                        ) {
+                        service_driver_task_pre_poll_burst_budgeted(
+                            contract,
+                            hot_path,
+                            NET_RING_FLAG_BUDGETED,
+                            budget,
+                        )
+                    } else {
+                        false
+                    };
+                    return Ok(self.flush_budgeted_tcp_with_time(now_ms, budget) || ring_progress);
                 }
                 let _ = hot_path;
                 return Err(DriverServiceBudgetError::OperationsExhausted);
@@ -7530,6 +7547,24 @@ mod tests {
         );
         assert!(
             tcp_bytes.saturating_add(response_flush_bytes) <= contract.budget.max_bytes_per_turn
+        );
+        assert!(
+            pre_poll_ops
+                .saturating_add(tcp_ops)
+                .saturating_add(response_flush_ops)
+                <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            pre_poll_frames
+                .saturating_add(tcp_frames)
+                .saturating_add(response_flush_frames)
+                <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            pre_poll_bytes
+                .saturating_add(tcp_bytes)
+                .saturating_add(response_flush_bytes)
+                <= contract.budget.max_bytes_per_turn
         );
 
         let mut dhcp_budget = DriverServiceBudget::new(contract).expect("valid CYW43 contract");
