@@ -175,6 +175,22 @@ const USB_ENUM_RESULT_PRESERVED_EVENT: u32 = 1 << 29;
     target_os = "none"
 ))]
 const USB_ENUM_RESULT_TRANSFER_EVENT: u32 = 1 << 30;
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const LOCAL_SEAT_HDMI_PENDING_PROMPT_BYTES: usize = 32;
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+const LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE: &str =
+    "USB keyboard starting; press any key to enable local console";
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
@@ -811,6 +827,17 @@ pub(crate) const fn local_seat_keyboard_poll_suspends_on_missing_reply(
     physical_pi_owner_state && root_console_ready && !keyboard_ready
 }
 
+/// Return whether HDMI may show an interactive prompt for the linked Pi local
+/// seat. On physical Pi, the prompt means USB input is usable, so first-report
+/// proof alone is intentionally not enough.
+#[must_use]
+pub(crate) const fn local_seat_hdmi_prompt_ready_for_usb_state(
+    physical_pi_owner_state: bool,
+    usb_first_byte_ready: bool,
+) -> bool {
+    !physical_pi_owner_state || usb_first_byte_ready
+}
+
 /// Return the next bounded USB keyboard poll backoff after a missing reply.
 #[must_use]
 pub(crate) const fn local_seat_keyboard_poll_next_no_reply_backoff(
@@ -1218,6 +1245,27 @@ pub struct LocalSeatRuntime {
     hdmi_open_line: bool,
     hdmi_open_line_floor_bytes: usize,
     hdmi_open_line_mirrors_input: bool,
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    hdmi_prompt_pending_until_keyboard_ready: bool,
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    hdmi_pending_prompt: heapless::String<LOCAL_SEAT_HDMI_PENDING_PROMPT_BYTES>,
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    hdmi_keyboard_wait_line_emitted: bool,
     hdmi_snapshot_generation: u64,
     dropped_keyboard_bytes: u64,
     dropped_mirrored_lines: u64,
@@ -1333,6 +1381,27 @@ impl LocalSeatRuntime {
             hdmi_open_line: false,
             hdmi_open_line_floor_bytes: 0,
             hdmi_open_line_mirrors_input: false,
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
+            hdmi_prompt_pending_until_keyboard_ready: false,
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
+            hdmi_pending_prompt: heapless::String::new(),
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
+            hdmi_keyboard_wait_line_emitted: false,
             hdmi_snapshot_generation: 0,
             dropped_keyboard_bytes: 0,
             dropped_mirrored_lines: 0,
@@ -1653,24 +1722,101 @@ impl LocalSeatRuntime {
         ))]
         {
             if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
-                let queue_tail = self.root_console_ready
-                    && self.hdmi_scrollback_offset == 0
-                    && !self.linked_hdmi_snapshot_recovery_required();
-                if self.linked_hdmi_open_line_matches(prompt) {
+                if !Self::linked_hdmi_prompt_ready_for_display() {
+                    self.defer_linked_hdmi_prompt_until_keyboard_ready(prompt);
                     return;
                 }
-                self.close_linked_hdmi_open_line(queue_tail);
-                self.mirror_line_current_tcb(prompt);
-                self.open_linked_hdmi_prompt_line(prompt);
-                if queue_tail && !self.queue_linked_hdmi_prompt(prompt) {
-                    self.request_linked_hdmi_snapshot_redraw();
-                } else if !queue_tail {
-                    self.refresh_linked_hdmi_redraw_after_content_mutation();
-                }
+                self.mirror_linked_hdmi_prompt_now(prompt);
                 return;
             }
         }
         self.mirror_line(prompt);
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn linked_hdmi_prompt_ready_for_display() -> bool {
+        let physical_pi_owner_state =
+            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
+        local_seat_hdmi_prompt_ready_for_usb_state(
+            physical_pi_owner_state,
+            linked_local_seat_usb_first_byte_ready(),
+        )
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn defer_linked_hdmi_prompt_until_keyboard_ready(&mut self, prompt: &str) {
+        if !self.hdmi_prompt_pending_until_keyboard_ready {
+            boot_log::force_uart_line_raw_without_prompt_refresh(
+                "[local-seat] hdmi prompt pending reason=usb-first-byte-pending action=wait-for-keyboard-ready",
+            );
+        }
+        self.hdmi_prompt_pending_until_keyboard_ready = true;
+        self.hdmi_pending_prompt.clear();
+        let _ = self.hdmi_pending_prompt.push_str(prompt);
+        if !self.hdmi_keyboard_wait_line_emitted {
+            self.hdmi_keyboard_wait_line_emitted = true;
+            self.mirror_line(LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE);
+        }
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn release_pending_linked_hdmi_prompt_if_keyboard_ready(&mut self) {
+        if !self.hdmi_prompt_pending_until_keyboard_ready
+            || !Self::linked_hdmi_prompt_ready_for_display()
+        {
+            return;
+        }
+
+        let mut prompt = heapless::String::<LOCAL_SEAT_HDMI_PENDING_PROMPT_BYTES>::new();
+        let _ = prompt.push_str(self.hdmi_pending_prompt.as_str());
+        self.hdmi_prompt_pending_until_keyboard_ready = false;
+        self.hdmi_pending_prompt.clear();
+        self.hdmi_keyboard_wait_line_emitted = false;
+        if prompt.is_empty() {
+            return;
+        }
+        boot_log::force_uart_line_raw_without_prompt_refresh(
+            "[local-seat] hdmi prompt enabled reason=usb-first-byte-ready action=show-prompt",
+        );
+        self.mirror_linked_hdmi_prompt_now(prompt.as_str());
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn mirror_linked_hdmi_prompt_now(&mut self, prompt: &str) {
+        let queue_tail = self.root_console_ready
+            && self.hdmi_scrollback_offset == 0
+            && !self.linked_hdmi_snapshot_recovery_required();
+        if self.linked_hdmi_open_line_matches(prompt) {
+            return;
+        }
+        self.close_linked_hdmi_open_line(queue_tail);
+        self.mirror_line_current_tcb(prompt);
+        self.open_linked_hdmi_prompt_line(prompt);
+        if queue_tail && !self.queue_linked_hdmi_prompt(prompt) {
+            self.request_linked_hdmi_snapshot_redraw();
+        } else if !queue_tail {
+            self.refresh_linked_hdmi_redraw_after_content_mutation();
+        }
     }
 
     fn refresh_linked_hdmi_redraw_after_content_mutation(&mut self) {
@@ -2347,6 +2493,7 @@ impl LocalSeatRuntime {
             return;
         }
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            self.release_pending_linked_hdmi_prompt_if_keyboard_ready();
             let mut scroll_delta = 0i32;
             let mut redraw = false;
             let mut terminal_echo = Vec::new();
@@ -7754,6 +7901,13 @@ mod tests {
         assert!(!local_seat_keyboard_poll_suspends_on_missing_reply(
             false, true, false
         ));
+    }
+
+    #[test]
+    fn physical_pi_hdmi_prompt_waits_for_usb_first_byte() {
+        assert!(!local_seat_hdmi_prompt_ready_for_usb_state(true, false));
+        assert!(local_seat_hdmi_prompt_ready_for_usb_state(true, true));
+        assert!(local_seat_hdmi_prompt_ready_for_usb_state(false, false));
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

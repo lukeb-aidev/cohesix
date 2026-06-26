@@ -187,6 +187,20 @@ fn budgeted_dhcp_service_required(mode: NetMode, ip: Ipv4Address, dhcp_socket_re
     dhcp_socket_ready && matches!(mode, NetMode::Dhcp) && ip == Ipv4Address::UNSPECIFIED
 }
 
+macro_rules! set_primary_ipv4_addr {
+    ($addrs:expr, $cidr:expr) => {{
+        let cidr = $cidr;
+        if $addrs.is_empty() {
+            let _ = $addrs.push(cidr);
+        } else {
+            $addrs[0] = cidr;
+            while $addrs.len() > 1 {
+                let _ = $addrs.pop();
+            }
+        }
+    }};
+}
+
 fn console_listener_defer_reason_for(
     mode: NetMode,
     ip: Ipv4Address,
@@ -2780,9 +2794,7 @@ impl<D: NetDevice> NetStack<D> {
         );
         interface.update_ip_addrs(|addrs| {
             let cidr = IpCidr::new(IpAddress::from(ip), prefix);
-            if addrs.push(cidr).is_err() {
-                addrs[0] = cidr;
-            }
+            set_primary_ipv4_addr!(addrs, cidr);
         });
         match gateway {
             Some(gw) => {
@@ -3580,6 +3592,21 @@ impl<D: NetDevice> NetStack<D> {
                 }
                 activity = true;
             }
+        } else if cyw43_tcp_fast_path && phase == BudgetedNetPhase::Tcp && activity {
+            for _ in 0..CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS {
+                if Self::charge_tcp_response_flush_budget(budget).is_err() {
+                    break;
+                }
+                let turn_activity = self.service_budgeted_tcp_response_flush_turn(
+                    timestamp,
+                    now_ms,
+                    "budgeted-cyw43-tcp-phase-response-flush",
+                );
+                if !turn_activity {
+                    break;
+                }
+                activity = true;
+            }
         }
 
         self.budgeted_phase = phase.next();
@@ -3874,9 +3901,7 @@ impl<D: NetDevice> NetStack<D> {
         self.device.set_assigned_ipv4(ip);
         self.interface.update_ip_addrs(|addrs| {
             let cidr = IpCidr::new(IpAddress::from(ip), lease.prefix_len);
-            if addrs.push(cidr).is_err() {
-                addrs[0] = cidr;
-            }
+            set_primary_ipv4_addr!(addrs, cidr);
         });
         let _ = self.interface.routes_mut().remove_default_ipv4_route();
         if let Some(gw) = gateway {
@@ -6836,6 +6861,7 @@ const DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
 const DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
 const GENET_TCP_FAST_PATH_EXTRA_TURNS: usize = 1;
 const GENET_TCP_POST_DISPATCH_EXTRA_TURNS: usize = 2;
+const CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS: usize = 1;
 const CYW43_TCP_POST_DISPATCH_EXTRA_TURNS: usize = 1;
 
 #[cfg(feature = "kernel")]
@@ -7468,6 +7494,28 @@ mod tests {
     }
 
     #[test]
+    fn dhcp_lease_replaces_unspecified_primary_interface_addr() {
+        let mac = EthernetAddress([0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
+        let mut device = Loopback::new(Medium::Ethernet);
+        let config = IfaceConfig::new(HardwareAddress::Ethernet(mac));
+        let mut interface = Interface::new(config, &mut device, Instant::from_millis(0));
+        interface.update_ip_addrs(|addrs| {
+            let cidr = IpCidr::new(IpAddress::from(Ipv4Address::UNSPECIFIED), 0);
+            let _ = addrs.push(cidr);
+        });
+        interface.update_ip_addrs(|addrs| {
+            let cidr = IpCidr::new(IpAddress::from(Ipv4Address::new(192, 168, 86, 154)), 24);
+            set_primary_ipv4_addr!(addrs, cidr);
+        });
+
+        assert_eq!(interface.ip_addrs().len(), 1);
+        assert_eq!(
+            interface.ip_addrs()[0],
+            IpCidr::new(IpAddress::from(Ipv4Address::new(192, 168, 86, 154)), 24)
+        );
+    }
+
+    #[test]
     fn interface_hardware_addr_sync_updates_smoltcp_mac() {
         let initial = EthernetAddress([0x02, 0x43, 0x4f, 0x48, 0x58, 0x32]);
         let runtime = EthernetAddress([0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
@@ -7715,6 +7763,24 @@ mod tests {
                 .saturating_add(tcp_bytes)
                 .saturating_add(response_flush_bytes)
                 <= contract.budget.max_bytes_per_turn
+        );
+        assert_eq!(CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS, 1);
+        assert!(
+            pre_poll_ops.saturating_add(tcp_ops).saturating_add(
+                response_flush_ops.saturating_mul(CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS as u16)
+            ) <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            pre_poll_frames.saturating_add(tcp_frames).saturating_add(
+                response_flush_frames
+                    .saturating_mul(CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS as u16)
+            ) <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            pre_poll_bytes.saturating_add(tcp_bytes).saturating_add(
+                response_flush_bytes
+                    .saturating_mul(CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS as u32)
+            ) <= contract.budget.max_bytes_per_turn
         );
 
         let mut dhcp_budget = DriverServiceBudget::new(contract).expect("valid CYW43 contract");

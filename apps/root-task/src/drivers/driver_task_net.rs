@@ -119,6 +119,7 @@ const CYW43_RUNTIME_CONTROL_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_DATA_POLL_NO_REPLY_RESUMES: usize = 63;
 const CYW43_RUNTIME_DATA_TX_NO_REPLY_RESUMES: usize = 63;
 const CYW43_DESCRIPTOR_UNAVAILABLE_DETAIL: u16 = 0x5309;
+const CYW43_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL: u16 = 0x5103;
 const CYW43_RUNTIME_DESCRIPTOR_UNAVAILABLE_RETRIES: usize = 2;
 const CYW43_CONTROL_TX_SUBMIT_RETRIES: usize = 3;
 const CYW43_RUNTIME_TRANSPORT_PHASE_ATTEMPTS: usize = 128;
@@ -381,6 +382,8 @@ static CYW43_DATA_TRACE_ARP_ASSIGNED_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TRACE_ARP_REPLY_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TRACE_DHCP_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TRACE_EAPOL_CONSUME_COUNT: AtomicU32 = AtomicU32::new(0);
+static CYW43_DATA_TRACE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);
+static CYW43_DATA_TRACE_DROP_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TRACE_PENDING_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TRACE_TX_RETRY_COUNT: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
@@ -389,6 +392,8 @@ static CYW43_DATA_TX_TEST_STUB: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_DATA_TX_TEST_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
@@ -6188,6 +6193,21 @@ fn cyw43_assigned_ipv4() -> Option<[u8; 4]> {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_post_dhcp_zero_sender_arp(frame: &[u8]) -> bool {
+    let Some(assigned_ip) = cyw43_assigned_ipv4() else {
+        return false;
+    };
+    let Some(info) = cyw43_data_path_info(frame) else {
+        return false;
+    };
+    info.ethertype == CYW43_ETH_P_ARP
+        && info.arp == "request"
+        && info.arp_spa == [0; 4]
+        && info.arp_tpa != [0; 4]
+        && info.arp_tpa != assigned_ip
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_mac_is_unicast(mac: [u8; 6]) -> bool {
     mac != [0; 6] && mac != [0xff; 6] && mac[0] & 0x01 == 0
 }
@@ -6255,16 +6275,18 @@ fn cyw43_data_path_trace_class(
     pending_before: bool,
     pending_after: bool,
 ) -> Cyw43DataPathTraceClass {
-    if completion_code == DriverTaskCompletionCode::Fault.as_u16()
-        || completion_code == DriverTaskCompletionCode::BudgetExhausted.as_u16()
+    if matches!(event, "rx-preserve-drop" | "rx-channel-drop" | "tx-drop")
+        || action == "invalid-arp-spa"
     {
-        return Cyw43DataPathTraceClass::Fault;
-    }
-    if matches!(event, "rx-preserve-drop" | "rx-channel-drop") {
         return Cyw43DataPathTraceClass::Drop;
     }
     if matches!(action, "retry" | "no-completion") {
         return Cyw43DataPathTraceClass::TxRetry;
+    }
+    if completion_code == DriverTaskCompletionCode::Fault.as_u16()
+        || completion_code == DriverTaskCompletionCode::BudgetExhausted.as_u16()
+    {
+        return Cyw43DataPathTraceClass::Fault;
     }
     if info.dhcp != "none" {
         return Cyw43DataPathTraceClass::Dhcp;
@@ -6303,7 +6325,9 @@ const fn cyw43_data_path_trace_class_uses_milestone_gate(
         Cyw43DataPathTraceClass::ArpAssistRequest
             | Cyw43DataPathTraceClass::ArpAssistReply
             | Cyw43DataPathTraceClass::Dhcp
+            | Cyw43DataPathTraceClass::Drop
             | Cyw43DataPathTraceClass::EapolConsume
+            | Cyw43DataPathTraceClass::Fault
             | Cyw43DataPathTraceClass::PendingTransition
             | Cyw43DataPathTraceClass::TxRetry
     )
@@ -6331,8 +6355,20 @@ fn cyw43_data_path_trace_repeat_allowed(trace_class: Cyw43DataPathTraceClass) ->
                 .saturating_add(1);
             cyw43_data_path_trace_repeat_milestone(count)
         }
+        Cyw43DataPathTraceClass::Drop => {
+            let count = CYW43_DATA_TRACE_DROP_COUNT
+                .fetch_add(1, Ordering::AcqRel)
+                .saturating_add(1);
+            cyw43_data_path_trace_repeat_milestone(count)
+        }
         Cyw43DataPathTraceClass::EapolConsume => {
             let count = CYW43_DATA_TRACE_EAPOL_CONSUME_COUNT
+                .fetch_add(1, Ordering::AcqRel)
+                .saturating_add(1);
+            cyw43_data_path_trace_repeat_milestone(count)
+        }
+        Cyw43DataPathTraceClass::Fault => {
+            let count = CYW43_DATA_TRACE_FAULT_COUNT
                 .fetch_add(1, Ordering::AcqRel)
                 .saturating_add(1);
             cyw43_data_path_trace_repeat_milestone(count)
@@ -6349,9 +6385,7 @@ fn cyw43_data_path_trace_repeat_allowed(trace_class: Cyw43DataPathTraceClass) ->
                 .saturating_add(1);
             cyw43_data_path_trace_repeat_milestone(count)
         }
-        Cyw43DataPathTraceClass::Fault
-        | Cyw43DataPathTraceClass::Drop
-        | Cyw43DataPathTraceClass::MacMismatch => true,
+        Cyw43DataPathTraceClass::MacMismatch => true,
     }
 }
 
@@ -11492,6 +11526,7 @@ fn cyw43_tx_retry_should_yield(
         Some(completion) => {
             completion.code == DriverTaskCompletionCode::Idle.as_u16()
                 || completion.code == DriverTaskCompletionCode::BudgetExhausted.as_u16()
+                || completion.code == DriverTaskCompletionCode::Fault.as_u16()
         }
         None => true,
     }
@@ -11675,6 +11710,21 @@ pub(crate) fn preserve_driver_task_pre_poll_completion(
 
 #[cfg(feature = "kernel")]
 fn submit_cyw43_driver_task_eth_frame(contract: DriverTaskContract, frame: &[u8]) -> bool {
+    if cyw43_post_dhcp_zero_sender_arp(frame) {
+        let pending_rx = cyw43_pending_rx_token_occupied();
+        emit_cyw43_data_path_trace(
+            contract,
+            "tx-drop",
+            "invalid-arp-spa",
+            0,
+            frame,
+            None,
+            0,
+            pending_rx,
+            pending_rx,
+        );
+        return false;
+    }
     for attempt in 0..CYW43_DATA_TX_ATTEMPTS {
         let completion = submit_cyw43_driver_task_eth_frame_completion(contract, frame);
         let submitted = completion.is_some_and(driver_task_tx_completion_submitted);
@@ -11723,6 +11773,19 @@ fn submit_cyw43_driver_task_eth_frame_completion(
         let attempt = CYW43_DATA_TX_TEST_ATTEMPTS.fetch_add(1, Ordering::AcqRel);
         if attempt < CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS.load(Ordering::Acquire) {
             return Some(DriverTaskCompletionRecord::idle(0));
+        }
+        if attempt < CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS.load(Ordering::Acquire) {
+            return Some(DriverTaskCompletionRecord {
+                sequence: attempt.saturating_add(1),
+                code: DriverTaskCompletionCode::Fault.as_u16(),
+                detail: CYW43_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL,
+                result: 0x0500_0800,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 56,
+                    flags: 0,
+                },
+            });
         }
         if attempt < CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.load(Ordering::Acquire) {
             return Some(DriverTaskCompletionRecord::progress(0, 0));
@@ -13169,6 +13232,14 @@ mod tests {
         CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
         CYW43_DATA_TX_RETRIES.store(0, Ordering::Release);
+        CYW43_DATA_TRACE_ARP_ASSIGNED_COUNT.store(0, Ordering::Release);
+        CYW43_DATA_TRACE_ARP_REPLY_COUNT.store(0, Ordering::Release);
+        CYW43_DATA_TRACE_DHCP_COUNT.store(0, Ordering::Release);
+        CYW43_DATA_TRACE_DROP_COUNT.store(0, Ordering::Release);
+        CYW43_DATA_TRACE_EAPOL_CONSUME_COUNT.store(0, Ordering::Release);
+        CYW43_DATA_TRACE_FAULT_COUNT.store(0, Ordering::Release);
+        CYW43_DATA_TRACE_PENDING_COUNT.store(0, Ordering::Release);
+        CYW43_DATA_TRACE_TX_RETRY_COUNT.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
         CYW43_ASSIGNED_IPV4_BE.store(0, Ordering::Release);
         CYW43_TX_SUBMITTED.store(0, Ordering::Release);
@@ -13179,6 +13250,7 @@ mod tests {
         CYW43_DATA_TX_TEST_STUB.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS.store(0, Ordering::Release);
+        CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS.store(0, Ordering::Release);
         CYW43_DATA_TX_TEST_ATTEMPTS.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_IO_STUB.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_TX_SUBMITTED.store(0, Ordering::Release);
@@ -15556,7 +15628,7 @@ mod tests {
                 "tx-result",
                 "retry",
                 discover_info,
-                DriverTaskCompletionCode::Idle.as_u16(),
+                DriverTaskCompletionCode::Fault.as_u16(),
                 Some([192, 168, 86, 154]),
                 CYW43_DRIVER_TASK_MAC,
                 false,
@@ -15570,6 +15642,19 @@ mod tests {
                 "control",
                 discover_info,
                 DriverTaskCompletionCode::FrameReady.as_u16(),
+                Some([192, 168, 86, 154]),
+                CYW43_DRIVER_TASK_MAC,
+                false,
+                false,
+            ),
+            Cyw43DataPathTraceClass::Drop
+        );
+        assert_eq!(
+            cyw43_data_path_trace_class(
+                "tx-drop",
+                "invalid-arp-spa",
+                assigned_arp_info,
+                DriverTaskCompletionCode::Idle.as_u16(),
                 Some([192, 168, 86, 154]),
                 CYW43_DRIVER_TASK_MAC,
                 false,
@@ -15595,8 +15680,11 @@ mod tests {
         assert!(cyw43_data_path_trace_class_uses_milestone_gate(
             Cyw43DataPathTraceClass::TxRetry
         ));
-        assert!(!cyw43_data_path_trace_class_uses_milestone_gate(
+        assert!(cyw43_data_path_trace_class_uses_milestone_gate(
             Cyw43DataPathTraceClass::Fault
+        ));
+        assert!(cyw43_data_path_trace_class_uses_milestone_gate(
+            Cyw43DataPathTraceClass::Drop
         ));
     }
 
@@ -15631,6 +15719,40 @@ mod tests {
         assert!(!submit_cyw43_arp_assist_if_needed(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             &unrelated
+        ));
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rejects_post_dhcp_zero_sender_arp_before_runtime_submit() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_ASSIGNED_IPV4_BE.store(u32::from_be_bytes([192, 168, 86, 154]), Ordering::Release);
+        let gateway_arp =
+            test_cyw43_arp_request(CYW43_DRIVER_TASK_MAC.0, [0, 0, 0, 0], [192, 168, 86, 1]);
+
+        assert!(cyw43_post_dhcp_zero_sender_arp(&gateway_arp));
+        assert!(!submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &gateway_arp
+        ));
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
+
+        let valid_gateway_arp = test_cyw43_arp_request(
+            CYW43_DRIVER_TASK_MAC.0,
+            [192, 168, 86, 154],
+            [192, 168, 86, 1],
+        );
+        assert!(!cyw43_post_dhcp_zero_sender_arp(&valid_gateway_arp));
+        assert!(submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &valid_gateway_arp
         ));
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
 
@@ -19131,6 +19253,13 @@ mod tests {
             false
         ));
         assert!(cyw43_tx_retry_should_yield(None, false));
+        assert!(cyw43_tx_retry_should_yield(
+            Some(DriverTaskCompletionRecord::fault(
+                7,
+                DriverTaskFaultCode::DeviceUnavailable
+            )),
+            false
+        ));
         assert!(!cyw43_tx_retry_should_yield(
             Some(DriverTaskCompletionRecord::idle(7)),
             true
@@ -19157,6 +19286,26 @@ mod tests {
         assert!(!submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             b"arp-request"
+        ));
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_DATA_TX_RETRIES.load(Ordering::Acquire), 1);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_data_tx_fault_completion_yields_without_hammering_retries() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS.store(1, Ordering::Release);
+
+        assert!(!submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"dhcp-discover"
         ));
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_DATA_TX_RETRIES.load(Ordering::Acquire), 1);
