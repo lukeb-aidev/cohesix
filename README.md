@@ -43,6 +43,8 @@ The system is intentionally narrow:
 
 The result is an orchestration environment for AI hives and distributed GPU workloads where authority, lifecycle, telemetry, and failure handling are first-class OS concerns. Detailed scope and use cases live in [docs/USE_CASES.md](docs/USE_CASES.md) and [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md).
 
+In an AI Harness deployment, Cohesix is the trustable action layer beneath agent frameworks: model or agent intent is reduced to role-scoped tickets, bounded file writes, host-side adapters, and replayable evidence. It can govern GPU leases, model activation, remediation playbooks, and edge fleet changes while keeping LLMs, MCP/A2A clients, CUDA/NVML, Kubernetes, and registries outside the VM trusted computing base.
+
 ## Design Shape
 
 [Plan 9 from Bell Labs](https://en.wikipedia.org/wiki/Plan_9_from_Bell_Labs) was a research operating system that treated files and per-process namespaces as the common interface to local and distributed resources. Its 9P protocol carries those file operations across process and machine boundaries. Cohesix chose a 9P-derived core protocol because a small file-operation grammar maps cleanly to capability-scoped authority, deterministic bounds, audit logs, and host/VM bridges without importing POSIX or general RPC.

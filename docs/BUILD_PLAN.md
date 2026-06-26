@@ -5904,6 +5904,7 @@ Upstream seL4 Pi 4 bring-up documentation originally used direct U-Boot image lo
 - Local diagnostics on Pi 4 must reuse the existing root-console parser and command semantics; no new shell grammar or in-VM protocol is permitted.
 - Local diagnostics seat remains primitive: USB keyboard input + HDMI text output only; no compositor/windowing stack.
 - Milestone 26 remains a strict no-NIC runtime baseline on Pi 4; root-task network bring-up and TCP console reachability on Pi 4 start in Milestone 26a.
+- Milestone 26 has no Pi 4 NIC throughput or latency acceptance target; QEMU U-Boot harness timing is script/debug feedback only and cannot be used as Pi hardware latency or network-performance proof.
 - U-Boot may be used for pre-kernel network setup and diagnostics, but no new Cohesix protocol semantics may be introduced there.
 - All post-seL4 hardware access (UART, NET, USB input, HDMI text output, TPM, RTC) must go through HAL-owned traits/drivers.
 
@@ -6005,7 +6006,7 @@ Deliver a **Pi firmware -> U-Boot -> seL4 image -> root-task** boot path on Rasp
 - If `hw.attestation.enabled=true`, attestation succeeds and evidence hash matches manifest fingerprint; if unavailable, boot aborts deterministically.
 - Milestone 26 runtime on Pi 4 emits deterministic no-NIC evidence and does not require TCP console reachability.
 - Root-task post-seL4 paths use HAL-only device access; no direct firmware-service assumptions in runtime code.
-- macOS QEMU U-Boot harness can execute U-Boot env/network commands for script validation; Pi 4 hardware remains authoritative for USB/HDMI/NIC proof.
+- macOS QEMU U-Boot harness can execute U-Boot env/network commands for script validation; Pi 4 hardware remains authoritative for USB/HDMI/NIC proof and QEMU timing is not accepted as Pi hardware latency evidence.
 - Existing macOS/Linux QEMU regression scripts continue to pass unchanged unless explicitly profile-gated and documented.
 
 ---
@@ -6115,6 +6116,7 @@ Milestone 25 established Cohesix's performance model: parallelism comes from iso
 - Serial RX and USB/local-seat input are the highest-priority service class; HDMI/log flushing and network data are preemptible.
 - Direct root-task driver paths are not a steady-state Pi 4 driver model. They may remain only for early/emergency serial output before the driver-task substrate exists and for QEMU/host compatibility profiles; physical Pi 4 steady-state driver service must fail closed until the corresponding independent ring-backed driver task owns the hardware state.
 - Backward compatibility is mandatory: 26a network changes must preserve existing macOS/Linux QEMU console and networking workflows unless explicitly profile-gated for Pi 4 `pi4-uboot-aarch64` (with transitional alias support for legacy `uefi-aarch64` manifests).
+- QEMU remains compatibility and transport-substrate evidence for 26a, not a Pi 4 wired-NIC latency baseline. Any 26a GENET latency reporting is diagnostic boundedness evidence for the physical static-IPv4 path; Milestone 26b owns same-harness benchmark comparison and the physical-network latency SLO.
 
 ### Prerequisite
 - Milestone **26** completed (U-Boot boot chain + device identity attestation + local diagnostics seat + bootloader/HAL boundary enforcement).
@@ -6186,6 +6188,7 @@ Add the HAL-enforced driver-task substrate, migrate serial/display and GENET beh
 - Serial and HDMI service remain responsive while synthetic GENET traffic consumes its full allowed budget.
 - Pi 4 U-Boot boot reaches root-task network init and reports `GENETv5` backend with static IPv4 from manifest-generated config.
 - `cohsh --transport tcp` succeeds against the configured static address with no console grammar or ACK/ERR/END drift.
+- Any 26a GENET latency evidence is recorded as physical static-IPv4 responsiveness diagnostics and must not be compared against QEMU loopback latency as a closure gate.
 - Invalid Pi 4 static IPv4 manifest settings are rejected deterministically (compiler validation and/or early-boot fail-fast).
 - Pi 4 26a validation explicitly demonstrates transition from Milestone 26 no-NIC baseline to 26a NIC-enabled boot using profile-gated configuration only.
 - No DHCP client path is introduced in 26a; DHCP remains scoped to Milestone 26b.
@@ -6367,7 +6370,7 @@ Deliverables:
 ## Milestone 26b — Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency <a id="26b"></a>
 [Milestones](#Milestones)
 
-**Status:** Reopened — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi, and QEMU compatibility guardrails remain the compatibility baseline. The reopened scope moves USB/xHCI/HID and CYW43/SDIO behind dedicated driver-task scheduling contracts and adds concurrency/performance gates so Wi-Fi work cannot regress USB keyboard, serial console, or HDMI responsiveness. Closure also requires the selected isolated runtime Pi path to meet or exceed the accepted best-QEMU throughput reference under the same harness, with latency recorded but excluded from the pass/fail verdict.
+**Status:** Reopened — bounded DHCP, U-Boot network policy, Pi 4 CYW43455 Wi-Fi, and QEMU compatibility guardrails remain the compatibility baseline. The reopened scope moves USB/xHCI/HID and CYW43/SDIO behind dedicated driver-task scheduling contracts and adds concurrency/performance gates so Wi-Fi work cannot regress USB keyboard, serial console, or HDMI responsiveness. Closure also requires the selected isolated runtime Pi path to meet or exceed the accepted best-QEMU throughput reference under the same harness. Pi 4 wired NIC and Wi-Fi latency may vary from QEMU loopback latency and is not a QEMU-parity pass/fail metric when fresh artifacts show it remains within documented industry-normal physical LAN/control-plane ranges.
 
 **Why now (operator continuity):**  
 Reopened Milestone 26b depends on reopened 26a providing the driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi and selected-network performance must improve by moving SDIO/firmware/RX/TX or GENET RX/TX progress onto bounded manifest-declared isolated driver runtimes, not by extending the root event-loop turn.
@@ -6383,15 +6386,15 @@ Reopened Milestone 26b depends on reopened 26a providing the driver-task substra
 - USB/xHCI/HID owns a higher-priority driver-task contract than Wi-Fi data. Keyboard first-byte and fast-typing proof are hard gates before Wi-Fi performance claims.
 - CYW43/SDIO runs under separate network-control and network-data budgets. EAPOL, DHCP, ARP, and TCP ACK progress may preempt Wi-Fi bulk data, but neither class may preempt USB/local-seat or serial input.
 - Runtime RX aggregation/glom may be enabled only after bounded superframe storage, capped deaggregation work, drop counters, and recovery gates are implemented inside the Wi-Fi driver task.
-- Performance claims use normalized parity: raw `cohsh` over Pi Wi-Fi is measured first, REST gateway overhead is measured separately, QEMU remains a compatibility/capacity reference by itself, and any Pi parity claim must come from a fresh same-harness Pi run that meets or exceeds the selected best-QEMU throughput reference.
-- The isolated runtime throughput verdict excludes latency only after recording latency fields in the artifacts. Throughput, successful operation count, error rate, and bounded-backpressure behavior remain verdict inputs.
+- Performance claims use normalized parity: raw `cohsh` over Pi Wi-Fi is measured first, REST gateway overhead is measured separately, QEMU remains a compatibility/capacity reference by itself, and any Pi throughput-parity claim must come from a fresh same-harness Pi run that meets or exceeds the selected best-QEMU throughput reference.
+- The isolated runtime throughput verdict excludes QEMU-latency parity only after recording latency fields in the artifacts and showing Pi 4 wired NIC and Wi-Fi latency is explained and aligned with documented industry-normal physical LAN/control-plane expectations. Throughput, successful operation count, error rate, and bounded-backpressure behavior remain verdict inputs. Persistent second-scale stalls, unbounded queue growth, drops, or timeout-driven success remain blockers even when throughput passes.
 - Backward compatibility is mandatory: Milestone 26b must not break existing macOS/Linux QEMU workflows, fixtures, or transport semantics.
 
 ### Prerequisite
 - Reopened Milestone **26a** must be completed before 26b closure, including the HAL driver-task admission substrate, serial/display isolation, GENET driver-task migration, and preserved Pi 4 GENETv5/static-IPv4 compatibility behavior.
 
 ### Goal
-Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task contracts, preserve DHCP and single-interface policy behavior, prove Wi-Fi/network load cannot degrade USB keyboard, serial console, or HDMI responsiveness, and close same-harness isolated runtime throughput parity against the accepted best-QEMU reference.
+Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task contracts, preserve DHCP and single-interface policy behavior, prove Wi-Fi/network load cannot degrade USB keyboard, serial console, or HDMI responsiveness, and close same-harness isolated runtime throughput parity against the accepted best-QEMU reference while treating Pi 4 wired NIC and Wi-Fi latency as physical-target SLO evidence instead of QEMU-loopback parity.
 
 ### Deliverables
 - **USB/xHCI/HID driver task**
@@ -6414,7 +6417,7 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
   - Add benchmark reporting that separates raw `cohsh` over Pi Wi-Fi, REST cold gateway overhead, and REST hot/cache projection.
   - Define the accepted best-QEMU reference by artifact path, harness command, worker count, request suite, gateway/auth mode, QEMU SMP topology, pressure settings, and error-budget policy.
   - Compare QEMU and Pi isolated runtime artifacts with the same harness and matched workload/provenance. QEMU results alone remain semantic/capacity references; Pi hardware parity requires fresh Pi evidence.
-  - Exclude latency from pass/fail only after preserving latency fields in JSON and human summaries; throughput, successful operation count, error rate, and bounded-backpressure behavior decide the verdict.
+  - Exclude QEMU-latency parity from pass/fail only after preserving latency fields in JSON and human summaries and verifying Pi 4 wired NIC/Wi-Fi latency remains within documented industry-normal physical LAN/control-plane ranges; throughput, successful operation count, error rate, and bounded-backpressure behavior decide the verdict.
   - Pi 4 performance acceptance requires zero USB/serial/HDMI responsiveness regression during Wi-Fi/NIC load and no root-owned steady-state physical-driver service path.
 
 - **Minimal DHCP core (`no_std`)**
@@ -6473,7 +6476,7 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 - Existing macOS/Linux QEMU workflows remain backward compatible, including serial/TCP console behavior and existing regression fixtures.
 - CYW43xx Wi-Fi path demonstrates HAL-only access in runtime code and tests; no direct MMIO/bootloader-service usage exists outside HAL-owned modules.
 - Raw Pi `cohsh` Wi-Fi latency, REST cold gateway overhead, and REST hot projection latency are reported separately; QEMU benchmark results are not used as Pi Wi-Fi hardware proof without a matched fresh Pi run.
-- A comparator identifies the selected best-QEMU benchmark artifact and the matched Pi isolated runtime artifact, rejects workload/provenance mismatches, excludes latency from pass/fail, and reports a deterministic PASS only when Pi throughput meets or exceeds QEMU with the accepted error budget.
+- A comparator identifies the selected best-QEMU benchmark artifact and the matched Pi isolated runtime artifact, rejects workload/provenance mismatches, excludes QEMU-latency parity from pass/fail, reports Pi 4 wired NIC/Wi-Fi latency against documented physical-network expectations, and reports a deterministic PASS only when Pi throughput meets or exceeds QEMU with the accepted error budget.
 - Isolated runtime hot-path changes remain bounded and preserve active-slot, fingerprint, completion, and busy-on-conflict invariants; no root-owned physical driver service path is added or re-enabled to win the benchmark.
 - Pi benchmark evidence is fresh, non-empty, normalized, and separated from flash, shell, USB/local-seat, HDMI, and serial-responsiveness proof lanes.
 - Full regression pack remains green on QEMU; any profile-gated divergence is explicitly documented and fixture-backed.
@@ -6585,7 +6588,7 @@ Deliverables:
   - Honest Pi Wi-Fi benchmark model that optimizes toward QEMU semantics without claiming impossible physical loopback parity.
 
 Title/ID: m26b-benchmark-comparator
-Goal: Define and enforce same-harness QEMU-vs-Pi isolated runtime throughput parity while excluding latency from the verdict.
+Goal: Define and enforce same-harness QEMU-vs-Pi isolated runtime throughput parity while evaluating Pi latency against documented physical-network norms instead of QEMU loopback parity.
 Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, tests/test_pi4_compare_driver_models.py, docs/BENCHMARKS.md, existing out/bench QEMU and Pi summaries.
 Changes:
   - scripts/rest_perf_harness.py or scripts/pi4_compare_driver_models.py — emit/compare benchmark provenance, reject mismatched workloads, and calculate pass/fail from throughput/error metrics only.
@@ -6593,7 +6596,7 @@ Changes:
   - docs/BENCHMARKS.md — document the best-QEMU selection rule, Pi artifact requirements, and latency-exclusion rule.
 Commands:
   - python3 -m pytest tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py
-Checks: comparator rejects stale or mismatched artifacts and produces deterministic PASS/FAIL for matched QEMU/Pi runs without using latency as a verdict metric.
+Checks: comparator rejects stale or mismatched artifacts and produces deterministic PASS/FAIL for matched QEMU/Pi runs without using QEMU latency parity as a verdict metric; it still flags Pi wired NIC/Wi-Fi latency outside documented industry-normal physical LAN/control-plane ranges.
 Deliverables: benchmark comparator, tests, and documented parity rule.
 
 Title/ID: m26b-linked-runtime-counters
@@ -6636,7 +6639,7 @@ Changes:
 Commands:
   - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26b-qemu-reference
   - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26b-pi4-linked-runtime
-Checks: Pi isolated runtime throughput meets or exceeds the selected QEMU reference under matched workload/provenance, latency remains recorded but excluded from verdict, and side proof lanes stay separate.
+Checks: Pi isolated runtime throughput meets or exceeds the selected QEMU reference under matched workload/provenance, latency remains recorded and checked against documented industry-normal physical LAN/control-plane ranges but excluded from the QEMU-throughput parity verdict, and side proof lanes stay separate.
 Deliverables: fresh benchmark artifacts, comparator PASS/FAIL, normalized Pi proof, and updated benchmark docs.
 
 Title/ID: m26b-authenticated-cohsh-reboot

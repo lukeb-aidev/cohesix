@@ -513,6 +513,34 @@ flowchart LR
 - Preserves strict split-brain fencing and explicit authority boundaries.
 - Produces replayable evidence linking source intent to target execution and terminal receipts.
 
+## 29) AI Harness action authority for enterprise agents
+**Problem:** Enterprise AI agents can plan across tools, but they should not receive direct mutation authority over production systems, GPUs, model registries, Kubernetes, systemd, or Docker.
+
+**Cohesix flow:**
+- Agent frameworks, MCP clients, A2A peers, or workflow engines submit intent only through existing Cohesix gateway or host-ticket surfaces.
+- Cohesix reduces each mutating request to a bounded ticket or append-only control write with role, scope, idempotency, writer epoch, and policy checks.
+- Host-side adapters execute only allowlisted actions and append terminal receipts; the LLM never calls CUDA/NVML, `kubectl`, `systemctl`, Docker, PEFT tooling, or shell commands directly.
+- Evidence tooling correlates the delegated identity, Cohesix path or ticket, adapter receipt, logs, and final state without storing raw prompts or creating an opaque inter-agent mailbox.
+
+**Why this is distinctive:**
+- Makes the harness authority boundary explicit: model intent is advisory until Cohesix policy admits it.
+- Preserves existing Secure9P, REST, MCP, and A2A projection semantics without adding a second executor.
+- Gives security teams a deterministic refusal and receipt trail for every attempted production change.
+
+## 30) AI Harness edge model-change gate
+**Problem:** AI systems need to update models, adapters, prompts, and runtime policy at the edge, but unsafe or unaudited changes can break regulated operations faster than humans can review them.
+
+**Cohesix flow:**
+- The harness stages candidate model or adapter changes through existing `/models`, `/gpu/models`, `/updates`, `/policy`, and host-ticket paths where enabled by the manifest.
+- Cohesix gates activation on signed artifacts, explicit lease or rollout policy, bounded telemetry readiness, and rollback availability.
+- Host-side model registry and GPU bridge components perform heavy work outside the VM; Cohesix records pointers, receipts, health summaries, and operator-visible evidence.
+- Agents may propose promotion, rollback, or canary expansion, but side effects still pass through Cohesix tickets and append-only control files.
+
+**Why this is distinctive:**
+- Turns AI-driven model operations into auditable infrastructure changes instead of opaque agent actions.
+- Keeps CUDA/NVML, registry storage, and inference engines outside the trusted computing base.
+- Supports disconnected or hostile edge sites where the harness must continue enforcing local policy during WAN loss.
+
 ---
 
 ## Platform Primitives and Typical Integrations
