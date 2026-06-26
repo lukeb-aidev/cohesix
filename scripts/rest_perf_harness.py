@@ -589,6 +589,74 @@ def allocate_synthetic_worker_id(state: SimState) -> str:
     return worker_id
 
 
+def worker_seq_max(worker_ids: Sequence[str]) -> int:
+    """Return the highest monotonic worker sequence in a worker ID list."""
+    max_seq = 0
+    for worker_id in worker_ids:
+        seq = parse_worker_seq(worker_id)
+        if seq is not None and seq > max_seq:
+            max_seq = seq
+    return max_seq
+
+
+def worker_listing_looks_truncated_tail(
+    current: Sequence[str],
+    actual: Sequence[str],
+) -> bool:
+    """Detect bounded /worker listings that expose only the tail window."""
+    if len(actual) >= len(current) or not actual:
+        return False
+    current_set = set(current)
+    actual_set = set(actual)
+    if not actual_set.issubset(current_set):
+        return False
+    if worker_seq_max(actual) != worker_seq_max(current):
+        return False
+    seqs = sorted(seq for seq in (parse_worker_seq(wid) for wid in actual) if seq)
+    if len(seqs) != len(actual):
+        return False
+    return seqs == list(range(seqs[0], seqs[-1] + 1))
+
+
+def reconcile_worker_snapshot(
+    current: Sequence[str],
+    actual: Sequence[str],
+) -> Tuple[List[str], int, bool]:
+    """Merge a possibly bounded /worker listing with predicted worker IDs."""
+    if worker_listing_looks_truncated_tail(current, actual):
+        return list(current), 0, True
+    max_actual = worker_seq_max(actual)
+    max_current = worker_seq_max(current)
+    if actual and max_actual < max_current:
+        reconciled = [
+            worker_id
+            for worker_id in current
+            if (parse_worker_seq(worker_id) or max_current + 1) <= max_actual
+        ]
+        return reconciled, len(current) - len(reconciled), False
+    actual_set = set(actual)
+    missing = sum(1 for worker_id in current if worker_id not in actual_set)
+    return list(actual), missing, False
+
+
+def expand_bounded_worker_listing(
+    worker_ids: Sequence[str],
+    target: int,
+) -> List[str]:
+    """Expand a bounded tail /worker listing when it proves the target exists."""
+    if len(worker_ids) >= target:
+        return list(worker_ids)
+    max_seq = worker_seq_max(worker_ids)
+    if max_seq < target:
+        return list(worker_ids)
+    seqs = sorted(seq for seq in (parse_worker_seq(wid) for wid in worker_ids) if seq)
+    if len(seqs) != len(worker_ids):
+        return list(worker_ids)
+    if seqs != list(range(seqs[0], seqs[-1] + 1)):
+        return list(worker_ids)
+    return [f"worker-{idx}" for idx in range(1, target + 1)]
+
+
 def build_telemetry_specs(
     workers: Sequence[str],
     max_workers: int,
@@ -1751,6 +1819,43 @@ def spawn_worker(
     return predicted_worker
 
 
+def reconcile_worker_ids(
+    client: RestClient,
+    state: SimState,
+    current: List[str],
+    spawned: List[str],
+    reason: str,
+) -> Tuple[List[str], List[str]]:
+    """Replace synthetic high-count worker IDs with the gateway's real listing."""
+    try:
+        actual = list_workers(client)
+    except RestError as exc:
+        if is_buffer_full_error(exc):
+            if state.logger:
+                state.logger.log(
+                    f"[workers] reconciliation skipped reason={reason} error={exc}"
+                )
+            return current, spawned
+        raise
+
+    seed_next_worker_seq(state, actual)
+    reconciled, missing, truncated_tail = reconcile_worker_snapshot(current, actual)
+    reconciled_set = set(reconciled)
+    reconciled_spawned = [
+        worker_id for worker_id in spawned if worker_id in reconciled_set
+    ]
+    if len(reconciled) != len(current) or missing or truncated_tail:
+        if state.logger:
+            action = "kept-truncated-tail" if truncated_tail else "reconciled"
+            state.logger.log(
+                f"[workers] {action} "
+                f"reason={reason} before={len(current)} actual={len(actual)} "
+                f"after={len(reconciled)} "
+                f"removed_synthetic={missing}"
+            )
+    return reconciled, reconciled_spawned
+
+
 def kill_worker(client: RestClient, state: SimState, worker_id: str) -> None:
     line = json.dumps({"kill": worker_id}, separators=(",", ":"))
     echo_with_policy_retry(client, "/queen/ctl", line, state)
@@ -2385,9 +2490,10 @@ def ensure_workers(
     state: SimState,
     target: int,
 ) -> Tuple[List[str], List[str]]:
-    current = list_workers(client)
+    current = expand_bounded_worker_listing(list_workers(client), target)
     seed_next_worker_seq(state, current)
     spawned: List[str] = []
+    capacity_limited = False
     while len(current) < target:
         try:
             new_worker = spawn_worker(client, state, current)
@@ -2399,12 +2505,21 @@ def ensure_workers(
                     state.logger.log(
                         f"worker capacity reached at {len(current)} ({exc})"
                     )
+                capacity_limited = True
                 break
             raise
         else:
             if new_worker not in current:
                 spawned.append(new_worker)
                 current.append(new_worker)
+    if spawned and (capacity_limited or len(current) >= 32):
+        current, spawned = reconcile_worker_ids(
+            client,
+            state,
+            current,
+            spawned,
+            "ensure",
+        )
     return current, spawned
 
 
@@ -2416,6 +2531,7 @@ def adjust_workers(
     target: int,
 ) -> Tuple[List[str], List[str]]:
     current = list(worker_ids)
+    capacity_limited = False
     if len(current) < target:
         while len(current) < target:
             try:
@@ -2428,12 +2544,21 @@ def adjust_workers(
                         state.logger.log(
                             f"worker capacity reached at {len(current)} ({exc})"
                         )
+                    capacity_limited = True
                     break
                 raise
             else:
                 if new_worker not in current:
                     spawned.append(new_worker)
                     current.append(new_worker)
+        if spawned and (capacity_limited or len(current) >= 32):
+            current, spawned = reconcile_worker_ids(
+                client,
+                state,
+                current,
+                spawned,
+                "adjust",
+            )
     elif len(current) > target:
         while len(current) > target and spawned:
             victim = spawned.pop()

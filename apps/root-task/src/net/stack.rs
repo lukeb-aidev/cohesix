@@ -1320,7 +1320,25 @@ fn budgeted_cyw43_tcp_fast_path_due(
 
 #[cfg(feature = "kernel")]
 const fn budgeted_cyw43_tcp_phase_borrow_allowed(phase: BudgetedNetPhase) -> bool {
-    !matches!(phase, BudgetedNetPhase::Tcp)
+    // Self-test stays available for health work; pre-poll drain plus TCP plus self-test
+    // does not fit in one CYW43 turn.
+    !matches!(phase, BudgetedNetPhase::Tcp | BudgetedNetPhase::SelfTest)
+}
+
+#[cfg(feature = "kernel")]
+const fn budgeted_cyw43_interface_poll_after_tcp_borrow(phase: BudgetedNetPhase) -> bool {
+    matches!(
+        phase,
+        BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn budgeted_outer_pre_poll_allowed(
+    hot_path: crate::hal::driver_task::DriverTaskHotPath,
+    cyw43_inner_pre_poll_owner: bool,
+) -> bool {
+    hot_path != crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi || !cyw43_inner_pre_poll_owner
 }
 
 #[cfg(feature = "kernel")]
@@ -3192,6 +3210,14 @@ impl<D: NetDevice> NetStack<D> {
         budget.charge_bytes(TCP_RESPONSE_FLUSH_BYTES_PER_TURN)
     }
 
+    fn charge_interface_poll_budget(
+        budget: &mut DriverServiceBudget,
+    ) -> Result<(), DriverServiceBudgetError> {
+        budget.charge_ops(2)?;
+        budget.charge_frames(1)?;
+        budget.charge_bytes(2048)
+    }
+
     fn charge_dhcp_budget(
         budget: &mut DriverServiceBudget,
     ) -> Result<(), DriverServiceBudgetError> {
@@ -3267,6 +3293,23 @@ impl<D: NetDevice> NetStack<D> {
             NET_RING_FLAG_BUDGETED,
             budget,
         )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn drain_cyw43_pre_poll_activity(
+        &mut self,
+        timestamp: Instant,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+        pre_poll_activity: bool,
+    ) -> bool {
+        if !pre_poll_activity {
+            return false;
+        }
+        if Self::charge_interface_poll_budget(budget).is_err() {
+            return false;
+        }
+        self.poll_smoltcp_once(timestamp, now_ms, "budgeted-cyw43-pre-poll-drain")
     }
 
     fn service_budgeted_dhcp_turn(&mut self, timestamp: Instant, now_ms: u64) -> bool {
@@ -3547,13 +3590,12 @@ impl<D: NetDevice> NetStack<D> {
         let phase = self.budgeted_phase;
         let genet_tcp_fast_path = self.budgeted_genet_tcp_fast_path_due();
         let cyw43_tcp_fast_path = self.budgeted_cyw43_tcp_fast_path_due();
-        let tcp_phase_borrow = genet_tcp_fast_path
-            || (cyw43_tcp_fast_path && budgeted_cyw43_tcp_phase_borrow_allowed(phase));
+        let cyw43_tcp_phase_borrow =
+            cyw43_tcp_fast_path && budgeted_cyw43_tcp_phase_borrow_allowed(phase);
+        let tcp_phase_borrow = genet_tcp_fast_path || cyw43_tcp_phase_borrow;
         match phase {
             BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush => {
-                budget.charge_ops(2)?;
-                budget.charge_frames(1)?;
-                budget.charge_bytes(2048)?;
+                Self::charge_interface_poll_budget(budget)?;
             }
             BudgetedNetPhase::Dhcp => {
                 Self::charge_dhcp_budget(budget)?;
@@ -3579,8 +3621,14 @@ impl<D: NetDevice> NetStack<D> {
         }
 
         #[cfg(feature = "kernel")]
-        let mut activity =
-            self.service_cyw43_data_pre_poll_burst_budgeted(D::driver_task_contract(), budget);
+        let mut activity = {
+            let pre_poll_activity =
+                self.service_cyw43_data_pre_poll_burst_budgeted(D::driver_task_contract(), budget);
+            let mut activity = pre_poll_activity;
+            activity |=
+                self.drain_cyw43_pre_poll_activity(timestamp, now_ms, budget, pre_poll_activity);
+            activity
+        };
         #[cfg(not(feature = "kernel"))]
         let mut activity = false;
         activity |= self.sync_interface_hardware_addr(now_ms);
@@ -3603,6 +3651,12 @@ impl<D: NetDevice> NetStack<D> {
             );
         }
         activity |= match phase {
+            BudgetedNetPhase::Interface
+                if cyw43_tcp_phase_borrow
+                    && budgeted_cyw43_interface_poll_after_tcp_borrow(phase) =>
+            {
+                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-cyw43-main-after-tcp-borrow")
+            }
             BudgetedNetPhase::Interface if tcp_phase_borrow => false,
             BudgetedNetPhase::Interface => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
@@ -3614,6 +3668,12 @@ impl<D: NetDevice> NetStack<D> {
                 "budgeted-tcp-pre",
                 "budgeted-post-tcp",
             ),
+            BudgetedNetPhase::InterfaceFlush
+                if cyw43_tcp_phase_borrow
+                    && budgeted_cyw43_interface_poll_after_tcp_borrow(phase) =>
+            {
+                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-cyw43-flush-after-tcp-borrow")
+            }
             BudgetedNetPhase::InterfaceFlush if tcp_phase_borrow => false,
             BudgetedNetPhase::InterfaceFlush => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
@@ -6475,12 +6535,20 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     ) {
                         return self.poll_budgeted_with_time(now_ms, budget);
                     }
-                    let ring_progress = service_driver_task_pre_poll_burst_budgeted(
-                        contract,
-                        hot_path,
-                        NET_RING_FLAG_BUDGETED,
-                        budget,
-                    );
+                    let cyw43_inner_pre_poll_owner = hot_path
+                        == crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi
+                        && self.cyw43_flush_pre_poll_data_ready();
+                    let ring_progress =
+                        if budgeted_outer_pre_poll_allowed(hot_path, cyw43_inner_pre_poll_owner) {
+                            service_driver_task_pre_poll_burst_budgeted(
+                                contract,
+                                hot_path,
+                                NET_RING_FLAG_BUDGETED,
+                                budget,
+                            )
+                        } else {
+                            false
+                        };
                     return self
                         .poll_budgeted_with_time(now_ms, budget)
                         .map(|root_progress| root_progress || ring_progress);
@@ -7734,6 +7802,10 @@ mod tests {
         let pre_poll_frames = CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u16;
         let pre_poll_bytes = (CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u32)
             .saturating_mul(DRIVER_TASK_PRE_POLL_TURN_BYTES);
+        let base_ops = 1u16;
+        let interface_ops = 2u16;
+        let interface_frames = 1u16;
+        let interface_bytes = 2048u32;
         let tcp_ops = 64u16;
         let tcp_frames = MAX_CONSOLE_FRAMES_PER_POLL as u16;
         let tcp_bytes = TCP_SERVICE_BYTES_PER_TURN;
@@ -7751,39 +7823,95 @@ mod tests {
         assert!(pre_poll_frames.saturating_add(tcp_frames) <= contract.budget.max_frames_per_turn);
         assert!(pre_poll_bytes.saturating_add(tcp_bytes) <= contract.budget.max_bytes_per_turn);
         assert!(
+            base_ops
+                .saturating_add(pre_poll_ops)
+                .saturating_add(tcp_ops)
+                .saturating_add(interface_ops)
+                <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            pre_poll_frames
+                .saturating_add(tcp_frames)
+                .saturating_add(interface_frames)
+                <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            pre_poll_bytes
+                .saturating_add(tcp_bytes)
+                .saturating_add(interface_bytes)
+                <= contract.budget.max_bytes_per_turn
+        );
+        assert!(
+            pre_poll_ops.saturating_mul(2).saturating_add(tcp_ops)
+                <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            pre_poll_frames.saturating_mul(2).saturating_add(tcp_frames)
+                <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            pre_poll_bytes.saturating_mul(2).saturating_add(tcp_bytes)
+                > contract.budget.max_bytes_per_turn
+        );
+        assert!(
+            base_ops
+                .saturating_add(pre_poll_ops)
+                .saturating_add(tcp_ops)
+                .saturating_add(interface_ops)
+                .saturating_add(interface_ops)
+                <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            pre_poll_frames
+                .saturating_add(tcp_frames)
+                .saturating_add(interface_frames)
+                .saturating_add(interface_frames)
+                <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            pre_poll_bytes
+                .saturating_add(tcp_bytes)
+                .saturating_add(interface_bytes)
+                .saturating_add(interface_bytes)
+                <= contract.budget.max_bytes_per_turn
+        );
+        assert!(
             pre_poll_ops
                 .saturating_add(tcp_ops)
                 .saturating_add(dhcp_ops)
+                .saturating_add(interface_ops)
                 <= contract.budget.max_ops_per_turn
         );
         assert!(
             pre_poll_frames
                 .saturating_add(tcp_frames)
                 .saturating_add(dhcp_frames)
+                .saturating_add(interface_frames)
                 <= contract.budget.max_frames_per_turn
         );
         assert!(
             pre_poll_bytes
                 .saturating_add(tcp_bytes)
                 .saturating_add(dhcp_bytes)
+                .saturating_add(interface_bytes)
                 <= contract.budget.max_bytes_per_turn
         );
         assert!(
             pre_poll_ops
-                .saturating_add(tcp_ops)
                 .saturating_add(selftest_ops)
+                .saturating_add(interface_ops)
                 <= contract.budget.max_ops_per_turn
         );
         assert!(
             pre_poll_frames
-                .saturating_add(tcp_frames)
                 .saturating_add(selftest_frames)
+                .saturating_add(interface_frames)
                 <= contract.budget.max_frames_per_turn
         );
         assert!(
             pre_poll_bytes
-                .saturating_add(tcp_bytes)
                 .saturating_add(selftest_bytes)
+                .saturating_add(interface_bytes)
                 <= contract.budget.max_bytes_per_turn
         );
         assert!(
@@ -8056,7 +8184,22 @@ mod tests {
         assert!(!budgeted_cyw43_tcp_phase_borrow_allowed(
             BudgetedNetPhase::Tcp
         ));
-        assert!(budgeted_cyw43_tcp_phase_borrow_allowed(
+        assert!(!budgeted_cyw43_tcp_phase_borrow_allowed(
+            BudgetedNetPhase::SelfTest
+        ));
+        assert!(budgeted_cyw43_interface_poll_after_tcp_borrow(
+            BudgetedNetPhase::Interface
+        ));
+        assert!(budgeted_cyw43_interface_poll_after_tcp_borrow(
+            BudgetedNetPhase::InterfaceFlush
+        ));
+        assert!(!budgeted_cyw43_interface_poll_after_tcp_borrow(
+            BudgetedNetPhase::Dhcp
+        ));
+        assert!(!budgeted_cyw43_interface_poll_after_tcp_borrow(
+            BudgetedNetPhase::Tcp
+        ));
+        assert!(!budgeted_cyw43_interface_poll_after_tcp_borrow(
             BudgetedNetPhase::SelfTest
         ));
     }

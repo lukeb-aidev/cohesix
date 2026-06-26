@@ -210,6 +210,52 @@ def test_allocate_ids_are_monotonic() -> None:
     assert rest_perf.allocate_lease_id(state) == "lease-abc123ef-000002"
 
 
+def test_reconcile_worker_snapshot_keeps_bounded_tail_listing() -> None:
+    current = [f"worker-{idx}" for idx in range(1, 1501)]
+    actual = [f"worker-{idx}" for idx in range(1437, 1501)]
+
+    reconciled, missing, truncated = rest_perf.reconcile_worker_snapshot(
+        current,
+        actual,
+    )
+
+    assert reconciled == current
+    assert missing == 0
+    assert truncated
+
+
+def test_reconcile_worker_snapshot_trims_overpredicted_workers() -> None:
+    current = [f"worker-{idx}" for idx in range(1, 1511)]
+    actual = [f"worker-{idx}" for idx in range(1, 1501)]
+
+    reconciled, missing, truncated = rest_perf.reconcile_worker_snapshot(
+        current,
+        actual,
+    )
+
+    assert reconciled == [f"worker-{idx}" for idx in range(1, 1501)]
+    assert missing == 10
+    assert not truncated
+
+
+def test_expand_bounded_worker_listing_recovers_existing_target() -> None:
+    tail = [f"worker-{idx}" for idx in range(1437, 1501)]
+
+    expanded = rest_perf.expand_bounded_worker_listing(tail, 1500)
+
+    assert expanded[0] == "worker-1"
+    assert expanded[-1] == "worker-1500"
+    assert len(expanded) == 1500
+
+
+def test_expand_bounded_worker_listing_keeps_short_prefix() -> None:
+    prefix = [f"worker-{idx}" for idx in range(1, 65)]
+
+    expanded = rest_perf.expand_bounded_worker_listing(prefix, 1500)
+
+    assert expanded == prefix
+
+
 def test_emit_benchmark_marker_writes_queen_log_line() -> None:
     class DummyClient:
         rest_url = "http://127.0.0.1:8080"
@@ -700,6 +746,7 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
         gateway_pool_telemetry_sessions=None,
         gateway_broker_control_response_timeout_ms=None,
         gateway_broker_telemetry_response_timeout_ms=None,
+        gateway_control_write_retry_window_ms=None,
         summary_max_error_lines=rest_perf.DEFAULT_SUMMARY_MAX_ERROR_LINES,
     )
     overall = rest_perf.OpStats()
