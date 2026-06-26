@@ -1382,6 +1382,7 @@ const CYW43_POST_RELEASE_MAILBOX_TIMEOUT_MS: u64 = 1_000;
 const CYW43_POST_RELEASE_HT_TIMEOUT_MS: u64 = 1_600;
 const CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS: u64 = 3_000;
 const CYW43_TX_CREDIT_TIMEOUT_MS: u64 = 100;
+const CYW43_DATA_TX_CREDIT_TIMEOUT_MS: u64 = 20;
 const CYW43_FUNCTION2_FIFO_WINDOW_ATTEMPTS: usize = 2;
 const CYW43_RX_SOURCE_SAMPLE_INTERVAL_EMPTY_POLLS: u32 = 1024;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS: usize = 1;
@@ -5075,6 +5076,7 @@ fn service_cyw43_descriptor_command(
                 flags: 0,
             };
             let submitted_seq = state.sdpcm_seq;
+            let credit_observations_before = state.sdpcm_credit_observations;
             let expected_request_len = cyw43_data_tx_total_len(usize::from(frame.len))
                 .map(|total_len| cyw43_data_tx_request_len_for_frame(frame, total_len).0);
             let written = cyw43_submit_sdpcm_frame(state, frame, true, false);
@@ -5090,6 +5092,8 @@ fn service_cyw43_descriptor_command(
                     state.sdpcm_seq_max,
                     state.sdpcm_credit_observations,
                 );
+            } else if state.sdpcm_credit_observations != credit_observations_before {
+                progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
             }
             written as u32
         }
@@ -5194,7 +5198,16 @@ fn service_cyw43_descriptor_command(
             || (desc.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME
                 && cyw43_take_last_fault_detail().is_none()))
     {
-        DriverTaskCompletionRecord::idle(command.sequence)
+        if progress_frame.flags != 0 {
+            DriverTaskCompletionRecord::idle_with_detail_and_frame(
+                command.sequence,
+                FAULT_NONE,
+                0,
+                progress_frame,
+            )
+        } else {
+            DriverTaskCompletionRecord::idle(command.sequence)
+        }
     } else if result == 0 {
         let detail =
             cyw43_take_last_fault_detail().unwrap_or_else(|| cyw43_command_fault_detail(desc.op));
@@ -9039,7 +9052,7 @@ fn cyw43_submit_sdpcm_frame(
         return 0;
     }
     let total_len = payload_len + header_len;
-    if !cyw43_wait_for_sdpcm_tx_credit(state) {
+    if !cyw43_wait_for_sdpcm_tx_credit(state, data_frame) {
         return 0;
     }
     let seq = state.sdpcm_seq;
@@ -9119,10 +9132,18 @@ fn cyw43_submit_sdpcm_frame(
     total_len
 }
 
-fn cyw43_wait_for_sdpcm_tx_credit(state: &mut Cyw43RuntimeState) -> bool {
+const fn cyw43_tx_credit_timeout_ms(data_frame: bool) -> u64 {
+    if data_frame {
+        CYW43_DATA_TX_CREDIT_TIMEOUT_MS
+    } else {
+        CYW43_TX_CREDIT_TIMEOUT_MS
+    }
+}
+
+fn cyw43_wait_for_sdpcm_tx_credit(state: &mut Cyw43RuntimeState, data_frame: bool) -> bool {
     let mut polls = 0usize;
     let mut deadline = runtime_deadline_from_millis_or_iterations(
-        CYW43_TX_CREDIT_TIMEOUT_MS,
+        cyw43_tx_credit_timeout_ms(data_frame),
         CYW43_TX_CREDIT_WAIT_LOOPS,
     );
     while !runtime_deadline_iteration_cap_reached(&deadline, polls, CYW43_TX_CREDIT_WAIT_LOOPS)
@@ -22929,6 +22950,10 @@ mod tests {
             5_400_000
         );
         assert_eq!(
+            runtime_millis_to_cycles_at_hz(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 54_000_000),
+            1_080_000
+        );
+        assert_eq!(
             runtime_millis_to_cycles_at_hz(CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS, 54_000_000),
             1_080_000
         );
@@ -25293,6 +25318,70 @@ mod tests {
         assert_eq!(state.sdpcm_seq, 7);
         assert_eq!(state.tx_frames, 0);
         assert_eq!(cyw43_take_last_fault_detail(), None);
+    }
+
+    #[test]
+    fn cyw43_data_tx_credit_timeout_is_shorter_than_control_timeout() {
+        assert_eq!(CYW43_TX_CREDIT_TIMEOUT_MS, 100);
+        assert_eq!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 20);
+        assert_eq!(
+            cyw43_tx_credit_timeout_ms(false),
+            CYW43_TX_CREDIT_TIMEOUT_MS
+        );
+        assert_eq!(
+            cyw43_tx_credit_timeout_ms(true),
+            CYW43_DATA_TX_CREDIT_TIMEOUT_MS
+        );
+        assert!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS < CYW43_TX_CREDIT_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn cyw43_eth_tx_no_credit_reports_observed_credit_snapshot() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_cyw43_engine_for_test();
+        let payload_offset = cyw43_runtime_payload_offset();
+        let outbound = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10, 0x08, 0x00,
+        ];
+        let inbound = [
+            0xcc, 0xf4, 0x11, 0x42, 0x5b, 0x92, 0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10, 0x08, 0x00,
+        ];
+        let inbound_len = stage_sdpcm_data_subframe(CYW43_RUNTIME_RX_BUFFER_OFFSET, &inbound, 7);
+        stage_bytes(usize::from(payload_offset), &outbound);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.sdpcm_seq = 7;
+            state.sdpcm_seq_max = 7;
+            state.sdpcm_next_frame_len = inbound_len as u16;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+            flags: 0,
+            target_addr: 0,
+            payload_offset,
+            payload_len: outbound.len() as u16,
+            total_len: outbound.len() as u32,
+            arg0: 0,
+            arg1: 0,
+            reserved: 0,
+        });
+        reset_test_sdio_transfer_log();
+
+        let expected = DriverTaskCompletionRecord::idle_with_detail_and_frame(
+            178,
+            FAULT_NONE,
+            0,
+            cyw43_sdpcm_tx_credit_proof_frame(7, 7, 1),
+        );
+        assert_eq!(service_command(0, cyw43_descriptor_command(178)), expected);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert_eq!(state.sdpcm_seq, 7);
+            assert_eq!(state.sdpcm_seq_max, 7);
+            assert_eq!(state.sdpcm_credit_observations, 1);
+            assert_eq!(state.rx_queue_count, 1);
+            assert_eq!(state.tx_frames, 0);
+        });
     }
 
     #[test]
@@ -28893,6 +28982,7 @@ mod tests {
         assert_eq!(CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS, 3_000);
         assert_eq!(CYW43_CONTROL_EXCHANGE_TIMEOUT_MS, 1_000);
         assert_eq!(CYW43_TX_CREDIT_TIMEOUT_MS, 100);
+        assert_eq!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 20);
         assert_eq!(CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS, 20);
         assert!(
             runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_HT_TIMEOUT_MS, 54_000_000)
@@ -28918,6 +29008,10 @@ mod tests {
         );
         assert!(
             runtime_millis_to_cycles_at_hz(CYW43_TX_CREDIT_TIMEOUT_MS, 54_000_000)
+                > runtime_legacy_spins_to_cycles_at_hz(CYW43_TX_CREDIT_WAIT_LOOPS, 54_000_000)
+        );
+        assert!(
+            runtime_millis_to_cycles_at_hz(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 54_000_000)
                 > runtime_legacy_spins_to_cycles_at_hz(CYW43_TX_CREDIT_WAIT_LOOPS, 54_000_000)
         );
         assert!(

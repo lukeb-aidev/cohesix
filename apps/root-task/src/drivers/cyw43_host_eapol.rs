@@ -272,6 +272,25 @@ impl HostEapolState {
             &body[EAPOL_KEY_BODY_REPLAY_OFFSET
                 ..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN],
         );
+        if let Some(candidate) = self.ptk_candidate_for_m1_anonce(ap_mac, &anonce) {
+            self.ap_mac = candidate.ap_mac;
+            self.anonce = candidate.anonce;
+            self.snonce = candidate.snonce;
+            self.m1_replay_counter = replay_counter;
+            self.ptk = candidate.ptk;
+            let len = write_eapol_key_reply_frame(
+                tx_frame,
+                &candidate.ap_mac,
+                &station_mac,
+                EAPOL_KEY_INFO_M2,
+                &replay_counter,
+                Some(&candidate.snonce),
+                &WPA2_PSK_CCMP_RSN_IE,
+                &candidate.ptk[..WPA_KCK_LEN],
+            )?;
+            self.m2_sent = true;
+            return Ok(HostEapolAction::SendM2 { len });
+        }
         self.ap_mac = ap_mac;
         self.anonce = anonce;
         self.m1_replay_counter = replay_counter;
@@ -304,6 +323,29 @@ impl HostEapolState {
         Ok(HostEapolAction::SendM2 { len })
     }
 
+    fn ptk_candidate_for_m1_anonce(
+        &self,
+        ap_mac: [u8; ETHER_ADDR_LEN],
+        anonce: &[u8; WPA_NONCE_LEN],
+    ) -> Option<HostPtkCandidate> {
+        if self.secure_complete()
+            && self.installed_ap_mac == ap_mac
+            && self.installed_anonce == *anonce
+        {
+            return Some(HostPtkCandidate {
+                valid: true,
+                ap_mac: self.installed_ap_mac,
+                anonce: self.installed_anonce,
+                snonce: self.installed_snonce,
+                m1_replay_counter: self.installed_m1_replay_counter,
+                ptk: self.installed_ptk,
+            });
+        }
+        self.ptk_candidates.iter().copied().find(|candidate| {
+            candidate.valid && candidate.ap_mac == ap_mac && candidate.anonce == *anonce
+        })
+    }
+
     fn handle_m3(
         &mut self,
         station_mac: [u8; ETHER_ADDR_LEN],
@@ -332,6 +374,8 @@ impl HostEapolState {
         }
         let replay_counter = &body
             [EAPOL_KEY_BODY_REPLAY_OFFSET..EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN];
+        let mut incoming_m3_replay_counter = [0u8; WPA_REPLAY_COUNTER_LEN];
+        incoming_m3_replay_counter.copy_from_slice(replay_counter);
         let Some(matched_candidate) =
             self.select_m3_ptk_candidate(packet, ap_mac, anonce, replay_counter)?
         else {
@@ -365,17 +409,23 @@ impl HostEapolState {
         };
         let mut rsc = [0u8; 6];
         rsc.copy_from_slice(&body[EAPOL_KEY_BODY_RSC_OFFSET..EAPOL_KEY_BODY_RSC_OFFSET + 6]);
+        let m4_replay_counter = if secure_retransmit {
+            &incoming_m3_replay_counter
+        } else {
+            &self.m3_replay_counter
+        };
         let len = write_eapol_key_reply_frame(
             tx_frame,
             &ap_mac,
             &station_mac,
             EAPOL_KEY_INFO_M4,
-            &self.m3_replay_counter,
+            m4_replay_counter,
             None,
             &[],
             &selected_ptk[..WPA_KCK_LEN],
         )?;
         if secure_retransmit {
+            self.m3_replay_counter = incoming_m3_replay_counter;
             return Ok(HostEapolAction::SendM4 { len });
         }
         let mut pairwise_tk = [0u8; WPA_TK_LEN];
@@ -407,12 +457,10 @@ impl HostEapolState {
         self.secure_complete()
             && self.installed_ap_mac == ap_mac
             && self.installed_anonce.as_slice() == anonce
-            && self.m3_replay_counter.as_slice() == replay_counter
             && candidate.ap_mac == self.installed_ap_mac
             && candidate.anonce == self.installed_anonce
-            && candidate.snonce == self.installed_snonce
-            && candidate.m1_replay_counter == self.installed_m1_replay_counter
             && candidate.ptk == self.installed_ptk
+            && replay_counter_at_least(replay_counter, &self.m3_replay_counter)
     }
 
     fn record_current_ptk_candidate(&mut self) {
@@ -1267,6 +1315,10 @@ fn replay_counter_increases(current: &[u8], previous: &[u8; WPA_REPLAY_COUNTER_L
     false
 }
 
+fn replay_counter_at_least(current: &[u8], previous: &[u8; WPA_REPLAY_COUNTER_LEN]) -> bool {
+    current == previous.as_slice() || replay_counter_increases(current, previous)
+}
+
 fn group_replay_counter_admitted(current: &[u8], state: &HostEapolState) -> bool {
     let previous = if state.group_replay_counter_valid {
         &state.group_replay_counter
@@ -1738,7 +1790,7 @@ mod tests {
     }
 
     #[test]
-    fn retransmitted_m1_rotates_m2_and_preserves_candidates() {
+    fn retransmitted_m1_reuses_m2_and_preserves_candidates() {
         let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
         let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
         let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
@@ -1770,10 +1822,10 @@ mod tests {
 
         assert_eq!(state.rx_packets(), 2);
         assert_eq!(second_len, first_len);
-        assert_ne!(state.snonce, first_snonce);
-        assert_ne!(state.ptk, first_ptk);
-        assert_ne!(&second_m2[..second_len], &first_m2[..first_len]);
-        assert_eq!(state.ptk_candidate_count, 2);
+        assert_eq!(state.snonce, first_snonce);
+        assert_eq!(state.ptk, first_ptk);
+        assert_eq!(&second_m2[..second_len], &first_m2[..first_len]);
+        assert_eq!(state.ptk_candidate_count, 1);
 
         let m3_action = state
             .handle_packet(station, &m3_for_first_m2[..m3_len], &mut second_m2)
@@ -1788,7 +1840,7 @@ mod tests {
     }
 
     #[test]
-    fn m3_can_match_earlier_m2_after_later_m1_updates_current_ptk() {
+    fn same_anonce_m1_replay_reuses_current_ptk_candidate() {
         let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
         let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
         let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
@@ -1817,9 +1869,10 @@ mod tests {
                 .expect("later m1"),
             HostEapolAction::SendM2 { .. }
         ));
-        assert_ne!(state.snonce, first_snonce);
-        assert_ne!(state.ptk, first_ptk);
-        assert_eq!(state.ptk_candidate_count, 2);
+        assert_eq!(state.snonce, first_snonce);
+        assert_eq!(state.ptk, first_ptk);
+        assert_eq!(state.m1_replay_counter[WPA_REPLAY_COUNTER_LEN - 1], 2);
+        assert_eq!(state.ptk_candidate_count, 1);
 
         let m3_action = state
             .handle_packet(station, &m3_for_first_m2[..m3_len], &mut tx)
@@ -1916,6 +1969,69 @@ mod tests {
             .handle_packet(station, &m3[..m3_len], &mut tx)
             .expect("retransmitted m3 after secure");
         assert!(matches!(retransmit, HostEapolAction::SendM4 { .. }));
+        assert!(state.secure_complete());
+    }
+
+    #[test]
+    fn same_anonce_m1_m3_after_secure_resends_m4_without_reinstall() {
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let mut state = HostEapolState::new(b"cohesix", b"passphrase").expect("host eapol");
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len = write_test_m1_frame(&mut m1, &station, &ap).expect("m1");
+        let mut tx = [0u8; MAX_FRAME_LEN];
+
+        assert!(matches!(
+            state
+                .handle_packet(station, &m1[..m1_len], &mut tx)
+                .expect("m1"),
+            HostEapolAction::SendM2 { .. }
+        ));
+        let mut m3 = [0u8; MAX_FRAME_LEN];
+        let m3_len = write_test_m3_frame(&mut m3, &station, &state).expect("m3");
+        assert!(matches!(
+            state
+                .handle_packet(station, &m3[..m3_len], &mut tx)
+                .expect("first m3"),
+            HostEapolAction::SendM4InstallKeys { .. }
+        ));
+        assert!(state.secure_complete());
+        let installed_ptk = state.installed_ptk;
+        let installed_snonce = state.installed_snonce;
+
+        let mut later_m1 = m1;
+        let body = ETH_HEADER_LEN + EAPOL_HEADER_LEN;
+        later_m1[body + EAPOL_KEY_BODY_REPLAY_OFFSET + WPA_REPLAY_COUNTER_LEN - 1] = 3;
+        assert!(matches!(
+            state
+                .handle_packet(station, &later_m1[..m1_len], &mut tx)
+                .expect("same anonce m1 retry after secure"),
+            HostEapolAction::SendM2 { .. }
+        ));
+        assert_eq!(state.ptk, installed_ptk);
+        assert_eq!(state.snonce, installed_snonce);
+        assert_eq!(state.m1_replay_counter[WPA_REPLAY_COUNTER_LEN - 1], 3);
+
+        let mut later_m3 = [0u8; MAX_FRAME_LEN];
+        let later_m3_len = write_test_m3_frame(&mut later_m3, &station, &state).expect("later m3");
+        let later_m3_action = state
+            .handle_packet(station, &later_m3[..later_m3_len], &mut tx)
+            .expect("same anonce m3 after secure");
+        let HostEapolAction::SendM4 { len: later_m4_len } = later_m3_action else {
+            panic!("same anonce m3 after secure should resend m4");
+        };
+        let replay_offset = ETH_HEADER_LEN + EAPOL_HEADER_LEN + EAPOL_KEY_BODY_REPLAY_OFFSET;
+        assert!(later_m4_len >= replay_offset + WPA_REPLAY_COUNTER_LEN);
+        assert_eq!(
+            &tx[replay_offset..replay_offset + WPA_REPLAY_COUNTER_LEN],
+            &later_m3[replay_offset..replay_offset + WPA_REPLAY_COUNTER_LEN]
+        );
+        assert_eq!(
+            state.m3_replay_counter.as_slice(),
+            &later_m3[replay_offset..replay_offset + WPA_REPLAY_COUNTER_LEN]
+        );
+        assert_eq!(state.installed_ptk, installed_ptk);
+        assert_eq!(state.installed_snonce, installed_snonce);
         assert!(state.secure_complete());
     }
 

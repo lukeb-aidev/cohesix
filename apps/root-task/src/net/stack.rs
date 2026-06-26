@@ -105,6 +105,7 @@ const DHCP_RESTART_BACKOFF_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 } else {
     64_000
 };
+const CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS: u64 = 500;
 const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
@@ -232,6 +233,27 @@ fn dhcp_start_defer_reason_for(bringup_status: Option<&'static str>) -> Option<&
         Some("dhcp-pending" | "dhcp-failed") | None => None,
         Some(status) => Some(status),
     }
+}
+
+fn cyw43_dhcp_post_secure_eapol_quiet(
+    now_ms: u64,
+    eapol_secure: u64,
+    eapol_rx: u64,
+    last_eapol_rx: &mut u64,
+    quiet_since_ms: &mut Option<u64>,
+) -> bool {
+    if eapol_secure == 0 || eapol_rx == 0 {
+        *last_eapol_rx = eapol_rx;
+        *quiet_since_ms = None;
+        return false;
+    }
+    if eapol_rx != *last_eapol_rx {
+        *last_eapol_rx = eapol_rx;
+        *quiet_since_ms = Some(now_ms);
+        return false;
+    }
+    let since_ms = quiet_since_ms.get_or_insert(now_ms);
+    now_ms.saturating_sub(*since_ms) >= CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS
 }
 
 #[cfg(feature = "net-backend-virtio")]
@@ -1164,6 +1186,9 @@ pub struct NetStack<D: NetDevice> {
     dhcp: Option<DhcpClient>,
     dhcp_started: bool,
     dhcp_restart_after_ms: Option<u64>,
+    wifi_dhcp_last_eapol_rx: u64,
+    wifi_dhcp_eapol_quiet_since_ms: Option<u64>,
+    wifi_dhcp_eapol_settle_logged: bool,
     udp_beacon_handle: Option<SocketHandle>,
     udp_echo_handle: Option<SocketHandle>,
     tcp_smoke_handle: Option<SocketHandle>,
@@ -2825,6 +2850,9 @@ impl<D: NetDevice> NetStack<D> {
             dhcp: dhcp_enabled.then(|| DhcpClient::new(console_config.policy.dhcp)),
             dhcp_started: false,
             dhcp_restart_after_ms: None,
+            wifi_dhcp_last_eapol_rx: 0,
+            wifi_dhcp_eapol_quiet_since_ms: None,
+            wifi_dhcp_eapol_settle_logged: false,
             udp_beacon_handle: None,
             udp_echo_handle: None,
             tcp_smoke_handle: None,
@@ -3731,6 +3759,46 @@ impl<D: NetDevice> NetStack<D> {
         activity
     }
 
+    fn cyw43_dhcp_start_defer_reason(&mut self, now_ms: u64) -> Option<&'static str> {
+        #[cfg(feature = "kernel")]
+        {
+            if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+            {
+                return None;
+            }
+            let counters = self.device.counters();
+            if cyw43_dhcp_post_secure_eapol_quiet(
+                now_ms,
+                counters.wifi_host_eapol_secure,
+                counters.wifi_host_eapol_rx,
+                &mut self.wifi_dhcp_last_eapol_rx,
+                &mut self.wifi_dhcp_eapol_quiet_since_ms,
+            ) {
+                self.wifi_dhcp_eapol_settle_logged = false;
+                return None;
+            }
+            if counters.wifi_host_eapol_secure != 0 && counters.wifi_host_eapol_rx != 0 {
+                if !self.wifi_dhcp_eapol_settle_logged {
+                    info!(
+                        "[dhcp] start deferred reason=wifi-post-secure-eapol-settle eapol_rx={} quiet_ms={} now_ms={}",
+                        counters.wifi_host_eapol_rx,
+                        self.wifi_dhcp_eapol_quiet_since_ms
+                            .map(|since_ms| now_ms.saturating_sub(since_ms))
+                            .unwrap_or(0),
+                        now_ms
+                    );
+                    self.wifi_dhcp_eapol_settle_logged = true;
+                }
+                return Some("wifi-post-secure-eapol-settle");
+            }
+        }
+        #[cfg(not(feature = "kernel"))]
+        {
+            let _ = now_ms;
+        }
+        None
+    }
+
     fn start_dhcp_if_ready(&mut self, now_ms: u64) -> bool {
         if self.dhcp_started || self.dhcp_handle.is_none() {
             return false;
@@ -3741,9 +3809,6 @@ impl<D: NetDevice> NetStack<D> {
             }
             self.dhcp_restart_after_ms = None;
         }
-        let Some(client) = self.dhcp.as_mut() else {
-            return false;
-        };
         if let Some(status) = dhcp_start_defer_reason_for(self.device.bringup_status_label()) {
             log::debug!(
                 "[dhcp] start deferred reason=device-bringup status={} now_ms={}",
@@ -3752,9 +3817,21 @@ impl<D: NetDevice> NetStack<D> {
             );
             return false;
         }
+        if let Some(status) = self.cyw43_dhcp_start_defer_reason(now_ms) {
+            log::debug!(
+                "[dhcp] start deferred reason=device-settle status={} now_ms={}",
+                status,
+                now_ms
+            );
+            return false;
+        }
+        let Some(client) = self.dhcp.as_mut() else {
+            return false;
+        };
         client.start(self.device.mac().0, now_ms);
         self.dhcp_started = true;
         self.dhcp_restart_after_ms = None;
+        self.wifi_dhcp_eapol_settle_logged = false;
         info!(
             "[dhcp] start ready interface={} now_ms={}",
             self.device.interface_label(),
@@ -7321,6 +7398,45 @@ mod tests {
             dhcp_start_defer_reason_for(Some("wifi-link-down")),
             Some("wifi-link-down")
         );
+    }
+
+    #[test]
+    fn cyw43_dhcp_waits_for_post_secure_eapol_quiet_window() {
+        let mut last_rx = 0;
+        let mut quiet_since_ms = None;
+
+        assert!(!cyw43_dhcp_post_secure_eapol_quiet(
+            1_000,
+            1,
+            18,
+            &mut last_rx,
+            &mut quiet_since_ms
+        ));
+        assert_eq!(last_rx, 18);
+        assert_eq!(quiet_since_ms, Some(1_000));
+        assert!(!cyw43_dhcp_post_secure_eapol_quiet(
+            1_499,
+            1,
+            18,
+            &mut last_rx,
+            &mut quiet_since_ms
+        ));
+        assert!(cyw43_dhcp_post_secure_eapol_quiet(
+            1_500,
+            1,
+            18,
+            &mut last_rx,
+            &mut quiet_since_ms
+        ));
+        assert!(!cyw43_dhcp_post_secure_eapol_quiet(
+            1_600,
+            1,
+            19,
+            &mut last_rx,
+            &mut quiet_since_ms
+        ));
+        assert_eq!(last_rx, 19);
+        assert_eq!(quiet_since_ms, Some(1_600));
     }
 
     #[test]
