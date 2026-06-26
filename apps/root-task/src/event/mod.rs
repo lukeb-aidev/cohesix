@@ -518,7 +518,7 @@ fn net_status_linked_runtime_data_ready(status: &NetStatusReport) -> bool {
 
 #[cfg(feature = "net-console")]
 fn net_status_cyw43_data_ready(status: &NetStatusReport) -> bool {
-    status.backend == "cyw43"
+    matches!(status.backend, "cyw43" | "bcmgenet-v5")
         && status.active_interface == "wifi"
         && status.address_source == "dhcp-lease"
         && status.dhcp_phase == "bound"
@@ -17596,6 +17596,13 @@ mod tests {
             NET_CYW43_HOT_DISPATCH_ROUNDS
         );
 
+        let mut stack_reported_wifi = genet.clone();
+        stack_reported_wifi.active_interface = "wifi";
+        assert_eq!(
+            net_hot_dispatch_rounds_for_status(&stack_reported_wifi),
+            NET_CYW43_HOT_DISPATCH_ROUNDS
+        );
+
         let mut pre_dhcp = genet.clone();
         pre_dhcp.address_source = "dhcp-pending";
         pre_dhcp.dhcp_phase = "requesting";
@@ -17617,6 +17624,8 @@ mod tests {
         let mut wifi = genet.clone();
         wifi.backend = "cyw43";
         wifi.active_interface = "wifi";
+        let mut stack_reported_wifi = genet.clone();
+        stack_reported_wifi.active_interface = "wifi";
 
         assert_eq!(
             net_post_dispatch_flush_limit_for_display(None),
@@ -17634,6 +17643,10 @@ mod tests {
             net_post_dispatch_flush_limit_for_status(&wifi, None),
             NET_CYW43_POST_DISPATCH_FLUSH_POLLS
         );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&stack_reported_wifi, None),
+            NET_CYW43_POST_DISPATCH_FLUSH_POLLS
+        );
 
         let mut pending = LocalSeatDisplayTrace {
             pending_bytes: 1,
@@ -17649,6 +17662,10 @@ mod tests {
         );
         assert_eq!(
             net_post_dispatch_flush_limit_for_status(&wifi, Some(pending)),
+            NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS
+        );
+        assert_eq!(
+            net_post_dispatch_flush_limit_for_status(&stack_reported_wifi, Some(pending)),
             NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS
         );
 

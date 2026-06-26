@@ -1254,6 +1254,23 @@ const fn budgeted_cyw43_tcp_phase_borrow_allowed(phase: BudgetedNetPhase) -> boo
     !matches!(phase, BudgetedNetPhase::Tcp)
 }
 
+#[cfg(feature = "kernel")]
+fn cyw43_flush_pre_poll_data_ready_for(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    active_interface: &'static str,
+    mode: NetMode,
+    ip: Ipv4Address,
+    bringup_status: Option<&'static str>,
+    dhcp_phase: Option<DhcpPhase>,
+) -> bool {
+    contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && active_interface == "wifi"
+        && matches!(mode, NetMode::Dhcp)
+        && ip != Ipv4Address::UNSPECIFIED
+        && bringup_status.is_none()
+        && dhcp_phase == Some(DhcpPhase::Bound)
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct SelfTestState {
     enabled: bool,
@@ -3145,6 +3162,19 @@ impl<D: NetDevice> NetStack<D> {
         {
             false
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn cyw43_flush_pre_poll_data_ready(&self) -> bool {
+        let dhcp_phase = self.dhcp.as_ref().map(|client| client.status().phase);
+        cyw43_flush_pre_poll_data_ready_for(
+            D::driver_task_contract(),
+            self.device.interface_label(),
+            self.mode,
+            self.ip,
+            self.device.bringup_status_label(),
+            dhcp_phase,
+        )
     }
 
     fn service_budgeted_dhcp_turn(&mut self, timestamp: Instant, now_ms: u64) -> bool {
@@ -6335,6 +6365,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     );
                     let ring_progress = if hot_path
                         == crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi
+                        // This is a post-DHCP latency accelerator only. Boot,
+                        // association, and host-EAPOL recovery keep their
+                        // existing bounded service path.
+                        && self.cyw43_flush_pre_poll_data_ready()
                         && !wifi_host_eapol_blocks_driver_task_pre_poll(
                             self.device.bringup_status_label(),
                         )
@@ -7573,6 +7607,79 @@ mod tests {
             NetStack::<DefaultNetDevice>::charge_dhcp_budget(&mut dhcp_budget).is_ok(),
             "budgeted DHCP turn must fit after base poll charge"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_flush_pre_poll_requires_bound_wifi_dhcp() {
+        let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let genet = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        let ip = Ipv4Address::new(192, 168, 86, 154);
+
+        assert!(cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            ip,
+            None,
+            Some(DhcpPhase::Bound)
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            ip,
+            Some("wifi-host-eapol-pending"),
+            Some(DhcpPhase::Bound)
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            ip,
+            Some("wifi-host-eapol-required"),
+            Some(DhcpPhase::Bound)
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            ip,
+            None,
+            Some(DhcpPhase::Requesting)
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            None,
+            Some(DhcpPhase::Bound)
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Static,
+            ip,
+            None,
+            Some(DhcpPhase::Bound)
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            genet,
+            "wifi",
+            NetMode::Dhcp,
+            ip,
+            None,
+            Some(DhcpPhase::Bound)
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wired",
+            NetMode::Dhcp,
+            ip,
+            None,
+            Some(DhcpPhase::Bound)
+        ));
     }
 
     #[cfg(feature = "kernel")]
