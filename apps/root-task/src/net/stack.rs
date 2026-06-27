@@ -3434,6 +3434,7 @@ impl<D: NetDevice> NetStack<D> {
         &mut self,
         now_ms: u64,
         budget: &mut DriverServiceBudget,
+        cyw43_pre_poll_activity: bool,
     ) -> bool {
         if !self.stage_policy.allow_tcp {
             return false;
@@ -3447,7 +3448,9 @@ impl<D: NetDevice> NetStack<D> {
             return true;
         }
 
-        let mut activity = self.service_budgeted_tcp_turn(
+        let mut activity =
+            self.drain_cyw43_pre_poll_activity(timestamp, now_ms, budget, cyw43_pre_poll_activity);
+        activity |= self.service_budgeted_tcp_turn(
             timestamp,
             now_ms,
             "budgeted-flush-tcp-pre",
@@ -6721,13 +6724,16 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                         } else {
                             false
                         };
-                    return Ok(self.flush_budgeted_tcp_with_time(now_ms, budget) || ring_progress);
+                    return Ok(
+                        self.flush_budgeted_tcp_with_time(now_ms, budget, ring_progress)
+                            || ring_progress,
+                    );
                 }
                 let _ = hot_path;
                 return Err(DriverServiceBudgetError::OperationsExhausted);
             }
         }
-        Ok(self.flush_budgeted_tcp_with_time(now_ms, budget))
+        Ok(self.flush_budgeted_tcp_with_time(now_ms, budget, false))
     }
 
     fn driver_task_contract(&self) -> crate::hal::driver_task::DriverTaskContract {

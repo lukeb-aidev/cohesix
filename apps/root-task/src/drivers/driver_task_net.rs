@@ -379,8 +379,6 @@ static CYW43_DATA_TX_RETRIES: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_TX_RETRIES: AtomicU32 = AtomicU32::new(0);
 static CYW43_PRIMARY_BSSCFG_JOIN_READY: AtomicU32 = AtomicU32::new(0);
 static CYW43_ASSIGNED_IPV4_BE: AtomicU32 = AtomicU32::new(0);
-static CYW43_DATA_TRACE_ARP_ASSIGNED_COUNT: AtomicU32 = AtomicU32::new(0);
-static CYW43_DATA_TRACE_ARP_REPLY_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TRACE_DHCP_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TRACE_EAPOL_CONSUME_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TRACE_FAULT_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -1583,6 +1581,7 @@ struct Cyw43HostEapolSession {
     last_timer_firstread_slot: Option<u16>,
     refreshed_after_assoc: bool,
     rescued_after_assoc: bool,
+    post_rescue_assoc_window_due: bool,
     bssid_refreshed_after_assoc: bool,
     bssid_probed_before_required: bool,
     assoc_probe_attempts: u8,
@@ -1610,6 +1609,7 @@ impl Cyw43HostEapolSession {
             last_timer_firstread_slot: None,
             refreshed_after_assoc: false,
             rescued_after_assoc: false,
+            post_rescue_assoc_window_due: false,
             bssid_refreshed_after_assoc: false,
             bssid_probed_before_required: false,
             assoc_probe_attempts: 0,
@@ -1636,6 +1636,25 @@ impl Cyw43HostEapolSession {
             self.last_pre_assoc_activity_ms = Some(now_ms);
             self.last_pre_assoc_activity_poll = Some(poll);
         }
+    }
+
+    fn restart_pre_assoc_window_after_rescue(&mut self, now_ms: u64) {
+        if self.progress.associated {
+            return;
+        }
+        self.last_pre_assoc_activity_ms = Some(now_ms);
+        self.last_pre_assoc_activity_poll = Some(0);
+        self.progress.polls = 0;
+        self.progress.empty_polls = 0;
+        self.assoc_probe_attempts = 0;
+        self.bssid_probed_before_required = false;
+        self.post_rescue_assoc_window_due = true;
+    }
+
+    fn take_post_rescue_assoc_window_due(&mut self) -> bool {
+        let due = self.post_rescue_assoc_window_due && !self.progress.associated;
+        self.post_rescue_assoc_window_due = false;
+        due
     }
 
     fn pre_assoc_idle_ms(&self, now_ms: u64) -> u64 {
@@ -4378,6 +4397,28 @@ fn service_cyw43_host_eapol_join_submit_window(
         outcome.activity,
         outcome.progress.as_ref(),
     );
+    if outcome.post_rescue_assoc_window_due {
+        let post_rescue_now_ms = crate::hal::timebase().now_ms();
+        emit_cyw43_host_eapol_join_submit_window(
+            contract,
+            "post-rescue-begin",
+            poll_limit,
+            false,
+            outcome.progress.as_ref(),
+        );
+        let post_rescue = service_cyw43_host_eapol_slice_with_outcome(
+            credentials,
+            poll_limit,
+            post_rescue_now_ms,
+        );
+        emit_cyw43_host_eapol_join_submit_window(
+            contract,
+            "post-rescue-end",
+            poll_limit,
+            post_rescue.activity,
+            post_rescue.progress.as_ref(),
+        );
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -4392,6 +4433,7 @@ fn cyw43_host_eapol_progress_snapshot() -> Option<Cyw43HostEapolProgress> {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Cyw43HostEapolSliceOutcome {
     activity: bool,
+    post_rescue_assoc_window_due: bool,
     progress: Option<Cyw43HostEapolProgress>,
 }
 
@@ -4482,11 +4524,16 @@ fn service_cyw43_host_eapol_slice_with_outcome(
             }
         }
     }
+    let post_rescue_assoc_window_due = session.take_post_rescue_assoc_window_due();
     let progress = Some(session.progress);
     if clear_session {
         *guard = None;
     }
-    Cyw43HostEapolSliceOutcome { activity, progress }
+    Cyw43HostEapolSliceOutcome {
+        activity,
+        post_rescue_assoc_window_due,
+        progress,
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -5430,10 +5477,7 @@ fn cyw43_try_host_eapol_assoc_rescue(
         "cyw43-host-eapol-join-rescue",
     ) {
         Ok(()) => {
-            session.record_pre_assoc_activity(
-                crate::hal::timebase().now_ms(),
-                poll.min(u32::MAX as usize) as u32,
-            );
+            session.restart_pre_assoc_window_after_rescue(crate::hal::timebase().now_ms());
             emit_cyw43_host_eapol_assoc_rescue(
                 contract,
                 poll,
@@ -5451,10 +5495,7 @@ fn cyw43_try_host_eapol_assoc_rescue(
             match cyw43_submit_bcdc_ssid(contract, credentials, "cyw43-host-eapol-set-ssid-rescue")
             {
                 Ok(()) => {
-                    session.record_pre_assoc_activity(
-                        crate::hal::timebase().now_ms(),
-                        poll.min(u32::MAX as usize) as u32,
-                    );
+                    session.restart_pre_assoc_window_after_rescue(crate::hal::timebase().now_ms());
                     emit_cyw43_host_eapol_assoc_rescue(
                         contract,
                         poll,
@@ -6258,8 +6299,6 @@ enum Cyw43DataPathTraceClass {
     Drop,
     TxRetry,
     Dhcp,
-    ArpAssistRequest,
-    ArpAssistReply,
     EapolConsume,
     PendingTransition,
     MacMismatch,
@@ -6296,16 +6335,27 @@ fn cyw43_data_path_trace_class(
     {
         return Cyw43DataPathTraceClass::Fault;
     }
+    let wifi_bound = assigned_ipv4.is_some();
     if info.dhcp != "none" {
+        if wifi_bound && info.src != runtime_station_mac.0 && info.dst != runtime_station_mac.0 {
+            return Cyw43DataPathTraceClass::Suppress;
+        }
         return Cyw43DataPathTraceClass::Dhcp;
     }
     if info.arp == "request"
         && matches!(assigned_ipv4, Some(ip) if info.arp_tpa != [0; 4] && info.arp_tpa == ip)
     {
-        return Cyw43DataPathTraceClass::ArpAssistRequest;
+        return Cyw43DataPathTraceClass::Suppress;
+    }
+    if wifi_bound
+        && info.ethertype == CYW43_ETH_P_ARP
+        && info.src != runtime_station_mac.0
+        && !matches!(assigned_ipv4, Some(ip) if info.arp_tpa != [0; 4] && info.arp_tpa == ip)
+    {
+        return Cyw43DataPathTraceClass::Suppress;
     }
     if event == "tx-result" && action == "submitted" && info.arp == "reply" {
-        return Cyw43DataPathTraceClass::ArpAssistReply;
+        return Cyw43DataPathTraceClass::Suppress;
     }
     if event == "rx-consume" && info.ethertype == ETH_P_EAPOL {
         return Cyw43DataPathTraceClass::EapolConsume;
@@ -6332,9 +6382,7 @@ const fn cyw43_data_path_trace_class_uses_milestone_gate(
 ) -> bool {
     matches!(
         trace_class,
-        Cyw43DataPathTraceClass::ArpAssistRequest
-            | Cyw43DataPathTraceClass::ArpAssistReply
-            | Cyw43DataPathTraceClass::Dhcp
+        Cyw43DataPathTraceClass::Dhcp
             | Cyw43DataPathTraceClass::Drop
             | Cyw43DataPathTraceClass::EapolConsume
             | Cyw43DataPathTraceClass::Fault
@@ -6347,18 +6395,6 @@ const fn cyw43_data_path_trace_class_uses_milestone_gate(
 fn cyw43_data_path_trace_repeat_allowed(trace_class: Cyw43DataPathTraceClass) -> bool {
     match trace_class {
         Cyw43DataPathTraceClass::Suppress => false,
-        Cyw43DataPathTraceClass::ArpAssistRequest => {
-            let count = CYW43_DATA_TRACE_ARP_ASSIGNED_COUNT
-                .fetch_add(1, Ordering::AcqRel)
-                .saturating_add(1);
-            cyw43_data_path_trace_repeat_milestone(count)
-        }
-        Cyw43DataPathTraceClass::ArpAssistReply => {
-            let count = CYW43_DATA_TRACE_ARP_REPLY_COUNT
-                .fetch_add(1, Ordering::AcqRel)
-                .saturating_add(1);
-            cyw43_data_path_trace_repeat_milestone(count)
-        }
         Cyw43DataPathTraceClass::Dhcp => {
             let count = CYW43_DATA_TRACE_DHCP_COUNT
                 .fetch_add(1, Ordering::AcqRel)
@@ -13288,8 +13324,6 @@ mod tests {
         CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
         CYW43_DATA_TX_RETRIES.store(0, Ordering::Release);
-        CYW43_DATA_TRACE_ARP_ASSIGNED_COUNT.store(0, Ordering::Release);
-        CYW43_DATA_TRACE_ARP_REPLY_COUNT.store(0, Ordering::Release);
         CYW43_DATA_TRACE_DHCP_COUNT.store(0, Ordering::Release);
         CYW43_DATA_TRACE_DROP_COUNT.store(0, Ordering::Release);
         CYW43_DATA_TRACE_EAPOL_CONSUME_COUNT.store(0, Ordering::Release);
@@ -15099,6 +15133,62 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn host_eapol_assoc_rescue_restarts_pre_assoc_window() {
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+        let started_at = 20_000;
+        session.record_time(started_at);
+        session.progress.polls = CYW43_HOST_EAPOL_ASSOC_RESCUE_POLL;
+        session.progress.empty_polls = CYW43_HOST_EAPOL_ASSOC_RESCUE_POLL;
+        session.assoc_probe_attempts = 3;
+        session.bssid_probed_before_required = true;
+        session
+            .progress
+            .record_assoc_probe("not-associated", CYW43_BCME_NOTASSOCIATED_STATUS);
+        session.progress.record_assoc_join_rescue_attempt();
+        let auth_timeout = Cyw43EventFrame {
+            src_mac: [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10],
+            event_type: CYW43_EVENT_AUTH,
+            status: CYW43_EVENT_STATUS_TIMEOUT,
+            reason: 2,
+            auth_type: 0,
+            addr: [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5],
+            flags: 0,
+        };
+        session.progress.record_event_frame(
+            0x4f01,
+            78,
+            auth_timeout,
+            session.progress.polls as usize,
+        );
+
+        let rescue_at = started_at + CYW43_HOST_EAPOL_ASSOC_RESCUE_MS;
+        session.restart_pre_assoc_window_after_rescue(rescue_at);
+
+        assert_eq!(session.progress.polls, 0);
+        assert_eq!(session.progress.empty_polls, 0);
+        assert_eq!(session.assoc_probe_attempts, 0);
+        assert!(!session.bssid_probed_before_required);
+        assert!(session.progress.assoc_join_rescue_attempted);
+        assert!(session.progress.auth_timeout_seen);
+        assert!(
+            session.take_post_rescue_assoc_window_due(),
+            "a ready rescue join must request one fresh bounded association window"
+        );
+        assert!(
+            !session.take_post_rescue_assoc_window_due(),
+            "the follow-up window request is one-shot"
+        );
+        assert!(
+            !cyw43_host_eapol_join_timeout_expired(&session, rescue_at + 1),
+            "the fresh post-rescue window must not expire immediately"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn host_eapol_gate7_subgate_tracks_join_progress() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
@@ -15641,6 +15731,19 @@ mod tests {
                 "submitted",
                 discover_info,
                 DriverTaskCompletionCode::Progress.as_u16(),
+                None,
+                CYW43_DRIVER_TASK_MAC,
+                false,
+                false,
+            ),
+            Cyw43DataPathTraceClass::Dhcp
+        );
+        assert_eq!(
+            cyw43_data_path_trace_class(
+                "tx-result",
+                "submitted",
+                discover_info,
+                DriverTaskCompletionCode::Progress.as_u16(),
                 Some([192, 168, 86, 154]),
                 CYW43_DRIVER_TASK_MAC,
                 false,
@@ -15657,12 +15760,28 @@ mod tests {
                 "poll",
                 offer_info,
                 DriverTaskCompletionCode::FrameReady.as_u16(),
-                Some([192, 168, 86, 154]),
+                None,
                 CYW43_DRIVER_TASK_MAC,
                 false,
                 false,
             ),
             Cyw43DataPathTraceClass::Dhcp
+        );
+        let mut foreign_offer = offer;
+        foreign_offer[6..12].copy_from_slice(&[0x62, 0x72, 0x58, 0xed, 0x47, 0x5b]);
+        let foreign_offer_info = cyw43_trace_frame_info(&foreign_offer);
+        assert_eq!(
+            cyw43_data_path_trace_class(
+                "rx-deliver",
+                "poll",
+                foreign_offer_info,
+                DriverTaskCompletionCode::FrameReady.as_u16(),
+                Some([192, 168, 86, 154]),
+                CYW43_DRIVER_TASK_MAC,
+                false,
+                false,
+            ),
+            Cyw43DataPathTraceClass::Suppress
         );
 
         let assigned_arp = test_cyw43_arp_request(
@@ -15682,7 +15801,7 @@ mod tests {
                 false,
                 false,
             ),
-            Cyw43DataPathTraceClass::ArpAssistRequest
+            Cyw43DataPathTraceClass::Suppress
         );
         assert_eq!(
             cyw43_data_path_trace_class(
@@ -15694,6 +15813,25 @@ mod tests {
                 CYW43_DRIVER_TASK_MAC,
                 false,
                 false,
+            ),
+            Cyw43DataPathTraceClass::Suppress
+        );
+        let link_local_arp = test_cyw43_arp_request(
+            [0x62, 0x72, 0x58, 0xed, 0x47, 0x5b],
+            [192, 168, 86, 102],
+            [169, 254, 169, 254],
+        );
+        let link_local_arp_info = cyw43_trace_frame_info(&link_local_arp);
+        assert_eq!(
+            cyw43_data_path_trace_class(
+                "rx-preserve",
+                "pre-poll",
+                link_local_arp_info,
+                DriverTaskCompletionCode::FrameReady.as_u16(),
+                Some([192, 168, 86, 154]),
+                CYW43_DRIVER_TASK_MAC,
+                false,
+                true,
             ),
             Cyw43DataPathTraceClass::Suppress
         );
@@ -15710,7 +15848,7 @@ mod tests {
                 false,
                 false,
             ),
-            Cyw43DataPathTraceClass::ArpAssistReply
+            Cyw43DataPathTraceClass::Suppress
         );
         assert_eq!(
             cyw43_data_path_trace_class(

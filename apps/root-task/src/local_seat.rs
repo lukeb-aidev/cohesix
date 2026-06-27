@@ -893,6 +893,35 @@ pub(crate) const fn local_seat_hdmi_prompt_ready_for_display_state(
     ) && (!physical_pi_owner_state || (display_idle && display_retry_idle))
 }
 
+/// Return whether a deferred HDMI prompt should show the pre-input keyboard
+/// startup notice. After first-byte proof, later settle churn must not reprint
+/// a startup line that makes the console look newly reset.
+#[must_use]
+pub(crate) const fn local_seat_hdmi_keyboard_wait_line_due(
+    usb_first_byte_ready: bool,
+    wait_line_emitted: bool,
+) -> bool {
+    !usb_first_byte_ready && !wait_line_emitted
+}
+
+/// Return whether an already published physical-Pi HDMI prompt remains valid.
+/// Soft post-first-byte settle churn should not hide or reprint the prompt;
+/// only real USB recovery/no-reply or HDMI retry failure demotes it.
+#[must_use]
+pub(crate) const fn local_seat_hdmi_prompt_ready_sticky_state(
+    physical_pi_owner_state: bool,
+    keyboard_ready_line_emitted: bool,
+    usb_first_byte_ready: bool,
+    usb_prompt_hard_blocked: bool,
+    display_retry_idle: bool,
+) -> bool {
+    physical_pi_owner_state
+        && keyboard_ready_line_emitted
+        && usb_first_byte_ready
+        && !usb_prompt_hard_blocked
+        && display_retry_idle
+}
+
 /// Return the next bounded USB keyboard poll backoff after a missing reply.
 #[must_use]
 pub(crate) const fn local_seat_keyboard_poll_next_no_reply_backoff(
@@ -1378,6 +1407,13 @@ pub struct LocalSeatRuntime {
         target_os = "none"
     ))]
     hdmi_keyboard_ready_line_emitted: bool,
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    hdmi_keyboard_recovering_line_emitted: bool,
     hdmi_snapshot_generation: u64,
     dropped_keyboard_bytes: u64,
     dropped_mirrored_lines: u64,
@@ -1529,6 +1565,13 @@ impl LocalSeatRuntime {
                 target_os = "none"
             ))]
             hdmi_keyboard_ready_line_emitted: false,
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
+            hdmi_keyboard_recovering_line_emitted: false,
             hdmi_snapshot_generation: 0,
             dropped_keyboard_bytes: 0,
             dropped_mirrored_lines: 0,
@@ -1869,6 +1912,9 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn linked_hdmi_prompt_ready_for_display(&self) -> bool {
+        if self.linked_hdmi_prompt_ready_sticky() {
+            return true;
+        }
         let physical_pi_owner_state =
             crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
         local_seat_hdmi_prompt_ready_for_display_state(
@@ -1877,6 +1923,24 @@ impl LocalSeatRuntime {
             linked_local_seat_usb_first_byte_ready(),
             self.linked_usb_prompt_safe_ready(),
             !self.linked_hdmi_pending_work(),
+            self.hdmi_no_reply_cooldown == 0
+                && self.hdmi_redraw_no_reply_streak == 0
+                && !self.hdmi_stale_after_retry_exhaustion,
+        )
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn linked_hdmi_prompt_ready_sticky(&self) -> bool {
+        local_seat_hdmi_prompt_ready_sticky_state(
+            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+            self.hdmi_keyboard_ready_line_emitted,
+            linked_local_seat_usb_first_byte_ready(),
+            self.linked_usb_prompt_hard_blocked(),
             self.hdmi_no_reply_cooldown == 0
                 && self.hdmi_redraw_no_reply_streak == 0
                 && !self.hdmi_stale_after_retry_exhaustion,
@@ -1902,6 +1966,16 @@ impl LocalSeatRuntime {
             self.keyboard_poll_no_reply_streak,
             runtime_queue_blocked,
         )
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn linked_usb_prompt_hard_blocked(&self) -> bool {
+        self.keyboard_recovery_aux_pending || self.keyboard_poll_no_reply_streak != 0
     }
 
     #[cfg(all(
@@ -1947,7 +2021,10 @@ impl LocalSeatRuntime {
         self.hdmi_prompt_pending_reason = reason;
         self.hdmi_pending_prompt.clear();
         let _ = self.hdmi_pending_prompt.push_str(prompt);
-        if !self.hdmi_keyboard_wait_line_emitted {
+        if local_seat_hdmi_keyboard_wait_line_due(
+            linked_local_seat_usb_first_byte_ready(),
+            self.hdmi_keyboard_wait_line_emitted,
+        ) {
             self.hdmi_keyboard_wait_line_emitted = true;
             self.mirror_line(LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE);
         }
@@ -1971,7 +2048,6 @@ impl LocalSeatRuntime {
         self.hdmi_prompt_pending_until_keyboard_ready = false;
         self.hdmi_prompt_pending_reason = LOCAL_SEAT_HDMI_PROMPT_WAIT_REASON_NONE;
         self.hdmi_pending_prompt.clear();
-        self.hdmi_keyboard_wait_line_emitted = false;
         if prompt.is_empty() {
             return;
         }
@@ -1993,6 +2069,7 @@ impl LocalSeatRuntime {
             return;
         }
         self.hdmi_keyboard_ready_line_emitted = true;
+        self.hdmi_keyboard_recovering_line_emitted = false;
         self.mirror_line(LOCAL_SEAT_HDMI_KEYBOARD_READY_LINE);
     }
 
@@ -2683,11 +2760,36 @@ impl LocalSeatRuntime {
         if terminal_echo.is_empty() || self.hdmi_scrollback_offset != 0 {
             return;
         }
-        let needs_redraw =
-            self.linked_hdmi_snapshot_recovery_required() || !self.hdmi_pending_bytes.is_empty();
-        if needs_redraw || !self.queue_linked_hdmi_payload(terminal_echo) {
+        if self.linked_hdmi_snapshot_recovery_required() {
+            self.request_linked_hdmi_snapshot_redraw();
+            return;
+        }
+        if !self.hdmi_pending_bytes.is_empty() {
+            let superseded = self.hdmi_pending_bytes.len();
+            self.hdmi_pending_bytes.clear();
+            self.hdmi_superseded_bytes =
+                self.hdmi_superseded_bytes.saturating_add(superseded as u64);
+            if !self.queue_linked_hdmi_current_input_line() {
+                self.request_linked_hdmi_snapshot_redraw();
+            }
+            return;
+        }
+        if !self.queue_linked_hdmi_payload(terminal_echo) {
             self.request_linked_hdmi_snapshot_redraw();
         }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn queue_linked_hdmi_current_input_line(&mut self) -> bool {
+        let Some(line) = self.mirrored_lines.back() else {
+            return false;
+        };
+        let mut payload = Vec::new();
+        payload.push(b'\n');
+        for &byte in line.as_bytes() {
+            payload.push(byte);
+        }
+        self.queue_linked_hdmi_payload(payload.as_slice())
     }
 
     #[cfg(all(
@@ -2815,10 +2917,21 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn reset_keyboard_post_first_byte_clean_proof(&mut self) {
-        if self.keyboard_post_first_byte_clean_polls != 0 && self.hdmi_keyboard_ready_line_emitted {
+        self.keyboard_post_first_byte_clean_polls = 0;
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn mark_keyboard_post_first_byte_recovery(&mut self) {
+        self.reset_keyboard_post_first_byte_clean_proof();
+        if self.hdmi_keyboard_ready_line_emitted && !self.hdmi_keyboard_recovering_line_emitted {
+            self.hdmi_keyboard_recovering_line_emitted = true;
             self.mirror_line(LOCAL_SEAT_HDMI_KEYBOARD_RECOVERING_LINE);
         }
-        self.keyboard_post_first_byte_clean_polls = 0;
         self.hdmi_keyboard_ready_line_emitted = false;
     }
 
@@ -2834,10 +2947,11 @@ impl LocalSeatRuntime {
         {
             return;
         }
-        if self.keyboard_recovery_aux_pending
-            || self.keyboard_poll_no_reply_streak != 0
-            || local_seat_keyboard_result_blocks_prompt_ready(result)
-        {
+        if self.keyboard_recovery_aux_pending || self.keyboard_poll_no_reply_streak != 0 {
+            self.mark_keyboard_post_first_byte_recovery();
+            return;
+        }
+        if local_seat_keyboard_result_blocks_prompt_ready(result) {
             self.reset_keyboard_post_first_byte_clean_proof();
             return;
         }
@@ -2995,7 +3109,7 @@ impl LocalSeatRuntime {
             target_arch = "aarch64",
             target_os = "none"
         ))]
-        self.reset_keyboard_post_first_byte_clean_proof();
+        self.mark_keyboard_post_first_byte_recovery();
         let steady_queue_idle = self.keyboard_poll_steady_queue_idle();
         let recovery_pending_clear_threshold = if steady_queue_idle {
             LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_IDLE_RECOVERY_NO_REPLY_THRESHOLD
@@ -7779,19 +7893,19 @@ mod tests {
         runtime.queue_linked_hdmi_input_echo_or_redraw(b"h");
 
         let display = runtime.display_trace();
-        assert_eq!(display.pending_bytes, 0);
+        assert!(display.pending_bytes > 0);
         assert_eq!(display.superseded_bytes, stale.len() as u64);
-        assert!(display.pending_redraw);
+        assert!(!display.pending_redraw);
 
-        let Some((snapshot, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
-            panic!("expected input snapshot");
+        let Some((input_line, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected input line");
         };
-        assert_eq!(reason, "keyboard-scrollback");
-        assert!(redraw);
-        assert!(snapshot
+        assert_eq!(reason, "queued-output");
+        assert!(!redraw);
+        assert!(input_line
             .windows(b"cohesix> h".len())
             .any(|window| window == b"cohesix> h"));
-        assert!(!snapshot
+        assert!(!input_line
             .windows(b"netstats".len())
             .any(|window| window == b"netstats"));
     }
@@ -8207,6 +8321,33 @@ mod tests {
         ));
         assert!(local_seat_hdmi_prompt_ready_for_display_state(
             false, false, false, false, false, false
+        ));
+    }
+
+    #[test]
+    fn physical_pi_hdmi_wait_line_is_one_shot_before_first_byte() {
+        assert!(local_seat_hdmi_keyboard_wait_line_due(false, false));
+        assert!(!local_seat_hdmi_keyboard_wait_line_due(false, true));
+        assert!(!local_seat_hdmi_keyboard_wait_line_due(true, false));
+        assert!(!local_seat_hdmi_keyboard_wait_line_due(true, true));
+    }
+
+    #[test]
+    fn physical_pi_hdmi_prompt_ready_sticks_after_safe_keyboard_proof() {
+        assert!(local_seat_hdmi_prompt_ready_sticky_state(
+            true, true, true, false, true
+        ));
+        assert!(!local_seat_hdmi_prompt_ready_sticky_state(
+            true, false, true, false, true
+        ));
+        assert!(!local_seat_hdmi_prompt_ready_sticky_state(
+            true, true, false, false, true
+        ));
+        assert!(!local_seat_hdmi_prompt_ready_sticky_state(
+            true, true, true, true, true
+        ));
+        assert!(!local_seat_hdmi_prompt_ready_sticky_state(
+            true, true, true, false, false
         ));
     }
 

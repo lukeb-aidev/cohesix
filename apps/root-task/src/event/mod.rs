@@ -238,13 +238,13 @@ const NET_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 16;
 #[cfg(feature = "net-console")]
 const NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS: usize = 3;
 #[cfg(feature = "net-console")]
-const NET_CYW43_HOT_DISPATCH_ROUNDS: usize = 6;
+const NET_CYW43_HOT_DISPATCH_ROUNDS: usize = 10;
 #[cfg(feature = "net-console")]
 const NET_CYW43_POST_DISPATCH_FLUSH_POLLS: usize = 12;
 #[cfg(feature = "net-console")]
 const NET_CYW43_POST_DISPATCH_BACKLOG_FLUSH_POLLS: usize = 24;
 #[cfg(feature = "net-console")]
-const NET_CYW43_POST_FLUSH_INGEST_POLLS: usize = 4;
+const NET_CYW43_POST_FLUSH_INGEST_POLLS: usize = 8;
 const LOCAL_SEAT_BACKEND_POLL_PASSES_PER_TURN: usize = 1;
 const LOCAL_SEAT_BURST_DRAIN_PASSES_PER_TURN: usize = 4;
 const LOCAL_SEAT_EMPTY_POLLS_BEFORE_YIELD: usize = 1;
@@ -252,8 +252,7 @@ const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
 const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 3;
 #[cfg(feature = "net-console")]
 const LOCAL_SEAT_HDMI_PUMP_PASSES_UNDER_NET_PRESSURE: usize = 1;
-const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 0;
-const LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE: u64 = 0;
+const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 4;
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 32;
 const CONSOLE_OUTPUT_LINES_PER_IDLE_TURN: usize = 2;
 const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
@@ -291,11 +290,17 @@ const fn local_seat_usb_burst_proof(
         && dropped_bytes == 0
 }
 
+const fn local_seat_network_mirror_power_of_two_sample(ordinal: u64) -> bool {
+    if ordinal == u64::MAX {
+        return false;
+    }
+    let one_based = ordinal + 1;
+    one_based != 0 && (one_based & (one_based - 1)) == 0
+}
+
 const fn local_seat_network_mirror_sample_allowed(ordinal: u64) -> bool {
     ordinal < LOCAL_SEAT_NET_MIRROR_INITIAL_LINES
-        || (LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE != 0
-            && ordinal % LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE
-                == LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE - 1)
+        || local_seat_network_mirror_power_of_two_sample(ordinal)
 }
 
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
@@ -1295,6 +1300,14 @@ pub struct PumpMetrics {
     pub net_post_dispatch_flush_polls: u64,
     /// Network-origin command batches that still had TCP work after the flush cap.
     pub net_post_dispatch_flush_exhaustions: u64,
+    /// CYW43 tail-ingest polls run after post-dispatch TCP response flushes.
+    pub net_cyw43_tail_polls: u64,
+    /// CYW43 tail-ingest polls that observed network activity.
+    pub net_cyw43_tail_hits: u64,
+    /// CYW43 tail-ingest polls that found no network activity.
+    pub net_cyw43_tail_idle: u64,
+    /// CYW43 tail-ingest polls stopped by service-budget exhaustion.
+    pub net_cyw43_tail_budget_errors: u64,
     /// Physical-console output records deferred behind active keyboard input.
     pub physical_console_output_deferred: u64,
     /// Deferred physical-console output records flushed during idle turns.
@@ -2437,6 +2450,10 @@ where
                 .saturating_add(1);
         }
         if flush_activity && net_status_cyw43_data_ready(&net.status_report()) {
+            let mut tail_polls = 0u64;
+            let mut tail_hits = 0u64;
+            let mut tail_idle = 0u64;
+            let mut tail_budget_errors = 0u64;
             for _ in 0..NET_CYW43_POST_FLUSH_INGEST_POLLS {
                 let mut net_budget = match DriverServiceBudget::new(net_contract) {
                     Ok(budget) => budget,
@@ -2448,12 +2465,26 @@ where
                             net_contract.max_service_us(),
                         ));
                         self.audit.denied(message.as_str());
+                        tail_budget_errors = tail_budget_errors.saturating_add(1);
                         break;
                     }
                 };
                 match net.poll_with_budget(self.now_ms, &mut net_budget) {
-                    Ok(true) => {}
-                    Ok(false) => break,
+                    Ok(true) => {
+                        tail_polls = tail_polls.saturating_add(1);
+                        tail_hits = tail_hits.saturating_add(1);
+                    }
+                    // The host usually sends the next serialized console
+                    // command only after it observes our response. A first
+                    // CYW43 RX poll immediately after TX can therefore be
+                    // idle even though the follow-up packet is about to
+                    // arrive. Keep this WiFi-only tail window bounded rather
+                    // than deferring the next request to a later scheduler
+                    // tick.
+                    Ok(false) => {
+                        tail_polls = tail_polls.saturating_add(1);
+                        tail_idle = tail_idle.saturating_add(1);
+                    }
                     Err(err) => {
                         let message = format_message(format_args!(
                             "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
@@ -2462,10 +2493,21 @@ where
                             net_contract.max_service_us(),
                         ));
                         self.audit.denied(message.as_str());
+                        tail_budget_errors = tail_budget_errors.saturating_add(1);
                         break;
                     }
                 }
             }
+            self.metrics.net_cyw43_tail_polls =
+                self.metrics.net_cyw43_tail_polls.saturating_add(tail_polls);
+            self.metrics.net_cyw43_tail_hits =
+                self.metrics.net_cyw43_tail_hits.saturating_add(tail_hits);
+            self.metrics.net_cyw43_tail_idle =
+                self.metrics.net_cyw43_tail_idle.saturating_add(tail_idle);
+            self.metrics.net_cyw43_tail_budget_errors = self
+                .metrics
+                .net_cyw43_tail_budget_errors
+                .saturating_add(tail_budget_errors);
         }
 
         Some(net.ingest_snapshot())
@@ -12469,9 +12511,13 @@ where
                             stats.tcp_smoke_outbound, stats.tcp_smoke_outbound_failures
                         ));
                         let line_flush = format_message(format_args!(
-                            "netstats: tcp_post_flush_polls={} tcp_post_flush_exhaustions={}",
+                            "netstats: tcp_post_flush_polls={} tcp_post_flush_exhaustions={} cyw43_tail_polls={} cyw43_tail_hits={} cyw43_tail_idle={} cyw43_tail_budget_errors={}",
                             self.metrics.net_post_dispatch_flush_polls,
                             self.metrics.net_post_dispatch_flush_exhaustions,
+                            self.metrics.net_cyw43_tail_polls,
+                            self.metrics.net_cyw43_tail_hits,
+                            self.metrics.net_cyw43_tail_idle,
+                            self.metrics.net_cyw43_tail_budget_errors,
                         ));
                         let line_local_seat = if let Some(runtime) = self.local_seat.as_ref() {
                             let display = runtime.display_trace();
@@ -15828,7 +15874,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn net_origin_output_suppresses_local_seat_mirror_without_keyboard_poll() {
+    fn net_origin_output_samples_local_seat_mirror_without_keyboard_poll() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -15856,12 +15902,12 @@ mod tests {
         pump.emit_console_line("REST response line");
 
         assert_eq!(pump.metrics().local_seat_output_keyboard_polls, 0);
-        assert_eq!(pump.metrics().local_seat_net_mirror_lines, 0);
-        assert_eq!(pump.metrics().local_seat_net_mirror_suppressed, 1);
+        assert_eq!(pump.metrics().local_seat_net_mirror_lines, 1);
+        assert_eq!(pump.metrics().local_seat_net_mirror_suppressed, 0);
         drop(pump);
         assert_eq!(net.sent.len(), 1);
         assert_eq!(net.sent[0].as_str(), "REST response line");
-        assert!(!local_seat
+        assert!(local_seat
             .mirrored_lines_snapshot()
             .iter()
             .any(|line| line.as_str() == "REST response line"));
@@ -15869,7 +15915,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn net_origin_output_suppresses_bursts_from_local_seat() {
+    fn net_origin_output_samples_bursts_logarithmically_for_local_seat() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -15893,30 +15939,41 @@ mod tests {
             .with_local_seat(&mut local_seat);
         pump.last_input_source = ConsoleInputSource::Net;
 
-        for idx in 0..(LOCAL_SEAT_NET_MIRROR_INITIAL_LINES + 18) {
+        for idx in 0..18 {
             let line = format_message(format_args!("REST response line {}", idx));
             pump.emit_console_line(line.as_str());
         }
 
-        assert_eq!(pump.metrics().local_seat_net_mirror_lines, 0);
-        assert_eq!(pump.metrics().local_seat_net_mirror_suppressed, 18);
+        assert_eq!(pump.metrics().local_seat_net_mirror_lines, 6);
+        assert_eq!(pump.metrics().local_seat_net_mirror_suppressed, 12);
         assert_eq!(pump.local_seat_hdmi_pump_pass_limit(), 1);
         drop(pump);
         assert_eq!(net.sent.len(), 18);
         let mirrored = local_seat.mirrored_lines_snapshot();
-        assert!(mirrored.is_empty());
+        assert!(mirrored.iter().any(|line| line == "REST response line 0"));
+        assert!(mirrored.iter().any(|line| line == "REST response line 3"));
+        assert!(mirrored.iter().any(|line| line == "REST response line 7"));
+        assert!(mirrored.iter().any(|line| line == "REST response line 15"));
+        assert!(!mirrored.iter().any(|line| line == "REST response line 16"));
     }
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn net_origin_mirror_sampling_suppresses_all_network_lines() {
-        assert!(!local_seat_network_mirror_sample_allowed(0));
-        assert!(!local_seat_network_mirror_sample_allowed(15));
+    fn net_origin_mirror_sampling_drops_to_logarithmic_visibility() {
+        assert!(local_seat_network_mirror_sample_allowed(0));
+        assert!(local_seat_network_mirror_sample_allowed(1));
+        assert!(local_seat_network_mirror_sample_allowed(2));
+        assert!(local_seat_network_mirror_sample_allowed(3));
+        assert!(!local_seat_network_mirror_sample_allowed(4));
+        assert!(!local_seat_network_mirror_sample_allowed(6));
+        assert!(local_seat_network_mirror_sample_allowed(7));
+        assert!(local_seat_network_mirror_sample_allowed(15));
         assert!(!local_seat_network_mirror_sample_allowed(16));
+        assert!(local_seat_network_mirror_sample_allowed(31));
         assert!(!local_seat_network_mirror_sample_allowed(254));
-        assert!(!local_seat_network_mirror_sample_allowed(255));
+        assert!(local_seat_network_mirror_sample_allowed(255));
         assert!(!local_seat_network_mirror_sample_allowed(256));
-        assert!(!local_seat_network_mirror_sample_allowed(511));
+        assert!(local_seat_network_mirror_sample_allowed(511));
     }
 
     #[cfg(feature = "net-console")]
@@ -16463,8 +16520,8 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     struct FakeNet {
-        lines: heapless::Vec<ConsoleLine, 64>,
-        sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 64>,
+        lines: heapless::Vec<ConsoleLine, 128>,
+        sent: heapless::Vec<HeaplessString<DEFAULT_LINE_CAPACITY>, 128>,
         start_result: NetSelfTestStartResult,
         status: NetStatusReport,
         counters: NetCounters,
@@ -16474,6 +16531,7 @@ mod tests {
         tcp_flush_activity_remaining: usize,
         release_line_after_flush_poll: bool,
         released_line_after_flush_poll: bool,
+        idle_flush_polls_before_release: usize,
         exhaust_poll_budget: bool,
         exhaust_flush_budget: bool,
         disconnect_requests: usize,
@@ -16495,6 +16553,7 @@ mod tests {
                 tcp_flush_activity_remaining: 0,
                 release_line_after_flush_poll: false,
                 released_line_after_flush_poll: false,
+                idle_flush_polls_before_release: 0,
                 exhaust_poll_budget: false,
                 exhaust_flush_budget: false,
                 disconnect_requests: 0,
@@ -16511,6 +16570,11 @@ mod tests {
                 && !self.released_line_after_flush_poll
                 && self.tcp_flushes != 0
             {
+                if self.idle_flush_polls_before_release != 0 {
+                    self.idle_flush_polls_before_release =
+                        self.idle_flush_polls_before_release.saturating_sub(1);
+                    return false;
+                }
                 let mut line = HeaplessString::new();
                 assert!(line.push_str("ping").is_ok());
                 assert!(self.lines.push(ConsoleLine::new(line, 9001)).is_ok());
@@ -17573,6 +17637,7 @@ mod tests {
         );
         assert_eq!(net.lines.len(), 2);
         assert_eq!(NET_LINKED_RUNTIME_HOT_DISPATCH_ROUNDS, 3);
+        assert_eq!(NET_CYW43_HOT_DISPATCH_ROUNDS, 10);
     }
 
     #[cfg(feature = "net-console")]
@@ -17602,6 +17667,16 @@ mod tests {
         drop(pump);
 
         assert_eq!(metrics.accepted_commands, 2);
+        assert_eq!(
+            metrics.net_cyw43_tail_polls,
+            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
+        );
+        assert_eq!(
+            metrics.net_cyw43_tail_hits,
+            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
+        );
+        assert_eq!(metrics.net_cyw43_tail_idle, 0);
+        assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
         assert!(net.released_line_after_flush_poll);
         assert_eq!(net.lines.len(), 0);
         assert!(net.polls > 1);
@@ -17612,6 +17687,47 @@ mod tests {
                 .count()
                 >= 2
         );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn cyw43_post_flush_ingest_keeps_bounded_tail_poll_after_idle() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.backend = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.tcp_flush_activity_remaining = 1;
+        net.release_line_after_flush_poll = true;
+        net.idle_flush_polls_before_release = 2;
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 1)).is_ok());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        let metrics = pump.metrics;
+        drop(pump);
+
+        assert_eq!(metrics.accepted_commands, 2);
+        assert_eq!(
+            metrics.net_cyw43_tail_polls,
+            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
+        );
+        assert_eq!(metrics.net_cyw43_tail_hits, 6);
+        assert_eq!(metrics.net_cyw43_tail_idle, 2);
+        assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
+        assert!(net.released_line_after_flush_poll);
+        assert_eq!(net.lines.len(), 0);
+        assert!(net.polls >= 3);
+        assert_eq!(NET_CYW43_POST_FLUSH_INGEST_POLLS, 8);
     }
 
     #[cfg(feature = "net-console")]
