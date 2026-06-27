@@ -252,8 +252,8 @@ const LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES: usize = 1;
 const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 3;
 #[cfg(feature = "net-console")]
 const LOCAL_SEAT_HDMI_PUMP_PASSES_UNDER_NET_PRESSURE: usize = 1;
-const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 16;
-const LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE: u64 = 256;
+const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 0;
+const LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE: u64 = 0;
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 32;
 const CONSOLE_OUTPUT_LINES_PER_IDLE_TURN: usize = 2;
 const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
@@ -293,7 +293,9 @@ const fn local_seat_usb_burst_proof(
 
 const fn local_seat_network_mirror_sample_allowed(ordinal: u64) -> bool {
     ordinal < LOCAL_SEAT_NET_MIRROR_INITIAL_LINES
-        || ordinal % LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE == LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE - 1
+        || (LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE != 0
+            && ordinal % LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE
+                == LOCAL_SEAT_NET_MIRROR_SAMPLE_STRIDE - 1)
 }
 
 const LOCAL_SEAT_SERIAL_LINES_PER_TURN: usize = 1;
@@ -520,6 +522,7 @@ fn net_status_should_yield_to_physical_input(status: &NetStatusReport) -> bool {
 fn net_status_needs_physical_pressure_service(status: &NetStatusReport) -> bool {
     (net_status_active_interface_is_wired(status) && status.address_source == "dhcp-lease")
         || net_status_cyw43_data_ready(status)
+        || net_status_cyw43_dhcp_pending(status)
 }
 
 #[cfg(feature = "net-console")]
@@ -536,6 +539,14 @@ fn net_status_cyw43_data_ready(status: &NetStatusReport) -> bool {
         && status.active_interface == "wifi"
         && status.address_source == "dhcp-lease"
         && status.dhcp_phase == "bound"
+}
+
+#[cfg(feature = "net-console")]
+fn net_status_cyw43_dhcp_pending(status: &NetStatusReport) -> bool {
+    matches!(status.backend, "cyw43" | "bcmgenet-v5")
+        && status.active_interface == "wifi"
+        && (status.address_source == "dhcp-pending"
+            || matches!(status.dhcp_phase, "selecting" | "requesting"))
 }
 
 #[cfg(feature = "net-console")]
@@ -2957,6 +2968,30 @@ where
         target_arch = "aarch64",
         target_os = "none"
     ))]
+    fn linked_local_seat_usb_recovery_pending(&self) -> bool {
+        crate::local_seat::linked_local_seat_usb_first_byte_ready()
+            && self.local_seat.as_ref().is_some_and(|runtime| {
+                let trace = runtime.keyboard_trace();
+                trace.recovery_aux_pending || trace.driver_task_no_reply_streak != 0
+            })
+    }
+
+    #[cfg(not(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )))]
+    const fn linked_local_seat_usb_recovery_pending(&self) -> bool {
+        false
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     fn linked_local_seat_first_report_pending(&self) -> bool {
         crate::local_seat::linked_local_seat_usb_keyboard_ready()
             && !crate::local_seat::linked_local_seat_usb_first_report_ready()
@@ -3064,6 +3099,9 @@ where
     }
 
     fn pump_local_seat_display_once(&mut self) {
+        if self.linked_local_seat_usb_recovery_pending() {
+            return;
+        }
         let pass_limit = self.local_seat_hdmi_pump_pass_limit();
         let Some(runtime) = self.local_seat.as_mut() else {
             return;
@@ -12492,6 +12530,10 @@ where
                             stats.wifi_rx_runtime_max_drained_per_turn,
                             stats.wifi_rx_runtime_drain_budget_hit,
                         ));
+                        let line_wifi_trace = format_message(format_args!(
+                            "netstats: wifi_trace_faults={} wifi_trace_tx_retries={}",
+                            stats.wifi_data_trace_faults, stats.wifi_data_trace_tx_retries,
+                        ));
                         let line_wired = format_message(format_args!(
                             "netstats: genet_rx_hw={} genet_rx_last_len={} genet_rx_last_ethertype=0x{:04x}",
                             stats.rx_used_advances,
@@ -12532,6 +12574,7 @@ where
                         self.emit_console_line(line_five.as_str());
                         if net_status_active_interface_is_wifi(&status) {
                             self.emit_console_line(line_wifi.as_str());
+                            self.emit_console_line(line_wifi_trace.as_str());
                             self.emit_wifi_credential_warning_for_status(&status, &stats, true);
                         }
                         if net_status_active_interface_is_wired(&status) {
@@ -15785,7 +15828,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn net_origin_output_mirrors_to_local_seat_without_keyboard_poll() {
+    fn net_origin_output_suppresses_local_seat_mirror_without_keyboard_poll() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -15813,10 +15856,12 @@ mod tests {
         pump.emit_console_line("REST response line");
 
         assert_eq!(pump.metrics().local_seat_output_keyboard_polls, 0);
+        assert_eq!(pump.metrics().local_seat_net_mirror_lines, 0);
+        assert_eq!(pump.metrics().local_seat_net_mirror_suppressed, 1);
         drop(pump);
         assert_eq!(net.sent.len(), 1);
         assert_eq!(net.sent[0].as_str(), "REST response line");
-        assert!(local_seat
+        assert!(!local_seat
             .mirrored_lines_snapshot()
             .iter()
             .any(|line| line.as_str() == "REST response line"));
@@ -15824,7 +15869,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn net_origin_output_samples_bursts_after_initial_window() {
+    fn net_origin_output_suppresses_bursts_from_local_seat() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent {
@@ -15853,33 +15898,25 @@ mod tests {
             pump.emit_console_line(line.as_str());
         }
 
-        assert_eq!(pump.metrics().local_seat_net_mirror_lines, 16);
+        assert_eq!(pump.metrics().local_seat_net_mirror_lines, 0);
         assert_eq!(pump.metrics().local_seat_net_mirror_suppressed, 18);
         assert_eq!(pump.local_seat_hdmi_pump_pass_limit(), 1);
         drop(pump);
-        assert_eq!(net.sent.len(), 34);
+        assert_eq!(net.sent.len(), 18);
         let mirrored = local_seat.mirrored_lines_snapshot();
-        assert!(mirrored
-            .iter()
-            .any(|line| line.as_str() == "REST response line 15"));
-        assert!(!mirrored
-            .iter()
-            .any(|line| line.as_str() == "REST response line 16"));
-        assert!(!mirrored
-            .iter()
-            .any(|line| line.as_str() == "REST response line 17"));
+        assert!(mirrored.is_empty());
     }
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn net_origin_mirror_sampling_keeps_stride_samples() {
-        assert!(local_seat_network_mirror_sample_allowed(0));
-        assert!(local_seat_network_mirror_sample_allowed(15));
+    fn net_origin_mirror_sampling_suppresses_all_network_lines() {
+        assert!(!local_seat_network_mirror_sample_allowed(0));
+        assert!(!local_seat_network_mirror_sample_allowed(15));
         assert!(!local_seat_network_mirror_sample_allowed(16));
         assert!(!local_seat_network_mirror_sample_allowed(254));
-        assert!(local_seat_network_mirror_sample_allowed(255));
+        assert!(!local_seat_network_mirror_sample_allowed(255));
         assert!(!local_seat_network_mirror_sample_allowed(256));
-        assert!(local_seat_network_mirror_sample_allowed(511));
+        assert!(!local_seat_network_mirror_sample_allowed(511));
     }
 
     #[cfg(feature = "net-console")]
@@ -17774,6 +17811,13 @@ mod tests {
         pre_lease.dhcp_phase = "requesting";
         assert!(!net_status_needs_physical_pressure_service(&pre_lease));
 
+        let mut wifi_dhcp_pending = pre_lease.clone();
+        wifi_dhcp_pending.backend = "cyw43";
+        wifi_dhcp_pending.active_interface = "wifi";
+        assert!(net_status_needs_physical_pressure_service(
+            &wifi_dhcp_pending
+        ));
+
         let mut wifi_host_eapol = wifi.clone();
         wifi_host_eapol.address_source = "wifi-host-eapol-required";
         wifi_host_eapol.dhcp_phase = "host-eapol-required";
@@ -18442,8 +18486,8 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn netstats_emits_compact_status_line() {
-        let driver = LoopbackSerial::<1024>::new();
-        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 512, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let store: TicketTable<4> = TicketTable::new();
@@ -18503,8 +18547,8 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn netstats_emits_wifi_dhcp_bound_secure_counters() {
-        let driver = LoopbackSerial::<1024>::new();
-        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<2048>::new();
+        let serial = SerialPort::<_, 512, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let store: TicketTable<4> = TicketTable::new();
@@ -18537,6 +18581,8 @@ mod tests {
         net.counters.wifi_rx_runtime_queue_overflow_seen = 0;
         net.counters.wifi_rx_runtime_max_drained_per_turn = 4;
         net.counters.wifi_rx_runtime_drain_budget_hit = 1;
+        net.counters.wifi_data_trace_faults = 3;
+        net.counters.wifi_data_trace_tx_retries = 5;
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
         pump.session = Some(SessionRole::Queen);
         pump.serial_mut().driver_mut().push_rx(b"netstats\n");
@@ -18565,6 +18611,10 @@ mod tests {
             rendered.contains(
                 "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1 wifi_rxq_cur=0 wifi_rxq_hwm=0 wifi_rxq_drops=0 wifi_runtime_rxq_cur=3 wifi_runtime_rxq_hwm=5 wifi_runtime_rxq_ovf=0 wifi_runtime_rxq_max_drain=4 wifi_runtime_rxq_drain_hit=1"
             ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("netstats: wifi_trace_faults=3 wifi_trace_tx_retries=5"),
             "{rendered}"
         );
         assert!(

@@ -1326,10 +1326,46 @@ const fn budgeted_cyw43_tcp_phase_borrow_allowed(phase: BudgetedNetPhase) -> boo
 }
 
 #[cfg(feature = "kernel")]
-const fn budgeted_cyw43_interface_poll_after_tcp_borrow(phase: BudgetedNetPhase) -> bool {
+fn budgeted_cyw43_dhcp_service_preempts_phase(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    phase: BudgetedNetPhase,
+    dhcp_service_required: bool,
+) -> bool {
+    contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && dhcp_service_required
+        && phase != BudgetedNetPhase::Dhcp
+}
+
+#[cfg(feature = "kernel")]
+fn budgeted_cyw43_selftest_defers_to_tcp(
+    contract: crate::hal::driver_task::DriverTaskContract,
+    stage_policy: NetStagePolicy,
+    listener_defer_reason: Option<&str>,
+    phase: BudgetedNetPhase,
+    session_active: bool,
+    tcp_state: TcpState,
+    tcp_pending_work: bool,
+) -> bool {
+    budgeted_cyw43_tcp_fast_path_due(contract, stage_policy, listener_defer_reason)
+        && phase == BudgetedNetPhase::SelfTest
+        && session_active
+        && tcp_pending_work
+        && matches!(
+            tcp_state,
+            TcpState::Established
+                | TcpState::CloseWait
+                | TcpState::FinWait1
+                | TcpState::FinWait2
+                | TcpState::LastAck
+                | TcpState::TimeWait
+        )
+}
+
+#[cfg(feature = "kernel")]
+const fn budgeted_cyw43_smoltcp_poll_after_tcp_borrow(phase: BudgetedNetPhase) -> bool {
     matches!(
         phase,
-        BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush
+        BudgetedNetPhase::Interface | BudgetedNetPhase::Dhcp | BudgetedNetPhase::InterfaceFlush
     )
 }
 
@@ -3261,6 +3297,24 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     #[cfg(feature = "kernel")]
+    fn budgeted_cyw43_selftest_defers_to_tcp(&self, phase: BudgetedNetPhase) -> bool {
+        let socket = self.sockets.get::<TcpSocket>(self.tcp_handle);
+        let tcp_pending_work = socket.can_recv()
+            || self.server.has_outbound()
+            || self.outbound.has_pending()
+            || self.disconnect_requested;
+        budgeted_cyw43_selftest_defers_to_tcp(
+            D::driver_task_contract(),
+            self.stage_policy,
+            self.console_listener_defer_reason(),
+            phase,
+            self.session_active,
+            socket.state(),
+            tcp_pending_work,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
     fn cyw43_flush_pre_poll_data_ready(&self) -> bool {
         let dhcp_phase = self.dhcp.as_ref().map(|client| client.status().phase);
         cyw43_flush_pre_poll_data_ready_for(
@@ -3587,21 +3641,49 @@ impl<D: NetDevice> NetStack<D> {
             return Ok(activity);
         }
 
-        let phase = self.budgeted_phase;
+        let scheduled_phase = self.budgeted_phase;
+        let dhcp_service_required = self.budgeted_dhcp_service_required();
+        #[cfg(feature = "kernel")]
+        let cyw43_dhcp_preempts_phase = budgeted_cyw43_dhcp_service_preempts_phase(
+            D::driver_task_contract(),
+            scheduled_phase,
+            dhcp_service_required,
+        );
+        #[cfg(not(feature = "kernel"))]
+        let cyw43_dhcp_preempts_phase = false;
+        let phase = if cyw43_dhcp_preempts_phase {
+            BudgetedNetPhase::Dhcp
+        } else {
+            scheduled_phase
+        };
         let genet_tcp_fast_path = self.budgeted_genet_tcp_fast_path_due();
         let cyw43_tcp_fast_path = self.budgeted_cyw43_tcp_fast_path_due();
         let cyw43_tcp_phase_borrow =
             cyw43_tcp_fast_path && budgeted_cyw43_tcp_phase_borrow_allowed(phase);
         let tcp_phase_borrow = genet_tcp_fast_path || cyw43_tcp_phase_borrow;
+        #[cfg(feature = "kernel")]
+        let cyw43_selftest_tcp_defer = self.budgeted_cyw43_selftest_defers_to_tcp(phase);
+        #[cfg(not(feature = "kernel"))]
+        let cyw43_selftest_tcp_defer = false;
         match phase {
             BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush => {
                 Self::charge_interface_poll_budget(budget)?;
             }
             BudgetedNetPhase::Dhcp => {
-                Self::charge_dhcp_budget(budget)?;
+                if cyw43_tcp_phase_borrow && !dhcp_service_required {
+                    Self::charge_interface_poll_budget(budget)?;
+                } else {
+                    Self::charge_dhcp_budget(budget)?;
+                }
             }
             BudgetedNetPhase::Tcp => {
                 Self::charge_tcp_budget(budget)?;
+            }
+            BudgetedNetPhase::SelfTest if cyw43_selftest_tcp_defer => {
+                Self::charge_tcp_budget(budget)?;
+                for _ in 0..CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS {
+                    Self::charge_tcp_response_flush_budget(budget)?;
+                }
             }
             BudgetedNetPhase::SelfTest => {
                 budget.charge_ops(16)?;
@@ -3616,7 +3698,11 @@ impl<D: NetDevice> NetStack<D> {
         let timestamp = self.begin_poll_turn(now_ms);
         if self.stage_policy.allow_tcp && !self.validate_console_socket(now_ms) {
             self.finish_poll_turn(now_ms, false);
-            self.budgeted_phase = phase.next();
+            self.budgeted_phase = if cyw43_dhcp_preempts_phase {
+                scheduled_phase
+            } else {
+                phase.next()
+            };
             return Ok(true);
         }
 
@@ -3653,13 +3739,16 @@ impl<D: NetDevice> NetStack<D> {
         activity |= match phase {
             BudgetedNetPhase::Interface
                 if cyw43_tcp_phase_borrow
-                    && budgeted_cyw43_interface_poll_after_tcp_borrow(phase) =>
+                    && budgeted_cyw43_smoltcp_poll_after_tcp_borrow(phase) =>
             {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-cyw43-main-after-tcp-borrow")
             }
             BudgetedNetPhase::Interface if tcp_phase_borrow => false,
             BudgetedNetPhase::Interface => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
+            }
+            BudgetedNetPhase::Dhcp if cyw43_tcp_phase_borrow && !dhcp_service_required => {
+                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-cyw43-dhcp-after-tcp-borrow")
             }
             BudgetedNetPhase::Dhcp => self.service_budgeted_dhcp_turn(timestamp, now_ms),
             BudgetedNetPhase::Tcp => self.service_budgeted_tcp_turn(
@@ -3670,13 +3759,35 @@ impl<D: NetDevice> NetStack<D> {
             ),
             BudgetedNetPhase::InterfaceFlush
                 if cyw43_tcp_phase_borrow
-                    && budgeted_cyw43_interface_poll_after_tcp_borrow(phase) =>
+                    && budgeted_cyw43_smoltcp_poll_after_tcp_borrow(phase) =>
             {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-cyw43-flush-after-tcp-borrow")
             }
             BudgetedNetPhase::InterfaceFlush if tcp_phase_borrow => false,
             BudgetedNetPhase::InterfaceFlush => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-flush")
+            }
+            BudgetedNetPhase::SelfTest if cyw43_selftest_tcp_defer => {
+                let mut tcp_activity = self.service_budgeted_tcp_turn(
+                    timestamp,
+                    now_ms,
+                    "budgeted-cyw43-selftest-defer-tcp-pre",
+                    "budgeted-cyw43-selftest-defer-tcp-post",
+                );
+                if tcp_activity {
+                    for _ in 0..CYW43_TCP_FAST_PATH_RESPONSE_FLUSH_TURNS {
+                        let turn_activity = self.service_budgeted_tcp_response_flush_turn(
+                            timestamp,
+                            now_ms,
+                            "budgeted-cyw43-selftest-defer-response-flush",
+                        );
+                        if !turn_activity {
+                            break;
+                        }
+                        tcp_activity = true;
+                    }
+                }
+                tcp_activity
             }
             BudgetedNetPhase::SelfTest => {
                 let selftest_activity =
@@ -3726,7 +3837,11 @@ impl<D: NetDevice> NetStack<D> {
             }
         }
 
-        self.budgeted_phase = phase.next();
+        self.budgeted_phase = if cyw43_dhcp_preempts_phase {
+            scheduled_phase
+        } else {
+            phase.next()
+        };
         self.finish_poll_turn(now_ms, activity);
         Ok(activity)
     }
@@ -4098,6 +4213,8 @@ impl<D: NetDevice> NetStack<D> {
             device_counters.wifi_rx_runtime_drain_budget_hit;
         self.counters.wifi_rx_runtime_max_drained_per_turn =
             device_counters.wifi_rx_runtime_max_drained_per_turn;
+        self.counters.wifi_data_trace_faults = device_counters.wifi_data_trace_faults;
+        self.counters.wifi_data_trace_tx_retries = device_counters.wifi_data_trace_tx_retries;
         self.counters.dropped_zero_len_tx = device_counters.dropped_zero_len_tx;
         self.counters.wifi_assoc = device_counters.wifi_assoc;
         self.counters.wifi_link_up = device_counters.wifi_link_up;
@@ -4155,6 +4272,8 @@ impl<D: NetDevice> NetStack<D> {
             wifi_rx_runtime_drain_budget_hit: device_counters.wifi_rx_runtime_drain_budget_hit,
             wifi_rx_runtime_max_drained_per_turn: device_counters
                 .wifi_rx_runtime_max_drained_per_turn,
+            wifi_data_trace_faults: device_counters.wifi_data_trace_faults,
+            wifi_data_trace_tx_retries: device_counters.wifi_data_trace_tx_retries,
             dropped_zero_len_tx: device_counters.dropped_zero_len_tx,
             wifi_assoc: device_counters.wifi_assoc,
             wifi_link_up: device_counters.wifi_link_up,
@@ -7898,6 +8017,33 @@ mod tests {
         );
         assert!(
             pre_poll_ops
+                .saturating_add(tcp_ops)
+                .saturating_add(interface_ops)
+                <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            pre_poll_frames
+                .saturating_add(tcp_frames)
+                .saturating_add(interface_frames)
+                <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            pre_poll_bytes
+                .saturating_add(tcp_bytes)
+                .saturating_add(interface_bytes)
+                <= contract.budget.max_bytes_per_turn
+        );
+        assert!(
+            pre_poll_ops
+                .saturating_add(tcp_ops)
+                .saturating_add(interface_ops)
+                < pre_poll_ops
+                    .saturating_add(tcp_ops)
+                    .saturating_add(dhcp_ops)
+                    .saturating_add(interface_ops)
+        );
+        assert!(
+            pre_poll_ops
                 .saturating_add(selftest_ops)
                 .saturating_add(interface_ops)
                 <= contract.budget.max_ops_per_turn
@@ -8187,19 +8333,98 @@ mod tests {
         assert!(!budgeted_cyw43_tcp_phase_borrow_allowed(
             BudgetedNetPhase::SelfTest
         ));
-        assert!(budgeted_cyw43_interface_poll_after_tcp_borrow(
+        assert!(budgeted_cyw43_dhcp_service_preempts_phase(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            BudgetedNetPhase::Interface,
+            true
+        ));
+        assert!(budgeted_cyw43_dhcp_service_preempts_phase(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            BudgetedNetPhase::SelfTest,
+            true
+        ));
+        assert!(!budgeted_cyw43_dhcp_service_preempts_phase(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            BudgetedNetPhase::Dhcp,
+            true
+        ));
+        assert!(!budgeted_cyw43_dhcp_service_preempts_phase(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            BudgetedNetPhase::Interface,
+            false
+        ));
+        assert!(!budgeted_cyw43_dhcp_service_preempts_phase(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            BudgetedNetPhase::Interface,
+            true
+        ));
+        assert!(budgeted_cyw43_selftest_defers_to_tcp(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None,
+            BudgetedNetPhase::SelfTest,
+            true,
+            TcpState::Established,
+            true
+        ));
+        assert!(!budgeted_cyw43_selftest_defers_to_tcp(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None,
+            BudgetedNetPhase::SelfTest,
+            true,
+            TcpState::Established,
+            false
+        ));
+        assert!(!budgeted_cyw43_selftest_defers_to_tcp(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None,
+            BudgetedNetPhase::SelfTest,
+            false,
+            TcpState::Established,
+            true
+        ));
+        assert!(!budgeted_cyw43_selftest_defers_to_tcp(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            Some("wifi-host-eapol-pending"),
+            BudgetedNetPhase::SelfTest,
+            true,
+            TcpState::Established,
+            true
+        ));
+        assert!(!budgeted_cyw43_selftest_defers_to_tcp(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None,
+            BudgetedNetPhase::Dhcp,
+            true,
+            TcpState::Established,
+            true
+        ));
+        assert!(!budgeted_cyw43_selftest_defers_to_tcp(
+            crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT,
+            tcp_policy,
+            None,
+            BudgetedNetPhase::SelfTest,
+            true,
+            TcpState::Established,
+            true
+        ));
+        assert!(budgeted_cyw43_smoltcp_poll_after_tcp_borrow(
             BudgetedNetPhase::Interface
         ));
-        assert!(budgeted_cyw43_interface_poll_after_tcp_borrow(
+        assert!(budgeted_cyw43_smoltcp_poll_after_tcp_borrow(
             BudgetedNetPhase::InterfaceFlush
         ));
-        assert!(!budgeted_cyw43_interface_poll_after_tcp_borrow(
+        assert!(budgeted_cyw43_smoltcp_poll_after_tcp_borrow(
             BudgetedNetPhase::Dhcp
         ));
-        assert!(!budgeted_cyw43_interface_poll_after_tcp_borrow(
+        assert!(!budgeted_cyw43_smoltcp_poll_after_tcp_borrow(
             BudgetedNetPhase::Tcp
         ));
-        assert!(!budgeted_cyw43_interface_poll_after_tcp_borrow(
+        assert!(!budgeted_cyw43_smoltcp_poll_after_tcp_borrow(
             BudgetedNetPhase::SelfTest
         ));
     }

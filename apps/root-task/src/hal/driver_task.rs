@@ -1307,6 +1307,8 @@ pub const DRIVER_TASK_RING_FLAG_ONE_WAY: u16 = DRIVER_RUNTIME_COMMAND_FLAG_ONE_W
 /// Command flag used by root to keep proven high-frequency dataplane turns out
 /// of serial timeout/progress tracing while preserving fault and budget traces.
 pub const DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH: u16 = 1 << 12;
+const DRIVER_TASK_RING_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL: u16 = 0x5103;
+const DRIVER_TASK_RING_SDIO_RESPONSE_ERROR_RESULT: u32 = 0x0500_0800;
 /// Any ring flag that prevents owner-state credit.
 pub const DRIVER_TASK_RING_NON_ACCEPTANCE_FLAGS: u16 =
     DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE
@@ -5819,6 +5821,9 @@ const fn driver_task_ring_completion_is_quiet_expected(
         || (completion.code == DriverTaskCompletionCode::Fault.as_u16()
             && completion.detail == DriverTaskFaultCode::RejectedCommand.as_u16()
             && completion.result == 0)
+        || (completion.code == DriverTaskCompletionCode::Fault.as_u16()
+            && completion.detail == DRIVER_TASK_RING_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL
+            && completion.result == DRIVER_TASK_RING_SDIO_RESPONSE_ERROR_RESULT)
 }
 
 #[cfg(feature = "kernel")]
@@ -10676,6 +10681,21 @@ mod tests {
             false,
             quiet_rx_command,
             DriverTaskCompletionRecord::fault(92, DriverTaskFaultCode::RejectedCommand)
+        ));
+        assert!(!driver_task_ring_completion_trace_enabled(
+            false,
+            quiet_rx_command,
+            DriverTaskCompletionRecord {
+                sequence: 92,
+                code: DriverTaskCompletionCode::Fault.as_u16(),
+                detail: DRIVER_TASK_RING_SDIO_DESCRIPTOR_TRANSFER_FAILED_DETAIL,
+                result: DRIVER_TASK_RING_SDIO_RESPONSE_ERROR_RESULT,
+                frame: DriverFrameDescriptor {
+                    offset: 0,
+                    len: 0,
+                    flags: 0,
+                },
+            }
         ));
         assert!(driver_task_ring_completion_trace_enabled(
             false,

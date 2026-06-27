@@ -588,6 +588,10 @@ pub struct NetDeviceCounters {
     pub wifi_rx_runtime_drain_budget_hit: u64,
     /// CYW43 linked-runtime max frames drained during one service turn.
     pub wifi_rx_runtime_max_drained_per_turn: u64,
+    /// Sampled CYW43 data-path fault trace count.
+    pub wifi_data_trace_faults: u64,
+    /// Sampled CYW43 data-path TX retry trace count.
+    pub wifi_data_trace_tx_retries: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
     /// TX publishes rejected due to duplicate or busy slot state.
@@ -697,6 +701,10 @@ pub struct NetCounters {
     pub wifi_rx_runtime_drain_budget_hit: u64,
     /// CYW43 linked-runtime max frames drained during one service turn.
     pub wifi_rx_runtime_max_drained_per_turn: u64,
+    /// Sampled CYW43 data-path fault trace count.
+    pub wifi_data_trace_faults: u64,
+    /// Sampled CYW43 data-path TX retry trace count.
+    pub wifi_data_trace_tx_retries: u64,
     /// TX publish attempts blocked because the descriptor length was zero.
     pub dropped_zero_len_tx: u64,
     /// Wi-Fi association state, encoded as 0 or 1 for compact diagnostics.
