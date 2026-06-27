@@ -7266,7 +7266,7 @@ const fn cyw43_data_tx_request_len(unpadded_len: usize) -> usize {
 fn cyw43_data_tx_request_len_for_frame(frame: &[u8], unpadded_len: usize) -> (usize, bool) {
     let request_len = cyw43_data_tx_request_len(unpadded_len);
     if request_len < CYW43_FUNCTION2_BLOCK_BYTES && cyw43_frame_is_ipv4_tcp(frame) {
-        (CYW43_FUNCTION2_BLOCK_BYTES, false)
+        (CYW43_FUNCTION2_BLOCK_BYTES, true)
     } else {
         (request_len, false)
     }
@@ -15656,7 +15656,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_shape_keeps_short_single_frames_in_byte_mode() {
+    fn cyw43_data_tx_shape_keeps_boot_frames_byte_mode_and_tcp_single_block() {
         let dhcp_discover =
             test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
         let dhcp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_discover.len();
@@ -15713,10 +15713,10 @@ mod tests {
         assert_eq!(tcp_total_len, 124);
         assert_eq!(cyw43_data_tx_request_len(tcp_total_len), 124);
         assert_eq!(tcp_request_len, CYW43_FUNCTION2_BLOCK_BYTES);
-        assert!(!tcp_block_mode);
+        assert!(tcp_block_mode);
         assert_eq!(
             cyw43_function2_data_tx_cmd53_shape(tcp_request_len, tcp_block_mode),
-            (CYW43_FUNCTION2_BLOCK_BYTES as u16, 0)
+            (CYW43_FUNCTION2_BLOCK_BYTES as u16, 1)
         );
     }
 

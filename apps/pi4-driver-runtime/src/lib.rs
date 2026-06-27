@@ -11724,7 +11724,7 @@ fn cyw43_data_tx_request_len_for_frame(
 ) -> (usize, bool) {
     let request_len = cyw43_data_tx_request_len_default(unpadded_len);
     if request_len < CYW43_FUNCTION2_BLOCK_BYTES && cyw43_data_tx_is_ipv4_tcp(frame) {
-        (CYW43_FUNCTION2_BLOCK_BYTES, false)
+        (CYW43_FUNCTION2_BLOCK_BYTES, true)
     } else {
         (request_len, false)
     }
@@ -25418,10 +25418,10 @@ mod tests {
         assert_eq!(ipv4_tcp_total_len, 124);
         assert_eq!(cyw43_data_tx_request_len_default(ipv4_tcp_total_len), 124);
         assert_eq!(ipv4_tcp_request_len, CYW43_FUNCTION2_BLOCK_BYTES);
-        assert!(!ipv4_tcp_block_mode);
+        assert!(ipv4_tcp_block_mode);
         assert_eq!(
             cyw43_function2_data_tx_cmd53_shape(ipv4_tcp_request_len, ipv4_tcp_block_mode),
-            (CYW43_FUNCTION2_BLOCK_BYTES as u16, 0)
+            (CYW43_FUNCTION2_BLOCK_BYTES as u16, 1)
         );
 
         let mut dhcp_discover = [0u8; 300];

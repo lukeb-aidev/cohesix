@@ -1836,6 +1836,7 @@ where
     local_seat_chunk_input_pending: bool,
     console_output_flush_active: bool,
     local_seat_mirror_suppressed: bool,
+    local_seat_first_command_input_logged: bool,
     reboot_pending: bool,
     reboot_flush_turns: u8,
     #[cfg(feature = "kernel")]
@@ -1953,6 +1954,7 @@ where
             local_seat_chunk_input_pending: false,
             console_output_flush_active: false,
             local_seat_mirror_suppressed: false,
+            local_seat_first_command_input_logged: false,
             reboot_pending: false,
             reboot_flush_turns: 0,
             #[cfg(feature = "kernel")]
@@ -3901,7 +3903,7 @@ where
         let metrics = self.metrics;
         let display = runtime.display_trace();
         let line = format_message(format_args!(
-            "[smp] activity local-seat runtime=present attached={} keyboard_device={} display={} backend_poll={} backend_polls={} backend_bytes={} keyboard_ready={} first_report={} first_byte={} queued={} accepted={} drained={} echoed={} drop={} no_reply={} cooldown={} cooldown_skips={} hdmi_drop={}",
+            "[smp] activity local-seat runtime=present attached={} keyboard_device={} display={} backend_poll={} backend_polls={} backend_bytes={} keyboard_ready={} command_ready={} first_report={} first_byte={} queued={} arming={} accepted={} drained={} echoed={} drop={} no_reply={} cooldown={} cooldown_skips={} hdmi_drop={}",
             Self::yes_no(backend_attached),
             status.keyboard_device,
             status.display_device,
@@ -3909,9 +3911,11 @@ where
             trace.backend_poll_calls,
             trace.backend_read_bytes,
             Self::yes_no(linked_keyboard_ready || backend_attached),
+            Self::yes_no(runtime.hdmi_keyboard_ready_line_emitted()),
             Self::yes_no(linked_first_report),
             Self::yes_no(linked_first_byte),
             trace.queued_bytes,
+            trace.arming_bytes,
             trace.accepted_bytes,
             trace.drained_bytes,
             trace.echoed_bytes,
@@ -5311,10 +5315,11 @@ where
             ));
             self.emit_console_line(drop_line.as_str());
             let trace_line = format_message(format_args!(
-                "usb: local-seat input queued={} backend_polls={} backend_bytes={} accepted={} drained={} echoed={} dropped={}",
+                "usb: local-seat input queued={} backend_polls={} backend_bytes={} arming={} accepted={} drained={} echoed={} dropped={}",
                 trace.queued_bytes,
                 trace.backend_poll_calls,
                 trace.backend_read_bytes,
+                trace.arming_bytes,
                 trace.accepted_bytes,
                 trace.drained_bytes,
                 trace.echoed_bytes,
@@ -5366,13 +5371,14 @@ where
             local_trace.dropped_bytes,
         );
         let sustained_line = format_message(format_args!(
-            "usb: sustained_input queue_valid={} detail=0x{:04x} result=0x{:08x} queued_reports={} transfer_events={} report_status={} accepted={} drained={} echoed={} no_reply={} no_reply_streak={} recovery_aux_requests={} recovery_aux_pending={} runtime_skipped={} blocker={} usb_burst={} drops={}",
+            "usb: sustained_input queue_valid={} detail=0x{:04x} result=0x{:08x} queued_reports={} transfer_events={} report_status={} arming={} accepted={} drained={} echoed={} no_reply={} no_reply_streak={} recovery_aux_requests={} recovery_aux_pending={} runtime_skipped={} blocker={} usb_burst={} drops={}",
             Self::yes_no(queue_valid),
             linked_detail,
             linked_result,
             queued_reports,
             transfer_events,
             Self::usb_runtime_keyboard_report_status_label(report_status),
+            local_trace.arming_bytes,
             local_trace.accepted_bytes,
             local_trace.drained_bytes,
             local_trace.echoed_bytes,
@@ -5461,8 +5467,8 @@ where
                 .as_ref()
                 .map(|local_seat| local_seat.keyboard_trace())
                 .unwrap_or_default();
-            let parser_ingress = local_trace.backend_read_bytes != 0
-                || local_trace.accepted_bytes != 0
+            let parser_ingress = local_trace.accepted_bytes != 0
+                || local_trace.drained_bytes != 0
                 || local_trace.echoed_bytes != 0;
             let (
                 queued_reports,
@@ -5678,11 +5684,12 @@ where
                 "local-seat-queue-diagnostic"
             };
             let keyboard_line = format_message(format_args!(
-                "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} accepted={} drained={} echoed={} dropped={} overruns={} no_reply={} recovery_aux={} recovery_pending={} cooldown={} cooldown_skips={}",
+                "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} arming={} accepted={} drained={} echoed={} dropped={} overruns={} no_reply={} recovery_aux={} recovery_pending={} cooldown={} cooldown_skips={}",
                 keyboard_trace_source,
                 local_trace.backend_poll_calls,
                 local_trace.backend_read_bytes,
                 local_trace.queued_bytes,
+                local_trace.arming_bytes,
                 local_trace.accepted_bytes,
                 local_trace.drained_bytes,
                 local_trace.echoed_bytes,
@@ -8218,8 +8225,8 @@ where
                 .unwrap_or_default();
             let keyboard_ready = linked_keyboard_ready;
             let first_report = linked_first_report;
-            let parser_ingress = local_trace.backend_read_bytes != 0
-                || local_trace.accepted_bytes != 0
+            let parser_ingress = local_trace.accepted_bytes != 0
+                || local_trace.drained_bytes != 0
                 || local_trace.echoed_bytes != 0;
             let first_byte = linked_first_byte;
             let (
@@ -8458,7 +8465,7 @@ where
                 "first-console-byte",
                 Self::usb_startup_gate_status(10, proof_gate, failing_gate),
                 format_args!(
-                    "first_byte={} first_byte_source={} parser_ingress={} backend_bytes={} accepted={} echoed={} input_observation={}",
+                    "first_byte={} first_byte_source={} parser_ingress={} backend_bytes={} arming={} accepted={} echoed={} input_observation={}",
                     Self::yes_no(first_byte),
                     if first_byte {
                         "linked-runtime-hid"
@@ -8469,6 +8476,7 @@ where
                     },
                     Self::yes_no(parser_ingress),
                     local_trace.backend_read_bytes,
+                    local_trace.arming_bytes,
                     local_trace.accepted_bytes,
                     local_trace.echoed_bytes,
                     input_observation,
@@ -12120,6 +12128,32 @@ where
             empty_polls = 0;
             consumed = true;
             self.last_input_source = ConsoleInputSource::LocalSeat;
+            #[cfg(feature = "kernel")]
+            if !self.local_seat_first_command_input_logged {
+                if let Some(runtime) = self.local_seat.as_ref() {
+                    if runtime.hdmi_keyboard_ready_line_emitted() {
+                        let trace = runtime.keyboard_trace();
+                        let display = runtime.display_trace();
+                        let mut line = HeaplessString::<256>::new();
+                        let _ = write!(
+                            line,
+                            "[local-seat] usb keyboard first-command-input action=parser-ingress read={} queued={} arming_bytes={} accepted={} drained={} echoed={} hdmi_pending={} hdmi_submitted={}",
+                            read,
+                            trace.queued_bytes,
+                            trace.arming_bytes,
+                            trace.accepted_bytes,
+                            trace.drained_bytes,
+                            trace.echoed_bytes,
+                            display.pending_bytes,
+                            display.submitted_frames,
+                        );
+                        boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
+                            line.as_str(),
+                        );
+                        self.local_seat_first_command_input_logged = true;
+                    }
+                }
+            }
             if let Some(runtime) = self.local_seat.as_mut() {
                 runtime.echo_input_bytes(&chunk[..read]);
             }
@@ -19031,6 +19065,56 @@ mod tests {
         assert!(rendered.contains("PONG"), "{rendered}");
         assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
         assert!(rendered.contains("cohesix> "), "{rendered}");
+    }
+
+    #[test]
+    fn local_seat_arming_bytes_do_not_enter_shared_parser() {
+        let driver = LoopbackSerial::<512>::new();
+        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        local_seat.accept_keyboard_arming_bytes(b"ping\n");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.poll();
+        assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
+        let first_turn = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(!first_turn.contains("ERR PARSE"), "{first_turn}");
+        assert!(!first_turn.contains("PONG"), "{first_turn}");
+
+        pump.local_seat
+            .as_mut()
+            .expect("local seat remains attached")
+            .enqueue_keyboard_bytes(b"ping\n");
+        pump.poll();
+        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
+        let second_turn = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(second_turn.contains("PONG"), "{second_turn}");
     }
 
     #[test]
