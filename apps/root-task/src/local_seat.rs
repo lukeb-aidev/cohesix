@@ -47,7 +47,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE, DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE,
+    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED,
+    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER,
     DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
     DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT,
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
@@ -86,9 +88,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN,
     DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED, DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
-    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS,
-    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER,
 };
 #[cfg(all(
     feature = "kernel",
@@ -875,14 +875,16 @@ pub(crate) const fn local_seat_hdmi_prompt_ready_for_usb_state(
 }
 
 /// Return whether HDMI may claim the local prompt is usable. First-byte proof
-/// establishes USB ingress only; physical Pi output must also be caught up.
+/// establishes USB ingress only; physical Pi display retry health must also be
+/// intact, but queued healthy display output must not indefinitely hide the
+/// user-facing command-ready line.
 #[must_use]
 pub(crate) const fn local_seat_hdmi_prompt_ready_for_display_state(
     physical_pi_owner_state: bool,
     root_console_ready: bool,
     usb_first_byte_ready: bool,
     usb_post_first_byte_safe: bool,
-    display_idle: bool,
+    _display_idle: bool,
     display_retry_idle: bool,
 ) -> bool {
     local_seat_hdmi_prompt_ready_for_usb_state(
@@ -890,7 +892,7 @@ pub(crate) const fn local_seat_hdmi_prompt_ready_for_display_state(
         root_console_ready,
         usb_first_byte_ready,
         usb_post_first_byte_safe,
-    ) && (!physical_pi_owner_state || (display_idle && display_retry_idle))
+    ) && (!physical_pi_owner_state || display_retry_idle)
 }
 
 /// Return whether a deferred HDMI prompt should show the pre-input keyboard
@@ -902,6 +904,18 @@ pub(crate) const fn local_seat_hdmi_keyboard_wait_line_due(
     wait_line_emitted: bool,
 ) -> bool {
     !usb_first_byte_ready && !wait_line_emitted
+}
+
+/// Return whether linked-runtime USB keyboard bytes may enter the shared parser.
+///
+/// On physical Pi, first-byte and post-first-byte settle reports are operator
+/// arming input until HDMI has told the user the USB console is command-ready.
+#[must_use]
+pub(crate) const fn local_seat_keyboard_bytes_enter_parser_state(
+    physical_pi_owner_state: bool,
+    command_ready: bool,
+) -> bool {
+    !physical_pi_owner_state || command_ready
 }
 
 /// Return whether an already published physical-Pi HDMI prompt remains valid.
@@ -1111,12 +1125,7 @@ const fn local_seat_keyboard_steady_queue_stalled(queued_reports: u32, report_st
             || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY as u32)
 }
 
-#[cfg(all(
-    feature = "kernel",
-    feature = "usb",
-    target_arch = "aarch64",
-    target_os = "none"
-))]
+#[cfg(all(feature = "kernel", feature = "usb"))]
 const fn local_seat_keyboard_hard_recovery_report_status(report_status: u32) -> bool {
     report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER as u32
         || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE as u32
@@ -1164,18 +1173,12 @@ const fn local_seat_keyboard_recovery_probe_stalled(
         && local_seat_keyboard_hard_recovery_report_status(report_status)
 }
 
-#[cfg(all(
-    feature = "kernel",
-    feature = "usb",
-    target_arch = "aarch64",
-    target_os = "none"
-))]
+#[cfg(all(feature = "kernel", feature = "usb"))]
 const fn local_seat_keyboard_result_blocks_prompt_ready(result: u32) -> bool {
     let queued_reports = result & 0xff;
     let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
         & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
     queued_reports > LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS
-        || local_seat_keyboard_steady_queue_stalled(queued_reports, report_status)
         || (queued_reports != 0 && local_seat_keyboard_hard_recovery_report_status(report_status))
 }
 
@@ -2004,10 +2007,13 @@ impl LocalSeatRuntime {
             "usb-first-byte-pending"
         } else if !self.linked_usb_prompt_safe_ready() {
             "usb-post-first-byte-settle-pending"
-        } else if self.linked_hdmi_pending_work() {
-            "display-drain-pending"
-        } else {
+        } else if self.hdmi_no_reply_cooldown != 0
+            || self.hdmi_redraw_no_reply_streak != 0
+            || self.hdmi_stale_after_retry_exhaustion
+        {
             "display-retry-pending"
+        } else {
+            "display-output-queued"
         }
     }
 
@@ -2067,7 +2073,7 @@ impl LocalSeatRuntime {
             return;
         }
         boot_log::force_uart_line_raw_without_prompt_refresh(
-            "[local-seat] hdmi prompt enabled reason=usb-first-byte-ready-display-drained action=show-prompt",
+            "[local-seat] hdmi prompt enabled reason=usb-console-command-ready action=show-prompt",
         );
         self.emit_linked_hdmi_keyboard_ready_line_once();
         self.mirror_linked_hdmi_prompt_now(prompt.as_str());
@@ -3019,6 +3025,7 @@ impl LocalSeatRuntime {
             .keyboard_post_first_byte_clean_polls
             .saturating_add(1)
             .min(LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS);
+        self.release_pending_linked_hdmi_prompt_if_keyboard_ready();
     }
 
     fn record_keyboard_poll_idle_completion(&mut self) {
@@ -3333,6 +3340,7 @@ impl LocalSeatRuntime {
                     if completion.code
                         == crate::hal::driver_task::DriverTaskCompletionCode::FrameReady.as_u16()
                     {
+                        let command_ready_before_poll = self.hdmi_keyboard_ready_line_emitted;
                         self.record_keyboard_poll_completion();
                         self.record_keyboard_post_first_byte_clean_poll(completion.result);
                         publish_local_seat_usb_keyboard_owner_ready(contract, completion);
@@ -3358,7 +3366,11 @@ impl LocalSeatRuntime {
                                 .backend_keyboard_read_bytes
                                 .saturating_add(bytes.len() as u64);
                             LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
-                            let accepted = if first_byte_ready_before {
+                            let parser_ingress = local_seat_keyboard_bytes_enter_parser_state(
+                                crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+                                command_ready_before_poll,
+                            );
+                            let accepted = if parser_ingress {
                                 self.enqueue_keyboard_bytes(bytes)
                             } else {
                                 self.accept_keyboard_arming_bytes(bytes)
@@ -8393,8 +8405,8 @@ mod tests {
     }
 
     #[test]
-    fn physical_pi_hdmi_prompt_waits_for_display_idle() {
-        assert!(!local_seat_hdmi_prompt_ready_for_display_state(
+    fn physical_pi_hdmi_prompt_waits_for_display_retry_health_not_empty_queue() {
+        assert!(local_seat_hdmi_prompt_ready_for_display_state(
             true, true, true, true, false, true
         ));
         assert!(!local_seat_hdmi_prompt_ready_for_display_state(
@@ -8417,6 +8429,40 @@ mod tests {
         assert!(!local_seat_hdmi_keyboard_wait_line_due(false, true));
         assert!(!local_seat_hdmi_keyboard_wait_line_due(true, false));
         assert!(!local_seat_hdmi_keyboard_wait_line_due(true, true));
+    }
+
+    #[test]
+    fn physical_pi_keyboard_bytes_wait_for_command_ready_before_parser_ingress() {
+        assert!(!local_seat_keyboard_bytes_enter_parser_state(true, false));
+        assert!(local_seat_keyboard_bytes_enter_parser_state(true, true));
+        assert!(local_seat_keyboard_bytes_enter_parser_state(false, false));
+    }
+
+    #[test]
+    fn physical_pi_prompt_ready_does_not_block_on_full_idle_queue_after_first_byte() {
+        #[cfg(all(feature = "kernel", feature = "usb"))]
+        {
+            let full_idle_result = LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS
+                | (u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE)
+                    << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT);
+
+            assert!(local_seat_keyboard_steady_queue_stalled(
+                LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS,
+                u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE)
+            ));
+            assert!(!local_seat_keyboard_result_blocks_prompt_ready(
+                full_idle_result
+            ));
+            assert!(local_seat_usb_prompt_safe_ready_state(
+                true,
+                true,
+                true,
+                LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
+                false,
+                0,
+                local_seat_keyboard_result_blocks_prompt_ready(full_idle_result),
+            ));
+        }
     }
 
     #[test]

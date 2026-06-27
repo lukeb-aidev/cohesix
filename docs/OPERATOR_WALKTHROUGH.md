@@ -19,6 +19,11 @@ For host tool usage, interdependencies, and policy/mount details, see
 - `/gpu/*` appears only after `gpu-bridge-host --publish` runs; `/host/*` appears only after `host-sidecar-bridge` runs.
 - Mock mode commands (`--mock`) do not talk to the VM; do not mix mock and live in the same session.
 
+## Pi 4 transport guidance
+Use wired GENET for production Pi 4 gateway and high-concurrency worker runs. It is the production transport for predictable REST latency and QEMU-capacity comparison.
+
+Pi 4 Wi-Fi is supported for CYW43/SDIO research, diagnostics, AP-distance testing, and degraded-link bring-up, but it is not the preferred production transport for high-concurrency deployments. Current local evidence sets the safe sustained Wi-Fi worker cap at `120` workers. Short exploratory pressure may run up to `300` workers. `1500`-worker Wi-Fi runs are stress diagnostics only and should not be treated as production capacity or latency SLO evidence. See [BENCHMARKS.md](BENCHMARKS.md) for the evidence basis and 26b proof-lane requirements.
+
 ## Hive-gateway mental model (0.9.0-beta)
 - `hive-gateway` is the **sole** console client; everything else must use REST (`--rest-url`).
 - REST is a 1:1 projection of `LS`, `CAT`, and `ECHO`. It does not add new verbs or semantics.

@@ -9,6 +9,7 @@
   - QEMU `aarch64/virt` (development/CI baseline).
   - Raspberry Pi 4 (`bcm2711`) via upstream-style boot chain: `Pi firmware -> U-Boot -> seL4 image -> root-task`.
 - Milestone 26 defines the strict no-NIC baseline on Pi 4; Milestone 26a adds profile-gated GENETv5 + static IPv4; the historical 26b compatibility baseline adds the interactive U-Boot policy wizard, DTB `/chosen/cohesix,*` network-policy handoff, Cohesix-owned xHCI/VL805 local-seat cold start, wired DHCP, and the staged Pi 4 Wi-Fi runtime path. Reopened 26a/26b driver-task closure is not as-built until fresh captures prove dedicated driver-task isolation for the active hardware paths.
+- Production Pi 4 networking should use wired GENET for predictable REST/gateway latency and high-concurrency worker runs. Wi-Fi is supported for CYW43/SDIO research, diagnostics, AP-distance testing, and degraded-link bring-up, but current 26b evidence caps routine sustained Wi-Fi worker runs at `120` workers, exploratory pressure at `300` workers, and treats `1500`-worker Wi-Fi as stress/fault-discovery evidence only.
 
 ## Canonical Pi 4 boot chain
 1. Pi boot firmware loads `start4.elf` and `fixup4.dat`.

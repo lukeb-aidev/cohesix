@@ -7264,32 +7264,8 @@ const fn cyw43_data_tx_request_len(unpadded_len: usize) -> usize {
 
 #[cfg(feature = "kernel")]
 fn cyw43_data_tx_request_len_for_frame(frame: &[u8], unpadded_len: usize) -> (usize, bool) {
-    let request_len = cyw43_data_tx_request_len(unpadded_len);
-    if request_len < CYW43_FUNCTION2_BLOCK_BYTES && cyw43_frame_is_ipv4_tcp(frame) {
-        (CYW43_FUNCTION2_BLOCK_BYTES, true)
-    } else {
-        (request_len, false)
-    }
-}
-
-#[cfg(feature = "kernel")]
-fn cyw43_frame_is_ipv4_tcp(frame: &[u8]) -> bool {
-    if frame.len() < ETH_HEADER_LEN + 20 {
-        return false;
-    }
-    let Some(ethertype) = cyw43_get_u16_be(frame, 12) else {
-        return false;
-    };
-    if ethertype != CYW43_ETH_P_IPV4 {
-        return false;
-    }
-    let ip = ETH_HEADER_LEN;
-    let version_ihl = frame[ip];
-    if version_ihl >> 4 != 4 {
-        return false;
-    }
-    let ihl = usize::from(version_ihl & 0x0f) * 4;
-    ihl >= 20 && frame.len() >= ETH_HEADER_LEN + ihl && frame[ip + 9] == CYW43_IP_PROTO_TCP
+    let _ = frame;
+    (cyw43_data_tx_request_len(unpadded_len), false)
 }
 
 #[cfg(feature = "kernel")]
@@ -15656,7 +15632,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_shape_keeps_boot_frames_byte_mode_and_tcp_single_block() {
+    fn cyw43_data_tx_shape_keeps_short_frames_in_natural_byte_mode() {
         let dhcp_discover =
             test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
         let dhcp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_discover.len();
@@ -15712,11 +15688,11 @@ mod tests {
             cyw43_data_tx_request_len_for_frame(&tcp_frame, tcp_total_len);
         assert_eq!(tcp_total_len, 124);
         assert_eq!(cyw43_data_tx_request_len(tcp_total_len), 124);
-        assert_eq!(tcp_request_len, CYW43_FUNCTION2_BLOCK_BYTES);
-        assert!(tcp_block_mode);
+        assert_eq!(tcp_request_len, 124);
+        assert!(!tcp_block_mode);
         assert_eq!(
             cyw43_function2_data_tx_cmd53_shape(tcp_request_len, tcp_block_mode),
-            (CYW43_FUNCTION2_BLOCK_BYTES as u16, 1)
+            (124, 0)
         );
     }
 

@@ -1206,7 +1206,6 @@ const CYW43_ETH_HEADER_BYTES: usize = 14;
 const CYW43_ETH_P_IPV4: u16 = 0x0800;
 const CYW43_ETH_P_ARP: u16 = 0x0806;
 const CYW43_ETH_P_EAPOL: u16 = 0x888e;
-const CYW43_IP_PROTO_TCP: u8 = 6;
 const CYW43_IP_PROTO_UDP: u8 = 17;
 const CYW43_DHCP_SERVER_PORT: u16 = 67;
 const CYW43_DHCP_CLIENT_PORT: u16 = 68;
@@ -11722,32 +11721,8 @@ fn cyw43_data_tx_request_len_for_frame(
     frame: DriverFrameDescriptor,
     unpadded_len: usize,
 ) -> (usize, bool) {
-    let request_len = cyw43_data_tx_request_len_default(unpadded_len);
-    if request_len < CYW43_FUNCTION2_BLOCK_BYTES && cyw43_data_tx_is_ipv4_tcp(frame) {
-        (CYW43_FUNCTION2_BLOCK_BYTES, true)
-    } else {
-        (request_len, false)
-    }
-}
-
-fn cyw43_data_tx_is_ipv4_tcp(frame: DriverFrameDescriptor) -> bool {
-    let offset = frame.offset as usize;
-    let len = usize::from(frame.len);
-    if len < CYW43_ETH_HEADER_BYTES + 20 {
-        return false;
-    }
-    if cyw43_ring_be_u16(offset + 12) != CYW43_ETH_P_IPV4 {
-        return false;
-    }
-    let ip_offset = offset + CYW43_ETH_HEADER_BYTES;
-    let version_ihl = read_ring_byte(ip_offset);
-    if version_ihl >> 4 != 4 {
-        return false;
-    }
-    let ihl = usize::from(version_ihl & 0x0f) * 4;
-    ihl >= 20
-        && len >= CYW43_ETH_HEADER_BYTES + ihl
-        && read_ring_byte(ip_offset + 9) == CYW43_IP_PROTO_TCP
+    let _ = frame;
+    (cyw43_data_tx_request_len_default(unpadded_len), false)
 }
 
 const fn cyw43_control_rx_request_len(unpadded_len: usize) -> usize {
@@ -25417,11 +25392,11 @@ mod tests {
             cyw43_data_tx_request_len_for_frame(frame, ipv4_tcp_total_len);
         assert_eq!(ipv4_tcp_total_len, 124);
         assert_eq!(cyw43_data_tx_request_len_default(ipv4_tcp_total_len), 124);
-        assert_eq!(ipv4_tcp_request_len, CYW43_FUNCTION2_BLOCK_BYTES);
-        assert!(ipv4_tcp_block_mode);
+        assert_eq!(ipv4_tcp_request_len, 124);
+        assert!(!ipv4_tcp_block_mode);
         assert_eq!(
             cyw43_function2_data_tx_cmd53_shape(ipv4_tcp_request_len, ipv4_tcp_block_mode),
-            (CYW43_FUNCTION2_BLOCK_BYTES as u16, 1)
+            (124, 0)
         );
 
         let mut dhcp_discover = [0u8; 300];

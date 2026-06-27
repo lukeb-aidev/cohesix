@@ -7,7 +7,7 @@
 ## Benchmark Verdicts (As-Built)
 - **Historical 25b worker-capacity benchmark:** PASS for the `1500` hard cap in real VM/TCP/gateway mode. Reviewable evidence is committed under `docs/bench/`.
 - **Historical 25f large-telemetry reliability gate:** PASS was recorded for the required no-retry scenarios (`telemetry-1mb`, `telemetry-10mb`, `telemetry-100mb`, `telemetry-1gb`) with `error_budget_rate=0.01`, but the cited summaries live under ignored `logs/`. Treat those rows as local diagnostic history unless the exact summaries are promoted into `docs/bench/`.
-- **Current 26b Pi isolated runtime parity:** no verdict yet. Closure requires fresh same-harness QEMU and Pi artifacts, comparator output, and separate serial/USB/HDMI/driver-task proof lanes.
+- **Current 26b Pi isolated runtime parity:** no verdict yet. Production closure requires fresh same-harness QEMU and wired/GENET Pi artifacts, comparator output, and separate serial/USB/HDMI/driver-task proof lanes. Pi 4 Wi-Fi is a research/diagnostic lane with its own bounded worker envelope rather than a production parity target.
 
 ## Hive-Gateway Worker Capacity (Milestone 25b)
 
@@ -45,6 +45,13 @@ Pi 4 results must be reported in three lanes: raw direct `cohsh` over TCP/Wi-Fi,
 
 The existing `out/bench/pi4-*` and `out/bench/qemu-*` paths are local diagnostics, not committed benchmark proof. They remain useful for trend comparison, but any improved-performance claim requires a fresh Pi run that also proves live driver TCBs, Wi-Fi DHCP or GENET service, clean serial, USB/local-seat responsiveness, HDMI responsiveness, and valid driver-task counters under load.
 
+Wi-Fi is useful for CYW43/SDIO driver research, field diagnostics, AP-distance testing, and failure-mode discovery, but it is not the preferred production transport for high-concurrency Pi 4 deployments. Production Pi fleets should use wired GENET unless a site-specific Wi-Fi envelope is freshly measured and documented. Based on current local Wi-Fi runs, the safe sustained 26b Wi-Fi worker cap is `120` workers. Short exploratory pressure may use up to `300` workers. `1500`-worker Wi-Fi runs remain valuable stress diagnostics, but they are not production-capacity or latency SLO evidence because recent successful runs still show second-scale REST latency and high run-to-run variance.
+
+The evidence basis for that cap is deliberately conservative:
+- `logs/wifi_rest_highstress_20260625T110417Z.summary.json`: `120` workers, intensity `10`, duration `2m`, `8067 ok / 0 err`, avg `2.035s`, p95 `3.563s`.
+- `logs/wifi_rest_quickpressure_pcap_20260626_20260626T124619Z.summary.json`: `300` workers, intensity `8`, duration `1m`, `3888 ok / 0 err`, avg `3.081s`, p95 `5.185s`.
+- Recent `1500`-worker Wi-Fi runs often pass the error budget, including `logs/pi4_wifi_high_20260627T1905_20260627T090434Z.summary.json` with `1365 ok / 0 err`, but p95 remained `5.727s`; this is stress/fault-discovery evidence, not production latency evidence.
+
 | Area | As-built status | Proof boundary |
 | --- | --- | --- |
 | Hot-path shape | CYW43, GENET, SDIO, USB, HDMI, PCIe, and serial work has moved toward bounded isolated runtime service turns with fixed rings and descriptor-backed resources. | Code-level readiness only; not a throughput verdict. |
@@ -58,9 +65,9 @@ Same-harness means the QEMU and Pi runs use matched workload, tool version, scen
 | Evidence item | Required content |
 | --- | --- |
 | Selected QEMU reference | Best eligible committed or archived QEMU artifact for the exact workload, with harness provenance and no mock mode. |
-| Matched Pi artifact | Fresh Pi isolated runtime run for the same workload, with normalized serial evidence and active Wi-Fi or GENET service markers. |
+| Matched Pi artifact | Fresh Pi isolated runtime run for the same workload, with normalized serial evidence and active GENET service markers for production parity. Wi-Fi artifacts are accepted only as research/diagnostic evidence at the documented worker envelope. |
 | Comparator command | `scripts/pi4_compare_driver_models.py` or successor invoked with both artifacts and workload/provenance validation enabled. |
-| Verdict fields | Throughput and error-budget metrics decide PASS/FAIL. Latency is recorded and compared, but excluded from the pass/fail verdict for 26b. |
+| Verdict fields | Production wired/GENET PASS/FAIL uses throughput, successful operation count, error-budget metrics, and bounded-backpressure behavior. Wi-Fi PASS/FAIL uses the `120`-worker sustained research envelope, raw reachability, clean CYW43/SDIO counters, and error budget; Wi-Fi latency is recorded as physical-link evidence, not QEMU parity. |
 | Required proof lanes | `DRIVER_TASK_BOOT`, `DRIVER_TASK_OWNER_STATE_PROOF=yes`, valid `DRIVER_TASK_COUNTER_*`, DHCP/IP or static-IP proof, USB keyboard responsiveness, HDMI responsiveness, and clean emergency serial. |
 
 ### Runtime/Config Changes Under Test

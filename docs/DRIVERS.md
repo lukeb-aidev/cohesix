@@ -85,9 +85,13 @@ batch device-local work, keep cache and DMA maintenance near the driver state
 machine, avoid UART-heavy steady telemetry, and use manifest affinity where the
 selected seL4 profile supports it. Saturation must appear as bounded busy,
 timeout, overrun, or owner-state fault evidence, never as unbounded queue growth
-or a hidden blocking call. Pi 4 performance acceptance requires fresh
-same-harness evidence with USB, Wi-Fi/GENET, HDMI, shell transport, flash, and
-current `smp activity`/affinity proof lanes kept separate; future
+or a hidden blocking call. Pi 4 production performance acceptance requires
+fresh same-harness evidence with USB, wired GENET, HDMI, shell transport,
+flash, and current `smp activity`/affinity proof lanes kept separate. Pi 4
+Wi-Fi performance acceptance is a research/diagnostic envelope: routine
+sustained runs are capped at `120` workers, exploratory pressure at `300`
+workers, and `1500`-worker Wi-Fi runs are stress evidence rather than
+production throughput proof. Future
 service-bucket proof is required only after the generated Milestone 27c surface
 lands. QEMU and host pressure tests remain semantic or regression evidence, not
 board-level throughput proof.
