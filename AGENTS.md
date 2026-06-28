@@ -134,6 +134,23 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
      - `Copyright <current year> Lukas Bower`
    - Do not credit OpenAI, Codex, or other tools in file headers.
 
+12. **Operator Performance Priority**
+   - When no authenticated `cohsh`/TCP console session is active, service
+     physical operator input first: serial, then local-seat USB keyboard, then
+     HDMI feedback when present.
+   - When an authenticated `cohsh`/TCP console session is active, treat it as
+     the primary control-plane shell and give it bounded response-flush priority,
+     but never starve serial/local-seat input, emergency diagnostics, or fatal
+     status.
+   - Under load, preserve command liveness and bounded `ACK`/`ERR`/`END`
+     behavior on every active operator surface. Scale back only nonessential
+     output: HDMI/network mirroring, redraws, routine progress breadcrumbs,
+     verbose telemetry, and large tails.
+   - Keep serial and local-seat operators informed with bounded state summaries:
+     `idle`, `busy`, `high-load`, or `overload`, plus the strongest current
+     blocker when known. Status output must be rate-limited and must not create
+     unbounded queues.
+
 ---
 
 ## Worker Bring-up

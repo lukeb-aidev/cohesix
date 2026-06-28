@@ -159,13 +159,13 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "run_demo.coh:0ab45aa7b6b1446fa2d043ff70377bb86685120c5f09d26fe715f3fdd39ad4de"
             .to_owned(),
-        "session_lifecycle.coh:6f80125a34b1b2bf7959f76615cf4cc349d1414957627310c238e9231623413b"
+        "session_lifecycle.coh:bb0ef5f00b4e0198b24c3a74df1860d779145625133c8c3832fa25a8cfc06b43"
             .to_owned(),
         "session_pool.coh:ba523237c1933fbce09df879e871e4269013b74b5b8f8a046adbd2de00e7395e"
             .to_owned(),
         "shard_1k.coh:d4ce5a6d7a8dff0b2d26382cdec8edc2486ac20b6766b6a51f009e811691620a"
             .to_owned(),
-        "sidecar_integration.coh:4cb5dcf403712defa9016f4bcc4bf27b891df6a1dce646dc304acf4b5f7cad74"
+        "sidecar_integration.coh:99262cacf0a62e67bef08920d9e71793ac09e3309bac15faa91fe9d795a6b0ea"
             .to_owned(),
         "smp_parity.coh:168c1785b657bd41644d1dd479619bac6f0ef6d82a9da774a4f7e08077420729"
             .to_owned(),

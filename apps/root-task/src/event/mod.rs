@@ -12733,7 +12733,10 @@ where
                     forwarded = matches!(self.session, Some(_));
                 }
             }
-            Command::Tail { path, lines } => {
+            Command::Tail {
+                path,
+                lines: _lines,
+            } => {
                 if self.ensure_worker_session(verb_label) {
                     let path_str = path.as_str();
                     if let Err(denial) = self.check_ticket_scope(path_str, TicketVerb::Read) {
@@ -12755,7 +12758,7 @@ where
                         {
                             let cursor_offset = self.ticket_cursor_offset(path_str).unwrap_or(0);
                             if path_str == "/log/queen.log" {
-                                stream_bytes = self.prepare_log_tail_pending_stream(lines);
+                                stream_bytes = self.prepare_log_tail_pending_stream(_lines);
                                 path_supported = true;
                             } else if path_str == "/proc/ingest/watch" {
                                 if let Some(bridge) = self.ninedoor.as_mut() {
@@ -12951,7 +12954,7 @@ where
                                     self.audit_ninedoor_err(sid, "CAT", path_str, err_msg.as_str());
                                     self.emit_ninedoor_refusal(verb_label, Some(path_str), &err);
                                 } else {
-                                    let stream_bytes = if log_path { 0 } else { data_bytes };
+                                    let stream_bytes = data_bytes;
                                     if let Err(denial) = self.check_ticket_bandwidth(stream_bytes) {
                                         self.record_ticket_denial(
                                             path_str,
@@ -16513,6 +16516,13 @@ mod tests {
         issuer.issue(claims).unwrap().encode().unwrap()
     }
 
+    fn command_path(value: &str) -> heapless::String<{ cohsh_core::MAX_PATH_LEN }> {
+        let mut path = heapless::String::new();
+        path.push_str(value)
+            .expect("test command path must fit MAX_PATH_LEN");
+        path
+    }
+
     fn unix_time_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -19717,6 +19727,68 @@ mod tests {
             .rfind(last_marker)
             .expect("last marker must be emitted");
         assert!(last < end, "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cat_queen_log_charges_retained_bytes_against_ticket_quota() {
+        let _root_guard = ReachableRootGuard::new(1);
+        log_buffer::append_log_line("[test] cat-queen-log-ticket-quota marker=retained");
+        let quota_bytes = log_buffer::export_cursor().bytes();
+        assert!(quota_bytes > 0);
+        let driver = LoopbackSerial::<16384>::new();
+        let serial = SerialPort::<_, 16384, 16384, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
+        pump.session = Some(SessionRole::Worker);
+        pump.session_ticket = Some("quota-test".to_owned());
+        pump.ticket_usage = Some(TicketUsage {
+            scopes: Vec::new(),
+            quotas: TicketQuotaState {
+                bandwidth_limit: Some(quota_bytes),
+                bandwidth_remaining: Some(quota_bytes),
+                cursor_resume_limit: None,
+                cursor_resume_remaining: None,
+                cursor_advance_limit: None,
+                cursor_advance_remaining: None,
+            },
+            cursor_offsets: BTreeMap::new(),
+        });
+
+        pump.handle_command(Command::Cat {
+            path: command_path("/log/queen.log"),
+        })
+        .expect("CAT dispatch must be infallible");
+        for _ in 0..128 {
+            pump.flush_pending_stream();
+            let _ = pump.serial_mut().driver_mut().drain_tx();
+            if pump.pending_stream.is_none() {
+                break;
+            }
+        }
+        assert!(pump.pending_stream.is_none());
+
+        pump.handle_command(Command::Cat {
+            path: command_path("/log/queen.log"),
+        })
+        .expect("CAT dispatch must be infallible");
+        let rendered = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("ERR CAT reason=quota path=/log/queen.log error=ELIMIT"),
+            "{rendered}"
+        );
     }
 
     #[cfg(feature = "kernel")]

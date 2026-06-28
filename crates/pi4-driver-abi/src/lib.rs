@@ -1263,42 +1263,56 @@ const fn driver_runtime_genet_result_clamp(value: u32, mask: u32) -> u32 {
     }
 }
 
+/// Role-specific GENET completion diagnostics before bit-packing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeGenetCompletionResultParts {
+    /// Free TX descriptors reported by the runtime.
+    pub tx_free: u16,
+    /// TX descriptors currently in flight.
+    pub tx_in_flight: u16,
+    /// Current runtime RX queue depth.
+    pub rx_queue_count: u8,
+    /// Runtime RX queue high-water depth.
+    pub rx_queue_high_water: u8,
+    /// Maximum RX frames drained by one runtime service turn.
+    pub rx_max_drained_per_turn: u8,
+    /// Whether any runtime service turn hit the RX drain-count budget.
+    pub rx_drain_budget_hit: bool,
+    /// Whether any runtime service turn hit the RX byte budget.
+    pub rx_byte_budget_hit: bool,
+    /// Whether the runtime RX queue overflowed.
+    pub rx_overflow_seen: bool,
+}
+
 /// Pack role-specific GENET completion diagnostics into a primitive result.
 #[must_use]
 pub const fn driver_runtime_genet_completion_result(
-    tx_free: u16,
-    tx_in_flight: u16,
-    rx_queue_count: u8,
-    rx_queue_high_water: u8,
-    rx_max_drained_per_turn: u8,
-    rx_drain_budget_hit: bool,
-    rx_byte_budget_hit: bool,
-    rx_overflow_seen: bool,
+    parts: DriverRuntimeGenetCompletionResultParts,
 ) -> u32 {
     DRIVER_RUNTIME_GENET_RESULT_PACKED
         | (driver_runtime_genet_result_clamp(
-            tx_in_flight as u32,
+            parts.tx_in_flight as u32,
             DRIVER_RUNTIME_GENET_RESULT_SIX_BIT_MASK,
         ) << DRIVER_RUNTIME_GENET_RESULT_TX_IN_FLIGHT_SHIFT)
         | (driver_runtime_genet_result_clamp(
-            tx_free as u32,
+            parts.tx_free as u32,
             DRIVER_RUNTIME_GENET_RESULT_SIX_BIT_MASK,
         ) << DRIVER_RUNTIME_GENET_RESULT_TX_FREE_SHIFT)
         | (driver_runtime_genet_result_clamp(
-            rx_queue_count as u32,
+            parts.rx_queue_count as u32,
             DRIVER_RUNTIME_GENET_RESULT_FIVE_BIT_MASK,
         ) << DRIVER_RUNTIME_GENET_RESULT_RX_QUEUE_COUNT_SHIFT)
         | (driver_runtime_genet_result_clamp(
-            rx_queue_high_water as u32,
+            parts.rx_queue_high_water as u32,
             DRIVER_RUNTIME_GENET_RESULT_FIVE_BIT_MASK,
         ) << DRIVER_RUNTIME_GENET_RESULT_RX_QUEUE_HIGH_WATER_SHIFT)
         | (driver_runtime_genet_result_clamp(
-            rx_max_drained_per_turn as u32,
+            parts.rx_max_drained_per_turn as u32,
             DRIVER_RUNTIME_GENET_RESULT_FIVE_BIT_MASK,
         ) << DRIVER_RUNTIME_GENET_RESULT_RX_MAX_DRAIN_SHIFT)
-        | ((rx_drain_budget_hit as u32) << DRIVER_RUNTIME_GENET_RESULT_RX_DRAIN_HIT_SHIFT)
-        | ((rx_byte_budget_hit as u32) << DRIVER_RUNTIME_GENET_RESULT_RX_BYTE_HIT_SHIFT)
-        | ((rx_overflow_seen as u32) << DRIVER_RUNTIME_GENET_RESULT_RX_OVERFLOW_SHIFT)
+        | ((parts.rx_drain_budget_hit as u32) << DRIVER_RUNTIME_GENET_RESULT_RX_DRAIN_HIT_SHIFT)
+        | ((parts.rx_byte_budget_hit as u32) << DRIVER_RUNTIME_GENET_RESULT_RX_BYTE_HIT_SHIFT)
+        | ((parts.rx_overflow_seen as u32) << DRIVER_RUNTIME_GENET_RESULT_RX_OVERFLOW_SHIFT)
 }
 
 /// Returns true when a GENET completion result uses the packed diagnostic form.
@@ -2412,7 +2426,17 @@ mod tests {
 
     #[test]
     fn genet_completion_result_packs_bounded_diagnostics() {
-        let result = driver_runtime_genet_completion_result(70, 69, 35, 34, 33, true, true, true);
+        let result =
+            driver_runtime_genet_completion_result(DriverRuntimeGenetCompletionResultParts {
+                tx_free: 70,
+                tx_in_flight: 69,
+                rx_queue_count: 35,
+                rx_queue_high_water: 34,
+                rx_max_drained_per_turn: 33,
+                rx_drain_budget_hit: true,
+                rx_byte_budget_hit: true,
+                rx_overflow_seen: true,
+            });
 
         assert!(driver_runtime_genet_result_is_packed(result));
         assert_eq!(
@@ -2439,7 +2463,17 @@ mod tests {
         assert!(driver_runtime_genet_result_rx_byte_budget_hit(result));
         assert!(driver_runtime_genet_result_rx_overflow_seen(result));
 
-        let result = driver_runtime_genet_completion_result(32, 1, 3, 8, 16, false, true, false);
+        let result =
+            driver_runtime_genet_completion_result(DriverRuntimeGenetCompletionResultParts {
+                tx_free: 32,
+                tx_in_flight: 1,
+                rx_queue_count: 3,
+                rx_queue_high_water: 8,
+                rx_max_drained_per_turn: 16,
+                rx_drain_budget_hit: false,
+                rx_byte_budget_hit: true,
+                rx_overflow_seen: false,
+            });
         assert_eq!(driver_runtime_genet_result_tx_free(result), 32);
         assert_eq!(driver_runtime_genet_result_tx_in_flight(result), 1);
         assert_eq!(driver_runtime_genet_result_rx_queue_count(result), 3);

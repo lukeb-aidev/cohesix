@@ -3173,22 +3173,31 @@ pub(crate) fn test_clear_driver_task_ring_progress_snapshot(contract: DriverTask
 }
 
 #[cfg(feature = "kernel")]
+fn current_driver_task_ring_request_for_slot(slot: &DriverTaskCommandSlot) -> Option<usize> {
+    let request = slot.request_seq.load(Ordering::Acquire);
+    (request != 0).then_some(request)
+}
+
+#[cfg(feature = "kernel")]
 pub(crate) fn current_driver_task_ring_request(contract: DriverTaskContract) -> Option<usize> {
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
-    let request = slot.request_seq.load(Ordering::Acquire);
-    (request != 0).then_some(request)
+    current_driver_task_ring_request_for_slot(slot)
+}
+
+#[cfg(feature = "kernel")]
+fn active_driver_task_ring_request_for_slot(slot: &DriverTaskCommandSlot) -> Option<usize> {
+    if slot.active.load(Ordering::Acquire) == 0 {
+        return None;
+    }
+    current_driver_task_ring_request_for_slot(slot)
 }
 
 #[cfg(feature = "kernel")]
 pub(crate) fn active_driver_task_ring_request(contract: DriverTaskContract) -> Option<usize> {
     let task_key = driver_task_contract_key(contract)?;
     let slot = slot_for_task_key(task_key)?;
-    if slot.active.load(Ordering::Acquire) == 0 {
-        return None;
-    }
-    let request = slot.request_seq.load(Ordering::Acquire);
-    (request != 0).then_some(request)
+    active_driver_task_ring_request_for_slot(slot)
 }
 
 #[cfg(feature = "kernel")]
@@ -7392,7 +7401,6 @@ fn driver_task_usb_resource_status_mirrors_to_hdmi(stage: &str, status: &str) ->
         || status == "no-endpoint"
         || status == "ring-missing"
         || status == "busy"
-        || status == "no-reply"
         || status == "poll-timeout"
         || status == "tx-no-reply"
         || status == "tx-submit-fail"
@@ -7402,8 +7410,12 @@ fn driver_task_usb_resource_status_mirrors_to_hdmi(stage: &str, status: &str) ->
     {
         return true;
     }
-    let _ = stage;
-    false
+    matches!(
+        (stage, status),
+        ("usb-engine-init", "ready")
+            | ("usb-keyboard-enumeration-resume", "device-addressed")
+            | ("usb-keyboard-first-report", "no-reply")
+    )
 }
 
 const fn driver_task_hdmi_progress_label(hot_path: DriverTaskHotPath) -> &'static str {
@@ -9579,6 +9591,60 @@ pub fn emit_boot_contract_proof() {
                 "owner-state-proven"
             } else {
                 "owner-state-missing"
+            },
+        );
+        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+
+        let spec = pi4_driver_task_runtime_image_spec(hot_path);
+        let counters = driver_task_counter_snapshot(contract);
+        let dma_pages = spec.region_pages(DriverTaskRuntimeRegionKind::Dma);
+        let mmio_pages = spec.region_pages(DriverTaskRuntimeRegionKind::Mmio);
+        let shared_pages = spec.region_pages(DriverTaskRuntimeRegionKind::SharedBuffer);
+        let cache_clean_ops = counters
+            .as_ref()
+            .map_or(0, |counters| counters.cache_clean_ops);
+        let cache_clean_bytes = counters
+            .as_ref()
+            .map_or(0, |counters| counters.cache_clean_bytes);
+        let cache_invalidate_ops = counters
+            .as_ref()
+            .map_or(0, |counters| counters.cache_invalidate_ops);
+        let cache_invalidate_bytes = counters
+            .as_ref()
+            .map_or(0, |counters| counters.cache_invalidate_bytes);
+        let dma_status = if present && spec.acceptance_eligible() {
+            "ready"
+        } else if !spec.acceptance_eligible() {
+            "spec-incomplete"
+        } else {
+            "owner-state-missing"
+        };
+        let mut line = String::<1024>::new();
+        let _ = write!(
+            line,
+            "DRIVER_TASK_DMA_PROOF contract={} hot_path={} status={} profile=bounded-no-iommu descriptor={} root_pointer={} owner={} mmio_pages={} dma_pages={} shared_pages={} bus_address_policy={} cache_policy=uncached-plus-root-maintenance cache_clean_ops={} cache_clean_bytes={} cache_invalidate_ops={} cache_invalidate_bytes={} proof_effect={}",
+            contract.name,
+            hot_path.as_str(),
+            dma_status,
+            if spec.acceptance_eligible() { "present" } else { "missing" },
+            if present { "no" } else { "unknown" },
+            if present { "linked-runtime" } else { "unproven" },
+            mmio_pages,
+            dma_pages,
+            shared_pages,
+            if dma_pages == 0 {
+                "zero-dma"
+            } else {
+                "hal-bounded-bus-address"
+            },
+            cache_clean_ops,
+            cache_clean_bytes,
+            cache_invalidate_ops,
+            cache_invalidate_bytes,
+            if present && spec.acceptance_eligible() {
+                "runtime-dma-proof-ready"
+            } else {
+                "runtime-dma-proof-red"
             },
         );
         crate::bootstrap::log::force_uart_line_raw(line.as_str());
@@ -13442,24 +13508,19 @@ mod tests {
     #[test]
     fn current_ring_request_reports_latest_sequence() {
         let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
-        let task_key = driver_task_contract_key(contract).expect("CYW43 task key");
-        let slot = slot_for_task_key(task_key).expect("CYW43 slot");
-        let previous = slot.request_seq.load(Ordering::Acquire);
-        let previous_active = slot.active.load(Ordering::Acquire);
+        assert!(driver_task_slot_for_contract(contract).is_some());
+        let slot = DriverTaskCommandSlot::new();
 
         slot.request_seq.store(73, Ordering::Release);
-        assert_eq!(current_driver_task_ring_request(contract), Some(73));
-        assert_eq!(active_driver_task_ring_request(contract), None);
+        assert_eq!(current_driver_task_ring_request_for_slot(&slot), Some(73));
+        assert_eq!(active_driver_task_ring_request_for_slot(&slot), None);
 
         slot.active.store(1, Ordering::Release);
-        assert_eq!(active_driver_task_ring_request(contract), Some(73));
+        assert_eq!(active_driver_task_ring_request_for_slot(&slot), Some(73));
 
         slot.request_seq.store(0, Ordering::Release);
-        assert_eq!(current_driver_task_ring_request(contract), None);
-        assert_eq!(active_driver_task_ring_request(contract), None);
-
-        slot.request_seq.store(previous, Ordering::Release);
-        slot.active.store(previous_active, Ordering::Release);
+        assert_eq!(current_driver_task_ring_request_for_slot(&slot), None);
+        assert_eq!(active_driver_task_ring_request_for_slot(&slot), None);
     }
 
     #[cfg(feature = "kernel")]

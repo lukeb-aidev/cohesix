@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Configure the worker-gpu crate dependencies and metadata.
+# Copyright 2026 Lukas Bower
 [package]
 name = "worker-gpu"
 version = "0.1.0"
@@ -7,6 +8,7 @@ edition = "2021"
 publish = false
 
 [dependencies]
+worker-heart = { path = "../worker-heart" }
 
 [target.'cfg(not(target_os = "none"))'.dependencies]
 anyhow = { workspace = true }

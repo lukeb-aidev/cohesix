@@ -72,7 +72,7 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(network["backend"], "bcmgenet-v5");
     assert_eq!(network["mode"], "dhcp");
     assert_eq!(network["interface"], "auto");
-    assert_eq!(network["dhcp"]["discover_timeout_ms"], 1000);
+    assert_eq!(network["dhcp"]["discover_timeout_ms"], 500);
     assert_eq!(network["dhcp"]["request_timeout_ms"], 1000);
     assert_eq!(network["dhcp"]["max_retries"], 4);
     let local_seat = &manifest["hw"]["local_seat"];

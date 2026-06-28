@@ -598,6 +598,11 @@ class GateSummary:
     driver_task_counter_tx_frames: int = 0
     driver_task_counter_rx_bytes: int = 0
     driver_task_counter_tx_bytes: int = 0
+    driver_task_dma_proofs: int = 0
+    driver_task_dma_blocker: str = "none"
+    pi4_runtime_dma_proof: str = "absent"
+    pi4_runtime_dma_proof_reason: str = "no-driver-task-runtime-proof"
+    pi4_runtime_dma_counter_proof: str = "absent"
     serial_output_tx_pending: str = "unknown"
     serial_output_interactive: str = "unknown"
     serial_output_deferred: int = 0
@@ -807,6 +812,11 @@ class GateSummary:
             "DRIVER_TASK_COUNTER_TX_FRAMES": self.driver_task_counter_tx_frames,
             "DRIVER_TASK_COUNTER_RX_BYTES": self.driver_task_counter_rx_bytes,
             "DRIVER_TASK_COUNTER_TX_BYTES": self.driver_task_counter_tx_bytes,
+            "DRIVER_TASK_DMA_PROOFS": self.driver_task_dma_proofs,
+            "DRIVER_TASK_DMA_BLOCKER": self.driver_task_dma_blocker,
+            "PI4_RUNTIME_DMA_PROOF": self.pi4_runtime_dma_proof,
+            "PI4_RUNTIME_DMA_PROOF_REASON": self.pi4_runtime_dma_proof_reason,
+            "PI4_RUNTIME_DMA_COUNTER_PROOF": self.pi4_runtime_dma_counter_proof,
             "SERIAL_OUTPUT_TX_PENDING": self.serial_output_tx_pending,
             "SERIAL_OUTPUT_INTERACTIVE": self.serial_output_interactive,
             "SERIAL_OUTPUT_DEFERRED": self.serial_output_deferred,
@@ -9625,7 +9635,42 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_resource_blocker,
         driver_task_resource_current_blocker,
     ) = summarize_driver_task_resource_init(event_list)
+    driver_task_dma_proofs, driver_task_dma_blocker = summarize_driver_task_dma_proofs(
+        event_list, driver_task_active_net, driver_task_active_net
+    )
     driver_task_counter_summary = summarize_driver_task_counters(event_list)
+    (
+        pi4_runtime_dma_proof,
+        pi4_runtime_dma_proof_reason,
+        pi4_runtime_dma_counter_proof,
+    ) = classify_pi4_runtime_dma_proof(
+        root_prompt_seen=root_prompt_seen,
+        usb_cold_boot_seen=usb_cold_boot_seen,
+        driver_task_dedicated_ready=driver_task_dedicated_ready,
+        driver_task_compatibility=driver_task_compatibility,
+        driver_task_substrate_ready=driver_task_substrate_ready,
+        driver_task_failed_count=driver_task_failed_count,
+        driver_task_capset_proof=driver_task_capset_proof,
+        driver_task_fault_proof=driver_task_fault_proof,
+        driver_task_revoke_proof=driver_task_revoke_proof,
+        driver_task_sched_proof=driver_task_sched_proof,
+        driver_task_affinity_proof=driver_task_affinity_proof,
+        driver_task_vspace_proof=driver_task_vspace_proof,
+        driver_task_pointer_free_ipc_proof=driver_task_pointer_free_ipc_proof,
+        driver_task_owner_state_proof=driver_task_owner_state_proof,
+        driver_task_ring_call_outstanding=driver_task_ring_call_outstanding,
+        driver_task_ring_call_timeout=driver_task_ring_call_timeout,
+        driver_task_bootstrap_deferred=driver_task_bootstrap_deferred,
+        driver_task_resource_blocker=driver_task_resource_blocker,
+        driver_task_resource_current_blocker=driver_task_resource_current_blocker,
+        driver_task_dma_proofs=driver_task_dma_proofs,
+        driver_task_dma_blocker=driver_task_dma_blocker,
+        timer_backend=timer_backend,
+        timer_clock_hz=timer_clock_hz,
+        timer_el0_counter=timer_el0_counter,
+        dummy_timer_seen=dummy_timer_seen,
+        driver_task_counter_summary=driver_task_counter_summary,
+    )
     output_pressure_summary = summarize_output_pressure(event_list)
     usb_keyboard_pressure_summary = summarize_usb_keyboard_pressure(event_list)
     usb_runtime_queue_summary = summarize_usb_runtime_queue(event_list)
@@ -9905,6 +9950,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_counter_tx_frames=driver_task_counter_summary.tx_frames,
         driver_task_counter_rx_bytes=driver_task_counter_summary.rx_bytes,
         driver_task_counter_tx_bytes=driver_task_counter_summary.tx_bytes,
+        driver_task_dma_proofs=driver_task_dma_proofs,
+        driver_task_dma_blocker=driver_task_dma_blocker,
+        pi4_runtime_dma_proof=pi4_runtime_dma_proof,
+        pi4_runtime_dma_proof_reason=pi4_runtime_dma_proof_reason,
+        pi4_runtime_dma_counter_proof=pi4_runtime_dma_counter_proof,
         serial_output_tx_pending=output_pressure_summary.serial_tx_pending,
         serial_output_interactive=output_pressure_summary.serial_interactive,
         serial_output_deferred=output_pressure_summary.serial_deferred,
@@ -10016,6 +10066,142 @@ def summarize_driver_task_resource_init(
     if current_blockers:
         current_blocker = next(reversed(current_blockers.values()))
     return len(resource_events), first_blocker, current_blocker
+
+
+def summarize_driver_task_dma_proofs(
+    events: Iterable[TraceEvent], selected_net: str, active_net: str
+) -> tuple[int, str]:
+    """Return ready DMA proof count and the first concrete DMA proof blocker."""
+
+    required = required_driver_task_owner_hot_paths(selected_net, active_net)
+    ready: set[str] = set()
+    blocker = "none"
+    for event in events:
+        if "driver_task_dma_proof" not in event.raw.lower():
+            continue
+        hot_path = classify_owner_state_hot_path(event.fields)
+        if hot_path is None:
+            if blocker == "none":
+                blocker = "unknown-hot-path"
+            continue
+        status = event.fields.get("status", "unknown").lower()
+        profile = event.fields.get("profile", "unknown").lower()
+        descriptor = event.fields.get("descriptor", "unknown").lower()
+        root_pointer = event.fields.get("root_pointer", "unknown").lower()
+        bus_policy = event.fields.get("bus_address_policy", "unknown").lower()
+        dma_pages = parse_hex_int(event.fields.get("dma_pages")) or 0
+        cache_policy = event.fields.get("cache_policy", "unknown").lower()
+        ready_line = (
+            status == "ready"
+            and profile == "bounded-no-iommu"
+            and descriptor == "present"
+            and root_pointer == "no"
+            and cache_policy == "uncached-plus-root-maintenance"
+            and (
+                (dma_pages == 0 and bus_policy == "zero-dma")
+                or (dma_pages > 0 and bus_policy == "hal-bounded-bus-address")
+            )
+        )
+        if ready_line:
+            ready.add(hot_path)
+        elif blocker == "none":
+            blocker = f"{hot_path}:{status}:{bus_policy}"
+    missing = sorted(required - ready)
+    if missing and blocker == "none":
+        blocker = f"missing:{missing[0]}"
+    return len(ready), blocker
+
+
+def classify_pi4_runtime_dma_proof(
+    *,
+    root_prompt_seen: bool,
+    usb_cold_boot_seen: bool,
+    driver_task_dedicated_ready: bool,
+    driver_task_compatibility: int,
+    driver_task_substrate_ready: bool,
+    driver_task_failed_count: int,
+    driver_task_capset_proof: bool,
+    driver_task_fault_proof: bool,
+    driver_task_revoke_proof: bool,
+    driver_task_sched_proof: bool,
+    driver_task_affinity_proof: bool,
+    driver_task_vspace_proof: bool,
+    driver_task_pointer_free_ipc_proof: bool,
+    driver_task_owner_state_proof: bool,
+    driver_task_ring_call_outstanding: int,
+    driver_task_ring_call_timeout: int,
+    driver_task_bootstrap_deferred: int,
+    driver_task_resource_blocker: str,
+    driver_task_resource_current_blocker: str,
+    driver_task_dma_proofs: int,
+    driver_task_dma_blocker: str,
+    timer_backend: str,
+    timer_clock_hz: int,
+    timer_el0_counter: str,
+    dummy_timer_seen: bool,
+    driver_task_counter_summary: DriverTaskCounterSummary,
+) -> tuple[str, str, str]:
+    """Classify Pi 4 runtime/DMA proof without inferring hardware success."""
+
+    runtime_checks = (
+        driver_task_dedicated_ready,
+        driver_task_substrate_ready,
+        driver_task_failed_count == 0,
+        driver_task_capset_proof,
+        driver_task_fault_proof,
+        driver_task_revoke_proof,
+        driver_task_sched_proof,
+        driver_task_affinity_proof,
+        driver_task_vspace_proof,
+        driver_task_pointer_free_ipc_proof,
+        driver_task_owner_state_proof,
+        driver_task_compatibility == 0,
+        driver_task_ring_call_outstanding == 0,
+        driver_task_ring_call_timeout == 0,
+        driver_task_bootstrap_deferred == 0,
+        driver_task_resource_blocker == "none",
+        driver_task_resource_current_blocker == "none",
+        driver_task_dma_blocker == "none",
+    )
+    proof_evidence_seen = (
+        driver_task_dedicated_ready
+        or driver_task_substrate_ready
+        or driver_task_failed_count != 0
+        or driver_task_capset_proof
+        or driver_task_fault_proof
+        or driver_task_revoke_proof
+        or driver_task_sched_proof
+        or driver_task_affinity_proof
+        or driver_task_vspace_proof
+        or driver_task_pointer_free_ipc_proof
+        or driver_task_owner_state_proof
+        or driver_task_compatibility != 0
+        or driver_task_ring_call_outstanding != 0
+        or driver_task_ring_call_timeout != 0
+        or driver_task_bootstrap_deferred != 0
+        or driver_task_resource_blocker != "none"
+        or driver_task_resource_current_blocker != "none"
+        or driver_task_dma_proofs != 0
+        or driver_task_counter_summary.snapshots != 0
+    )
+    if not proof_evidence_seen:
+        return "absent", "no-runtime-proof-lines", "absent"
+    if not all(runtime_checks):
+        return "diagnostic", "runtime-proof-incomplete", "diagnostic"
+
+    counter_qualified = (
+        timer_backend == "arch-counter"
+        and timer_clock_hz == 54_000_000
+        and timer_el0_counter == "vct"
+        and not dummy_timer_seen
+        and driver_task_counter_summary.snapshots > 0
+        and driver_task_counter_summary.invalid == 0
+    )
+    counter_state = "counter-qualified" if counter_qualified else "diagnostic"
+
+    if root_prompt_seen and usb_cold_boot_seen:
+        return "fresh-pi", "live-pi-owner-state", counter_state
+    return "qemu-or-stale-log", "missing-fresh-pi-boot-markers", counter_state
 
 
 def summarize_driver_task_frontiers(

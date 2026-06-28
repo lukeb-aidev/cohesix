@@ -288,6 +288,47 @@ impl DocFragments {
         .ok();
         writeln!(
             schema_md,
+            "- `worker_runtime.implementation_epoch`: `{}`",
+            manifest.worker_runtime.implementation_epoch
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `worker_runtime.cap_backed_authority`: `{}`",
+            manifest.worker_runtime.cap_backed_authority
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `worker_runtime.notification_lifecycle`: `{}`",
+            manifest.worker_runtime.notification_lifecycle
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `worker_runtime.scheduling.profile`: `{}`",
+            manifest.worker_runtime.scheduling.profile.as_str()
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `worker_runtime.scheduling.service_turn_budget`: `{}`",
+            manifest.worker_runtime.scheduling.service_turn_budget
+        )
+        .ok();
+        for role in &manifest.worker_runtime.roles {
+            writeln!(
+                schema_md,
+                "- `worker_runtime.roles.{}`: `implemented={} ticket_scope={} telemetry={}`",
+                role.role.as_str(),
+                role.implemented,
+                role.ticket_scope,
+                role.telemetry_path_template
+            )
+            .ok();
+        }
+        writeln!(
+            schema_md,
             "- `telemetry_ingest.max_segments_per_device`: `{}`",
             manifest.telemetry_ingest.max_segments_per_device
         )
@@ -1109,6 +1150,12 @@ impl DocFragments {
             schema_md,
             "- `cache.unify_instructions`: `{}`",
             manifest.cache.unify_instructions
+        )
+        .ok();
+        writeln!(
+            schema_md,
+            "- `dma.protection_profile`: `{}`",
+            manifest.dma.protection_profile.as_str()
         )
         .ok();
         writeln!(

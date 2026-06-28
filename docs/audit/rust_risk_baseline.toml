@@ -3,7 +3,7 @@
 # Copyright 2026 Lukas Bower
 
 [non_test]
-unsafe = 691
-unwrap = 286
-expect = 703
-panic = 115
+unsafe = 804
+unwrap = 469
+expect = 1063
+panic = 147

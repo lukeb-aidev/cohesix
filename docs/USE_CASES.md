@@ -280,17 +280,17 @@ The Python SDK (`tools/cohesix-py`) is now a first-class operator path for high-
 flowchart LR
   subgraph SITE["Edge Site (Factory / Store / MEC)"]
     subgraph HIVE["Cohesix Hive (one Queen, many Workers)"]
-      Q["Queen<br/>(root-task + NineDoor)<br/>/queen /proc /log"]:::queen
+      Q["Queen (root-task + NineDoor; /queen /proc /log)"]:::queen
       W1["Worker: sensors/PLC"]:::worker
       W2["Worker: CV camera ingest"]:::worker
       W3["Worker: app control loop"]:::worker
-      WG["Worker: gpu stub<br/>(in-VM, no CUDA)"]:::worker
+      WG["Worker: gpu stub (in-VM, no CUDA)"]:::worker
     end
 
     subgraph HOST["Host ecosystems (sidecars)"]
-      OT["OT protocol bridge<br/>(MODBUS/CAN/DNP3/IEC-104)"]:::sidecar
-      GPU["gpu-bridge-host<br/>CUDA/NVML stays here"]:::sidecar
-      STORE["Local storage / spool<br/>(ring buffers, batch upload)"]:::sidecar
+      OT["OT protocol bridge (MODBUS/CAN/DNP3/IEC-104)"]:::sidecar
+      GPU["gpu-bridge-host (CUDA/NVML stays here)"]:::sidecar
+      STORE["Local storage / spool (ring buffers, batch upload)"]:::sidecar
     end
 
     CAM["Cameras / Sensors"]:::ext
@@ -298,29 +298,29 @@ flowchart LR
     JET["Jetson / Edge GPU nodes"]:::ext
   end
 
-  CLOUD["Cloud / HQ<br/>(Ops + Registry + Analytics)"]:::cloud
-  OPS["Operator / NOC<br/>cohsh or GUI client"]:::ext
+  CLOUD["Cloud / HQ (Ops + Registry + Analytics)"]:::cloud
+  OPS["Operator / NOC (cohsh or GUI client)"]:::ext
 
   %% flows
-  OPS -->|"cohsh attach<br/>(console or Secure9P)"| Q
+  OPS -->|"cohsh attach (console or Secure9P)"| Q
   CAM -->|"telemetry/video"| W2
   PLC -->|"fieldbus"| OT
-  OT -->|"mirrored files<br/>into namespace"| Q
-  W1 -->|"append telemetry<br/>/shard/<label>/worker/<id>/telemetry"| Q
-  W2 -->|"append summaries<br/>/shard/<label>/worker/<id>/telemetry"| Q
+  OT -->|"mirrored files into namespace"| Q
+  W1 -->|"append telemetry to /shard/<label>/worker/<id>/telemetry"| Q
+  W2 -->|"append summaries to /shard/<label>/worker/<id>/telemetry"| Q
   W3 -->|"control + status"| Q
 
-  Q -->|"ticketed orchestration<br/>/queen/ctl"| W1
-  Q -->|"ticketed orchestration<br/>/queen/ctl"| W2
-  Q -->|"ticketed orchestration<br/>/queen/ctl"| W3
+  Q -->|"ticketed orchestration via /queen/ctl"| W1
+  Q -->|"ticketed orchestration via /queen/ctl"| W2
+  Q -->|"ticketed orchestration via /queen/ctl"| W3
   Q -->|"lease + job via /gpu/*"| WG
-  WG -->|"append job descriptors<br/>/gpu/<id>/job"| Q
+  WG -->|"append job descriptors to /gpu/<id>/job"| Q
 
-  GPU -->|"publishes provider nodes<br/>/gpu/<id>/*"| Q
-  JET -->|"CUDA workloads<br/>host-side"| GPU
+  GPU -->|"publishes provider nodes under /gpu/<id>/*"| Q
+  JET -->|"CUDA workloads host-side"| GPU
 
-  Q -->|"append-only logs<br/>/log/*"| Q
-  Q -->|"batch export / uplink<br/>(protocol outside TCB)"| STORE
+  Q -->|"append-only logs under /log/*"| Q
+  Q -->|"batch export / uplink (protocol outside TCB)"| STORE
   STORE -->|"durable batch upload"| CLOUD
 
   classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
@@ -386,13 +386,13 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  USB["Portable media<br/>(update bundles)"]:::ext
+  USB["Portable media (update bundles)"]:::ext
   subgraph HIVE["Air-gapped site: Cohesix Hive"]
-    Q["Queen<br/>(root-task + NineDoor)"]:::queen
-    UPD["/updates/<epoch>/*<br/>(manifest + chunks)"]:::path
-    LOG["/log/*<br/>append-only audit"]:::path
+    Q["Queen (root-task + NineDoor)"]:::queen
+    UPD["/updates/<epoch>/* (manifest + chunks)"]:::path
+    LOG["/log/* append-only audit"]:::path
   end
-  OPS["Operator<br/>cohsh"]:::ext
+  OPS["Operator cohsh"]:::ext
   HOST["Host cas-tool"]:::sidecar
 
   USB -->|"ingest bundle"| HOST
@@ -450,18 +450,18 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  REG["Model registry bridge (host sidecar)<br/>CAS + signatures"]:::sidecar
+  REG["Model registry bridge (host sidecar; CAS + signatures)"]:::sidecar
   subgraph HIVE["Cohesix Hive"]
-    Q["Queen<br/>(root-task + NineDoor)"]:::queen
-    POL["/policy/*<br/>(only signed by X)<br/>allowlist/denylist"]:::path
-    MODELS["/models/*<br/>(content addressed)"]:::path
-    DEP["/gpu/models/active<br/>(pointer to model id)"]:::path
-    BOOT["/proc/boot<br/>(provenance, measurements)"]:::path
-    LOG["/log/*<br/>append-only audit"]:::path
-    W["Workers consume model ref<br/>(no unsigned blobs)"]:::worker
+    Q["Queen (root-task + NineDoor)"]:::queen
+    POL["/policy/* (signed allowlist/denylist)"]:::path
+    MODELS["/models/* (content addressed)"]:::path
+    DEP["/gpu/models/active (pointer to model id)"]:::path
+    BOOT["/proc/boot (provenance, measurements)"]:::path
+    LOG["/log/* append-only audit"]:::path
+    W["Workers consume model ref (no unsigned blobs)"]:::worker
   end
 
-  OPS["Operator / CI<br/>cohsh"]:::ext
+  OPS["Operator / CI cohsh"]:::ext
 
   REG -->|"publish signed model"| MODELS
   OPS -->|"update policy bundle"| POL
@@ -469,7 +469,7 @@ flowchart LR
   DEP -->|"validated by policy"| Q
   Q -->|"audit writes"| LOG
   Q -->|"expose boot + model provenance"| BOOT
-  W -->|"fetch by id<br/>verify via policy"| MODELS
+  W -->|"fetch by id and verify via policy"| MODELS
 
   classDef queen fill:#f7fbff,stroke:#2b6cb0,stroke-width:1px;
   classDef worker fill:#f0fdf4,stroke:#15803d,stroke-width:1px;

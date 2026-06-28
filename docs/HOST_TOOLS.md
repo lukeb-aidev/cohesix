@@ -850,19 +850,19 @@ Figure 1: Policy-gated control writes (`/queen/ctl`)
 flowchart TD
   A["coh / cohsh / hive-gateway"] --> B["TCP console (single client)"]
   B --> C["NineDoor Secure9P"]
-  C --> D{"Policy gating enabled?<br/>/policy/rules present"}
+  C --> D{"Policy gating enabled? /policy/rules present"}
   D -- "No" --> E["Write /queen/ctl accepted"]
-  D -- "Yes" --> F{"Approval queued?<br/>/actions/queue"}
+  D -- "Yes" --> F{"Approval queued? /actions/queue"}
   F -- "No" --> G["ERR ECHO reason=policy (EPERM)"]
-  F -- "Yes" --> H["Write accepted<br/>approval consumed (audit if enabled)"]
-  H --> I["Queen applies action<br/>(spawn/lease/export/etc.)"]
+  F -- "Yes" --> H["Write accepted; approval consumed (audit if enabled)"]
+  H --> I["Queen applies action (spawn/lease/export/etc.)"]
 ```
 
 Figure 2: Policy control apply/rollback (`/policy/ctl`)
 ```mermaid
 flowchart TD
   A["cohsh / hive-gateway / REST client"] --> B["ECHO /policy/ctl (apply/rollback)"]
-  B --> C["Policy control validation<br/>(bounds, schema, hash)"]
+  B --> C["Policy control validation (bounds, schema, hash)"]
   C --> D["Policy state updated"]
   D --> E["/policy/preflight/* reflects queued/consumed approvals"]
   D --> F["/proc/pressure/policy exposes pressure"]
@@ -876,7 +876,7 @@ flowchart TD
     L1["QEMU running (TCP console)"] --> L2["gpu-bridge-host --publish"]
     L2 --> L3["/gpu namespace populated"]
     L3 --> L4["coh gpu list/lease"]
-    L4 --> L5["coh run requires active lease<br/>/gpu/<id>/lease"]
+    L4 --> L5["coh run requires active lease via /gpu/<id>/lease"]
     L1 --> L6["host-sidecar-bridge --watch/--provider ..."]
     L6 --> L7["/host namespace populated"]
     L7 --> L8["cohsh / coh / hive-gateway reads /host/*"]
@@ -885,7 +885,7 @@ flowchart TD
   end
   subgraph Mock["Mock (in-process backend)"]
     M1["coh --mock / cohsh --transport mock"] --> M2["No QEMU or TCP console used"]
-    M2 --> M3["gpu-bridge-host --mock --list<br/>drives mock GPU data"]
+    M2 --> M3["gpu-bridge-host --mock --list drives mock GPU data"]
   end
 ```
 

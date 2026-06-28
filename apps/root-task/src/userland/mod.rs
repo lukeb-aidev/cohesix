@@ -1041,7 +1041,42 @@ impl BootstrapMessageHandler for UserlandBootstrapHandler {
         } else {
             log::debug!("[audit] {}", summary.as_str());
         }
+        if let Ok(observation) = crate::worker_authority::observe_endpoint_badge(message.badge) {
+            let mut worker_summary = HeaplessString::<160>::new();
+            let _ = write!(
+                worker_summary,
+                "[worker-ipc] action={} role={} epoch={} badge=0x{badge:016x}",
+                worker_endpoint_action_label(observation.action),
+                worker_role_label(observation.role),
+                observation.epoch,
+                badge = observation.badge
+            );
+            audit.info(worker_summary.as_str());
+            log::debug!("[audit] {}", worker_summary.as_str());
+        }
         crate::bootstrap::log::process_ep_payload(message.payload.as_slice(), audit);
+    }
+}
+
+fn worker_endpoint_action_label(
+    action: crate::worker_authority::WorkerEndpointAction,
+) -> &'static str {
+    match action {
+        crate::worker_authority::WorkerEndpointAction::Attach => "attach",
+        crate::worker_authority::WorkerEndpointAction::Telemetry => "telemetry",
+        crate::worker_authority::WorkerEndpointAction::LeaseRenewal => "lease-renewal",
+        crate::worker_authority::WorkerEndpointAction::Receipt => "receipt",
+        crate::worker_authority::WorkerEndpointAction::Revoke => "revoke",
+    }
+}
+
+fn worker_role_label(role: cohesix_ticket::Role) -> &'static str {
+    match role {
+        cohesix_ticket::Role::Queen => "queen",
+        cohesix_ticket::Role::WorkerHeartbeat => "worker-heartbeat",
+        cohesix_ticket::Role::WorkerGpu => "worker-gpu",
+        cohesix_ticket::Role::WorkerBus => "worker-bus",
+        cohesix_ticket::Role::WorkerLora => "worker-lora",
     }
 }
 

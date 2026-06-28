@@ -332,6 +332,10 @@ name = "trace_hex_dump_signature"
 path = "tests/trace_hex_dump_signature.rs"
 required-features = ["net-console"]
 
+[[test]]
+name = "worker_authority"
+path = "tests/worker_authority.rs"
+
 [build-dependencies]
 regex = "1.10"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

@@ -82,6 +82,10 @@ const MAX_DRIVER_RUNTIME_IMAGE_ID_LEN: usize = 64;
 const MAX_DRIVER_RUNTIME_IMAGE_PATH_LEN: usize = 160;
 const MAX_DRIVER_RUNTIME_ENTRY_SYMBOL_LEN: usize = 96;
 const MAX_DRIVER_RUNTIME_REGION_PAGES: u16 = 1024;
+const MAX_WORKER_RUNTIME_ROLES: usize = 8;
+const MAX_WORKER_RUNTIME_TEXT_LEN: usize = 96;
+const REQUIRED_IMPLEMENTED_WORKER_ROLES: [Role; 3] =
+    [Role::WorkerHeartbeat, Role::WorkerGpu, Role::WorkerLora];
 const REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS: [&str; 7] = [
     "serial-console",
     "usb-keyboard",
@@ -106,6 +110,8 @@ pub struct Manifest {
     pub hw: HardwareConfig,
     #[serde(default)]
     pub cache: CacheConfig,
+    #[serde(default)]
+    pub dma: DmaConfig,
     pub tickets: Vec<TicketSpec>,
     #[serde(default)]
     pub ticket_limits: TicketLimits,
@@ -123,6 +129,8 @@ pub struct Manifest {
     pub telemetry_ingest: TelemetryIngest,
     #[serde(default)]
     pub lifecycle: LifecycleConfig,
+    #[serde(default)]
+    pub worker_runtime: WorkerRuntimeConfig,
     #[serde(default)]
     pub control_plane: ControlPlaneConfig,
     #[serde(default)]
@@ -182,6 +190,7 @@ impl Manifest {
         }
         self.validate_hw()?;
         self.validate_cache()?;
+        self.validate_dma()?;
         self.validate_namespace_mounts()?;
         self.validate_sharding()?;
         self.validate_tickets()?;
@@ -190,6 +199,7 @@ impl Manifest {
         self.validate_sidecars()?;
         self.validate_telemetry()?;
         self.validate_lifecycle()?;
+        self.validate_worker_runtime()?;
         self.validate_control_plane()?;
         self.validate_observability()?;
         self.validate_ui_providers()?;
@@ -1402,6 +1412,57 @@ impl Manifest {
             self.cache.dma_clean || self.cache.dma_invalidate || self.cache.unify_instructions;
         if requested && !self.cache.kernel_ops {
             bail!("cache.kernel_ops must be true when cache maintenance is requested");
+        }
+        Ok(())
+    }
+
+    fn validate_dma(&self) -> Result<()> {
+        if self.profile_is_pi4_family()
+            && self.dma.protection_profile != DmaProtectionProfile::BoundedNoIommu
+        {
+            bail!(
+                "profile.name={} requires dma.protection_profile=bounded-no-iommu",
+                self.profile.name
+            );
+        }
+
+        match self.dma.protection_profile {
+            DmaProtectionProfile::None | DmaProtectionProfile::BoundedNoIommu => Ok(()),
+            DmaProtectionProfile::SmmuV2 | DmaProtectionProfile::SmmuV3 => {
+                bail!(
+                    "dma.protection_profile={} requires generated per-device DMA-domain state before isolation can be claimed",
+                    self.dma.protection_profile.as_str()
+                );
+            }
+        }
+    }
+
+    fn validate_worker_runtime(&self) -> Result<()> {
+        self.worker_runtime.validate()?;
+        for role in REQUIRED_IMPLEMENTED_WORKER_ROLES {
+            let Some(entry) = self.worker_runtime.role(role) else {
+                bail!(
+                    "worker_runtime.roles missing required role {}",
+                    role.as_str()
+                );
+            };
+            if !entry.implemented {
+                bail!(
+                    "worker_runtime.roles role={} must be implemented for Milestone 26c QEMU closure",
+                    role.as_str()
+                );
+            }
+        }
+        if self.worker_runtime.has_implemented_roles() {
+            if !self.worker_runtime.ticket_subject_required {
+                bail!("worker_runtime.ticket_subject_required must be true for implemented roles");
+            }
+            if !self.worker_runtime.endpoint_caps.required {
+                bail!("worker_runtime.endpoint_caps.required must be true for implemented roles");
+            }
+            if !self.worker_runtime.notifications.enabled {
+                bail!("worker_runtime.notifications.enabled must be true for implemented roles");
+            }
         }
         Ok(())
     }
@@ -2678,9 +2739,10 @@ impl Default for AffinityPolicy {
 #[cfg(test)]
 mod tests {
     use super::{
-        load_manifest, AffinityPolicy, AttestationPolicy, DriverAffinityPolicy,
-        DriverRuntimeImagePolicy, DriverRuntimeImageSpec, HardwareDevice, HardwareDeviceKind,
-        NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
+        load_manifest, AffinityPolicy, AttestationPolicy, DmaProtectionProfile,
+        DriverAffinityPolicy, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, HardwareDevice,
+        HardwareDeviceKind, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode,
+        WorkerSchedulingProfile,
     };
     use std::path::PathBuf;
 
@@ -2810,6 +2872,7 @@ mod tests {
         manifest.hw.network.static_ipv4.ip.clear();
         manifest.hw.network.static_ipv4.prefix_len = 0;
         manifest.hw.network.static_ipv4.gateway = None;
+        manifest.dma.protection_profile = DmaProtectionProfile::BoundedNoIommu;
         manifest.hw.devices = vec![
             HardwareDevice {
                 kind: HardwareDeviceKind::Uart,
@@ -2828,6 +2891,118 @@ mod tests {
             },
         ];
         manifest
+    }
+
+    #[test]
+    fn virt_profile_accepts_default_dma_profile() {
+        let manifest = fixture_manifest();
+        assert_eq!(manifest.dma.protection_profile, DmaProtectionProfile::None);
+        manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect("virt profile accepts no DMA protection profile claim");
+    }
+
+    #[test]
+    fn pi4_profile_requires_bounded_no_iommu_dma_profile() {
+        let mut manifest = base_pi4_manifest("pi4-uboot-aarch64");
+        manifest.dma.protection_profile = DmaProtectionProfile::None;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("Pi 4 DMA profile must be declared");
+        assert!(
+            err.to_string()
+                .contains("requires dma.protection_profile=bounded-no-iommu"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn smmu_dma_profile_requires_generated_domain_state() {
+        let mut manifest = fixture_manifest();
+        manifest.dma.protection_profile = DmaProtectionProfile::SmmuV3;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("SMMU isolation needs generated domain state");
+        assert!(
+            err.to_string()
+                .contains("requires generated per-device DMA-domain state"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_runtime_requires_implemented_26c_roles() {
+        let mut manifest = fixture_manifest();
+        let heartbeat = manifest
+            .worker_runtime
+            .roles
+            .iter_mut()
+            .find(|entry| entry.role == super::Role::WorkerHeartbeat)
+            .expect("heartbeat role");
+        heartbeat.implemented = false;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("heartbeat implementation is required");
+        assert!(
+            err.to_string().contains("worker-heartbeat"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_runtime_rejects_metadata_only_authority() {
+        let mut manifest = fixture_manifest();
+        manifest.worker_runtime.endpoint_caps.required = false;
+        manifest.worker_runtime.cap_backed_authority = false;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("implemented workers require endpoint caps");
+        assert!(
+            err.to_string()
+                .contains("endpoint_caps.required must be true"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn worker_runtime_rejects_duplicate_worker_badges() {
+        let mut manifest = fixture_manifest();
+        manifest.worker_runtime.notifications.revoke_badge =
+            manifest.worker_runtime.endpoint_caps.attach_badge_base;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("badge overlap must fail");
+        assert!(
+            err.to_string().contains("overlaps another badge"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn non_mcs_worker_runtime_must_not_claim_mcs_evidence() {
+        let mut manifest = fixture_manifest();
+        manifest.worker_runtime.scheduling.profile = WorkerSchedulingProfile::NonMcs;
+        manifest.worker_runtime.scheduling.consumed_budget_evidence = true;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("non-MCS evidence claim must fail");
+        assert!(
+            err.to_string().contains("non-mcs profile must not claim"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn mcs_worker_runtime_requires_budget_and_timeout_evidence() {
+        let mut manifest = fixture_manifest();
+        manifest.worker_runtime.scheduling.profile = WorkerSchedulingProfile::Mcs;
+        let err = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("MCS budget fields are required");
+        assert!(
+            err.to_string().contains("MCS profile requires"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -3431,6 +3606,425 @@ pub struct CacheConfig {
     pub dma_clean: bool,
     pub dma_invalidate: bool,
     pub unify_instructions: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DmaProtectionProfile {
+    #[default]
+    None,
+    BoundedNoIommu,
+    SmmuV2,
+    SmmuV3,
+}
+
+impl DmaProtectionProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::BoundedNoIommu => "bounded-no-iommu",
+            Self::SmmuV2 => "smmu-v2",
+            Self::SmmuV3 => "smmu-v3",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DmaConfig {
+    pub protection_profile: DmaProtectionProfile,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WorkerRuntimeConfig {
+    pub implementation_epoch: u32,
+    pub max_workers: u16,
+    pub ticket_subject_required: bool,
+    pub cap_backed_authority: bool,
+    pub notification_lifecycle: bool,
+    pub roles: Vec<WorkerRoleRuntime>,
+    pub endpoint_caps: WorkerEndpointCapConfig,
+    pub notifications: WorkerNotificationConfig,
+    pub scheduling: WorkerSchedulingConfig,
+}
+
+impl WorkerRuntimeConfig {
+    fn validate(&self) -> Result<()> {
+        if self.implementation_epoch == 0 {
+            bail!("worker_runtime.implementation_epoch must be > 0");
+        }
+        if self.max_workers == 0 {
+            bail!("worker_runtime.max_workers must be > 0");
+        }
+        if self.roles.is_empty() {
+            bail!("worker_runtime.roles must not be empty");
+        }
+        if self.roles.len() > MAX_WORKER_RUNTIME_ROLES {
+            bail!(
+                "worker_runtime.roles contains {} entries, max {}",
+                self.roles.len(),
+                MAX_WORKER_RUNTIME_ROLES
+            );
+        }
+        let mut seen = BTreeSet::new();
+        for role in &self.roles {
+            role.validate()?;
+            if !seen.insert(role.role.as_str()) {
+                bail!(
+                    "worker_runtime.roles contains duplicate role {}",
+                    role.role.as_str()
+                );
+            }
+        }
+        self.endpoint_caps.validate()?;
+        self.notifications.validate()?;
+        self.scheduling.validate()?;
+        if self.cap_backed_authority != self.endpoint_caps.required {
+            bail!("worker_runtime.cap_backed_authority must match worker_runtime.endpoint_caps.required");
+        }
+        if self.notification_lifecycle != self.notifications.enabled {
+            bail!("worker_runtime.notification_lifecycle must match worker_runtime.notifications.enabled");
+        }
+        let mut badges = BTreeSet::new();
+        for (name, badge) in self.endpoint_caps.badge_entries() {
+            if badge == 0 {
+                bail!("worker_runtime.endpoint_caps.{name} must be non-zero");
+            }
+            if !badges.insert(badge) {
+                bail!("worker_runtime endpoint badge 0x{badge:x} is duplicated");
+            }
+        }
+        let badge_span = self.endpoint_caps.badge_span()?;
+        let mut ranges = Vec::<(&'static str, u64, u64)>::new();
+        for (name, base) in self.endpoint_caps.badge_entries() {
+            let end = base
+                .checked_add(badge_span.saturating_sub(1))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("worker_runtime.endpoint_caps.{name} range overflows")
+                })?;
+            for (seen_name, seen_start, seen_end) in &ranges {
+                if base <= *seen_end && end >= *seen_start {
+                    bail!(
+                        "worker_runtime.endpoint_caps.{} range overlaps {}",
+                        name,
+                        seen_name
+                    );
+                }
+            }
+            ranges.push((name, base, end));
+        }
+        for (name, badge) in self.notifications.badge_entries() {
+            if badge == 0 {
+                bail!("worker_runtime.notifications.{name} must be non-zero");
+            }
+            if !badges.insert(badge) {
+                bail!("worker_runtime notification badge 0x{badge:x} overlaps another badge");
+            }
+            for (range_name, start, end) in &ranges {
+                if badge >= *start && badge <= *end {
+                    bail!(
+                        "worker_runtime.notifications.{} overlaps endpoint range {}",
+                        name,
+                        range_name
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn role(&self, role: Role) -> Option<&WorkerRoleRuntime> {
+        self.roles.iter().find(|entry| entry.role == role)
+    }
+
+    fn has_implemented_roles(&self) -> bool {
+        self.roles.iter().any(|role| role.implemented)
+    }
+}
+
+impl Default for WorkerRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            implementation_epoch: 26,
+            max_workers: 8,
+            ticket_subject_required: true,
+            cap_backed_authority: true,
+            notification_lifecycle: true,
+            roles: default_worker_roles(),
+            endpoint_caps: WorkerEndpointCapConfig::default(),
+            notifications: WorkerNotificationConfig::default(),
+            scheduling: WorkerSchedulingConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WorkerRoleRuntime {
+    pub role: Role,
+    pub implemented: bool,
+    pub ticket_scope: String,
+    pub telemetry_path_template: String,
+    pub lease_path_template: String,
+    pub shutdown_policy: String,
+}
+
+impl WorkerRoleRuntime {
+    fn validate(&self) -> Result<()> {
+        validate_worker_runtime_text("ticket_scope", &self.ticket_scope)?;
+        validate_worker_runtime_text("telemetry_path_template", &self.telemetry_path_template)?;
+        validate_worker_runtime_text("lease_path_template", &self.lease_path_template)?;
+        validate_worker_runtime_text("shutdown_policy", &self.shutdown_policy)?;
+        if self.implemented && self.ticket_scope.is_empty() {
+            bail!(
+                "worker_runtime.roles role={} requires non-empty ticket_scope",
+                self.role.as_str()
+            );
+        }
+        if self.implemented && self.telemetry_path_template.is_empty() {
+            bail!(
+                "worker_runtime.roles role={} requires non-empty telemetry_path_template",
+                self.role.as_str()
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Default for WorkerRoleRuntime {
+    fn default() -> Self {
+        Self {
+            role: Role::WorkerHeartbeat,
+            implemented: false,
+            ticket_scope: String::new(),
+            telemetry_path_template: String::new(),
+            lease_path_template: String::new(),
+            shutdown_policy: "notification".to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WorkerEndpointCapConfig {
+    pub required: bool,
+    pub attach_badge_base: u64,
+    pub telemetry_badge_base: u64,
+    pub lease_badge_base: u64,
+    pub receipt_badge_base: u64,
+    pub revoke_badge_base: u64,
+    pub epoch_bits: u8,
+    pub role_bits: u8,
+}
+
+impl WorkerEndpointCapConfig {
+    fn validate(&self) -> Result<()> {
+        if self.required && self.epoch_bits == 0 {
+            bail!("worker_runtime.endpoint_caps.epoch_bits must be > 0 when endpoint caps are required");
+        }
+        if self.required && self.role_bits == 0 {
+            bail!("worker_runtime.endpoint_caps.role_bits must be > 0 when endpoint caps are required");
+        }
+        Ok(())
+    }
+
+    fn badge_entries(&self) -> [(&'static str, u64); 5] {
+        [
+            ("attach_badge_base", self.attach_badge_base),
+            ("telemetry_badge_base", self.telemetry_badge_base),
+            ("lease_badge_base", self.lease_badge_base),
+            ("receipt_badge_base", self.receipt_badge_base),
+            ("revoke_badge_base", self.revoke_badge_base),
+        ]
+    }
+
+    fn badge_span(&self) -> Result<u64> {
+        let total_bits = u16::from(self.epoch_bits) + u16::from(self.role_bits);
+        if total_bits == 0 || total_bits >= 63 {
+            bail!("worker_runtime.endpoint_caps epoch_bits + role_bits must be in 1..63");
+        }
+        Ok(1u64 << total_bits)
+    }
+}
+
+impl Default for WorkerEndpointCapConfig {
+    fn default() -> Self {
+        Self {
+            required: true,
+            attach_badge_base: 0x260c_1000,
+            telemetry_badge_base: 0x260c_2000,
+            lease_badge_base: 0x260c_3000,
+            receipt_badge_base: 0x260c_4000,
+            revoke_badge_base: 0x260c_5000,
+            epoch_bits: 8,
+            role_bits: 4,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WorkerNotificationConfig {
+    pub enabled: bool,
+    pub revoke_badge: u64,
+    pub shutdown_badge: u64,
+    pub lease_expiry_badge: u64,
+    pub telemetry_pressure_badge: u64,
+    pub irq_badge: u64,
+}
+
+impl WorkerNotificationConfig {
+    fn validate(&self) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        Ok(())
+    }
+
+    fn badge_entries(&self) -> [(&'static str, u64); 5] {
+        [
+            ("revoke_badge", self.revoke_badge),
+            ("shutdown_badge", self.shutdown_badge),
+            ("lease_expiry_badge", self.lease_expiry_badge),
+            ("telemetry_pressure_badge", self.telemetry_pressure_badge),
+            ("irq_badge", self.irq_badge),
+        ]
+    }
+}
+
+impl Default for WorkerNotificationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            revoke_badge: 0x260c_6000,
+            shutdown_badge: 0x260c_7000,
+            lease_expiry_badge: 0x260c_8000,
+            telemetry_pressure_badge: 0x260c_9000,
+            irq_badge: 0x260c_a000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerSchedulingProfile {
+    #[default]
+    NonMcs,
+    Mcs,
+}
+
+impl WorkerSchedulingProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NonMcs => "non-mcs",
+            Self::Mcs => "mcs",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WorkerSchedulingConfig {
+    pub profile: WorkerSchedulingProfile,
+    pub priority: u8,
+    pub domain: u8,
+    pub service_turn_budget: u16,
+    pub mcs_budget_us: u32,
+    pub mcs_period_us: u32,
+    pub timeout_endpoint_badge: u64,
+    pub consumed_budget_evidence: bool,
+}
+
+impl WorkerSchedulingConfig {
+    fn validate(&self) -> Result<()> {
+        match self.profile {
+            WorkerSchedulingProfile::NonMcs => {
+                if self.service_turn_budget == 0 {
+                    bail!("worker_runtime.scheduling.service_turn_budget must be > 0 for non-mcs profiles");
+                }
+                if self.mcs_budget_us != 0
+                    || self.mcs_period_us != 0
+                    || self.timeout_endpoint_badge != 0
+                    || self.consumed_budget_evidence
+                {
+                    bail!("worker_runtime.scheduling non-mcs profile must not claim MCS budget, timeout endpoint, or consumed-budget evidence");
+                }
+            }
+            WorkerSchedulingProfile::Mcs => {
+                if self.mcs_budget_us == 0 || self.mcs_period_us == 0 {
+                    bail!("worker_runtime.scheduling MCS profile requires mcs_budget_us and mcs_period_us");
+                }
+                if self.timeout_endpoint_badge == 0 || !self.consumed_budget_evidence {
+                    bail!("worker_runtime.scheduling MCS profile requires timeout endpoint badge and consumed-budget evidence");
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Default for WorkerSchedulingConfig {
+    fn default() -> Self {
+        Self {
+            profile: WorkerSchedulingProfile::NonMcs,
+            priority: 96,
+            domain: 0,
+            service_turn_budget: 64,
+            mcs_budget_us: 0,
+            mcs_period_us: 0,
+            timeout_endpoint_badge: 0,
+            consumed_budget_evidence: false,
+        }
+    }
+}
+
+fn default_worker_roles() -> Vec<WorkerRoleRuntime> {
+    vec![
+        WorkerRoleRuntime {
+            role: Role::WorkerHeartbeat,
+            implemented: true,
+            ticket_scope: "/worker".to_owned(),
+            telemetry_path_template: "/shard/<label>/worker/<id>/telemetry".to_owned(),
+            lease_path_template: String::new(),
+            shutdown_policy: "notification".to_owned(),
+        },
+        WorkerRoleRuntime {
+            role: Role::WorkerGpu,
+            implemented: true,
+            ticket_scope: "/gpu".to_owned(),
+            telemetry_path_template: "/shard/<label>/worker/<id>/telemetry".to_owned(),
+            lease_path_template: "/gpu/<id>/lease".to_owned(),
+            shutdown_policy: "notification".to_owned(),
+        },
+        WorkerRoleRuntime {
+            role: Role::WorkerBus,
+            implemented: false,
+            ticket_scope: "/bus".to_owned(),
+            telemetry_path_template: "/shard/<label>/worker/<id>/telemetry".to_owned(),
+            lease_path_template: String::new(),
+            shutdown_policy: "deferred".to_owned(),
+        },
+        WorkerRoleRuntime {
+            role: Role::WorkerLora,
+            implemented: true,
+            ticket_scope: "/lora".to_owned(),
+            telemetry_path_template: "/shard/<label>/worker/<id>/telemetry".to_owned(),
+            lease_path_template: "/lora/<scope>/lease".to_owned(),
+            shutdown_policy: "notification".to_owned(),
+        },
+    ]
+}
+
+fn validate_worker_runtime_text(name: &str, value: &str) -> Result<()> {
+    if value.len() > MAX_WORKER_RUNTIME_TEXT_LEN {
+        bail!(
+            "worker_runtime.{} exceeds max length {}",
+            name,
+            MAX_WORKER_RUNTIME_TEXT_LEN
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4695,7 +5289,7 @@ pub struct PolicyRule {
     pub target: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Role {
     Queen,

@@ -1306,6 +1306,39 @@ stage_driver_runtime_payload() {
     log "Staged Pi4 driver runtime payload at ${stage_dir_abs}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
 }
 
+write_pi4_runtime_dma_build_proof() {
+    local proof_path="${STAGE_DIR}/pi4-runtime-dma-proof.env"
+    local manifest_json="${GENERATED_CONFIG_DIR}/root_task_resolved.json"
+    local runtime_raw="${STAGE_DIR}/cohesix-driver-runtimes.cpio"
+    local runtime_uimg="${STAGE_DIR}/${DRIVER_RUNTIME_CPIO_STAGE_NAME}"
+    local staged_image="${STAGE_DIR}/${COHESIX_IMAGE_NAME}"
+    local timestamp
+
+    require_file "$manifest_json"
+    require_file "$runtime_raw"
+    require_file "$runtime_uimg"
+    require_file "$staged_image"
+
+    timestamp="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    {
+        printf "PI4_RUNTIME_DMA_PROOF=target-build\n"
+        printf "PI4_RUNTIME_DMA_PROOF_REASON=stage-only-no-live-serial\n"
+        printf "PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu\n"
+        printf "PI4_RUNTIME_DMA_COUNTER_PROOF=not-live\n"
+        printf "PI4_RUNTIME_DMA_PROOF_CREATED_AT_UTC=%s\n" "$timestamp"
+        printf "PI4_RUNTIME_DMA_MANIFEST=%s\n" "$manifest_json"
+        printf "PI4_RUNTIME_DMA_MANIFEST_SHA256=%s\n" "$(shasum -a 256 "$manifest_json" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_RUNTIME_CPIO=%s\n" "$runtime_raw"
+        printf "PI4_RUNTIME_DMA_RUNTIME_CPIO_SHA256=%s\n" "$(shasum -a 256 "$runtime_raw" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_RUNTIME_UIMAGE=%s\n" "$runtime_uimg"
+        printf "PI4_RUNTIME_DMA_RUNTIME_UIMAGE_SHA256=%s\n" "$(shasum -a 256 "$runtime_uimg" | awk '{print $1}')"
+        printf "PI4_RUNTIME_DMA_STAGED_IMAGE=%s\n" "$staged_image"
+        printf "PI4_RUNTIME_DMA_STAGED_IMAGE_SHA256=%s\n" "$(shasum -a 256 "$staged_image" | awk '{print $1}')"
+    } >"$proof_path"
+    require_file "$proof_path"
+    log "Wrote Pi4 runtime/DMA stage-only proof at ${proof_path}"
+}
+
 stage_sd_payload() {
     local mkimage_bin="$1"
     local sel4_image="${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
@@ -1334,6 +1367,7 @@ stage_sd_payload() {
         cp -f "${STAGE_DIR}/${COHESIX_LOGO_STAGE_NAME}" "${STAGE_DIR}/${BOOTSTD_LOGO_STAGE_NAME}"
     fi
     stage_driver_runtime_payload "$mkimage_bin"
+    write_pi4_runtime_dma_build_proof
     write_linux_wifi_debug_helpers
 
     cat > "${STAGE_DIR}/config.txt" <<EOF

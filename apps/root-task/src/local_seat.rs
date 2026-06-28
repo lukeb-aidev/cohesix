@@ -1056,7 +1056,7 @@ fn routine_hdmi_ready_log_visible(
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
     count <= LINKED_LOCAL_SEAT_HDMI_READY_VERBOSE_LIMIT
-        || count % LINKED_LOCAL_SEAT_HDMI_READY_SAMPLE_STRIDE == 0
+        || count.is_multiple_of(LINKED_LOCAL_SEAT_HDMI_READY_SAMPLE_STRIDE)
 }
 
 /// Return whether a display mirror miss should preserve the serial shell.

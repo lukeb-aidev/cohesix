@@ -18,6 +18,7 @@ DISK_LABEL="COHESIX"
 SERIAL_DEVICE="${COHESIX_PI4_SERIAL_DEVICE:-/dev/cu.usbserial-0001}"
 DEFAULT_LOG_PATH="/Users/lukasbower/pi4-serial-$(date +%Y%m%d-%H%M%S).log"
 LOG_PATH="${COHESIX_PI4_SERIAL_LOG:-${DEFAULT_LOG_PATH}}"
+RUNTIME_DMA_PROOF_PATH="${COHESIX_PI4_RUNTIME_DMA_PROOF:-}"
 BOOT_WAIT_SECONDS=12
 CONSOLE_READY_TIMEOUT_SECONDS=60
 CAPTURE_SECONDS=10
@@ -73,6 +74,11 @@ Options:
                              (default: /Users/lukasbower/pi4-serial-<timestamp>.log)
                              Active capture refuses existing paths; use
                              --normalize-only or --no-capture for existing logs.
+  --runtime-dma-proof-out <path>
+                             Write an env-style Pi runtime/DMA proof artifact
+                             after successful normalization. Defaults to a
+                             sibling file next to --log when driver-task proof
+                             is required.
   --boot-wait <seconds>      Delay before issuing console commands
                              (default: 12)
   --console-ready-timeout <seconds>
@@ -311,6 +317,8 @@ run_capture() {
 run_normalizer() {
     local -a args=("${PYTHON}" "${TRACE_NORMALIZER}" "${LOG_PATH}" "--gate-summary")
     local index
+    local output
+    local status
 
     require_file "${TRACE_NORMALIZER}"
     require_file "${LOG_PATH}"
@@ -530,6 +538,14 @@ run_normalizer() {
         args+=("--expect" "DRIVER_TASK_RING_CALL_OUTSTANDING=0")
         args+=("--expect" "DRIVER_TASK_RING_CALL_TIMEOUT=0")
         args+=("--expect" "DRIVER_TASK_BOOTSTRAP_DEFERRED=0")
+        if [[ "${require_sdio_proof}" -eq 1 ]]; then
+            args+=("--expect-min" "DRIVER_TASK_DMA_PROOFS=7")
+        else
+            args+=("--expect-min" "DRIVER_TASK_DMA_PROOFS=5")
+        fi
+        args+=("--expect" "DRIVER_TASK_DMA_BLOCKER=none")
+        args+=("--expect" "PI4_RUNTIME_DMA_PROOF=fresh-pi")
+        args+=("--expect" "PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified")
     fi
     if [[ "${REQUIRE_INPUT_RESPONSIVE}" -eq 1 ]]; then
         args+=("--expect" "SERIAL_RESPONSIVE_PROOF=yes")
@@ -548,7 +564,53 @@ run_normalizer() {
         args+=("--expect-not" "${NOT_EXPECTATIONS[$index]}")
     done
 
-    "${args[@]}"
+    set +e
+    output="$("${args[@]}")"
+    status=$?
+    set -e
+    printf '%s\n' "${output}"
+    if [[ "${status}" -ne 0 ]]; then
+        return "${status}"
+    fi
+    if [[ "${REQUIRE_DRIVER_TASK_PROOF}" -eq 1 ]]; then
+        write_runtime_dma_proof "${output}"
+    fi
+}
+
+runtime_dma_proof_path() {
+    if [[ -n "${RUNTIME_DMA_PROOF_PATH}" ]]; then
+        printf '%s\n' "${RUNTIME_DMA_PROOF_PATH}"
+        return 0
+    fi
+    printf '%s.runtime-dma-proof.env\n' "${LOG_PATH%.*}"
+}
+
+write_runtime_dma_proof() {
+    local summary="$1"
+    local proof_path
+    local build_proof="${ROOT_DIR}/out/pi4-sd/pi4-runtime-dma-proof.env"
+    proof_path="$(runtime_dma_proof_path)"
+    mkdir -p "$(dirname "${proof_path}")"
+    {
+        printf 'PI4_RUNTIME_DMA_PROOF_ARTIFACT_VERSION=1\n'
+        printf 'PI4_RUNTIME_DMA_SERIAL_LOG=%s\n' "${LOG_PATH}"
+        printf 'PI4_RUNTIME_DMA_MANIFEST_SOURCE=%s\n' "${MANIFEST_PATH}"
+        if [[ -n "${TEST_PLAN_STATE_DIR:-}" ]]; then
+            printf 'PI4_RUNTIME_DMA_TEST_PLAN_STATE_DIR=%s\n' "${TEST_PLAN_STATE_DIR}"
+        fi
+        if [[ -f "${build_proof}" ]]; then
+            printf 'PI4_RUNTIME_DMA_STAGE_BUILD_PROOF=%s\n' "${build_proof}"
+            printf 'PI4_RUNTIME_DMA_STAGE_BUILD_PROOF_SHA256=%s\n' "$(shasum -a 256 "${build_proof}" | awk '{print $1}')"
+        fi
+        while IFS= read -r line; do
+            case "${line}" in
+                PI4_RUNTIME_DMA_*|DRIVER_TASK_DMA_*|DRIVER_TASK_COUNTER_*|DRIVER_TASK_RESOURCE_*|DRIVER_TASK_RING_CALL_*|DRIVER_TASK_BOOTSTRAP_DEFERRED=*|DRIVER_TASK_ACTIVE_NET=*|DRIVER_TASK_OWNER_STATE_PROOF=*|DRIVER_TASK_POINTER_FREE_IPC_PROOF=*|DRIVER_TASK_VSPACE_PROOF=*|TIMER_BACKEND=*|TIMER_CLOCK_HZ=*|TIMER_EL0_COUNTER=*|DUMMY_TIMER_SEEN=*)
+                    printf '%s\n' "${line}"
+                    ;;
+            esac
+        done <<<"${summary}"
+    } >"${proof_path}"
+    log "runtime/DMA proof artifact: ${proof_path}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -582,6 +644,11 @@ while [[ $# -gt 0 ]]; do
         --log)
             require_arg "$1" "$#"
             LOG_PATH="$2"
+            shift 2
+            ;;
+        --runtime-dma-proof-out)
+            require_arg "$1" "$#"
+            RUNTIME_DMA_PROOF_PATH="$2"
             shift 2
             ;;
         --boot-wait)

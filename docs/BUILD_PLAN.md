@@ -107,7 +107,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26a](#26a) | Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation | Complete |
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Complete |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Not Started |
-| [26d](#26d) | seL4 15 Baseline Refresh + Reference Manual Realignment | Pending |
+| [26d](#26d) | seL4 15 Baseline Refresh + Reference/Performance Realignment | Pending |
 | [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
 | [27b](#27b) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
 | [27c](#27c) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Pending |
@@ -6921,7 +6921,7 @@ Deliverables:
 **Why now (reviewer trust):**
 Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-up evidence, and isolated runtime benchmark closure, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window after isolated runtime benchmark closure and before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
-**Current planning status:** Not Started. Milestones 26a and 26b are complete, so 26c is unblocked, but no 26c cleanup, refactor, target-qualified runner implementation, or closure evidence has started yet.
+**Current planning status:** In Progress / QEMU implementation closed, final batched validation pending. The target-qualified runner, QEMU worker/cap/notification/scheduling additions, generated drift guard, fresh QEMU build, QEMU Stage 01-05 evidence, fresh Pi 4 stage-only build, and runtime/DMA proof semantics have current evidence in `docs/audit/M26C_AGENT_HANDOFFS.md` and `docs/audit/M26C_AS_BUILT_BLOCKERS.md`. Full 26c milestone closure remains Pi 4-blocked until live target-qualified Pi 4 Stage 01-05 and runtime/DMA proof evidence exist; QEMU evidence must not be cited as board closure.
 
 **Non-negotiable constraints:**
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, console grammar, Secure9P, or release-behavior drift may hide under a "refactor", "cleanup", or "humanizing" label.
@@ -7604,11 +7604,11 @@ Deliverables:
 
 ---
 
-## Milestone 26d — seL4 15 Baseline Refresh + Reference Manual Realignment <a id="26d"></a>
+## Milestone 26d — seL4 15 Baseline Refresh + Reference/Performance Realignment <a id="26d"></a>
 [Milestones](#Milestones)
 
 **Why now (kernel truth):**
-Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 15.0.0, anchors manual alignment to the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)), proves the reopened 26a/26b driver-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions.
+Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 15.0.0, anchors manual alignment to the official seL4 Reference Manual v15.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-15.0.0.pdf)), proves the reopened 26a/26b driver-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions. Because a kernel refresh changes scheduler, syscall, timer, cache, and generated-artifact behavior that can move measured latency or throughput, 26d also owns a bounded benchmark revalidation and regression-tuning lane: compare historical-best, accepted 26b, first seL4 15, and post-tuning evidence before later milestones rely on the refreshed baseline.
 
 **Non-negotiable constraints:**
 - No further system-model change beyond the reopened 26a/26b driver-task baseline. Cohesix remains an upstream seL4, pure-Rust root-task authority system with hardware driver tasks; Microkit, CAmkES, and capDL loader adoption are explicitly out of scope for 26d.
@@ -7618,6 +7618,8 @@ Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM
 - Older manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 15 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
 - Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 15 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
 - The seL4 15 refresh must preserve the Pi 4 hardware-counter contract used by isolated runtime performance proof: `release-pi4` / `timers-arch-counter` builds expose only the read-only EL0 virtual counter (`KernelArmExportVCNTUser` / `CONFIG_EXPORT_VCNT_USER`), keep physical counter and EL0 timer-control exports disabled, and derive elapsed-time proof from refreshed `TIMER_CLOCK_HZ=54000000` generated headers. Kernel refresh work must not reclassify dummy-timer or physical-counter captures as valid latency evidence.
+- Performance tuning is permitted in 26d only when tied to a measured same-harness regression, regression-risk, or drift exposed by the seL4 15 refresh. Allowed tuning includes bounded scheduler/budget constants, driver-runtime service-turn cadence, cache-maintenance batching thresholds, TCP/REST gateway timeout plumbing, harness provenance/reporting fixes, and comparator hygiene. Tuning must preserve Secure9P semantics, ACK/ERR/END grammar, manifest authority, HAL-only physical-device authority, root/driver-task ownership boundaries, no-retry benchmark accounting, and the documented Pi 4 wired/GENET versus Wi-Fi proof split.
+- 26d tuning must not become service-bucket/core-local redesign, new protocol work, new namespace or telemetry grammar, relaxed error budgets, retry masking, root-owned physical-driver shortcuts, larger unbounded queues, or a reclassification of Wi-Fi stress diagnostics as production parity. Those remain reopened 26b, 27c, or later scoped work.
 - QEMU and Pi 4 target-qualified evidence must be regenerated on the refreshed kernel baseline before 26d can close.
 
 ### Prerequisite
@@ -7625,7 +7627,7 @@ Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM
 - Reopened Milestones **26a** and **26b** completed or explicitly scoped where their driver-task and benchmark artifacts are inputs to the kernel refresh; no isolated runtime performance assumption may be rewritten under the kernel-refresh label.
 
 ### Goal
-Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0 while preserving root-task authority plus the reopened 26a/26b hardware driver-task model, and prove zero operator-visible drift across QEMU and Pi 4.
+Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0 while preserving root-task authority plus the reopened 26a/26b hardware driver-task model, prove zero operator-visible drift across QEMU and Pi 4, and preserve or recover the accepted 26b REST/driver-runtime benchmark envelope when the refreshed kernel baseline exposes a bounded performance regression.
 
 ### Deliverables
 - **Kernel baseline refresh**
@@ -7653,6 +7655,12 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
   - Re-run generated-artifact guards, root-task checks/tests, QEMU bring-up, Pi 4 image build, and the full target-qualified Test Plan on the seL4 15 baseline.
   - Publish refreshed audit artifacts proving that operator-visible semantics remain unchanged, that the VM build remains `no_std`, and that Pi 4 latency/performance proof still uses the virtual-counter backend rather than dummy timers or physical-counter exports.
 
+- **Benchmark revalidation and bounded tuning**
+  - Archive a before/after benchmark ledger with four explicit lanes: historical top benchmark, accepted 26b baseline, first seL4 15 baseline before tuning, and final seL4 15 evidence after any tuning.
+  - Re-run the REST performance harness in the same-harness QEMU/Pi shape used by 26b, keeping raw direct `cohsh`/TCP proof, REST gateway overhead, QEMU semantic/capacity reference, wired/GENET production parity, and Wi-Fi research/diagnostic evidence separate.
+  - Permit only bounded tuning that preserves existing authority and protocol semantics; every performance fix must identify the moved layer as kernel/generated-artifact drift, root-task scheduling cadence, isolated driver-runtime service cadence, gateway/harness behavior, physical-target variance, or pre-existing 26b debt.
+  - Update `docs/BENCHMARKS.md` only for refreshed artifact indexes, verdict changes, or explicit non-blocking debt. Do not erase historical-best evidence or convert uncommitted local diagnostics into canonical proof without archived artifacts.
+
 ### Commands
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `scripts/check-generated.sh`
@@ -7667,6 +7675,11 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - `cargo check -p pi4-driver-runtime --target aarch64-unknown-none`
 - `scripts/cohesix-build-run.sh --sel4-build seL4/build --no-run --cargo-target aarch64-unknown-none --profile release --root-task-features cohesix-dev`
 - `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir seL4/build_UBOOT`
+- `python3 -m pytest -q tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-15-initial`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-15-initial`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-15-final`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-15-final`
 - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu`
 - `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4`
 
@@ -7677,12 +7690,15 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 15.0.0
 - Secure9P bounds, console grammar, manifest outputs, release semantics, and host/VM runtime boundaries remain unchanged unless separately documented as defects fixed in the same change.
 - Build artifacts and documentation no longer rely on an accidental `sel4test`-provided `domain_schedule.c` dependency for one-domain Cohesix configurations; any remaining dependency is explicit, justified, and documented.
 - Pi 4 refreshed evidence reports `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no`; any missing/mismatched counter export leaves isolated runtime latency proof red until fixed or explicitly scoped back to reopened 26a/26b acceptance.
+- 26d benchmark evidence includes the historical-best, accepted 26b, first seL4 15, and final seL4 15 lanes; any tuning is explained by layer, bounded by existing authority/protocol rules, and rechecked with the REST performance harness without retry masking or relaxed error budgets.
+- If final seL4 15 benchmark evidence remains below the accepted 26b envelope, the closure record classifies the gap as blocking regression, physical-target variance with evidence, pre-existing 26b debt, or explicitly deferred later-milestone work. Deferred work cannot be counted as 26d closure evidence for downstream milestones.
 - The carried seL4 manual/reference artifacts, if tracked in-repo, match the accepted kernel baseline or are explicitly relinked to the authoritative upstream 15.0.0 source.
 
 ### Compiler / docsystem touchpoints
 - `coh-rtc` outputs, docs snippets, and manifest fingerprints remain authoritative; 26d may update generators or schemas only when required by the seL4 15 baseline refresh, and any such change must be reflected in the same evidence set.
 - Pi 4 manifest-declared isolated driver runtime ABI/descriptors/images remain authoritative for driver-task bootstrap evidence during the kernel refresh; 26d may adapt them only for seL4 15 compatibility and must not reclassify runtime-spec acceptance or board-proof boundaries without reopened 26a/26b hardware acceptance evidence.
 - Root-task and linked-driver-runtime hardware-counter guards remain authoritative for performance proof during the kernel refresh. Generated seL4 headers and CMake/cache config must agree before `timers-arch-counter` evidence can satisfy 26d closure.
+- REST harness output, benchmark provenance fields, and `docs/BENCHMARKS.md` artifact indexes remain the source of truth for same-harness performance claims during the refresh. Any harness change made in 26d must improve provenance, strictness, or failure classification without changing the workload contract used for comparison.
 - `docs/TEST_PLAN.md`, `scripts/ci/test_plan_run.sh`, and target-qualified state-dir evidence remain the source of truth for QEMU/Pi 4 pass semantics during the kernel refresh.
 
 ### Atomic tasks
@@ -7740,6 +7756,29 @@ Deliverables:
 ```
 
 ```
+Title/ID: m26d-benchmark-revalidation-and-tuning
+Goal: Revalidate and, where needed, recover the accepted 26b REST/driver-runtime benchmark envelope on the seL4 15 baseline.
+Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, tests/test_pi4_compare_driver_models.py, docs/BENCHMARKS.md, out/bench/m26b-* artifacts, refreshed seL4 15 QEMU/Pi build artifacts, fresh Pi serial/pcap proof for the selected transport.
+Changes:
+  - docs/BENCHMARKS.md — record refreshed artifact indexes, before/after verdicts, and any explicitly classified non-blocking debt.
+  - scripts/rest_perf_harness.py + tests/test_rest_perf_harness.py — provenance/reporting or strictness fixes only when needed to compare the seL4 15 run against the accepted 26b workload without changing the workload contract.
+  - apps/root-task/src/**, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, or apps/hive-gateway/src/** — bounded tuning only where same-harness evidence points to a moved layer caused or exposed by the seL4 15 refresh.
+Commands:
+  - python3 -m pytest -q tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-15-initial
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-15-initial
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-15-final
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-15-final
+Checks:
+  - Historical top, accepted 26b, first seL4 15, and final seL4 15 lanes are all recorded with artifact paths, workload parameters, tool version/provenance, selected seL4 build, gateway/auth mode, QEMU SMP topology, target transport, and error-budget policy.
+  - QEMU/Pi comparisons reject stale or mismatched artifacts before any verdict; Pi evidence remains fresh, timer-qualified, and paired with raw TCP/cohsh proof for the selected transport.
+  - Tuning preserves Secure9P bounds, console grammar, manifest authority, no-retry failure accounting, HAL/driver-task ownership, and root-task no-std constraints.
+  - Wi-Fi remains a research/diagnostic lane with the documented worker envelope; production throughput parity still requires fresh wired/GENET evidence.
+Deliverables:
+  - Benchmark ledger and refreshed artifacts that make the seL4 15 performance delta reviewable before later milestones depend on the refreshed baseline.
+```
+
+```
 Title/ID: m26d-domain-schedule-debt-removal
 Goal: Remove or explicitly resolve stale legacy domain-schedule dependencies from Cohesix seL4 build configurations.
 Inputs: seL4/build_UBOOT/CMakeCache.txt, seL4/build*/generated artifacts, Pi 4 build scripts, seL4 15.0.0 upgrade notes.
@@ -7753,15 +7792,42 @@ Deliverables: documented and verified domain-schedule posture for Cohesix seL4 1
 
 ```
 Title/ID: m26d-full-regression-refresh
-Goal: Prove the seL4 15 baseline refresh preserves operator-visible behavior across QEMU and Pi 4.
-Inputs: refreshed generated artifacts, seL4 15 build trees, docs/TEST_PLAN.md, scripts/ci/test_plan_run.sh.
+Goal: Prove the seL4 15 baseline refresh preserves operator-visible behavior and accepted benchmark envelopes across QEMU and Pi 4.
+Inputs: refreshed generated artifacts, seL4 15 build trees, docs/TEST_PLAN.md, scripts/ci/test_plan_run.sh, m26d benchmark ledger.
 Changes:
   - docs/TEST_PLAN.md — update kernel-baseline references only where needed to match the refreshed evidence.
   - out/test-plan/m26d-qemu and out/test-plan/m26d-pi4 — target-qualified PASS evidence on the refreshed baseline.
-Commands: scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu
-Checks: QEMU and Pi 4 staged Test Plan runs are PASS with no undocumented drift.
-Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety for Cohesix.
+Commands:
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26d-pi4
+Checks: QEMU and Pi 4 staged Test Plan runs are PASS with no undocumented drift, and benchmark revalidation has either recovered the accepted 26b envelope or recorded a scoped blocker/defer decision that downstream milestones cannot count as satisfied evidence.
+Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety and performance continuity for Cohesix.
 ```
+
+---
+
+## Post-26d Benchmark Cadence (Milestones 27+) <a id="post-26d-benchmark-cadence"></a>
+[Milestones](#Milestones)
+
+26d establishes the refreshed seL4 15 performance baseline. Later milestones must use that evidence as the rolling comparison point, but they must not turn every feature into a full hardware benchmark gate. Benchmarking after 26d is tiered:
+
+- **Full same-harness benchmark gate:** required only when a milestone changes runtime scheduling, physical driver/runtime service, hot network paths, gateway broker behavior used by the canonical REST harness, or a new physical target. The run must compare against the latest accepted rolling baseline and archive QEMU/Pi or target-specific artifacts in `out/bench/` or `docs/bench/` as appropriate.
+- **Targeted microbenchmark gate:** required when a milestone adds bounded storage drains, namespace roots, read/write authorization checks, protocol projections, exporters, UI render loops, or evidence-pack processing that can add measurable overhead but does not change the physical network/runtime path.
+- **No runtime benchmark gate by default:** applies to documentation-only, verification-only, schema-only, read-only inspection, and pure conformance milestones. These milestones may measure CI/proof/tool runtime or bounded command latency, but they do not rerun Pi/QEMU throughput unless their changes land in a runtime or gateway hot path.
+
+Benchmark evidence must keep proof lanes separate: raw direct `cohsh`/TCP, REST/gateway overhead, QEMU semantic/capacity reference, Pi wired/GENET production parity, Pi Wi-Fi research/diagnostic evidence, storage/spool pressure, UI render cadence, and target-specific ENA/AWS proof are not interchangeable. Any claimed optimization must identify the moved layer and preserve Secure9P bounds, ACK/ERR/END grammar, manifest authority, HAL-only physical-device authority, no-retry accounting, and bounded queues.
+
+Cadence by milestone family:
+- **27 persistence:** targeted spool/settings pressure plus a small REST/status sanity benchmark only for profiles with persistence enabled.
+- **27b verification:** no runtime benchmark; track verification-gate runtime and proof reproducibility only.
+- **27c core-local scheduling:** full same-harness QEMU/Pi benchmark gate with service-bucket counters and fresh target evidence.
+- **28 read-only utilities:** no full benchmark; require bounded command latency for inspect/diff/attest over representative evidence packs.
+- **28b/28d gateway authority/protocol work:** gateway-focused latency/backpressure benchmarks for REST delegated writes, MCP resources/tools, and A2A task flows; full Pi hardware benchmark only if gateway results expose runtime-path regression.
+- **28b1/28c/28e:** targeted provider/exporter, AI-run-cost, or fault-recovery timing where the milestone changes those paths; no full Pi/QEMU throughput gate by default.
+- **28f UI workbench:** UI render/backlog benchmark gate for Live Hive, replay, and inactive-view polling behavior.
+- **29/29a field status:** bounded command-latency checks only.
+- **29b AI namespace:** namespace-scale microbenchmarks for high-churn job/run roots; no full hardware benchmark unless the namespace provider changes hot runtime paths.
+- **30 AWS/ENA:** new-target benchmark gates; single-queue first-link evidence is not peak performance, and peak ENA claims require archived EC2 evidence tied to generated queue and service-bucket policy.
 
 ---
 
@@ -7779,6 +7845,7 @@ Deliverables: target-qualified refreshed evidence proving seL4 15 upgrade safety
 - Persistence is exposed only through NineDoor nodes (file‑shaped, bounded).
 - `/proc` remains read-only observability. Milestone 27 must not introduce write-only or append-only controls under `/proc`; mutating spool/settings controls live under explicit role-scoped control roots.
 - Storage selection is profile-gated and role-selected. The default Pi 4 hardware profile uses a manifest-declared raw SD/MMC block region on the boot microSD card, separate from the FAT boot partition and separate from U-Boot-owned `cohesix.env` policy storage.
+- Persistence-enabled Pi 4 SD cards use a two-partition default layout: partition 1 is a 1 GiB FAT32 boot partition labeled by the flash script's `--disk-label` value (default `COHESIX`), and partition 2 is an unformatted raw M27 persistence region. The raw region has no filesystem label; host tooling may name or tag the partition `COHESIX-PERSIST` for operator visibility only. Flash tooling must check target SD size before erasing, fail closed when the card is too small, and leave any media beyond the manifest-declared persistence range unallocated/reserved unless a later profile explicitly opts into using the remainder.
 - Physical Pi 4 block-device service must use a manifest-declared isolated storage runtime. Root-task may admit HAL resources, publish region descriptors, submit bounded block service turns, validate records, and expose NineDoor state, but it must not contain a root-owned SD/MMC storage driver or direct steady-state SD/MMC MMIO path.
 - The Pi 4 CYW43 SDIO Wi-Fi transport is not a persistence backend. Its `sdio-host` role remains a CYW43 bus role, not a generic SD-card block role.
 - USB mass storage is not the Milestone 27 default path. It may be added only as a later optional removable-media profile after USB local-seat/xHCI ownership is hardware-proved and cannot be a boot-critical dependency.
@@ -7848,6 +7915,7 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 - Crash‑fault simulation tests for both stores (power loss at every write boundary).
 - Fuzz record decoder with strict size limits; reject malformed frames.
 - Golden fixture: known block image → expected `status/read/ack` behavior.
+- Targeted performance guard for persistence-enabled profiles: measure spool append/read/ack pressure, settings roundtrip latency, and a small REST/status sanity run before and after enabling VM-local persistence. This is a microbenchmark gate only; it must not be treated as a fresh 26b/26d same-harness hardware parity run unless persistence changes the active physical network/runtime path.
 - Regression pack additions:
   - `scripts/cohsh/spool_roundtrip.coh`
   - `scripts/cohsh/settings_roundtrip.coh`
@@ -7860,6 +7928,7 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 - `cargo test -p pi4-driver-runtime`
 - `cohsh --script scripts/cohsh/spool_roundtrip.coh`
 - `cohsh --script scripts/cohsh/settings_roundtrip.coh`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite status --runs 5 --log-dir out/bench --log-prefix m27-persistence-status-sanity`
 
 ### Checks (DoD)
 - Spool append/read/ack semantics are deterministic and bounded; invalid tail records after crash are ignored.
@@ -7871,6 +7940,7 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 - `/proc` remains read-only; spool append/ack writes are accepted only through documented role-scoped control paths.
 - VM vs Pi 4 boot profile semantics remain byte‑stable unless explicitly profile‑gated.
 - Regression pack passes unchanged; new tests are additive.
+- Persistence-enabled benchmark evidence shows bounded spool/settings latency and no material status-read regression against the accepted 26d rolling baseline; any full hardware throughput rerun is required only if the active network/runtime hot path changed.
 
 ### Compiler touchpoints
 - `coh-rtc` emits persistence limits (record size, max bytes, policy mode), settings bounds, profile storage declarations, and physical storage-runtime descriptors into manifest IR; docs import the generated snippets.
@@ -7892,6 +7962,25 @@ Checks:
   - Pi 4 admits `pi4-sdmmc-raw` only when a bounded raw region and isolated storage-runtime descriptor are declared, and rejects CYW43 SDIO, USB local-seat, FAT, root-task SD/MMC, or `cohesix.env` storage bindings.
 Deliverables:
   - Compiler-enforced persistence admission with docs snippets refreshed.
+
+Title/ID: m27-pi4-sd-partitioning
+Goal: Teach Pi 4 flash tooling to create the M27 boot-plus-raw-persistence SD layout without mounting or formatting the persistence region.
+Inputs: scripts/pi4-image-build.sh, docs/HARDWARE_BRINGUP.md, docs/BOOT_REFERENCE.md, persistence IR storage declarations.
+Changes:
+  - scripts/pi4-image-build.sh — add a persistence-aware partition planner and flasher path that works on macOS and Linux: inspect the target block-device size before any destructive operation, reject undersized media, create the default Pi-compatible partition table with partition 1 as a 1 GiB FAT32 `COHESIX` boot partition and partition 2 as an unformatted raw `COHESIX-PERSIST` role/partition sized from the M27 manifest declaration or conservative default cap, leave any tail outside the declared region unallocated/reserved, copy staged boot assets only to partition 1, and verify both partition geometry and boot-file hashes after flashing.
+  - scripts/pi4-image-build.sh — keep existing stage-only behavior unchanged and add a non-destructive dry-run/planner mode for CI that reports the selected partition table, start LBAs, sizes, labels/tags, host tool path (`diskutil` on macOS, `sfdisk`/`parted` plus `mkfs.vfat` on Linux), and the exact reason an SD target would be rejected.
+  - docs/HARDWARE_BRINGUP.md + docs/BOOT_REFERENCE.md — document the M27 SD layout, minimum-card-size policy, Mac/Linux host requirements, the fact that partition 2 has no filesystem, and the rule that U-Boot continues to load only from `mmc 0:1` / the FAT boot partition.
+  - tests/test_pi4_image_build_partitioning.py or an equivalent shell test — cover the dry-run planner for representative 4 GiB, 8 GiB, 16 GiB, and 32 GiB card sizes on macOS/Linux command profiles without touching real block devices.
+Commands:
+  - bash -n scripts/pi4-image-build.sh
+  - python3 -m pytest tests/test_pi4_image_build_partitioning.py
+Checks:
+  - Flash tooling never erases before the SD size, selected OS backend, FAT boot geometry, and raw persistence geometry have been validated.
+  - Partition 1 remains the only mounted/formatted partition and contains the staged boot assets with verified hashes.
+  - Partition 2 is never formatted as FAT/exFAT/ext/ext4, is never used for `cohesix.env`, and is emitted only as the manifest-declared raw region for `pi4-sdmmc-raw`.
+  - macOS and Linux dry-run planner output matches for the same byte-size inputs, apart from host command syntax.
+Deliverables:
+  - Cross-platform Pi 4 SD partitioning/flashing plan and implementation ready for M27 raw persistence admission.
 
 Title/ID: m27-block-hal
 Goal: Add bounded block-device plumbing for persistent regions without reintroducing root-owned physical storage drivers.
@@ -7958,13 +8047,16 @@ Inputs: scripts/cohsh/, tests/fixtures/.
 Changes:
   - scripts/cohsh/spool_roundtrip.coh — append/read/ack sequence.
   - scripts/cohsh/settings_roundtrip.coh — set/get + A/B markers.
+  - docs/BENCHMARKS.md — record persistence-enabled status/spool/settings microbenchmark artifacts without claiming fresh hardware throughput parity.
 Commands:
   - cohsh --script scripts/cohsh/spool_roundtrip.coh
   - cohsh --script scripts/cohsh/settings_roundtrip.coh
+  - python3 scripts/rest_perf_harness.py --mode perf --suite status --runs 5 --log-dir out/bench --log-prefix m27-persistence-status-sanity
 Checks:
   - Scripts pass unchanged; transcripts stable.
+  - Status/spool/settings latency stays bounded against the accepted 26d rolling baseline for persistence-enabled profiles, or the delta is classified before 27 closes.
 Deliverables:
-  - Regression fixtures committed and referenced in docs/TEST_PLAN.md.
+  - Regression fixtures and targeted persistence benchmark artifacts committed or archived and referenced in docs/TEST_PLAN.md.
 ```
 
 ## Milestone 27b — Formal Verification Baseline + Proof-Carrying Manifests <a id="27b"></a>
@@ -8248,6 +8340,7 @@ This milestone optimizes the runtime shape; it does not add user-visible capabil
 - Host-safe pressure tests validate mixed Secure9P, worker telemetry, driver-task, and spool-drain load without claiming Pi hardware throughput.
 - QEMU SMP tests prove semantic stability and contention reduction against the generated schedule evidence.
 - Pi 4 tests prove hardware throughput only with fresh logs that also separate flash proof, shell transport, USB/local-seat, Wi-Fi/GENET, HDMI, and SMP service-bucket evidence.
+- Full same-harness benchmark closure is required in this milestone because the runtime scheduling model changes: QEMU and Pi 4 REST harness evidence must compare 27c results against the accepted 26d rolling baseline, and every claimed improvement or regression must cite service-bucket counters plus target-qualified proof.
 
 ### Commands
 - `cargo test -p coh-rtc`
@@ -8256,6 +8349,8 @@ This milestone optimizes the runtime shape; it does not add user-visible capabil
 - `cargo test -p pi4-driver-runtime`
 - `scripts/check-generated.sh`
 - `scripts/ci/verification_gate.sh`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m27c-qemu-service-buckets`
+- `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m27c-pi4-service-buckets`
 - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27c-qemu-smp`
 - `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27c-pi4-smp`
 
@@ -8267,6 +8362,7 @@ This milestone optimizes the runtime shape; it does not add user-visible capabil
 - `smp activity` and `/proc/schedule/*` report bounded service-bucket counters with `cpu_pct=unavailable` unless a real kernel-backed utilization source exists.
 - Host-safe pressure tests pass and remain classified as semantic/regression evidence, not Pi hardware throughput proof.
 - QEMU and Pi 4 target-qualified Test Plan runs pass with no undocumented output drift; Pi 4 throughput claims cite fresh target evidence and keep USB/Wi-Fi/HDMI/shell proof lanes separate.
+- Same-harness REST benchmark artifacts show whether service buckets improved, preserved, or regressed the 26d rolling baseline; any tuning remains bounded by generated service-bucket policy and cannot relax backpressure or proof-lane separation.
 
 ### Compiler touchpoints
 - `coh-rtc` emits service-bucket tables beside existing affinity, worker/driver scheduling, driver-image, persistence, and proof-witness outputs.
@@ -8342,8 +8438,10 @@ Changes:
 Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m27c-qemu-smp
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m27c-pi4-smp
-Checks: Host pressure stays semantic-only; QEMU proves regression stability; Pi throughput claims require fresh target logs and separated acceptance lanes.
-Deliverables: Repeatable validation lanes for core-local SMP optimization.
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m27c-qemu-service-buckets
+  - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m27c-pi4-service-buckets
+Checks: Host pressure stays semantic-only; QEMU proves regression stability; Pi throughput claims require fresh target logs and separated acceptance lanes; same-harness REST artifacts compare service-bucket results to the 26d rolling baseline with service-bucket counters attached.
+Deliverables: Repeatable validation and benchmark lanes for core-local SMP optimization.
 ```
 
 
@@ -8532,6 +8630,7 @@ This command is binary by design and suitable for CI and compliance workflows.
 - Trace replay regression using the existing canonical trace fixtures
 - Attestation positive and negative cases
 - Audit ledger consistency checks across blockers, exceptions, findings, and risk baseline files
+- Bounded command-latency checks for `inspect`, `diff`, `attest`, and evidence-pack reads over representative live and offline artifacts. This is a host-tool microbenchmark gate, not a QEMU/Pi throughput rerun.
 - Tools must operate correctly against:
   - QEMU single-core
   - QEMU multicore
@@ -8546,6 +8645,7 @@ This command is binary by design and suitable for CI and compliance workflows.
 - Trace replay yields byte-identical ACK/ERR using the existing canonical trace format
 - Canonical evidence packs/bundles are sufficient for offline diagnosis
 - Audit blocker/risk ledgers agree with current generated artifacts and evidence-pack schema before Milestone 28b/28c tasks cite them.
+- Read-only operator-tool latency evidence stays bounded on representative artifacts and any regression is classified as parser, evidence-pack, transport, or artifact-size overhead before downstream tools depend on the shared core.
 - Documentation reflects as-built behavior
 
 ---
@@ -8580,6 +8680,16 @@ Changes:
 Commands: scripts/check-generated.sh && cargo test -p tests --test audit_ledgers
 Checks: Blockers, exceptions, findings, and risk baseline agree; stale audit snapshots cannot be cited as current closure evidence.
 Deliverables: Current, internally consistent audit ledgers for authority hardening and host-side AI milestones.
+
+Title/ID: m28-readonly-command-latency
+Goal: Add bounded latency coverage for read-only operator utilities without treating Milestone 28 as a full runtime benchmark gate.
+Inputs: apps/coh, tests/fixtures/traces/, representative evidence packs, docs/TEST_PLAN.md, docs/BENCHMARKS.md.
+Changes:
+  - apps/coh/tests/operator_latency.rs — deterministic fixture-backed checks for inspect, diff, attest, and evidence-pack read latency.
+  - docs/TEST_PLAN.md + docs/BENCHMARKS.md — classify the evidence as host-tool latency, separate from REST/QEMU/Pi throughput proof.
+Commands: cargo test -p coh --test operator_latency
+Checks: Representative artifact sizes stay within declared parse/read bounds; failures classify parser, evidence-pack, transport, or artifact-size overhead.
+Deliverables: Read-only operator utility latency evidence that later field and UI tools can cite without rerunning full hardware benchmarks.
 ```
 
 ## Milestone 28b — Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents <a id="28b"></a>
@@ -8752,6 +8862,17 @@ As-built leverage:
 
 ---
 
+### 9) Gateway authority performance guard
+**Purpose:** Prove delegated REST identity, idempotency, and writer-epoch fencing do not create hidden gateway backpressure or push operators toward unsafe retry masking.
+
+Implementation requirements:
+- Add a targeted gateway benchmark for read-only REST status, delegated mutating REST writes, duplicate-idempotency refusals, and stale-writer refusals.
+- Report p50/p95 latency, error/refusal counts, broker queue depth, backpressure responses, delegated-ticket cache behavior, and audit-line emission cost.
+- Compare against the accepted 26d rolling baseline for equivalent REST status reads and against a pre-28b local gateway authority baseline for write-path overhead.
+- This is a gateway/auth microbenchmark only. It must not be counted as fresh Pi hardware throughput proof unless the benchmark exposes a runtime-path regression that requires a full same-harness rerun.
+
+---
+
 ## Commands
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `cargo test -p hive-gateway`
@@ -8764,6 +8885,7 @@ As-built leverage:
 - `cargo test -p tests --test failover`
 - `cargo test -p coh-rtc`
 - `scripts/cohsh/run_regression_batch.sh`
+- `scripts/ci/gateway_perf_probe.sh --scenario delegated-rest-authority --state-dir out/bench/m28b-gateway-authority`
 
 ---
 
@@ -8782,6 +8904,7 @@ As-built leverage:
 - Generated profiles and docs do not claim full worker/driver cap-bundle authority or structured fault containment until Milestone 28e evidence exists.
 - Milestone 28c host-side AI control cannot be enabled in target profiles unless delegated REST identity, writer-epoch fencing, and audit/replay requirements are all active.
 - Regression pack passes unchanged in compatibility mode; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
+- Gateway authority benchmark evidence shows delegated REST identity, idempotency, writer-epoch refusal, and audit/replay emission stay bounded; any material status/read or write-path regression is classified before downstream MCP/A2A or AI host-control milestones depend on the gateway.
 
 ---
 
@@ -8914,6 +9037,20 @@ Checks:
   - Profiles cannot claim full worker/driver cap-bundle or structured fault lifecycle authority from 28b alone.
 Deliverables:
   - Honest dependency gate for 28c/28d/29b host actuation work and 28e VM authority closure.
+
+Title/ID: m28b-gateway-authority-performance
+Goal: Prove delegated REST identity, idempotency, writer-epoch fencing, and audit/replay emission stay bounded in the gateway path.
+Inputs: apps/hive-gateway, apps/host-ticket-agent, scripts/rest_perf_harness.py, docs/BENCHMARKS.md, docs/TEST_PLAN.md.
+Changes:
+  - scripts/ci/gateway_perf_probe.sh — targeted gateway benchmark scenarios for read-only status, delegated writes, duplicate-idempotency refusal, stale-writer refusal, and audit/replay emission cost.
+  - docs/BENCHMARKS.md + docs/TEST_PLAN.md — classify gateway authority benchmark evidence separately from Pi/QEMU throughput proof.
+Commands:
+  - scripts/ci/gateway_perf_probe.sh --scenario delegated-rest-authority --state-dir out/bench/m28b-gateway-authority
+Checks:
+  - Read/status latency, delegated write latency, refusal counts, broker queue depth, ticket-cache behavior, and audit emission cost remain bounded or are classified before 28c/28d depend on the gateway.
+  - Probe evidence preserves no-retry accounting and does not count as fresh Pi hardware throughput proof unless it exposes a runtime-path regression that triggers the full REST harness.
+Deliverables:
+  - Gateway authority performance ledger for downstream MCP/A2A and AI-host-control milestones.
 ```
 
 ---
@@ -9073,6 +9210,14 @@ Implementation requirements:
   - evidence-pack reconstruction path.
 - Release gates fail if public docs claim production coexistence for an ecosystem without registry, tests, packaging, identity/security posture, and evidence matrix entries.
 
+### 9) Provider/exporter performance guard
+**Purpose:** Prove provider conformance, read-visibility checks, identity mapping, and exporter projections remain bounded without turning coexistence validation into a full runtime throughput gate.
+
+Implementation requirements:
+- Add a targeted provider/exporter timing mode to the conformance runner for registry lookup, target validation, read-visibility refusal, identity-mapping refusal, receipt rendering, and Prometheus/OpenTelemetry/SIEM export over representative evidence packs.
+- Report per-provider p50/p95, refusal counts, exporter row/byte counts, and artifact-size bounds.
+- Compare against the accepted 26d rolling baseline only for shared REST/read status context; provider/exporter results are host-side coexistence evidence, not Pi hardware proof.
+
 **Commands**
 - `cargo test -p coh-rtc`
 - `cargo test -p host-ticket-agent`
@@ -9082,6 +9227,7 @@ Implementation requirements:
 - `python -m pytest tools/cohesix-py/tests/test_integrations.py`
 - `scripts/check-generated.sh`
 - `scripts/ci/provider_conformance_run.sh --matrix configs/provider_conformance.toml --state-dir out/provider-conformance/m28b1`
+- `scripts/ci/provider_conformance_run.sh --perf-only --matrix configs/provider_conformance.toml --state-dir out/bench/m28b1-provider-overhead`
 - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m28b1-coexistence`
 
 **Checks (Definition of Done)**
@@ -9094,6 +9240,7 @@ Implementation requirements:
 - Prometheus/OpenTelemetry/SIEM outputs are read-only, bounded, redacted, schema-versioned, and reconstructable from Cohesix evidence without becoming authority.
 - OT/industry sidecars remain host-only, read-only-first, and profile-gated; write-capable actions are refused unless explicitly admitted by provider policy and approval flow.
 - Evidence packs include provider registry, conformance matrix, identity-mapping refs, packaging profile, exporter schemas, and provider receipts.
+- Provider/exporter performance evidence shows registry lookup, validation/refusal, identity mapping, receipt rendering, and exporter projection remain bounded; material regressions are classified as host provider overhead, gateway/auth overhead, or evidence-pack size overhead before 28c/28d/29b depend on the coexistence registry.
 - `docs/USE_CASES.md`, `docs/HOST_TOOLS.md`, `docs/API_GUIDELINES.md`, `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and `docs/TEST_PLAN.md` describe support levels exactly as proven.
 
 **Compiler touchpoints**
@@ -9197,6 +9344,16 @@ Changes:
 Commands: scripts/ci/use_case_gate.sh && cargo test -p coh --test evidence_pack
 Checks: Release docs cannot claim production coexistence without matching generated policy, tests, deployment profile, and evidence reconstruction.
 Deliverables: Cohesix adoption claims stay honest and auditable.
+
+Title/ID: m28b1-provider-exporter-performance
+Goal: Add targeted provider/exporter timing evidence without requiring a full Pi/QEMU throughput benchmark.
+Inputs: configs/provider_conformance.toml, scripts/ci/provider_conformance_run.sh, docs/BENCHMARKS.md, docs/TEST_PLAN.md.
+Changes:
+  - scripts/ci/provider_conformance_run.sh — perf-only mode for registry lookup, provider validation/refusal, identity mapping, receipt rendering, and exporter projection over representative evidence packs.
+  - docs/BENCHMARKS.md + docs/TEST_PLAN.md — classify coexistence overhead separately from REST hardware performance.
+Commands: scripts/ci/provider_conformance_run.sh --perf-only --matrix configs/provider_conformance.toml --state-dir out/bench/m28b1-provider-overhead
+Checks: Provider/exporter timing stays bounded by generated limits and reports artifact-size context; failures classify host-provider, gateway/auth, or evidence-pack overhead.
+Deliverables: Provider/exporter overhead evidence for downstream AI and gateway protocol work.
 ```
 
 ## Outcome
@@ -9325,6 +9482,7 @@ Implementation requirements:
   - handoff count and checkpoint restart count.
 - Metrics remain read-only exports and evidence inputs; they do not become a second source of truth for control.
 - Policy gating remains mandatory for high-risk live mutations initiated by AI supervisors.
+- Add a targeted AI run-cost benchmark for dry-run/mock playbooks that records checkpoint/resume overhead, prefix/hotset hit/miss behavior, prompt bytes avoided, receipt/evidence export cost, and provider queue-wait simulation. This is host-side AI evidence, not a full Pi/QEMU runtime benchmark.
 
 As-built leverage:
 - Reuse `/queen/telemetry/*`, existing evidence packs, and host snapshots.
@@ -9413,6 +9571,7 @@ As-built leverage:
 - `python -m pytest tools/cohesix-py/tests/test_playbooks.py -k nemo`
 - `cargo test -p tests --test host_ticket_agent -- nemo`
 - `cohesix-playbook --playbook long-context-agent-factory --dry-run --mock`
+- `cohesix-playbook --playbook long-context-agent-factory --dry-run --mock --metrics-out out/bench/m28c-ai-run-cost.json`
 - `cargo test -p worker-gpu && cargo test -p worker-lora && cargo test -p worker-heart`
 - `cargo test -p coh --test peft && cargo test -p coh --test peft_registry_transactions`
 
@@ -9429,6 +9588,7 @@ As-built leverage:
 - Optional NeMo support remains host-side, ticket-scoped, writer-fenced, and evidence-backed; disabling NeMo leaves the baseline 28c substrate intact.
 - The same Cohesix run envelope and evidence model works against NeMo and at least one alternate provider family, proving NeMo support adds governed lifecycle value rather than vendor-specific lock-in.
 - Guardrail and evaluator receipts can gate live promotion or actuation decisions deterministically in dry-run/mock tests before any real provider mutation is allowed.
+- AI run-cost evidence records checkpoint/resume, prefix/hotset reuse, prompt bytes avoided, provider queue-wait simulation, and evidence export overhead for the dry-run/mock playbook; material regressions are classified as host orchestration, provider adapter, evidence-pack, or gateway overhead before 29b depends on the run model.
 - No new in-VM listeners, runtime, or control protocols are introduced.
 
 **Compiler touchpoints**
@@ -9493,8 +9653,12 @@ Changes:
   - tools/coh-rtc/src/ir.rs + tools/coh-rtc/src/validate.rs — host AI budget/TTL/metrics bounds, retrieval/offload bounds, task-graph/handoff bounds, and dependency on 28b safety gates.
   - apps/coh/src/telemetry.rs — bounded run-efficiency metric export helpers.
   - tools/cohesix-py/cohesix/generated.py — generated defaults consumed by Python orchestration/playbooks.
-Commands: cargo test -p coh-rtc && cargo test -p coh && python -m pytest tools/cohesix-py/tests/test_evidence_receipts.py
-Checks: Generated defaults bound AI runs consistently across CLI/Python flows; cache eligibility/invalidation fields and metrics stay bounded and byte-stable.
+Commands:
+  - cargo test -p coh-rtc
+  - cargo test -p coh
+  - python -m pytest tools/cohesix-py/tests/test_evidence_receipts.py
+  - cohesix-playbook --playbook long-context-agent-factory --dry-run --mock --metrics-out out/bench/m28c-ai-run-cost.json
+Checks: Generated defaults bound AI runs consistently across CLI/Python flows; cache eligibility/invalidation fields and metrics stay bounded and byte-stable; dry-run/mock run-cost evidence reports checkpoint/resume, prefix reuse, prompt bytes avoided, and evidence export overhead without invoking live providers.
 Deliverables: Context budgets, retrieval/offload bounds, and efficiency metrics are compiler-aligned rather than ad hoc.
 
 Title/ID: m28c-framework-adapters
@@ -9771,6 +9935,7 @@ Implementation requirements:
 - Add checked protocol fixtures/schemas for MCP JSON-RPC messages, A2A HTTP+JSON requests, gateway REST/OpenAPI compatibility, and generated provider action schemas so future client regressions are reviewable as data.
 - Validate with at least one MCP inspector/client conformance path and archive the transcript/output under the milestone evidence directory.
 - Validate with at least one A2A-compatible client/conformance path and archive the transcript/output under the milestone evidence directory.
+- Add a gateway protocol performance probe covering MCP resource reads, MCP tool calls that submit host tickets, A2A task creation/status streaming, and backpressure/refusal paths. Compare against REST read/write behavior from the accepted 28b gateway authority baseline; do not treat this as Pi hardware throughput proof unless the gateway probe exposes an upstream runtime regression.
 - Document how MCP clients should treat Cohesix resources, tools, prompts, approval prompts, and errors.
 - Document how A2A peers should treat Cohesix Agent Cards, skills, task status, artifacts, push notification limits, and errors.
 - Expose deterministic error mapping from Cohesix `ERR` lines and REST gateway errors into MCP errors without losing the original Cohesix reason.
@@ -9851,6 +10016,7 @@ As-built leverage:
 - `cargo test -p coh --test evidence_pack`
 - `cargo test -p coh --test evidence_timeline`
 - `cargo test -p coh-rtc`
+- `scripts/ci/gateway_perf_probe.sh --scenario mcp-a2a-protocols --state-dir out/bench/m28d-gateway-protocols`
 - `git diff --check -- docs/BUILD_PLAN.md docs/OPERATOR_WALKTHROUGH.md docs/HOST_API.md docs/HOST_TOOLS.md docs/API_GUIDELINES.md docs/USERLAND_AND_CLI.md docs/INTERFACES.md docs/ARCHITECTURE.md docs/SECURITY.md docs/TEST_PLAN.md`
 - `scripts/check-generated.sh`
 - `scripts/cohsh/run_regression_batch.sh`
@@ -9878,6 +10044,7 @@ As-built leverage:
 - There is no A2A FUSE mode; A2A task/artifact state appears through gateway protocol responses and read-only evidence/resource projections only.
 - MCP-mounted resource contents match the corresponding MCP `resources/read` output and, for Cohesix namespace-backed resources, the corresponding REST/console read within documented bounds.
 - A2A artifacts and push notification attempts are bounded, redacted, policy-gated, and reconstructable from audit/evidence without raw secret leakage.
+- Gateway protocol performance evidence shows MCP resource/tool and A2A task/artifact paths stay bounded relative to the 28b gateway authority baseline; any full Pi/QEMU benchmark is triggered only by evidence of upstream runtime-path regression.
 - `docs/OPERATOR_WALKTHROUGH.md` and related canonical docs describe the as-built transport, mount, MCP, A2A, host-ticket, provider, and evidence behavior without claiming implemented support before code/tests/generated outputs exist.
 
 **Compiler touchpoints**
@@ -10047,6 +10214,20 @@ Commands: git diff --check -- docs/OPERATOR_WALKTHROUGH.md docs/HOST_API.md docs
 Checks: Documentation distinguishes direct TCP proof, REST gateway proof, gateway-backed FUSE mount, optional read-only MCP resource mount, MCP ticket-submission tools, and A2A task/artifact/status behavior; no doc claims MCP, A2A, mount, provider, or host-ticket behavior that lacks code/tests/generated evidence.
 Deliverables: Operator-facing documentation that is coherent with as-built 28d behavior and usable for live, mock, and dry-run workflows.
 
+Title/ID: m28d-gateway-protocol-performance
+Goal: Prove MCP/A2A gateway protocol projections remain bounded relative to the 28b gateway authority baseline.
+Inputs: apps/hive-gateway, scripts/ci/gateway_perf_probe.sh, docs/BENCHMARKS.md, docs/TEST_PLAN.md, accepted 28b gateway authority artifacts.
+Changes:
+  - scripts/ci/gateway_perf_probe.sh — add MCP resource read, MCP ticket-submitting tool call, A2A task create/status stream, artifact read, and backpressure/refusal scenarios.
+  - docs/BENCHMARKS.md + docs/TEST_PLAN.md — record protocol-projection performance as gateway evidence, separate from Pi/QEMU runtime throughput proof.
+Commands:
+  - scripts/ci/gateway_perf_probe.sh --scenario mcp-a2a-protocols --state-dir out/bench/m28d-gateway-protocols
+Checks:
+  - MCP/A2A protocol paths stay bounded relative to the 28b gateway authority baseline, with queue depth, refusal counts, auth checks, and evidence/audit emission cost recorded.
+  - A full REST/Pi/QEMU benchmark is triggered only if gateway protocol evidence shows an upstream runtime-path regression.
+Deliverables:
+  - Gateway protocol performance ledger for MCP/A2A clients and downstream AI namespace work.
+
 Title/ID: m28d-gateway-agent-security-conformance
 Goal: Prove MCP/A2A ecosystem compatibility and preserve Cohesix security boundaries.
 Inputs: apps/hive-gateway, docs/SECURITY.md, docs/TEST_PLAN.md, accepted MCP protocol revision, accepted A2A protocol revision.
@@ -10097,6 +10278,7 @@ Complete production VM authority by making worker and driver tickets correspond 
 **Commands**
 - `cargo test -p root-task --tests cap_bundle`
 - `cargo test -p root-task --tests fault`
+- `cargo test -p root-task --test fault_recovery_timing`
 - `cargo test -p pi4-driver-abi`
 - `cargo test -p pi4-driver-runtime`
 - `cargo test -p worker-heart`
@@ -10116,6 +10298,7 @@ Complete production VM authority by making worker and driver tickets correspond 
 - Fault handling revokes old caps, rejects stale shared-ring turns and telemetry, and requires fresh lease/cap-bundle construction before restart.
 - Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
 - Compatibility profiles may retain 26c endpoint-cap-only tickets only when docs and generated profile state explicitly say full cap bundles are disabled.
+- Fault/revoke timing evidence stays bounded for representative worker and driver fault cases; material regressions are classified as cap-revocation, evidence-export, restart-policy, or driver-runtime recovery overhead before production profiles depend on structured fault recovery.
 
 **Compiler touchpoints**
 - `coh-rtc` emits full cap-bundle ticket authority profiles, generated per-role cap inventories, revoke/recovery evidence, production enablement gates, generated badged fault endpoint records, terminal/quarantine policy, and bounded fault evidence paths.
@@ -10157,9 +10340,11 @@ Changes:
   - apps/root-task/src/lifecycle.rs + apps/root-task/src/event/** — receive worker/driver fault IPC, record bounded evidence, revoke the affected cap bundle, and transition the lease to terminal or quarantined state.
   - apps/root-task/src/hal/** + apps/pi4-driver-runtime/src/** — ensure driver faults cut off IRQ, shared-ring, MMIO, DMA/shared-buffer, and fault authority for the old epoch.
   - apps/worker-heart/src/** + apps/worker-gpu/src/** + apps/worker-lora/src/** — restart only through a fresh ticket/lease/cap-bundle path and refuse stale telemetry or receipts after a fault epoch.
+  - apps/root-task/tests/fault_recovery_timing.rs — bounded timing checks for revoke, evidence export, stale-turn refusal, and fresh restart admission under representative worker/driver faults.
   - apps/coh/src/evidence.rs + docs/SECURITY.md + docs/INTERFACES.md + docs/TEST_PLAN.md — include bounded fault lifecycle records in evidence exports and document restart/quarantine semantics.
 Commands:
   - cargo test -p root-task --tests fault
+  - cargo test -p root-task --test fault_recovery_timing
   - cargo test -p pi4-driver-runtime
   - cargo test -p worker-heart
   - cargo test -p worker-gpu
@@ -10171,6 +10356,7 @@ Checks:
   - Fault badges deterministically identify the faulting worker or driver role, instance, lease epoch, and cap-bundle generation.
   - Fault handling revokes old caps, rejects stale shared-ring turns and telemetry, and requires fresh lease/cap-bundle construction before restart.
   - Fault evidence is bounded, redaction-safe where needed, included in evidence packs, and does not alter console grammar or Secure9P framing.
+  - Fault/revoke timing remains bounded and is reported as VM authority recovery evidence, not Pi/QEMU network throughput proof.
 Deliverables:
   - Production fault lifecycle evidence that lets seL4 reviewers audit how Cohesix contains and recovers from faulty workers and drivers.
 ```
@@ -10261,6 +10447,9 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 - Live Hive desktop integration:
   - preserve PixiJS renderer and replay fixtures;
   - update canvas framing, toolbar, inspector, worker selection, canonical shard path display, and `No telemetry yet` remediation flow.
+- UI performance gate:
+  - add deterministic source and release-bundle checks for Live Hive frame cadence, pending-event backlog, inactive-view polling, replay rendering, and layout thrash under fixture load;
+  - record UI render/backlog metrics separately from REST or Pi hardware performance; UI regressions do not reopen driver/runtime performance unless the transcript or gateway evidence shows backend slowdown.
 - Documentation updates:
   - `docs/USERLAND_AND_CLI.md` describes the SwarmUI desktop workbench, Spectrum/PixiJS split, namespace navigation, evidence desk, replay desk, and non-goals.
   - `docs/INTERFACES.md` records that the UI remains a projection of existing Secure9P/console/evidence/replay semantics.
@@ -10281,6 +10470,7 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 - `cd tools/swarmui-ui-tests && npm ci`
 - `cd tools/swarmui-ui-tests && npx playwright install webkit`
 - `cd tools/swarmui-ui-tests && npm test`
+- `cd tools/swarmui-ui-tests && npm test -- --grep live-hive-performance`
 - `SWARMUI_RELEASE_DIR=../../releases/<latest> npm test` from `tools/swarmui-ui-tests` during release-bundle validation.
 
 **Checks (DoD)**
@@ -10295,6 +10485,7 @@ Significant frontend redesign and refactoring is explicitly in scope. The implem
 - Direct TCP mode clearly warns about single-client console ownership; REST/gateway mode presents gateway health, request-auth state, and backpressure counters before operators tune publish rates.
 - No hidden polling or background watchers run when a workbench view is inactive, stopped, or offline; Live Hive polling remains bounded by generated defaults.
 - Playwright desktop and narrow screenshots are updated intentionally, with checks for nonblank PixiJS canvas, visible legends/status, text fit, no overlapping controls, keyboard/focus behavior, and accessible labels.
+- Live Hive UI performance evidence records frame cadence, pending/backlog bounds, inactive-view polling state, and replay render stability for source and release-bundle runs; failures are fixed in the UI/render loop unless backend transcript evidence proves a runtime regression.
 - Release-bundle UI tests pass against the latest bundle assets, not only source files.
 
 **Compiler touchpoints**
@@ -10389,10 +10580,11 @@ Changes:
 Commands:
   - cargo test -p swarmui --test replay
   - cd tools/swarmui-ui-tests && npm test
+  - cd tools/swarmui-ui-tests && npm test -- --grep live-hive-performance
 Checks:
   - PixiJS remains the rendering engine; Spectrum does not replace canvas rendering.
   - Selection, overlays, details, replay, and degraded-mode indicators remain bounded and reconstructable.
-  - Canvas pixel checks and screenshots prove nonblank rendering and no UI overlap.
+  - Canvas pixel checks, screenshots, and Live Hive performance checks prove nonblank rendering, bounded frame cadence/backlog, inactive-view polling state, and no UI overlap.
 Deliverables:
   - Live Hive preserved as the high-performance visualization inside the desktop workbench.
 
@@ -10406,11 +10598,14 @@ Commands:
   - cd tools/swarmui-ui-tests && npm ci
   - cd tools/swarmui-ui-tests && npx playwright install webkit
   - cd tools/swarmui-ui-tests && npm test
+  - cd tools/swarmui-ui-tests && npm test -- --grep live-hive-performance
   - cd tools/swarmui-ui-tests && SWARMUI_RELEASE_DIR=../../releases/<latest> npm test
+  - cd tools/swarmui-ui-tests && SWARMUI_RELEASE_DIR=../../releases/<latest> npm test -- --grep live-hive-performance
 Checks:
   - Source and release-bundle UI tests pass with deterministic fixtures.
   - Screenshots are intentionally updated and stable.
   - Release bundle includes all Spectrum, icon, font, and PixiJS assets needed for offline operation.
+  - Source and release-bundle Live Hive performance checks record frame cadence, pending/backlog bounds, inactive-view polling state, and replay stability separately from backend REST/Pi performance.
 Deliverables:
   - Replay-first UI regression gate for the SwarmUI desktop workbench.
 ```
@@ -10449,18 +10644,21 @@ Promote `coh-status` into a **small read-only CLI** for local field inspection o
 - Shared read-only status/snapshot core reused by `coh inspect`, `coh attest`, SwarmUI, and `coh-status`.
 - Shared offline snapshot/CBOR parsing code extracted from existing SwarmUI logic so grammar stays aligned.
 - Status-specific fixtures proving read-only behavior; no `/queen/ctl` writes in the canonical `coh-status` test flows.
+- Bounded command-latency fixture for offline and live-read status paths. This is field-tool latency evidence, not a full runtime or hardware throughput benchmark.
 
 **Commands**
 - `cargo build -p coh-status`
 - `cargo run -p coh-status -- --help`
 - `cargo run -p coh-status -- offline --trace tests/fixtures/traces/trace_v0.trace`
 - `cargo run -p coh-status -- attest --help`
+- `cargo test -p coh-status --test latency`
 
 **Checks (DoD)**
 - Works offline; wrong/expired ticket → deterministic `ERR reason=Permission` surfaced to user.
 - Shared snapshot/CBOR parsing identical to SwarmUI for overlapping flows.
 - Abuse case: attempt to write via `coh-status` returns deterministic denial and does not mutate state.
 - UI/CLI/console equivalence MUST be preserved: ACK/ERR/END sequences must remain byte-stable relative to the 7c baseline.
+- `coh-status` latency evidence stays bounded on representative offline traces and live-read fixtures; regressions are classified as snapshot parsing, attestation verification, transport, or artifact-size overhead before 29a/29b field surfaces reuse the status core.
 
 **Compiler touchpoints**
 - `coh-rtc` emits localhost binding guidance and attestation paths for Pi 4 boot profile into `docs/HARDWARE_BRINGUP.md` and `docs/USERLAND_AND_CLI.md`.
@@ -10515,11 +10713,14 @@ Goal: Replace generic convergence fixtures with `coh-status`-specific read-only 
 Inputs: apps/coh-status/tests/, tests/fixtures/transcripts/, docs/TEST_PLAN.md.
 Changes:
   - apps/coh-status/tests/transcript.rs — read-only status transcript only.
+  - apps/coh-status/tests/latency.rs — bounded offline/live-read status latency fixtures over representative artifacts.
   - tests/fixtures/transcripts/ — `coh-status` fixtures with no `/queen/ctl` writes.
 Commands:
   - cargo test -p coh-status --test transcript
+  - cargo test -p coh-status --test latency
 Checks:
   - Canonical `coh-status` flows read `/proc/boot`, `/proc/attest/*`, and selected telemetry without mutating state.
+  - Offline/live-read status latency stays bounded and is reported as field-tool evidence, not REST/Pi throughput proof.
 Deliverables:
   - Field-tech read-only transcript fixtures and explicit docs.
 
@@ -10558,6 +10759,7 @@ Add a Pi 4-build-only `hw-status` command on the root shell that prints bounded,
 - Stable serial transcript format using sectioned rows such as `hw power`, `hw clock`, `hw voltage`, `hw thermal`, `hw memory`, `hw framebuffer`, and `hw firmware-notify`.
 - Optional read-only status mirror for `coh-status` only if it reuses the same field names and does not add authority or a second parser.
 - Documentation and regression fixtures proving the command is passive, Pi 4-profile gated, and does not count as isolated runtime hardware acceptance.
+- Bounded serial-local command-latency evidence for `hw-status` so passive diagnostics stay quick without reopening runtime throughput gates.
 
 **Commands**
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hw_status -- --test-threads=1`
@@ -10565,6 +10767,7 @@ Add a Pi 4-build-only `hw-status` command on the root shell that prints bounded,
 - `SEL4_BUILD_DIR=$REPO/seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
 - `scripts/check-generated.sh`
 - `scripts/ci/test_plan_run.sh --state-dir out/test-plan/m29a-hw-status`
+- `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hw_status_latency -- --test-threads=1`
 
 **Checks (DoD)**
 - `help` and `docs/USERLAND_AND_CLI.md` list `hw-status` only for the Pi 4 root-console surface; TCP/`cohsh` shared grammar does not accidentally accept undocumented raw hardware commands.
@@ -10572,6 +10775,7 @@ Add a Pi 4-build-only `hw-status` command on the root shell that prints bounded,
 - Live Pi 4 acceptance, when claimed, includes a fresh serial transcript showing `hw-status` returning bounded rows while USB/local-seat, Wi-Fi/GENET, HDMI, and shell proof lanes remain separate.
 - No `hw-status` path writes firmware state, changes clocks/voltage/power domains, clears notifications, or touches isolated runtime device state.
 - Generated docs, fixtures, and trace-normalizer expectations remain aligned; command output drift is intentional only with matching docs/tests.
+- `hw-status` latency evidence stays bounded in mocked tests and, when live Pi evidence is claimed, is reported as serial-local passive diagnostic timing rather than hardware runtime throughput proof.
 
 **Compiler touchpoints**
 - `coh-rtc` owns the profile gate and generated command/help snippets for `hw-status`.
@@ -10619,11 +10823,13 @@ Inputs: docs/TEST_PLAN.md, scripts/pi4_trace_normalize.py, tests/fixtures/transc
 Changes:
   - docs/TEST_PLAN.md — classify `hw-status` as passive Pi 4 diagnostics, not hardware acceptance for USB/Wi-Fi/GENET/HDMI.
   - scripts/pi4_trace_normalize.py — parse optional `HW_STATUS_*` fields from captured transcripts without making them gate blockers.
+  - apps/root-task/tests/hw_status_latency.rs — mocked bounded timing checks for HAL firmware-property status rows and unsupported-profile refusal.
   - tests/fixtures/transcripts/ — add serial-local `hw-status` success and unsupported-profile fixtures.
 Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hw_status -- --test-threads=1
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hw_status_latency -- --test-threads=1
   - pytest tests/test_pi4_trace_normalize.py
-Checks: Transcript and normalizer coverage prove passive behavior, stable field extraction, and no regression in existing Pi 4 gates.
+Checks: Transcript, latency, and normalizer coverage prove passive behavior, bounded command timing, stable field extraction, and no regression in existing Pi 4 gates.
 Deliverables: Repeatable host and Pi 4 validation for `hw-status`.
 ```
 
@@ -10669,6 +10875,7 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - Host tools (`cohsh`, `coh`, REST projection, SwarmUI read models where relevant) discover and render the new paths without introducing new verbs.
 - Canonical schemas for all new paths documented in `docs/INTERFACES.md` and emitted from `coh-rtc`.
 - Namespace state remains a projection of 28c run envelopes, checkpoints, retrieval manifests, and receipts; it does not introduce an independent scheduler or executor.
+- Namespace-scale microbenchmark evidence for representative job/run/checkpoint counts proves `ls`, `cat`, `tail`, and fixed-control-file writes remain bounded. This is a namespace/provider microbenchmark, not a full Pi hardware throughput gate, unless high-churn AI namespace paths change the root-task hot runtime path.
 
 **Commands**
 - `cargo test -p coh-rtc`
@@ -10676,6 +10883,7 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - `cargo test -p root-task`
 - `cargo test -p cohsh`
 - `cohsh --script scripts/cohsh/ai_namespace_roundtrip.coh`
+- `cohsh --script scripts/cohsh/ai_namespace_scale.coh`
 
 **Checks (DoD)**
 - All new AI namespace paths are manifest-gated, bounded, and role-scoped.
@@ -10685,6 +10893,7 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - Missing AI paths are treated as gate state, not client bugs.
 - Read views expose 28c task/handoff/checkpoint/prefix evidence without becoming a second source of authority.
 - No new in-VM listener, runtime, or hidden RPC behavior is introduced.
+- AI namespace scale evidence shows bounded path walk/list/read/write behavior at representative job/run counts; material regressions are classified as namespace-provider overhead, host-tool projection overhead, or runtime hot-path regression before downstream profiles depend on the new roots.
 
 **Compiler touchpoints**
 - `coh-rtc` admits `ecosystem.ai.*` IR fields for path gating, quotas, and per-surface limits.
@@ -10742,11 +10951,13 @@ Goal: Add deterministic regression coverage for AI namespace semantics.
 Inputs: scripts/cohsh/, tests/fixtures/, docs/TEST_PLAN.md.
 Changes:
   - scripts/cohsh/ai_namespace_roundtrip.coh — canonical AI namespace script using existing verbs only.
+  - scripts/cohsh/ai_namespace_scale.coh — representative namespace-scale listing, read, tail, and fixed-control-file write probe for high-churn job/run roots.
   - tests/fixtures/transcripts/ — stable transcript fixtures for gated/missing/enabled AI paths.
 Commands:
   - cohsh --script scripts/cohsh/ai_namespace_roundtrip.coh
+  - cohsh --script scripts/cohsh/ai_namespace_scale.coh
 Checks:
-  - Missing paths, denied writes, and successful reads/writes all preserve existing grammar and refusal semantics.
+  - Missing paths, denied writes, successful reads/writes, and representative high-churn namespace listings all preserve existing grammar, refusal semantics, and bounded runtime behavior.
 Deliverables:
   - Canonical AI namespace regression pack and test-plan coverage.
 ```
@@ -10808,6 +11019,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 - Add generated queue-count, queue-affinity, notification/MSI-X or poll-budget policy, burst, and backpressure bounds after first-link smoke passes.
 - Map ENA queues into core-local service buckets from Milestone 27c without changing Secure9P, console, or namespace semantics.
 - Keep root-task as the serialized authority/net-stack client; isolated runtime owns queue service and DMA/cache maintenance.
+- Produce archived EC2 performance evidence for first-link single-queue bootstrap and later multi-queue/notification-backed ENA closure. Benchmark evidence must include instance type, ENA feature set, generated queue policy, service-bucket mapping, request suite, error-budget policy, and hostile-fabric/refusal context. Single-queue polling results are bootstrap/link evidence only and cannot be promoted to peak-performance claims.
 
 #### E) Optional IMDSv2 bootstrap
 - Optional IMDSv2 bootstrap (instance identity + config) is deferred until the bounded HTTP client threat model is approved; the default AWS path uses manifest-authored or signed-bootstrap inputs without IMDS.
@@ -10824,6 +11036,8 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 - `scripts/aws/build-esp.sh`
 - `scripts/aws/register-ami.sh`
 - `scripts/aws/launch-smoke.sh`
+- `scripts/aws/ena-bench.sh --mode bootstrap --state-dir out/bench/m30-ena-bootstrap`
+- `scripts/aws/ena-bench.sh --mode peak --state-dir out/bench/m30-ena-peak`
 - `cargo tree -p root-task --target aarch64-unknown-none --no-default-features`
 - `cargo deny check bans`
 
@@ -10834,6 +11048,7 @@ Milestone 30 first reconciles the **generic UEFI ESP/QEMU baseline** currently d
 - ENA hardware service must use a manifest-declared isolated ENA runtime; root-task direct ENA MMIO/DMA paths fail profile validation outside explicitly named QEMU/host compatibility tests.
 - 9door namespace mounts successfully and control plane is reachable.
 - Single-queue polling evidence is classified as bootstrap/link proof. Peak AWS performance claims require the D2 multi-queue/core-local evidence lane.
+- ENA benchmark artifacts are archived for bootstrap and, where peak-performance claims are made, multi-queue or notification-backed service-bucket runs. EC2 results are compared against the latest accepted rolling benchmark baseline only for capacity/context; AWS target evidence is its own lane and must not overwrite Pi/QEMU proof.
 - IMDSv2 metadata fetch is absent by default or optional and bounded after approval; if unavailable or denied, boot continues safely with explicit diagnostics and no unbounded retries.
 - If TLS/HTTP is approved, proof shows it remains client-only and non-persistent: no listener, no background refresh loop, bounded trust-anchor/cert storage from signed manifest inputs, bounded handshake/input parsing, and deterministic boot behavior when fabric, TLS, or IMDS is unavailable.
 - Power cycle returns to identical clean state (no persistence).
@@ -10951,13 +11166,17 @@ Changes:
 - tools/coh-rtc/src/ir.rs — generated ENA queue-count, queue-affinity, notification/MSI-X or poll-budget, burst, and backpressure limits.
 - apps/aws-driver-runtime/src/** — bounded multi-queue service turns and queue-local counters where the platform profile admits them.
 - apps/root-task/src/net/ena.rs — deterministic merge/backpressure handling for isolated runtime queue completions.
+- scripts/aws/ena-bench.sh — archived EC2 benchmark runner for bootstrap and peak ENA lanes, including target metadata, queue policy, service-bucket evidence, and error-budget summary.
 - docs/BENCHMARKS.md + docs/AWS_AMI.md — classify bootstrap link proof separately from peak-throughput proof.
 Commands:
 - cargo test -p coh-rtc
 - cargo test -p root-task --test ena_ioq
 - cargo test -p aws-driver-runtime
+- scripts/aws/ena-bench.sh --mode bootstrap --state-dir out/bench/m30-ena-bootstrap
+- scripts/aws/ena-bench.sh --mode peak --state-dir out/bench/m30-ena-peak
 Checks:
 - Multi-queue or notification-backed claims cite generated bounds and archived EC2 evidence; single-queue polling cannot be described as peak performance.
+- Benchmark artifacts preserve target metadata, generated queue policy, service-bucket counters, error-budget results, and hostile-fabric/refusal context; AWS performance is recorded as a target-specific lane, not substituted for Pi/QEMU evidence.
 Deliverables:
 - AWS ENA performance lane aligned to Cohesix service-bucket proof rather than root-owned driver shortcuts.
 

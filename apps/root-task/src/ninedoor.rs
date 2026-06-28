@@ -8809,6 +8809,22 @@ mod tests {
         fn denied(&mut self, _message: &str) {}
     }
 
+    fn install_test_lora_adapter(bridge: &mut NineDoorBridge, scope: &str, mount: &str) {
+        bridge.sidecars.lora.adapters.push(SidecarLoraAdapterState {
+            mount_root: sidecar_mount_root("/lora", mount),
+            mount_label: mount.to_owned(),
+            scope: scope.to_owned(),
+            guard: DutyCycleGuard::new(DutyCycleConfig {
+                duty_cycle_percent: 100,
+                window_ms: 1_000,
+                max_payload_bytes: 64,
+            }),
+            tamper: TamperLog::new(8),
+            telemetry: Vec::new(),
+            ctl: Vec::new(),
+        });
+    }
+
     #[test]
     fn attach_succeeds_when_bridge_handoff_was_not_requested() {
         boot_log::init_logger_bootstrap_only();
@@ -8971,6 +8987,34 @@ mod tests {
         let mut log = Vec::new();
         let err = append_log_bytes(&mut log, "0123456789", 8).unwrap_err();
         assert!(matches!(err, NineDoorBridgeError::InvalidPayload));
+    }
+
+    #[test]
+    fn denied_cross_sidecar_write_appends_audit_log_line() {
+        let mut bridge = NineDoorBridge::new();
+        install_test_lora_adapter(&mut bridge, "lora-main", "lora-main");
+        bridge.attached = true;
+        bridge.session_role = Some(SessionRoleLabel::WorkerBus);
+        bridge.session_scope = Some("unit-test-sidecar-deny".to_owned());
+
+        let err = bridge
+            .echo("/lora/lora-main/ctl", "denied")
+            .expect_err("worker-bus must not write lora ctl");
+        assert!(matches!(err, NineDoorBridgeError::Permission));
+
+        let mut cursor = log_buffer::tail_cursor(log_buffer::LOG_SNAPSHOT_LINES);
+        let mut lines: HeaplessVec<
+            HeaplessString<DEFAULT_LINE_CAPACITY>,
+            { log_buffer::LOG_SNAPSHOT_LINES },
+        > = HeaplessVec::new();
+        let _ = log_buffer::read_cursor_lines_into(&mut cursor, &mut lines);
+        assert!(
+            lines.iter().any(|line| {
+                line.as_str()
+                    .contains("sidecar-deny kind=lora scope=unit-test-sidecar-deny")
+            }),
+            "denied sidecar write did not append audit log line: {lines:?}"
+        );
     }
 
     #[test]

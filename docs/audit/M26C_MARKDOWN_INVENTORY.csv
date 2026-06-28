@@ -1,0 +1,190 @@
+# Author: Lukas Bower
+# Purpose: Inventory every tracked Markdown file for Milestone 26c disposition control.
+# Copyright 2026 Lukas Bower
+path,disposition,owner,update_rule,evidence_source
+AGENTS.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+CONTRIBUTING.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+apps/gpu-bridge-host/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+apps/nine-door/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+apps/root-task/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+apps/worker-gpu/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+crates/boot/uefi-elfloader-shim/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+crates/cohesix-ticket/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+crates/secure9p-codec/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/API_GUIDELINES.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/ARCHITECTURE.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/AWS_AMI.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/BENCHMARKS.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/BOOT_REFERENCE.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/BUILD_PLAN.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/CODING_GUIDELINES.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/DRIVERS.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/FAILOVER.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/FAILURE_MODES.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/GPU_NODES.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/HARDWARE_BRINGUP.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/HOST_API.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/HOST_TOOLS.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/INTERFACES.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/NETWORK_CONFIG.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/OPERATOR_WALKTHROUGH.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/PYTHON_SUPPORT.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/QUICKSTART.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/QUICKSTART_ALPHA.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/REPO_LAYOUT.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/ROLES_AND_SCHEDULING.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/SECURE9P.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/SECURITY.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/SECURITY_NIST_800_53.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/TEST_PLAN.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/TOOLCHAIN_MAC_ARM64.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/USERLAND_AND_CLI.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/USE_CASES.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/WORKER_TICKETS.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+docs/audit/AUDIT_REPORT_2026-02-12.md,append-only audit evidence,audit-owner,append only with dated evidence; do not rewrite for style,historical audit evidence
+docs/audit/AUDIT_REPORT_2026-02-13.md,append-only audit evidence,audit-owner,append only with dated evidence; do not rewrite for style,historical audit evidence
+docs/audit/AUDIT_REPORT_2026-02-14.md,append-only audit evidence,audit-owner,append only with dated evidence; do not rewrite for style,historical audit evidence
+docs/audit/BLOCKERS.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/CONTROL_TRACEABILITY.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/DUE_DILIGENCE_PLAN.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/EXCEPTIONS.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/M26B_COMPLETION_EVIDENCE.md,append-only audit evidence,audit-owner,append only with dated evidence; do not rewrite for style,historical audit evidence
+docs/audit/PI4_ROOT_OWNED_DRIVER_INVENTORY.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/checklists/ARCHITECTURE_CHECKLIST.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/audit/checklists/SECURITY_CHECKLIST.md,live audit register,audit-owner,update only with matching evidence command,audit control surface
+docs/nist/REPORT.md,generated report,generator-owner,update only through NIST report generator,generated compliance report
+docs/snippets/cas_interfaces.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/cas_security.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/coh_doctor_checks.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/coh_policy.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/cohesix_py_defaults.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/cohsh_client.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/cohsh_grammar.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/cohsh_policy.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/cohsh_ticket_policy.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/gpu_breadcrumbs.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/latency_metrics.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/observability_interfaces.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/observability_security.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/root_task_manifest.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/swarmui_defaults.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/telemetry_cbor_schema.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/ticket_quotas.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+docs/snippets/trace_policy.md,generated snippet,generator-owner,update only through coh-rtc or source generator,generated documentation snippet
+releases/Cohesix-0.8.0-alpha-MacOS/QUICKSTART.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/README.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/RELEASE_NOTES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/ARCHITECTURE.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/GPU_NODES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/HOST_TOOLS.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/INTERFACES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/NETWORK_CONFIG.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/PYTHON_SUPPORT.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/ROLES_AND_SCHEDULING.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/SECURE9P.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/SECURITY.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/USERLAND_AND_CLI.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/USE_CASES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/docs/WORKER_TICKETS.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-MacOS/python/cohesix-py/README.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/QUICKSTART.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/README.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/RELEASE_NOTES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/ARCHITECTURE.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/GPU_NODES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/HOST_TOOLS.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/INTERFACES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/NETWORK_CONFIG.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/PYTHON_SUPPORT.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/ROLES_AND_SCHEDULING.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/SECURE9P.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/SECURITY.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/USERLAND_AND_CLI.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/USE_CASES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/docs/WORKER_TICKETS.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.8.0-alpha-linux/python/cohesix-py/README.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/QUICKSTART.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/README.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/RELEASE_NOTES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/ARCHITECTURE.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/GPU_NODES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/HOST_TOOLS.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/INTERFACES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/NETWORK_CONFIG.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/PYTHON_SUPPORT.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/ROLES_AND_SCHEDULING.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/SECURE9P.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/SECURITY.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/USERLAND_AND_CLI.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/USE_CASES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/docs/WORKER_TICKETS.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-MacOS/python/cohesix-py/README.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/QUICKSTART.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/README.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/RELEASE_NOTES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/ARCHITECTURE.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/GPU_NODES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/HOST_TOOLS.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/INTERFACES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/NETWORK_CONFIG.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/PYTHON_SUPPORT.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/ROLES_AND_SCHEDULING.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/SECURE9P.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/SECURITY.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/USERLAND_AND_CLI.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/USE_CASES.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/docs/WORKER_TICKETS.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/Cohesix-0.9.0-beta-linux/python/cohesix-py/README.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/RELEASE_NOTES-0.1.0-alpha1.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/RELEASE_NOTES-0.2.0-alpha2.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/RELEASE_NOTES-0.3.0-alpha.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/RELEASE_NOTES-0.4.0-alpha.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/RELEASE_NOTES-0.6.0-alpha.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/RELEASE_NOTES-0.7.0-alpha.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/RELEASE_NOTES-0.8.0-alpha.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+releases/RELEASE_NOTES-0.9.0-beta.md,release snapshot,release-owner,update only through release-cut flow,release package snapshot
+seL4/elfloader.md,external reference mirror,kernel-reference-owner,inventory only; update through accepted seL4 reference refresh,external seL4 reference
+seL4/seL4-manual-latest.md,external reference mirror,kernel-reference-owner,inventory only; update through accepted seL4 reference refresh,external seL4 reference
+tests/integration/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+third_party/raspberry-pi-firmware/v1.50/Readme.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/3rdparty/everest/README.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/3rdparty/p256-m/README.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/3rdparty/p256-m/p256-m/README.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/BRANCHES.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/BUGS.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/CONTRIBUTING.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/ChangeLog.d/00README.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/README.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/SECURITY.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/SUPPORT.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/configs/ext/README.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/3.0-migration-guide.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/alternative-implementations.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/mbed-crypto-storage-specification.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/psa-crypto-implementation-structure.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/psa-migration/md-cipher-dispatch.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/psa-migration/psa-legacy-bridges.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/psa-migration/psa-limitations.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/psa-migration/strategy.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/psa-migration/testing.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/psa-shared-memory.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/psa-storage-resilience.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/psa-thread-safety/psa-thread-safety.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/architecture/tls13-support.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/driver-only-builds.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/proposed/psa-conditional-inclusion-c.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/proposed/psa-driver-developer-guide.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/proposed/psa-driver-integration-guide.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/proposed/psa-driver-interface.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/proposed/psa-driver-wrappers-codegen-migration-guide.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/psa-driver-example-and-guide.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/psa-transition.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/tls13-early-data.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/docs/use-psa-crypto.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/programs/README.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/programs/fuzz/README.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+third_party/u-boot/lib/mbedtls/external/mbedtls/tests/git-scripts/README.md,vendored reference,external-reference-owner,inventory only; update through upstream vendor import,third-party import
+tools/cohesix-py/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation
+tools/host-bootpd/README.md,human-edited canonical source,docs-owner,edit directly with generated/as-built evidence,canonical Cohesix-authored documentation

@@ -31,6 +31,82 @@ pub struct CachePolicy {
     pub unify_instructions: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DmaProtectionProfile {
+    None,
+    BoundedNoIommu,
+    SmmuV2,
+    SmmuV3,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DmaConfig {
+    pub protection_profile: DmaProtectionProfile,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkerSchedulingProfile {
+    NonMcs,
+    Mcs,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerRoleRuntime {
+    pub role: Role,
+    pub implemented: bool,
+    pub ticket_scope: &'static str,
+    pub telemetry_path_template: &'static str,
+    pub lease_path_template: &'static str,
+    pub shutdown_policy: &'static str,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerEndpointCapConfig {
+    pub required: bool,
+    pub attach_badge_base: u64,
+    pub telemetry_badge_base: u64,
+    pub lease_badge_base: u64,
+    pub receipt_badge_base: u64,
+    pub revoke_badge_base: u64,
+    pub epoch_bits: u8,
+    pub role_bits: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerNotificationConfig {
+    pub enabled: bool,
+    pub revoke_badge: u64,
+    pub shutdown_badge: u64,
+    pub lease_expiry_badge: u64,
+    pub telemetry_pressure_badge: u64,
+    pub irq_badge: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerSchedulingConfig {
+    pub profile: WorkerSchedulingProfile,
+    pub priority: u8,
+    pub domain: u8,
+    pub service_turn_budget: u16,
+    pub mcs_budget_us: u32,
+    pub mcs_period_us: u32,
+    pub timeout_endpoint_badge: u64,
+    pub consumed_budget_evidence: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerRuntimeConfig {
+    pub implementation_epoch: u32,
+    pub max_workers: u16,
+    pub ticket_subject_required: bool,
+    pub cap_backed_authority: bool,
+    pub notification_lifecycle: bool,
+    pub roles: &'static [WorkerRoleRuntime],
+    pub endpoint_caps: WorkerEndpointCapConfig,
+    pub notifications: WorkerNotificationConfig,
+    pub scheduling: WorkerSchedulingConfig,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum ShortWritePolicy {
     Reject,
@@ -600,11 +676,13 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.5";
 pub const MANIFEST_SHA256: &str =
-    "3a8690c01e1c9c165b91d3c366fbe7dcb9667602461f82e51df6ca5e2ba45d77";
+    "b5d22bc62de7e0883b8fea8acc6db377cfe3450e8f6357f1a6c6d01a9e66971b";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
 pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;
+pub const DMA_CONFIG: DmaConfig = bootstrap::DMA_CONFIG;
+pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = bootstrap::WORKER_RUNTIME_CONFIG;
 pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
 pub const TICKET_LIMITS: TicketLimits = bootstrap::TICKET_LIMITS;
 pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
@@ -657,6 +735,18 @@ pub const fn initial_audit_lines() -> &'static [&'static str] {
 
 pub const fn cache_policy() -> CachePolicy {
     bootstrap::CACHE_POLICY
+}
+
+pub const fn dma_config() -> DmaConfig {
+    bootstrap::DMA_CONFIG
+}
+
+pub const fn worker_runtime_config() -> WorkerRuntimeConfig {
+    bootstrap::WORKER_RUNTIME_CONFIG
+}
+
+pub const fn worker_runtime_roles() -> &'static [WorkerRoleRuntime] {
+    &bootstrap::WORKER_RUNTIME_ROLES
 }
 
 pub const fn secure9p_limits() -> Secure9pLimits {

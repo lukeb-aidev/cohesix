@@ -13491,13 +13491,14 @@ mod tests {
 
     impl Drop for TestCyw43RingGuard {
         fn drop(&mut self) {
-            crate::hal::driver_task::publish_driver_task_ring(CYW43_WIFI_DRIVER_TASK_CONTRACT, 0);
+            crate::hal::driver_task::clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         }
     }
 
     fn test_publish_cyw43_ring(
         ring_page: &mut [u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES],
     ) -> TestCyw43RingGuard {
+        crate::hal::driver_task::clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         crate::hal::driver_task::publish_driver_task_ring(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             ring_page.as_mut_ptr() as usize,
@@ -14321,6 +14322,9 @@ mod tests {
 
     #[test]
     fn cyw43_pending_control_reply_matches_exact_cmd_id() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 pending-control tests must serialize");
         clear_cyw43_pending_control_replies();
         let body = [0x11, 0x22, 0x33, 0x44];
         let token = test_control_reply_token(CYW43_WLC_SET_VAR, 54, 0, &body);
@@ -14345,6 +14349,9 @@ mod tests {
 
     #[test]
     fn cyw43_pending_control_reply_restages_copied_body_after_ring_overwrite() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 pending-control tests must serialize");
         clear_cyw43_pending_control_replies();
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
         let _ring = test_publish_cyw43_ring(&mut ring_page);
@@ -14385,6 +14392,9 @@ mod tests {
 
     #[test]
     fn host_eapol_control_completion_preserves_cdc_reply() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 pending-control tests must serialize");
         clear_cyw43_pending_control_replies();
         let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
             .expect("valid wifi credentials");
@@ -19078,7 +19088,16 @@ mod tests {
             code: DriverTaskCompletionCode::FrameReady.as_u16(),
             detail: 0,
             result: pi4_driver_abi::driver_runtime_genet_completion_result(
-                30, 2, 4, 8, 9, true, false, true,
+                pi4_driver_abi::DriverRuntimeGenetCompletionResultParts {
+                    tx_free: 30,
+                    tx_in_flight: 2,
+                    rx_queue_count: 4,
+                    rx_queue_high_water: 8,
+                    rx_max_drained_per_turn: 9,
+                    rx_drain_budget_hit: true,
+                    rx_byte_budget_hit: false,
+                    rx_overflow_seen: true,
+                },
             ),
             frame: DriverFrameDescriptor {
                 offset: 1024,

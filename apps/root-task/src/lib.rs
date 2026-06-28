@@ -147,6 +147,9 @@ pub mod sel4_view;
 #[path = "generated/mod.rs"]
 pub mod generated;
 
+/// Generated worker endpoint, notification, and scheduling evidence helpers.
+pub mod worker_authority;
+
 #[cfg(feature = "kernel")]
 /// NineDoor 9P bridge exposed inside the VM environment.
 pub mod ninedoor;

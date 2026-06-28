@@ -656,6 +656,11 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_COUNTER_TX_BYTES": 0,
         "DRIVER_TASK_COUNTER_OVERRUNS": 0,
         "DRIVER_TASK_COUNTER_DROPS": 0,
+        "DRIVER_TASK_DMA_PROOFS": 0,
+        "DRIVER_TASK_DMA_BLOCKER": "missing:cyw43-wifi",
+        "PI4_RUNTIME_DMA_PROOF": "absent",
+        "PI4_RUNTIME_DMA_PROOF_REASON": "no-runtime-proof-lines",
+        "PI4_RUNTIME_DMA_COUNTER_PROOF": "absent",
         "SERIAL_OUTPUT_TX_PENDING": "unknown",
         "SERIAL_OUTPUT_INTERACTIVE": "unknown",
         "SERIAL_OUTPUT_DEFERRED": 0,
@@ -757,6 +762,120 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["USB_BURST_PROOF"] == "yes"
     assert record["USB_BURST_DROPS"] == 0
     assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
+    """Runtime/DMA proof needs live Pi owner-state and counter-qualified timing."""
+
+    events = normalizer.parse_events(
+        [
+            "U-Boot 2026.01",
+            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "cohesix> driver proof",
+            "[timers] backend=arch-counter counter=vct timer_freq_hz=54000000",
+            "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
+            "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
+            "task_count=7 failed_count=0 live_tcb_count=7 "
+            "fault_endpoint_ready=yes revoke_ready=yes broad_caps_leaked=0 "
+            "sched=yes affinity=per-driver affinity_configured=7 "
+            "affinity_applied=7 vspace=isolated ipc_abi=shared-ring-command "
+            "pointer_free_ipc=yes owner_state=driver-owned live_hot_paths=yes",
+            "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=18",
+            "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=22",
+            "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=44",
+            "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=91",
+            "SCHED_CONTRACT contract=sdio-host isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=31",
+            "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=36",
+            "DRIVER_TASK_DMA_PROOF contract=serial hot_path=serial-console "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=0 "
+            "shared_pages=4 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
+            "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=usb-local-seat hot_path=usb-keyboard "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=128 "
+            "shared_pages=32 bus_address_policy=hal-bounded-bus-address "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=1 "
+            "cache_clean_bytes=64 cache_invalidate_ops=1 cache_invalidate_bytes=64 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=hdmi-text hot_path=hdmi-text "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=0 "
+            "shared_pages=16 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
+            "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=bcmgenet-v5 hot_path=genet-nic "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=6 dma_pages=64 "
+            "shared_pages=32 bus_address_policy=hal-bounded-bus-address "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=1 "
+            "cache_clean_bytes=64 cache_invalidate_ops=1 cache_invalidate_bytes=64 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=cyw43455 hot_path=cyw43-wifi "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=0 "
+            "shared_pages=64 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
+            "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=sdio-host hot_path=sdio-host "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=1 dma_pages=0 "
+            "shared_pages=32 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
+            "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=10 dma_pages=0 "
+            "shared_pages=16 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
+            "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
+            "source=root-ring sequence=1 submitted=2 completed=2 idle=0 fault=0 "
+            "budget=0 frame=1 desc=1 staged_bytes=64 clean_ops=1 clean_bytes=64 "
+            "inv_ops=1 inv_bytes=64 sends=2 yields=0 busy=0 same_request=0 "
+            "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
+            "rx_bytes=8 tx_frames=1 tx_bytes=8 role_aux0=0 role_aux1=0 "
+            "role_aux2=0 role_aux3=0",
+            "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
+            "substrate=active capset=pass fault=pass revoke=pass sched=pass "
+            "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
+            "pointer_free_ipc=yes owner_state=driver-owned required=7 "
+            "dedicated=7 compatibility=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_DMA_PROOFS"] == 7
+    assert record["DRIVER_TASK_DMA_BLOCKER"] == "none"
+    assert record["PI4_RUNTIME_DMA_PROOF"] == "fresh-pi"
+    assert record["PI4_RUNTIME_DMA_PROOF_REASON"] == "live-pi-owner-state"
+    assert record["PI4_RUNTIME_DMA_COUNTER_PROOF"] == "counter-qualified"
 
 
 def test_gate_summary_tracks_cyw43_data_path_trace_counts() -> None:

@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
-# Purpose: Validate docs/TEST_PLAN.md hashes, command alignment, and scripted stage references.
+# Purpose: Validate docs/TEST_PLAN.md hashes, command alignment, and target-qualified scripted stage references.
 # Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 doc_path="${repo_root}/docs/TEST_PLAN.md"
+runner_path="${repo_root}/scripts/ci/test_plan_run.sh"
 stage_02_path="${repo_root}/scripts/ci/test_plan_stage_02_host_fast.sh"
 due_diligence_path="${repo_root}/scripts/ci/due_diligence_gate.sh"
 
-python3 - "$repo_root" "$doc_path" "$stage_02_path" "$due_diligence_path" <<'PY'
+python3 - "$repo_root" "$doc_path" "$runner_path" "$stage_02_path" "$due_diligence_path" <<'PY'
 import hashlib
 import pathlib
 import re
@@ -18,9 +19,11 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 doc = pathlib.Path(sys.argv[2])
-stage_02 = pathlib.Path(sys.argv[3])
-due_diligence = pathlib.Path(sys.argv[4])
+runner = pathlib.Path(sys.argv[3])
+stage_02 = pathlib.Path(sys.argv[4])
+due_diligence = pathlib.Path(sys.argv[5])
 text = doc.read_text()
+runner_text = runner.read_text()
 stage_02_text = stage_02.read_text()
 due_diligence_text = due_diligence.read_text()
 pattern = re.compile(r'^- `([^`]+)` — `sha256:([0-9a-f]{64})`$', re.M)
@@ -48,6 +51,8 @@ required_snippets = [
     "## Mandatory Agent Execution Contract",
     "Defect resolution is mandatory before progression.",
     "scripts/ci/test_plan_run.sh",
+    "scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/<run-id>",
+    "scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/<run-id>",
     "scripts/ci/test_plan_stage_01_integrity.sh",
     "scripts/ci/test_plan_stage_02_host_fast.sh",
     "scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh",
@@ -58,6 +63,14 @@ required_snippets = [
     "scripts/ci/due_diligence_gate.sh",
     "TP_STAGE4_GATEWAY_BIND",
     "self-contained local QEMU by default",
+    "target.env",
+    "stage_01.qemu.done",
+    "stage_01.pi4.done",
+    "TEST_PLAN_TARGET",
+    "COHSH_BATCH_TARGET",
+    "COHSH_TCP_HOST",
+    "COHESIX_GATEWAY_URL",
+    "Target-Qualified Runner Matrix",
     "scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml",
     "scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-usb-ready --require-wired-ready --require-driver-task-proof --require-input-responsive",
     "scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-ready",
@@ -76,6 +89,10 @@ required_snippets = [
     "DRIVER_TASK_VSPACE_PROOF",
     "DRIVER_TASK_POINTER_FREE_IPC_PROOF",
     "DRIVER_TASK_OWNER_STATE_PROOF",
+    "DRIVER_TASK_DMA_PROOFS",
+    "DRIVER_TASK_DMA_BLOCKER",
+    "PI4_RUNTIME_DMA_PROOF",
+    "PI4_RUNTIME_DMA_COUNTER_PROOF",
     "DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no",
     "serial-console",
     "usb-keyboard",
@@ -130,6 +147,34 @@ required_snippets = [
 for snippet in required_snippets:
     if snippet not in text:
         print(f"missing required TEST_PLAN entry: {snippet}", file=sys.stderr)
+        errors += 1
+
+required_runner_snippets = [
+    "--target <name>",
+    "target=\"${TEST_PLAN_TARGET:-qemu}\"",
+    "qemu|pi4",
+    "target.env",
+    "TEST_PLAN_TARGET_MATRIX_VERSION=1",
+    "TEST_PLAN_TARGET=\"${target}\"",
+    "COHSH_BATCH_TARGET=\"${target}\"",
+    "stage_%02d.%s.done",
+    "stage_*.incomplete",
+    "qemu-regression-logs/summary.log",
+    "INFO target=pi4",
+    "existing gateway",
+    "COHSH_TCP_HOST or COHSH_HOST",
+    "TP_PI4_ALLOW_LOOPBACK",
+    "assert_full_target_pass",
+    "PI4_RUNTIME_DMA_PROOF_FILE",
+    "PI4_RUNTIME_DMA_PROOF=fresh-pi",
+    "PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified",
+]
+for snippet in required_runner_snippets:
+    if snippet not in runner_text:
+        print(
+            f"missing target-qualified runner contract in {runner.relative_to(root)}: {snippet}",
+            file=sys.stderr,
+        )
         errors += 1
 
 required_stage_02_commands = [

@@ -34,14 +34,15 @@ use font8x8::legacy::BASIC_LEGACY;
 use pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID;
 use pi4_driver_abi::{
     driver_runtime_genet_completion_result, DriverRuntimeCyw43CommandDescriptor,
-    DriverRuntimeInitDescriptor, DriverRuntimeResourceRangeDescriptor,
-    DriverRuntimeSdioCommandDescriptor, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
-    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
-    DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE, DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+    DriverRuntimeGenetCompletionResultParts, DriverRuntimeInitDescriptor,
+    DriverRuntimeResourceRangeDescriptor, DriverRuntimeSdioCommandDescriptor,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_ENDPOINT_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR, DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER,
+    DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN, DRIVER_RUNTIME_CYW43_FLAG_FORCE_BYTE_MODE,
+    DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
     DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
@@ -4074,16 +4075,16 @@ fn genet_runtime_init(state: &mut GenetRuntimeState) -> bool {
 }
 
 fn genet_completion_result(state: &GenetRuntimeState, tx_free: u16, tx_in_flight: u16) -> u32 {
-    driver_runtime_genet_completion_result(
+    driver_runtime_genet_completion_result(DriverRuntimeGenetCompletionResultParts {
         tx_free,
         tx_in_flight,
-        state.rx_queue_count,
-        state.rx_queue_high_water,
-        state.rx_max_drained_per_turn,
-        state.rx_drain_budget_hits != 0,
-        state.rx_byte_budget_hits != 0,
-        state.rx_queue_overflows != 0,
-    )
+        rx_queue_count: state.rx_queue_count,
+        rx_queue_high_water: state.rx_queue_high_water,
+        rx_max_drained_per_turn: state.rx_max_drained_per_turn,
+        rx_drain_budget_hit: state.rx_drain_budget_hits != 0,
+        rx_byte_budget_hit: state.rx_byte_budget_hits != 0,
+        rx_overflow_seen: state.rx_queue_overflows != 0,
+    })
 }
 
 fn service_genet_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
@@ -14747,7 +14748,52 @@ static TEST_SDIO_CMD52_NONE_RESPONSE_KEY: AtomicU32 =
     AtomicU32::new(TEST_SDIO_CMD52_RESPONSE_UNSET);
 
 #[cfg(all(not(target_os = "none"), test))]
+static TEST_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(all(not(target_os = "none"), test))]
+thread_local! {
+    static TEST_STATE_GUARD_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+struct TestStateGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+impl Drop for TestStateGuard {
+    fn drop(&mut self) {
+        TEST_STATE_GUARD_DEPTH.with(|depth| {
+            let current = depth.get();
+            debug_assert!(current > 0);
+            depth.set(current.saturating_sub(1));
+        });
+    }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_state_guard() -> TestStateGuard {
+    let lock = match TEST_STATE_LOCK.lock() {
+        Ok(lock) => lock,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    TEST_STATE_GUARD_DEPTH.with(|depth| depth.set(depth.get().saturating_add(1)));
+    TestStateGuard { _lock: lock }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn assert_test_state_guard_held() {
+    TEST_STATE_GUARD_DEPTH.with(|depth| {
+        assert!(
+            depth.get() != 0,
+            "runtime tests must hold test_guard before touching shared state"
+        );
+    });
+}
+
+#[cfg(all(not(target_os = "none"), test))]
 fn reset_test_ring() {
+    assert_test_state_guard_held();
     // SAFETY: Runtime tests hold `test_guard` before resetting shared state.
     unsafe {
         (*TEST_RING.0.get()).fill(0);
@@ -14763,6 +14809,7 @@ fn reset_test_ring() {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn reset_test_sdio_transfer_log() {
+    assert_test_state_guard_held();
     // SAFETY: Runtime tests hold `test_guard` before resetting shared state.
     unsafe {
         let log = &mut *TEST_SDIO_TRANSFER_LOG.0.get();
@@ -14773,6 +14820,7 @@ fn reset_test_sdio_transfer_log() {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn reset_test_sdio_transfer_failure() {
+    assert_test_state_guard_held();
     // SAFETY: Runtime tests hold `test_guard` before resetting shared state.
     unsafe {
         *TEST_SDIO_TRANSFER_FAILURE.0.get() = TestSdioTransferFailureState::default();
@@ -14998,6 +15046,7 @@ fn test_sdio_transfer_index(
 
 #[cfg(all(not(target_os = "none"), test))]
 fn read_ring_byte(offset: usize) -> u8 {
+    assert_test_state_guard_held();
     if offset >= DRIVER_TASK_RING_PAGE_BYTES {
         return 0;
     }
@@ -15021,6 +15070,7 @@ fn write_ring_byte(offset: usize, value: u8) {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn write_ring_byte(offset: usize, value: u8) {
+    assert_test_state_guard_held();
     if offset >= DRIVER_TASK_RING_PAGE_BYTES {
         return;
     }
@@ -15043,6 +15093,7 @@ fn read_shared_buffer_byte(offset: usize) -> u8 {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn read_shared_buffer_byte(offset: usize) -> u8 {
+    assert_test_state_guard_held();
     if offset >= DRIVER_TASK_RING_PAGE_BYTES * 64 {
         return 0;
     }
@@ -15067,6 +15118,7 @@ fn write_shared_buffer_byte(offset: usize, value: u8) {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn write_shared_buffer_byte(offset: usize, value: u8) {
+    assert_test_state_guard_held();
     if offset >= DRIVER_TASK_RING_PAGE_BYTES * 64 {
         return;
     }
@@ -15688,6 +15740,7 @@ fn read_dma_byte(addr: usize) -> u8 {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn read_dma_byte(addr: usize) -> u8 {
+    assert_test_state_guard_held();
     let Some(offset) = test_dma_offset(addr) else {
         return 0;
     };
@@ -15712,6 +15765,7 @@ fn write_dma_byte(addr: usize, value: u8) {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn write_dma_byte(addr: usize, value: u8) {
+    assert_test_state_guard_held();
     let Some(offset) = test_dma_offset(addr) else {
         return;
     };
@@ -15734,6 +15788,7 @@ fn genet_read32(offset: usize) -> u32 {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn genet_read32(offset: usize) -> u32 {
+    assert_test_state_guard_held();
     let Some(word) = test_genet_mmio_word(offset) else {
         return 0;
     };
@@ -15758,6 +15813,7 @@ fn genet_write32(offset: usize, value: u32) {
 
 #[cfg(all(not(target_os = "none"), test))]
 fn genet_write32(offset: usize, value: u32) {
+    assert_test_state_guard_held();
     let Some(word) = test_genet_mmio_word(offset) else {
         return;
     };
@@ -22909,10 +22965,8 @@ mod tests {
         DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL, DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI,
     };
 
-    fn test_guard() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock()
-            .expect("runtime tests must serialize global state")
+    fn test_guard() -> TestStateGuard {
+        test_state_guard()
     }
 
     fn reset_runtime_for_test() {
@@ -23536,16 +23590,17 @@ mod tests {
             ..tx
         };
 
-        let idle_result = driver_runtime_genet_completion_result(
-            GENET_ACTIVE_RING_DESCS as u16,
-            0,
-            0,
-            0,
-            0,
-            false,
-            false,
-            false,
-        );
+        let idle_result =
+            driver_runtime_genet_completion_result(DriverRuntimeGenetCompletionResultParts {
+                tx_free: GENET_ACTIVE_RING_DESCS as u16,
+                tx_in_flight: 0,
+                rx_queue_count: 0,
+                rx_queue_high_water: 0,
+                rx_max_drained_per_turn: 0,
+                rx_drain_budget_hit: false,
+                rx_byte_budget_hit: false,
+                rx_overflow_seen: false,
+            });
         assert_eq!(
             service_command(0, poll),
             genet_tx_idle_completion(32, 1, GENET_ACTIVE_RING_DESCS as u16, 0, idle_result)
@@ -23556,7 +23611,7 @@ mod tests {
     fn genet_hw_init_hard_clears_rbuf_flush_control() {
         let _guard = test_guard();
         reset_runtime_for_test();
-        genet_write32(GENET_SYS_RBUF_FLUSH_CTRL, u32::MAX & !(1 << 1));
+        genet_write32(GENET_SYS_RBUF_FLUSH_CTRL, !(1_u32 << 1));
 
         genet_hw_init_registers();
 
@@ -26134,7 +26189,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_rx_glom_and_deferred_queue_caps_stay_bounded() {
+    fn cyw43_rx_glom_and_deferred_queue_caps_match_old_good_envelope() {
         assert_eq!(CYW43_RX_DRAIN_BUDGET, 16);
         assert_eq!(CYW43_DATA_TX_POST_DRAIN_BUDGET, 8);
         assert_eq!(CYW43_RX_GLOM_SUBFRAME_CAP, 8);
@@ -28777,6 +28832,8 @@ mod tests {
 
     #[test]
     fn cyw43_descriptor_rejects_direct_sdio_mmio_even_with_bus_link() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let mut descriptor = descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET);
         assert!(descriptor_resources_ready(&descriptor, HOT_PATH_CYW43_WIFI));
 
@@ -29059,6 +29116,8 @@ mod tests {
 
     #[test]
     fn cyw43_transport_init_reports_exact_missing_bus_link_fault() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
 
         assert_eq!(
@@ -30473,6 +30532,8 @@ mod tests {
 
     #[test]
     fn cyw43_firmware_stream_rejects_nonzero_tail_padding() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let payload_offset = usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE);
         for index in 0..3_584 {
             write_runtime_payload_byte(payload_offset + index, 0);
@@ -32442,6 +32503,8 @@ mod tests {
 
     #[test]
     fn usb_enumeration_requires_command_path_before_live_port_scan() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let mut state = UsbRuntimeState::new();
         state.initialized = true;
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY;
@@ -32753,6 +32816,8 @@ mod tests {
 
     #[test]
     fn usb_keyboard_arms_known_good_interrupt_queue_depth() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
         let mut state = UsbRuntimeState::new();
         state.db_offset = 0x1000;
@@ -32807,6 +32872,8 @@ mod tests {
 
     #[test]
     fn usb_keyboard_interrupt_trbs_request_bounded_endpoint_packet_len() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
         let mut state = UsbRuntimeState::new();
         state.db_offset = 0x1000;
@@ -32838,6 +32905,8 @@ mod tests {
 
     #[test]
     fn usb_keyboard_interrupt_queue_refuses_owned_trb_index() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
         let mut state = UsbRuntimeState::new();
         state.db_offset = 0x1000;
@@ -33980,6 +34049,8 @@ mod tests {
 
     #[test]
     fn usb_keyboard_decodes_report_buffer_from_transfer_event_trb() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
         let dma_range = runtime_resource_range(
             &descriptor,

@@ -1,0 +1,8 @@
+# Author: Lukas Bower
+# Purpose: Record Milestone 26c non-test Rust risk-pattern baseline and approval state.
+# Copyright 2026 Lukas Bower
+pattern,count,evidence,allowed_increase,notes
+unsafe,804,out/audit/gate/20260627T235957Z/rust-risk-ratchet.log,no,Due-diligence filtered apps/crates non-test Rust count; future increases require approved exception.
+unwrap(,469,out/audit/gate/20260627T235957Z/rust-risk-ratchet.log,no,Due-diligence filtered apps/crates non-test Rust count; future increases require approved exception.
+expect(,1023,out/audit/gate/20260627T235957Z/rust-risk-ratchet.log,no,Due-diligence filtered apps/crates non-test Rust count; future increases require approved exception.
+panic!,147,out/audit/gate/20260627T235957Z/rust-risk-ratchet.log,no,Due-diligence filtered apps/crates non-test Rust count; future increases require approved exception.

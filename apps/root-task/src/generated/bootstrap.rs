@@ -7,9 +7,9 @@
 
 use super::{
     AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig,
-    ControlPlaneConfig, DhcpPolicyConfig, DriverAffinityPolicy, DriverRuntimeImagePolicy,
-    DriverRuntimeImageSpec, ExportControlConfig, HardwareConfig, HardwareDevice,
-    HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig,
+    ControlPlaneConfig, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy,
+    DriverRuntimeImagePolicy, DriverRuntimeImageSpec, ExportControlConfig, HardwareConfig,
+    HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig,
     HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState,
     LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig,
     NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig,
@@ -20,6 +20,8 @@ use super::{
     StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema,
     TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec,
     UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig,
+    WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerRoleRuntime, WorkerRuntimeConfig,
+    WorkerSchedulingConfig, WorkerSchedulingProfile,
 };
 use cohesix_ticket::{Role, TicketKey};
 
@@ -28,7 +30,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "ccb5032c5aa08c0ebc645a67ad9da5304f69f488298564eb11f05855223be06e";
+    "ebe3d952e99b02136b911962614c3a52acfa97c2ae940a1f832d1158ffe47756";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -88,6 +90,82 @@ pub const CACHE_POLICY: CachePolicy = CachePolicy {
     dma_clean: true,
     dma_invalidate: true,
     unify_instructions: false,
+};
+
+pub const DMA_CONFIG: DmaConfig = DmaConfig {
+    protection_profile: DmaProtectionProfile::None,
+};
+
+pub const WORKER_RUNTIME_ROLES: [WorkerRoleRuntime; 4] = [
+    WorkerRoleRuntime {
+        role: Role::WorkerHeartbeat,
+        implemented: true,
+        ticket_scope: "/worker",
+        telemetry_path_template: "/shard/<label>/worker/<id>/telemetry",
+        lease_path_template: "",
+        shutdown_policy: "notification",
+    },
+    WorkerRoleRuntime {
+        role: Role::WorkerGpu,
+        implemented: true,
+        ticket_scope: "/gpu",
+        telemetry_path_template: "/shard/<label>/worker/<id>/telemetry",
+        lease_path_template: "/gpu/<id>/lease",
+        shutdown_policy: "notification",
+    },
+    WorkerRoleRuntime {
+        role: Role::WorkerBus,
+        implemented: false,
+        ticket_scope: "/bus",
+        telemetry_path_template: "/shard/<label>/worker/<id>/telemetry",
+        lease_path_template: "",
+        shutdown_policy: "deferred",
+    },
+    WorkerRoleRuntime {
+        role: Role::WorkerLora,
+        implemented: true,
+        ticket_scope: "/lora",
+        telemetry_path_template: "/shard/<label>/worker/<id>/telemetry",
+        lease_path_template: "/lora/<scope>/lease",
+        shutdown_policy: "notification",
+    },
+];
+
+pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {
+    implementation_epoch: 26,
+    max_workers: 8,
+    ticket_subject_required: true,
+    cap_backed_authority: true,
+    notification_lifecycle: true,
+    roles: &WORKER_RUNTIME_ROLES,
+    endpoint_caps: WorkerEndpointCapConfig {
+        required: true,
+        attach_badge_base: 638324736,
+        telemetry_badge_base: 638328832,
+        lease_badge_base: 638332928,
+        receipt_badge_base: 638337024,
+        revoke_badge_base: 638341120,
+        epoch_bits: 8,
+        role_bits: 4,
+    },
+    notifications: WorkerNotificationConfig {
+        enabled: true,
+        revoke_badge: 638345216,
+        shutdown_badge: 638349312,
+        lease_expiry_badge: 638353408,
+        telemetry_pressure_badge: 638357504,
+        irq_badge: 638361600,
+    },
+    scheduling: WorkerSchedulingConfig {
+        profile: WorkerSchedulingProfile::NonMcs,
+        priority: 96,
+        domain: 0,
+        service_turn_budget: 64,
+        mcs_budget_us: 0,
+        mcs_period_us: 0,
+        timeout_endpoint_badge: 0,
+        consumed_budget_evidence: false,
+    },
 };
 
 pub const SECURE9P_LIMITS: Secure9pLimits = Secure9pLimits {
@@ -648,10 +726,10 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
-pub const INITIAL_AUDIT_LINES: [&str; 36] = [
+pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.5",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=3a8690c01e1c9c165b91d3c366fbe7dcb9667602461f82e51df6ca5e2ba45d77",
+    "manifest.sha256=b5d22bc62de7e0883b8fea8acc6db377cfe3450e8f6357f1a6c6d01a9e66971b",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",
@@ -670,6 +748,12 @@ pub const INITIAL_AUDIT_LINES: [&str; 36] = [
     "manifest.cache.dma_clean=true",
     "manifest.cache.dma_invalidate=true",
     "manifest.cache.unify_instructions=false",
+    "manifest.dma.protection_profile=none",
+    "manifest.worker_runtime.implementation_epoch=26",
+    "manifest.worker_runtime.cap_backed_authority=true",
+    "manifest.worker_runtime.notification_lifecycle=true",
+    "manifest.worker_runtime.scheduling.profile=non-mcs",
+    "manifest.worker_runtime.scheduling.service_turn_budget=64",
     "manifest.features.net_console=true",
     "manifest.hw.secure_boot=false",
     "manifest.hw.no_nic=false",

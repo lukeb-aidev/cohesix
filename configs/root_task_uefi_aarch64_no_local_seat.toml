@@ -62,6 +62,76 @@ dma_clean = true
 dma_invalidate = true
 unify_instructions = false
 
+[dma]
+protection_profile = "bounded-no-iommu"
+
+[worker_runtime]
+implementation_epoch = 26
+max_workers = 8
+ticket_subject_required = true
+cap_backed_authority = true
+notification_lifecycle = true
+
+[[worker_runtime.roles]]
+role = "worker-heartbeat"
+implemented = true
+ticket_scope = "/worker"
+telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
+lease_path_template = ""
+shutdown_policy = "notification"
+
+[[worker_runtime.roles]]
+role = "worker-gpu"
+implemented = true
+ticket_scope = "/gpu"
+telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
+lease_path_template = "/gpu/<id>/lease"
+shutdown_policy = "notification"
+
+[[worker_runtime.roles]]
+role = "worker-bus"
+implemented = false
+ticket_scope = "/bus"
+telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
+lease_path_template = ""
+shutdown_policy = "deferred"
+
+[[worker_runtime.roles]]
+role = "worker-lora"
+implemented = true
+ticket_scope = "/lora"
+telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
+lease_path_template = "/lora/<scope>/lease"
+shutdown_policy = "notification"
+
+[worker_runtime.endpoint_caps]
+required = true
+attach_badge_base = 638324736
+telemetry_badge_base = 638328832
+lease_badge_base = 638332928
+receipt_badge_base = 638337024
+revoke_badge_base = 638341120
+epoch_bits = 8
+role_bits = 4
+
+[worker_runtime.notifications]
+enabled = true
+revoke_badge = 638345216
+shutdown_badge = 638349312
+lease_expiry_badge = 638353408
+telemetry_pressure_badge = 638357504
+irq_badge = 638361600
+
+[worker_runtime.scheduling]
+profile = "non-mcs"
+priority = 96
+domain = 0
+service_turn_budget = 64
+mcs_budget_us = 0
+mcs_period_us = 0
+timeout_endpoint_badge = 0
+consumed_budget_evidence = false
+
 [features]
 net_console = false
 serial_console = true

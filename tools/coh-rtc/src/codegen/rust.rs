@@ -5,8 +5,9 @@
 
 use crate::codegen::hash_bytes;
 use crate::ir::{
-    resolve_manifest_relative_path, AttestationPolicy, HardwareDeviceKind, HostProvider,
-    HostTicketAction, HostTicketLifecycleState, Manifest, NetworkBackendKind, Role, SidecarLink,
+    resolve_manifest_relative_path, AttestationPolicy, DmaProtectionProfile, HardwareDeviceKind,
+    HostProvider, HostTicketAction, HostTicketLifecycleState, Manifest, NetworkBackendKind, Role,
+    SidecarLink, WorkerSchedulingProfile,
 };
 use anyhow::{Context, Result};
 use serde::Serialize;
@@ -60,6 +61,94 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub dma_clean: bool,")?;
     writeln!(mod_contents, "    pub dma_invalidate: bool,")?;
     writeln!(mod_contents, "    pub unify_instructions: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum DmaProtectionProfile {{")?;
+    writeln!(mod_contents, "    None,")?;
+    writeln!(mod_contents, "    BoundedNoIommu,")?;
+    writeln!(mod_contents, "    SmmuV2,")?;
+    writeln!(mod_contents, "    SmmuV3,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct DmaConfig {{")?;
+    writeln!(
+        mod_contents,
+        "    pub protection_profile: DmaProtectionProfile,"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum WorkerSchedulingProfile {{")?;
+    writeln!(mod_contents, "    NonMcs,")?;
+    writeln!(mod_contents, "    Mcs,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct WorkerRoleRuntime {{")?;
+    writeln!(mod_contents, "    pub role: Role,")?;
+    writeln!(mod_contents, "    pub implemented: bool,")?;
+    writeln!(mod_contents, "    pub ticket_scope: &'static str,")?;
+    writeln!(
+        mod_contents,
+        "    pub telemetry_path_template: &'static str,"
+    )?;
+    writeln!(mod_contents, "    pub lease_path_template: &'static str,")?;
+    writeln!(mod_contents, "    pub shutdown_policy: &'static str,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct WorkerEndpointCapConfig {{")?;
+    writeln!(mod_contents, "    pub required: bool,")?;
+    writeln!(mod_contents, "    pub attach_badge_base: u64,")?;
+    writeln!(mod_contents, "    pub telemetry_badge_base: u64,")?;
+    writeln!(mod_contents, "    pub lease_badge_base: u64,")?;
+    writeln!(mod_contents, "    pub receipt_badge_base: u64,")?;
+    writeln!(mod_contents, "    pub revoke_badge_base: u64,")?;
+    writeln!(mod_contents, "    pub epoch_bits: u8,")?;
+    writeln!(mod_contents, "    pub role_bits: u8,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct WorkerNotificationConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub revoke_badge: u64,")?;
+    writeln!(mod_contents, "    pub shutdown_badge: u64,")?;
+    writeln!(mod_contents, "    pub lease_expiry_badge: u64,")?;
+    writeln!(mod_contents, "    pub telemetry_pressure_badge: u64,")?;
+    writeln!(mod_contents, "    pub irq_badge: u64,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct WorkerSchedulingConfig {{")?;
+    writeln!(mod_contents, "    pub profile: WorkerSchedulingProfile,")?;
+    writeln!(mod_contents, "    pub priority: u8,")?;
+    writeln!(mod_contents, "    pub domain: u8,")?;
+    writeln!(mod_contents, "    pub service_turn_budget: u16,")?;
+    writeln!(mod_contents, "    pub mcs_budget_us: u32,")?;
+    writeln!(mod_contents, "    pub mcs_period_us: u32,")?;
+    writeln!(mod_contents, "    pub timeout_endpoint_badge: u64,")?;
+    writeln!(mod_contents, "    pub consumed_budget_evidence: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct WorkerRuntimeConfig {{")?;
+    writeln!(mod_contents, "    pub implementation_epoch: u32,")?;
+    writeln!(mod_contents, "    pub max_workers: u16,")?;
+    writeln!(mod_contents, "    pub ticket_subject_required: bool,")?;
+    writeln!(mod_contents, "    pub cap_backed_authority: bool,")?;
+    writeln!(mod_contents, "    pub notification_lifecycle: bool,")?;
+    writeln!(mod_contents, "    pub roles: &'static [WorkerRoleRuntime],")?;
+    writeln!(
+        mod_contents,
+        "    pub endpoint_caps: WorkerEndpointCapConfig,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub notifications: WorkerNotificationConfig,"
+    )?;
+    writeln!(mod_contents, "    pub scheduling: WorkerSchedulingConfig,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -702,6 +791,14 @@ pub fn emit_rust(
     )?;
     writeln!(
         mod_contents,
+        "pub const DMA_CONFIG: DmaConfig = bootstrap::DMA_CONFIG;"
+    )?;
+    writeln!(
+        mod_contents,
+        "pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = bootstrap::WORKER_RUNTIME_CONFIG;"
+    )?;
+    writeln!(
+        mod_contents,
         "pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;"
     )?;
     writeln!(
@@ -865,6 +962,24 @@ pub fn emit_rust(
         "pub const fn cache_policy() -> CachePolicy {{"
     )?;
     writeln!(mod_contents, "    bootstrap::CACHE_POLICY")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "pub const fn dma_config() -> DmaConfig {{")?;
+    writeln!(mod_contents, "    bootstrap::DMA_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "pub const fn worker_runtime_config() -> WorkerRuntimeConfig {{"
+    )?;
+    writeln!(mod_contents, "    bootstrap::WORKER_RUNTIME_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "pub const fn worker_runtime_roles() -> &'static [WorkerRoleRuntime] {{"
+    )?;
+    writeln!(mod_contents, "    &bootstrap::WORKER_RUNTIME_ROLES")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(
@@ -1056,7 +1171,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DriverAffinityPolicy, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SidecarLoraAdapter, SidecarLoraConfig, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile}};"
     )?;
     writeln!(
         bootstrap_contents,
@@ -1125,6 +1240,63 @@ pub fn emit_rust(
         manifest.cache.dma_clean,
         manifest.cache.dma_invalidate,
         manifest.cache.unify_instructions
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const DMA_CONFIG: DmaConfig = DmaConfig {{ protection_profile: {} }};\n",
+        dma_protection_profile_to_rust(manifest.dma.protection_profile)
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const WORKER_RUNTIME_ROLES: [WorkerRoleRuntime; {}] = [",
+        manifest.worker_runtime.roles.len()
+    )?;
+    for role in &manifest.worker_runtime.roles {
+        writeln!(
+            bootstrap_contents,
+            "    WorkerRoleRuntime {{ role: {}, implemented: {}, ticket_scope: \"{}\", telemetry_path_template: \"{}\", lease_path_template: \"{}\", shutdown_policy: \"{}\" }},",
+            role_to_rust(role.role),
+            role.implemented,
+            escape_literal(&role.ticket_scope),
+            escape_literal(&role.telemetry_path_template),
+            escape_literal(&role.lease_path_template),
+            escape_literal(&role.shutdown_policy),
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    let endpoint_caps = &manifest.worker_runtime.endpoint_caps;
+    let notifications = &manifest.worker_runtime.notifications;
+    let scheduling = &manifest.worker_runtime.scheduling;
+    writeln!(
+        bootstrap_contents,
+        "pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {{ implementation_epoch: {}, max_workers: {}, ticket_subject_required: {}, cap_backed_authority: {}, notification_lifecycle: {}, roles: &WORKER_RUNTIME_ROLES, endpoint_caps: WorkerEndpointCapConfig {{ required: {}, attach_badge_base: {}, telemetry_badge_base: {}, lease_badge_base: {}, receipt_badge_base: {}, revoke_badge_base: {}, epoch_bits: {}, role_bits: {} }}, notifications: WorkerNotificationConfig {{ enabled: {}, revoke_badge: {}, shutdown_badge: {}, lease_expiry_badge: {}, telemetry_pressure_badge: {}, irq_badge: {} }}, scheduling: WorkerSchedulingConfig {{ profile: {}, priority: {}, domain: {}, service_turn_budget: {}, mcs_budget_us: {}, mcs_period_us: {}, timeout_endpoint_badge: {}, consumed_budget_evidence: {} }} }};\n",
+        manifest.worker_runtime.implementation_epoch,
+        manifest.worker_runtime.max_workers,
+        manifest.worker_runtime.ticket_subject_required,
+        manifest.worker_runtime.cap_backed_authority,
+        manifest.worker_runtime.notification_lifecycle,
+        endpoint_caps.required,
+        endpoint_caps.attach_badge_base,
+        endpoint_caps.telemetry_badge_base,
+        endpoint_caps.lease_badge_base,
+        endpoint_caps.receipt_badge_base,
+        endpoint_caps.revoke_badge_base,
+        endpoint_caps.epoch_bits,
+        endpoint_caps.role_bits,
+        notifications.enabled,
+        notifications.revoke_badge,
+        notifications.shutdown_badge,
+        notifications.lease_expiry_badge,
+        notifications.telemetry_pressure_badge,
+        notifications.irq_badge,
+        worker_scheduling_profile_to_rust(scheduling.profile),
+        scheduling.priority,
+        scheduling.domain,
+        scheduling.service_turn_budget,
+        scheduling.mcs_budget_us,
+        scheduling.mcs_period_us,
+        scheduling.timeout_endpoint_badge,
+        scheduling.consumed_budget_evidence,
     )?;
     writeln!(
         bootstrap_contents,
@@ -1894,6 +2066,22 @@ fn network_backend_label(backend: NetworkBackendKind) -> &'static str {
     }
 }
 
+fn dma_protection_profile_to_rust(profile: DmaProtectionProfile) -> &'static str {
+    match profile {
+        DmaProtectionProfile::None => "DmaProtectionProfile::None",
+        DmaProtectionProfile::BoundedNoIommu => "DmaProtectionProfile::BoundedNoIommu",
+        DmaProtectionProfile::SmmuV2 => "DmaProtectionProfile::SmmuV2",
+        DmaProtectionProfile::SmmuV3 => "DmaProtectionProfile::SmmuV3",
+    }
+}
+
+fn worker_scheduling_profile_to_rust(profile: WorkerSchedulingProfile) -> &'static str {
+    match profile {
+        WorkerSchedulingProfile::NonMcs => "WorkerSchedulingProfile::NonMcs",
+        WorkerSchedulingProfile::Mcs => "WorkerSchedulingProfile::Mcs",
+    }
+}
+
 fn parse_optional_ipv4_literal(label: &str, value: &str) -> Result<Option<[u8; 4]>> {
     if value.trim().is_empty() {
         return Ok(None);
@@ -2309,6 +2497,30 @@ fn build_audit_lines(
         format!(
             "manifest.cache.unify_instructions={}",
             manifest.cache.unify_instructions
+        ),
+        format!(
+            "manifest.dma.protection_profile={}",
+            manifest.dma.protection_profile.as_str()
+        ),
+        format!(
+            "manifest.worker_runtime.implementation_epoch={}",
+            manifest.worker_runtime.implementation_epoch
+        ),
+        format!(
+            "manifest.worker_runtime.cap_backed_authority={}",
+            manifest.worker_runtime.cap_backed_authority
+        ),
+        format!(
+            "manifest.worker_runtime.notification_lifecycle={}",
+            manifest.worker_runtime.notification_lifecycle
+        ),
+        format!(
+            "manifest.worker_runtime.scheduling.profile={}",
+            manifest.worker_runtime.scheduling.profile.as_str()
+        ),
+        format!(
+            "manifest.worker_runtime.scheduling.service_turn_budget={}",
+            manifest.worker_runtime.scheduling.service_turn_budget
         ),
         format!(
             "manifest.features.net_console={}",
