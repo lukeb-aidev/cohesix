@@ -8,10 +8,13 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 doc_path="${repo_root}/docs/TEST_PLAN.md"
 runner_path="${repo_root}/scripts/ci/test_plan_run.sh"
+common_path="${repo_root}/scripts/ci/test_plan_common.sh"
 stage_02_path="${repo_root}/scripts/ci/test_plan_stage_02_host_fast.sh"
+stage_03_path="${repo_root}/scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh"
+stage_05_path="${repo_root}/scripts/ci/test_plan_stage_05_due_diligence.sh"
 due_diligence_path="${repo_root}/scripts/ci/due_diligence_gate.sh"
 
-python3 - "$repo_root" "$doc_path" "$runner_path" "$stage_02_path" "$due_diligence_path" <<'PY'
+python3 - "$repo_root" "$doc_path" "$runner_path" "$common_path" "$stage_02_path" "$stage_03_path" "$stage_05_path" "$due_diligence_path" <<'PY'
 import hashlib
 import pathlib
 import re
@@ -20,11 +23,17 @@ import sys
 root = pathlib.Path(sys.argv[1])
 doc = pathlib.Path(sys.argv[2])
 runner = pathlib.Path(sys.argv[3])
-stage_02 = pathlib.Path(sys.argv[4])
-due_diligence = pathlib.Path(sys.argv[5])
+common = pathlib.Path(sys.argv[4])
+stage_02 = pathlib.Path(sys.argv[5])
+stage_03 = pathlib.Path(sys.argv[6])
+stage_05 = pathlib.Path(sys.argv[7])
+due_diligence = pathlib.Path(sys.argv[8])
 text = doc.read_text()
 runner_text = runner.read_text()
+common_text = common.read_text()
 stage_02_text = stage_02.read_text()
+stage_03_text = stage_03.read_text()
+stage_05_text = stage_05.read_text()
 due_diligence_text = due_diligence.read_text()
 pattern = re.compile(r'^- `([^`]+)` — `sha256:([0-9a-f]{64})`$', re.M)
 entries = pattern.findall(text)
@@ -61,6 +70,13 @@ required_snippets = [
     "scripts/cohsh/run_regression_batch.sh",
     "scripts/cohsh/REST_regression_batch.sh",
     "scripts/ci/due_diligence_gate.sh",
+    "--iteration",
+    "TEST_PLAN_ITERATION",
+    "stage_01.inputs.sha256",
+    "stage_01.<target>.iteration",
+    "DD_REUSE_REGRESSION_BATCH_FROM",
+    "TP_STAGE5_REUSE_REGRESSION",
+    "COHSH_BATCH_GROUPS",
     "TP_STAGE4_GATEWAY_BIND",
     "self-contained local QEMU by default",
     "target.env",
@@ -164,6 +180,10 @@ required_runner_snippets = [
     "existing gateway",
     "COHSH_TCP_HOST or COHSH_HOST",
     "TP_PI4_ALLOW_LOOPBACK",
+    "iteration=\"${TEST_PLAN_ITERATION:-0}\"",
+    "tp_assert_stage_fingerprint_fresh",
+    "tp_stage_iteration_marker",
+    "stage_%02d.%s.iteration",
     "assert_full_target_pass",
     "PI4_RUNTIME_DMA_PROOF_FILE",
     "PI4_RUNTIME_DMA_PROOF=fresh-pi",
@@ -173,6 +193,21 @@ for snippet in required_runner_snippets:
     if snippet not in runner_text:
         print(
             f"missing target-qualified runner contract in {runner.relative_to(root)}: {snippet}",
+            file=sys.stderr,
+        )
+        errors += 1
+
+required_common_snippets = [
+    "tp_stage_input_fingerprint",
+    "tp_stage_fingerprint_file",
+    "tp_assert_stage_fingerprint_fresh",
+    "TEST_PLAN_ITERATION",
+    "stage_%02d.iteration",
+]
+for snippet in required_common_snippets:
+    if snippet not in common_text:
+        print(
+            f"missing staged-runner common contract in {common.relative_to(root)}: {snippet}",
             file=sys.stderr,
         )
         errors += 1
@@ -214,10 +249,39 @@ for command in required_stage_02_commands:
         )
         errors += 1
 
+required_stage_03_snippets = [
+    "COHSH_BATCH_GROUPS",
+    "TEST_PLAN_ITERATION",
+    "qemu-regression-subset",
+]
+for snippet in required_stage_03_snippets:
+    if snippet not in stage_03_text:
+        print(
+            f"missing Stage 03 iteration/subset guard in {stage_03.relative_to(root)}: {snippet}",
+            file=sys.stderr,
+        )
+        errors += 1
+
+required_stage_05_snippets = [
+    "TP_STAGE5_REUSE_REGRESSION",
+    "DD_REUSE_REGRESSION_BATCH_FROM",
+    "tp_assert_stage_fingerprint_fresh 3",
+]
+for snippet in required_stage_05_snippets:
+    if snippet not in stage_05_text:
+        print(
+            f"missing Stage 05 reuse contract in {stage_05.relative_to(root)}: {snippet}",
+            file=sys.stderr,
+        )
+        errors += 1
+
 required_due_diligence_commands = [
     "env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings",
     "env CARGO_INCREMENTAL=0 cargo check --workspace",
     "env CARGO_INCREMENTAL=0 cargo test --workspace",
+    "DD_REUSE_REGRESSION_BATCH_FROM",
+    "check_reused_regression_batch",
+    "DD_REGRESSION_GROUPS",
 ]
 for command in required_due_diligence_commands:
     if command not in due_diligence_text:

@@ -14,6 +14,9 @@ This section is a mandatory execution contract for all contributors and agents w
 - For target-qualified evidence, select the target explicitly:
   - `scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/<run-id>`
   - `scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/<run-id>`
+- For focused debugging, run one stage in iteration mode:
+  - `scripts/ci/test_plan_run.sh --target qemu --stage 3 --iteration --state-dir out/test-plan/<run-id>`
+  - `TEST_PLAN_ITERATION=1 scripts/ci/test_plan_run.sh --target pi4 --stage 3 --state-dir out/test-plan/<run-id>`
 - Stage scripts are authoritative:
   - `scripts/ci/test_plan_stage_01_integrity.sh`
   - `scripts/ci/test_plan_stage_02_host_fast.sh`
@@ -25,6 +28,13 @@ This section is a mandatory execution contract for all contributors and agents w
 - If any stage fails, stop immediately.
 - Fix the root cause in code/docs/scripts first; do not bypass by proceeding to a later stage.
 - Re-run the failed stage until green, then continue to the next stage.
+- A focused rerun may use `--iteration`; it writes `stage_01.inputs.sha256`
+  style input fingerprints and `stage_01.<target>.iteration` markers, but it
+  never writes `stage_XX.done` or `stage_XX.<target>.done`.
+- Later stages may reuse earlier markers only when their stored input
+  fingerprints still match the current test-plan scripts, docs, and regression
+  fixtures. If a fingerprint is stale, rerun that earlier stage in the same
+  state dir before treating later evidence as current.
 - Do not mark the run complete until Stage 05 (`scripts/ci/due_diligence_gate.sh`) passes.
 
 3. No silent skips.
@@ -43,11 +53,19 @@ A run is **PASS** if and only if:
 - Stages **01-05** complete successfully and create `stage_01.done` ... `stage_05.done` in the shared state dir.
 - The state dir contains target metadata in `target.env`.
 - Target-qualified runs also create `stage_01.qemu.done` ... `stage_05.qemu.done` or `stage_01.pi4.done` ... `stage_05.pi4.done`.
+- Every completed stage records `stage_XX.inputs.sha256`; stale fingerprints
+  prevent later-stage reuse until the affected earlier stage is rerun.
+- Iteration markers such as `stage_01.qemu.iteration` or
+  `stage_01.pi4.iteration` are useful evidence for debugging but do not count
+  toward PASS.
 - No stage wrote an INCOMPLETE marker (presence of any `stage_*.incomplete` or any files under `out/test-plan/<run-id>/incomplete/` means **FAIL**).
 - Stage 05 runs `scripts/ci/due_diligence_gate.sh` and it is green.
 
 Notes:
 - Running individual stages (for example `--stage 2`) is for iteration only; it is not a "PASS" run.
+- Subset selectors such as `COHSH_BATCH_GROUPS=base` are valid only with
+  `--iteration`; a final Stage 03 or due-diligence run requires all regression
+  groups.
 - "NA" checks must still be logged, but they do not cause failure; INCOMPLETE always fails.
 
 ## Target-Qualified Runner Matrix
@@ -265,6 +283,10 @@ Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CY
 - Pi 4 hardware bring-up uses the same official runner against an already-booted TCP console: `COHSH_BATCH_TARGET=pi4 COHSH_TCP_HOST=<pi4-ip> COHSH_TCP_PORT=31337 scripts/cohsh/run_regression_batch.sh`. Pi mode archives a full per-script ledger, runs lifecycle resume before/after groups and scripts, continues after failures by default, and writes a unique `out/regression-logs/pi4-full-<utc>/summary.log` unless `COHSH_LOG_ROOT` is set.
 - Stage 03 archives per-script logs under the stage state dir (for example `out/test-plan/<run-id>/qemu-regression-logs/`).
 - Manual runs of `scripts/cohsh/run_regression_batch.sh` default to `out/regression-logs/` unless `COHSH_LOG_ROOT` is set.
+- Focused Stage 03 iteration may use `COHSH_BATCH_GROUPS=base`,
+  `base-telemetry`, `base-shard`, or `gated` with `--iteration`. Without
+  `--iteration`, any subset writes an INCOMPLETE record and cannot produce
+  Stage 03 PASS evidence.
 Start QEMU (source tree or bundle), then verify:
 - Capture QEMU serial to `logs/qemu-console.log` (example: `./qemu/run.sh | tee logs/qemu-console.log`).
 - `cohsh` (queen): `help`, `attach queen` (skip if you launched cohsh with `--role`),
@@ -691,6 +713,15 @@ Run Sections 3–5 using the extracted bundle in a clean temp directory (not the
 - `CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings`
 - `CARGO_INCREMENTAL=0 cargo check --workspace`
 - `CARGO_INCREMENTAL=0 cargo test --workspace`
+- When Stage 05 is invoked through `scripts/ci/test_plan_run.sh`, the wrapper
+  may reuse fresh Stage 03 regression evidence by passing
+  `DD_REUSE_REGRESSION_BATCH_FROM=<state-dir>/qemu-regression-logs` into the
+  due-diligence gate. Set `TP_STAGE5_REUSE_REGRESSION=0` to force a fresh
+  regression batch inside Stage 05.
+- Direct standalone `scripts/ci/due_diligence_gate.sh` remains exhaustive and
+  reruns the regression batch unless `DD_REUSE_REGRESSION_BATCH_FROM` is
+  supplied explicitly. `DD_REGRESSION_GROUPS` or inherited `COHSH_BATCH_GROUPS`
+  values other than `all` mark the gate INCOMPLETE.
 - Do not progress beyond this stage until all prior scripted stages have completion markers and the due-diligence gate is fully green.
 
 ## Trace replay limits

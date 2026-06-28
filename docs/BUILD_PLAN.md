@@ -7077,7 +7077,9 @@ Goal: Make target-qualified staged-run semantics real before any cleanup or stru
 Inputs: docs/TEST_PLAN.md, docs/HARDWARE_BRINGUP.md, scripts/ci/test_plan_run.sh, scripts/ci/test_plan_stage_*.sh, scripts/ci/check_test_plan.sh, scripts/pi4-image-build.sh, scripts/uboot/qemu-uboot-smoke.sh
 Changes:
   - scripts/ci/test_plan_run.sh — add explicit `--target qemu|pi4` selection, write target metadata into the shared state dir, pass the selected target to every stage, and reject unsupported target/stage combinations before a stage can write misleading evidence.
-  - scripts/ci/test_plan_stage_*.sh — consume the selected target and write target-qualified stage markers, logs, and incomplete records without treating QEMU artifacts as Pi 4 proof or Pi 4 hardware logs as QEMU proof.
+  - scripts/ci/test_plan_run.sh + scripts/ci/test_plan_common.sh — add explicit `--iteration` rerun semantics and per-stage input fingerprints so focused reruns cannot be mistaken for target-qualified PASS and stale earlier evidence is detected before later-stage reuse.
+  - scripts/ci/test_plan_stage_*.sh — consume the selected target and write target-qualified stage markers, logs, iteration markers, input fingerprints, and incomplete records without treating QEMU artifacts as Pi 4 proof or Pi 4 hardware logs as QEMU proof.
+  - scripts/ci/test_plan_stage_05_due_diligence.sh + scripts/ci/due_diligence_gate.sh — permit Stage 05 to validate and reuse fresh Stage 03 regression evidence from the same state dir while leaving standalone due-diligence exhaustive by default.
   - scripts/ci/check_test_plan.sh — enforce that docs, runner usage, stage scripts, and target matrix language agree.
   - docs/TEST_PLAN.md + docs/HARDWARE_BRINGUP.md — document the QEMU/Pi 4 target matrix, target-specific prerequisites, allowed stage combinations, state-dir metadata, and PASS/INCOMPLETE interpretation.
   - docs/audit/M26C_TARGET_RUNNER_BASELINE.md — checked-in evidence for runner syntax, target matrix, smoke commands, intentionally unsupported combinations, and the rule that Phase 4 cleanup cannot start without this gate.
@@ -7089,6 +7091,8 @@ Commands:
 Checks:
   - `--target qemu|pi4` is accepted by the runner, recorded in the state dir, and visible to every stage script.
   - Unsupported target/stage combinations fail before producing `stage_*.done` or target-qualified PASS evidence.
+  - Focused `--iteration` runs write only `stage_*.iteration` / `stage_*.<target>.iteration` plus input fingerprints, never PASS markers.
+  - `COHSH_BATCH_GROUPS` subsets are iteration-only; final Stage 03 and due-diligence runs require the full regression batch or verified reuse of a fresh full Stage 03 batch.
   - The checker fails if docs mention runner commands, stage matrices, or closure criteria that the scripts do not implement.
   - No Phase 4 cleanup or structural decomposition task may start until this runner baseline is present and PASS.
 Deliverables:

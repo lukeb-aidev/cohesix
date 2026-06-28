@@ -13,11 +13,18 @@ Status: `PASS-contract / QEMU-STAGE-01-05-PASS / PI4-STAGE-01-SMOKE-PASS`
 stage, and writes target-qualified stage markers only after a successful stage
 and required artifact checks.
 
+The runner also supports focused iteration through `--iteration` /
+`TEST_PLAN_ITERATION=1`. Iteration writes `stage_XX.inputs.sha256`,
+`stage_XX.iteration`, and `stage_XX.<target>.iteration`; it does not write
+generic or target-qualified PASS markers. Later stages check stored input
+fingerprints before reusing previous stage evidence when fingerprints exist.
+
 Target-qualified PASS requires:
 
 - `stage_01.done` through `stage_05.done`
 - `stage_01.<target>.done` through `stage_05.<target>.done`
 - `target.env`
+- `stage_01.inputs.sha256` through `stage_05.inputs.sha256`
 - no `stage_*.incomplete`
 - no files under `incomplete/`
 
@@ -27,6 +34,11 @@ Pi 4 Stage 03 requires a live Pi TCP console host through `COHSH_TCP_HOST` or
 Without those prerequisites the runner fails before stage execution so QEMU
 evidence cannot be mistaken for Pi 4 proof.
 
+Stage 03 subgroup selectors such as `COHSH_BATCH_GROUPS=base` are iteration-only
+and write INCOMPLETE in final mode. Stage 05 may validate and reuse fresh Stage
+03 regression evidence from the same state dir; standalone due diligence remains
+exhaustive unless `DD_REUSE_REGRESSION_BATCH_FROM` is supplied explicitly.
+
 ## Evidence
 
 | Command | Result |
@@ -34,6 +46,8 @@ evidence cannot be mistaken for Pi 4 proof.
 | `bash -n scripts/ci/test_plan_run.sh scripts/ci/check_test_plan.sh scripts/ci/check_mermaid_github.sh scripts/ci/render_mermaid_github.sh` | PASS |
 | `scripts/ci/test_plan_run.sh --list` | PASS |
 | `scripts/ci/check_test_plan.sh` | PASS |
+| Stage input fingerprint smoke (`tp_stage_input_fingerprint 1/3/5`) | PASS |
+| Stage 03 subgroup without `--iteration` | PASS negative test; status 1, `stage_03.incomplete` written, no PASS marker |
 | Invalid target negative test | PASS in runner handoff; status 2 and no stage marker |
 | Pi 4 Stage 03 without host | PASS in runner handoff; status 2 and no stage marker |
 | Pi 4 Stage 04 without gateway | PASS in runner handoff; status 2 and no stage marker |

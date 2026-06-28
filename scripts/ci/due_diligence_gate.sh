@@ -9,6 +9,12 @@
 #   DD_SKIP_REGRESSION_BATCH=1 Mark regression batch check as incomplete (run still fails)
 #   DD_SKIP_CARGO_AUDIT=1      Mark cargo-audit as incomplete (run still fails)
 #   DD_SKIP_CARGO_DENY=1       Mark cargo-deny advisories check as incomplete (run still fails)
+#   DD_REUSE_REGRESSION_BATCH_FROM
+#                                Validate a prior full Stage 03 regression log root
+#                                instead of rerunning the batch. Used only by
+#                                scripts/ci/test_plan_stage_05_due_diligence.sh.
+#   DD_REGRESSION_GROUPS        Full due-diligence requires all regression groups.
+#                                Subsets are incomplete and fail the gate.
 #   DD_REGRESSION_READY_TIMEOUT  Override run_regression_batch READY_TIMEOUT (default: 900)
 #   DD_REGRESSION_PORT_TIMEOUT   Override run_regression_batch PORT_TIMEOUT (default: 60)
 #   DD_REGRESSION_AUTH_TIMEOUT   Override run_regression_batch AUTH_READY_TIMEOUT (default: 120)
@@ -25,6 +31,8 @@ dd_regression_ready_timeout="${DD_REGRESSION_READY_TIMEOUT:-900}"
 dd_regression_port_timeout="${DD_REGRESSION_PORT_TIMEOUT:-60}"
 dd_regression_auth_timeout="${DD_REGRESSION_AUTH_TIMEOUT:-120}"
 dd_regression_quit_timeout="${DD_REGRESSION_QUIT_TIMEOUT:-60}"
+dd_reuse_regression_batch_from="${DD_REUSE_REGRESSION_BATCH_FROM:-}"
+dd_regression_groups="${DD_REGRESSION_GROUPS:-${COHSH_BATCH_GROUPS:-all}}"
 mkdir -p "$log_root"
 
 declare -a failures=()
@@ -411,6 +419,89 @@ print("exceptions register gate passed")
 PY
 }
 
+check_reused_regression_batch() {
+  local reuse_root="$1"
+  python3 - "$reuse_root" <<'PY'
+import pathlib
+import re
+import sys
+
+root = pathlib.Path(sys.argv[1])
+if not root.is_dir():
+    print(f"missing regression log root: {root}", file=sys.stderr)
+    sys.exit(1)
+
+summary = root / "summary.log"
+if summary.is_file():
+    text = summary.read_text(errors="ignore")
+    if "INFO target=pi4" not in text:
+        print(f"Pi 4 summary does not record target=pi4: {summary}", file=sys.stderr)
+        sys.exit(1)
+    match = re.search(r"RESULT pass=(\d+) fail=(\d+) total=(\d+)", text)
+    if not match:
+        print(f"Pi 4 summary is missing RESULT line: {summary}", file=sys.stderr)
+        sys.exit(1)
+    passed, failed, total = (int(value) for value in match.groups())
+    if failed != 0 or total == 0 or passed != total:
+        print(
+            f"Pi 4 regression summary is not a full pass: pass={passed} fail={failed} total={total}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"reused Pi 4 regression batch: {summary} pass={passed} total={total}")
+    sys.exit(0)
+
+expected = {
+    "base": [
+        "boot_v0",
+        "9p_batch",
+        "host_absent",
+        "host_sidecar_mock",
+        "observe_watch",
+        "root_cut_basic",
+        "session_lifecycle",
+        "busy_backpressure",
+        "cas_roundtrip",
+        "tcp_basic",
+        "session_pool",
+    ],
+    "base-telemetry": [
+        "telemetry_ring",
+        "telemetry_push_create",
+    ],
+    "base-shard": [
+        "shard_1k",
+    ],
+    "gated": [
+        "replay_journal",
+        "policy_gate",
+        "model_cas_bind",
+        "sidecar_integration",
+    ],
+}
+
+missing = []
+for group, scripts in expected.items():
+    group_root = root / group
+    if not group_root.is_dir():
+        missing.append(str(group_root))
+        continue
+    for script in scripts:
+        for suffix in ("out.log", "qemu.log"):
+            path = group_root / f"{script}.{suffix}"
+            if not path.is_file() or path.stat().st_size == 0:
+                missing.append(str(path))
+
+if missing:
+    print("reused QEMU regression batch is incomplete:", file=sys.stderr)
+    for path in missing:
+        print(f"  - {path}", file=sys.stderr)
+    sys.exit(1)
+
+print(f"reused QEMU regression batch: {root} groups={len(expected)} scripts=18")
+PY
+}
+
 run_step "required-audit-assets" check_required_audit_assets
 run_step "cargo-fmt-check" cargo fmt --all -- --check
 run_step "cargo-clippy-workspace" env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets -- -D warnings
@@ -437,10 +528,15 @@ else
 fi
 if [[ "${DD_SKIP_REGRESSION_BATCH:-0}" == "1" ]]; then
   mark_incomplete_step "regression-batch" "DD_SKIP_REGRESSION_BATCH=1"
+elif [[ -n "${dd_reuse_regression_batch_from}" ]]; then
+  run_step "regression-batch-reuse" check_reused_regression_batch "${dd_reuse_regression_batch_from}"
+elif [[ -n "${dd_regression_groups}" && "${dd_regression_groups}" != "all" ]]; then
+  mark_incomplete_step "regression-batch" "DD_REGRESSION_GROUPS=${dd_regression_groups}"
 else
   run_step \
     "regression-batch" \
     env \
+    COHSH_BATCH_GROUPS="${dd_regression_groups}" \
     COHSH_LOG_ROOT="${log_root}/regression-logs" \
     READY_TIMEOUT="${dd_regression_ready_timeout}" \
     PORT_TIMEOUT="${dd_regression_port_timeout}" \

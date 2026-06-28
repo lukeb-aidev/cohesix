@@ -13,6 +13,15 @@ tp_init
 tp_require_stage_done 2
 tp_stage_begin 3 "qemu-tcp-regression"
 
+selected_groups="${COHSH_BATCH_GROUPS:-all}"
+if [[ "${TEST_PLAN_ITERATION:-0}" != "1" && -n "${selected_groups}" && "${selected_groups}" != "all" ]]; then
+  tp_mark_incomplete \
+    "qemu-regression-subset" \
+    "COHSH_BATCH_GROUPS=${selected_groups}" \
+    "Only part of the TCP regression matrix was selected; this is useful for focused iteration but cannot produce Stage 03 PASS evidence."
+  tp_stage_complete 3
+fi
+
 ready_timeout="${TP_STAGE3_READY_TIMEOUT:-900}"
 port_timeout="${TP_STAGE3_PORT_TIMEOUT:-60}"
 quit_close_timeout="${TP_STAGE3_QUIT_CLOSE_TIMEOUT:-60}"

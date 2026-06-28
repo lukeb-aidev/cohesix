@@ -7,10 +7,12 @@ set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "${script_dir}/../.." && pwd)
+# shellcheck source=scripts/ci/test_plan_common.sh
+source "${script_dir}/test_plan_common.sh"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/ci/test_plan_run.sh [--target qemu|pi4] [--state-dir <path>] [--stage <1..5>] [--list]
+Usage: scripts/ci/test_plan_run.sh [--target qemu|pi4] [--state-dir <path>] [--stage <1..5>] [--iteration] [--list]
 
 Runs the scripted test plan stages in order:
   1 integrity
@@ -23,6 +25,7 @@ Options:
   --target <name>     Target under test: qemu or pi4. Defaults to qemu for legacy invocations.
   --state-dir <path>  Shared state/log directory for stage markers and logs.
   --stage <n>         Run exactly one stage (requires previous stage markers for n>1).
+  --iteration         Focused rerun mode for a single stage. Writes iteration markers only.
   --list              Print stage map and exit.
   --help              Show this help.
 
@@ -32,6 +35,7 @@ Environment pass-through:
   COHESIX_GATEWAY_URL / HIVE_GATEWAY_URL / COHSH_REST_URL / COH_REST_URL
   COHSH_BATCH_TARGET / COHSH_TCP_HOST / COHSH_TCP_PORT
   TP_STAGE4_GATEWAY_BIND / TP_STAGE4_QEMU_TCP_PORT
+  TEST_PLAN_ITERATION
   TP_SKIP_GENERATED_CHECK, TP_SKIP_PYTHON, TP_SKIP_FUSE, TP_WRITE_TRACE_FIXTURES
 
 Target contract:
@@ -46,6 +50,7 @@ Target contract:
 
 Notes:
   - TP_SKIP_* options record an INCOMPLETE marker and the stage fails (they are for local iteration only).
+  - --iteration is for focused debugging only; it never writes stage_XX.done or stage_XX.<target>.done.
 USAGE
 }
 
@@ -64,12 +69,15 @@ pi4   stages 1 2 3 4 5  (stage 3 requires COHSH_TCP_HOST/COHSH_HOST; stage 4 req
 state-dir target metadata:
 target.env
 stage_01.qemu.done / stage_01.pi4.done
+stage_01.inputs.sha256
+stage_01.qemu.iteration / stage_01.pi4.iteration
 STAGES
 }
 
 state_dir="${TEST_PLAN_STATE_DIR:-${repo_root}/out/test-plan/$(date -u +%Y%m%dT%H%M%SZ)}"
 single_stage=""
 target="${TEST_PLAN_TARGET:-qemu}"
+iteration="${TEST_PLAN_ITERATION:-0}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -97,6 +105,9 @@ while [[ $# -gt 0 ]]; do
       }
       single_stage="$1"
       ;;
+    --iteration)
+      iteration="1"
+      ;;
     --list)
       list_stages
       exit 0
@@ -123,6 +134,15 @@ case "${target}" in
     ;;
 esac
 
+case "${iteration}" in
+  0|1)
+    ;;
+  *)
+    echo "invalid TEST_PLAN_ITERATION value: ${iteration} (expected 0 or 1)" >&2
+    exit 2
+    ;;
+esac
+
 stage_script_path() {
   local stage="$1"
   case "${stage}" in
@@ -138,6 +158,11 @@ stage_script_path() {
 target_stage_marker() {
   local stage="$1"
   printf "%s/stage_%02d.%s.done" "${state_dir}" "${stage}" "${target}"
+}
+
+target_stage_iteration_marker() {
+  local stage="$1"
+  printf "%s/stage_%02d.%s.iteration" "${state_dir}" "${stage}" "${target}"
 }
 
 existing_gateway_url() {
@@ -197,6 +222,11 @@ require_previous_target_markers() {
     if [[ ! -f "${marker}" ]]; then
       echo "missing target-qualified stage marker: ${marker}" >&2
       echo "run stage $(printf "%02d" "${previous}") first with --target ${target} --state-dir ${state_dir}" >&2
+      return 1
+    fi
+    TEST_PLAN_ROOT="${repo_root}"
+    TEST_PLAN_STATE_DIR="${state_dir}"
+    if ! tp_assert_stage_fingerprint_fresh "${previous}"; then
       return 1
     fi
   done
@@ -298,6 +328,13 @@ write_target_stage_marker() {
   date -u +"%Y-%m-%dT%H:%M:%SZ" >"${marker}"
 }
 
+write_target_stage_iteration_marker() {
+  local stage="$1"
+  local marker
+  marker="$(target_stage_iteration_marker "${stage}")"
+  date -u +"%Y-%m-%dT%H:%M:%SZ" >"${marker}"
+}
+
 assert_no_incomplete_markers() {
   if compgen -G "${state_dir}/stage_*.incomplete" >/dev/null; then
     echo "target-qualified PASS blocked by stage incomplete marker(s): ${state_dir}/stage_*.incomplete" >&2
@@ -335,11 +372,19 @@ else
   stages=(1 2 3 4 5)
 fi
 
+if [[ "${iteration}" == "1" && -z "${single_stage}" ]]; then
+  echo "--iteration requires --stage <1..5>" >&2
+  exit 2
+fi
+
 mkdir -p "${state_dir}"
 write_target_metadata
 echo "[test-plan] root: ${repo_root}"
 echo "[test-plan] state-dir: ${state_dir}"
 echo "[test-plan] target: ${target}"
+if [[ "${iteration}" == "1" ]]; then
+  echo "[test-plan] iteration: yes"
+fi
 
 for stage in "${stages[@]}"; do
   if ! validate_target_stage "${stage}"; then
@@ -356,8 +401,20 @@ for stage in "${stages[@]}"; do
   echo "[test-plan] running stage ${stage}: ${script_path}"
   TEST_PLAN_STATE_DIR="${state_dir}" \
     TEST_PLAN_TARGET="${target}" \
+    TEST_PLAN_ITERATION="${iteration}" \
     COHSH_BATCH_TARGET="${target}" \
     "${script_path}"
+  if [[ "${iteration}" == "1" ]]; then
+    TEST_PLAN_ROOT="${repo_root}"
+    TEST_PLAN_STATE_DIR="${state_dir}"
+    iteration_marker="$(tp_stage_iteration_marker "${stage}")"
+    if [[ ! -f "${iteration_marker}" ]]; then
+      echo "missing iteration marker for stage ${stage}: ${iteration_marker}" >&2
+      exit 1
+    fi
+    write_target_stage_iteration_marker "${stage}"
+    continue
+  fi
   assert_required_artifacts "${stage}"
   write_target_stage_marker "${stage}"
 done
