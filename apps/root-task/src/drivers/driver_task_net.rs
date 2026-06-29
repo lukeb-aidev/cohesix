@@ -4286,6 +4286,17 @@ fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) {
 }
 
 #[cfg(feature = "kernel")]
+pub(crate) fn reassert_cyw43_post_secure_data_rx(contract: DriverTaskContract) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) == 0
+    {
+        return false;
+    }
+    restore_cyw43_host_eapol_rx_after_secure(contract);
+    true
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_configure_host_eapol_rx_mode(
     contract: DriverTaskContract,
     allmulti: u32,
@@ -14383,6 +14394,30 @@ mod tests {
     fn post_secure_eapol_keeps_broadcast_data_admitted_for_dhcp() {
         assert_eq!(CYW43_POST_SECURE_DATA_ALLMULTI, 1);
         assert_eq!(CYW43_POST_SECURE_DATA_PROMISC, 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn post_secure_data_rx_reassert_waits_for_secure_eapol() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 replay tests must serialize");
+        reset_cyw43_status_flags();
+        let _io_guard = test_enable_cyw43_host_eapol_io_stub();
+
+        assert!(!reassert_cyw43_post_secure_data_rx(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert_eq!(CYW43_HOST_EAPOL_TEST_RX_RESTORED.load(Ordering::Acquire), 0);
+
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+
+        assert!(reassert_cyw43_post_secure_data_rx(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert_eq!(CYW43_HOST_EAPOL_TEST_RX_RESTORED.load(Ordering::Acquire), 1);
+
+        reset_cyw43_status_flags();
     }
 
     #[test]

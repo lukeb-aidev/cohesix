@@ -158,36 +158,46 @@ manifest artifacts afterward.
   - Gateway counters stayed clean for the benchmark start state:
     `pool_exhausted=0`, `checkout_retries=0`, and `timeout_rejections=0`.
 
-## Intermittent Wi-Fi Reboot Evidence and Fix Batch
+## Saved-Policy Wi-Fi and GENET Reboot Evidence
 
 Follow-up saved-policy Wi-Fi reboot diagnostics on the pre-fix Pi image used
-the redacted serial log `/Users/lukasbower/pi4-serial-20260630-000021.log`,
-cycle ledger
-`out/pi4-live/m26d-wifi-10cycle-20260630-000021.jsonl`, and TCP transcripts
-under `out/pi4-live/m26d-wifi-10cycle-tcp-20260630-000021/`.
+serial logs
+`/Users/lukasbower/pi4-serial-20260630-070231-m26d-wifi-10cycle.log` and
+`/Users/lukasbower/pi4-serial-20260630-071225-m26d-wifi-cycles-5-10.log`,
+plus ledgers
+`out/pi4-live/m26d-wifi-10cycle-20260630-070231.jsonl` and
+`out/pi4-live/m26d-wifi-cycles-5-10-20260630-071225.jsonl`.
 
-The ten-cycle run did not stop on the first Wi-Fi failure. It recorded eight
-DHCP-bound boots at `192.168.86.154`, one `dhcp timeout-exhausted` boot, and
-one prompt-ready `dhcp=host-eapol-required` boot. TCP auth was ready on seven
-of the ten boots. Cycles 1 and 4 completed `tcp_basic.coh`, `boot_v0.coh`, and
-`smp_parity.coh`; the remaining bound cycles exposed TCP script or reboot
-timeouts after DHCP bind. The serial trace repeatedly shows the `.154` Pi lease
-paired with `.102` ARP traffic and CYW43 TCP transmit retry/no-completion
-events toward the `.102` peer, preserving the `.154`/`.102` ARP clue as a live
-diagnostic rather than treating DHCP success as full TCP success.
+The Wi-Fi lane did not pass ten saved-policy reboots. Three cycles reached
+DHCP-bound `192.168.86.154` with raw TCP open, while later cycles exposed one
+TCP timeout after DHCP bind, two `dhcp=failed` boots, and one
+`dhcp=selecting` boot. Three early cycle records were host-harness settle
+artifacts and are not counted as target failures. The corrected `.coh` harness
+must avoid pre-attaching `--role queen` for scripts that contain their own
+`attach queen` step. The recurring `.154` Pi lease and `.102` host ARP/TCP
+pattern remains a live clue: DHCP bind alone did not guarantee host reachability
+after the AP delivered or withheld later broadcast/unicast traffic.
 
-The fix batch in this change keeps CYW43 post-secure data admission
-broadcast-capable (`allmulti=1`, `promisc=1`), allows CYW43 pre-poll data drain
-during DHCP selecting/requesting/bound phases, sends both unicast and broadcast
-ARP-assist replies for the assigned Pi address, emits gratuitous ARP request
-and reply announcements when DHCP assigns the IPv4 address, and records ARP TX
-counter evidence on submitted CYW43 Ethernet payloads.
+Saved-policy GENET diagnostics used
+`/Users/lukasbower/pi4-serial-20260630-072528-m26d-switch-genet.log`,
+`/Users/lukasbower/pi4-serial-20260630-072645-m26d-genet-netstats.log`, and
+`/Users/lukasbower/pi4-serial-20260630-073517-m26d-genet-cycles-2-10.log`.
+Corrected cycle evidence is split across
+`out/pi4-live/m26d-genet-10cycle-fixed-20260630-072953.jsonl` for cycle 1 and
+`out/pi4-live/m26d-genet-cycles-2-10-20260630-073517.jsonl` for cycles 2-10.
+GENET passed `10/10` saved-policy reboots at `192.168.10.50`; each corrected
+cycle reached DHCP bound, raw TCP open, and successful `tcp_basic.coh`,
+`boot_v0.coh`, and `smp_parity.coh` runs. The invalid earlier GENET cycle 2 was
+a host-harness stale-prompt/menu-input error, not a target failure.
 
-This reboot evidence is a pre-fix diagnostic baseline. The patched image was
-not reflashed in this run because `/Volumes/COHESIX` was not mounted on the
-macOS host. The next hardware acceptance step is to rebuild/reflash the patched
-Pi image and rerun the same saved-policy ten-cycle Wi-Fi loop before claiming
-post-fix Wi-Fi stability or proceeding to the GENET parity loop.
+The fix batch in this change keeps existing CYW43 ARP assist and gratuitous ARP
+paths intact, adds a CYW43 pre-poll drain window before the DHCP client leaves
+`Disabled`, reasserts post-secure broadcast data admission at DHCP start and
+lease bind, and widens only the Pi 4 manifest DHCP retry envelope to
+`1500 ms` discover, `1500 ms` request, and `6` retries. The patched Pi image was
+stage-built at `out/pi4-sd-m26d-fix` and was not live reflashed in this run.
+The next hardware acceptance step is to reflash that image and rerun the same
+saved-policy Wi-Fi ten-cycle loop before claiming post-fix Wi-Fi stability.
 
 ## Remaining Closure Boundary
 
@@ -198,6 +208,7 @@ proof, and live Pi 4 Wi-Fi REST status benchmark lane.
 
 The full target-qualified staged runner is not claimed here because the live
 Pi run did not execute the full lifecycle-reset/reboot path required by that
-runner. Production wired/GENET parity is also not claimed here; that remains a
-separate 26b/26d proof boundary. Wi-Fi evidence is accepted only for the
-diagnostic/status lane documented in `docs/BENCHMARKS.md`.
+runner. Saved-policy GENET reboot parity is evidenced above for `.coh` smoke
+and DHCP/TCP readiness, but full GENET performance/staged-runner closure remains
+a separate 26b/26d proof boundary. Wi-Fi evidence remains diagnostic until the
+patched image passes the saved-policy ten-cycle loop documented above.

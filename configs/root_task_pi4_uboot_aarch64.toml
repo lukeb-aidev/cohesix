@@ -269,9 +269,9 @@ prefix_len = 24
 gateway = "192.168.10.1"
 
 [hw.network.dhcp]
-discover_timeout_ms = 500
-request_timeout_ms = 1000
-max_retries = 4
+discover_timeout_ms = 1500
+request_timeout_ms = 1500
+max_retries = 6
 
 [hw.attestation]
 enabled = true
