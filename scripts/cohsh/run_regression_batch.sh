@@ -461,17 +461,18 @@ run_cohsh_file() {
     local bin="${COHSH_BIN:-./out/cohesix/host-tools/cohsh}"
     local tcp_host="${COHSH_RUN_TCP_HOST:-127.0.0.1}"
     local tcp_port="${COHSH_RUN_TCP_PORT:-31337}"
-    local policy_args=()
+    local args=(
+        "$bin"
+        --transport tcp
+        --tcp-host "$tcp_host"
+        --tcp-port "$tcp_port"
+        --auth-token "${COHSH_AUTH_TOKEN}"
+    )
     if [[ -n "${COHSH_RUN_POLICY:-}" ]]; then
-        policy_args=(--policy "$COHSH_RUN_POLICY")
+        args+=(--policy "$COHSH_RUN_POLICY")
     fi
-    "$bin" \
-        --transport tcp \
-        --tcp-host "$tcp_host" \
-        --tcp-port "$tcp_port" \
-        --auth-token "${COHSH_AUTH_TOKEN}" \
-        "${policy_args[@]}" \
-        --script "$script_path"
+    args+=(--script "$script_path")
+    "${args[@]}"
 }
 
 run_cohsh() {

@@ -228,6 +228,28 @@ def _strong_wired_driver_task_proof_lines() -> list[str]:
     ]
 
 
+def _strong_wifi_selected_driver_task_proof_lines() -> list[str]:
+    lines: list[str] = []
+    selected_line = (
+        "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wifi "
+        "active_net=cyw43 required_roles=0x3f required_hot_paths=0x77 "
+        "required_tasks=6"
+    )
+    for line in _strong_driver_task_proof_lines():
+        if "bcmgenet-v5" in line or "contract=genet" in line:
+            continue
+        if "task_count=9" in line:
+            line = line.replace("task_count=9", "task_count=6")
+            line = line.replace("live_tcb_count=9", "live_tcb_count=6")
+            line = line.replace("affinity_configured=9", "affinity_configured=6")
+            line = line.replace("affinity_applied=9", "affinity_applied=6")
+        line = line.replace("required=7 dedicated=7", "required=6 dedicated=6")
+        lines.append(line)
+        if line.startswith("U-Boot "):
+            lines.append(selected_line)
+    return lines
+
+
 def _oldgood_usb_replay_lines() -> list[str]:
     return [
         "usb: controller-ready source=linked-runtime",
@@ -919,6 +941,46 @@ def test_gate_proof_accepts_wired_driver_task_proof_without_sdio(
     assert "DRIVER_TASK_OWNER_STATE_PROOF=yes" in result.stdout
     assert "DRIVER_TASK_SDIO_DEDICATED=no" in result.stdout
     assert "DRIVER_TASK_DMA_PROOFS=5" in result.stdout
+    assert "PI4_RUNTIME_DMA_PROOF=fresh-pi" in result.stdout
+
+
+def test_gate_proof_accepts_wifi_selected_driver_task_proof_without_genet(
+    tmp_path: pathlib.Path,
+) -> None:
+    """WiFi closure requires CYW43 plus SDIO, not inactive GENET proof."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(_strong_wifi_selected_driver_task_proof_lines()),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-driver-task-proof",
+            "--expect",
+            "DRIVER_TASK_ACTIVE_NET=cyw43",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "DRIVER_TASK_ACTIVE_NET=cyw43" in result.stdout
+    assert "DRIVER_TASK_SDIO_DEDICATED=yes" in result.stdout
+    assert "DRIVER_TASK_DMA_PROOFS=6" in result.stdout
     assert "PI4_RUNTIME_DMA_PROOF=fresh-pi" in result.stdout
 
 

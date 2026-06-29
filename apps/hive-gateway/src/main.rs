@@ -12,7 +12,7 @@ use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -70,17 +70,20 @@ const BROKER_ENQUEUE_RETRY_SLEEP_MS: u64 = 5;
 const BROKER_CONTROL_QUEUE_CAPACITY: usize = 256;
 const BROKER_TELEMETRY_QUEUE_CAPACITY: usize = 1024;
 const BROKER_CONTROL_BURST: usize = 6;
+const TELEMETRY_WRITE_BATCH_MAX: usize = 4;
 const BROKER_IDLE_WAIT_MS: u64 = 20;
 const DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
 const MAX_CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 60_000;
 const CONTROL_WRITE_RETRY_SLEEP_MS: u64 = 15;
 const CONTROL_WRITE_RETRY_MAX_SLEEP_MS: u64 = 120;
+const CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS: u64 = 250;
 const CACHE_INVALIDATE_CONTROL_NAMESPACES: &[&str] = &["/proc", "/queen", "/worker", "/gpu"];
 const CACHE_INVALIDATE_HOST_NAMESPACES: &[&str] = &["/host"];
 const CACHE_INVALIDATE_GPU_NAMESPACES: &[&str] = &["/gpu"];
 const CACHE_INVALIDATE_SCHEDULE_NAMESPACES: &[&str] = &["/proc/schedule"];
 const CACHE_INVALIDATE_LEASE_NAMESPACES: &[&str] = &["/proc/lease"];
 const CACHE_INVALIDATE_TELEMETRY_NAMESPACES: &[&str] = &["/gpu"];
+const CACHE_INVALIDATE_POLICY_NAMESPACES: &[&str] = &["/proc/pressure/policy", "/queen"];
 
 const OPENAPI_YAML: &str = include_str!("../../../resources/openapi/hive-gateway.yaml");
 
@@ -183,6 +186,7 @@ struct GatewayInner {
     policy: CohshPolicy,
     broker: Arc<BrokerMetrics>,
     proc_cache: Mutex<ProcReadCache>,
+    control_write_backpressure: Mutex<ControlWriteBackpressure>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -393,6 +397,52 @@ struct ProcReadCache {
     order: VecDeque<String>,
 }
 
+#[derive(Default)]
+struct ControlWriteBackpressure {
+    entries: HashMap<&'static str, ControlWriteBackpressureEntry>,
+}
+
+struct ControlWriteBackpressureEntry {
+    until: Instant,
+    last_error: String,
+}
+
+impl ControlWriteBackpressure {
+    fn record(
+        &mut self,
+        path: &str,
+        now: Instant,
+        cooldown: Duration,
+        last_error: &str,
+    ) -> Option<String> {
+        let key = control_write_backpressure_key(path)?;
+        self.entries.insert(
+            key,
+            ControlWriteBackpressureEntry {
+                until: now + cooldown,
+                last_error: last_error.to_owned(),
+            },
+        );
+        Some(last_error.to_owned())
+    }
+
+    fn refusal(&mut self, path: &str, now: Instant) -> Option<String> {
+        let key = control_write_backpressure_key(path)?;
+        let entry = self.entries.get(key)?;
+        if now >= entry.until {
+            self.entries.remove(key);
+            return None;
+        }
+        Some(entry.last_error.clone())
+    }
+
+    fn clear(&mut self, path: &str) {
+        if let Some(key) = control_write_backpressure_key(path) {
+            self.entries.remove(key);
+        }
+    }
+}
+
 #[derive(Clone)]
 struct ProcReadCacheEntry {
     inserted_at: Instant,
@@ -460,6 +510,66 @@ enum BrokerRequest {
 enum BrokerResponse {
     Unit,
     Lines(Vec<String>),
+}
+
+struct TelemetryWriteBatch {
+    path: String,
+    payloads: Vec<Vec<u8>>,
+    response_txs: Vec<mpsc::Sender<Result<BrokerResponse>>>,
+}
+
+impl TelemetryWriteBatch {
+    fn from_command(command: BrokerCommand) -> std::result::Result<Self, BrokerCommand> {
+        if command.kind != PoolKind::Telemetry {
+            return Err(command);
+        }
+        let response_tx = command.response_tx;
+        match command.request {
+            BrokerRequest::Write { path, payload } => {
+                if is_batchable_telemetry_write_path(path.as_str()) {
+                    Ok(Self {
+                        path,
+                        payloads: vec![payload],
+                        response_txs: vec![response_tx],
+                    })
+                } else {
+                    Err(BrokerCommand {
+                        kind: command.kind,
+                        request: BrokerRequest::Write { path, payload },
+                        response_tx,
+                    })
+                }
+            }
+            request => Err(BrokerCommand {
+                kind: command.kind,
+                request,
+                response_tx,
+            }),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.payloads.len()
+    }
+
+    fn try_push(&mut self, command: BrokerCommand) -> std::result::Result<(), BrokerCommand> {
+        if self.len() >= TELEMETRY_WRITE_BATCH_MAX || command.kind != PoolKind::Telemetry {
+            return Err(command);
+        }
+        let response_tx = command.response_tx;
+        match command.request {
+            BrokerRequest::Write { path, payload } if path == self.path => {
+                self.payloads.push(payload);
+                self.response_txs.push(response_tx);
+                Ok(())
+            }
+            request => Err(BrokerCommand {
+                kind: command.kind,
+                request,
+                response_tx,
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -541,6 +651,7 @@ async fn main() -> Result<()> {
             policy,
             broker: broker_metrics,
             proc_cache: Mutex::new(ProcReadCache::default()),
+            control_write_backpressure: Mutex::new(ControlWriteBackpressure::default()),
         }),
     };
 
@@ -1011,7 +1122,7 @@ fn run_broker_dispatcher(
         match telemetry_rx.try_recv() {
             Ok(command) => {
                 dispatched = true;
-                dispatch_broker_command(&pool, &metrics, command);
+                dispatch_telemetry_command(&pool, &metrics, command, &telemetry_rx);
             }
             Err(TryRecvError::Empty) => {
                 if dispatched {
@@ -1035,7 +1146,7 @@ fn run_broker_dispatcher(
         }
 
         match telemetry_rx.recv_timeout(Duration::from_millis(BROKER_IDLE_WAIT_MS)) {
-            Ok(command) => dispatch_broker_command(&pool, &metrics, command),
+            Ok(command) => dispatch_telemetry_command(&pool, &metrics, command, &telemetry_rx),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => {}
         }
@@ -1043,23 +1154,98 @@ fn run_broker_dispatcher(
     pool.shutdown();
 }
 
+fn dispatch_telemetry_command(
+    pool: &SharedPool,
+    metrics: &BrokerMetrics,
+    command: BrokerCommand,
+    telemetry_rx: &Receiver<BrokerCommand>,
+) {
+    let mut batch = match TelemetryWriteBatch::from_command(command) {
+        Ok(batch) => batch,
+        Err(command) => {
+            dispatch_broker_command(pool, metrics, command);
+            return;
+        }
+    };
+    let mut deferred = None;
+    while batch.len() < TELEMETRY_WRITE_BATCH_MAX {
+        match telemetry_rx.try_recv() {
+            Ok(command) => match batch.try_push(command) {
+                Ok(()) => {}
+                Err(command) => {
+                    deferred = Some(command);
+                    break;
+                }
+            },
+            Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+        }
+    }
+    dispatch_telemetry_write_batch(pool, metrics, batch);
+    if let Some(command) = deferred {
+        dispatch_broker_command(pool, metrics, command);
+    }
+}
+
+fn dispatch_telemetry_write_batch(
+    pool: &SharedPool,
+    metrics: &BrokerMetrics,
+    batch: TelemetryWriteBatch,
+) {
+    let TelemetryWriteBatch {
+        path,
+        payloads,
+        response_txs,
+    } = batch;
+    let payload_count = response_txs.len();
+    for _ in 0..payload_count {
+        decrement_counter(metrics.wait_counter(PoolKind::Telemetry));
+    }
+    metrics
+        .checkout_counter(PoolKind::Telemetry)
+        .fetch_add(1, Ordering::Relaxed);
+    let result = execute_broker_write_batch(pool, PoolKind::Telemetry, path, payloads)
+        .map_err(|err| map_broker_error(metrics, PoolKind::Telemetry, err));
+    match result {
+        Ok(written) => {
+            for (index, response_tx) in response_txs.into_iter().enumerate() {
+                if index < written {
+                    let _ = response_tx.send(Ok(BrokerResponse::Unit));
+                } else {
+                    let _ = response_tx.send(Err(anyhow::anyhow!(
+                        "telemetry write batch acknowledged {written}/{payload_count} payloads"
+                    )));
+                }
+            }
+        }
+        Err(err) => {
+            let message = err.to_string();
+            for response_tx in response_txs {
+                let _ = response_tx.send(Err(anyhow::anyhow!(message.clone())));
+            }
+        }
+    }
+}
+
 fn dispatch_broker_command(pool: &SharedPool, metrics: &BrokerMetrics, command: BrokerCommand) {
     decrement_counter(metrics.wait_counter(command.kind));
     metrics
         .checkout_counter(command.kind)
         .fetch_add(1, Ordering::Relaxed);
-    let result = execute_broker_request(pool, command.kind, command.request).map_err(|err| {
-        if is_pool_exhausted(&err) {
-            metrics.pool_exhausted.fetch_add(1, Ordering::Relaxed);
-            anyhow::anyhow!(
-                "gateway backpressure: broker checkout exhausted for {:?}",
-                command.kind
-            )
-        } else {
-            err
-        }
-    });
+    let result = execute_broker_request(pool, command.kind, command.request)
+        .map_err(|err| map_broker_error(metrics, command.kind, err));
     let _ = command.response_tx.send(result);
+}
+
+fn map_broker_error(metrics: &BrokerMetrics, kind: PoolKind, err: anyhow::Error) -> anyhow::Error {
+    if is_pool_exhausted(&err) {
+        metrics.pool_exhausted.fetch_add(1, Ordering::Relaxed);
+        anyhow::anyhow!(
+            "gateway backpressure: broker checkout exhausted for {:?}",
+            kind
+        )
+    } else {
+        err
+    }
 }
 
 fn execute_broker_request(
@@ -1096,6 +1282,19 @@ fn execute_broker_request(
             })
         }
     }
+}
+
+fn execute_broker_write_batch(
+    pool: &SharedPool,
+    kind: PoolKind,
+    path: String,
+    payloads: Vec<Vec<u8>>,
+) -> Result<usize> {
+    let mut lease = pool.checkout(kind)?;
+    let session = lease.session().clone();
+    lease
+        .transport_mut()
+        .write_batch(&session, path.as_str(), payloads.as_slice())
 }
 
 fn with_pool_once<F>(pool: &SharedPool, kind: PoolKind, action: F) -> Result<BrokerResponse>
@@ -1381,15 +1580,27 @@ impl AppState {
     fn write(&self, path: &str, payload: &[u8]) -> Result<()> {
         self.ensure_connected()?;
         let write_path = path.to_owned();
+        if let Some(error) = self.control_write_backpressure_refusal(write_path.as_str()) {
+            self.inner
+                .broker
+                .control_write_retryable_errors
+                .fetch_add(1, Ordering::Relaxed);
+            self.inner
+                .broker
+                .control_write_retry_exhaustions
+                .fetch_add(1, Ordering::Relaxed);
+            return Err(anyhow::anyhow!(error));
+        }
         let payload = payload.to_vec();
         let retry_window = Duration::from_millis(self.inner.control_write_retry_window_ms);
         let deadline = Instant::now() + retry_window;
         let retry_deadline_enabled = is_retryable_control_write_path(write_path.as_str());
+        let write_kind = write_pool_kind(write_path.as_str());
         let mut first_retryable_error: Option<String> = None;
         let mut retry_delay = Duration::from_millis(CONTROL_WRITE_RETRY_SLEEP_MS);
         loop {
             let result = self.submit_broker(
-                PoolKind::Control,
+                write_kind,
                 BrokerRequest::Write {
                     path: write_path.clone(),
                     payload: payload.clone(),
@@ -1403,6 +1614,7 @@ impl AppState {
                             .control_write_success_after_retry
                             .fetch_add(1, Ordering::Relaxed);
                     }
+                    self.control_write_backpressure_clear(write_path.as_str());
                     self.read_cache_invalidate_for_write(write_path.as_str());
                     return Ok(());
                 }
@@ -1426,6 +1638,18 @@ impl AppState {
                         .fetch_add(1, Ordering::Relaxed);
                     if first_retryable_error.is_none() {
                         first_retryable_error = Some(message.clone());
+                    }
+                    if is_vm_control_queue_full_error(message.as_str()) {
+                        if let Some(error) = self.control_write_backpressure_record(
+                            write_path.as_str(),
+                            message.as_str(),
+                        ) {
+                            self.inner
+                                .broker
+                                .control_write_retry_exhaustions
+                                .fetch_add(1, Ordering::Relaxed);
+                            return Err(anyhow::anyhow!(error));
+                        }
                     }
                     let now = Instant::now();
                     if retry_window.is_zero() || now >= deadline {
@@ -1545,6 +1769,31 @@ impl AppState {
             .cloned()
             .collect();
         cache.order = VecDeque::from(retained_order);
+    }
+
+    fn control_write_backpressure_refusal(&self, path: &str) -> Option<String> {
+        self.control_write_backpressure_guard()
+            .refusal(path, Instant::now())
+    }
+
+    fn control_write_backpressure_record(&self, path: &str, message: &str) -> Option<String> {
+        self.control_write_backpressure_guard().record(
+            path,
+            Instant::now(),
+            Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
+            message,
+        )
+    }
+
+    fn control_write_backpressure_clear(&self, path: &str) {
+        self.control_write_backpressure_guard().clear(path);
+    }
+
+    fn control_write_backpressure_guard(&self) -> MutexGuard<'_, ControlWriteBackpressure> {
+        match self.inner.control_write_backpressure.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
     }
 }
 
@@ -1809,10 +2058,10 @@ fn cache_invalidation_namespaces(write_path: &str) -> Option<&'static [&'static 
     if write_path.starts_with("/queen/telemetry/") {
         return Some(CACHE_INVALIDATE_TELEMETRY_NAMESPACES);
     }
-    if write_path.starts_with("/queen/")
-        || write_path == CLIENT_POLICY_CTL_PATH
-        || write_path.starts_with("/actions/")
-    {
+    if write_path == CLIENT_POLICY_CTL_PATH {
+        return Some(CACHE_INVALIDATE_POLICY_NAMESPACES);
+    }
+    if write_path.starts_with("/queen/") || write_path.starts_with("/actions/") {
         return Some(CACHE_INVALIDATE_CONTROL_NAMESPACES);
     }
     if write_path.starts_with("/host/") {
@@ -1828,12 +2077,37 @@ fn is_retryable_control_write_path(path: &str) -> bool {
     path.starts_with("/queen/") || path == CLIENT_POLICY_CTL_PATH || path.starts_with("/actions/")
 }
 
+fn write_pool_kind(path: &str) -> PoolKind {
+    if is_batchable_telemetry_write_path(path) {
+        PoolKind::Telemetry
+    } else {
+        PoolKind::Control
+    }
+}
+
+fn is_batchable_telemetry_write_path(path: &str) -> bool {
+    path.starts_with("/queen/telemetry/") && path.contains("/seg/")
+}
+
+fn control_write_backpressure_key(path: &str) -> Option<&'static str> {
+    match path {
+        CLIENT_QUEEN_SCHEDULE_CTL_PATH => Some(CLIENT_QUEEN_SCHEDULE_CTL_PATH),
+        CLIENT_QUEEN_LEASE_CTL_PATH => Some(CLIENT_QUEEN_LEASE_CTL_PATH),
+        _ => None,
+    }
+}
+
 fn is_retryable_control_write_error(error: &str) -> bool {
     let lowered = error.to_ascii_lowercase();
     lowered.contains("buffer-full")
         || lowered.contains("buffer full")
         || lowered.contains("session pool exhausted")
         || lowered.contains("gateway backpressure")
+}
+
+fn is_vm_control_queue_full_error(error: &str) -> bool {
+    let lowered = error.to_ascii_lowercase();
+    lowered.contains("buffer-full") || lowered.contains("buffer full")
 }
 
 fn final_control_write_error(
@@ -2073,6 +2347,25 @@ mod tests {
     use axum::http::header::AUTHORIZATION;
     use axum::http::{HeaderMap, HeaderValue};
 
+    fn test_write_command(
+        kind: PoolKind,
+        path: &str,
+        payload: &[u8],
+    ) -> (BrokerCommand, mpsc::Receiver<Result<BrokerResponse>>) {
+        let (response_tx, response_rx) = mpsc::channel();
+        (
+            BrokerCommand {
+                kind,
+                request: BrokerRequest::Write {
+                    path: path.to_owned(),
+                    payload: payload.to_vec(),
+                },
+                response_tx,
+            },
+            response_rx,
+        )
+    }
+
     #[test]
     fn extract_ack_error_returns_err_line() {
         let message =
@@ -2267,7 +2560,7 @@ mod tests {
         );
         assert_eq!(
             cache_invalidation_namespaces("/policy/ctl"),
-            Some(CACHE_INVALIDATE_CONTROL_NAMESPACES)
+            Some(CACHE_INVALIDATE_POLICY_NAMESPACES)
         );
         assert_eq!(
             cache_invalidation_namespaces("/host/docker/status"),
@@ -2286,6 +2579,15 @@ mod tests {
         assert!(is_retryable_control_write_path("/policy/ctl"));
         assert!(is_retryable_control_write_path("/actions/queue"));
         assert!(!is_retryable_control_write_path("/host/docker/status"));
+        assert_eq!(
+            control_write_backpressure_key(CLIENT_QUEEN_SCHEDULE_CTL_PATH),
+            Some(CLIENT_QUEEN_SCHEDULE_CTL_PATH)
+        );
+        assert_eq!(
+            control_write_backpressure_key(CLIENT_QUEEN_LEASE_CTL_PATH),
+            Some(CLIENT_QUEEN_LEASE_CTL_PATH)
+        );
+        assert_eq!(control_write_backpressure_key(CLIENT_POLICY_CTL_PATH), None);
 
         assert!(is_retryable_control_write_error(
             "ERR ECHO reason=quota detail=buffer-full path=/queen/schedule/ctl error=buffer full"
@@ -2296,6 +2598,113 @@ mod tests {
         assert!(!is_retryable_control_write_error(
             "ERR ECHO reason=policy detail=invalid-payload path=/queen/lease/ctl error=invalid payload"
         ));
+        assert!(is_vm_control_queue_full_error(
+            "ERR ECHO reason=quota detail=buffer-full path=/queen/schedule/ctl error=buffer full"
+        ));
+        assert!(!is_vm_control_queue_full_error(
+            "ERR ECHO reason=policy detail=invalid-payload path=/queen/lease/ctl error=invalid payload"
+        ));
+    }
+
+    #[test]
+    fn telemetry_write_routing_batches_only_segment_appends() {
+        assert_eq!(
+            write_pool_kind("/queen/telemetry/bench/seg/current"),
+            PoolKind::Telemetry
+        );
+        assert!(is_batchable_telemetry_write_path(
+            "/queen/telemetry/bench/seg/current"
+        ));
+
+        for path in [
+            "/queen/telemetry/bench/ctl",
+            "/queen/telemetry/bench/segment",
+            CLIENT_QUEEN_SCHEDULE_CTL_PATH,
+            CLIENT_POLICY_CTL_PATH,
+        ] {
+            assert_eq!(write_pool_kind(path), PoolKind::Control);
+            assert!(
+                !is_batchable_telemetry_write_path(path),
+                "unexpected batchable path: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn telemetry_write_batch_accepts_only_same_segment_path() {
+        let segment_path = "/queen/telemetry/bench/seg/current";
+        let other_segment_path = "/queen/telemetry/bench/seg/next";
+        let (command, _response_rx) = test_write_command(PoolKind::Telemetry, segment_path, b"one");
+        let batch_result = TelemetryWriteBatch::from_command(command);
+        assert!(batch_result.is_ok(), "expected batchable command");
+        let Ok(mut batch) = batch_result else {
+            return;
+        };
+        assert_eq!(batch.len(), 1);
+
+        let (same_path_command, _response_rx) =
+            test_write_command(PoolKind::Telemetry, segment_path, b"two");
+        assert!(batch.try_push(same_path_command).is_ok());
+        assert_eq!(batch.len(), 2);
+
+        let (other_path_command, _response_rx) =
+            test_write_command(PoolKind::Telemetry, other_segment_path, b"three");
+        assert!(batch.try_push(other_path_command).is_err());
+        assert_eq!(batch.len(), 2);
+
+        let (control_command, _response_rx) =
+            test_write_command(PoolKind::Control, segment_path, b"four");
+        assert!(batch.try_push(control_command).is_err());
+        assert_eq!(batch.len(), 2);
+
+        for index in batch.len()..TELEMETRY_WRITE_BATCH_MAX {
+            let payload = format!("payload-{index}");
+            let (command, _response_rx) =
+                test_write_command(PoolKind::Telemetry, segment_path, payload.as_bytes());
+            assert!(batch.try_push(command).is_ok());
+        }
+        let (overflow_command, _response_rx) =
+            test_write_command(PoolKind::Telemetry, segment_path, b"overflow");
+        assert!(batch.try_push(overflow_command).is_err());
+        assert_eq!(batch.len(), TELEMETRY_WRITE_BATCH_MAX);
+    }
+
+    #[test]
+    fn control_write_backpressure_tracks_and_expires_queue_full_paths() {
+        let mut backpressure = ControlWriteBackpressure::default();
+        let now = Instant::now();
+        let last_error =
+            "ERR ECHO reason=quota detail=buffer-full path=/queen/schedule/ctl error=buffer full";
+
+        let recorded = backpressure.record(
+            CLIENT_QUEEN_SCHEDULE_CTL_PATH,
+            now,
+            Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
+            last_error,
+        );
+
+        assert_eq!(recorded.as_deref(), Some(last_error));
+        assert!(backpressure
+            .record(
+                CLIENT_POLICY_CTL_PATH,
+                now,
+                Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS),
+                last_error,
+            )
+            .is_none());
+
+        let refusal = backpressure.refusal(
+            CLIENT_QUEEN_SCHEDULE_CTL_PATH,
+            now + Duration::from_millis(100),
+        );
+        assert_eq!(refusal.as_deref(), Some(last_error));
+
+        assert!(backpressure
+            .refusal(
+                CLIENT_QUEEN_SCHEDULE_CTL_PATH,
+                now + Duration::from_millis(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS + 1),
+            )
+            .is_none());
     }
 
     #[test]
@@ -2314,6 +2723,9 @@ mod tests {
     #[test]
     fn retry_budget_defaults_preserve_existing_control_write_window() {
         assert_eq!(DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS, 1_200);
+        const {
+            assert!(CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS < DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS);
+        }
         assert_eq!(validate_control_write_retry_window_ms(0).unwrap(), 0);
         assert!(
             validate_control_write_retry_window_ms(MAX_CONTROL_WRITE_RETRY_WINDOW_MS + 1).is_err()

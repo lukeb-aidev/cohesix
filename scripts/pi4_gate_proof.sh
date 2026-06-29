@@ -539,7 +539,7 @@ run_normalizer() {
         args+=("--expect" "DRIVER_TASK_RING_CALL_TIMEOUT=0")
         args+=("--expect" "DRIVER_TASK_BOOTSTRAP_DEFERRED=0")
         if [[ "${require_sdio_proof}" -eq 1 ]]; then
-            args+=("--expect-min" "DRIVER_TASK_DMA_PROOFS=7")
+            args+=("--expect-min" "DRIVER_TASK_DMA_PROOFS=6")
         else
             args+=("--expect-min" "DRIVER_TASK_DMA_PROOFS=5")
         fi

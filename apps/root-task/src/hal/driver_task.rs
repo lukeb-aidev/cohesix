@@ -3979,6 +3979,16 @@ pub fn driver_task_runtime_owner_state_registered(hot_path: DriverTaskHotPath) -
     DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire) & hot_path.owner_state_bit() != 0
 }
 
+/// Re-emit the canonical boot contract after a Pi 4 owner-state transition.
+#[cfg(feature = "kernel")]
+pub fn emit_owner_state_transition_boot_contract_proof(hot_path: DriverTaskHotPath) {
+    if physical_pi_driver_task_only_owner_state_active()
+        && driver_task_runtime_owner_state_registered(hot_path)
+    {
+        emit_boot_contract_proof();
+    }
+}
+
 #[cfg(feature = "kernel")]
 fn refresh_driver_task_owner_state_proof() {
     let owner_hot_paths = DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire);

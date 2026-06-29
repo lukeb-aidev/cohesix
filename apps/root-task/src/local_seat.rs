@@ -205,6 +205,14 @@ const LOCAL_SEAT_HDMI_KEYBOARD_READY_LINE: &str =
     target_arch = "aarch64",
     target_os = "none"
 ))]
+const LOCAL_SEAT_HDMI_KEYBOARD_BUSY_LINE: &str =
+    "USB console armed; system busy, keystrokes may be delayed";
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
 const LOCAL_SEAT_HDMI_KEYBOARD_RECOVERING_LINE: &str =
     "USB keyboard recovering; wait for ready before typing";
 #[cfg(all(
@@ -969,6 +977,24 @@ pub(crate) const fn local_seat_keyboard_poll_next_no_reply_backoff_for_queue(
     }
 }
 
+/// Return the user-visible cooldown after a successful idle keyboard poll.
+#[must_use]
+pub(crate) const fn local_seat_keyboard_poll_idle_completion_cooldown(
+    _steady_queue_idle: bool,
+) -> u8 {
+    0
+}
+
+/// Return whether a keyboard-poll cooldown should be visible as USB busy.
+#[must_use]
+pub(crate) const fn local_seat_keyboard_cooldown_should_show_busy(
+    command_ready: bool,
+    no_reply_streak: u64,
+    recovery_pending: bool,
+) -> bool {
+    !command_ready || no_reply_streak != 0 || recovery_pending
+}
+
 /// Return whether the `count`th repeat of a no-reply diagnostic should still be
 /// logged to the raw UART.
 #[must_use]
@@ -1192,7 +1218,8 @@ const fn local_seat_keyboard_result_blocks_prompt_ready(result: u32) -> bool {
     )
 ))]
 #[must_use]
-pub(crate) const fn local_seat_usb_prompt_safe_ready_state(
+#[derive(Clone, Copy)]
+pub(crate) struct LocalSeatUsbPromptSafeReadyState {
     physical_pi_owner_state: bool,
     root_console_ready: bool,
     first_byte_ready: bool,
@@ -1200,14 +1227,30 @@ pub(crate) const fn local_seat_usb_prompt_safe_ready_state(
     recovery_pending: bool,
     no_reply_streak: u64,
     runtime_queue_blocked: bool,
+    post_first_byte_pressure: bool,
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )
+))]
+#[must_use]
+pub(crate) const fn local_seat_usb_prompt_safe_ready_state(
+    state: LocalSeatUsbPromptSafeReadyState,
 ) -> bool {
-    !physical_pi_owner_state
-        || (root_console_ready
-            && first_byte_ready
-            && clean_polls >= LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS
-            && !recovery_pending
-            && no_reply_streak == 0
-            && !runtime_queue_blocked)
+    !state.physical_pi_owner_state
+        || (state.root_console_ready
+            && state.first_byte_ready
+            && state.clean_polls >= LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS
+            && !state.recovery_pending
+            && state.no_reply_streak == 0
+            && !state.runtime_queue_blocked
+            && !state.post_first_byte_pressure)
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -1418,6 +1461,13 @@ pub struct LocalSeatRuntime {
         target_arch = "aarch64",
         target_os = "none"
     ))]
+    hdmi_keyboard_busy_line_emitted: bool,
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     hdmi_keyboard_recovering_line_emitted: bool,
     hdmi_snapshot_generation: u64,
     dropped_keyboard_bytes: u64,
@@ -1446,6 +1496,11 @@ pub struct LocalSeatRuntime {
     keyboard_recovery_aux_pending: bool,
     keyboard_recovery_aux_requests: u64,
     keyboard_post_first_byte_clean_polls: u8,
+    keyboard_post_first_byte_no_reply_baseline: u64,
+    keyboard_post_first_byte_cooldown_skip_baseline: u64,
+    keyboard_post_first_byte_hdmi_deferred_baseline: u64,
+    keyboard_post_first_byte_hdmi_busy_baseline: u64,
+    keyboard_post_first_byte_hdmi_no_reply_baseline: u64,
     keyboard_poll_cooldown_skips: u64,
     backend_keyboard_polling_enabled: bool,
     backend_keyboard_poll_deferred_logged: bool,
@@ -1577,6 +1632,13 @@ impl LocalSeatRuntime {
                 target_arch = "aarch64",
                 target_os = "none"
             ))]
+            hdmi_keyboard_busy_line_emitted: false,
+            #[cfg(all(
+                feature = "kernel",
+                feature = "usb",
+                target_arch = "aarch64",
+                target_os = "none"
+            ))]
             hdmi_keyboard_recovering_line_emitted: false,
             hdmi_snapshot_generation: 0,
             dropped_keyboard_bytes: 0,
@@ -1605,6 +1667,11 @@ impl LocalSeatRuntime {
             keyboard_recovery_aux_pending: false,
             keyboard_recovery_aux_requests: 0,
             keyboard_post_first_byte_clean_polls: 0,
+            keyboard_post_first_byte_no_reply_baseline: 0,
+            keyboard_post_first_byte_cooldown_skip_baseline: 0,
+            keyboard_post_first_byte_hdmi_deferred_baseline: 0,
+            keyboard_post_first_byte_hdmi_busy_baseline: 0,
+            keyboard_post_first_byte_hdmi_no_reply_baseline: 0,
             keyboard_poll_cooldown_skips: 0,
             // Keep boot fail-open: the root shell must stay reachable even if
             // a platform keyboard backend can still wedge during first probe.
@@ -1975,15 +2042,17 @@ impl LocalSeatRuntime {
         let runtime_queue_blocked = local_seat_keyboard_result_blocks_prompt_ready(
             LINKED_LOCAL_SEAT_USB_LAST_RESULT.load(Ordering::Acquire) as u32,
         );
-        local_seat_usb_prompt_safe_ready_state(
-            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
-            self.root_console_ready,
-            linked_local_seat_usb_first_byte_ready(),
-            self.keyboard_post_first_byte_clean_polls,
-            self.keyboard_recovery_aux_pending,
-            self.keyboard_poll_no_reply_streak,
+        local_seat_usb_prompt_safe_ready_state(LocalSeatUsbPromptSafeReadyState {
+            physical_pi_owner_state:
+                crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+            root_console_ready: self.root_console_ready,
+            first_byte_ready: linked_local_seat_usb_first_byte_ready(),
+            clean_polls: self.keyboard_post_first_byte_clean_polls,
+            recovery_pending: self.keyboard_recovery_aux_pending,
+            no_reply_streak: self.keyboard_poll_no_reply_streak,
             runtime_queue_blocked,
-        )
+            post_first_byte_pressure: self.linked_usb_post_first_byte_pressure_active(),
+        })
     }
 
     #[cfg(all(
@@ -1994,6 +2063,35 @@ impl LocalSeatRuntime {
     ))]
     fn linked_usb_prompt_hard_blocked(&self) -> bool {
         self.keyboard_recovery_aux_pending || self.keyboard_poll_no_reply_streak != 0
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn linked_usb_post_first_byte_pressure_active(&self) -> bool {
+        self.driver_task_no_replies > self.keyboard_post_first_byte_no_reply_baseline
+            || self.keyboard_poll_cooldown_skips
+                > self.keyboard_post_first_byte_cooldown_skip_baseline
+            || self.hdmi_deferred_frames > self.keyboard_post_first_byte_hdmi_deferred_baseline
+            || self.hdmi_busy_frames > self.keyboard_post_first_byte_hdmi_busy_baseline
+            || self.hdmi_no_reply_frames > self.keyboard_post_first_byte_hdmi_no_reply_baseline
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    fn reset_keyboard_post_first_byte_pressure_baseline(&mut self) {
+        self.keyboard_post_first_byte_no_reply_baseline = self.driver_task_no_replies;
+        self.keyboard_post_first_byte_cooldown_skip_baseline = self.keyboard_poll_cooldown_skips;
+        self.keyboard_post_first_byte_hdmi_deferred_baseline = self.hdmi_deferred_frames;
+        self.keyboard_post_first_byte_hdmi_busy_baseline = self.hdmi_busy_frames;
+        self.keyboard_post_first_byte_hdmi_no_reply_baseline = self.hdmi_no_reply_frames;
     }
 
     #[cfg(all(
@@ -2085,11 +2183,35 @@ impl LocalSeatRuntime {
         target_arch = "aarch64",
         target_os = "none"
     ))]
+    fn emit_linked_hdmi_keyboard_busy_line_once(&mut self, reason: &'static str) {
+        if self.hdmi_keyboard_busy_line_emitted || !linked_local_seat_usb_first_byte_ready() {
+            return;
+        }
+        self.hdmi_keyboard_busy_line_emitted = true;
+        let mut line = heapless::String::<192>::new();
+        let _ = core::fmt::Write::write_fmt(
+            &mut line,
+            format_args!(
+                "[local-seat] usb keyboard command-deferred reason={} action=show-hdmi-busy",
+                reason
+            ),
+        );
+        boot_log::force_uart_line_raw_and_log(line.as_str());
+        self.mirror_line(LOCAL_SEAT_HDMI_KEYBOARD_BUSY_LINE);
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     fn emit_linked_hdmi_keyboard_ready_line_once(&mut self) {
         if self.hdmi_keyboard_ready_line_emitted || !self.linked_hdmi_prompt_ready_for_display() {
             return;
         }
         self.hdmi_keyboard_ready_line_emitted = true;
+        self.hdmi_keyboard_busy_line_emitted = false;
         self.hdmi_keyboard_recovering_line_emitted = false;
         let keyboard = self.keyboard_trace();
         let display = self.display_trace();
@@ -2962,6 +3084,21 @@ impl LocalSeatRuntime {
         self.keyboard_poll_no_reply_cooldown =
             self.keyboard_poll_no_reply_cooldown.saturating_sub(1);
         self.keyboard_poll_cooldown_skips = self.keyboard_poll_cooldown_skips.saturating_add(1);
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            if local_seat_keyboard_cooldown_should_show_busy(
+                self.hdmi_keyboard_ready_line_emitted,
+                self.keyboard_poll_no_reply_streak,
+                self.keyboard_recovery_aux_pending,
+            ) {
+                self.emit_linked_hdmi_keyboard_busy_line_once("keyboard-poll-cooldown");
+            }
+        }
         true
     }
 
@@ -2984,6 +3121,7 @@ impl LocalSeatRuntime {
     ))]
     fn reset_keyboard_post_first_byte_clean_proof(&mut self) {
         self.keyboard_post_first_byte_clean_polls = 0;
+        self.reset_keyboard_post_first_byte_pressure_baseline();
     }
 
     #[cfg(all(
@@ -2999,6 +3137,7 @@ impl LocalSeatRuntime {
             self.mirror_line(LOCAL_SEAT_HDMI_KEYBOARD_RECOVERING_LINE);
         }
         self.hdmi_keyboard_ready_line_emitted = false;
+        self.hdmi_keyboard_busy_line_emitted = false;
     }
 
     #[cfg(all(
@@ -3021,6 +3160,11 @@ impl LocalSeatRuntime {
             self.reset_keyboard_post_first_byte_clean_proof();
             return;
         }
+        if self.linked_usb_post_first_byte_pressure_active() {
+            self.emit_linked_hdmi_keyboard_busy_line_once("post-first-byte-pressure");
+            self.reset_keyboard_post_first_byte_clean_proof();
+            return;
+        }
         self.keyboard_post_first_byte_clean_polls = self
             .keyboard_post_first_byte_clean_polls
             .saturating_add(1)
@@ -3031,11 +3175,14 @@ impl LocalSeatRuntime {
     fn record_keyboard_poll_idle_completion(&mut self) {
         self.keyboard_poll_no_reply_streak = 0;
         self.keyboard_recovery_aux_pending = false;
-        if self.keyboard_poll_steady_queue_idle() {
-            self.keyboard_poll_no_reply_backoff = LINKED_LOCAL_SEAT_USB_POLL_READY_IDLE_COOLDOWN;
-            self.keyboard_poll_no_reply_cooldown = LINKED_LOCAL_SEAT_USB_POLL_READY_IDLE_COOLDOWN;
-        } else {
+        let idle_cooldown = local_seat_keyboard_poll_idle_completion_cooldown(
+            self.keyboard_poll_steady_queue_idle(),
+        );
+        if idle_cooldown == 0 {
             self.clear_keyboard_poll_no_reply_backoff();
+        } else {
+            self.keyboard_poll_no_reply_backoff = idle_cooldown;
+            self.keyboard_poll_no_reply_cooldown = idle_cooldown;
         }
     }
 
@@ -3428,6 +3575,9 @@ impl LocalSeatRuntime {
                                     "ready",
                                     Some(completion),
                                 );
+                                crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(
+                                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+                                );
                             }
                             self.record_keyboard_post_first_byte_clean_poll(completion.result);
                             return;
@@ -3733,6 +3883,9 @@ fn credit_linked_display_runtime_frame_owner_state(
                 root_console_ready,
                 LINKED_LOCAL_SEAT_DISPLAY_INIT_ATTEMPTS.load(Ordering::Acquire),
                 Some(completion),
+            );
+            crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(
+                crate::hal::driver_task::DriverTaskHotPath::HdmiText,
             );
         }
         true
@@ -4248,6 +4401,9 @@ fn publish_local_seat_usb_keyboard_owner_ready(
                 "ready",
                 Some(completion),
             );
+            crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(
+                crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+            );
         }
     } else {
         crate::hal::driver_task::emit_driver_task_resource_init_status(
@@ -4293,6 +4449,16 @@ fn publish_linked_local_seat_usb_first_report_event(
     if accepted == 0 {
         return;
     }
+    if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::hal::driver_task::emit_driver_task_resource_init_status(
+            contract,
+            crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+            "usb-keyboard-first-report",
+            "ready",
+            Some(completion),
+        );
+    }
+    publish_local_seat_usb_keyboard_owner_ready(contract, completion);
     if !LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.swap(true, Ordering::AcqRel) {
         let byte = bytes.first().copied().unwrap_or(0);
         let mut line = heapless::String::<192>::new();
@@ -5096,6 +5262,9 @@ fn try_attach_linked_display_runtime(root_console_ready: bool) -> bool {
         emit_hdmi_diagnostic_line(
             "[local-seat] linked HDMI runtime active action=serial-safe-mirror",
         );
+        crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(
+            crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+        );
         return true;
     }
     if !hdmi_ok {
@@ -5240,6 +5409,9 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                     "pcie-owner-state",
                     "ready",
                     None,
+                );
+                crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(
+                    crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
                 );
             }
         } else {
@@ -8110,6 +8282,41 @@ mod tests {
     }
 
     #[test]
+    fn runtime_keyboard_idle_completion_does_not_start_busy_cooldown() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        runtime.record_keyboard_poll_no_reply();
+        assert!(runtime.keyboard_trace().poll_cooldown_turns > 0);
+        runtime.record_keyboard_poll_idle_completion();
+
+        let trace = runtime.keyboard_trace();
+        assert_eq!(trace.driver_task_no_reply_streak, 0);
+        assert_eq!(trace.poll_cooldown_turns, 0);
+        assert_eq!(trace.poll_cooldown_skips, 0);
+        assert_eq!(local_seat_keyboard_poll_idle_completion_cooldown(false), 0);
+        assert_eq!(local_seat_keyboard_poll_idle_completion_cooldown(true), 0);
+    }
+
+    #[test]
+    fn keyboard_cooldown_busy_message_is_reserved_for_unready_or_recovery() {
+        assert!(!local_seat_keyboard_cooldown_should_show_busy(
+            true, 0, false
+        ));
+        assert!(local_seat_keyboard_cooldown_should_show_busy(
+            false, 0, false
+        ));
+        assert!(local_seat_keyboard_cooldown_should_show_busy(
+            true, 1, false
+        ));
+        assert!(local_seat_keyboard_cooldown_should_show_busy(true, 0, true));
+    }
+
+    #[test]
     fn runtime_keyboard_recovery_aux_waits_for_root_queue_drain_unless_runtime_is_stale() {
         assert!(!local_seat_keyboard_recovery_aux_allowed(
             false,
@@ -8454,13 +8661,18 @@ mod tests {
                 full_idle_result
             ));
             assert!(local_seat_usb_prompt_safe_ready_state(
-                true,
-                true,
-                true,
-                LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
-                false,
-                0,
-                local_seat_keyboard_result_blocks_prompt_ready(full_idle_result),
+                LocalSeatUsbPromptSafeReadyState {
+                    physical_pi_owner_state: true,
+                    root_console_ready: true,
+                    first_byte_ready: true,
+                    clean_polls: LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
+                    recovery_pending: false,
+                    no_reply_streak: 0,
+                    runtime_queue_blocked: local_seat_keyboard_result_blocks_prompt_ready(
+                        full_idle_result,
+                    ),
+                    post_first_byte_pressure: false,
+                },
             ));
         }
     }
@@ -8486,56 +8698,64 @@ mod tests {
 
     #[test]
     fn physical_pi_usb_prompt_safe_ready_waits_for_clean_post_first_byte_poll() {
+        let ready = LocalSeatUsbPromptSafeReadyState {
+            physical_pi_owner_state: true,
+            root_console_ready: true,
+            first_byte_ready: true,
+            clean_polls: LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
+            recovery_pending: false,
+            no_reply_streak: 0,
+            runtime_queue_blocked: false,
+            post_first_byte_pressure: false,
+        };
         assert!(!local_seat_usb_prompt_safe_ready_state(
-            true, true, true, 0, false, 0, false
+            LocalSeatUsbPromptSafeReadyState {
+                clean_polls: 0,
+                ..ready
+            },
         ));
         assert!(!local_seat_usb_prompt_safe_ready_state(
-            true,
-            true,
-            true,
-            LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS - 1,
-            false,
-            0,
-            false
+            LocalSeatUsbPromptSafeReadyState {
+                clean_polls: LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS - 1,
+                ..ready
+            },
         ));
         assert!(!local_seat_usb_prompt_safe_ready_state(
-            true,
-            true,
-            true,
-            LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
-            true,
-            0,
-            false
+            LocalSeatUsbPromptSafeReadyState {
+                recovery_pending: true,
+                ..ready
+            },
         ));
         assert!(!local_seat_usb_prompt_safe_ready_state(
-            true,
-            true,
-            true,
-            LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
-            false,
-            1,
-            false
+            LocalSeatUsbPromptSafeReadyState {
+                no_reply_streak: 1,
+                ..ready
+            },
         ));
         assert!(!local_seat_usb_prompt_safe_ready_state(
-            true,
-            true,
-            true,
-            LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
-            false,
-            0,
-            true
+            LocalSeatUsbPromptSafeReadyState {
+                runtime_queue_blocked: true,
+                ..ready
+            },
         ));
+        assert!(!local_seat_usb_prompt_safe_ready_state(
+            LocalSeatUsbPromptSafeReadyState {
+                post_first_byte_pressure: true,
+                ..ready
+            },
+        ));
+        assert!(local_seat_usb_prompt_safe_ready_state(ready));
         assert!(local_seat_usb_prompt_safe_ready_state(
-            true,
-            true,
-            true,
-            LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
-            false,
-            0,
-            false
-        ));
-        assert!(local_seat_usb_prompt_safe_ready_state(
-            false, false, false, 0, true, 9, true
+            LocalSeatUsbPromptSafeReadyState {
+                physical_pi_owner_state: false,
+                root_console_ready: false,
+                first_byte_ready: false,
+                clean_polls: 0,
+                recovery_pending: true,
+                no_reply_streak: 9,
+                runtime_queue_blocked: true,
+                post_first_byte_pressure: true,
+            },
         ));
     }
 

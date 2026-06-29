@@ -131,7 +131,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "busy_backpressure.coh:0bfb61ee8f7a5eb87b9401e6e85d197b6ea2e134cf0c3b1c940a09afec8f7cd6"
             .to_owned(),
-        "cas_roundtrip.coh:f6afb2dc79c414d04cc33f9a6d29da2f665959d2436c8d24baaa11f14b2ca98f"
+        "cas_roundtrip.coh:cb8982bb4e62088dd08501995e4cdf2707a2ccd97380f85c486f1fbd8f3e9315"
             .to_owned(),
         "host_absent.coh:f86f0aee6f7199034b7414d55788edbe2900ac8754f68296edf975816a7919df"
             .to_owned(),
@@ -143,7 +143,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "lifecycle_reboot_resume.coh:45471021214d5945361560b849611cc115bf714ed97822d3b583ed2a191290c0"
             .to_owned(),
-        "model_cas_bind.coh:56bb0c3908dc28d2f04381977d9dcaf9e98a179cca8904c88e9ee89a031c7311"
+        "model_cas_bind.coh:b36d084b87963b584926e0ecbf5e1b652d8a991f85f6407f4c0a4bfbe9ae6fa5"
             .to_owned(),
         "observe_watch.coh:cb6ae987049eb345c4dd7501fc657bfe6bd99c6f235593a5aab82e85ce3d4a9e"
             .to_owned(),
@@ -151,7 +151,7 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "policy_gate.coh:6d7ad6b827641b2578843e3db0bedcd9ffcf911f48520a6e0478d468860f239f"
             .to_owned(),
-        "replay_journal.coh:1ff3cc6ac006c47fe8a6f914fb5b079d352a41691c2b5da34cf6441fba4d5a8f"
+        "replay_journal.coh:8bc1578f3283b727ecfc9f5e29a72937221ecbc0ce8e7ecb9881ad87dcd1877d"
             .to_owned(),
         "rest_control_plane_smoke.coh:d9caa417b846e6af631a608d9f3b61dcc35d88f55ebe66a60ab5c75a72e6eb84"
             .to_owned(),
@@ -171,9 +171,9 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "tcp_basic.coh:619970b6ff14332bbef80f704c117b4471653bb75f7a6187b27d93fbc16415a7"
             .to_owned(),
-        "telemetry_push_create.coh:d8612c5d812d4e5d20e6dd3973569194b201d4465eadab9a6e61deb203231dea"
+        "telemetry_push_create.coh:5fd750c00e702d1660c35a96b141f067dd5fa5de14f11720524f3a1ef0cc154c"
             .to_owned(),
-        "telemetry_ring.coh:92ca2e5604e7b123e1aa026a2ca7b27fe6f914cc8cb280faff6189e6c35e1513"
+        "telemetry_ring.coh:4d0d4d260b6e0dd8f5508ee1be9971b8da93c3a3b1e77dd78b5eb95a545e6784"
             .to_owned(),
     ]);
     assert_eq!(results, expected);

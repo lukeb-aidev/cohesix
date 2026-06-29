@@ -764,6 +764,25 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
 
 
+def test_gate_summary_tracks_smp_activity_net_state() -> None:
+    """Operator activity summaries must carry Genet readiness into gate proof."""
+
+    events = normalizer.parse_events(
+        [
+            "[smp] activity net attached=yes backend=bcmgenet-v5 mode=dhcp "
+            "active=wired standby=wifi src=dhcp-lease dhcp=bound "
+            "contract=bcmgenet-v5",
+            "[smp] activity net-link link=yes last_poll_ms=70950 tx_drops=0 "
+            "ip=192.168.10.50 gw=192.168.10.1",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["NET_ACTIVE"] == "wired"
+    assert record["NET_ADDR_SRC"] == "dhcp-lease"
+    assert record["NET_DHCP"] == "bound"
+
+
 def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
     """Runtime/DMA proof needs live Pi owner-state and counter-qualified timing."""
 
@@ -876,6 +895,321 @@ def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
     assert record["PI4_RUNTIME_DMA_PROOF"] == "fresh-pi"
     assert record["PI4_RUNTIME_DMA_PROOF_REASON"] == "live-pi-owner-state"
     assert record["PI4_RUNTIME_DMA_COUNTER_PROOF"] == "counter-qualified"
+
+
+def test_gate_summary_accepts_late_wired_owner_state_refresh() -> None:
+    """Resolved Pi owner-state replay should close the wired runtime/DMA proof."""
+
+    events = normalizer.parse_events(
+        [
+            "U-Boot 2026.01",
+            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "usb: platform_reset policy=full-reset-start "
+            "origin=live-runtime-default handoff=none seed=none run=run-cold",
+            "[Cohesix] Root console ready (type 'help' for commands)",
+            "cohesix> driver proof",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=serial tcb=0x064e "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=usb-local-seat tcb=0x08f2 "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=pcie-root tcb=0x0713 "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-owner-state "
+            "status=blocked-first-report detail=0x0500 result=0 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=serial hot_path=serial-console "
+            "stage=runtime-descriptor-replay status=ready detail=0x0501 "
+            "result=1 frame_len=0",
+            "DRIVER_TASK_RUNTIME_INIT_DEFERRED contract=serial "
+            "hot_path=serial-console status=resumed owner=linked-runtime "
+            "root_action=descriptor-replay action=steady-service-enabled",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=runtime-descriptor-replay "
+            "status=ready detail=0x0501 result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-owner-state "
+            "status=ready detail=0x0501 result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=pcie-root hot_path=pcie-root "
+            "stage=runtime-descriptor-replay status=ready detail=0x0501 "
+            "result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=pcie-root hot_path=pcie-root "
+            "stage=pcie-owner-state status=ready detail=0x0501 "
+            "result=1 frame_len=0",
+            "[timers] backend=arch-counter counter=vct timer_freq_hz=54000000",
+            "DRIVER_TASK_DEFAULT requested=dedicated required=yes "
+            "substrate_active=yes live_hot_paths=yes",
+            "DRIVER_TASK_SELECTED profile=pi4-uboot-aarch64 selection=wired "
+            "active_net=genet required_roles=0x2f required_hot_paths=0x2f "
+            "required_tasks=5",
+            "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
+            "task_count=7 failed_count=0 live_tcb_count=7 "
+            "root_authority=admission-descriptor-diagnostics-only "
+            "hardware_owner=linked-runtime fault_endpoint_ready=yes "
+            "revoke_ready=yes broad_caps_leaked=0 sched=yes "
+            "affinity=per-driver affinity_configured=7 affinity_applied=7 "
+            "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes "
+            "owner_state=driver-owned live_hot_paths=yes",
+            "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=18",
+            "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=22",
+            "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=44",
+            "SCHED_CONTRACT contract=bcmgenet-v5 isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=31",
+            "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=36",
+            "DRIVER_TASK_DMA_PROOF contract=serial hot_path=serial-console "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=0 "
+            "shared_pages=4 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
+            "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=usb-local-seat hot_path=usb-keyboard "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=128 "
+            "shared_pages=32 bus_address_policy=hal-bounded-bus-address "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=1 "
+            "cache_clean_bytes=64 cache_invalidate_ops=1 cache_invalidate_bytes=64 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=hdmi-text hot_path=hdmi-text "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=0 "
+            "shared_pages=16 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
+            "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=bcmgenet-v5 hot_path=genet-nic "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=6 dma_pages=64 "
+            "shared_pages=32 bus_address_policy=hal-bounded-bus-address "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=1 "
+            "cache_clean_bytes=64 cache_invalidate_ops=1 cache_invalidate_bytes=64 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=10 dma_pages=0 "
+            "shared_pages=16 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=0 "
+            "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
+            "proof_effect=runtime-dma-proof-ready",
+            "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
+            "source=root-ring sequence=1 submitted=2 completed=2 idle=0 fault=0 "
+            "budget=0 frame=1 desc=1 staged_bytes=64 clean_ops=1 clean_bytes=64 "
+            "inv_ops=1 inv_bytes=64 sends=2 yields=0 busy=0 same_request=0 "
+            "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
+            "rx_bytes=8 tx_frames=1 tx_bytes=8 role_aux0=0 role_aux1=0 "
+            "role_aux2=0 role_aux3=0",
+            "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
+            "substrate=active capset=pass fault=pass revoke=pass sched=pass "
+            "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
+            "pointer_free_ipc=yes owner_state=driver-owned required=5 "
+            "dedicated=5 compatibility=0 active_net=genet live_hot_paths=yes",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_BOOTSTRAP_DEFERRED"] == 0
+    assert (
+        record["DRIVER_TASK_RESOURCE_BLOCKER"]
+        == "usb-keyboard:usb-owner-state:blocked-first-report"
+    )
+    assert record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"] == "none"
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
+    assert record["DRIVER_TASK_DMA_PROOFS"] == 5
+    assert record["DRIVER_TASK_DMA_BLOCKER"] == "none"
+    assert record["PI4_RUNTIME_DMA_PROOF"] == "fresh-pi"
+    assert record["PI4_RUNTIME_DMA_PROOF_REASON"] == "live-pi-owner-state"
+    assert record["PI4_RUNTIME_DMA_COUNTER_PROOF"] == "counter-qualified"
+
+
+def test_gate_summary_replaces_superseded_dma_blockers() -> None:
+    """Later ready DMA proof should replace early owner-state-missing output."""
+
+    events = normalizer.parse_events(
+        [
+            "U-Boot 2026.01",
+            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "usb: platform_reset policy=full-reset-start "
+            "origin=live-runtime-default handoff=none seed=none run=run-cold",
+            "[Cohesix] Root console ready (type 'help' for commands)",
+            "cohesix>",
+            "[timers] backend=arch-counter counter=vct timer_freq_hz=54000000",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=serial tcb=0x05bd "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=usb-local-seat tcb=0x07a7 "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+            "DRIVER_TASK_BOOTSTRAP_DEFERRED contract=pcie-root tcb=0x06a2 "
+            "runtime_descriptor=yes reason=root-shell-before-first-service-proof",
+            "DRIVER_TASK_DEFAULT requested=dedicated required=yes "
+            "substrate_active=yes live_hot_paths=no",
+            "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wired "
+            "active_net=genet required_roles=0x2f required_hot_paths=0x4f "
+            "required_tasks=5",
+            "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-uboot-aarch64 "
+            "task_count=5 failed_count=0 live_tcb_count=5 "
+            "root_authority=admission-descriptor-diagnostics-only "
+            "hardware_owner=linked-runtime fault_endpoint_ready=yes "
+            "revoke_ready=yes broad_caps_leaked=0 sched=yes "
+            "affinity=per-driver affinity_configured=5 affinity_applied=5 "
+            "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes",
+            "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=root-task-compatibility",
+            "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=root-task-compatibility",
+            "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=44",
+            "SCHED_CONTRACT contract=bcmgenet-v5 isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=31",
+            "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=root-task-compatibility",
+            "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+            "owner_state=missing descriptor=missing root_pointer=unknown",
+            "DRIVER_TASK_DMA_PROOF contract=serial hot_path=serial-console "
+            "status=owner-state-missing profile=bounded-no-iommu descriptor=present "
+            "root_pointer=unknown owner=unproven mmio_pages=1 dma_pages=0 "
+            "shared_pages=4 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance",
+            "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+            "owner_state=missing descriptor=missing root_pointer=unknown",
+            "DRIVER_TASK_DMA_PROOF contract=usb-local-seat hot_path=usb-keyboard "
+            "status=owner-state-missing profile=bounded-no-iommu descriptor=present "
+            "root_pointer=unknown owner=unproven mmio_pages=16 dma_pages=128 "
+            "shared_pages=32 bus_address_policy=hal-bounded-bus-address "
+            "cache_policy=uncached-plus-root-maintenance",
+            "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+            "owner_state=missing descriptor=missing root_pointer=unknown",
+            "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
+            "status=owner-state-missing profile=bounded-no-iommu descriptor=present "
+            "root_pointer=unknown owner=unproven mmio_pages=10 dma_pages=0 "
+            "shared_pages=16 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance",
+            "DRIVER_TASK_DEFAULT requested=dedicated required=yes "
+            "substrate_active=yes live_hot_paths=yes",
+            "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wired "
+            "active_net=genet required_roles=0x2f required_hot_paths=0x4f "
+            "required_tasks=5",
+            "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_DMA_PROOF contract=serial hot_path=serial-console "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=1 dma_pages=0 "
+            "shared_pages=4 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance",
+            "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_DMA_PROOF contract=usb-local-seat hot_path=usb-keyboard "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=16 dma_pages=128 "
+            "shared_pages=32 bus_address_policy=hal-bounded-bus-address "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=1 "
+            "cache_clean_bytes=64 cache_invalidate_ops=1 cache_invalidate_bytes=64",
+            "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_DMA_PROOF contract=hdmi-text hot_path=hdmi-text "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=0 "
+            "shared_pages=16 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance",
+            "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_DMA_PROOF contract=bcmgenet-v5 hot_path=genet-nic "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=6 dma_pages=64 "
+            "shared_pages=32 bus_address_policy=hal-bounded-bus-address "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=1 "
+            "cache_clean_bytes=64 cache_invalidate_ops=1 cache_invalidate_bytes=64",
+            "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+            "owner_state=driver-owned descriptor=present root_pointer=no",
+            "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=10 dma_pages=0 "
+            "shared_pages=16 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance",
+            "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=18",
+            "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=22",
+            "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
+            "live_tcb=yes hot_path=dedicated observed_service_us=36",
+            "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
+            "source=root-ring sequence=1 submitted=2 completed=2 idle=0 fault=0 "
+            "budget=0 frame=1 desc=1 staged_bytes=64 clean_ops=1 clean_bytes=64 "
+            "inv_ops=1 inv_bytes=64 sends=2 yields=0 busy=0 same_request=0 "
+            "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
+            "rx_bytes=8 tx_frames=1 tx_bytes=8 role_aux0=0 role_aux1=0 "
+            "role_aux2=0 role_aux3=0",
+            "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes "
+            "reason=dedicated-sel4-substrate-active active_net=genet "
+            "substrate=active capset=pass fault=pass revoke=pass sched=pass "
+            "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
+            "pointer_free_ipc=yes owner_state=driver-owned required=5 "
+            "dedicated=5 compatibility=0 live_hot_paths=yes",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["DRIVER_TASK_BOOTSTRAP_DEFERRED"] == 0
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
+    assert record["DRIVER_TASK_DMA_PROOFS"] == 5
+    assert record["DRIVER_TASK_DMA_BLOCKER"] == "none"
+    assert record["PI4_RUNTIME_DMA_PROOF"] == "fresh-pi"
+    assert record["PI4_RUNTIME_DMA_PROOF_REASON"] == "live-pi-owner-state"
+    assert record["PI4_RUNTIME_DMA_COUNTER_PROOF"] == "counter-qualified"
+
+
+def test_gate_summary_splits_glued_serial_trace_segment() -> None:
+    """UART prompt capture can glue typed input before SERIAL_INPUT_TRACE."""
+
+    events = normalizer.parse_events(
+        [
+            "cohesix> usb statusSERIAL_INPUT_TRACE stage=line-ready "
+            "route=bcm2711-mini-uart line_len=10 rx_depth=0 partial_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["SERIAL_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_gate_summary_clears_recovery_request_after_sustained_input() -> None:
+    """Later sustained input progress closes earlier post-first-byte recovery noise."""
+
+    events = normalizer.parse_events(
+        [
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x65",
+            "usb: recovery_request action=no-reply aux0=0x55534252 "
+            "no_reply=27 streak=9 cooldown=2 recovery_aux_requests=1 "
+            "recovery_aux_pending=yes queue_empty=yes accepted=12 drained=11 "
+            "echoed=10 detail=0x0501 result=0x00000220 queued_reports=1 "
+            "report_status=none report_status_code=0",
+            "usb: sustained_input queue_valid=yes detail=0x0501 "
+            "result=0x64000020 queued_reports=32 transfer_events=100 "
+            "report_status=none accepted=14 drained=14 echoed=14 "
+            "no_reply=27 no_reply_streak=0 recovery_aux_requests=1 "
+            "recovery_aux_pending=no blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
+    assert record["USB_BURST_PROOF"] == "yes"
+    assert record["USB_BURST_DROPS"] == 0
 
 
 def test_gate_summary_tracks_cyw43_data_path_trace_counts() -> None:
@@ -1521,6 +1855,24 @@ def test_gate_summary_counts_driver_task_budget_overruns() -> None:
     assert record["DRIVER_TASK_LATENCY_PROOFS"] == 1
 
 
+def test_gate_summary_ignores_zero_driver_task_budget_overrun_fields() -> None:
+    """Zero-valued pressure fields must not count as budget-overrun evidence."""
+
+    events = normalizer.parse_events(
+        [
+            "usb: local-seat drops keyboard_drop=0 driver_task_budget_overruns=0 "
+            "driver_task_no_replies=3122 poll_cooldown=1 cooldown_skips=221894",
+            "[smp] activity pump now_ms=120915 input=local-seat lines=6 ok=5 "
+            "denied=0 ticks=22318 serial_rx_drop=0 serial_tx_drop=0 "
+            "utf8_drop=0 serial_budget_overruns=0 serial_rx_backpressure=0 "
+            "serial_tx_backpressure=0 serial_pressure_source=uart-output",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_BUDGET_OVERRUNS"] == 0
+
+
 def test_gate_summary_tracks_driver_task_notification_bind_deferral() -> None:
     events = normalizer.parse_events(
         [
@@ -2115,6 +2467,33 @@ def test_gate_summary_clears_current_resource_blocker_after_ready() -> None:
     assert (
         record["DRIVER_TASK_RESOURCE_BLOCKER"]
         == "usb-keyboard:usb-keyboard-enumeration-retry:not-enumerated"
+    )
+    assert record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"] == "none"
+
+
+def test_gate_summary_clears_current_resource_blocker_after_owner_state() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-host-eapol "
+            "status=secure detail=0 result=0 frame_len=0",
+            "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+            "owner_state=driver-owned hardware_owner=linked-runtime "
+            "descriptor=present root_pointer=no proof_effect=owner-state-proven",
+            "DRIVER_TASK_DMA_PROOF contract=cyw43455 hot_path=cyw43-wifi "
+            "status=ready profile=bounded-no-iommu descriptor=present "
+            "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=0 "
+            "shared_pages=64 bus_address_policy=zero-dma "
+            "cache_policy=uncached-plus-root-maintenance cache_clean_ops=1 "
+            "cache_clean_bytes=64 cache_invalidate_ops=1 cache_invalidate_bytes=64 "
+            "proof_effect=runtime-dma-proof-ready",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert (
+        record["DRIVER_TASK_RESOURCE_BLOCKER"]
+        == "cyw43-wifi:cyw43-host-eapol:secure"
     )
     assert record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"] == "none"
 

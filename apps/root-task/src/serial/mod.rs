@@ -491,6 +491,9 @@ pub fn init_serial_driver_task_runtime() -> bool {
         );
         SERIAL_LINKED_RUNTIME_ATTACHED.store(1, AtomicOrdering::Release);
         emit_serial_runtime_state("driver", "ready", "green");
+        crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+        );
     } else {
         SERIAL_LINKED_RUNTIME_ATTACHED.store(0, AtomicOrdering::Release);
         emit_serial_runtime_state("driver", status, "red");

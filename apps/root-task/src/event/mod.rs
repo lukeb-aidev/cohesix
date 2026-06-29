@@ -13391,12 +13391,22 @@ where
                         {
                             if let Some(bridge_ref) = self.ninedoor.as_mut() {
                                 match bridge_ref.echo(path_str, payload.as_str()) {
-                                    Ok(()) => {
-                                        let detail = format_message(format_args!(
-                                            "path={} bytes={}",
-                                            path_str,
-                                            payload.len()
-                                        ));
+                                    Ok(outcome) => {
+                                        let detail =
+                                            if let Some(seg_id) = outcome.telemetry_segment_id() {
+                                                format_message(format_args!(
+                                                    "path={} bytes={} seg_id={}",
+                                                    path_str,
+                                                    payload.len(),
+                                                    seg_id
+                                                ))
+                                            } else {
+                                                format_message(format_args!(
+                                                    "path={} bytes={}",
+                                                    path_str,
+                                                    payload.len()
+                                                ))
+                                            };
                                         self.emit_ack_ok(verb_label, Some(detail.as_str()));
                                         self.consume_ticket_bandwidth(payload.len() as u64);
                                     }

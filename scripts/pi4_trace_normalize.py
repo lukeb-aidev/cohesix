@@ -51,7 +51,10 @@ TRACE_SEGMENT_RE = re.compile(
     r"|\[net-console\]"
     r"|\[smp\]"
     r"|\[timers\]"
+    r"|SERIAL_INPUT_TRACE"
     r"|HDMI_FRAME_"
+    r"|(?<![A-Za-z0-9_.:-])DRIVER_TASK_"
+    r"|(?<![A-Za-z0-9_.:-])SCHED_CONTRACT"
     r"|CYW43_"
     r"|(?<![A-Za-z0-9_.:-])(?:usb:|USB:|wifi:|WiFi:|WIFI:)"
     r"|(?<![A-Za-z0-9_.:-])(?:OK|ERR) NETTEST"
@@ -1223,6 +1226,7 @@ def classify_domain(line: str) -> str | None:
             and "conn " in lower
             and " authenticated" in lower
         )
+        or line.startswith("[smp] activity net")
         or line.startswith("netstatus")
         or line.startswith("netstats")
     ):
@@ -7292,7 +7296,9 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str]:
     addr_src = "unknown"
     dhcp = "unknown"
     for event in events:
-        if not event.raw.lower().startswith(("netstats:", "netstatus:")):
+        if not event.raw.lower().startswith(
+            ("netstats:", "netstatus:", "[smp] activity net")
+        ):
             continue
         active = event.fields.get("active", active)
         addr_src = event.fields.get("addr_src", event.fields.get("src", addr_src))
@@ -7703,8 +7709,12 @@ def summarize_driver_task_proofs(
                 fields.get("priority")
             )
             active_net = fields.get("active_net", active_net).lower()
-            if "budget_overrun" in raw or "budget overrun" in raw or _truthy_field(
-                fields.get("budget_overrun")
+            budget_overrun_count = parse_hex_int(fields.get("driver_task_budget_overruns"))
+            if (
+                raw.startswith("budget_overrun")
+                or "budget overrun" in raw
+                or _truthy_field(fields.get("budget_overrun"))
+                or (budget_overrun_count or 0) > 0
             ):
                 budget_overruns += 1
             if any(
@@ -7821,7 +7831,33 @@ def line_has_usb_burst_proof(raw: str, fields: dict[str, str]) -> bool:
         raw.startswith("usb_burst")
         or "keyboard burst" in raw
         or fields.get("usb_burst") in {"1", "true", "yes"}
+        or sustained_input_progress_proof(raw, fields)
     )
+
+
+def sustained_input_progress_proof(raw: str, fields: dict[str, str]) -> bool:
+    """Return whether a sustained-input line proves post-first-byte progress."""
+
+    if not raw.startswith("usb: sustained_input"):
+        return False
+    if fields.get("queue_valid", "").lower() == "no":
+        return False
+    if fields.get("recovery_aux_pending", "").lower() == "yes":
+        return False
+    blocker = fields.get("blocker", "none").lower().replace("_", "-")
+    if blocker and blocker != "none":
+        return False
+    report_status = fields.get("report_status", "").lower().replace("_", "-")
+    if report_status not in {"", "none", "idle-report", "produced-byte"}:
+        return False
+    accepted = parse_hex_int(fields.get("accepted"))
+    drained = parse_hex_int(fields.get("drained"))
+    echoed = parse_hex_int(fields.get("echoed"))
+    if None in {accepted, drained, echoed}:
+        return False
+    return (accepted or 0) > 0 and (drained or 0) >= (accepted or 0) and (
+        echoed or 0
+    ) >= (accepted or 0)
 
 
 def line_has_hdmi_responsiveness(raw: str, fields: dict[str, str]) -> bool:
@@ -8773,6 +8809,8 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
     last_usb_counter: tuple[int, int, int, int] | None = None
     last_local_seat: tuple[int, int, int, int, int] | None = None
     saw_keyboard_no_reply = False
+    sustained_progress_seen = False
+    blocker = "none"
     for event in events:
         raw = event.raw.lower()
         if usb_first_byte_step(event) or usb_runtime_gate10_step(event):
@@ -8783,7 +8821,7 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
         report_status = event.fields.get("report_status", "").lower().replace("_", "-")
         if raw.startswith("usb: recovery_request"):
             if field_lower(event, "action") == "no-reply":
-                return "usb-post-first-byte-recovery-request-no-reply"
+                blocker = "usb-post-first-byte-recovery-request-no-reply"
             continue
         if (
             "driver_task_ring_call_abort" in raw
@@ -8797,26 +8835,41 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
             ):
                 phase = field_lower(event, "marker_phase_name")
                 if phase == "usb-hid-interrupt-queue-begin":
-                    return "usb-post-first-byte-recovery-request-timeout"
-                return "usb-post-first-byte-recovery-request-no-reply"
+                    blocker = "usb-post-first-byte-recovery-request-timeout"
+                else:
+                    blocker = "usb-post-first-byte-recovery-request-no-reply"
+                continue
         if raw.startswith("usb: sustained_input"):
+            if sustained_input_progress_proof(raw, event.fields):
+                sustained_progress_seen = True
+                blocker = "none"
+                no_reply_streak = parse_hex_int(event.fields.get("no_reply_streak")) or 0
+                if no_reply_streak == 0:
+                    saw_keyboard_no_reply = False
+                continue
             sustained_blocker = field_lower(event, "blocker").replace("_", "-")
             if sustained_blocker and sustained_blocker != "none":
-                return sustained_blocker
+                blocker = sustained_blocker
+                continue
             if (
                 field_lower(event, "recovery_aux_pending") == "yes"
                 and field_lower(event, "queue_valid") == "no"
             ):
-                return "usb-post-first-byte-recovery-pending-no-diag"
+                blocker = "usb-post-first-byte-recovery-pending-no-diag"
+                continue
         if report_status == "queue-collapse" or "queue-collapse" in raw:
-            return "usb-post-first-byte-queue-collapse"
+            blocker = "usb-post-first-byte-queue-collapse"
+            continue
         if report_status == "recovery-failed" or "recovery-failed" in raw:
-            return "usb-post-first-byte-recovery-failed"
+            blocker = "usb-post-first-byte-recovery-failed"
+            continue
         if report_status == "recovery-success" or "recovery-success" in raw:
+            blocker = "none"
             saw_keyboard_no_reply = False
             continue
         if report_status == "unmatched-transfer" or "unmatched-transfer" in raw:
-            return "usb-post-first-byte-unmatched-transfer"
+            blocker = "usb-post-first-byte-unmatched-transfer"
+            continue
         if raw.startswith("usb: stall_telemetry") or raw.startswith("usb: runtime_queue"):
             queued_reports = parse_hex_int(event.fields.get("queued_reports"))
             transfer_events = parse_hex_int(event.fields.get("transfer_events"))
@@ -8826,10 +8879,11 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
                 and queued_reports <= 4
                 and transfer_events >= 32
             ):
-                return "usb-post-first-byte-queue-collapse-risk"
+                blocker = "usb-post-first-byte-queue-collapse-risk"
+                continue
         if raw.startswith("usb: event_loop"):
             runtime_skipped = parse_hex_int(event.fields.get("runtime_skipped")) or 0
-            if runtime_skipped > 0:
+            if runtime_skipped > 0 and not sustained_progress_seen:
                 saw_keyboard_no_reply = True
 
         if raw.startswith("driver_task_counter "):
@@ -8856,7 +8910,7 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
                         and snapshot[2] == last_usb_counter[2]
                         and snapshot[3] == last_usb_counter[3]
                     ):
-                        return "usb-post-first-byte-no-progress"
+                        blocker = "usb-post-first-byte-no-progress"
                     last_usb_counter = snapshot
 
         if raw.startswith("[smp] activity local-seat "):
@@ -8867,8 +8921,6 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
             drained = parse_hex_int(fields.get("drained"))
             echoed = parse_hex_int(fields.get("echoed"))
             no_reply = parse_hex_int(fields.get("no_reply"))
-            if (no_reply or 0) > 0:
-                saw_keyboard_no_reply = True
             if None not in {backend_polls, backend_bytes, accepted, drained, echoed}:
                 snapshot = (
                     backend_polls or 0,
@@ -8882,9 +8934,22 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
                     and snapshot[0] > last_local_seat[0]
                     and snapshot[1:] == last_local_seat[1:]
                 ):
-                    return "usb-post-first-byte-no-progress"
+                    blocker = "usb-post-first-byte-no-progress"
                 last_local_seat = snapshot
+                if (
+                    blocker != "usb-post-first-byte-no-progress"
+                    and snapshot[2] > 0
+                    and snapshot[3] >= snapshot[2]
+                    and snapshot[4] >= snapshot[2]
+                ):
+                    blocker = "none"
+                    saw_keyboard_no_reply = False
+                    continue
+            if (no_reply or 0) > 0:
+                saw_keyboard_no_reply = True
 
+    if blocker != "none":
+        return blocker
     if saw_keyboard_no_reply:
         return "usb-post-first-byte-no-reply"
     return "none"
@@ -9625,10 +9690,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             driver_task_ring_call_outstanding = max(
                 0, driver_task_ring_call_outstanding - open_begins
             )
-    driver_task_bootstrap_deferred = sum(
-        1
-        for event in event_list
-        if "driver_task_bootstrap_deferred" in event.raw.lower()
+    driver_task_bootstrap_deferred = summarize_driver_task_bootstrap_deferred(
+        event_list
     )
     (
         driver_task_resource_init,
@@ -10018,16 +10081,29 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     )
 
 
+def clear_resource_blockers(
+    current_blockers: dict[tuple[str, str, str], str],
+    *,
+    contract: str | None = None,
+    hot_path: str | None = None,
+) -> None:
+    """Clear stale resource blockers after later owner-state or DMA proof."""
+
+    stale_keys = [
+        blocker_key
+        for blocker_key in current_blockers
+        if (contract is None or blocker_key[0] == contract)
+        and (hot_path is None or blocker_key[1] == hot_path)
+    ]
+    for blocker_key in stale_keys:
+        current_blockers.pop(blocker_key, None)
+
+
 def summarize_driver_task_resource_init(
     events: Iterable[TraceEvent],
 ) -> tuple[int, str, str]:
     """Return resource-init breadcrumb count, first blocker, and current blocker."""
 
-    resource_events = [
-        event
-        for event in events
-        if "driver_task_resource_init" in event.raw.lower()
-    ]
     non_blocking_statuses = {
         "ready",
         "deferred",
@@ -10040,7 +10116,41 @@ def summarize_driver_task_resource_init(
     }
     first_blocker = "none"
     current_blockers: dict[tuple[str, str, str], str] = {}
-    for event in resource_events:
+    resource_count = 0
+    for event in events:
+        raw = event.raw.lower()
+        if "driver_task_acceptance" in raw and (
+            _truthy_field(event.fields.get("dedicated_ready"))
+            and field_lower(event, "proof_effect") == "acceptance-green"
+        ):
+            current_blockers.clear()
+            continue
+        if (
+            "driver_task_owner_state" in raw
+            and _owner_state_proven(event.fields)
+            and event.fields.get("descriptor", "").lower() == "present"
+            and event.fields.get("root_pointer", "").lower() == "no"
+        ):
+            hot_path = classify_owner_state_hot_path(event.fields)
+            if hot_path is not None:
+                clear_resource_blockers(
+                    current_blockers,
+                    contract=event.fields.get("contract", "unknown"),
+                    hot_path=hot_path,
+                )
+            continue
+        if "driver_task_dma_proof" in raw and is_ready_driver_task_dma_proof(event):
+            hot_path = classify_owner_state_hot_path(event.fields)
+            if hot_path is not None:
+                clear_resource_blockers(
+                    current_blockers,
+                    contract=event.fields.get("contract", "unknown"),
+                    hot_path=hot_path,
+                )
+            continue
+        if "driver_task_resource_init" not in raw:
+            continue
+        resource_count += 1
         status = event.fields.get("status", "unknown").lower()
         contract = event.fields.get("contract", "unknown")
         hot_path = event.fields.get("hot_path", contract)
@@ -10055,61 +10165,108 @@ def summarize_driver_task_resource_init(
         else:
             current_blockers.pop(key, None)
             if status in {"ready", "preserved-ready", "cached-ready"}:
-                stale_keys = [
-                    blocker_key
-                    for blocker_key in current_blockers
-                    if blocker_key[0] == contract and blocker_key[1] == hot_path
-                ]
-                for blocker_key in stale_keys:
-                    current_blockers.pop(blocker_key, None)
+                clear_resource_blockers(
+                    current_blockers,
+                    contract=contract,
+                    hot_path=hot_path,
+                )
     current_blocker = "none"
     if current_blockers:
         current_blocker = next(reversed(current_blockers.values()))
-    return len(resource_events), first_blocker, current_blocker
+    return resource_count, first_blocker, current_blocker
+
+
+def summarize_driver_task_bootstrap_deferred(events: Iterable[TraceEvent]) -> int:
+    """Return unresolved shell-first bootstrap deferrals by contract."""
+
+    deferred_contracts: dict[str, bool] = {}
+    resolved_statuses = {"ready", "resumed", "preserved-ready", "cached-ready"}
+    for event in events:
+        raw = event.raw.lower()
+        contract = event.fields.get("contract", "").lower()
+        if not contract:
+            continue
+        if "driver_task_bootstrap_deferred" in raw:
+            deferred_contracts[contract] = True
+            continue
+        if (
+            "driver_task_runtime_init_deferred" in raw
+            and event.fields.get("status", "").lower() == "resumed"
+        ):
+            deferred_contracts[contract] = False
+            continue
+        if (
+            "driver_task_owner_state" in raw
+            and _owner_state_proven(event.fields)
+            and event.fields.get("descriptor", "").lower() == "present"
+            and event.fields.get("root_pointer", "").lower() == "no"
+        ):
+            deferred_contracts[contract] = False
+            continue
+        if "driver_task_dma_proof" in raw and is_ready_driver_task_dma_proof(event):
+            deferred_contracts[contract] = False
+            continue
+        if "driver_task_resource_init" not in raw:
+            continue
+        status = event.fields.get("status", "").lower()
+        stage = event.fields.get("stage", "").lower()
+        if status not in resolved_statuses:
+            continue
+        if stage == "runtime-descriptor-replay" or stage.endswith("owner-state"):
+            deferred_contracts[contract] = False
+    return sum(1 for deferred in deferred_contracts.values() if deferred)
+
+
+def is_ready_driver_task_dma_proof(event: TraceEvent) -> bool:
+    """Return whether a DMA proof line satisfies the bounded Pi 4 profile."""
+
+    status = event.fields.get("status", "unknown").lower()
+    profile = event.fields.get("profile", "unknown").lower()
+    descriptor = event.fields.get("descriptor", "unknown").lower()
+    root_pointer = event.fields.get("root_pointer", "unknown").lower()
+    bus_policy = event.fields.get("bus_address_policy", "unknown").lower()
+    dma_pages = parse_hex_int(event.fields.get("dma_pages")) or 0
+    cache_policy = event.fields.get("cache_policy", "unknown").lower()
+    return (
+        status == "ready"
+        and profile == "bounded-no-iommu"
+        and descriptor == "present"
+        and root_pointer == "no"
+        and cache_policy == "uncached-plus-root-maintenance"
+        and (
+            (dma_pages == 0 and bus_policy == "zero-dma")
+            or (dma_pages > 0 and bus_policy == "hal-bounded-bus-address")
+        )
+    )
 
 
 def summarize_driver_task_dma_proofs(
     events: Iterable[TraceEvent], selected_net: str, active_net: str
 ) -> tuple[int, str]:
-    """Return ready DMA proof count and the first concrete DMA proof blocker."""
+    """Return ready DMA proof count and the current concrete DMA proof blocker."""
 
     required = required_driver_task_owner_hot_paths(selected_net, active_net)
     ready: set[str] = set()
-    blocker = "none"
+    current_blockers: dict[str, str] = {}
     for event in events:
         if "driver_task_dma_proof" not in event.raw.lower():
             continue
         hot_path = classify_owner_state_hot_path(event.fields)
         if hot_path is None:
-            if blocker == "none":
-                blocker = "unknown-hot-path"
             continue
-        status = event.fields.get("status", "unknown").lower()
-        profile = event.fields.get("profile", "unknown").lower()
-        descriptor = event.fields.get("descriptor", "unknown").lower()
-        root_pointer = event.fields.get("root_pointer", "unknown").lower()
         bus_policy = event.fields.get("bus_address_policy", "unknown").lower()
-        dma_pages = parse_hex_int(event.fields.get("dma_pages")) or 0
-        cache_policy = event.fields.get("cache_policy", "unknown").lower()
-        ready_line = (
-            status == "ready"
-            and profile == "bounded-no-iommu"
-            and descriptor == "present"
-            and root_pointer == "no"
-            and cache_policy == "uncached-plus-root-maintenance"
-            and (
-                (dma_pages == 0 and bus_policy == "zero-dma")
-                or (dma_pages > 0 and bus_policy == "hal-bounded-bus-address")
-            )
-        )
-        if ready_line:
+        status = event.fields.get("status", "unknown").lower()
+        if is_ready_driver_task_dma_proof(event):
             ready.add(hot_path)
-        elif blocker == "none":
-            blocker = f"{hot_path}:{status}:{bus_policy}"
+            current_blockers.pop(hot_path, None)
+        elif hot_path in required and hot_path not in ready:
+            current_blockers[hot_path] = f"{hot_path}:{status}:{bus_policy}"
+    if current_blockers:
+        return len(ready), next(reversed(current_blockers.values()))
     missing = sorted(required - ready)
-    if missing and blocker == "none":
-        blocker = f"missing:{missing[0]}"
-    return len(ready), blocker
+    if missing:
+        return len(ready), f"missing:{missing[0]}"
+    return len(ready), "none"
 
 
 def classify_pi4_runtime_dma_proof(
@@ -10159,7 +10316,6 @@ def classify_pi4_runtime_dma_proof(
         driver_task_ring_call_outstanding == 0,
         driver_task_ring_call_timeout == 0,
         driver_task_bootstrap_deferred == 0,
-        driver_task_resource_blocker == "none",
         driver_task_resource_current_blocker == "none",
         driver_task_dma_blocker == "none",
     )

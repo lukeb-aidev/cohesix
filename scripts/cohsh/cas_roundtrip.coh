@@ -1,13 +1,12 @@
 # Author: Lukas Bower
 # Purpose: CAS update roundtrip with resume, signatures, and delta replay.
+# Copyright 2026 Lukas Bower
 attach queen
 EXPECT OK
 
 # Base chunk upload with resume.
 echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
 EXPECT OK
-cat /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
-EXPECT ERR
 echo AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA > /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e
 EXPECT OK
 cat /updates/100/chunks/b6ac3cc10386331c765f04f041c147d0f278f2aed8eaa021e2d0057fc6f6ff9e

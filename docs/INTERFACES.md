@@ -312,7 +312,7 @@ Path: `/queen/export/ctl` (append-only JSONL)
   - `ctl` — append-only control log. Accepts JSON lines of the form `{"new":"segment","mime":"text/plain"}`.
   - `seg/` — directory containing OS-named segments (append-only).
   - `latest` — read-only pointer to the newest segment (single line: `<seg_id>`).
-- Segment creation is **OS-owned**: clients can only request a new segment via `ctl`; names are assigned `seg-000001`, `seg-000002`, ... per device.
+- Segment creation is **OS-owned**: clients can only request a new segment via `ctl`; names are assigned `seg-000001`, `seg-000002`, ... per device. Console `ECHO` acknowledgements for successful `ctl` segment creation include `seg_id=<id>` in the detail field so clients do not need a follow-up `latest` read on the common path.
 - Segment writes are append-only; offsets must match the end of the file (or use `u64::MAX`). Random writes, truncation, and renames are rejected.
 - Quotas are manifest-driven via `telemetry_ingest.*`:
   - `max_segments_per_device`

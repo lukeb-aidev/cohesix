@@ -1196,6 +1196,7 @@ const CYW43_SDPCM_CHANNEL_GLOM: u8 = 3;
 const CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES: usize = 16;
 const CYW43_RX_DRAIN_BUDGET: usize = 16;
 const CYW43_DATA_TX_POST_DRAIN_BUDGET: usize = 8;
+const CYW43_DATA_TX_FUNCTION2_RETRIES: usize = 2;
 const CYW43_TX_CREDIT_WAIT_LOOPS: usize = 2_000;
 const CYW43_RX_FRAME_FLAG_MASK_DATA: u16 = 1 << CYW43_SDPCM_CHANNEL_DATA;
 const CYW43_RX_FRAME_FLAG_MASK_CONTROL: u16 = 1 << CYW43_SDPCM_CHANNEL_CONTROL;
@@ -1345,6 +1346,7 @@ const CYW43_POST_RELEASE_CLOCK_READY_MASK: u8 = SBSDIO_ALP_AVAIL | SBSDIO_HT_AVA
 const SBSDIO_WAKE_TILL_HT_AVAIL: u8 = 0x02;
 const SBSDIO_FUNC1_SLEEPCSR_KSO_EN: u8 = 0x01;
 const CY_43455_F2_WATERMARK: u8 = 0x60;
+const CYW43_DATA_TX_MIN_FUNCTION2_BYTES: usize = CY_43455_F2_WATERMARK as usize;
 const CY_43455_MESBUSYCTRL: u8 = 0xd0;
 const CYW43_F2_READY_DETAIL_REASON_TIMEOUT: u8 = 0;
 const CYW43_F2_READY_DETAIL_REASON_IOEX_READ_FAILED: u8 = 1;
@@ -1375,6 +1377,9 @@ const HOSTINTMASK: u32 = I_HMB_SW_MASK | I_CHIPACTIVE;
 const FUNCTIONINTMASK: u32 = SDIO_FUNC_ENABLE_2 as u32;
 const CYW43_POST_RELEASE_MAILBOX_POLLS: usize = 1_000;
 const CYW43_POST_RELEASE_MAILBOX_TIMEOUT_MS: u64 = 1_000;
+const CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_MS: u64 = 20;
+const CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_POLLS: usize = SDHCI_INIT_SPINS / 10;
+const CYW43_POST_RELEASE_HT_REQUEST_ATTEMPTS: usize = 2;
 const CYW43_POST_RELEASE_HT_TIMEOUT_MS: u64 = 1_600;
 const CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS: u64 = 3_000;
 const CYW43_TX_CREDIT_TIMEOUT_MS: u64 = 100;
@@ -7259,34 +7264,77 @@ fn cyw43_require_post_release_ht_clock() -> Result<u8, u16> {
     #[cfg(target_os = "none")]
     {
         let mut last_chipclk = 0u8;
-        if !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ) {
+        for _ in 0..CYW43_POST_RELEASE_HT_REQUEST_ATTEMPTS {
+            last_chipclk = cyw43_apply_post_release_sdonly_clock_fence()?;
+            if !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ) {
+                cyw43_record_last_fault_with_result(
+                    FAULT_CYW43_POST_RELEASE_HT,
+                    u32::from(last_chipclk),
+                );
+                return Err(FAULT_CYW43_POST_RELEASE_HT);
+            }
+            let mut poll = 0usize;
+            let mut deadline = runtime_deadline_from_millis_or_iterations(
+                CYW43_POST_RELEASE_HT_TIMEOUT_MS,
+                SDHCI_INIT_SPINS,
+            );
+            while !runtime_deadline_iteration_cap_reached(&deadline, poll, SDHCI_INIT_SPINS)
+                && !runtime_deadline_expired(&mut deadline)
+            {
+                let Some(chipclk) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR) else {
+                    return Err(FAULT_CYW43_POST_RELEASE_HT);
+                };
+                last_chipclk = chipclk;
+                if cyw43_post_release_clock_ready(chipclk) {
+                    return Ok(chipclk);
+                }
+                if chipclk & SBSDIO_HT_AVAIL_REQ == 0
+                    && !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ)
+                {
+                    cyw43_record_last_fault_with_result(
+                        FAULT_CYW43_POST_RELEASE_HT,
+                        u32::from(chipclk),
+                    );
+                    return Err(FAULT_CYW43_POST_RELEASE_HT);
+                }
+                runtime_poll_pause();
+                poll = poll.saturating_add(1);
+            }
+        }
+        cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, u32::from(last_chipclk));
+        Err(FAULT_CYW43_POST_RELEASE_HT)
+    }
+}
+
+fn cyw43_apply_post_release_sdonly_clock_fence() -> Result<u8, u16> {
+    #[cfg(not(target_os = "none"))]
+    {
+        return Ok(0);
+    }
+    #[cfg(target_os = "none")]
+    {
+        let Some(before) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR) else {
+            return Err(FAULT_CYW43_POST_RELEASE_HT);
+        };
+        if !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_CHIPCLKCSR, 0) {
+            cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, u32::from(before));
             return Err(FAULT_CYW43_POST_RELEASE_HT);
         }
         let mut poll = 0usize;
         let mut deadline = runtime_deadline_from_millis_or_iterations(
-            CYW43_POST_RELEASE_HT_TIMEOUT_MS,
-            SDHCI_INIT_SPINS,
+            CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_MS,
+            CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_POLLS,
         );
-        while !runtime_deadline_iteration_cap_reached(&deadline, poll, SDHCI_INIT_SPINS)
-            && !runtime_deadline_expired(&mut deadline)
+        while !runtime_deadline_iteration_cap_reached(
+            &deadline,
+            poll,
+            CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_POLLS,
+        ) && !runtime_deadline_expired(&mut deadline)
         {
-            let Some(chipclk) = cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR) else {
-                return Err(FAULT_CYW43_POST_RELEASE_HT);
-            };
-            last_chipclk = chipclk;
-            if cyw43_post_release_clock_ready(chipclk) {
-                return Ok(chipclk);
-            }
-            if chipclk & SBSDIO_HT_AVAIL_REQ == 0
-                && !cyw43_sdio_cmd52_write(1, SBSDIO_FUNC1_CHIPCLKCSR, SBSDIO_HT_AVAIL_REQ)
-            {
-                return Err(FAULT_CYW43_POST_RELEASE_HT);
-            }
             runtime_poll_pause();
             poll = poll.saturating_add(1);
         }
-        cyw43_record_last_fault_with_result(FAULT_CYW43_POST_RELEASE_HT, u32::from(last_chipclk));
-        Err(FAULT_CYW43_POST_RELEASE_HT)
+        cyw43_sdio_cmd52_read(1, SBSDIO_FUNC1_CHIPCLKCSR).ok_or(FAULT_CYW43_POST_RELEASE_HT)
     }
 }
 
@@ -8742,6 +8790,29 @@ fn cyw43_function2_execute_transfer(
     )
 }
 
+fn cyw43_function2_execute_data_tx_transfer(
+    state: &mut Cyw43RuntimeState,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+) -> bool {
+    for attempt in 0..=CYW43_DATA_TX_FUNCTION2_RETRIES {
+        if cyw43_function2_execute_transfer(state, true, frame, block_size, block_count) {
+            return true;
+        }
+        if attempt == CYW43_DATA_TX_FUNCTION2_RETRIES {
+            return false;
+        }
+        let _ = cyw43_runtime_read_rframe_if_present(
+            state,
+            0,
+            Cyw43AssertedEmptyPolicy::RequestRetransmit,
+        );
+        runtime_poll_pause();
+    }
+    false
+}
+
 fn cyw43_function2_execute_transfer_with_policy(
     state: &mut Cyw43RuntimeState,
     write: bool,
@@ -9122,7 +9193,12 @@ fn cyw43_submit_sdpcm_frame(
         len: request_len as u16,
         flags: 0,
     };
-    if !cyw43_function2_execute_transfer(state, true, tx_frame, block_size, block_count) {
+    let tx_ok = if data_frame {
+        cyw43_function2_execute_data_tx_transfer(state, tx_frame, block_size, block_count)
+    } else {
+        cyw43_function2_execute_transfer(state, true, tx_frame, block_size, block_count)
+    };
+    if !tx_ok {
         return 0;
     }
     state.sdpcm_seq = state.sdpcm_seq.wrapping_add(1);
@@ -11723,7 +11799,10 @@ fn cyw43_data_tx_request_len_for_frame(
     unpadded_len: usize,
 ) -> (usize, bool) {
     let _ = frame;
-    (cyw43_data_tx_request_len_default(unpadded_len), false)
+    (
+        cyw43_data_tx_request_len_default(unpadded_len).max(CYW43_DATA_TX_MIN_FUNCTION2_BYTES),
+        false,
+    )
 }
 
 const fn cyw43_control_rx_request_len(unpadded_len: usize) -> usize {
@@ -25664,6 +25743,65 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_data_tx_retries_function2_write_without_sequence_drift() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.sdpcm_seq = 11;
+        state.sdpcm_seq_max = 12;
+        let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 1024;
+        let mut dhcp_request = [0u8; 300];
+        dhcp_request[..6].fill(0xff);
+        dhcp_request[6..12].copy_from_slice(&[0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
+        dhcp_request[12..14].copy_from_slice(&CYW43_ETH_P_IPV4.to_be_bytes());
+        dhcp_request[14] = 0x45;
+        dhcp_request[14 + 9] = CYW43_IP_PROTO_UDP;
+        let udp = CYW43_ETH_HEADER_BYTES + 20;
+        dhcp_request[udp..udp + 2].copy_from_slice(&CYW43_DHCP_CLIENT_PORT.to_be_bytes());
+        dhcp_request[udp + 2..udp + 4].copy_from_slice(&CYW43_DHCP_SERVER_PORT.to_be_bytes());
+        stage_bytes(payload_offset, &dhcp_request);
+        let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_request.len();
+        let request_len = cyw43_data_tx_request_len_default(total_len);
+        test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
+        test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
+        reset_test_sdio_transfer_log();
+
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: dhcp_request.len() as u16,
+            flags: 0,
+        };
+
+        assert_eq!(
+            cyw43_submit_sdpcm_frame(&mut state, frame, true, false),
+            total_len
+        );
+        assert_eq!(state.sdpcm_seq, 12);
+        assert_eq!(state.tx_frames, 1);
+        assert_eq!(
+            test_sdio_cmd53_write_shape_count(
+                2,
+                BACKPLANE_32BIT_FLAG,
+                request_len as u16,
+                0,
+                request_len as u16
+            ),
+            3
+        );
+        assert_eq!(
+            read_frame_prefix::<14>(DriverFrameDescriptor {
+                offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES) as u32,
+                len: dhcp_request.len() as u16,
+                flags: 0,
+            }),
+            dhcp_request[..14]
+        );
+    }
+
+    #[test]
     fn cyw43_data_tx_keeps_arp_in_function2_byte_mode() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -25698,9 +25836,17 @@ mod tests {
         reset_test_sdio_transfer_log();
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + arp_reply.len();
-        let request_len = cyw43_data_tx_request_len_default(total_len);
+        let request_len = cyw43_data_tx_request_len_for_frame(
+            DriverFrameDescriptor {
+                offset: payload_offset as u32,
+                len: arp_reply.len() as u16,
+                flags: 0,
+            },
+            total_len,
+        )
+        .0;
         assert_eq!(total_len, 72);
-        assert_eq!(request_len, 72);
+        assert_eq!(request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert_eq!(service_command(0, cyw43_descriptor_command(177)), {
             let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 177,
@@ -29146,6 +29292,12 @@ mod tests {
         assert_eq!(FAULT_CYW43_POST_RELEASE_PROTOCOL_VERSION, 0x532e);
         assert_eq!(CYW43_POST_RELEASE_MAILBOX_POLLS, 1_000);
         assert_eq!(CYW43_POST_RELEASE_MAILBOX_TIMEOUT_MS, 1_000);
+        assert_eq!(CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_MS, 20);
+        assert_eq!(
+            CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_POLLS,
+            SDHCI_INIT_SPINS / 10
+        );
+        assert_eq!(CYW43_POST_RELEASE_HT_REQUEST_ATTEMPTS, 2);
         assert_eq!(CYW43_POST_RELEASE_HT_TIMEOUT_MS, 1_600);
         assert_eq!(CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS, 3_000);
         assert_eq!(CYW43_CONTROL_EXCHANGE_TIMEOUT_MS, 1_000);
@@ -29155,6 +29307,13 @@ mod tests {
         assert!(
             runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_HT_TIMEOUT_MS, 54_000_000)
                 > runtime_legacy_spins_to_cycles_at_hz(SDHCI_INIT_SPINS, 54_000_000)
+        );
+        assert!(
+            runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_MS, 54_000_000)
+                > runtime_legacy_spins_to_cycles_at_hz(
+                    CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_POLLS,
+                    54_000_000,
+                )
         );
         assert!(
             runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS, 54_000_000)
@@ -29209,24 +29368,28 @@ mod tests {
         assert!(!cyw43_firmware_mailbox_ready(
             HMB_DATA_FWREADY | (5 << HMB_DATA_VERSION_SHIFT)
         ));
-        assert_eq!(
-            cyw43_require_post_release_ht_clock().unwrap() & CYW43_POST_RELEASE_CLOCK_READY_MASK,
-            CYW43_POST_RELEASE_CLOCK_READY_MASK
-        );
-        assert_eq!(
-            cyw43_enable_post_release_function2().unwrap() & SDIO_FUNC_READY_2,
-            SDIO_FUNC_READY_2
-        );
+        let alp_with_ht_request = SBSDIO_ALP_AVAIL | SBSDIO_HT_AVAIL_REQ;
+        assert!(!cyw43_post_release_clock_ready(alp_with_ht_request));
+        assert_eq!(cyw43_apply_post_release_sdonly_clock_fence(), Ok(0));
+        assert!(matches!(
+            cyw43_require_post_release_ht_clock(),
+            Ok(value) if value & CYW43_POST_RELEASE_CLOCK_READY_MASK
+                == CYW43_POST_RELEASE_CLOCK_READY_MASK
+        ));
+        assert!(matches!(
+            cyw43_enable_post_release_function2(),
+            Ok(value) if value & SDIO_FUNC_READY_2 == SDIO_FUNC_READY_2
+        ));
         assert_eq!(SDIO_FUNCTION2_BLOCK_SIZE, 512);
         assert_eq!(SDIO_CCCR_IENX, 0x04);
         assert_eq!(SDIO_INTERRUPT_ENABLE_MASK, 0x07);
         assert!(cyw43_arm_post_release_function_interrupts().is_ok());
         let mut state = Cyw43RuntimeState::new();
-        assert_eq!(
-            cyw43_wait_for_firmware_mailbox_ready(&mut state).unwrap()
-                & (HMB_DATA_DEVREADY | HMB_DATA_FWREADY | HMB_DATA_VERSION_MASK),
-            HMB_DATA_DEVREADY | HMB_DATA_FWREADY | cyw43_mailbox_version_payload()
-        );
+        assert!(matches!(
+            cyw43_wait_for_firmware_mailbox_ready(&mut state),
+            Ok(value) if value & (HMB_DATA_DEVREADY | HMB_DATA_FWREADY | HMB_DATA_VERSION_MASK)
+                == HMB_DATA_DEVREADY | HMB_DATA_FWREADY | cyw43_mailbox_version_payload()
+        ));
     }
 
     #[test]
@@ -29638,6 +29801,19 @@ mod tests {
         assert_eq!(
             cyw43_data_tx_request_len_default(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14),
             44
+        );
+        let tiny_frame = DriverFrameDescriptor {
+            offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+            len: 14,
+            flags: 0,
+        };
+        assert_eq!(
+            cyw43_data_tx_request_len_for_frame(
+                tiny_frame,
+                CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14
+            )
+            .0,
+            CYW43_DATA_TX_MIN_FUNCTION2_BYTES
         );
         assert_eq!(
             cyw43_data_tx_request_len_default(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 300),

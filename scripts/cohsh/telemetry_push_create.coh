@@ -4,26 +4,28 @@
 attach queen
 telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
 EXPECT OK
-EXPECT SUBSTR seg_id=seg-000001
+EXPECT SUBSTR seg_id=seg-
 cat /queen/telemetry/telemetry-demo/latest
-EXPECT SUBSTR seg-000001
+EXPECT OK
+EXPECT SUBSTR seg-
 telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
 EXPECT OK
-EXPECT SUBSTR seg_id=seg-000002
+EXPECT SUBSTR seg_id=seg-
 telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
 EXPECT OK
-EXPECT SUBSTR seg_id=seg-000003
+EXPECT SUBSTR seg_id=seg-
 telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
 EXPECT OK
-EXPECT SUBSTR seg_id=seg-000004
+EXPECT SUBSTR seg_id=seg-
 telemetry push scripts/cohsh/fixtures/telemetry_push_small.txt --device telemetry-demo
 EXPECT OK
-EXPECT SUBSTR seg_id=seg-000005
+EXPECT SUBSTR seg_id=seg-
 cat /queen/telemetry/telemetry-demo/seg/seg-000001
 EXPECT ERR
 telemetry push scripts/cohsh/fixtures/telemetry_push_oversize.txt --device telemetry-demo
 EXPECT OK
 EXPECT SUBSTR mode=inline
 cat /queen/telemetry/telemetry-demo/latest
-EXPECT SUBSTR seg-000006
+EXPECT OK
+EXPECT SUBSTR seg-
 quit

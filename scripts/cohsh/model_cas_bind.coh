@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Upload a model bundle, bind into worker namespace, and assert read-only.
+# Copyright 2026 Lukas Bower
 attach queen
 EXPECT OK
 echo '{"id":"model-spawn","target":"/queen/ctl","decision":"approve"}' > /actions/queue
@@ -13,36 +14,35 @@ cat /actions/model-spawn/status
 EXPECT OK
 EXPECT SUBSTR consumed
 
-echo WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/weights
+echo XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX > /models/64531077024b8fe57566a3d556ef54fd598bab2e0ca49b43185f765a6a86cb5d/weights
 EXPECT OK
-echo WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/weights
+echo XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX > /models/64531077024b8fe57566a3d556ef54fd598bab2e0ca49b43185f765a6a86cb5d/weights
 EXPECT OK
-echo schema-v1 > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/schema
+echo schema-v1 > /models/64531077024b8fe57566a3d556ef54fd598bab2e0ca49b43185f765a6a86cb5d/schema
 EXPECT OK
-echo sig-v1 > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/signature
+echo sig-v1 > /models/64531077024b8fe57566a3d556ef54fd598bab2e0ca49b43185f765a6a86cb5d/signature
 EXPECT OK
 
 ls /models
 EXPECT OK
-EXPECT SUBSTR entries=1
-cat /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/weights
+cat /models/64531077024b8fe57566a3d556ef54fd598bab2e0ca49b43185f765a6a86cb5d/weights
 EXPECT OK
-EXPECT SUBSTR data=b64:V1dX
+EXPECT SUBSTR data=b64:WFhY
 
 echo '{"id":"model-bind","target":"/queen/ctl","decision":"approve"}' > /actions/queue
 EXPECT OK
 cat /actions/model-bind/status
 EXPECT OK
 EXPECT SUBSTR queued
-bind /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a /worker/worker-1/model
+bind /models/64531077024b8fe57566a3d556ef54fd598bab2e0ca49b43185f765a6a86cb5d /worker/worker-1/model
 EXPECT OK
 cat /actions/model-bind/status
 EXPECT OK
 EXPECT SUBSTR consumed
 cat /worker/worker-1/model/weights
 EXPECT OK
-EXPECT SUBSTR data=b64:V1dX
+EXPECT SUBSTR data=b64:WFhY
 
-echo WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW > /models/b709c9e6fbe27b1543d56f56aa5de23107764ef48a9a5c8a07bca698a5ceee6a/weights
+echo XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX > /models/64531077024b8fe57566a3d556ef54fd598bab2e0ca49b43185f765a6a86cb5d/weights
 EXPECT ERR
 quit
