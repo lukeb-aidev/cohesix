@@ -4,11 +4,11 @@
 
 # M26C Post-Behavior Baseline
 
-Status: `QEMU-FROZEN / PI4-HARDWARE-OPEN`
+Status: `QEMU+PI4-FROZEN`
 
 The QEMU post-behavior baseline is frozen for the authorized 26c behavior
-changes. Pi 4 hardware closure is not frozen until a fresh live runtime/DMA
-proof bundle and target-qualified Pi Stage 01-05 pass.
+changes. Pi 4 hardware closure is frozen for 26c by the final wired GENET
+runtime/DMA proof bundle and target-qualified Pi Stage 01-05 pass.
 
 QEMU-frozen behavior:
 
@@ -21,14 +21,17 @@ QEMU-frozen behavior:
 - Pi runtime/DMA proof states now distinguish target-build, diagnostic,
   qemu-or-stale-log, and fresh-pi evidence.
 
-Open before full 26c closure:
+Pi-frozen behavior:
 
-- Live Pi runtime/DMA proof must produce `PI4_RUNTIME_DMA_PROOF=fresh-pi`,
+- Final Pi runtime/DMA proof produced `PI4_RUNTIME_DMA_PROOF=fresh-pi`,
   `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`, and
-  `DRIVER_TASK_DMA_BLOCKER=none`.
-- Target-qualified Pi Stage 01-05 must pass with `PI4_RUNTIME_DMA_PROOF_FILE`
-  pointing at the live proof bundle.
+  `DRIVER_TASK_DMA_BLOCKER=none` in
+  `out/test-plan/m26c-pi4-live/pi4-runtime-dma-proof-genet-latest.env`.
+- Target-qualified Pi Stage 01-05 passed in `out/test-plan/m26c-pi4-live`
+  with `PI4_RUNTIME_DMA_PROOF_FILE` pointing at the live GENET proof bundle.
+- Final Pi Stage 05 due diligence passed at `out/audit/gate/20260629T061204Z`.
 
-Phase 4 refactor waves may compare QEMU-only edits against this baseline only
-when the touched surface is explicitly QEMU-scoped. Pi 4 HAL/network/local-seat
-cleanup remains blocked by live hardware evidence.
+Future refactor waves may compare against this frozen baseline only when the
+touched surface is explicitly authorized by a later milestone and has its own
+preserved-contract evidence. Broad host/root/HAL cleanup remains deferred
+outside 26c.

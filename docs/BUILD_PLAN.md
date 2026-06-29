@@ -106,7 +106,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | In Progress |
 | [26a](#26a) | Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation | Complete |
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Complete |
-| [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Not Started |
+| [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 15 Baseline Refresh + Reference/Performance Realignment | Pending |
 | [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
 | [27b](#27b) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
@@ -6921,7 +6921,7 @@ Deliverables:
 **Why now (reviewer trust):**
 Milestones 25-26b establish technical capability, transport breadth, Pi 4 bring-up evidence, and isolated runtime benchmark closure, but the implementation has accumulated visible scaffolding, duplicated validation paths, long runtime modules, and uneven characterization coverage. Milestone 26c is the aggressive refactor window after isolated runtime benchmark closure and before seL4 15 realignment: it inventories tracked Markdown authoring surfaces, records docs-as-built truth, expands characterization and boundary gates, and then permits broad behavior-preserving refactors across Cohesix-authored host tools, root-task adapters, HAL-facing network code, tests, and public documentation. Cleanup is complete only when the target-qualified staged Test Plan passes on both QEMU and Pi 4 with evidence that external behavior did not drift.
 
-**Current planning status:** In Progress / QEMU implementation closed, final batched validation pending. The target-qualified runner, QEMU worker/cap/notification/scheduling additions, generated drift guard, fresh QEMU build, QEMU Stage 01-05 evidence, fresh Pi 4 stage-only build, and runtime/DMA proof semantics have current evidence in `docs/audit/M26C_AGENT_HANDOFFS.md` and `docs/audit/M26C_AS_BUILT_BLOCKERS.md`. Full 26c milestone closure remains Pi 4-blocked until live target-qualified Pi 4 Stage 01-05 and runtime/DMA proof evidence exist; QEMU evidence must not be cited as board closure.
+**Current planning status:** Complete. QEMU closure remains anchored by `out/test-plan/m26c-qemu` and Stage 05 due-diligence root `out/audit/gate/20260628T015332Z`. Pi 4 closure is anchored by the final wired GENET boot in `/Users/lukasbower/pi4-serial-20260629-135454.log`, paired USB-Ethernet capture `/Users/lukasbower/tcpdump-usb-eth-20260629-135504.pcap`, runtime/DMA proof bundle `out/test-plan/m26c-pi4-live/pi4-runtime-dma-proof-genet-latest.env`, direct TCP proof `out/test-plan/m26c-pi4-live/cohsh-tcp-proof-genet-latest.txt`, target-qualified Stage 03/04/05 refresh logs and markers in `out/test-plan/m26c-pi4-live`, and Stage 05 due-diligence root `out/audit/gate/20260629T061204Z`. The Pi proof is wired GENET at `192.168.10.50` with `PI4_RUNTIME_DMA_PROOF=fresh-pi`, `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`, `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, DHCP-bound TCP `cohsh`, REST/gateway validation, and no substitution of QEMU or stale board evidence for Pi closure.
 
 **Non-negotiable constraints:**
 - No protocol, namespace, ACK/ERR/END, telemetry, manifest, console grammar, Secure9P, or release-behavior drift may hide under a "refactor", "cleanup", or "humanizing" label.

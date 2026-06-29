@@ -4,7 +4,7 @@
 
 # M26C Target Runner Baseline
 
-Status: `PASS-contract / QEMU-STAGE-01-05-PASS / PI4-STAGE-01-SMOKE-PASS`
+Status: `PASS-contract / QEMU-STAGE-01-05-PASS / PI4-STAGE-01-05-PASS`
 
 ## Contract
 
@@ -55,6 +55,7 @@ exhaustive unless `DD_REUSE_REGRESSION_BATCH_FROM` is supplied explicitly.
 | QEMU Stage 01 smoke | PASS; `out/test-plan/m26c-runner-qemu-smoke/stage_01.done` and `stage_01.qemu.done` |
 | Pi 4 Stage 01 smoke | PASS; `out/test-plan/m26c-runner-pi4-smoke/stage_01.done` and `stage_01.pi4.done` |
 | QEMU full Stage 01-05 run | PASS; `out/test-plan/m26c-qemu/stage_01.done` through `stage_05.done`, matching `.qemu.done` markers, no incomplete markers, and Stage 05 due-diligence evidence at `out/audit/gate/20260628T015332Z` |
+| Pi 4 full Stage 01-05 run | PASS; `out/test-plan/m26c-pi4-live/stage_01.done` through `stage_05.done`, matching `.pi4.done` markers, no incomplete markers, final GENET runtime/DMA proof `out/test-plan/m26c-pi4-live/pi4-runtime-dma-proof-genet-latest.env`, and Stage 05 due-diligence evidence at `out/audit/gate/20260629T061204Z` |
 
 ## Stage 01 Smoke Closure
 
@@ -65,8 +66,8 @@ Stage 01 smoke checks after generated artifacts settled:
 - `scripts/ci/test_plan_run.sh --target qemu --stage 1 --state-dir out/test-plan/m26c-runner-qemu-smoke` - PASS.
 - `scripts/ci/test_plan_run.sh --target pi4 --stage 1 --state-dir out/test-plan/m26c-runner-pi4-smoke` - PASS.
 
-This closes the Stage 01 smoke gap only. Full 26c closure still requires both
-targets to pass through Stage 05 after Phase 2 blockers are closed.
+This closed the Stage 01 smoke gap. The final closure run below records both
+targets through Stage 05 after the Phase 2 blockers were closed.
 
 ## QEMU Stage 01-05 Closure
 
@@ -80,6 +81,25 @@ The parent run later executed the full target-qualified QEMU matrix:
   QEMU state dir after the pass.
 - Stage 05 due-diligence passed at `out/audit/gate/20260628T015332Z`.
 
-This closes the QEMU side of `m26c-full-test-plan-qemu-and-pi4`. Pi 4 full
-Stage 01-05 closure remains separate and still requires target-qualified Pi
-hardware evidence.
+This closes the QEMU side of `m26c-full-test-plan-qemu-and-pi4`.
+
+## Pi 4 Stage 01-05 Closure
+
+The final Pi 4 state dir now contains a target-qualified full pass. Stage 01
+and Stage 02 markers were already present from the current Pi validation state;
+the final request refreshed only Stage 03, Stage 04, and Stage 05 against the
+same live GENET board state:
+
+- `out/test-plan/m26c-pi4-live/target.env` records `TEST_PLAN_TARGET=pi4`.
+- `out/test-plan/m26c-pi4-live` contains `stage_01.done` through
+  `stage_05.done` and `stage_01.pi4.done` through `stage_05.pi4.done`.
+- No `*.incomplete` markers or `incomplete/` artifacts were present after the
+  Stage 05 pass.
+- Stage 03 ran against `192.168.10.50:31337` with
+  `PI4_RUNTIME_DMA_PROOF_FILE=out/test-plan/m26c-pi4-live/pi4-runtime-dma-proof-genet-latest.env`.
+- Stage 04 ran through `hive-gateway` at `http://127.0.0.1:48080` with request
+  auth token `m26c-pi4-rest-token`.
+- Stage 05 due diligence passed at `out/audit/gate/20260629T061204Z`.
+
+This closes the Pi 4 side of `m26c-full-test-plan-qemu-and-pi4` without using
+QEMU or older board evidence as a substitute.

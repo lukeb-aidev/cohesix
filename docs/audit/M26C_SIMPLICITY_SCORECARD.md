@@ -4,11 +4,11 @@
 
 # M26C Simplicity Scorecard
 
-Status: `QEMU-TOUCHED-UPDATED / BROADER-CLEANUP-DEFERRED`
+Status: `COMPLETE / BROADER-CLEANUP-DEFERRED`
 
-This scorecard records only cleanup backed by current QEMU characterization and
-no_std evidence. Broader host, root-task, and Pi 4 cleanup waves remain deferred
-until their own preserved-contract evidence is present.
+This scorecard records cleanup backed by 26c characterization and staged-run
+evidence. Broader host, root-task, and Pi 4 cleanup waves remain deferred
+outside 26c until their own preserved-contract evidence is present.
 
 | Surface | Before Evidence | Target | After Evidence | Status |
 | --- | --- | --- | --- | --- |
@@ -18,4 +18,4 @@ until their own preserved-contract evidence is present.
 | AI-fingerprint docs/comments | `out/audit/m26c_ai_fingerprint_rg.txt` has 152 lines | Delete/rewrite generic authored text without touching generated/release/vendored surfaces | QEMU-touched worker wording cleaned; broader findings deferred | Partial-QEMU |
 | Host tools | Refactor candidates not characterized | Collapse duplication only with tests | Pending accepted wave | Deferred |
 | Root-task adapters | Large boundary-sensitive modules | Split only after parity/no-std gates | Pending accepted wave | Deferred |
-| HAL/network/local-seat | Complex Pi proof lanes | Extract only after runtime/DMA and hardware evidence | Pending live Pi proof | Pi-blocked |
+| HAL/network/local-seat | Complex Pi proof lanes | Extract only after runtime/DMA and hardware evidence | Final Pi GENET proof exists; extraction remains outside 26c | Deferred |

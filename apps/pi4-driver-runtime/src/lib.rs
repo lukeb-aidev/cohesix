@@ -25402,7 +25402,15 @@ mod tests {
             reserved: 0,
         });
         let data_tx_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 14;
-        let data_tx_request_len = cyw43_data_tx_request_len_default(data_tx_len);
+        let data_tx_request_len = cyw43_data_tx_request_len_for_frame(
+            DriverFrameDescriptor {
+                offset: u32::from(payload_offset),
+                len: 14,
+                flags: 0,
+            },
+            data_tx_len,
+        )
+        .0;
         assert_eq!(service_command(0, cyw43_descriptor_command(75)), {
             let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 75,
@@ -25910,7 +25918,15 @@ mod tests {
         reset_test_sdio_transfer_log();
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + outbound.len();
-        let request_len = cyw43_data_tx_request_len_default(total_len);
+        let request_len = cyw43_data_tx_request_len_for_frame(
+            DriverFrameDescriptor {
+                offset: u32::from(payload_offset),
+                len: outbound.len() as u16,
+                flags: 0,
+            },
+            total_len,
+        )
+        .0;
         assert_eq!(service_command(0, cyw43_descriptor_command(178)), {
             let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 178,

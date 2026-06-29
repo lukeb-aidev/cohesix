@@ -3911,7 +3911,7 @@ where
             trace.backend_poll_calls,
             trace.backend_read_bytes,
             Self::yes_no(linked_keyboard_ready || backend_attached),
-            Self::yes_no(runtime.hdmi_keyboard_ready_line_emitted()),
+            Self::yes_no(runtime.usb_keyboard_command_ready_latched()),
             Self::yes_no(linked_first_report),
             Self::yes_no(linked_first_byte),
             trace.queued_bytes,
@@ -12131,7 +12131,7 @@ where
             #[cfg(feature = "kernel")]
             if !self.local_seat_first_command_input_logged {
                 if let Some(runtime) = self.local_seat.as_ref() {
-                    if runtime.hdmi_keyboard_ready_line_emitted() {
+                    if runtime.usb_keyboard_command_ready_latched() {
                         let trace = runtime.keyboard_trace();
                         let display = runtime.display_trace();
                         let mut line = HeaplessString::<256>::new();
