@@ -2978,7 +2978,9 @@ where
             }
             for _ in 0..LOCAL_SEAT_OUTPUT_KEYBOARD_POLL_PASSES {
                 runtime.poll_backend_keyboard();
-                runtime.drain_display_control_bytes_during_output(KEYBOARD_POLL_CHUNK_BYTES);
+                if runtime.keyboard_parser_ingress_ready() {
+                    runtime.drain_display_control_bytes_during_output(KEYBOARD_POLL_CHUNK_BYTES);
+                }
                 self.metrics.local_seat_output_keyboard_polls = self
                     .metrics
                     .local_seat_output_keyboard_polls
@@ -12111,6 +12113,13 @@ where
         {
             passes = passes.saturating_add(1);
             self.poll_local_seat_backend_for_ingress();
+            if self
+                .local_seat
+                .as_ref()
+                .is_some_and(|runtime| !runtime.keyboard_parser_ingress_ready())
+            {
+                break;
+            }
             let read = match self.local_seat.as_mut() {
                 Some(runtime) => runtime.drain_keyboard_bytes(&mut chunk),
                 None => return consumed,
@@ -19103,7 +19112,7 @@ mod tests {
                 line_bytes: 64,
                 buffer_lines: 8,
             });
-        local_seat.accept_keyboard_arming_bytes(b"ping\n");
+        local_seat.accept_keyboard_arming_bytes(b"p");
         let mut pump =
             EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
 

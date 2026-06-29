@@ -1,4 +1,4 @@
-#line 1 "/Users/lukasbower/seL4/kernel/src/api/faults.c"
+#line 1 "/Users/lukasbower/seL4_15/src/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -260,7 +260,7 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
                                  seL4_Fault_get_seL4_FaultType(sender->tcbFault));
     }
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/api/syscall.c"
+#line 1 "/Users/lukasbower/seL4_15/src/api/syscall.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -297,13 +297,45 @@ word_t setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffer)
 #include <mode/machine/debug.h>
 #endif
 
+/**
+ * FIXME: This is a temporary hack to prevent the printing of incorrect
+ *        spurious interrupt warnings on MCS when checkInterrupt() is called
+ *        following preemptionPoint and the reason is because running
+ *        out of sufficient budget, rather than an active IRQ.
+ *        See issue https://github.com/seL4/seL4/issues/1540 and
+ *        https://github.com/seL4/seL4/pull/1544.
+ **/
+#ifdef CONFIG_IRQ_REPORTING
+static inline void checkInterrupt(bool_t was_interrupt_entry)
+#else
+static inline void checkInterrupt(void)
+#endif
+{
+    irq_t irq;
+
+    irq = getActiveIRQ();
+    if (IRQT_TO_IRQ(irq) != IRQT_TO_IRQ(irqInvalid)) {
+        handleInterrupt(irq);
+    } else {
+#ifdef CONFIG_IRQ_REPORTING
+        if (was_interrupt_entry) {
+            userError("Spurious interrupt!");
+        }
+#endif
+        handleSpuriousIRQ();
+    }
+}
+
+#ifndef CONFIG_IRQ_REPORTING
+/** Part of the temporary hack above **/
+#define checkInterrupt(was_interrupt_entry) checkInterrupt()
+#endif
+
 /* The haskell function 'handleEvent' is split into 'handleXXX' variants
  * for each event causing a kernel entry */
 
 exception_t handleInterruptEntry(void)
 {
-    irq_t irq;
-
 #ifdef CONFIG_KERNEL_MCS
     if (SMP_TERNARY(clh_is_self_in_queue(), 1)) {
         updateTimestamp();
@@ -311,15 +343,7 @@ exception_t handleInterruptEntry(void)
     }
 #endif
 
-    irq = getActiveIRQ();
-    if (IRQT_TO_IRQ(irq) != IRQT_TO_IRQ(irqInvalid)) {
-        handleInterrupt(irq);
-    } else {
-#ifdef CONFIG_IRQ_REPORTING
-        userError("Spurious interrupt!");
-#endif
-        handleSpuriousIRQ();
-    }
+    checkInterrupt(/* was_interrupt_entry */ true);
 
 #ifdef CONFIG_KERNEL_MCS
     if (SMP_TERNARY(clh_is_self_in_queue(), 1)) {
@@ -781,7 +805,6 @@ static void handleYield(void)
 exception_t handleSyscall(syscall_t syscall)
 {
     exception_t ret;
-    irq_t irq;
     MCS_DO_IF_BUDGET({
         switch (syscall)
         {
@@ -789,10 +812,7 @@ exception_t handleSyscall(syscall_t syscall)
             ret = handleInvocation(false, true, false, false, getRegister(NODE_STATE(ksCurThread), capRegister));
             if (unlikely(ret != EXCEPTION_NONE)) {
                 mcsPreemptionPoint();
-                irq = getActiveIRQ();
-                if (IRQT_TO_IRQ(irq) != IRQT_TO_IRQ(irqInvalid)) {
-                    handleInterrupt(irq);
-                }
+                checkInterrupt(/* was_interrupt_entry */ false);
             }
 
             break;
@@ -801,10 +821,7 @@ exception_t handleSyscall(syscall_t syscall)
             ret = handleInvocation(false, false, false, false, getRegister(NODE_STATE(ksCurThread), capRegister));
             if (unlikely(ret != EXCEPTION_NONE)) {
                 mcsPreemptionPoint();
-                irq = getActiveIRQ();
-                if (IRQT_TO_IRQ(irq) != IRQT_TO_IRQ(irqInvalid)) {
-                    handleInterrupt(irq);
-                }
+                checkInterrupt(/* was_interrupt_entry */ false);
             }
             break;
 
@@ -812,10 +829,7 @@ exception_t handleSyscall(syscall_t syscall)
             ret = handleInvocation(true, true, true, false, getRegister(NODE_STATE(ksCurThread), capRegister));
             if (unlikely(ret != EXCEPTION_NONE)) {
                 mcsPreemptionPoint();
-                irq = getActiveIRQ();
-                if (IRQT_TO_IRQ(irq) != IRQT_TO_IRQ(irqInvalid)) {
-                    handleInterrupt(irq);
-                }
+                checkInterrupt(/* was_interrupt_entry */ false);
             }
             break;
 
@@ -854,10 +868,7 @@ exception_t handleSyscall(syscall_t syscall)
             ret = handleInvocation(false, false, true, true, dest);
             if (unlikely(ret != EXCEPTION_NONE)) {
                 mcsPreemptionPoint();
-                irq = getActiveIRQ();
-                if (IRQT_TO_IRQ(irq) != IRQT_TO_IRQ(irqInvalid)) {
-                    handleInterrupt(irq);
-                }
+                checkInterrupt(/* was_interrupt_entry */ false);
                 break;
             }
             handleRecv(true, true);
@@ -868,10 +879,7 @@ exception_t handleSyscall(syscall_t syscall)
             ret = handleInvocation(false, false, true, true, getRegister(NODE_STATE(ksCurThread), replyRegister));
             if (unlikely(ret != EXCEPTION_NONE)) {
                 mcsPreemptionPoint();
-                irq = getActiveIRQ();
-                if (IRQT_TO_IRQ(irq) != IRQT_TO_IRQ(irqInvalid)) {
-                    handleInterrupt(irq);
-                }
+                checkInterrupt(/* was_interrupt_entry */ false);
                 break;
             }
             handleRecv(true, false);
@@ -896,7 +904,7 @@ exception_t handleSyscall(syscall_t syscall)
 
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/c_traps.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -964,7 +972,7 @@ void VISIBLE NORETURN restore_user_context(void)
     );
     UNREACHABLE();
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/idle.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/idle.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -990,7 +998,7 @@ void NORETURN NO_INLINE VISIBLE halt(void)
     idle_thread();
     UNREACHABLE();
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/kernel/thread.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1030,7 +1038,7 @@ void Arch_activateIdleThread(tcb_t *tcb)
 {
     /* Don't need to do anything */
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/kernel/vspace.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/kernel/vspace.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -1519,7 +1527,7 @@ BOOT_CODE cap_t create_it_address_space(cap_t root_cnode_cap, v_region_t it_v_re
                      rootserver.vspace, /* capVSBasePtr    */
                      1                  /* capVSIsMapped   */
 #ifdef CONFIG_ARM_SMMU
-                     , 0                /* capVSMappedCB   */
+                     , CB_INVALID       /* capVSMappedCB   */
 #endif
                  );
     slot_pos_before = ndks_boot.slot_pos_cur;
@@ -3034,7 +3042,7 @@ exception_t benchmark_arch_map_logBuffer(word_t frame_cptr)
     return EXCEPTION_NONE;
 }
 #endif /* CONFIG_KERNEL_LOG_BUFFER */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/machine/capdl.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3545,7 +3553,7 @@ void debug_capDL(void)
 }
 
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/machine/debug.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3800,7 +3808,7 @@ void aarch64_restore_user_debug_context(tcb_t *target_thread)
 }
 
 #endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/machine/fpu.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3820,7 +3828,8 @@ BOOT_CODE bool_t fpsimd_init(void)
     if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
         enableFpuEL01();
     }
-
+    /* Non-HYP Kernel assumes FPU is always enabled for EL1: Make sure it is */
+    isb();
     return true;
 }
 #endif /* CONFIG_HAVE_FPU */
@@ -3838,7 +3847,7 @@ BOOT_CODE bool_t fpsimd_HWCapTest(void)
 
     return true;
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/machine/registerset.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -3881,7 +3890,7 @@ word_t getNBSendRecvDest(void)
     return getRegister(NODE_STATE(ksCurThread), nbsendRecvDest);
 }
 #endif
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/model/statedata.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/model/statedata.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4013,7 +4022,7 @@ asid_t smmuStateCBAsidTable[SMMU_MAX_CB];
 /* Null state for the Debug coprocessor's break/watchpoint registers */
 user_breakpoint_state_t armKSNullBreakpointState;
 #endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/64/object/objecttype.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/64/object/objecttype.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4539,7 +4548,7 @@ exception_t Arch_decodeInvocation(word_t label, word_t length, cptr_t cptr,
 #endif /*CONFIG_ARM_SMMU*/
 #ifdef CONFIG_ALLOW_SMC_CALLS
     case cap_smc_cap:
-        return decodeARMSMCInvocation(label, length, cptr, slot, cap, call, buffer);
+        return decodeARMSMCInvocation(label, length, cap, call, buffer);
 #endif
     default:
 #else
@@ -4561,7 +4570,7 @@ Arch_prepareThreadDelete(tcb_t * thread) {
     fpuRelease(thread);
 #endif
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/api/faults.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/api/faults.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4625,7 +4634,7 @@ word_t Arch_setMRs_fault(tcb_t *sender, tcb_t *receiver, word_t *receiveIPCBuffe
         fail("Invalid fault");
     }
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/armv/armv8-a/64/cache.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/armv/armv8-a/64/cache.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4734,7 +4743,7 @@ void cleanInvalidate_L1D(void)
 {
     cleanInvalidate_D_by_level(0);
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/armv/armv8-a/64/user_access.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/armv/armv8-a/64/user_access.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -4799,7 +4808,7 @@ void armv_init_user_access(void)
     check_export_pmu();
     check_export_arch_timer();
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/benchmark/benchmark.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/benchmark/benchmark.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -4838,7 +4847,7 @@ void arm_init_ccnt(void)
 #endif /* CONFIG_ARM_ENABLE_PMU_OVERFLOW_INTERRUPT */
 }
 #endif
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/c_traps.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/c_traps.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5051,7 +5060,7 @@ VISIBLE NORETURN void c_handle_vcpu_fault(word_t hsr)
     UNREACHABLE();
 }
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/kernel/boot.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  * Copyright 2021, HENSOLDT Cyber
@@ -5729,7 +5738,7 @@ BOOT_CODE VISIBLE void init_kernel(
     schedule();
     activateThread();
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/kernel/thread.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/kernel/thread.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -5742,7 +5751,21 @@ void Arch_postModifyRegisters(tcb_t *tptr)
 {
     /* Nothing to do */
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/machine/cache.c"
+
+void Arch_prepareNextDomain(void)
+{
+    if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
+        vcpu_flush();
+    }
+}
+
+void Arch_prepareSetDomain(tcb_t *tptr, dom_t dom)
+{
+    if (config_set(CONFIG_ARM_HYPERVISOR_SUPPORT)) {
+        vcpu_flush_if_current(tptr);
+    }
+}
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/cache.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -5951,7 +5974,7 @@ void arch_clean_invalidate_L1_caches(word_t type)
         isb();
     }
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/machine/debug.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/debug.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6567,7 +6590,7 @@ void restore_user_debug_context(tcb_t *target_thread)
 }
 
 #endif /* ARM_BASE_CP14_SAVE_AND_RESTORE */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/machine/errata.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/errata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6613,7 +6636,7 @@ BOOT_CODE void VISIBLE arm_errata(void)
 #endif
 }
 
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/machine/gic_v2.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/gic_v2.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6793,7 +6816,8 @@ BOOT_CODE void cpu_initLocalIRQController(void)
 
 bool_t plat_SGITargetValid(word_t target)
 {
-    return target < GIC_SGI_NUM_TARGETS;
+    /* written as <= so that the term is the same as in gic_v3 for the proofs */
+    return target <= GIC_SGI_NUM_TARGETS - 1;
 }
 
 void plat_sendSGI(word_t irq, word_t target)
@@ -6858,7 +6882,7 @@ volatile struct gich_vcpu_ctrl_map *gic_vcpu_ctrl =
 word_t gic_vcpu_num_list_regs;
 
 #endif /* End of CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/machine/hardware.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/hardware.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6904,7 +6928,7 @@ BOOT_CODE void map_kernel_devices(void)
     }
 }
 
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/machine/io.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/io.c"
 /*
  * Copyright 2021, Axel Heider <axelheider@gmx.de>
  *
@@ -6928,7 +6952,7 @@ unsigned char kernel_getDebugChar(void)
     return uart_drv_getchar();
 }
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/machine/l2c_nop.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/machine/l2c_nop.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -6945,7 +6969,7 @@ void plat_cleanL2Range(paddr_t start, paddr_t end) {}
 void plat_invalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Range(paddr_t start, paddr_t end) {}
 void plat_cleanInvalidateL2Cache(void) {}
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/object/interrupt.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -6960,9 +6984,9 @@ void plat_cleanInvalidateL2Cache(void) {}
 
 static exception_t Arch_invokeIRQControl(irq_t irq, cte_t *handlerSlot, cte_t *controlSlot, bool_t trigger)
 {
-#ifdef HAVE_SET_TRIGGER
-    setIRQTrigger(irq, trigger);
-#endif
+    if (config_set(HAVE_SET_TRIGGER)) {
+        setIRQTrigger(irq, trigger);
+    }
     return invokeIRQControl(irq, handlerSlot, controlSlot);
 }
 
@@ -7043,6 +7067,15 @@ exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
             current_syscall_error.type = seL4_TruncatedMessage;
             return EXCEPTION_SYSCALL_ERROR;
         }
+
+        /* wrap_config_set to prevent verification automation from simplifying
+           away the condition when NUM_SGIS = 0 */
+        if (wrap_config_set(NUM_SGIS) == 0) {
+            current_syscall_error.type = seL4_IllegalOperation;
+            userError("IRQControl: IssueSGISignal not available on this platform.");
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+
         word_t irq = getSyscallArg(0, buffer);
         word_t target = getSyscallArg(1, buffer);
         word_t index = getSyscallArg(2, buffer);
@@ -7050,7 +7083,9 @@ exception_t Arch_decodeIRQControlInvocation(word_t invLabel, word_t length,
 
         cap_t cnodeCap = current_extra_caps.excaprefs[0]->cap;
 
-        if (irq >= NUM_SGIS) {
+        /* wrap_config_set to prevent verification automation from simplifying
+           away the condition when NUM_SGIS = 0 */
+        if (irq >= wrap_config_set(NUM_SGIS)) {
             current_syscall_error.type = seL4_RangeError;
             current_syscall_error.rangeErrorMin = 0;
             current_syscall_error.rangeErrorMax = NUM_SGIS - 1;
@@ -7162,7 +7197,7 @@ exception_t decodeSGISignalInvocation(word_t invLabel, word_t length,
     return invokeSGISignalGenerate(irq, target);
 }
 #endif /* !CONFIG_ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/object/iospace.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/iospace.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -7639,7 +7674,7 @@ exception_t decodeARMIOSpaceInvocation(word_t invLabel, cap_t cap)
     return EXCEPTION_SYSCALL_ERROR;
 }
 #endif /* end of CONFIG_TK1_SMMU */
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/object/smc.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/smc.c"
 /*
  * Copyright 2021, DornerWorks Ltd.
  *
@@ -7650,63 +7685,63 @@ exception_t decodeARMIOSpaceInvocation(word_t invLabel, cap_t cap)
 #ifdef CONFIG_ALLOW_SMC_CALLS
 #include <arch/object/smc.h>
 
-compile_assert(n_msgRegisters_less_than_smc_regs, n_msgRegisters <= NUM_SMC_REGS);
+/** Wrapped in a struct for verification, so the array does not decay to a pointer. */
+typedef struct smc_args_t_ {
+    word_t arg[NUM_SMC_REGS];
+} smc_args_t;
 
-static exception_t invokeSMCCall(word_t *buffer, bool_t call)
+/** We need the function result to be returned on the stack for verification.
+  * In reality, this function is inlined and the compiler should optimise all
+  * of this argument shuffling away. */
+static inline smc_args_t doSMC(smc_args_t smc_args)
 {
-    word_t i;
-    seL4_Word arg[NUM_SMC_REGS];
-    word_t *ipcBuffer;
+    register seL4_Word r0 asm("x0") = smc_args.arg[0];
+    register seL4_Word r1 asm("x1") = smc_args.arg[1];
+    register seL4_Word r2 asm("x2") = smc_args.arg[2];
+    register seL4_Word r3 asm("x3") = smc_args.arg[3];
+    register seL4_Word r4 asm("x4") = smc_args.arg[4];
+    register seL4_Word r5 asm("x5") = smc_args.arg[5];
+    register seL4_Word r6 asm("x6") = smc_args.arg[6];
+    register seL4_Word r7 asm("x7") = smc_args.arg[7];
 
-    for (i = 0; i < NUM_SMC_REGS; i++) {
-        arg[i] = getSyscallArg(i, buffer);
-    }
-
-    ipcBuffer = lookupIPCBuffer(true, NODE_STATE(ksCurThread));
-
-    register seL4_Word r0 asm("x0") = arg[0];
-    register seL4_Word r1 asm("x1") = arg[1];
-    register seL4_Word r2 asm("x2") = arg[2];
-    register seL4_Word r3 asm("x3") = arg[3];
-    register seL4_Word r4 asm("x4") = arg[4];
-    register seL4_Word r5 asm("x5") = arg[5];
-    register seL4_Word r6 asm("x6") = arg[6];
-    register seL4_Word r7 asm("x7") = arg[7];
     asm volatile("smc #0\n"
                  : "+r"(r0), "+r"(r1), "+r"(r2), "+r"(r3),
                  "+r"(r4), "+r"(r5), "+r"(r6), "+r"(r7)
                  :: "x8", "x9", "x10", "x11", "x12", "x13", "x14", "x15", "x16", "x17", "memory");
 
-    arg[0] = r0;
-    arg[1] = r1;
-    arg[2] = r2;
-    arg[3] = r3;
-    arg[4] = r4;
-    arg[5] = r5;
-    arg[6] = r6;
-    arg[7] = r7;
+    smc_args.arg[0] = r0;
+    smc_args.arg[1] = r1;
+    smc_args.arg[2] = r2;
+    smc_args.arg[3] = r3;
+    smc_args.arg[4] = r4;
+    smc_args.arg[5] = r5;
+    smc_args.arg[6] = r6;
+    smc_args.arg[7] = r7;
+    return smc_args;
+}
+
+static exception_t invokeSMCCall(smc_args_t smc_args, bool_t call)
+{
+    smc_args = doSMC(smc_args);
 
     if (call) {
-        for (i = 0; i < n_msgRegisters; i++) {
-            setRegister(NODE_STATE(ksCurThread), msgRegisters[i], arg[i]);
+        tcb_t *thread = NODE_STATE(ksCurThread);
+        word_t *ipcBuffer = lookupIPCBuffer(true, thread);
+
+        setRegister(thread, badgeRegister, 0);
+        for (word_t i = 0; i < NUM_SMC_REGS; i++) {
+            setMR(thread, ipcBuffer, i, smc_args.arg[i]);
         }
 
-        if (ipcBuffer != NULL) {
-            for (; i < NUM_SMC_REGS; i++) {
-                ipcBuffer[i + 1] = arg[i];
-            }
-        }
-
-        setRegister(NODE_STATE(ksCurThread), badgeRegister, 0);
-        setRegister(NODE_STATE(ksCurThread), msgInfoRegister, wordFromMessageInfo(
-                        seL4_MessageInfo_new(0, 0, 0, i)));
+        word_t length = ipcBuffer ? NUM_SMC_REGS : n_msgRegisters;
+        setRegister(thread, msgInfoRegister, wordFromMessageInfo(
+                        seL4_MessageInfo_new(0, 0, 0, length)));
     }
     setThreadState(NODE_STATE(ksCurThread), ThreadState_Running);
     return EXCEPTION_NONE;
 }
 
-exception_t decodeARMSMCInvocation(word_t label, word_t length, cptr_t cptr,
-                                   cte_t *srcSlot, cap_t cap, bool_t call, word_t *buffer)
+exception_t decodeARMSMCInvocation(word_t label, word_t length, cap_t cap, bool_t call, word_t *buffer)
 {
     if (label != ARMSMCCall) {
         userError("ARMSMCInvocation: Illegal operation.");
@@ -7729,12 +7764,17 @@ exception_t decodeARMSMCInvocation(word_t label, word_t length, cptr_t cptr,
         return EXCEPTION_SYSCALL_ERROR;
     }
 
+    smc_args_t smc_args;
+    for (word_t i = 0; i < NUM_SMC_REGS; i++) {
+        smc_args.arg[i] = getSyscallArg(i, buffer);
+    }
+
     setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-    return invokeSMCCall(buffer, call);
+    return invokeSMCCall(smc_args, call);
 }
 
 #endif
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/object/smmu.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/smmu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8147,7 +8187,7 @@ void invalidateSMMUTLBByASIDVA(asid_t asid, vptr_t vaddr, word_t bind_cb)
 
 #endif
 
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/object/tcb.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8171,7 +8211,7 @@ exception_t CONST Arch_performTransfer(word_t arch, tcb_t *tcb_src, tcb_t *tcb_d
 {
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/object/vcpu.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/object/vcpu.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8436,6 +8476,21 @@ static void vcpu_invalidate_active(void)
         ARCH_NODE_STATE(armHSVCPUActive) = false;
     }
     ARCH_NODE_STATE(armHSCurVCPU) = NULL;
+}
+
+void vcpu_flush(void)
+{
+    if (ARCH_NODE_STATE(armHSCurVCPU)) {
+        vcpu_save(ARCH_NODE_STATE(armHSCurVCPU), ARCH_NODE_STATE(armHSVCPUActive));
+        vcpu_invalidate_active();
+    }
+}
+
+void vcpu_flush_if_current(tcb_t *tptr)
+{
+    if (tptr->tcbArch.tcbVCPU == ARCH_NODE_STATE(armHSCurVCPU)) {
+        vcpu_flush();
+    }
 }
 
 void vcpu_finalise(vcpu_t *vcpu)
@@ -8764,7 +8819,7 @@ void handleVCPUInjectInterruptIPI(vcpu_t *vcpu, unsigned long index, virq_t virq
 #endif /* ENABLE_SMP_SUPPORT */
 
 #endif
-#line 1 "/Users/lukasbower/seL4/kernel/src/arch/arm/smp/ipi.c"
+#line 1 "/Users/lukasbower/seL4_15/src/arch/arm/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -8840,7 +8895,7 @@ void ipi_send_mask(irq_t ipi, word_t mask, bool_t isBlocking)
     generic_ipi_send_mask(ipi, mask, isBlocking);
 }
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4/kernel/src/assert.c"
+#line 1 "/Users/lukasbower/seL4_15/src/assert.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -8884,7 +8939,7 @@ void _assert_fail(
 }
 
 #endif
-#line 1 "/Users/lukasbower/seL4/kernel/src/benchmark/benchmark.c"
+#line 1 "/Users/lukasbower/seL4_15/src/benchmark/benchmark.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9041,7 +9096,7 @@ exception_t handle_SysBenchmarkResetAllThreadsUtilisation(void)
 #endif /* CONFIG_DEBUG_BUILD */
 #endif /* CONFIG_BENCHMARK_TRACK_UTILISATION */
 #endif /* CONFIG_ENABLE_BENCHMARKS */
-#line 1 "/Users/lukasbower/seL4/kernel/src/benchmark/benchmark_track.c"
+#line 1 "/Users/lukasbower/seL4_15/src/benchmark/benchmark_track.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9076,7 +9131,7 @@ void benchmark_track_exit(void)
     }
 }
 #endif /* CONFIG_BENCHMARK_TRACK_KERNEL_ENTRIES */
-#line 1 "/Users/lukasbower/seL4/kernel/src/benchmark/benchmark_utilisation.c"
+#line 1 "/Users/lukasbower/seL4_15/src/benchmark/benchmark_utilisation.c"
 /*
  * Copyright 2016, General Dynamics C4 Systems
  *
@@ -9155,7 +9210,7 @@ void benchmark_track_reset_utilisation(tcb_t *tcb)
     tcb->benchmark.schedule_start_time = 0;
 }
 #endif /* CONFIG_BENCHMARK_TRACK_UTILISATION */
-#line 1 "/Users/lukasbower/seL4/kernel/src/drivers/serial/bcm2835-aux-uart.c"
+#line 1 "/Users/lukasbower/seL4_15/src/drivers/serial/bcm2835-aux-uart.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9209,7 +9264,7 @@ unsigned char uart_drv_getchar(void)
     return *UART_REG(MU_IO);
 }
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/seL4/kernel/src/drivers/timer/generic_timer.c"
+#line 1 "/Users/lukasbower/seL4_15/src/drivers/timer/generic_timer.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -9350,7 +9405,7 @@ static void restore_virt_timer(vcpu_t *vcpu)
 }
 
 #endif /* CONFIG_ARM_HYPERVISOR_SUPPORT */
-#line 1 "/Users/lukasbower/seL4/kernel/src/fastpath/fastpath.c"
+#line 1 "/Users/lukasbower/seL4_15/src/fastpath/fastpath.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -10250,7 +10305,7 @@ void NORETURN fastpath_vm_fault(vm_fault_type_t type)
     fastpath_restore(badge, msgInfo, NODE_STATE(ksCurThread));
 }
 #endif
-#line 1 "/Users/lukasbower/seL4/kernel/src/inlines.c"
+#line 1 "/Users/lukasbower/seL4_15/src/inlines.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -10267,7 +10322,7 @@ syscall_error_t current_syscall_error;
 debug_syscall_error_t current_debug_error;
 #endif
 
-#line 1 "/Users/lukasbower/seL4/kernel/src/kernel/boot.c"
+#line 1 "/Users/lukasbower/seL4_15/src/kernel/boot.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -10280,6 +10335,7 @@ debug_syscall_error_t current_debug_error;
 #include <machine/io.h>
 #include <machine/registerset.h>
 #include <model/statedata.h>
+#include <object/domain.h>
 #include <arch/machine.h>
 #include <arch/kernel/boot.h>
 #include <arch/kernel/vspace.h>
@@ -10309,7 +10365,7 @@ BOOT_CODE p_region_t get_p_reg_kernel_img(void)
 {
     return (p_region_t) {
         .start = kpptr_to_paddr((const void *)KERNEL_ELF_BASE),
-        .end   = kpptr_to_paddr(ki_end)
+        .end   = kpptr_to_paddr((const void *)KERNEL_ELF_TOP)
     };
 }
 
@@ -10568,13 +10624,6 @@ compile_assert(num_priorities_valid,
 BOOT_CODE void
 create_domain_cap(cap_t root_cnode_cap)
 {
-    /* Check domain scheduler assumptions. */
-    assert(ksDomScheduleLength > 0);
-    for (word_t i = 0; i < ksDomScheduleLength; i++) {
-        assert(ksDomSchedule[i].domain < CONFIG_NUM_DOMAINS);
-        assert(ksDomSchedule[i].length > 0);
-    }
-
     cap_t cap = cap_domain_cap_new();
     write_slot(SLOT_PTR(pptr_of_cap(root_cnode_cap), seL4_CapDomain), cap);
 }
@@ -10640,7 +10689,7 @@ BOOT_CODE void populate_bi_frame(node_id_t node_id, word_t num_nodes,
     bi->numIOPTLevels = 0;
     bi->ipcBuffer = (seL4_IPCBuffer *)ipcbuf_vptr;
     bi->initThreadCNodeSizeBits = CONFIG_ROOT_CNODE_SIZE_BITS;
-    bi->initThreadDomain = ksDomSchedule[ksDomScheduleIdx].domain;
+    bi->initThreadDomain = 0;
     bi->extraLen = extra_bi_size;
 
     ndks_boot.bi_frame = bi;
@@ -10814,19 +10863,11 @@ BOOT_CODE tcb_t *create_initial_thread(cap_t root_cnode_cap, cap_t it_pd_cap, vp
 
     tcb->tcbPriority = seL4_MaxPrio;
     tcb->tcbMCP = seL4_MaxPrio;
-    tcb->tcbDomain = ksDomSchedule[ksDomScheduleIdx].domain;
+    tcb->tcbDomain = 0;
 #ifndef CONFIG_KERNEL_MCS
     setupReplyMaster(tcb);
 #endif
     setThreadState(tcb, ThreadState_Running);
-
-    ksCurDomain = ksDomSchedule[ksDomScheduleIdx].domain;
-#ifdef CONFIG_KERNEL_MCS
-    ksDomainTime = usToTicks(ksDomSchedule[ksDomScheduleIdx].length * US_IN_MS);
-#else
-    ksDomainTime = ksDomSchedule[ksDomScheduleIdx].length;
-#endif
-    assert(ksCurDomain < CONFIG_NUM_DOMAINS && ksDomainTime > 0);
 
 #ifndef CONFIG_KERNEL_MCS
     SMP_COND_STATEMENT(tcb->tcbAffinity = 0);
@@ -10848,6 +10889,21 @@ BOOT_CODE tcb_t *create_initial_thread(cap_t root_cnode_cap, cap_t it_pd_cap, vp
 }
 
 #ifdef ENABLE_SMP_CLOCK_SYNC_TEST_ON_BOOT
+BOOT_CODE static bool_t hypervisor_present(void)
+{
+#ifdef CONFIG_ARCH_X86
+    uint32_t ebx = x86_cpuid_ebx(KVM_CPUID_SIGNATURE, 0);
+    uint32_t ecx = x86_cpuid_ecx(KVM_CPUID_SIGNATURE, 0);
+    uint32_t edx = x86_cpuid_edx(KVM_CPUID_SIGNATURE, 0);
+
+    if ((ebx == CPUID_KVM_EBX && ecx == CPUID_KVM_ECX && edx == CPUID_KVM_EDX)
+        || (ebx == CPUID_TCG_EBX && ecx == CPUID_TCG_ECX && edx == CPUID_TCG_EDX)) {
+        return true;
+    }
+#endif
+    return false;
+}
+
 BOOT_CODE void clock_sync_test(void)
 {
     ticks_t t, t0;
@@ -10863,7 +10919,16 @@ BOOT_CODE void clock_sync_test(void)
     t = getCurrentTime();
     printf("clock_sync_test[%d]: t0 = %"PRIu64", t = %"PRIu64", td = %"PRIi64"\n",
            (int)getCurrentCPUIndex(), t0, t, t - t0);
-    assert(t0 <= margin + t && t <= t0 + margin);
+    /*
+     * The test does not consistently work if we are in a virtual machine (e.g
+     * within QEMU) because the measurement cannot distinguish between
+     * interrupted clock reads and out-of-sync clocks.
+     */
+    if (hypervisor_present()) {
+        printf("clock_sync_test[%d]: disabled, detected running as VM\n", (int)getCurrentCPUIndex());
+    } else {
+        assert(t0 <= margin + t && t <= t0 + margin);
+    }
 }
 #endif
 
@@ -10891,6 +10956,10 @@ BOOT_CODE void init_core_state(tcb_t *scheduler_action)
     NODE_STATE(ksReleaseQueue.end) = NULL;
     NODE_STATE(ksCurTime) = getCurrentTime();
 #endif
+    /* No need for NODE_STATE() as there is no SMP support for domains */
+    ksCurDomain = 0;
+    ksDomainTime = DSCHED_MAX_DURATION;
+    ksDomSchedule[0] = dschedule_make(0, DSCHED_MAX_DURATION);
 }
 
 /**
@@ -11349,7 +11418,7 @@ BOOT_CODE bool_t init_freemem(word_t n_available, const p_region_t *available,
            "objects, need size/alignment of 2^%"SEL4_PRIu_word"\n", max);
     return false;
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/kernel/cspace.c"
+#line 1 "/Users/lukasbower/seL4_15/src/kernel/cspace.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11543,7 +11612,7 @@ resolveAddressBits_ret_t resolveAddressBits(cap_t nodeCap, cptr_t capptr, word_t
         }
     }
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/kernel/faulthandler.c"
+#line 1 "/Users/lukasbower/seL4_15/src/kernel/faulthandler.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11716,7 +11785,7 @@ void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
     setThreadState(tptr, ThreadState_Inactive);
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/kernel/stack.c"
+#line 1 "/Users/lukasbower/seL4_15/src/kernel/stack.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -11727,7 +11796,7 @@ void handleDoubleFault(tcb_t *tptr, seL4_Fault_t ex1)
 
 VISIBLE ALIGN(KERNEL_STACK_ALIGNMENT)
 char kernel_stack_alloc[CONFIG_MAX_NUM_NODES][BIT(CONFIG_KERNEL_STACK_BITS)];
-#line 1 "/Users/lukasbower/seL4/kernel/src/kernel/thread.c"
+#line 1 "/Users/lukasbower/seL4_15/src/kernel/thread.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -11742,6 +11811,7 @@ char kernel_stack_alloc[CONFIG_MAX_NUM_NODES][BIT(CONFIG_KERNEL_STACK_BITS)];
 #include <kernel/cspace.h>
 #include <kernel/thread.h>
 #include <kernel/vspace.h>
+#include <object/domain.h>
 #ifdef CONFIG_KERNEL_MCS
 #include <object/schedcontext.h>
 #endif
@@ -11823,11 +11893,11 @@ void restart(tcb_t *target)
         cancelIPC(target);
 #ifdef CONFIG_KERNEL_MCS
         setThreadState(target, ThreadState_Restart);
-        if (sc_sporadic(target->tcbSchedContext)
-            && target->tcbSchedContext != NODE_STATE(ksCurSC)) {
-            refill_unblock_check(target->tcbSchedContext);
+        sched_context_t *sc = target->tcbSchedContext;
+        if (sc_sporadic(sc) && sc != NODE_STATE(ksCurSC)) {
+            refill_unblock_check(sc);
         }
-        schedContext_resume(target->tcbSchedContext);
+        schedContext_resume(sc);
         if (isSchedulable(target)) {
             possibleSwitchTo(target);
         }
@@ -12034,16 +12104,18 @@ void doNBRecvFailedTransfer(tcb_t *thread)
 
 void prepareSetDomain(tcb_t *tptr, dom_t dom)
 {
-#ifdef CONFIG_HAVE_FPU
     if (ksCurDomain != dom) {
+        Arch_prepareSetDomain(tptr, dom);
+#ifdef CONFIG_HAVE_FPU
         /* Save FPU state now to avoid touching cross-domain state later */
         fpuRelease(tptr);
-    }
 #endif
+    }
 }
 
 static void prepareNextDomain(void)
 {
+    Arch_prepareNextDomain();
 #ifdef CONFIG_HAVE_FPU
     /* Save FPU state now to avoid touching cross-domain state later */
     switchLocalFpuOwner(NULL);
@@ -12053,19 +12125,15 @@ static void prepareNextDomain(void)
 static void nextDomain(void)
 {
     ksDomScheduleIdx++;
-    if (ksDomScheduleIdx >= ksDomScheduleLength) {
-        ksDomScheduleIdx = 0;
+    if (dschedule_is_end_marker(ksDomScheduleIdx)) {
+        ksDomScheduleIdx = ksDomScheduleStart;
     }
 #ifdef CONFIG_KERNEL_MCS
     NODE_STATE(ksReprogram) = true;
 #endif
     ksWorkUnitsCompleted = 0;
-    ksCurDomain = ksDomSchedule[ksDomScheduleIdx].domain;
-#ifdef CONFIG_KERNEL_MCS
-    ksDomainTime = usToTicks(ksDomSchedule[ksDomScheduleIdx].length * US_IN_MS);
-#else
-    ksDomainTime = ksDomSchedule[ksDomScheduleIdx].length;
-#endif
+    ksCurDomain = dschedule_domain(ksDomSchedule[ksDomScheduleIdx]);
+    ksDomainTime = dschedule_duration(ksDomSchedule[ksDomScheduleIdx]);
 }
 
 #ifdef CONFIG_KERNEL_MCS
@@ -12480,7 +12548,7 @@ void awaken(void)
     }
 }
 #endif
-#line 1 "/Users/lukasbower/seL4/kernel/src/machine/capdl.c"
+#line 1 "/Users/lukasbower/seL4_15/src/machine/capdl.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -12999,7 +13067,7 @@ void print_object(cap_t cap)
 #endif /* CONFIG_PRINTING */
 
 #endif /* CONFIG_DEBUG_BUILD */
-#line 1 "/Users/lukasbower/seL4/kernel/src/machine/fpu.c"
+#line 1 "/Users/lukasbower/seL4_15/src/machine/fpu.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13050,7 +13118,7 @@ void fpuRelease(tcb_t *thread)
     }
 }
 #endif /* CONFIG_HAVE_FPU */
-#line 1 "/Users/lukasbower/seL4/kernel/src/machine/io.c"
+#line 1 "/Users/lukasbower/seL4_15/src/machine/io.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13707,7 +13775,7 @@ int impl_ksnvprintf(char *str, word_t size, const char *format, va_list ap)
 }
 
 #endif /* CONFIG_PRINTING */
-#line 1 "/Users/lukasbower/seL4/kernel/src/machine/registerset.c"
+#line 1 "/Users/lukasbower/seL4_15/src/machine/registerset.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13723,7 +13791,7 @@ const register_t fault_messages[][MAX_MSG_SIZE] = {
     [MessageID_TimeoutReply] = TIMEOUT_REPLY_MESSAGE,
 #endif
 };
-#line 1 "/Users/lukasbower/seL4/kernel/src/model/preemption.c"
+#line 1 "/Users/lukasbower/seL4_15/src/model/preemption.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13768,7 +13836,7 @@ exception_t preemptionPoint(void)
     return EXCEPTION_NONE;
 }
 
-#line 1 "/Users/lukasbower/seL4/kernel/src/model/smp.c"
+#line 1 "/Users/lukasbower/seL4_15/src/model/smp.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -13783,6 +13851,9 @@ exception_t preemptionPoint(void)
 
 void migrateTCB(tcb_t *tcb, word_t new_core)
 {
+    if (new_core == tcb->tcbAffinity) {
+        return;
+    }
 #ifdef CONFIG_DEBUG_BUILD
     tcbDebugRemove(tcb);
 #endif
@@ -13791,9 +13862,7 @@ void migrateTCB(tcb_t *tcb, word_t new_core)
      * is not necessarily the core, that we are now running on), then release
      * that cores's FPU.
      */
-    if (nativeThreadUsingFPU(tcb)) {
-        switchFpuOwner(NULL, tcb->tcbAffinity);
-    }
+    fpuRelease(tcb);
 #endif /* CONFIG_HAVE_FPU */
     tcb->tcbAffinity = new_core;
 #ifdef CONFIG_DEBUG_BUILD
@@ -13802,7 +13871,7 @@ void migrateTCB(tcb_t *tcb, word_t new_core)
 }
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4/kernel/src/model/statedata.c"
+#line 1 "/Users/lukasbower/seL4_15/src/model/statedata.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -13889,14 +13958,14 @@ compile_assert(irqCNodeSize, sizeof(intStateIRQNode) >= ((INT_STATE_ARRAY_SIZE) 
 dom_t ksCurDomain;
 
 /* Domain timeslice remaining */
-#ifdef CONFIG_KERNEL_MCS
 ticks_t ksDomainTime;
-#else
-word_t ksDomainTime;
-#endif
 
-/* An index into ksDomSchedule for active domain and length. */
+/* An index into ksDomSchedule for active domain and duration. */
 word_t ksDomScheduleIdx;
+
+/* The value ksDomScheduleIdx will be set to when reaching either the end of
+ * ksDomSchedule, or an end marker (entry with zero domain and duration). */
+word_t ksDomScheduleStart;
 
 /* Idle thread. */
 SECTION("._idle_thread") char ksIdleThreadTCB[CONFIG_MAX_NUM_NODES][BIT(seL4_TCBBits)] ALIGN(BIT(seL4_TCBBits));
@@ -13913,7 +13982,7 @@ kernel_entry_t ksKernelEntry;
 #ifdef CONFIG_KERNEL_LOG_BUFFER
 paddr_t ksUserLogBuffer;
 #endif /* CONFIG_KERNEL_LOG_BUFFER */
-#line 1 "/Users/lukasbower/seL4/kernel/src/object/cnode.c"
+#line 1 "/Users/lukasbower/seL4_15/src/object/cnode.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -14848,7 +14917,180 @@ cap_transfer_t PURE loadCapTransfer(word_t *buffer)
     const int offset = seL4_MsgMaxLength + seL4_MsgMaxExtraCaps + 2;
     return capTransferFromWords(buffer + offset);
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/object/endpoint.c"
+#line 1 "/Users/lukasbower/seL4_15/src/object/domain.c"
+/*
+ * Copyright 2014, General Dynamics C4 Systems
+ * Copyright 2025, Indan Zupancic
+ *
+ * SPDX-License-Identifier: GPL-2.0-only
+ */
+#include <util.h>
+#include <api/syscall.h>
+#include <kernel/thread.h>
+#include <mode/api/ipc_buffer.h>
+#include <model/statedata.h>
+#include <object/domain.h>
+#include <object/structures.h>
+
+/* Domain schedules. The duration is in kernel ticks for non-MCS and timer ticks for MCS. */
+dschedule_t ksDomSchedule[CONFIG_NUM_DOMAIN_SCHEDULES];
+
+static void invokeDomainSetSet(tcb_t *tcb, dom_t domain)
+{
+    prepareSetDomain(tcb, domain);
+    setDomain(tcb, domain);
+}
+
+static exception_t decodeDomainSetSetInvocation(word_t length, word_t *buffer)
+{
+    dom_t domain;
+    cap_t tcap;
+
+    if (unlikely(length == 0)) {
+        userError("Domain Configure: Truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    } else {
+        domain = getSyscallArg(0, buffer);
+        if (domain >= numDomains) {
+            userError("Domain Configure: invalid domain (%lu >= %u).",
+                      domain, numDomains);
+            current_syscall_error.type = seL4_InvalidArgument;
+            current_syscall_error.invalidArgumentNumber = 0;
+            return EXCEPTION_SYSCALL_ERROR;
+        }
+    }
+
+    if (unlikely(current_extra_caps.excaprefs[0] == NULL)) {
+        userError("Domain Configure: Truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+
+    tcap = current_extra_caps.excaprefs[0]->cap;
+    if (unlikely(cap_get_capType(tcap) != cap_thread_cap)) {
+        userError("Domain Configure: thread cap required.");
+        current_syscall_error.type = seL4_InvalidArgument;
+        current_syscall_error.invalidArgumentNumber = 1;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    invokeDomainSetSet(TCB_PTR(cap_thread_cap_get_capTCBPtr(tcap)), domain);
+    return EXCEPTION_NONE;
+}
+
+static void invokeDomainScheduleConfigure(word_t index, dom_t domain, ticks_t duration)
+{
+    ksDomSchedule[index] = dschedule_make(domain, duration);
+}
+
+static exception_t decodeDomainScheduleConfigure(word_t length, word_t *buffer)
+{
+    word_t index;
+    dom_t domain;
+    ticks_t duration;
+
+    if (unlikely(length < 2 + TIME_ARG_SIZE)) {
+        userError("Domain Schedule Configure: Truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    index = getSyscallArg(0, buffer);
+    domain = getSyscallArg(1, buffer);
+    duration = mode_parseTimeArg(2, buffer);
+
+    /* Last entry must stay an end marker, hence the -1: */
+    if (index >= domScheduleLength - 1) {
+        userError("Domain Schedule Configure: Invalid index.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = 0;
+        current_syscall_error.rangeErrorMax = domScheduleLength - 2;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    if (domain >= numDomains) {
+        userError("Domain Schedule Configure: Invalid domain.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = 0;
+        current_syscall_error.rangeErrorMax = numDomains - 1;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    if (duration > DSCHED_MAX_DURATION) {
+        userError("Domain Schedule Configure: Duration must fit in 56 bits.");
+        current_syscall_error.invalidArgumentNumber = 2;
+        current_syscall_error.type = seL4_InvalidArgument;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    if (duration == 0 && domain != 0) {
+        userError("Domain Schedule Configure: Both domain and duration must be zero for end markers.");
+        current_syscall_error.invalidArgumentNumber = 1;
+        current_syscall_error.type = seL4_InvalidArgument;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    if (index == ksDomScheduleStart && duration == 0) {
+        userError("Domain Schedule Configure: Starting schedule's duration must not be zero.");
+        current_syscall_error.invalidArgumentNumber = 2;
+        current_syscall_error.type = seL4_InvalidArgument;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    invokeDomainScheduleConfigure(index, domain, duration);
+    return EXCEPTION_NONE;
+}
+
+static void invokeDomainScheduleSetStart(word_t index)
+{
+    ksDomScheduleStart = index;
+    /* End the current domain schedule and force an
+     * immediate switch to the new starting index: */
+    ksDomainTime = 0;
+    ksDomScheduleIdx = domScheduleLength - 2;
+    rescheduleRequired();
+}
+
+static exception_t decodeDomainScheduleSetStart(word_t length, word_t *buffer)
+{
+    word_t index;
+
+    if (unlikely(length < 1)) {
+        userError("Domain Schedule Configure: Truncated message.");
+        current_syscall_error.type = seL4_TruncatedMessage;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    index = getSyscallArg(0, buffer);
+
+    if (index >= domScheduleLength) {
+        userError("Domain Schedule Set Start: Invalid index.");
+        current_syscall_error.type = seL4_RangeError;
+        current_syscall_error.rangeErrorMin = 0;
+        current_syscall_error.rangeErrorMax = domScheduleLength - 1;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    if (dschedule_is_end_marker(index)) {
+        userError("Domain Schedule Set Start: Starting schedule must not be an end marker.");
+        current_syscall_error.invalidArgumentNumber = 0;
+        current_syscall_error.type = seL4_InvalidArgument;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
+    invokeDomainScheduleSetStart(index);
+    return EXCEPTION_NONE;
+}
+
+exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffer)
+{
+    switch (invLabel) {
+    case DomainSetSet:
+        return decodeDomainSetSetInvocation(length, buffer);
+    case DomainScheduleConfigure:
+        return decodeDomainScheduleConfigure(length, buffer);
+    case DomainScheduleSetStart:
+        return decodeDomainScheduleSetStart(length, buffer);
+    default:
+        current_syscall_error.type = seL4_IllegalOperation;
+        return EXCEPTION_SYSCALL_ERROR;
+    }
+}
+#line 1 "/Users/lukasbower/seL4_15/src/object/endpoint.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -15346,7 +15588,7 @@ void reorderEP(endpoint_t *epptr, tcb_t *thread)
     ep_ptr_set_queue(epptr, queue);
 }
 #endif
-#line 1 "/Users/lukasbower/seL4/kernel/src/object/interrupt.c"
+#line 1 "/Users/lukasbower/seL4_15/src/object/interrupt.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -15644,7 +15886,7 @@ void setIRQState(irq_state_t irqState, irq_t irq)
 #endif
     maskInterrupt(irqState == IRQInactive, irq);
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/object/notification.c"
+#line 1 "/Users/lukasbower/seL4_15/src/object/notification.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -16011,7 +16253,7 @@ void reorderNTFN(notification_t *ntfnPtr, tcb_t *thread)
     ntfn_ptr_set_queue(ntfnPtr, queue);
 }
 #endif
-#line 1 "/Users/lukasbower/seL4/kernel/src/object/objecttype.c"
+#line 1 "/Users/lukasbower/seL4_15/src/object/objecttype.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -16137,7 +16379,7 @@ finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed)
         if (final) {
             notification_t *ntfn = NTFN_PTR(cap_notification_cap_get_capNtfnPtr(cap));
 #ifdef CONFIG_KERNEL_MCS
-            schedContext_unbindNtfn(SC_PTR(notification_ptr_get_ntfnSchedContext(ntfn)));
+            schedContextMaybeUnbindNtfn(ntfn);
 #endif
             unbindMaybeNotification(ntfn);
             cancelAllSignals(ntfn);
@@ -16151,12 +16393,13 @@ finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed)
         if (final) {
             reply_t *reply = REPLY_PTR(cap_reply_cap_get_capReplyPtr(cap));
             if (reply && reply->replyTCB) {
-                switch (thread_state_get_tsType(reply->replyTCB->tcbState)) {
+                tcb_t *tcb = reply->replyTCB;
+                switch (thread_state_get_tsType(tcb->tcbState)) {
                 case ThreadState_BlockedOnReply:
-                    reply_remove(reply, reply->replyTCB);
+                    reply_remove(reply, tcb);
                     break;
                 case ThreadState_BlockedOnReceive:
-                    cancelIPC(reply->replyTCB);
+                    cancelIPC(tcb);
                     break;
                 default:
                     fail("Invalid tcb state");
@@ -16234,11 +16477,7 @@ finaliseCap_ret_t finaliseCap(cap_t cap, bool_t final, bool_t exposed)
             sched_context_t *sc = SC_PTR(cap_sched_context_cap_get_capSCPtr(cap));
             schedContext_unbindAllTCBs(sc);
             schedContext_unbindNtfn(sc);
-            if (sc->scReply) {
-                assert(call_stack_get_isHead(sc->scReply->replyNext));
-                sc->scReply->replyNext = call_stack_new(0, false);
-                sc->scReply = NULL;
-            }
+            schedContext_unbindReply(sc);
             if (sc->scYieldFrom) {
                 schedContext_completeYieldTo(sc->scYieldFrom);
             }
@@ -17039,7 +17278,7 @@ bool_t CONST isCapRevocable(cap_t derivedCap, cap_t srcCap)
         return false;
     }
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/object/tcb.c"
+#line 1 "/Users/lukasbower/seL4_15/src/object/tcb.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -17844,9 +18083,12 @@ static void invokeSetFlags(tcb_t *thread, word_t clear, word_t set, bool_t call)
     thread->tcbFlags = flags;
 
 #ifdef CONFIG_HAVE_FPU
-    /* Save current FPU state before disabling FPU: */
     if (flags & seL4_TCBFlag_fpuDisabled) {
+        /* Save current FPU state before disabling FPU: */
         fpuRelease(thread);
+    } else if (thread == cur_thread) {
+        /* Restore FPU here as switchToThread() won't be called: */
+        lazyFPURestore(thread);
     }
 #endif
     if (call) {
@@ -18661,55 +18903,6 @@ exception_t decodeSetSpace(cap_t cap, word_t length, cte_t *slot, word_t *buffer
 #endif
 }
 
-exception_t decodeDomainInvocation(word_t invLabel, word_t length, word_t *buffer)
-{
-    dom_t domain;
-    cap_t tcap;
-
-    if (unlikely(invLabel != DomainSetSet)) {
-        current_syscall_error.type = seL4_IllegalOperation;
-        return EXCEPTION_SYSCALL_ERROR;
-    }
-
-    if (unlikely(length == 0)) {
-        userError("Domain Configure: Truncated message.");
-        current_syscall_error.type = seL4_TruncatedMessage;
-        return EXCEPTION_SYSCALL_ERROR;
-    } else {
-        domain = getSyscallArg(0, buffer);
-        if (domain >= numDomains) {
-            userError("Domain Configure: invalid domain (%lu >= %u).",
-                      domain, numDomains);
-            current_syscall_error.type = seL4_InvalidArgument;
-            current_syscall_error.invalidArgumentNumber = 0;
-            return EXCEPTION_SYSCALL_ERROR;
-        }
-    }
-
-    if (unlikely(current_extra_caps.excaprefs[0] == NULL)) {
-        userError("Domain Configure: Truncated message.");
-        current_syscall_error.type = seL4_TruncatedMessage;
-        return EXCEPTION_SYSCALL_ERROR;
-    }
-
-    tcap = current_extra_caps.excaprefs[0]->cap;
-    if (unlikely(cap_get_capType(tcap) != cap_thread_cap)) {
-        userError("Domain Configure: thread cap required.");
-        current_syscall_error.type = seL4_InvalidArgument;
-        current_syscall_error.invalidArgumentNumber = 1;
-        return EXCEPTION_SYSCALL_ERROR;
-    }
-    setThreadState(NODE_STATE(ksCurThread), ThreadState_Restart);
-    invokeDomainSetSet(TCB_PTR(cap_thread_cap_get_capTCBPtr(tcap)), domain);
-    return EXCEPTION_NONE;
-}
-
-void invokeDomainSetSet(tcb_t *tcb, dom_t domain)
-{
-    prepareSetDomain(tcb, domain);
-    setDomain(tcb, domain);
-}
-
 exception_t decodeBindNotification(cap_t cap)
 {
     notification_t *ntfnPtr;
@@ -19205,7 +19398,7 @@ word_t setMRs_syscall_error(tcb_t *thread, word_t *receiveIPCBuffer)
         fail("Invalid syscall error");
     }
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/object/untyped.c"
+#line 1 "/Users/lukasbower/seL4_15/src/object/untyped.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -19511,7 +19704,7 @@ exception_t invokeUntyped_Retype(cte_t *srcSlot,
 
     return EXCEPTION_NONE;
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/smp/ipi.c"
+#line 1 "/Users/lukasbower/seL4_15/src/smp/ipi.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -19730,7 +19923,7 @@ exception_t handle_SysDebugSendIPI(void)
 #endif /* CONFIG_DEBUG_BUILD */
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4/kernel/src/smp/lock.c"
+#line 1 "/Users/lukasbower/seL4_15/src/smp/lock.c"
 /*
  * Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
  *
@@ -19760,7 +19953,7 @@ BOOT_CODE void clh_lock_init(void)
 }
 
 #endif /* ENABLE_SMP_SUPPORT */
-#line 1 "/Users/lukasbower/seL4/kernel/src/string.c"
+#line 1 "/Users/lukasbower/seL4_15/src/string.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -19803,7 +19996,7 @@ word_t strlcat(char *dest, const char *src, word_t size)
     }
     return len;
 }
-#line 1 "/Users/lukasbower/seL4/kernel/src/util.c"
+#line 1 "/Users/lukasbower/seL4_15/src/util.c"
 /*
  * Copyright 2014, General Dynamics C4 Systems
  *
@@ -20256,80 +20449,3 @@ CONST int __ctzdi2(uint64_t x)
     return ctz64(x);
 }
 #endif
-#line 1 "/Users/lukasbower/seL4/projects/sel4test/domain_schedule.c"
-/*
- * Copyright 2017, Data61, CSIRO (ABN 41 687 119 230)
- *
- * SPDX-License-Identifier: BSD-2-Clause
- */
-
-/* This is a domain schedule that is suitable for the domains tests in sel4test. All
- * sel4test actually needs is for every domain to be executable for some period of time
- * in order for the tests to make progress.
- *
- * Most tests run only in domain 0, so we give it the longest period to reduce
- * overall idle time. We pick 2 ticks as the shortest period so that tests can
- * make some progress if they exist, and we pick some variety in the first four
- * domains so that not everything is equal.
- */
-
-/* remember that this is compiled as part of the kernel, and so is referencing kernel headers */
-
-#include <config.h>
-#include <object/structures.h>
-#include <model/statedata.h>
-
-/* Default schedule. */
-const dschedule_t ksDomSchedule[] = {
-    { .domain = 0, .length = 60 },
-#if CONFIG_NUM_DOMAINS > 1
-    { .domain = 1, .length = 4 },
-#endif
-#if CONFIG_NUM_DOMAINS > 2
-    { .domain = 2, .length = 3 },
-#endif
-#if CONFIG_NUM_DOMAINS > 3
-    { .domain = 3, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 4
-    { .domain = 4, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 5
-    { .domain = 5, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 6
-    { .domain = 6, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 7
-    { .domain = 7, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 8
-    { .domain = 8, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 9
-    { .domain = 9, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 10
-    { .domain = 10, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 11
-    { .domain = 11, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 12
-    { .domain = 12, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 13
-    { .domain = 13, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 14
-    { .domain = 14, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 15
-    { .domain = 15, .length = 2 },
-#endif
-#if CONFIG_NUM_DOMAINS > 16
-#error Unsupportd number of domains set
-#endif
-};
-
-const word_t ksDomScheduleLength = sizeof(ksDomSchedule) / sizeof(dschedule_t);

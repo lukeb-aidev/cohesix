@@ -34,7 +34,7 @@ endif()
 
 # Set path to fallback-tool for dependency-resolution.
 if(NOT DEFINED CMAKE_OBJDUMP)
-  set(CMAKE_OBJDUMP "/opt/homebrew/bin/aarch64-elf-objdump")
+  set(CMAKE_OBJDUMP "/opt/homebrew/bin/aarch64-linux-gnu-objdump")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)

@@ -1,0 +1,32 @@
+%rename cpp_options old_cpp_options
+
+*cpp_options:
+-nostdinc -isystem /Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/musllibc/build-temp/stage/include -isystem include%s %(old_cpp_options)
+
+*cc1:
+%(cc1_cpu) -nostdinc -isystem /Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/musllibc/build-temp/stage/include -isystem include%s
+
+*link_libgcc:
+-L/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/musllibc/build-temp/stage/lib -L .%s
+
+*libgcc:
+libgcc.a%s %:if-exists(libgcc_eh.a%s)
+
+*startfile:
+%{!shared: /Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/musllibc/build-temp/stage/lib/Scrt1.o} /Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/musllibc/build-temp/stage/lib/crti.o crtbeginS.o%s
+
+*endfile:
+crtendS.o%s /Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/musllibc/build-temp/stage/lib/crtn.o
+
+*link:
+-dynamic-linker /Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/musllibc/build-temp/stage/lib/ld-musl-aarch64.so.1 -nostdlib %{shared:-shared} %{static:-static} %{rdynamic:-export-dynamic}
+
+*esp_link:
+
+
+*esp_options:
+
+
+*esp_cpp_options:
+
+

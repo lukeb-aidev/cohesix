@@ -1714,11 +1714,17 @@ seL4_IRQControl_GetTriggerCore(seL4_IRQControl _service, seL4_Word irq, seL4_Wor
  * The resulting capability can be invoked like a notification capability that supports
  * only signal/send. SGIs can be received by IRQ notification objects on the target
  * core like other IRQs. See also <autoref label="sec:interrupts"/>.
+ * 
+ * Note that the kernel only checks architectural limits for SGI IRQ id and target. It
+ * does not know whether the corresponding target core exists. Depending on hardware
+ * implementation, signalling a non-existent target may create an unrecoverable SError.
+ * This means it is the responsibility of the developer to not issue capabilities for
+ * targets that do not exist.
  * @endxmlonly
  * 
  * @param[in] _service An IRQControl capability. This gives you the authority to make this call.
  * @param[in] irq The SGI INTID (0-15) that can be signalled. 
- * @param[in] target The node ID that will be             targeted. 0-7 for GICv2 and 0-31 for GICv3. Targets within that range that are not             supported by the hardware will be ignored. For example, on a GICv3 board with 4 CPUs, the             capability for target 13 can be created, but signals to it will have no effect. 
+ * @param[in] target The node ID that will be targeted.             0-7 for GICv2 and the affinity value for GICv3 (concatenation of Aff3+Aff2+Aff1+Aff0 from MPIDR).             Targets within that range that are not supported by thde hardware will be not be rejected. For example,             on a GICv2 board with 4 CPUs, the capability for target 5 can be created. The result of later signalling             this target depends on the hardware implementation. 
  * @param[in] root CPtr to the CNode that forms the root of the destination CSpace. Must be at a depth equivalent to the wordsize. 
  * @param[in] index CPtr to the destination slot. Resolved from the root of the destination CSpace. 
  * @param[in] depth Number of bits of dest_index to resolve to find the destination slot. 
@@ -1726,10 +1732,13 @@ seL4_IRQControl_GetTriggerCore(seL4_IRQControl _service, seL4_Word irq, seL4_Wor
  * @retval seL4_DeleteFirst The destination slot contains a capability. 
  * @retval seL4_FailedLookup The  @xmlonly <texttt text="index"/> @endxmlonly  or  @xmlonly <texttt text="depth"/> @endxmlonly  is invalid  @xmlonly <docref>(see <autoref label="s:cspace-addressing"/>)</docref> @endxmlonly .
  * Or,  @xmlonly <texttt text="root"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
- * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
+ * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type.
+ * Or, SGIs are not supported on this platform. 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
  * @retval seL4_RangeError The value of  @xmlonly <texttt text="irq"/> @endxmlonly  or  @xmlonly <texttt text="target"/> @endxmlonly  is out of range.
  * Or,  @xmlonly <texttt text="depth"/> @endxmlonly  is invalid  @xmlonly <docref>(see <autoref label="s:cspace-addressing"/>)</docref> @endxmlonly . 
+ * @retval seL4_InvalidArgument The SGI target is not supported on this GIC. Note that this only checks
+ * architectural limits, not the presence of the target core on the current board. 
  */
 LIBSEL4_INLINE seL4_Error
 seL4_IRQControl_IssueSGISignal(seL4_IRQControl _service, seL4_Word irq, seL4_Word target, seL4_CNode root, seL4_Word index, seL4_Uint8 depth)
@@ -2824,7 +2833,7 @@ seL4_TCB_CopyRegisters(seL4_TCB _service, seL4_TCB source, seL4_Bool suspend_sou
  * @param[in] cspace_root_data Optionally set the guard and guard size of the new root CNode. If set to zero, this parameter has no effect. 
  * @param[in] vspace_root The new VSpace root. 
  * @param[in] vspace_root_data Has no effect on x86 or ARM processors. 
- * @param[in] buffer Location of the thread's IPC buffer. Must be 512-byte aligned. The IPC buffer may not cross a page boundary. 
+ * @param[in] buffer Location of the thread's IPC buffer. Must be aligned to  @xmlonly <texttt text="seL4_IPCBufferSizeBits"/> @endxmlonly . The IPC buffer may not cross a page boundary. 
  * @param[in] bufferFrame Capability to a page containing the thread's IPC buffer. 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly ,  @xmlonly <texttt text="bufferFrame"/> @endxmlonly ,  @xmlonly <texttt text="cspace_root"/> @endxmlonly , or  @xmlonly <texttt text="vspace_root"/> @endxmlonly  is a CPtr to a capability of the wrong type.
@@ -2893,7 +2902,7 @@ seL4_TCB_Configure(seL4_TCB _service, seL4_Word fault_ep, seL4_CNode cspace_root
  * @param[in] cspace_root_data Optionally set the guard and guard size of the new root CNode. If set to zero, this parameter has no effect. 
  * @param[in] vspace_root The new VSpace root. 
  * @param[in] vspace_root_data Has no effect on x86 or ARM processors. 
- * @param[in] buffer Location of the thread's IPC buffer. Must be 512-byte aligned. The IPC buffer may not cross a page boundary. 
+ * @param[in] buffer Location of the thread's IPC buffer. Must be aligned to  @xmlonly <texttt text="seL4_IPCBufferSizeBits"/> @endxmlonly . The IPC buffer may not cross a page boundary. 
  * @param[in] bufferFrame Capability to a page containing the thread's IPC buffer. 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_AlignmentError The  @xmlonly <texttt text="buffer"/> @endxmlonly  is not aligned. 
@@ -3260,7 +3269,7 @@ seL4_TCB_SetTimeoutEndpoint(seL4_TCB _service, seL4_CPtr timeout_fault_ep)
  * @endxmlonly
  * 
  * @param[in] _service Capability to the TCB which is being operated on.
- * @param[in] buffer Location of the thread's IPC buffer. Must be 512-byte aligned. The IPC buffer may not cross a page boundary. 
+ * @param[in] buffer Location of the thread's IPC buffer. Must be aligned to  @xmlonly <texttt text="seL4_IPCBufferSizeBits"/> @endxmlonly . The IPC buffer may not cross a page boundary. 
  * @param[in] bufferFrame Capability to a page containing the thread's IPC buffer. 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_AlignmentError The  @xmlonly <texttt text="buffer"/> @endxmlonly  is not aligned. 
@@ -4907,7 +4916,7 @@ seL4_IRQHandler_Clear(seL4_IRQHandler _service)
  * @param[in] thread Capability to the TCB which is being operated on. 
  * @return @xmlonly <errorenumdesc/> @endxmlonly
  * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
- * @retval seL4_InvalidArgument The  @xmlonly <texttt text="domain"/> @endxmlonly  is greater than  @xmlonly <texttt text="CONFIG_NUM_DOMAINS"/> @endxmlonly .
+ * @retval seL4_InvalidArgument The  @xmlonly <texttt text="domain"/> @endxmlonly  is greater than  @xmlonly <texttt text="KernelNumDomains"/> @endxmlonly .
  * Or,  @xmlonly <texttt text="thread"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
  * @retval seL4_InvalidCapability The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
  */
@@ -4927,6 +4936,143 @@ seL4_DomainSet_Set(seL4_DomainSet _service, seL4_Uint8 domain, seL4_TCB thread)
 
 	/* Marshal and initialise parameters. */
 	mr0 = (domain & 0xffull);
+	mr1 = 0;
+	mr2 = 0;
+	mr3 = 0;
+
+	/* Perform the call, passing in-register arguments directly. */
+	output_tag = seL4_CallWithMRs(_service, tag,
+		&mr0, &mr1, &mr2, &mr3);
+	result = (seL4_Error) seL4_MessageInfo_get_label(output_tag);
+
+	/* Unmarshal registers into IPC buffer on error. */
+	if (result != seL4_NoError) {
+		seL4_SetMR(0, mr0);
+		seL4_SetMR(1, mr1);
+		seL4_SetMR(2, mr2);
+		seL4_SetMR(3, mr3);
+#ifdef CONFIG_KERNEL_INVOCATION_REPORT_ERROR_IPC
+		if (seL4_CanPrintError()) {
+			seL4_DebugPutString(seL4_GetDebugError());
+		}
+#endif
+	}
+
+	return result;
+}
+
+/**
+ * @xmlonly <manual name="ScheduleConfigure" label="domain_schedule_configure"/> @endxmlonly
+ * @brief @xmlonly Modify a domain scheduling entry. @endxmlonly
+ * 
+ * @xmlonly
+ * Configure the domain and duration of a scheduling entry.
+ * A zero domain and duration means it is an end marker.
+ * The domain scheduler will go back to the starting index when reaching
+ * an end marker.
+ * This makes it possible to configure multiple independent domain schedules
+ * and switch between them atomically.
+ * 
+ * The scheduling entry will be modified immediately. However, if the currently active
+ * index is modified, the change will not apply until the next time this entry is reached
+ * by the domain scheduler.
+ * 
+ * After boot the first scheduling entry has domain zero and maximum duration, all other
+ * entries will be end markers.
+ * 
+ * Hence, after initial configuration a call to <texttt text="seL4_DomainSet_ScheduleSetStart"/>
+ * is needed to update the current execution, even when there is no need to actually
+ * change the starting index.
+ * 
+ * <docref>See <autoref label="sec:domains"/>.</docref>
+ * @endxmlonly
+ * 
+ * @param[in] _service Capability allowing domain configuration.
+ * @param[in] index The scheduling entry to modify. 
+ * @param[in] domain The scheduling entry's new domain. 
+ * @param[in] duration Timeslice in ticks (kernel ticks for non-MCS, timer ticks for MCS). 
+ * @return @xmlonly <errorenumdesc/> @endxmlonly
+ * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
+ * @retval seL4_InvalidArgument The  @xmlonly <texttt text="duration"/> @endxmlonly  is zero, but  @xmlonly <texttt text="domain"/> @endxmlonly  is not.
+ * Or,  @xmlonly <texttt text="index"/> @endxmlonly  points to the starting index, but  @xmlonly <texttt text="duration"/> @endxmlonly  is zero.
+ * Or,  @xmlonly <texttt text="duration"/> @endxmlonly  does not fit in 56 bits. 
+ * @retval seL4_RangeError The  @xmlonly <texttt text="index"/> @endxmlonly  is not less than  @xmlonly <texttt text="KernelNumDomainSchedules"/> @endxmlonly .
+ * Or,  @xmlonly <texttt text="domain"/> @endxmlonly  is not less than  @xmlonly <texttt text="KernelNumDomains"/> @endxmlonly . 
+ */
+LIBSEL4_INLINE seL4_Error
+seL4_DomainSet_ScheduleConfigure(seL4_DomainSet _service, seL4_Word index, seL4_Uint8 domain, seL4_Time duration)
+{
+	seL4_Error result;
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(DomainScheduleConfigure, 0, 0, 3);
+	seL4_MessageInfo_t output_tag;
+	seL4_Word mr0;
+	seL4_Word mr1;
+	seL4_Word mr2;
+	seL4_Word mr3;
+
+	/* Marshal and initialise parameters. */
+	mr0 = index;
+	mr1 = (domain & 0xffull);
+	mr2 = duration;
+	mr3 = 0;
+
+	/* Perform the call, passing in-register arguments directly. */
+	output_tag = seL4_CallWithMRs(_service, tag,
+		&mr0, &mr1, &mr2, &mr3);
+	result = (seL4_Error) seL4_MessageInfo_get_label(output_tag);
+
+	/* Unmarshal registers into IPC buffer on error. */
+	if (result != seL4_NoError) {
+		seL4_SetMR(0, mr0);
+		seL4_SetMR(1, mr1);
+		seL4_SetMR(2, mr2);
+		seL4_SetMR(3, mr3);
+#ifdef CONFIG_KERNEL_INVOCATION_REPORT_ERROR_IPC
+		if (seL4_CanPrintError()) {
+			seL4_DebugPutString(seL4_GetDebugError());
+		}
+#endif
+	}
+
+	return result;
+}
+
+/**
+ * @xmlonly <manual name="ScheduleSetStart" label="domain_schedule_set_start"/> @endxmlonly
+ * @brief @xmlonly Change the starting index of the domain scheduler. @endxmlonly
+ * 
+ * @xmlonly
+ * The domain scheduler starts with the schedule entry indicated by the starting index.
+ * When reaching an end marker or the end of the schedules, the scheduler will go back
+ * to the starting entry again. The starting index is zero after boot.
+ * 
+ * The currently active scheduling index will be changed to the new starting index
+ * immediately, before returning from this system call. This relinquishes all remaining
+ * duration of the last schedule.
+ * 
+ * <docref>See <autoref label="sec:domains"/>.</docref>
+ * @endxmlonly
+ * 
+ * @param[in] _service Capability allowing domain configuration.
+ * @param[in] index The new starting index. 
+ * @return @xmlonly <errorenumdesc/> @endxmlonly
+ * @retval seL4_IllegalOperation The  @xmlonly <texttt text="_service"/> @endxmlonly  is a CPtr to a capability of the wrong type. 
+ * @retval seL4_InvalidArgument The  @xmlonly <texttt text="index"/> @endxmlonly  points to an end marker entry. 
+ * @retval seL4_RangeError The  @xmlonly <texttt text="index"/> @endxmlonly  is not less than  @xmlonly <texttt text="KernelNumDomainSchedules"/> @endxmlonly . 
+ */
+LIBSEL4_INLINE seL4_Error
+seL4_DomainSet_ScheduleSetStart(seL4_DomainSet _service, seL4_Word index)
+{
+	seL4_Error result;
+	seL4_MessageInfo_t tag = seL4_MessageInfo_new(DomainScheduleSetStart, 0, 0, 1);
+	seL4_MessageInfo_t output_tag;
+	seL4_Word mr0;
+	seL4_Word mr1;
+	seL4_Word mr2;
+	seL4_Word mr3;
+
+	/* Marshal and initialise parameters. */
+	mr0 = index;
 	mr1 = 0;
 	mr2 = 0;
 	mr3 = 0;

@@ -15,13 +15,26 @@
 /* disabled: CONFIG_ARCH_IA32 */
 #define CONFIG_SEL4_ARCH  aarch64
 #define CONFIG_ARCH_ARM  1
+/* disabled: CONFIG_ARCH_RISCV */
+/* disabled: CONFIG_ARCH_X86 */
 #define CONFIG_ARCH  arm
 #define CONFIG_WORD_SIZE  64
 #define CONFIG_ARM_PLAT  qemu-arm-virt
+/* disabled: CONFIG_PLAT_ALLWINNERA20 */
+/* disabled: CONFIG_PLAT_AM335X */
+/* disabled: CONFIG_PLAT_APQ8064 */
+/* disabled: CONFIG_PLAT_ARIANE */
 /* disabled: CONFIG_PLAT_BCM2711 */
 /* disabled: CONFIG_PLAT_BCM2837 */
+/* disabled: CONFIG_PLAT_CHESHIRE */
+/* disabled: CONFIG_PLAT_HIFIVE_P550 */
+/* disabled: CONFIG_PLAT_EXYNOS4 */
+/* disabled: CONFIG_PLAT_EXYNOS5 */
 /* disabled: CONFIG_PLAT_FVP */
+/* disabled: CONFIG_PLAT_HIFIVE */
 /* disabled: CONFIG_PLAT_HIKEY */
+/* disabled: CONFIG_PLAT_IMX6 */
+/* disabled: CONFIG_PLAT_IMX7_SABRE */
 /* disabled: CONFIG_PLAT_IMX8MQ_EVK */
 /* disabled: CONFIG_PLAT_IMX8MM_EVK */
 /* disabled: CONFIG_PLAT_IMX8MP_EVK */
@@ -29,12 +42,23 @@
 /* disabled: CONFIG_PLAT_MAAXBOARD */
 /* disabled: CONFIG_PLAT_ODROIDC2 */
 /* disabled: CONFIG_PLAT_ODROIDC4 */
+/* disabled: CONFIG_PLAT_OMAP3 */
+/* disabled: CONFIG_PLAT_PC99 */
+/* disabled: CONFIG_PLAT_POLARFIRE */
 #define CONFIG_PLAT_QEMU_ARM_VIRT  1
+/* disabled: CONFIG_PLAT_QEMU_RISCV_VIRT */
 /* disabled: CONFIG_PLAT_QUARTZ64 */
+/* disabled: CONFIG_PLAT_RK3568 */
+/* disabled: CONFIG_PLAT_ROCKETCHIP */
 /* disabled: CONFIG_PLAT_ROCKPRO64 */
+/* disabled: CONFIG_PLAT_BANANAPIF3 */
+/* disabled: CONFIG_PLAT_SPIKE */
+/* disabled: CONFIG_PLAT_STAR64 */
+/* disabled: CONFIG_PLAT_TK1 */
 /* disabled: CONFIG_PLAT_TQMA8XQP1GB */
 /* disabled: CONFIG_PLAT_TX1 */
 /* disabled: CONFIG_PLAT_TX2 */
+/* disabled: CONFIG_PLAT_ZYNQ7000 */
 /* disabled: CONFIG_PLAT_ZYNQMP */
 #define CONFIG_PLAT  qemu-arm-virt
 /* disabled: CONFIG_ARM_CORTEX_A7 */
@@ -91,6 +115,7 @@
 #define CONFIG_FASTPATH  1
 /* disabled: CONFIG_EXCEPTION_FASTPATH */
 #define CONFIG_NUM_DOMAINS  1
+#define CONFIG_NUM_DOMAIN_SCHEDULES  2
 /* disabled: CONFIG_SIGNAL_FASTPATH */
 #define CONFIG_NUM_PRIORITIES  256
 #define CONFIG_MAX_NUM_NODES  1

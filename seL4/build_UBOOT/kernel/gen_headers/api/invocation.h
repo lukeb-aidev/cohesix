@@ -78,6 +78,8 @@ enum invocation_label {
     IRQSetIRQHandler,
     IRQClearIRQHandler,
     DomainSetSet,
+    DomainScheduleConfigure,
+    DomainScheduleSetStart,
 #if defined(CONFIG_KERNEL_MCS)
     SchedControlConfigureFlags,
 #endif

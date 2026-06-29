@@ -1,4 +1,4 @@
-/* generated from /Users/lukasbower/seL4/kernel/include/arch/arm/arch/object/structures.bf */
+/* generated from /Users/lukasbower/seL4_15/include/arch/arm/arch/object/structures.bf */
 
 #pragma once
 

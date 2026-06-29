@@ -107,7 +107,7 @@ We revisit these sections whenever we specify new kernel interactions or manifes
 | [26a](#26a) | Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation | Complete |
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Complete |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
-| [26d](#26d) | seL4 15 Baseline Refresh + Reference/Performance Realignment | Pending |
+| [26d](#26d) | seL4 15 Baseline Refresh + Reference/Performance Realignment | In Progress |
 | [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
 | [27b](#27b) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
 | [27c](#27c) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Pending |

@@ -190,14 +190,11 @@ const LOCAL_SEAT_HDMI_PENDING_PROMPT_BYTES: usize = 32;
     target_os = "none"
 ))]
 const LOCAL_SEAT_HDMI_KEYBOARD_STARTING_LINE: &str = "USB console starting...";
-#[cfg(all(
-    feature = "kernel",
-    feature = "usb",
-    target_arch = "aarch64",
-    target_os = "none"
-))]
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
 const LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE: &str =
     "System starting; press any key to start the USB console";
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+const LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE_BYTES: usize = 96;
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
@@ -714,14 +711,15 @@ const LINKED_LOCAL_SEAT_HDMI_FALLBACK_SNAPSHOT_COLS: usize = 77;
 /// Fallback Pi 4 HDMI text height after linked-runtime overscan clipping.
 const LINKED_LOCAL_SEAT_HDMI_FALLBACK_SNAPSHOT_ROWS: usize = 28;
 
-/// Bytes in `ESC[H` + `ESC[J`, used to clear stale text before a snapshot redraw.
-const LINKED_LOCAL_SEAT_HDMI_SNAPSHOT_CLEAR_BYTES: usize = 6;
+/// Bytes in `ESC[H`, used to move to the top-left before a snapshot redraw.
+const LINKED_LOCAL_SEAT_HDMI_CURSOR_HOME_BYTES: usize = 3;
 
 /// Bytes in `ESC[K`, used to clear stale text to the physical right edge.
 const LINKED_LOCAL_SEAT_HDMI_CLEAR_EOL_BYTES: usize = 3;
 
-/// Bytes in `ESC[J`, used to clear stale text below the rendered viewport.
-const LINKED_LOCAL_SEAT_HDMI_CLEAR_TO_END_BYTES: usize = 3;
+/// Bytes in `ESC7`/`ESC8`, used to preserve the post-snapshot cursor position.
+const LINKED_LOCAL_SEAT_HDMI_SAVE_CURSOR_BYTES: usize = 2;
+const LINKED_LOCAL_SEAT_HDMI_RESTORE_CURSOR_BYTES: usize = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct LinkedHdmiSnapshotGeometry {
@@ -928,6 +926,37 @@ pub(crate) const fn local_seat_keyboard_bytes_enter_parser_state(
     !physical_pi_owner_state || command_ready
 }
 
+/// Return how many terminal bytes belong to the one operator arming key.
+#[must_use]
+#[cfg_attr(not(test), allow(dead_code))]
+const fn keyboard_arming_sequence_len(bytes: &[u8]) -> usize {
+    if bytes.is_empty() {
+        return 0;
+    }
+    if bytes[0] != 0x1b || bytes.len() == 1 {
+        return 1;
+    }
+    if bytes[1] == b'O' {
+        return if bytes.len() < 3 { bytes.len() } else { 3 };
+    }
+    if bytes[1] != b'[' {
+        return 1;
+    }
+
+    let mut index = 2usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte >= 0x40 && byte <= 0x7e {
+            return index + 1;
+        }
+        if index >= 7 {
+            return 8;
+        }
+        index += 1;
+    }
+    bytes.len()
+}
+
 /// Return whether an already published physical-Pi HDMI prompt remains valid.
 /// Soft post-first-byte settle churn should not hide or reprint the prompt;
 /// only real USB recovery/no-reply or HDMI retry failure demotes it.
@@ -1094,6 +1123,18 @@ pub(crate) const fn local_seat_display_mirror_suspends_on_missing_reply(
     root_console_ready: bool,
 ) -> bool {
     physical_pi_owner_state && root_console_ready
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn local_seat_hdmi_keyboard_wait_line_payload(
+    direct_submit_needs_newline: bool,
+) -> heapless::String<LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE_BYTES> {
+    let mut line = heapless::String::<LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE_BYTES>::new();
+    let _ = line.push_str(LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE);
+    if direct_submit_needs_newline {
+        let _ = line.push('\n');
+    }
+    line
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -1488,6 +1529,7 @@ pub struct LocalSeatRuntime {
     backend_keyboard_read_bytes: u64,
     accepted_keyboard_bytes: u64,
     arming_keyboard_bytes: u64,
+    keyboard_arming_escape_state: u8,
     drained_keyboard_bytes: u64,
     echoed_keyboard_bytes: u64,
     driver_task_budget_overruns: u64,
@@ -1659,6 +1701,7 @@ impl LocalSeatRuntime {
             backend_keyboard_read_bytes: 0,
             accepted_keyboard_bytes: 0,
             arming_keyboard_bytes: 0,
+            keyboard_arming_escape_state: 0,
             drained_keyboard_bytes: 0,
             echoed_keyboard_bytes: 0,
             driver_task_budget_overruns: 0,
@@ -1709,12 +1752,80 @@ impl LocalSeatRuntime {
     /// Consume bytes used only to prove and arm the local-seat keyboard path.
     ///
     /// The first physical keypress after the HDMI startup notice is an operator
-    /// acknowledgement, not command input. Keeping it out of the parser avoids
-    /// an immediate partial command or parse error before the prompt is usable.
+    /// acknowledgement, not command input. Keep exactly one terminal key
+    /// sequence out of the parser, then retain any fast-typed burst tail in the
+    /// bounded parser queue so startup arming does not discard operator input.
     pub fn accept_keyboard_arming_bytes(&mut self, bytes: &[u8]) -> usize {
-        let accepted = bytes.len();
-        self.arming_keyboard_bytes = self.arming_keyboard_bytes.saturating_add(accepted as u64);
-        accepted
+        self.accept_keyboard_arming_bytes_with_trace(bytes).0
+    }
+
+    fn accept_keyboard_arming_bytes_with_trace(&mut self, bytes: &[u8]) -> (usize, usize) {
+        if bytes.is_empty() {
+            return (0, 0);
+        }
+        let arming_len = self.consume_keyboard_arming_sequence_prefix(bytes);
+        self.arming_keyboard_bytes = self.arming_keyboard_bytes.saturating_add(arming_len as u64);
+        let queued = self.enqueue_keyboard_bytes(&bytes[arming_len..]);
+        (arming_len.saturating_add(queued), arming_len)
+    }
+
+    fn consume_keyboard_arming_sequence_prefix(&mut self, bytes: &[u8]) -> usize {
+        let mut index = 0usize;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            match self.keyboard_arming_escape_state {
+                0 if index == 0 && byte == 0x1b => {
+                    self.keyboard_arming_escape_state = 1;
+                }
+                0 => return index.saturating_add(1),
+                1 if byte == b'[' => {
+                    self.keyboard_arming_escape_state = 2;
+                }
+                1 if byte == b'O' => {
+                    self.keyboard_arming_escape_state = 3;
+                }
+                1 => {
+                    self.keyboard_arming_escape_state = 0;
+                    return index.saturating_add(1);
+                }
+                2 if (0x40..=0x7e).contains(&byte) => {
+                    self.keyboard_arming_escape_state = 0;
+                    return index.saturating_add(1);
+                }
+                2 => {}
+                3 => {
+                    self.keyboard_arming_escape_state = 0;
+                    return index.saturating_add(1);
+                }
+                _ => {
+                    self.keyboard_arming_escape_state = 0;
+                    return index.saturating_add(1);
+                }
+            }
+            index = index.saturating_add(1);
+        }
+        bytes.len()
+    }
+
+    fn keyboard_arming_sequence_pending(&self) -> bool {
+        self.keyboard_arming_escape_state != 0
+    }
+
+    fn accept_keyboard_bytes_for_parser_state(
+        &mut self,
+        bytes: &[u8],
+        parser_ingress: bool,
+        first_byte_ready_before: bool,
+        physical_pi_owner_state: bool,
+    ) -> (usize, usize) {
+        if parser_ingress
+            || (physical_pi_owner_state
+                && first_byte_ready_before
+                && !self.keyboard_arming_sequence_pending())
+        {
+            return (self.enqueue_keyboard_bytes(bytes), 0);
+        }
+        self.accept_keyboard_arming_bytes_with_trace(bytes)
     }
 
     /// Drain queued keyboard bytes into `out` and return bytes written.
@@ -2171,7 +2282,10 @@ impl LocalSeatRuntime {
             self.hdmi_keyboard_wait_line_emitted,
         ) {
             self.hdmi_keyboard_wait_line_emitted = true;
-            self.mirror_line(LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE);
+            let direct_submit_needs_newline =
+                !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
+            let line = local_seat_hdmi_keyboard_wait_line_payload(direct_submit_needs_newline);
+            self.mirror_line(line.as_str());
         }
     }
 
@@ -2242,7 +2356,7 @@ impl LocalSeatRuntime {
         self.hdmi_keyboard_busy_line_emitted = false;
         let keyboard = self.keyboard_trace();
         let display = self.display_trace();
-        let mut line = heapless::String::<256>::new();
+        let mut line = heapless::String::<320>::new();
         let _ = core::fmt::Write::write_fmt(
             &mut line,
             format_args!(
@@ -2259,7 +2373,8 @@ impl LocalSeatRuntime {
                 display.submitted_frames,
             ),
         );
-        boot_log::force_uart_line_raw_and_log(line.as_str());
+        let console_seq = boot_log::next_console_event_seq();
+        boot_log::force_uart_line_raw_and_log_without_prompt_refresh(line.as_str(), console_seq);
     }
 
     #[cfg(all(
@@ -2333,7 +2448,9 @@ impl LocalSeatRuntime {
         let line_bytes = display_line.as_bytes();
         let take = line_bytes.len().min(line_width);
         payload.extend_from_slice(&line_bytes[..take]);
-        payload.extend_from_slice(b"\x1b[K");
+        let clear_eol = b"\x1b[K";
+        debug_assert_eq!(clear_eol.len(), LINKED_LOCAL_SEAT_HDMI_CLEAR_EOL_BYTES);
+        payload.extend_from_slice(clear_eol);
         if append_newline {
             payload.push(b'\n');
         }
@@ -2370,7 +2487,10 @@ impl LocalSeatRuntime {
         let end = total.saturating_sub(offset);
         let start = self.linked_hdmi_snapshot_start(end, geometry);
         let mut payload = Vec::new();
-        payload.extend_from_slice(b"\x1b[H\x1b[J");
+        let cursor_home = b"\x1b[H";
+        debug_assert_eq!(cursor_home.len(), LINKED_LOCAL_SEAT_HDMI_CURSOR_HOME_BYTES);
+        payload.extend_from_slice(cursor_home);
+        let mut rendered_rows = 0usize;
         if start == end {
             let input_preview = if offset == 0
                 && total == 0
@@ -2381,20 +2501,22 @@ impl LocalSeatRuntime {
             } else {
                 None
             };
-            if input_preview.is_some()
-                && !self.append_linked_hdmi_snapshot_line(
-                    &mut payload,
-                    "",
-                    input_preview,
-                    geometry,
-                    false,
-                )
-            {
+            if !self.append_linked_hdmi_snapshot_line(
+                &mut payload,
+                "",
+                input_preview,
+                geometry,
+                false,
+            ) {
                 return payload;
             }
+            rendered_rows = 1;
         } else {
+            let mut cursor_at_blank_tail_row = false;
             for index in start..end {
-                let append_newline = index.saturating_add(1) < end;
+                let is_tail_line = offset == 0 && index.saturating_add(1) == end;
+                let append_newline =
+                    index.saturating_add(1) < end || (is_tail_line && !self.hdmi_open_line);
                 let Some(line) = self.mirrored_lines.get(index) else {
                     continue;
                 };
@@ -2416,10 +2538,51 @@ impl LocalSeatRuntime {
                 ) {
                     break;
                 }
+                rendered_rows = rendered_rows.saturating_add(1);
+                cursor_at_blank_tail_row = append_newline;
             }
+            self.append_linked_hdmi_snapshot_blank_tail(
+                &mut payload,
+                geometry.rows.saturating_sub(rendered_rows),
+                cursor_at_blank_tail_row,
+            );
+            return payload;
         }
-        payload.extend_from_slice(b"\x1b[J");
+        self.append_linked_hdmi_snapshot_blank_tail(
+            &mut payload,
+            geometry.rows.saturating_sub(rendered_rows),
+            false,
+        );
         payload
+    }
+
+    fn append_linked_hdmi_snapshot_blank_tail(
+        &self,
+        payload: &mut Vec<u8>,
+        rows: usize,
+        cursor_at_blank_tail_row: bool,
+    ) {
+        if rows == 0 {
+            return;
+        }
+        let save_cursor = b"\x1b7";
+        let restore_cursor = b"\x1b8";
+        debug_assert_eq!(save_cursor.len(), LINKED_LOCAL_SEAT_HDMI_SAVE_CURSOR_BYTES);
+        debug_assert_eq!(
+            restore_cursor.len(),
+            LINKED_LOCAL_SEAT_HDMI_RESTORE_CURSOR_BYTES
+        );
+        payload.extend_from_slice(save_cursor);
+        let mut remaining_rows = rows;
+        if cursor_at_blank_tail_row {
+            payload.extend_from_slice(b"\x1b[K");
+            remaining_rows = remaining_rows.saturating_sub(1);
+        }
+        for _ in 0..remaining_rows {
+            payload.push(b'\n');
+            payload.extend_from_slice(b"\x1b[K");
+        }
+        payload.extend_from_slice(restore_cursor);
     }
 
     fn pop_linked_hdmi_chunk(queue: &mut VecDeque<u8>) -> Vec<u8> {
@@ -2679,6 +2842,30 @@ impl LocalSeatRuntime {
     #[must_use]
     pub const fn usb_keyboard_command_ready_latched(&self) -> bool {
         false
+    }
+
+    /// Return whether queued keyboard bytes may enter the console parser.
+    #[must_use]
+    pub fn keyboard_parser_ingress_ready(&self) -> bool {
+        #[cfg(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))]
+        {
+            !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+                || self.hdmi_keyboard_command_ready_latched
+        }
+        #[cfg(not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        )))]
+        {
+            true
+        }
     }
 
     /// Legacy diagnostic accessor; the HDMI ready banner is no longer mirrored.
@@ -3545,20 +3732,29 @@ impl LocalSeatRuntime {
                                 .backend_keyboard_read_bytes
                                 .saturating_add(bytes.len() as u64);
                             LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
+                            let physical_pi_owner_state =
+                                crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
                             let parser_ingress = local_seat_keyboard_bytes_enter_parser_state(
-                                crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+                                physical_pi_owner_state,
                                 command_ready_before_poll,
                             );
-                            let accepted = if parser_ingress {
-                                self.enqueue_keyboard_bytes(bytes)
-                            } else {
-                                self.accept_keyboard_arming_bytes(bytes)
-                            };
+                            let (accepted, arming_bytes) = self
+                                .accept_keyboard_bytes_for_parser_state(
+                                    bytes,
+                                    parser_ingress,
+                                    first_byte_ready_before,
+                                    physical_pi_owner_state,
+                                );
                             if accepted != 0 && !first_byte_ready_before {
                                 self.reset_keyboard_post_first_byte_clean_proof();
                             }
                             publish_linked_local_seat_usb_first_report_event(
-                                contract, completion, bytes, accepted,
+                                contract,
+                                completion,
+                                bytes,
+                                accepted,
+                                arming_bytes,
+                                parser_ingress,
                             );
                         }
                         return;
@@ -4459,6 +4655,8 @@ fn publish_linked_local_seat_usb_first_report_event(
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
     bytes: &[u8],
     accepted: usize,
+    arming_bytes: usize,
+    parser_ingress: bool,
 ) {
     use core::fmt::Write;
 
@@ -4466,17 +4664,19 @@ fn publish_linked_local_seat_usb_first_report_event(
         return;
     }
     if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_EVENT_LOGGED.swap(true, Ordering::AcqRel) {
-        let mut line = heapless::String::<256>::new();
+        let mut line = heapless::String::<320>::new();
         let _ = write!(
             line,
-            "[local-seat] usb hid first report contract={} source=linked-runtime-hid tag=usb-hid-report-event len={} arming={} parser_ingress=no detail=0x{:04x} result=0x{:08x} transfer_event=yes",
+            "[local-seat] usb hid first report contract={} source=linked-runtime-hid tag=usb-hid-report-event len={} accepted={} arming={} parser_ingress={} detail=0x{:04x} result=0x{:08x} transfer_event=yes",
             contract.name,
             bytes.len(),
             accepted,
+            arming_bytes,
+            local_seat_yes_no(parser_ingress),
             completion.detail,
             completion.result,
         );
-        boot_log::force_uart_line_raw(line.as_str());
+        boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
     }
     if accepted == 0 {
         return;
@@ -4501,15 +4701,15 @@ fn publish_linked_local_seat_usb_first_report_event(
             completion.detail,
             completion.result,
         );
-        boot_log::force_uart_line_raw(line.as_str());
-        emit_linked_local_seat_usb_keyboard_ready_alert(contract, completion, accepted);
+        boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
+        emit_linked_local_seat_usb_keyboard_ready_alert(contract, completion, arming_bytes);
     }
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
 fn linked_local_seat_usb_keyboard_ready_alert_line(
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
-    accepted: usize,
+    arming_bytes: usize,
 ) -> heapless::String<192> {
     use core::fmt::Write;
 
@@ -4517,7 +4717,7 @@ fn linked_local_seat_usb_keyboard_ready_alert_line(
     let _ = write!(
         line,
         "usb keyboard armed: first_report=yes first_byte=yes input=local-seat source=linked-runtime-hid arming={} parser_ingress=no detail=0x{:04x} result=0x{:08x} action=wait-for-command-ready",
-        accepted, completion.detail, completion.result,
+        arming_bytes, completion.detail, completion.result,
     );
     line
 }
@@ -4531,10 +4731,11 @@ fn linked_local_seat_usb_keyboard_ready_alert_line(
 fn emit_linked_local_seat_usb_keyboard_ready_alert(
     _contract: crate::hal::driver_task::DriverTaskContract,
     completion: crate::hal::driver_task::DriverTaskCompletionRecord,
-    accepted: usize,
+    arming_bytes: usize,
 ) {
-    let line = linked_local_seat_usb_keyboard_ready_alert_line(completion, accepted);
-    boot_log::force_uart_line_raw_and_log(line.as_str());
+    let line = linked_local_seat_usb_keyboard_ready_alert_line(completion, arming_bytes);
+    let console_seq = boot_log::next_console_event_seq();
+    boot_log::force_uart_line_raw_and_log_without_prompt_refresh(line.as_str(), console_seq);
 }
 
 #[cfg(all(
@@ -7071,7 +7272,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_arming_bytes_do_not_enter_parser_queue() {
+    fn runtime_arming_consumes_one_key_and_keeps_burst_tail() {
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
             display_device: "hdmi0",
@@ -7081,15 +7282,101 @@ mod tests {
 
         assert_eq!(runtime.accept_keyboard_arming_bytes(b"ping\n"), 5);
         let trace = runtime.keyboard_trace();
-        assert_eq!(trace.arming_bytes, 5);
-        assert_eq!(trace.accepted_bytes, 0);
-        assert_eq!(trace.queued_bytes, 0);
+        assert_eq!(trace.arming_bytes, 1);
+        assert_eq!(trace.accepted_bytes, 4);
+        assert_eq!(trace.queued_bytes, 4);
 
         let mut drained = [0u8; 8];
-        assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 0);
+        assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 4);
+        assert_eq!(&drained[..4], b"ing\n");
         assert_eq!(runtime.enqueue_keyboard_bytes(b"ping\n"), 5);
         assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 5);
         assert_eq!(&drained[..5], b"ping\n");
+    }
+
+    #[test]
+    fn runtime_arming_consumes_one_escape_sequence() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        assert_eq!(keyboard_arming_sequence_len(b"\x1b[Ahelp\n"), 3);
+        assert_eq!(runtime.accept_keyboard_arming_bytes(b"\x1b[Ahelp\n"), 8);
+        let trace = runtime.keyboard_trace();
+        assert_eq!(trace.arming_bytes, 3);
+        assert_eq!(trace.accepted_bytes, 5);
+        assert_eq!(trace.queued_bytes, 5);
+
+        let mut drained = [0u8; 8];
+        assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 5);
+        assert_eq!(&drained[..5], b"help\n");
+    }
+
+    #[test]
+    fn runtime_arming_consumes_only_first_key_across_frames() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        assert_eq!(
+            runtime.accept_keyboard_bytes_for_parser_state(b"p", false, false, true),
+            (1, 1)
+        );
+        assert_eq!(
+            runtime.accept_keyboard_bytes_for_parser_state(b"i", false, true, true),
+            (1, 0)
+        );
+        assert_eq!(
+            runtime.accept_keyboard_bytes_for_parser_state(b"n", false, true, true),
+            (1, 0)
+        );
+        assert_eq!(
+            runtime.accept_keyboard_bytes_for_parser_state(b"g\n", false, true, true),
+            (2, 0)
+        );
+
+        let trace = runtime.keyboard_trace();
+        assert_eq!(trace.arming_bytes, 1);
+        assert_eq!(trace.accepted_bytes, 4);
+        assert_eq!(trace.queued_bytes, 4);
+
+        let mut drained = [0u8; 8];
+        assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 4);
+        assert_eq!(&drained[..4], b"ing\n");
+    }
+
+    #[test]
+    fn runtime_arming_escape_sequence_can_span_frames() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        assert_eq!(
+            runtime.accept_keyboard_bytes_for_parser_state(b"\x1b", false, false, true),
+            (1, 1)
+        );
+        assert_eq!(
+            runtime.accept_keyboard_bytes_for_parser_state(b"[Ahelp\n", false, true, true),
+            (7, 2)
+        );
+
+        let trace = runtime.keyboard_trace();
+        assert_eq!(trace.arming_bytes, 3);
+        assert_eq!(trace.accepted_bytes, 5);
+        assert_eq!(trace.queued_bytes, 5);
+
+        let mut drained = [0u8; 8];
+        assert_eq!(runtime.drain_keyboard_bytes(&mut drained), 5);
+        assert_eq!(&drained[..5], b"help\n");
     }
 
     #[test]
@@ -7606,11 +7893,15 @@ mod tests {
                     .saturating_add(LINKED_LOCAL_SEAT_HDMI_CLEAR_EOL_BYTES)
                     .saturating_add(1),
             )
-            .saturating_add(
-                LINKED_LOCAL_SEAT_HDMI_SNAPSHOT_CLEAR_BYTES
-                    .saturating_add(LINKED_LOCAL_SEAT_HDMI_CLEAR_TO_END_BYTES),
-            );
+            .saturating_add(LINKED_LOCAL_SEAT_HDMI_CURSOR_HOME_BYTES);
         assert!(full_viewport_bytes > LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES);
+    }
+
+    fn assert_no_blink_snapshot_payload(payload: &[u8]) {
+        assert!(payload.starts_with(b"\x1b[H"));
+        assert!(!payload.windows(3).any(|window| window == b"\x1b[J"));
+        assert!(!payload.contains(&0x0c));
+        assert!(payload.windows(3).any(|window| window == b"\x1b[K"));
     }
 
     #[test]
@@ -7646,11 +7937,9 @@ mod tests {
 
         let payload = runtime.build_linked_hdmi_scrollback_payload_for_geometry(geometry);
 
-        assert!(payload.starts_with(b"\x1b[H\x1b[J"));
-        assert!(payload.ends_with(b"\x1b[J"));
+        assert_no_blink_snapshot_payload(payload.as_slice());
         assert_eq!(payload.iter().filter(|&&byte| byte == b'\n').count(), 58);
         assert!(payload.len() > LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES);
-        assert!(!payload.contains(&0x0c));
 
         for byte in payload.iter().copied() {
             runtime.hdmi_redraw_bytes.push_back(byte);
@@ -7697,7 +7986,42 @@ mod tests {
         };
         assert_eq!(reason, "keyboard-scrollback");
         assert!(redraw);
-        assert_eq!(payload.as_slice(), b"\x1b[H\x1b[Jcohesix> \x1b[K\x1b[J");
+        assert_no_blink_snapshot_payload(payload.as_slice());
+        assert!(payload
+            .windows(b"cohesix> ".len())
+            .any(|window| window == b"cohesix> "));
+        assert!(payload.windows(2).any(|window| window == b"\x1b7"));
+        assert!(payload.ends_with(b"\x1b8"));
+    }
+
+    #[test]
+    fn runtime_hdmi_snapshot_terminates_closed_wait_line_before_prompt() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 160,
+            buffer_lines: 4,
+        });
+
+        runtime.mirror_line_current_tcb(LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE);
+        runtime.request_linked_hdmi_snapshot_redraw();
+
+        let Some((payload, reason, redraw)) = runtime.next_linked_hdmi_payload() else {
+            panic!("expected snapshot payload");
+        };
+        assert_eq!(reason, "keyboard-scrollback");
+        assert!(redraw);
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE.as_bytes());
+        expected.extend_from_slice(b"\x1b[K\n");
+        assert!(
+            payload
+                .windows(expected.len())
+                .any(|window| window == expected.as_slice()),
+            "{:?}",
+            String::from_utf8_lossy(payload.as_slice())
+        );
     }
 
     #[test]
@@ -7718,7 +8042,10 @@ mod tests {
         };
         assert_eq!(reason, "keyboard-scrollback");
         assert!(redraw);
-        assert_eq!(payload.as_slice(), b"\x1b[H\x1b[Jcohesix> hel\x1b[K\x1b[J");
+        assert_no_blink_snapshot_payload(payload.as_slice());
+        assert!(payload
+            .windows(b"cohesix> hel".len())
+            .any(|window| window == b"cohesix> hel"));
     }
 
     #[test]
@@ -7783,7 +8110,10 @@ mod tests {
         };
         assert_eq!(reason, "keyboard-scrollback");
         assert!(redraw);
-        assert_eq!(payload.as_slice(), b"\x1b[H\x1b[Jcohesix> help\x1b[K\x1b[J");
+        assert_no_blink_snapshot_payload(payload.as_slice());
+        assert!(payload
+            .windows(b"cohesix> help".len())
+            .any(|window| window == b"cohesix> help"));
     }
 
     #[test]
@@ -7807,11 +8137,8 @@ mod tests {
         };
         assert_eq!(reason, "keyboard-scrollback");
         assert!(redraw);
-        assert!(payload.starts_with(b"\x1b[H\x1b[J"));
-        assert!(payload.ends_with(b"\x1b[J"));
+        assert_no_blink_snapshot_payload(payload.as_slice());
         assert_eq!(payload.iter().filter(|&&byte| byte == b'\n').count(), 27);
-        assert!(payload.windows(3).any(|window| window == b"\x1b[K"));
-        assert!(!payload.contains(&0x0c));
         assert!(payload.len() <= LINKED_LOCAL_SEAT_HDMI_FRAME_CHUNK_BYTES);
     }
 
@@ -7976,7 +8303,7 @@ mod tests {
         };
         assert_eq!(snapshot_reason, "keyboard-scrollback");
         assert!(snapshot_redraw);
-        assert!(snapshot.starts_with(b"\x1b[H\x1b[J"));
+        assert_no_blink_snapshot_payload(snapshot.as_slice());
     }
 
     #[test]
@@ -8017,7 +8344,7 @@ mod tests {
         };
         assert_eq!(restart_reason, "keyboard-scrollback");
         assert!(restart_redraw);
-        assert!(restart.starts_with(b"\x1b[H\x1b[J"));
+        assert_no_blink_snapshot_payload(restart.as_slice());
     }
 
     #[test]
@@ -8126,7 +8453,7 @@ mod tests {
         };
         assert_eq!(reason, "keyboard-scrollback");
         assert!(redraw);
-        assert!(snapshot.starts_with(b"\x1b[H\x1b[J"));
+        assert_no_blink_snapshot_payload(snapshot.as_slice());
         assert!(snapshot
             .windows(b"help".len())
             .any(|window| window == b"help"));
@@ -8173,7 +8500,7 @@ mod tests {
             assert!(redraw);
             rebuilt.extend_from_slice(chunk.as_slice());
         }
-        assert!(rebuilt.starts_with(b"\x1b[H\x1b[J"));
+        assert_no_blink_snapshot_payload(rebuilt.as_slice());
         assert!(rebuilt
             .windows(b"new-tail".len())
             .any(|window| window == b"new-tail"));
@@ -8864,6 +9191,27 @@ mod tests {
         assert!(!local_seat_display_mirror_suspends_on_missing_reply(
             false, true
         ));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn keyboard_wait_line_direct_submit_terminates_before_prompt() {
+        let linked_line = local_seat_hdmi_keyboard_wait_line_payload(false);
+        assert_eq!(linked_line.as_str(), LOCAL_SEAT_HDMI_KEYBOARD_WAIT_LINE);
+
+        let direct_line = local_seat_hdmi_keyboard_wait_line_payload(true);
+        assert_eq!(
+            direct_line.as_str(),
+            "System starting; press any key to start the USB console\n"
+        );
+        assert_eq!(
+            direct_line
+                .as_bytes()
+                .iter()
+                .filter(|&&byte| byte == b'\n')
+                .count(),
+            1
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

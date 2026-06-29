@@ -133,12 +133,11 @@ active Pi 4 work authorized by `docs/BUILD_PLAN.md`:
 Future and contextual milestones may constrain this guide but do not authorize
 implementation by being named here:
 
-- Milestone 26c is currently not started; its behavior-preserving cleanup and
-  target-qualified Test Plan work may audit this document but must not expand
-  driver behavior before `docs/BUILD_PLAN.md` activates that scope.
-- Milestone 26d is pending; seL4 15 references in this guide are alignment
-  targets, while local generated seL4 artifacts still define selected-profile
-  truth.
+- Milestone 26c is complete; its target-qualified Test Plan and audit ledgers
+  remain the regression boundary for driver-runtime changes.
+- Milestone 26d is in progress; seL4 15 references in this guide now describe
+  the accepted kernel baseline, while local generated seL4 artifacts still
+  define selected-profile truth.
 - Milestone 27c is pending; core-local service buckets, generated per-core
   budgets, and service-bucket throughput proof are future generated surfaces,
   not current driver-runtime claims.

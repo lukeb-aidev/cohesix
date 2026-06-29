@@ -12,11 +12,13 @@ MANIFEST_PATH="${ROOT_DIR}/configs/root_task_pi4_uboot_aarch64.toml"
 CANONICAL_MANIFEST_PATH="${ROOT_DIR}/configs/root_task.toml"
 DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/seL4/build_UBOOT"
 DEFAULT_HOME_SEL4_BUILD_DIR="${HOME}/seL4/build_UBOOT"
+DEFAULT_SEL4_KERNEL_SOURCE_DIR="${HOME}/seL4_15"
 if [[ -d "${DEFAULT_REPO_SEL4_BUILD_DIR}" ]]; then
     SEL4_BUILD_DIR="${DEFAULT_REPO_SEL4_BUILD_DIR}"
 else
     SEL4_BUILD_DIR="${DEFAULT_HOME_SEL4_BUILD_DIR}"
 fi
+SEL4_KERNEL_SOURCE_DIR="${COHESIX_SEL4_KERNEL_SOURCE_DIR:-}"
 SEL4_VENV_DIR="${ROOT_DIR}/.venv"
 U_BOOT_BIN="${ROOT_DIR}/third_party/u-boot/u-boot.bin"
 OBJCOPY_WRAPPER="${ROOT_DIR}/scripts/aarch64-objcopy-stdout.sh"
@@ -40,6 +42,7 @@ ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"
 SKIP_BUILD=0
 CLEAN_BUILD=0
 PI4_TOTAL_MEM_MB=2048
+PI4_UBOOT_IMAGE_START_ADDR=0x10000000
 RESTORE_CANONICAL_CODEGEN=0
 PI4_DTB_PADDED_SIZE=$((128 * 1024))
 U_BOOT_CROSS_COMPILE="aarch64-linux-gnu-"
@@ -67,6 +70,10 @@ Options:
                             (default: configs/root_task_pi4_uboot_aarch64.toml)
   --sel4-build-dir <dir>    seL4 Pi4 build directory (default: repo seL4/build_UBOOT
                             when present, otherwise ~/seL4/build_UBOOT)
+  --sel4-kernel-source-dir <dir>
+                            seL4 kernel source used by the sel4test image wrapper
+                            (default: $HOME/seL4_15 when present; env:
+                            COHESIX_SEL4_KERNEL_SOURCE_DIR)
   --venv <dir>              Python venv containing build tooling (default: <repo>/.venv)
   --u-boot-bin <path>       U-Boot binary (default: third_party/u-boot/u-boot.bin)
   --firmware-dir <dir>      Pi firmware directory (default: third_party/raspberry-pi-firmware/v1.50)
@@ -323,12 +330,45 @@ resolve_sel4_source_dir() {
     printf "%s\n" "$inferred"
 }
 
+resolve_sel4_kernel_source_dir() {
+    local cached=""
+
+    if [[ -n "${SEL4_KERNEL_SOURCE_DIR}" ]]; then
+        [[ -f "${SEL4_KERNEL_SOURCE_DIR}/CMakeLists.txt" ]] || \
+          fail "seL4 kernel source missing CMakeLists.txt: ${SEL4_KERNEL_SOURCE_DIR}"
+        [[ -f "${SEL4_KERNEL_SOURCE_DIR}/tools/helpers.cmake" ]] || \
+          fail "seL4 kernel source missing tools/helpers.cmake: ${SEL4_KERNEL_SOURCE_DIR}"
+        [[ -f "${SEL4_KERNEL_SOURCE_DIR}/configs/seL4Config.cmake" ]] || \
+          fail "seL4 kernel source missing configs/seL4Config.cmake: ${SEL4_KERNEL_SOURCE_DIR}"
+        printf "%s\n" "${SEL4_KERNEL_SOURCE_DIR}"
+        return 0
+    fi
+
+    if [[ -d "${DEFAULT_SEL4_KERNEL_SOURCE_DIR}" && \
+          -f "${DEFAULT_SEL4_KERNEL_SOURCE_DIR}/CMakeLists.txt" && \
+          -f "${DEFAULT_SEL4_KERNEL_SOURCE_DIR}/VERSION" ]]; then
+        printf "%s\n" "${DEFAULT_SEL4_KERNEL_SOURCE_DIR}"
+        return 0
+    fi
+
+    if [[ -f "${SEL4_BUILD_DIR}/CMakeCache.txt" ]]; then
+        cached="$(awk -F= '/^KERNEL_PATH:STRING=/{print $2}' "${SEL4_BUILD_DIR}/CMakeCache.txt" | tail -n 1)"
+        if [[ -n "$cached" && -d "$cached" && -f "${cached}/CMakeLists.txt" ]]; then
+            printf "%s\n" "$cached"
+            return 0
+        fi
+    fi
+
+    fail "could not resolve seL4 kernel source for ${SEL4_BUILD_DIR}; pass --sel4-kernel-source-dir"
+}
+
 verify_pi4_sel4_xhci_device_untyped() {
     local sel4_source_dir="$1"
     local overlay_path=""
     local generated_dts="${SEL4_BUILD_DIR}/kernel/kernel.dts"
     local candidate=""
     local -a overlay_candidates=(
+        "${sel4_source_dir}/src/plat/bcm2711/overlay-rpi4.dts"
         "${sel4_source_dir}/kernel/src/plat/bcm2711/overlay-rpi4.dts"
         "${sel4_source_dir}/../kernel/src/plat/bcm2711/overlay-rpi4.dts"
         "${sel4_source_dir}/../../kernel/src/plat/bcm2711/overlay-rpi4.dts"
@@ -400,12 +440,84 @@ verify_pi4_sel4_counter_config() {
     log "Verified Pi4 seL4 virtual counter export and TIMER_CLOCK_HZ=${timer_clock_hz}"
 }
 
+verify_pi4_uboot_image_start_addr() {
+    local require_generated="${1:-cache}"
+    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
+    local image_start_header="${SEL4_BUILD_DIR}/elfloader/gen_headers/image_start_addr.h"
+
+    require_file "$cache_file"
+    grep -Eq "^IMAGE_START_ADDR(:[A-Z]+)?=${PI4_UBOOT_IMAGE_START_ADDR}$" "$cache_file" || \
+      fail "Pi4 U-Boot IMAGE_START_ADDR must be ${PI4_UBOOT_IMAGE_START_ADDR} for bootm/XIP handoff"
+
+    if [[ "$require_generated" == "generated" ]]; then
+        require_file "$image_start_header"
+        grep -Eq "^#define IMAGE_START_ADDR ${PI4_UBOOT_IMAGE_START_ADDR}$" "$image_start_header" || \
+          fail "Pi4 U-Boot image_start_addr.h drifted from ${PI4_UBOOT_IMAGE_START_ADDR}: ${image_start_header}"
+    fi
+}
+
+generate_pi4_elfloader_platform_info() {
+    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
+    local platform_yaml="${SEL4_BUILD_DIR}/kernel/gen_headers/plat/machine/platform_gen.yaml"
+    local platform_info="${SEL4_BUILD_DIR}/elfloader/gen_headers/platform_info.h"
+    local elfloader_source_dir=""
+    local platform_sift=""
+
+    require_file "$cache_file"
+    require_file "$platform_yaml"
+
+    elfloader_source_dir="$(awk -F= '/^elfloader_SOURCE_DIR:STATIC=/{print $2}' "$cache_file" | tail -n 1)"
+    [[ -n "$elfloader_source_dir" && -d "$elfloader_source_dir" ]] || \
+      fail "could not resolve elfloader source directory from ${cache_file}"
+
+    platform_sift="${elfloader_source_dir}/../cmake-tool/helpers/platform_sift.py"
+    require_file "$platform_sift"
+
+    mkdir -p "$(dirname "$platform_info")"
+    python3 "$platform_sift" --emit-c-syntax "$platform_yaml" > "$platform_info"
+    grep -q "memory_region" "$platform_info" || \
+      fail "Pi4 elfloader platform_info.h is missing memory_region after regeneration"
+}
+
+resolve_one_domain_schedule_cache() {
+    local cache_file="${SEL4_BUILD_DIR}/CMakeCache.txt"
+    local tmp_file
+
+    require_file "$cache_file"
+    grep -q "^KernelNumDomains:STRING=1$" "$cache_file" || return 0
+
+    if grep -Eq "^KernelDomainSchedule(:|-)" "$cache_file"; then
+        tmp_file="$(mktemp "${cache_file}.domain.XXXXXX")"
+        awk '$0 !~ /^KernelDomainSchedule(:|-)/ { print }' "$cache_file" > "$tmp_file"
+        mv "$tmp_file" "$cache_file"
+        log "Removed unused one-domain KernelDomainSchedule cache entry"
+    fi
+}
+
+ensure_sel4_lib_available() {
+    local jobs=""
+
+    if [[ -f "${SEL4_BUILD_DIR}/libsel4/libsel4.a" ]]; then
+        return 0
+    fi
+
+    jobs="$(sysctl -n hw.ncpu)"
+    log "Building seL4 support archive required by Cargo bindings"
+    cmake --build "${SEL4_BUILD_DIR}" \
+      --target libsel4.a \
+      -j"${jobs}"
+    require_file "${SEL4_BUILD_DIR}/libsel4/libsel4.a"
+}
+
 configure_pi4_sel4_build() {
     local sel4_source_dir="$1"
+    local sel4_kernel_source_dir="$2"
 
     log "Configuring ${SEL4_BUILD_DIR} for Pi4 serial diagnostics"
     cmake -S "$sel4_source_dir" -B "$SEL4_BUILD_DIR" \
-      -DAARCH64=TRUE \
+      -DKERNEL_PATH="${sel4_kernel_source_dir}" \
+      -DKERNEL_HELPERS_PATH="${sel4_kernel_source_dir}/tools/helpers.cmake" \
+      -DKERNEL_CONFIG_PATH="${sel4_kernel_source_dir}/configs/seL4Config.cmake" \
       -DARM_HYP=OFF \
       -DPLATFORM=bcm2711 \
       -DRPI4_MEMORY="${PI4_TOTAL_MEM_MB}" \
@@ -416,6 +528,7 @@ configure_pi4_sel4_build() {
       -DSel4testAllowSettingsOverride=ON \
       -DKernelPlatform=bcm2711 \
       -DKernelSel4Arch=aarch64 \
+      -DKernelVerificationBuild=OFF \
       -DKernelDebugBuild=ON \
       -DKernelPrinting=ON \
       -DKernelArmExportVCNTUser=ON \
@@ -425,8 +538,10 @@ configure_pi4_sel4_build() {
       -DHardwareDebugAPI=OFF \
       -DKernelMaxNumNodes=4 \
       -DKernelRootCNodeSizeBits=13 \
+      -DElfloaderRootserversLast=ON \
       -DElfloaderImage=uimage \
       -DElfloaderIncludeDtb=OFF \
+      -DIMAGE_START_ADDR="${PI4_UBOOT_IMAGE_START_ADDR}" \
       -DCMAKE_OBJCOPY="${OBJCOPY_WRAPPER}" \
       -DSIMULATION=OFF \
       -DCMAKE_BUILD_TYPE=Debug
@@ -444,8 +559,11 @@ configure_pi4_sel4_build() {
     verify_pi4_sel4_counter_config
     grep -q "^HardwareDebugAPI:BOOL=OFF$" "$cache_file" || fail "HardwareDebugAPI must be OFF for current sel4-sys bindings"
     grep -q "^KernelMaxNumNodes:STRING=4$" "$cache_file" || fail "KernelMaxNumNodes not 4"
+    grep -q "^ElfloaderRootserversLast:BOOL=ON$" "$cache_file" || fail "ElfloaderRootserversLast must be ON for seL4 15 Pi4 rootserver placement"
     grep -q "^ElfloaderImage:STRING=uimage$" "$cache_file" || fail "ElfloaderImage not set to uimage"
     grep -q "^ElfloaderIncludeDtb:BOOL=OFF$" "$cache_file" || fail "ElfloaderIncludeDtb must be OFF for Pi4 U-Boot DTB handoff"
+    verify_pi4_uboot_image_start_addr
+    generate_pi4_elfloader_platform_info
 }
 
 resolve_mkimage() {
@@ -632,18 +750,23 @@ rebuild_u_boot_pi4() {
 
 rebuild_sel4_pi4_uboot_tree() {
     local sel4_source_dir=""
+    local sel4_kernel_source_dir=""
     local jobs=""
 
     sel4_source_dir="$(resolve_sel4_source_dir)"
-    verify_pi4_sel4_xhci_device_untyped "${sel4_source_dir}"
-    configure_pi4_sel4_build "${sel4_source_dir}"
+    sel4_kernel_source_dir="$(resolve_sel4_kernel_source_dir)"
+    verify_pi4_sel4_xhci_device_untyped "${sel4_kernel_source_dir}"
+    configure_pi4_sel4_build "${sel4_source_dir}" "${sel4_kernel_source_dir}"
 
     jobs="$(sysctl -n hw.ncpu)"
 
     log "Cleaning Pi4 seL4 U-Boot build tree in ${SEL4_BUILD_DIR}"
     cmake --build "${SEL4_BUILD_DIR}" --target clean
+    generate_pi4_elfloader_platform_info
     log "Rebuilding Pi4 seL4 U-Boot build tree"
     cmake --build "${SEL4_BUILD_DIR}" -j"${jobs}"
+    resolve_one_domain_schedule_cache
+    verify_pi4_uboot_image_start_addr generated
 
     require_file "${SEL4_BUILD_DIR}/libsel4/libsel4.a"
     require_file "${SEL4_BUILD_DIR}/images/${SEL4_UPSTREAM_IMAGE_NAME}"
@@ -666,6 +789,11 @@ parse_args() {
             --sel4-build-dir)
                 [[ $# -ge 2 ]] || fail "--sel4-build-dir requires a path"
                 SEL4_BUILD_DIR="$2"
+                shift 2
+                ;;
+            --sel4-kernel-source-dir)
+                [[ $# -ge 2 ]] || fail "--sel4-kernel-source-dir requires a path"
+                SEL4_KERNEL_SOURCE_DIR="$2"
                 shift 2
                 ;;
             --venv)
@@ -754,6 +882,9 @@ realpath_py() {
 canonicalize_input_paths() {
     MANIFEST_PATH="$(realpath_py "${MANIFEST_PATH}")"
     SEL4_BUILD_DIR="$(realpath_py "${SEL4_BUILD_DIR}")"
+    if [[ -n "${SEL4_KERNEL_SOURCE_DIR}" ]]; then
+        SEL4_KERNEL_SOURCE_DIR="$(realpath_py "${SEL4_KERNEL_SOURCE_DIR}")"
+    fi
     SEL4_VENV_DIR="$(realpath_py "${SEL4_VENV_DIR}")"
     U_BOOT_BIN="$(realpath_py "${U_BOOT_BIN}")"
     FIRMWARE_DIR="$(realpath_py "${FIRMWARE_DIR}")"
@@ -864,6 +995,7 @@ build_pi4_image() {
     local root_task_elf
     local embedded_rootserver="${SEL4_BUILD_DIR}/elfloader/rootserver"
     local sel4_source_dir
+    local sel4_kernel_source_dir
     local jobs
     local root_hash_expected
     local root_hash_actual
@@ -875,8 +1007,10 @@ build_pi4_image() {
     root_task_elf="$(root_task_release_elf_path)"
 
     sel4_source_dir="$(resolve_sel4_source_dir)"
-    verify_pi4_sel4_xhci_device_untyped "$sel4_source_dir"
-    configure_pi4_sel4_build "$sel4_source_dir"
+    sel4_kernel_source_dir="$(resolve_sel4_kernel_source_dir)"
+    verify_pi4_sel4_xhci_device_untyped "$sel4_kernel_source_dir"
+    configure_pi4_sel4_build "$sel4_source_dir" "$sel4_kernel_source_dir"
+    ensure_sel4_lib_available
 
     if [[ "${MANIFEST_PATH}" == *.toml ]]; then
         log "Regenerating manifest artifacts via coh-rtc"
@@ -916,6 +1050,7 @@ build_pi4_image() {
     cmake --build "$SEL4_BUILD_DIR" \
       --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
       -j"$jobs"
+    verify_pi4_uboot_image_start_addr generated
 
     require_file "$embedded_rootserver"
     cp -f "$STRIPPED_ROOT_TASK_ELF" "$embedded_rootserver"
@@ -926,6 +1061,8 @@ build_pi4_image() {
     cmake --build "$SEL4_BUILD_DIR" \
       --target "images/${SEL4_UPSTREAM_IMAGE_NAME}" \
       -j"$jobs"
+    resolve_one_domain_schedule_cache
+    verify_pi4_uboot_image_start_addr generated
 
     root_hash_expected="$(shasum -a 256 "$STRIPPED_ROOT_TASK_ELF" | awk '{print $1}')"
     root_hash_actual="$(shasum -a 256 "$embedded_rootserver" | awk '{print $1}')"
@@ -1613,9 +1750,9 @@ main() {
     if [[ "$SKIP_BUILD" -eq 0 ]]; then
         build_pi4_image
     else
-        local sel4_source_dir
-        sel4_source_dir="$(resolve_sel4_source_dir)"
-        verify_pi4_sel4_xhci_device_untyped "$sel4_source_dir"
+        local sel4_kernel_source_dir
+        sel4_kernel_source_dir="$(resolve_sel4_kernel_source_dir)"
+        verify_pi4_sel4_xhci_device_untyped "$sel4_kernel_source_dir"
         verify_pi4_sel4_counter_config
         verify_skip_build_image_fresh
         log "Skipping build (--skip-build)"

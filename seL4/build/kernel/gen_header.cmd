@@ -1,0 +1,1 @@
+regen /Users/lukasbower/GitHub/cohesix/seL4/build/kernel/gen_headers/plat/machine/devices_gen.h /Users/lukasbower/GitHub/cohesix/seL4/build/kernel/kernel.dtb;/Users/lukasbower/seL4_15/tools/hardware.yml;/Users/lukasbower/seL4_15/tools/hardware_schema.yml;/Users/lukasbower/seL4_15/tools/hardware_gen.py

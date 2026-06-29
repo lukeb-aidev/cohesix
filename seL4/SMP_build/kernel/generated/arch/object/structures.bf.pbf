@@ -25,16 +25,15 @@ base 64(48,1)
 block null_cap {
     padding 64
     field capType 5
-    padding 59
+    padding word_size - 5
 }
 block untyped_cap {
-    field capFreeIndex 48
-    padding 9
+    field capFreeIndex canonical_size
+    padding word_size - canonical_size - 1 - 6
     field capIsDevice 1
     field capBlockSize 6
     field capType 5
-    padding 11
-    field_high capPtr 48
+    field_ptr capPtr word_size - 5
 }
 block endpoint_cap(capEPBadge, capCanGrantReply, capCanGrant, capCanSend,
                    capCanReceive, capEPPtr, capType) {
@@ -44,21 +43,19 @@ block endpoint_cap(capEPBadge, capCanGrantReply, capCanGrant, capCanSend,
     field capCanGrant 1
     field capCanReceive 1
     field capCanSend 1
-    padding 7
-    field_high capEPPtr 48
+    field_ptr capEPPtr word_size - 5 - 4
 }
 block notification_cap {
     field capNtfnBadge 64
     field capType 5
     field capNtfnCanReceive 1
     field capNtfnCanSend 1
-    padding 9
-    field_high capNtfnPtr 48
+    field_ptr capNtfnPtr word_size - 5 - 2
 }
 block reply_cap(capReplyCanGrant, capReplyMaster, capTCBPtr, capType) {
     field capTCBPtr 64
     field capType 5
-    padding 57
+    padding word_size - 5 - 2
     field capReplyCanGrant 1
     field capReplyMaster 1
 }
@@ -69,61 +66,56 @@ block cnode_cap(capCNodeRadix, capCNodeGuardSize, capCNodeGuard,
     field capType 5
     field capCNodeGuardSize 6
     field capCNodeRadix 6
-    field_high capCNodePtr 47
+    field_ptr(1) capCNodePtr 47
 }
 block thread_cap {
     padding 64
     field capType 5
-    padding 11
-    field_high capTCBPtr 48
+    field_ptr capTCBPtr word_size - 5
 }
 block irq_control_cap {
     padding 64
     field capType 5
-    padding 59
+    padding word_size - 5
 }
 block irq_handler_cap {
     field capIRQ 64
     field capType 5
-    padding 59
+    padding word_size - 5
 }
 block zombie_cap {
     field capZombieID 64
     field capType 5
-    padding 52
+    padding word_size - 5 - 7
     field capZombieType 7
 }
 block domain_cap {
     padding 64
     field capType 5
-    padding 59
+    padding word_size - 5
 }
 ---- Arch-independent object types
 -- Endpoint: size = 16 bytes
 block endpoint {
     field epQueue_head 64
-    padding 16
-    field_high epQueue_tail 46
+    field_ptr(2) epQueue_tail word_size - 2
     field state 2
 }
 -- Async endpoint: size = 32 bytes (64 bytes on mcs)
 block notification {
-    padding 16
-    field_high ntfnBoundTCB 48
-    field ntfnMsgIdentifier 64
-    padding 16
-    field_high ntfnQueue_head 48
-    field_high ntfnQueue_tail 48
-    padding 14
+    field_ptr ntfnBoundTCB word_size
+    field ntfnMsgIdentifier word_size
+    field_ptr ntfnQueue_head word_size
+    field_high ntfnQueue_tail canonical_size
+    padding word_size - canonical_size - 2
     field state 2
 }
 -- Mapping database (MDB) node: size = 16 bytes
 block mdb_node {
-    padding 16
-    field_high mdbNext 46
+    field_ptr(2) mdbNext word_size - 2
     field mdbRevocable 1
     field mdbFirstBadged 1
-    field mdbPrev 64
+    field mdbPrev word_size
 }
 -- Thread state data
 --
@@ -238,8 +230,7 @@ block thread_state(blockingIPCBadge, blockingIPCCanGrant,
     field blockingIPCCanGrantReply 1
     field blockingIPCIsCall 1
     field tcbQueued 1
-    padding 16
-    field_high blockingObject 44
+    field_ptr(4) blockingObject word_size - 4
     field tsType 4
 }
 ---- ARM-specific caps

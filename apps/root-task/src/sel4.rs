@@ -3422,7 +3422,7 @@ impl SlotAllocator {
 
 /// Returns `true` when the supplied slot index references a kernel-reserved capability.
 ///
-/// The set mirrors Table 9.1 of the seL4 reference manual (version 13.0.0) and includes the
+/// The set mirrors Table 9.1 of the seL4 reference manual (version 15.0.0) and includes the
 /// optional `seL4_CapSMC` slot provided by Arm kernels.
 #[inline(always)]
 #[allow(non_upper_case_globals)]

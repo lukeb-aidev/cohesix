@@ -1,0 +1,3 @@
+HAVE_TIMER: false
+SIMULATION: false
+HAVE_CACHE: true # Sel4testHaveCache=ON

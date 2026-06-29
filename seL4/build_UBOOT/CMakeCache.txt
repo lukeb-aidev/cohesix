@@ -14,9 +14,6 @@
 # EXTERNAL cache entries
 ########################
 
-//No help, variable specified on the command line.
-AARCH64:UNINITIALIZED=TRUE
-
 //Hyp mode for ARM platforms
 ARM_HYP:BOOL=OFF
 
@@ -24,27 +21,27 @@ ARM_HYP:BOOL=OFF
 BAMBOO:BOOL=OFF
 
 //Path to a file.
-BF_GEN_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/tools/bitfield_gen.py
+BF_GEN_PATH:FILEPATH=/Users/lukasbower/seL4_15/tools/bitfield_gen.py
 
 //Path to a program.
 CCACHE:FILEPATH=CCACHE-NOTFOUND
 
 //Path to a file.
-CIRCULAR_INCLUDES:FILEPATH=/Users/lukasbower/seL4/kernel/tools/circular_includes.py
+CIRCULAR_INCLUDES:FILEPATH=/Users/lukasbower/seL4_15/tools/circular_includes.py
 
 //Path to a program.
-CMAKE_ADDR2LINE:FILEPATH=/opt/homebrew/bin/aarch64-elf-addr2line
+CMAKE_ADDR2LINE:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-addr2line
 
 //Path to a program.
-CMAKE_AR:FILEPATH=/opt/homebrew/bin/aarch64-elf-ar
+CMAKE_AR:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-ar
 
 //A wrapper around 'ar' adding the appropriate '--plugin' option
 // for the GCC compiler
-CMAKE_ASM_COMPILER_AR:FILEPATH=/opt/homebrew/bin/aarch64-elf-gcc-ar
+CMAKE_ASM_COMPILER_AR:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-gcc-ar
 
 //A wrapper around 'ranlib' adding the appropriate '--plugin' option
 // for the GCC compiler
-CMAKE_ASM_COMPILER_RANLIB:FILEPATH=/opt/homebrew/bin/aarch64-elf-gcc-ranlib
+CMAKE_ASM_COMPILER_RANLIB:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-gcc-ranlib
 
 //Flags used by the ASM compiler during all build types.
 CMAKE_ASM_FLAGS:STRING=
@@ -67,11 +64,11 @@ CMAKE_BUILD_TYPE:STRING=Debug
 
 //A wrapper around 'ar' adding the appropriate '--plugin' option
 // for the GCC compiler
-CMAKE_CXX_COMPILER_AR:FILEPATH=/opt/homebrew/bin/aarch64-elf-gcc-ar
+CMAKE_CXX_COMPILER_AR:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-gcc-ar
 
 //A wrapper around 'ranlib' adding the appropriate '--plugin' option
 // for the GCC compiler
-CMAKE_CXX_COMPILER_RANLIB:FILEPATH=/opt/homebrew/bin/aarch64-elf-gcc-ranlib
+CMAKE_CXX_COMPILER_RANLIB:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-gcc-ranlib
 
 //Flags used by the CXX compiler during all build types.
 CMAKE_CXX_FLAGS:STRING=
@@ -90,11 +87,11 @@ CMAKE_CXX_FLAGS_RELWITHDEBINFO:STRING=-O2 -g -DNDEBUG
 
 //A wrapper around 'ar' adding the appropriate '--plugin' option
 // for the GCC compiler
-CMAKE_C_COMPILER_AR:FILEPATH=/opt/homebrew/bin/aarch64-elf-gcc-ar
+CMAKE_C_COMPILER_AR:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-gcc-ar
 
 //A wrapper around 'ranlib' adding the appropriate '--plugin' option
 // for the GCC compiler
-CMAKE_C_COMPILER_RANLIB:FILEPATH=/opt/homebrew/bin/aarch64-elf-gcc-ranlib
+CMAKE_C_COMPILER_RANLIB:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-gcc-ranlib
 
 //Flags used by the C compiler during all build types.
 CMAKE_C_FLAGS:STRING=
@@ -142,7 +139,7 @@ CMAKE_FIND_PACKAGE_REDIRECTS_DIR:STATIC=/Users/lukasbower/GitHub/cohesix/seL4/bu
 CMAKE_INSTALL_PREFIX:PATH=/usr/local
 
 //Path to a program.
-CMAKE_LINKER:FILEPATH=/opt/homebrew/bin/aarch64-elf-ld
+CMAKE_LINKER:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-ld
 
 //Program used to build from build.ninja files.
 CMAKE_MAKE_PROGRAM:FILEPATH=/opt/homebrew/bin/ninja
@@ -168,13 +165,13 @@ CMAKE_MODULE_LINKER_FLAGS_RELEASE:STRING=
 CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO:STRING=
 
 //Path to a program.
-CMAKE_NM:FILEPATH=/opt/homebrew/bin/aarch64-elf-nm
+CMAKE_NM:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-nm
 
 //No help, variable specified on the command line.
 CMAKE_OBJCOPY:UNINITIALIZED=/Users/lukasbower/GitHub/cohesix/scripts/aarch64-objcopy-stdout.sh
 
 //Path to a program.
-CMAKE_OBJDUMP:FILEPATH=/opt/homebrew/bin/aarch64-elf-objdump
+CMAKE_OBJDUMP:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-objdump
 
 //Value Computed by CMake
 CMAKE_PROJECT_COMPAT_VERSION:STATIC=
@@ -189,10 +186,10 @@ CMAKE_PROJECT_HOMEPAGE_URL:STATIC=
 CMAKE_PROJECT_NAME:STATIC=sel4test
 
 //Path to a program.
-CMAKE_RANLIB:FILEPATH=/opt/homebrew/bin/aarch64-elf-ranlib
+CMAKE_RANLIB:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-ranlib
 
 //Path to a program.
-CMAKE_READELF:FILEPATH=/opt/homebrew/bin/aarch64-elf-readelf
+CMAKE_READELF:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-readelf
 
 //Flags used by the linker during the creation of shared libraries
 // during all build types.
@@ -242,13 +239,13 @@ CMAKE_STATIC_LINKER_FLAGS_RELEASE:STRING=
 CMAKE_STATIC_LINKER_FLAGS_RELWITHDEBINFO:STRING=
 
 //Path to a program.
-CMAKE_STRIP:FILEPATH=/opt/homebrew/bin/aarch64-elf-strip
+CMAKE_STRIP:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-strip
 
 //Path to a program.
 CMAKE_TAPI:FILEPATH=CMAKE_TAPI-NOTFOUND
 
 //The CMake toolchain file
-CMAKE_TOOLCHAIN_FILE:FILEPATH=/Users/lukasbower/seL4/build_UBOOT/gcc.cmake
+CMAKE_TOOLCHAIN_FILE:FILEPATH=/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/gcc.cmake
 
 //If this value is on, makefiles will be generated without the
 // .SILENT directive, and all commands will be echoed to the console
@@ -257,16 +254,10 @@ CMAKE_TOOLCHAIN_FILE:FILEPATH=/Users/lukasbower/seL4/build_UBOOT/gcc.cmake
 CMAKE_VERBOSE_MAKEFILE:BOOL=FALSE
 
 //Path to a file.
-CONFIGURE_FILE_SCRIPT:FILEPATH=/Users/lukasbower/seL4/tools/seL4/cmake-tool/helpers/configure_file.cmake
+CONFIG_GEN_PATH:FILEPATH=/Users/lukasbower/seL4_15/tools/config_gen.py
 
 //Path to a file.
-CONFIG_GEN_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/tools/config_gen.py
-
-//Path to a file.
-CPP_GEN_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/tools/cpp_gen.sh
-
-//No help, variable specified on the command line.
-CROSS_COMPILER_PREFIX:UNINITIALIZED=aarch64-elf-
+CPP_GEN_PATH:FILEPATH=/Users/lukasbower/seL4_15/tools/cpp_gen.sh
 
 CSPEC_DIR:PATH=.
 
@@ -298,39 +289,36 @@ ElfloaderIncludeDtb:BOOL=OFF
 ElfloaderPrecompile:BOOL=OFF
 
 //Place the rootserver images at the end of memory
-ElfloaderRootserversLast:BOOL=OFF
+ElfloaderRootserversLast:BOOL=ON
 
 //Always produce ANSI-colored output.
 FORCE_COLORED_OUTPUT:BOOL=OFF
 
 //Path to a file.
-GDB_SCRIPT:FILEPATH=/Users/lukasbower/seL4/tools/seL4/cmake-tool/simulate_scripts/launch_gdb.py
-
-//Git command line client
-GIT_EXECUTABLE:FILEPATH=/usr/bin/git
-
-//Path to a file.
-HARDWARE_GEN_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/tools/hardware_gen.py
+HARDWARE_GEN_PATH:FILEPATH=/Users/lukasbower/seL4_15/tools/hardware_gen.py
 
 //Builds the kernel with support for a userspace debug API, which
 // can     allows userspace processes to set breakpoints, watchpoints
 // and to     single-step through thread execution.
 HardwareDebugAPI:BOOL=OFF
 
-//Path to a file.
-INVOCATION_ID_GEN_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/tools/invocation_header_gen.py
+//No help, variable specified on the command line.
+IMAGE_START_ADDR:UNINITIALIZED=0x10000000
 
 //Path to a file.
-INVOCATION_JSON_GEN_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/tools/invocation_json_gen.py
-
-KERNEL_CONFIG_PATH:STRING=/Users/lukasbower/seL4/kernel/configs/seL4Config.cmake
+INVOCATION_ID_GEN_PATH:FILEPATH=/Users/lukasbower/seL4_15/tools/invocation_header_gen.py
 
 //Path to a file.
-KERNEL_FLAGS_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/tools/flags.cmake
+INVOCATION_JSON_GEN_PATH:FILEPATH=/Users/lukasbower/seL4_15/tools/invocation_json_gen.py
 
-KERNEL_HELPERS_PATH:STRING=/Users/lukasbower/seL4/kernel/tools/helpers.cmake
+KERNEL_CONFIG_PATH:STRING=/Users/lukasbower/seL4_15/configs/seL4Config.cmake
 
-KERNEL_PATH:STRING=/Users/lukasbower/seL4/kernel
+//Path to a file.
+KERNEL_FLAGS_PATH:FILEPATH=/Users/lukasbower/seL4_15/tools/flags.cmake
+
+KERNEL_HELPERS_PATH:STRING=/Users/lukasbower/seL4_15/tools/helpers.cmake
+
+KERNEL_PATH:STRING=/Users/lukasbower/seL4_15
 
 //By default any SError interrupt will halt the kernel. SErrors
 // may     be caused by e.g. writes to read-only device registers
@@ -394,6 +382,9 @@ KernelArmGicV3:BOOL=OFF
 // build the kernel as a hypervisor
 KernelArmHypervisorSupport:BOOL=OFF
 
+//Which TLS register is used for Kernel TLS syscalls and invocations.
+//     The usual registers used by gnu-elf ABIs are:     - on aarch32:
+// tpidruro     - on aarch64: tpidru.
 KernelArmTLSReg:STRING=tpidru
 
 //Enable benchmarks including logging and tracing info.     Setting
@@ -505,6 +496,7 @@ KernelMaxNumNodes:STRING=4
 // currently running syscall if interrupts are pending).
 KernelMaxNumWorkUnitsPerPreemption:STRING=100
 
+//The number of scheduler domains in the system
 KernelNumDomains:STRING=1
 
 //The number of priority levels per domain. Valid range 1-256
@@ -537,6 +529,7 @@ KernelResetChunkBits:STRING=8
 // invocation.
 KernelRetypeFanOutLimit:STRING=256
 
+//aarch32, aarch64, arm_hyp, ia32, x86_64, riscv32, riscv64
 KernelSel4Arch:STRING=aarch64
 
 //This describes the log2 size of the kernel stack. Great care
@@ -716,6 +709,11 @@ LibSel4TestPrinterHaltOnTestFailure:BOOL=OFF
 //A POSIX regex pattern used to filter tests
 LibSel4TestPrinterRegex:STRING=.*
 
+//mark the __sel4_ipc_buffer variable as thread local using '__thread'.
+//      This requires thread local storage support and is useful
+// if multiple      threads share the same virtual address space.
+LibSel4UseThreadLocals:BOOL=ON
+
 //Size of default cspace to spawn processes with
 LibSel4UtilsCSpaceSizeBits:STRING=12
 
@@ -796,17 +794,11 @@ RELEASE:BOOL=OFF
 //No help, variable specified on the command line.
 RPI4_MEMORY:UNINITIALIZED=2048
 
-//No help, variable specified on the command line.
-SEL4_CACHE_DIR:UNINITIALIZED=../.sel4_cache
-
 SEL4_LIBS_DIR:STRING=/Users/lukasbower/seL4/projects/seL4_libs
 
 SEL4_PROJECTS_LIBS_DIR:STRING=/Users/lukasbower/seL4/projects/sel4_projects_libs
 
 SEL4_RUNTIME_DIR:STRING=/Users/lukasbower/seL4/projects/sel4runtime
-
-//Path to a file.
-SIMULATE_SCRIPT:FILEPATH=/Users/lukasbower/seL4/tools/seL4/cmake-tool/simulate_scripts/simulate.py
 
 //Include only simulation compatible tests
 SIMULATION:BOOL=OFF
@@ -822,10 +814,10 @@ SORRY_BITFIELD_PROOFS:BOOL=OFF
 STAT_TOOL:FILEPATH=/usr/bin/stat
 
 //Path to a file.
-SYSCALL_ID_GEN_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/tools/syscall_header_gen.py
+SYSCALL_ID_GEN_PATH:FILEPATH=/Users/lukasbower/seL4_15/tools/syscall_header_gen.py
 
 //Path to a file.
-SYSCALL_STUB_GEN_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/libsel4/tools/syscall_stub_gen.py
+SYSCALL_STUB_GEN_PATH:FILEPATH=/Users/lukasbower/seL4_15/libsel4/tools/syscall_stub_gen.py
 
 //Size of the initial stack for the root task
 Sel4RuntimeRootStack:STRING=16384
@@ -862,7 +854,10 @@ UserLinkerGCSections:BOOL=OFF
 VERIFICATION:BOOL=OFF
 
 //Path to a file.
-XMLLINT_PATH:FILEPATH=/Users/lukasbower/seL4/kernel/tools/xmllint.sh
+XMLLINT_PATH:FILEPATH=/Users/lukasbower/seL4_15/tools/xmllint.sh
+
+//Path to a program.
+_GCC_aarch64-linux-gnu-:FILEPATH=/opt/homebrew/bin/aarch64-linux-gnu-gcc
 
 //Value Computed by CMake
 elfloader_BINARY_DIR:STATIC=/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/elfloader
@@ -970,7 +965,7 @@ libsel4_BINARY_DIR:STATIC=/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/libs
 libsel4_IS_TOP_LEVEL:STATIC=OFF
 
 //Value Computed by CMake
-libsel4_SOURCE_DIR:STATIC=/Users/lukasbower/seL4/kernel/libsel4
+libsel4_SOURCE_DIR:STATIC=/Users/lukasbower/seL4_15/libsel4
 
 //Value Computed by CMake
 libsel4allocman_BINARY_DIR:STATIC=/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/seL4_libs/libsel4allocman
@@ -1207,7 +1202,7 @@ seL4_BINARY_DIR:STATIC=/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/kernel
 seL4_IS_TOP_LEVEL:STATIC=OFF
 
 //Value Computed by CMake
-seL4_SOURCE_DIR:STATIC=/Users/lukasbower/seL4/kernel
+seL4_SOURCE_DIR:STATIC=/Users/lukasbower/seL4_15
 
 //Value Computed by CMake
 sel4runtime_BINARY_DIR:STATIC=/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT/apps/sel4test-driver/sel4runtime
@@ -1285,8 +1280,6 @@ CMAKE_ASM_FLAGS_MINSIZEREL-ADVANCED:INTERNAL=1
 CMAKE_ASM_FLAGS_RELEASE-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_ASM_FLAGS_RELWITHDEBINFO
 CMAKE_ASM_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
-//ADVANCED property for variable: CMAKE_BUILD_TYPE
-CMAKE_BUILD_TYPE-ADVANCED:INTERNAL=1
 //This is the directory where this CMakeCache.txt was created
 CMAKE_CACHEFILE_DIR:INTERNAL=/Users/lukasbower/GitHub/cohesix/seL4/build_UBOOT
 //Major version of cmake used to create the current loaded cache
@@ -1428,8 +1421,6 @@ CMAKE_TOOLCHAIN_FILE-ADVANCED:INTERNAL=1
 CMAKE_UNAME:INTERNAL=/usr/bin/uname
 //ADVANCED property for variable: CMAKE_VERBOSE_MAKEFILE
 CMAKE_VERBOSE_MAKEFILE-ADVANCED:INTERNAL=1
-//ADVANCED property for variable: CONFIGURE_FILE_SCRIPT
-CONFIGURE_FILE_SCRIPT-ADVANCED:INTERNAL=1
 CONFIGURE_IRQ_SLOT_BITS:INTERNAL=9
 //ADVANCED property for variable: CONFIG_GEN_PATH
 CONFIG_GEN_PATH-ADVANCED:INTERNAL=1
@@ -1476,8 +1467,6 @@ ElfloaderMonitorHook_DISABLED:INTERNAL=TRUE
 ElfloaderPrecompile-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: ElfloaderRootserversLast
 ElfloaderRootserversLast-ADVANCED:INTERNAL=1
-//Details about finding Git
-FIND_PACKAGE_MESSAGE_DETAILS_Git:INTERNAL=[/usr/bin/git][v2.50.1 (Apple Git-155)()]
 //Details about finding Nanopb
 FIND_PACKAGE_MESSAGE_DETAILS_Nanopb:INTERNAL=[/Users/lukasbower/seL4/tools/nanopb][/Users/lukasbower/seL4/tools/nanopb/pb_decode.c;/Users/lukasbower/seL4/tools/nanopb/pb_encode.c;/Users/lukasbower/seL4/tools/nanopb/pb_common.c][/Users/lukasbower/seL4/tools/nanopb/pb_decode.h;/Users/lukasbower/seL4/tools/nanopb/pb_encode.h;/Users/lukasbower/seL4/tools/nanopb/pb_common.h;/Users/lukasbower/seL4/tools/nanopb/pb.h][/Users/lukasbower/seL4/tools/nanopb/generator][/opt/homebrew/bin/protoc][v()]
 //Details about finding elfloader-tool
@@ -1485,7 +1474,7 @@ FIND_PACKAGE_MESSAGE_DETAILS_elfloader-tool:INTERNAL=[/Users/lukasbower/seL4/too
 //Details about finding musllibc
 FIND_PACKAGE_MESSAGE_DETAILS_musllibc:INTERNAL=[/Users/lukasbower/seL4/projects/musllibc][v()]
 //Details about finding seL4
-FIND_PACKAGE_MESSAGE_DETAILS_seL4:INTERNAL=[/Users/lukasbower/seL4/kernel][/Users/lukasbower/seL4/kernel/tools/helpers.cmake][/Users/lukasbower/seL4/kernel/configs/seL4Config.cmake][v()]
+FIND_PACKAGE_MESSAGE_DETAILS_seL4:INTERNAL=[/Users/lukasbower/seL4_15][/Users/lukasbower/seL4_15/tools/helpers.cmake][/Users/lukasbower/seL4_15/configs/seL4Config.cmake][v()]
 //Details about finding seL4_libs
 FIND_PACKAGE_MESSAGE_DETAILS_seL4_libs:INTERNAL=[/Users/lukasbower/seL4/projects/seL4_libs][v()]
 //Details about finding sel4_projects_libs
@@ -1496,15 +1485,10 @@ FIND_PACKAGE_MESSAGE_DETAILS_sel4runtime:INTERNAL=[/Users/lukasbower/seL4/projec
 FIND_PACKAGE_MESSAGE_DETAILS_util_libs:INTERNAL=[/Users/lukasbower/seL4/projects/util_libs][/Users/lukasbower/seL4/projects/util_libs/liblwip/lwip_helpers.cmake][/Users/lukasbower/seL4/projects/util_libs/libplatsupport/tools/helpers.cmake][v()]
 //ADVANCED property for variable: FORCE_COLORED_OUTPUT
 FORCE_COLORED_OUTPUT-ADVANCED:INTERNAL=1
-//ADVANCED property for variable: GDB_SCRIPT
-GDB_SCRIPT-ADVANCED:INTERNAL=1
-//ADVANCED property for variable: GIT_EXECUTABLE
-GIT_EXECUTABLE-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: HARDWARE_GEN_PATH
 HARDWARE_GEN_PATH-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: HardwareDebugAPI
 HardwareDebugAPI-ADVANCED:INTERNAL=1
-IMAGE_START_ADDR:INTERNAL=0x10000000
 //ADVANCED property for variable: INVOCATION_ID_GEN_PATH
 INVOCATION_ID_GEN_PATH-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: INVOCATION_JSON_GEN_PATH
@@ -1705,9 +1689,6 @@ KernelDebugDisableL2Cache-ADVANCED:INTERNAL=1
 // the L1 Data prefetcher.
 KernelDebugDisablePrefetchers:INTERNAL=OFF
 KernelDebugDisablePrefetchers_DISABLED:INTERNAL=TRUE
-//ADVANCED property for variable: KernelDomainSchedule
-KernelDomainSchedule-ADVANCED:INTERNAL=1
-KernelDomainSchedule:INTERNAL=/Users/lukasbower/seL4/projects/sel4test/domain_schedule.c
 KernelEnableBenchmarks:INTERNAL=OFF
 KernelEnableSMPSupport:INTERNAL=ON
 //ADVANCED property for variable: KernelExceptionFastpath
@@ -1732,6 +1713,8 @@ KernelMaxNumTracePoints:INTERNAL=0
 KernelMaxNumTracePoints_UNAVAILABLE:INTERNAL=ON
 //ADVANCED property for variable: KernelMaxNumWorkUnitsPerPreemption
 KernelMaxNumWorkUnitsPerPreemption-ADVANCED:INTERNAL=1
+KernelNumDomainSchedules:INTERNAL=2
+KernelNumDomainSchedules_UNAVAILABLE:INTERNAL=ON
 //ADVANCED property for variable: KernelNumDomains
 KernelNumDomains-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: KernelNumPriorities
@@ -1753,7 +1736,7 @@ KernelPaddrUserTop:INTERNAL=17592186044416
 //ADVANCED property for variable: KernelPlatform
 KernelPlatform-ADVANCED:INTERNAL=1
 //STRINGS property for variable: KernelPlatform
-KernelPlatform-STRINGS:INTERNAL=bcm2711;bcm2837;fvp;hikey;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;qemu-arm-virt;quartz64;rockpro64;tqma8xqp1gb;tx1;tx2;zynqmp;bcm2711;bcm2837;fvp;hikey;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;qemu-arm-virt;quartz64;rockpro64;tqma8xqp1gb;tx1;tx2;zynqmp
+KernelPlatform-STRINGS:INTERNAL=bcm2711;bcm2837;fvp;hikey;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;qemu-arm-virt;quartz64;rk3568;rockpro64;tqma8xqp1gb;tx1;tx2;zynqmp;bcm2711;bcm2837;fvp;hikey;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;qemu-arm-virt;quartz64;rk3568;rockpro64;tqma8xqp1gb;tx1;tx2;zynqmp
 KernelPlatformFVP:INTERNAL=OFF
 KernelPlatformHikey:INTERNAL=OFF
 KernelPlatformIMX93:INTERNAL=OFF
@@ -1765,6 +1748,7 @@ KernelPlatformOdroidc2:INTERNAL=OFF
 KernelPlatformOdroidc4:INTERNAL=OFF
 KernelPlatformQEMUArmVirt:INTERNAL=OFF
 KernelPlatformQuartz64:INTERNAL=OFF
+KernelPlatformRock3b:INTERNAL=OFF
 KernelPlatformRockpro64:INTERNAL=OFF
 KernelPlatformRpi3:INTERNAL=OFF
 KernelPlatformRpi4:INTERNAL=ON
@@ -1772,7 +1756,7 @@ KernelPlatformTqma8xqp1gb:INTERNAL=OFF
 KernelPlatformTx1:INTERNAL=OFF
 KernelPlatformTx2:INTERNAL=OFF
 KernelPlatformZynqmp:INTERNAL=OFF
-KernelPlatform_all_strings:INTERNAL=allwinnerA20;am335x;apq8064;ariane;bcm2711;bcm2837;cheshire;hifive-p550;exynos4;exynos5;fvp;hifive;hikey;imx6;imx7;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;omap3;pc99;polarfire;qemu-arm-virt;qemu-riscv-virt;quartz64;rocketchip;rockpro64;spike;star64;tk1;tqma8xqp1gb;tx1;tx2;zynq7000;zynqmp;allwinnerA20;am335x;apq8064;ariane;bcm2711;bcm2837;cheshire;hifive-p550;exynos4;exynos5;fvp;hifive;hikey;imx6;imx7;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;omap3;pc99;polarfire;qemu-arm-virt;qemu-riscv-virt;quartz64;rocketchip;rockpro64;spike;star64;tk1;tqma8xqp1gb;tx1;tx2;zynq7000;zynqmp
+KernelPlatform_all_strings:INTERNAL=allwinnerA20;am335x;apq8064;ariane;bcm2711;bcm2837;cheshire;hifive-p550;exynos4;exynos5;fvp;hifive;hikey;imx6;imx7;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;omap3;pc99;polarfire;qemu-arm-virt;qemu-riscv-virt;quartz64;rk3568;rocketchip;rockpro64;bananapi-f3;spike;star64;tk1;tqma8xqp1gb;tx1;tx2;zynq7000;zynqmp;allwinnerA20;am335x;apq8064;ariane;bcm2711;bcm2837;cheshire;hifive-p550;exynos4;exynos5;fvp;hifive;hikey;imx6;imx7;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;omap3;pc99;polarfire;qemu-arm-virt;qemu-riscv-virt;quartz64;rk3568;rocketchip;rockpro64;bananapi-f3;spike;star64;tk1;tqma8xqp1gb;tx1;tx2;zynq7000;zynqmp
 //ADVANCED property for variable: KernelPrinting
 KernelPrinting-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: KernelResetChunkBits
@@ -1902,6 +1886,8 @@ LibSel4TestPrintXML-ADVANCED:INTERNAL=1
 LibSel4TestPrinterHaltOnTestFailure-ADVANCED:INTERNAL=0
 //ADVANCED property for variable: LibSel4TestPrinterRegex
 LibSel4TestPrinterRegex-ADVANCED:INTERNAL=0
+//ADVANCED property for variable: LibSel4UseThreadLocals
+LibSel4UseThreadLocals-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: LibSel4UtilsCSpaceSizeBits
 LibSel4UtilsCSpaceSizeBits-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: LibSel4UtilsProfile
@@ -1950,7 +1936,7 @@ LibVKADebugLiveObjsSZ-ADVANCED:INTERNAL=1
 LibVKADebugLiveSlotsSZ-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: LinkPageSize
 LinkPageSize-ADVANCED:INTERNAL=1
-MEMOIZE_CACHE_DIR:INTERNAL=/Users/lukasbower/GitHub/cohesix/seL4/.sel4_cache
+MEMOIZE_CACHE_DIR:INTERNAL=
 //ADVANCED property for variable: MUSLLIBC_CURRENT_DIR
 MUSLLIBC_CURRENT_DIR-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: NANOPB_GENERATOR_SOURCE_DIR
@@ -1960,7 +1946,7 @@ NANOPB_INCLUDE_DIRS-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: NANOPB_SRC_ROOT_FOLDER
 NANOPB_SRC_ROOT_FOLDER-ADVANCED:INTERNAL=1
 //STRINGS property for variable: PLATFORM
-PLATFORM-STRINGS:INTERNAL=allwinnerA20;am335x;apq8064;ariane;bcm2711;bcm2837;cheshire;hifive-p550;exynos4;exynos5;fvp;hifive;hikey;imx6;imx7;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;omap3;pc99;polarfire;qemu-arm-virt;qemu-riscv-virt;quartz64;rocketchip;rockpro64;spike;star64;tk1;tqma8xqp1gb;tx1;tx2;zynq7000;zynqmp;rocketchip-base;rocketchip-zcu102;sabre;wandq;nitrogen6sx;rpi3;rpi4;exynos5250;exynos5410;exynos5422;am335x-boneblack;am335x-boneblue;am335x-bone;zcu102;ultra96;ultra96v2;x86_64;ia32
+PLATFORM-STRINGS:INTERNAL=allwinnerA20;am335x;apq8064;ariane;bcm2711;bcm2837;cheshire;hifive-p550;exynos4;exynos5;fvp;hifive;hikey;imx6;imx7;imx8mq-evk;imx8mm-evk;imx8mp-evk;imx93;maaxboard;odroidc2;odroidc4;omap3;pc99;polarfire;qemu-arm-virt;qemu-riscv-virt;quartz64;rk3568;rocketchip;rockpro64;bananapi-f3;spike;star64;tk1;tqma8xqp1gb;tx1;tx2;zynq7000;zynqmp;rocketchip-base;rocketchip-zcu102;sabre;wandq;nitrogen6sx;rpi3;rpi4;exynos5250;exynos5410;exynos5422;am335x-boneblack;am335x-boneblue;am335x-bone;zcu102;ultra96;ultra96v2;x86_64;ia32
 //ADVANCED property for variable: PLATSUPPORT_HELPERS
 PLATSUPPORT_HELPERS-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: PROTOBUF_PROTOC_EXECUTABLE
@@ -1974,8 +1960,6 @@ SEL4_LIBS_DIR-ADVANCED:INTERNAL=1
 SEL4_PROJECTS_LIBS_DIR-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: SEL4_RUNTIME_DIR
 SEL4_RUNTIME_DIR-ADVANCED:INTERNAL=1
-//ADVANCED property for variable: SIMULATE_SCRIPT
-SIMULATE_SCRIPT-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: SKIP_MODIFIES
 SKIP_MODIFIES-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: SORRY_BITFIELD_PROOFS

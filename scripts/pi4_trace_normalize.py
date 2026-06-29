@@ -579,6 +579,7 @@ class GateSummary:
     driver_task_ring_call_return: int = 0
     driver_task_ring_call_outstanding: int = 0
     driver_task_ring_call_timeout: int = 0
+    driver_task_ring_call_unresolved_timeout: int = 0
     driver_task_ring_call_keep_active: int = 0
     driver_task_ring_call_abort: int = 0
     driver_task_bootstrap_deferred: int = 0
@@ -791,6 +792,9 @@ class GateSummary:
             "DRIVER_TASK_RING_CALL_RETURN": self.driver_task_ring_call_return,
             "DRIVER_TASK_RING_CALL_OUTSTANDING": self.driver_task_ring_call_outstanding,
             "DRIVER_TASK_RING_CALL_TIMEOUT": self.driver_task_ring_call_timeout,
+            "DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT": (
+                self.driver_task_ring_call_unresolved_timeout
+            ),
             "DRIVER_TASK_RING_CALL_KEEP_ACTIVE": self.driver_task_ring_call_keep_active,
             "DRIVER_TASK_RING_CALL_ABORT": self.driver_task_ring_call_abort,
             "DRIVER_TASK_BOOTSTRAP_DEFERRED": self.driver_task_bootstrap_deferred,
@@ -9654,11 +9658,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     driver_task_ring_call_outstanding = max(
         0, driver_task_ring_call_begin - driver_task_ring_call_return
     )
-    driver_task_ring_call_timeout = sum(
-        1
-        for event in event_list
-        if "driver_task_ring_call_timeout" in event.raw.lower()
-    )
+    (
+        driver_task_ring_call_timeout,
+        driver_task_ring_call_unresolved_timeout,
+    ) = summarize_driver_task_ring_call_timeouts(event_list)
     driver_task_ring_call_keep_active = sum(
         1
         for event in event_list
@@ -9722,7 +9725,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_pointer_free_ipc_proof=driver_task_pointer_free_ipc_proof,
         driver_task_owner_state_proof=driver_task_owner_state_proof,
         driver_task_ring_call_outstanding=driver_task_ring_call_outstanding,
-        driver_task_ring_call_timeout=driver_task_ring_call_timeout,
+        driver_task_ring_call_unresolved_timeout=(
+            driver_task_ring_call_unresolved_timeout
+        ),
         driver_task_bootstrap_deferred=driver_task_bootstrap_deferred,
         driver_task_resource_blocker=driver_task_resource_blocker,
         driver_task_resource_current_blocker=driver_task_resource_current_blocker,
@@ -9991,6 +9996,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_ring_call_return=driver_task_ring_call_return,
         driver_task_ring_call_outstanding=driver_task_ring_call_outstanding,
         driver_task_ring_call_timeout=driver_task_ring_call_timeout,
+        driver_task_ring_call_unresolved_timeout=(
+            driver_task_ring_call_unresolved_timeout
+        ),
         driver_task_ring_call_keep_active=driver_task_ring_call_keep_active,
         driver_task_ring_call_abort=driver_task_ring_call_abort,
         driver_task_bootstrap_deferred=driver_task_bootstrap_deferred,
@@ -10269,6 +10277,36 @@ def summarize_driver_task_dma_proofs(
     return len(ready), "none"
 
 
+def summarize_driver_task_ring_call_timeouts(
+    events: Iterable[TraceEvent],
+) -> tuple[int, int]:
+    """Return total timeout events and timeout frontiers not closed by returns."""
+
+    total = 0
+    unresolved: set[tuple[str, str, int]] = set()
+    for event in events:
+        raw = event.raw.lower()
+        if (
+            "driver_task_ring_call_timeout" not in raw
+            and "driver_task_ring_call_return" not in raw
+        ):
+            continue
+        request = parse_hex_int(event.fields.get("request"))
+        if request is None:
+            continue
+        key = (
+            event.fields.get("contract", "").lower(),
+            event.fields.get("endpoint", "").lower(),
+            request,
+        )
+        if "driver_task_ring_call_timeout" in raw:
+            total += 1
+            unresolved.add(key)
+        elif "driver_task_ring_call_return" in raw:
+            unresolved.discard(key)
+    return total, len(unresolved)
+
+
 def classify_pi4_runtime_dma_proof(
     *,
     root_prompt_seen: bool,
@@ -10286,7 +10324,7 @@ def classify_pi4_runtime_dma_proof(
     driver_task_pointer_free_ipc_proof: bool,
     driver_task_owner_state_proof: bool,
     driver_task_ring_call_outstanding: int,
-    driver_task_ring_call_timeout: int,
+    driver_task_ring_call_unresolved_timeout: int,
     driver_task_bootstrap_deferred: int,
     driver_task_resource_blocker: str,
     driver_task_resource_current_blocker: str,
@@ -10314,7 +10352,7 @@ def classify_pi4_runtime_dma_proof(
         driver_task_owner_state_proof,
         driver_task_compatibility == 0,
         driver_task_ring_call_outstanding == 0,
-        driver_task_ring_call_timeout == 0,
+        driver_task_ring_call_unresolved_timeout == 0,
         driver_task_bootstrap_deferred == 0,
         driver_task_resource_current_blocker == "none",
         driver_task_dma_blocker == "none",
@@ -10333,7 +10371,7 @@ def classify_pi4_runtime_dma_proof(
         or driver_task_owner_state_proof
         or driver_task_compatibility != 0
         or driver_task_ring_call_outstanding != 0
-        or driver_task_ring_call_timeout != 0
+        or driver_task_ring_call_unresolved_timeout != 0
         or driver_task_bootstrap_deferred != 0
         or driver_task_resource_blocker != "none"
         or driver_task_resource_current_blocker != "none"

@@ -2938,7 +2938,7 @@ mod tests {
     }
 
     #[test]
-    fn tcb_set_ipc_buffer_uses_v13_invocation_shape() {
+    fn tcb_set_ipc_buffer_uses_v15_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_SetIPCBuffer(0x44, 0x8000_0000, 0x55) };
@@ -2953,7 +2953,7 @@ mod tests {
     }
 
     #[test]
-    fn tcb_set_sched_params_uses_v13_invocation_shape() {
+    fn tcb_set_sched_params_uses_v15_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_SetSchedParams(0x44, 0x01, 220, 200) };
@@ -2969,7 +2969,7 @@ mod tests {
     }
 
     #[test]
-    fn tcb_set_priority_uses_v13_invocation_shape() {
+    fn tcb_set_priority_uses_v15_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_SetPriority(0x44, 0x01, 240) };
@@ -2984,7 +2984,7 @@ mod tests {
     }
 
     #[test]
-    fn tcb_bind_and_unbind_notification_use_v13_invocation_shape() {
+    fn tcb_bind_and_unbind_notification_use_v15_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_BindNotification(0x44, 0x99) };
@@ -3007,7 +3007,7 @@ mod tests {
     }
 
     #[test]
-    fn tcb_suspend_resume_use_v13_invocation_shape() {
+    fn tcb_suspend_resume_use_v15_invocation_shape() {
         let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
         // SAFETY: Host stubs do not cross a kernel boundary; this records the invocation shape.
         let result = unsafe { seL4_TCB_Suspend(0x44) };

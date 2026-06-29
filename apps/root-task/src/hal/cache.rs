@@ -687,7 +687,7 @@ unsafe fn call_arm_vspace_op(
     let mut mr3 = 0;
 
     let tag = seL4_MessageInfo_new(label, 0, 0, 2);
-    // SAFETY: The generated seL4 v13 AArch64 VSpace cache operations take two
+    // SAFETY: The generated seL4 v15 AArch64 VSpace cache operations take two
     // message registers (`start`, `end`) and no extra caps; `vspace` is the
     // caller-supplied VSpace capability.
     let out_tag = unsafe { seL4_CallWithMRs(vspace, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3) };

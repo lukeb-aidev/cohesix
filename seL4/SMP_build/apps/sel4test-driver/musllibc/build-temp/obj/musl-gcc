@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "${REALGCC:-/opt/homebrew/bin/aarch64-linux-gnu-gcc}" "$@" -specs "/Users/lukasbower/GitHub/cohesix/seL4/SMP_build/apps/sel4test-driver/musllibc/build-temp/stage/lib/musl-gcc.specs"

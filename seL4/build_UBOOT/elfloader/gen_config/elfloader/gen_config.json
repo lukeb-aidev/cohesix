@@ -4,6 +4,10 @@
     "IMAGE_EFI": false,
     "IMAGE_UIMAGE": true,
     "ELFLOADER_IMAGE": "uimage",
+    "ARM_S_SUPERVISOR_MODE": false,
+    "ARM_MONITOR_MODE": false,
+    "ARM_HYPERVISOR_MODE": false,
+    "ARM_NS_SUPERVISOR_MODE": false,
     "ARM_MONITOR_HOOK": false,
     "GPT_PTIMER_NS_PL1_ACCESS": false,
     "ARM_ERRATA_764369": false,
@@ -12,7 +16,7 @@
     "HASH_MD5": false,
     "HASH_INSTRUCTIONS": "hash_none",
     "ELFLOADER_INCLUDE_DTB": false,
-    "ELFLOADER_ROOTSERVERS_LAST": false,
+    "ELFLOADER_ROOTSERVERS_LAST": true,
     "ELFLOADER_ARMV8_LEAVE_AARCH64": false,
     "ELFLOADER_PRECOMPILE": false
 }

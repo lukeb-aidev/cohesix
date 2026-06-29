@@ -1,4 +1,4 @@
-/* generated from /Users/lukasbower/seL4/kernel/libsel4/mode_include/64/sel4/shared_types.bf */
+/* generated from /Users/lukasbower/seL4_15/libsel4/mode_include/64/sel4/shared_types.bf */
 
 #pragma once
 

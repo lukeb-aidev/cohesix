@@ -634,6 +634,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "DRIVER_TASK_RING_CALL_RETURN": 0,
         "DRIVER_TASK_RING_CALL_OUTSTANDING": 0,
         "DRIVER_TASK_RING_CALL_TIMEOUT": 0,
+        "DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT": 0,
         "DRIVER_TASK_RING_CALL_KEEP_ACTIVE": 0,
         "DRIVER_TASK_RING_CALL_ABORT": 0,
         "DRIVER_TASK_BOOTSTRAP_DEFERRED": 0,
@@ -1950,6 +1951,7 @@ def test_gate_summary_tracks_driver_task_ring_call_timeout() -> None:
     assert record["DRIVER_TASK_RING_CALL_RETURN"] == 0
     assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 1
     assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
+    assert record["DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT"] == 1
 
 
 def test_gate_summary_tracks_driver_task_ring_call_keep_active() -> None:
@@ -1976,9 +1978,39 @@ def test_gate_summary_tracks_driver_task_ring_call_keep_active() -> None:
     assert record["DRIVER_TASK_RING_CALL_BEGIN"] == 1
     assert record["DRIVER_TASK_RING_CALL_RETURN"] == 0
     assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
+    assert record["DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT"] == 1
     assert record["DRIVER_TASK_RING_CALL_KEEP_ACTIVE"] == 1
     assert record["DRIVER_TASK_RING_CALL_ABORT"] == 0
     assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 1
+
+
+def test_gate_summary_closes_driver_task_timeout_after_return() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RING_CALL_TIMEOUT contract=cyw43455 endpoint=0x192d "
+            "request=93 mode=nonblocking attempts=1048576 opcode=1 arg0=5 "
+            "aux0=0x43595734 frame_len=28 owner=linked-runtime "
+            "marker_valid=yes marker_sequence=93 marker_phase=142 "
+            "marker_phase_name=cyw43-sdio-owner-wait-begin "
+            "marker_aux0=0x43595734 blocker=cyw43-sdio-owner-wait-begin "
+            "next_action=check-keep-active",
+            "DRIVER_TASK_RING_CALL_KEEP_ACTIVE contract=cyw43455 endpoint=0x192d "
+            "request=93 mode=nonblocking timeout_count=0 keep_limit=512 "
+            "progress_advanced=yes opcode=1 arg0=5 aux0=0x43595734 "
+            "frame_len=28 owner=linked-runtime marker_valid=yes "
+            "marker_sequence=93 marker_phase=142 "
+            "marker_phase_name=cyw43-sdio-owner-wait-begin "
+            "marker_aux0=0x43595734 blocker=cyw43-sdio-owner-wait-begin "
+            "next_action=poll-same-request",
+            "DRIVER_TASK_RING_CALL_RETURN contract=cyw43455 endpoint=0x192d "
+            "request=93 sequence=93 code=5 detail=21290 result=80",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
+    assert record["DRIVER_TASK_RING_CALL_KEEP_ACTIVE"] == 1
+    assert record["DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT"] == 0
 
 
 def test_gate_summary_tracks_driver_task_ring_call_abort() -> None:
@@ -2009,6 +2041,7 @@ def test_gate_summary_tracks_driver_task_ring_call_abort() -> None:
     assert record["DRIVER_TASK_RING_CALL_BEGIN"] == 1
     assert record["DRIVER_TASK_RING_CALL_RETURN"] == 0
     assert record["DRIVER_TASK_RING_CALL_TIMEOUT"] == 1
+    assert record["DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT"] == 1
     assert record["DRIVER_TASK_RING_CALL_ABORT"] == 1
     assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 0
 

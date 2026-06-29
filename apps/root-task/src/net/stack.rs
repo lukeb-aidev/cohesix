@@ -1382,16 +1382,18 @@ fn cyw43_flush_pre_poll_data_ready_for(
     contract: crate::hal::driver_task::DriverTaskContract,
     active_interface: &'static str,
     mode: NetMode,
-    ip: Ipv4Address,
+    _ip: Ipv4Address,
     bringup_status: Option<&'static str>,
     dhcp_phase: Option<DhcpPhase>,
 ) -> bool {
     contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
         && active_interface == "wifi"
         && matches!(mode, NetMode::Dhcp)
-        && ip != Ipv4Address::UNSPECIFIED
         && bringup_status.is_none()
-        && dhcp_phase == Some(DhcpPhase::Bound)
+        && matches!(
+            dhcp_phase,
+            Some(DhcpPhase::Selecting | DhcpPhase::Requesting | DhcpPhase::Bound)
+        )
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -8127,7 +8129,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_flush_pre_poll_requires_bound_wifi_dhcp() {
+    fn cyw43_flush_pre_poll_allows_active_wifi_dhcp() {
         let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         let genet = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
         let ip = Ipv4Address::new(192, 168, 86, 154);
@@ -8156,21 +8158,37 @@ mod tests {
             Some("wifi-host-eapol-required"),
             Some(DhcpPhase::Bound)
         ));
-        assert!(!cyw43_flush_pre_poll_data_ready_for(
+        assert!(cyw43_flush_pre_poll_data_ready_for(
             cyw43,
             "wifi",
             NetMode::Dhcp,
-            ip,
+            Ipv4Address::UNSPECIFIED,
             None,
             Some(DhcpPhase::Requesting)
         ));
-        assert!(!cyw43_flush_pre_poll_data_ready_for(
+        assert!(cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            Ipv4Address::UNSPECIFIED,
+            None,
+            Some(DhcpPhase::Selecting)
+        ));
+        assert!(cyw43_flush_pre_poll_data_ready_for(
             cyw43,
             "wifi",
             NetMode::Dhcp,
             Ipv4Address::UNSPECIFIED,
             None,
             Some(DhcpPhase::Bound)
+        ));
+        assert!(!cyw43_flush_pre_poll_data_ready_for(
+            cyw43,
+            "wifi",
+            NetMode::Dhcp,
+            ip,
+            None,
+            None
         ));
         assert!(!cyw43_flush_pre_poll_data_ready_for(
             cyw43,

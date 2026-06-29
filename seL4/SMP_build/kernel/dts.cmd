@@ -1,0 +1,1 @@
+regen /Users/lukasbower/GitHub/cohesix/seL4/SMP_build/kernel/kernel.dtb /Users/lukasbower/GitHub/cohesix/seL4/SMP_build/qemu-arm-virt.dts;/Users/lukasbower/seL4_15/src/plat/qemu-arm-virt/overlay-qemu-arm-virt.dts

@@ -8,6 +8,7 @@
 - **Historical 25b worker-capacity benchmark:** PASS for the `1500` hard cap in real VM/TCP/gateway mode. Reviewable evidence is committed under `docs/bench/`.
 - **Historical 25f large-telemetry reliability gate:** PASS was recorded for the required no-retry scenarios (`telemetry-1mb`, `telemetry-10mb`, `telemetry-100mb`, `telemetry-1gb`) with `error_budget_rate=0.01`, but the cited summaries live under ignored `logs/`. Treat those rows as local diagnostic history unless the exact summaries are promoted into `docs/bench/`.
 - **Current 26b Pi isolated runtime parity:** no verdict yet. Production closure requires fresh same-harness QEMU and wired/GENET Pi artifacts, comparator output, and separate serial/USB/HDMI/driver-task proof lanes. Pi 4 Wi-Fi is a research/diagnostic lane with its own bounded worker envelope rather than a production parity target.
+- **Current 26d seL4 15 revalidation:** QEMU and live Pi 4 Wi-Fi status lanes pass for the seL4 15 refresh. The seL4 15.0.0 QEMU/SMP/Pi profile artifacts, Pi stage-only image proof, QEMU SMP TCP regression, QEMU REST status benchmark, live Pi 4 Wi-Fi raw TCP proof, strict runtime/DMA proof, and live Pi 4 REST status benchmark are recorded in `docs/audit/M26D_SEL4_15_PROVENANCE.md`. The QEMU and Pi REST telemetry suites skipped because the current manifests expose no `/worker` entries to the perf harness. Production wired/GENET parity remains a separate 26b/26d boundary and is not claimed by the Wi-Fi status lane.
 
 ## Hive-Gateway Worker Capacity (Milestone 25b)
 

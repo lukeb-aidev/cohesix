@@ -136,11 +136,11 @@ rustup target add aarch64-unknown-none --toolchain 1.93.1
 If you're on another Linux distro, install the same dependencies with your package manager (QEMU + build essentials + Rust).
 
 **Build and run (QEMU + TCP console)**
-1. Build seL4 externally (upstream) for `aarch64` + `qemu_arm_virt`. Place the build at `$HOME/seL4/build` or pass `--sel4-build` below.
+1. Use the checked-in seL4 15.0.0 QEMU SMP artifact tree at `seL4/SMP_build`, or refresh it from the accepted upstream seL4 15 source described in `docs/TOOLCHAIN_MAC_ARM64.md`.
 2. Terminal 1: build and boot:
    ```bash
-   SEL4_BUILD_DIR=$HOME/seL4/build ./scripts/cohesix-build-run.sh \
-     --sel4-build "$HOME/seL4/build" \
+   SEL4_BUILD_DIR="$PWD/seL4/SMP_build" ./scripts/cohesix-build-run.sh \
+     --sel4-build "$PWD/seL4/SMP_build" \
      --out-dir out/cohesix \
      --profile release \
      --root-task-features cohesix-dev \
