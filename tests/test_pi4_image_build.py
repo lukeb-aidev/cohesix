@@ -88,6 +88,47 @@ def test_pi4_image_build_keeps_dtb_policy_handoff_common() -> None:
     assert 'bootm ${coh_addr} ${coh_runtime_cpio_addr} ${coh_dtb_addr}' in source
 
 
+def test_pi4_image_build_fastboot_requires_authenticated_rsts_marker() -> None:
+    """Reset-status plus saved settings must not bypass the guarded boot menu."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    boot_template = source[
+        source.index('echo "[cohesix] pi4 autoboot script"') : source.index(
+            '\nEOF\n    sed -i \'\' "s/__COH_IMAGE__/'
+        )
+    ]
+    detect_fastboot = next(
+        line
+        for line in boot_template.splitlines()
+        if line.startswith("setenv coh_detect_fastboot ")
+    )
+    marker_check = 'itest.l ${coh_fastboot_rsts_marker} == ${coh_fastboot_rsts_magic}'
+    reset_check = 'itest.l ${coh_fastboot_rsts_reset} == ${coh_fastboot_rsts_reset_mask}'
+
+    assert "setenv coh_fastboot_rsts_addr 0xfe100020" in source
+    assert "setenv coh_fastboot_rsts_mask 0x00ff0000" in source
+    assert "setenv coh_fastboot_rsts_magic 0x00430000" in source
+    assert "setenv coh_fastboot_rsts_reset_mask 0x00000400" in source
+    assert "setenv coh_fastboot_rsts_clear_mask 0xff00ffff" in source
+    assert "setenv coh_fastboot_rsts_low_mask 0x00000020" not in source
+    assert marker_check in detect_fastboot
+    assert "coh_fastboot_rsts_reset" in detect_fastboot
+    assert (
+        'test "${coh_fastboot}" != "1" && test "${coh_has_saved_config}" = "1"'
+        not in detect_fastboot
+    )
+    assert reset_check not in detect_fastboot
+    assert "software-reset-saved-policy" not in boot_template
+    assert "reset=${coh_fastboot_rsts_reset} saved=${coh_has_saved_config}" in boot_template
+    generated_tail = boot_template[boot_template.rindex("run coh_force_serial_preboot") :]
+    assert generated_tail.index("run coh_load_saved_policy") < generated_tail.index(
+        "run coh_detect_saved_config"
+    )
+    assert generated_tail.index("run coh_detect_saved_config") < generated_tail.index(
+        "run coh_maybe_fastboot"
+    )
+
+
 def test_pi4_image_build_allows_serial_menu_without_usb_keyboard() -> None:
     """The explicit serial menu opt-out must not require U-Boot USB keyboard support."""
 

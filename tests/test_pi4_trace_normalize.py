@@ -488,6 +488,90 @@ def test_cli_summary_uses_latest_boot_slice(
     assert summary["gates"]["WIFI_BLOCKER"] == "ht-clock-timeout"
 
 
+def test_cli_boot_summary_scores_each_boot_slice(
+    tmp_path: pathlib.Path, capsys
+) -> None:
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "U-Boot 2026.01-dirty",
+                "[cohesix:root-task] Cohesix boot: root-task online",
+                "Cohesix console ready",
+                "cohesix> HDMI_FRAME_SUBMIT reason=keyboard-scrollback "
+                "status=ready root_console_ready=yes attached=yes bytes=1",
+                "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
+                "max_service_us=1000 observed_service_us=3281157",
+                "U-Boot 2026.01-dirty",
+                "[cohesix:root-task] Cohesix boot: root-task online",
+                "Cohesix console ready",
+                "cohesix> ",
+                "SERIAL_ECHO result=ok serial_responsive=yes",
+                "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+                "proof_gate=10 blocker=none",
+                "usb: gate 10 name=first-console-byte status=pass "
+                "evidence=first_byte=yes first_byte_source=linked-runtime-hid "
+                "parser_ingress=yes backend_bytes=1 accepted=1 echoed=1 "
+                "next=acceptance-complete",
+                "usb: sustained_input queue_valid=yes blocker=none "
+                "report_status=idle-report accepted=1 drained=1 echoed=1",
+                "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
+                "max_service_us=1000 observed_service_us=91",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = normalizer.main([str(log_path), "--boot-summary"])
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+
+    assert result == 0
+    assert len(summary["boots"]) == 2
+    assert summary["boots"][0]["score"] == "fail"
+    assert "driver-task-budget-overrun" in summary["boots"][0]["blockers"]
+    assert "serial-unclean" in summary["boots"][0]["blockers"]
+    assert summary["boots"][1]["score"] == "pass"
+
+
+def test_cli_boot_summary_skips_uboot_menu_save_reset(
+    tmp_path: pathlib.Path, capsys
+) -> None:
+    """A U-Boot policy save/reset slice is not a failed Cohesix boot."""
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "U-Boot 2026.01-dirty",
+                "[cohesix] Cohesix boot options",
+                "[cohesix] saved settings to cohesix.env",
+                "resetting ...",
+                "U-Boot 2026.01-dirty",
+                "Starting kernel ...",
+                "[cohesix:root-task] Cohesix boot: root-task online",
+                "Cohesix console ready",
+                "cohesix> ",
+                "SERIAL_ECHO result=ok serial_responsive=yes",
+                "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+                "proof_gate=10 blocker=none",
+                "usb: sustained_input queue_valid=yes blocker=none "
+                "report_status=idle-report accepted=1 drained=1 echoed=1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = normalizer.main([str(log_path), "--boot-summary"])
+    captured = capsys.readouterr()
+    summary = json.loads(captured.out)
+
+    assert result == 0
+    assert summary["boots"][0]["score"] == "skip"
+    assert summary["boots"][0]["kind"] == "uboot-menu-save-reset"
+    assert summary["boots"][1]["kind"] == "cohesix-boot"
+
+
 def test_latest_boot_slice_keeps_same_boot_uboot_usb_evidence() -> None:
     lines = [
         "U-Boot 2026.01-dirty",
@@ -525,6 +609,76 @@ def test_latest_boot_slice_prefers_later_uboot_chain() -> None:
     assert gates.to_record()["USB_BOOTLOADER_HANDOFF_SEEN"] == "no"
     assert gates.to_record()["USB_COLD_BOOT_SEEN"] == "yes"
     assert gates.to_record()["WIFI_EXACT"] == "new-failure"
+
+
+def test_boot_slices_ignore_uboot_menu_text() -> None:
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "  0. Exit to U-Boot prompt",
+        "Starting kernel ...",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+        "U-Boot 2026.01-dirty",
+        "  0. Exit to U-Boot prompt",
+        "Starting kernel ...",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+    ]
+
+    slices = normalizer.boot_slices(lines)
+
+    assert [offset for offset, _ in slices] == [0, 4]
+
+
+def test_boot_summary_skips_uboot_save_reset_menu_slice() -> None:
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "[cohesix] Cohesix boot options",
+        "[cohesix] mode=dhcp",
+        "[cohesix] saved settings to cohesix.env",
+        "resetting ...",
+        "U-Boot 2026.01-dirty",
+        "Starting kernel ...",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+        "Cohesix console ready",
+        "cohesix> ",
+        "SERIAL_ECHO result=ok serial_responsive=yes",
+        "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+        "proof_gate=10 blocker=none",
+        "usb: gate 10 name=first-console-byte status=pass "
+        "evidence=first_byte=yes first_byte_source=linked-runtime-hid "
+        "parser_ingress=yes backend_bytes=1 accepted=1 echoed=1 "
+        "next=acceptance-complete",
+        "usb: sustained_input queue_valid=yes blocker=none "
+        "report_status=idle-report accepted=1 drained=1 echoed=1",
+    ]
+
+    summaries = normalizer.summarize_boot_slices(lines)
+    line_offset, latest_lines = normalizer.latest_boot_slice(lines)
+
+    assert summaries[0]["score"] == "skip"
+    assert summaries[0]["kind"] == "uboot-menu-save-reset"
+    assert summaries[1]["kind"] == "cohesix-boot"
+    assert summaries[1]["score"] == "pass"
+    assert line_offset == 5
+    assert latest_lines[0] == "U-Boot 2026.01-dirty"
+
+
+def test_latest_boot_slice_ignores_trailing_uboot_save_reset_menu() -> None:
+    lines = [
+        "U-Boot 2026.01-dirty",
+        "Starting kernel ...",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+        "Cohesix console ready",
+        "cohesix> ",
+        "U-Boot 2026.01-dirty",
+        "[cohesix] saved settings to cohesix.env",
+        "resetting ...",
+    ]
+
+    line_offset, latest_lines = normalizer.latest_boot_slice(lines)
+
+    assert line_offset == 0
+    assert latest_lines[0] == "U-Boot 2026.01-dirty"
+    assert "Starting kernel ..." in latest_lines
 
 
 def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
@@ -1184,6 +1338,26 @@ def test_gate_summary_splits_glued_serial_trace_segment() -> None:
     record = normalizer.summarize_gates(events).to_record()
 
     assert record["SERIAL_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_gate_summary_marks_prompt_prefixed_trace_as_unclean() -> None:
+    """Prompt/log interleaving must not look like clean operator evidence."""
+
+    events = normalizer.parse_events(
+        [
+            "cohesix> HDMI_FRAME_SUBMIT reason=keyboard-scrollback status=ready "
+            "root_console_ready=yes attached=yes bytes=220",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.to_record()["HDMI_RESPONSIVE_PROOF"] == "yes"
+    assert gates.to_record()["SERIAL_CLEAN"] == "no"
+    assert any(
+        event.fields.get("serial_error") == "prompt-prefixed-trace"
+        for event in events
+    )
 
 
 def test_gate_summary_clears_recovery_request_after_sustained_input() -> None:
@@ -1854,6 +2028,25 @@ def test_gate_summary_counts_driver_task_budget_overruns() -> None:
     assert record["DRIVER_TASK_CONTRACTS"] == 1
     assert record["DRIVER_TASK_BUDGET_OVERRUNS"] == 1
     assert record["DRIVER_TASK_LATENCY_PROOFS"] == 1
+
+
+def test_gate_summary_counts_observed_service_budget_overruns() -> None:
+    """Observed service time above max_service_us must fail closed."""
+
+    events = normalizer.parse_events(
+        [
+            "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
+            "max_service_us=1000 observed_service_us=3281157",
+            "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+            "service_max_us=250 service_us=9278",
+            "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
+            "max_service_us=250 observed_service_us=18",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["DRIVER_TASK_BUDGET_OVERRUNS"] == 2
+    assert record["DRIVER_TASK_LATENCY_PROOFS"] == 3
 
 
 def test_gate_summary_ignores_zero_driver_task_budget_overrun_fields() -> None:
@@ -9519,6 +9712,31 @@ def test_gate_summary_tracks_root_console_waiting_for_wifi() -> None:
     assert gates.wifi_blocker == "boot-waiting-for-wifi"
 
 
+def test_gate_summary_treats_dhcp_bound_net_ready_as_wifi_ready() -> None:
+    """Fresh Pi logs can prove WiFi readiness before prompt-side netstats."""
+
+    events = normalizer.parse_events(
+        [
+            "[INFO root_task::net::stack] [dhcp] start ready "
+            "interface=wifi now_ms=45335",
+            "[INFO root_task::net::stack] [dhcp] lease bound "
+            "ip=192.168.86.154/24 gateway=192.168.86.1 "
+            "server=192.168.86.1 lease_s=86400",
+            "[net-console] root console wait complete reason=net-ready "
+            "action=start-serial-root-console elapsed_ms=46725 polls=4",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
+
+    assert gates.wifi_gate == 10
+    assert gates.wifi_blocker == "none"
+    assert record["NET_ACTIVE"] == "wifi"
+    assert record["NET_ADDR_SRC"] == "dhcp-lease"
+    assert record["NET_DHCP"] == "bound"
+
+
 def test_gate_summary_preserves_deferred_wifi_failure_over_root_wait() -> None:
     events = normalizer.parse_events(
         [
@@ -10148,6 +10366,38 @@ def test_gate_summary_requires_netstats_for_wifi_ready() -> None:
 
     assert gates.wifi_gate == 9
     assert gates.wifi_blocker == "netstats-missing"
+
+
+def test_gate_summary_accepts_dhcp_bound_root_console_net_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=secure reason=none polls=8197 associated=yes link_up=yes "
+            "eapol_rx=7 next_action=release-dhcp-data",
+            "[INFO root_task::net::stack] [dhcp] start ready interface=wifi "
+            "now_ms=45335",
+            "[INFO root_task::net::stack] [dhcp] tx queued kind=discover "
+            "from=selecting to=selecting len=300 attempts=1 tx_packets=1",
+            "CYW43_DRIVER_TASK_DATA_PATH contract=cyw43455 event=rx-deliver "
+            "action=pending dhcp=offer",
+            "[INFO root_task::net::stack] [dhcp] rx ack ip=192.168.86.154 "
+            "phase=bound len=300 rx_packets=2",
+            "[INFO root_task::net::stack] [dhcp] lease bound "
+            "ip=192.168.86.154/24 gateway=192.168.86.1 "
+            "server=192.168.86.1 lease_s=86400",
+            "[net-console] root console wait complete reason=net-ready "
+            "action=start-serial-root-console elapsed_ms=46725 polls=4",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE"] == 10
+    assert record["WIFI_BLOCKER"] == "none"
+    assert record["WIFI_EXACT"] == "none"
+    assert record["NET_ACTIVE"] == "wifi"
+    assert record["NET_ADDR_SRC"] == "dhcp-lease"
+    assert record["NET_DHCP"] == "bound"
 
 
 def test_gate_summary_treats_peer_assisted_nettest_as_ready_for_netstats() -> None:

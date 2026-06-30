@@ -37,8 +37,6 @@ const PM_RSTS_PI_FIRMWARE_PARTITION_MASK: u32 = 0x0000_0555;
 const PM_RSTS_COHESIX_FASTBOOT_MASK: u32 = 0x00ff_0000;
 #[cfg(any(feature = "kernel", test))]
 const PM_RSTS_COHESIX_FASTBOOT_MAGIC: u32 = 0x0043_0000;
-#[cfg(any(feature = "kernel", test))]
-const PM_RSTS_COHESIX_FASTBOOT_LOW_MASK: u32 = 0x0000_0020;
 
 #[cfg(feature = "kernel")]
 static BCM2711_PM_WATCHDOG: Mutex<Option<MappedRegisterWindow>> = Mutex::new(None);
@@ -103,15 +101,12 @@ pub fn backend_available() -> bool {
 
 #[cfg(any(feature = "kernel", test))]
 fn rsts_fastboot_reboot_value(current: u32) -> u32 {
-    PM_PASSWORD
-        | ((current & !PM_RSTS_COHESIX_FASTBOOT_MASK)
-            | PM_RSTS_COHESIX_FASTBOOT_MAGIC
-            | PM_RSTS_COHESIX_FASTBOOT_LOW_MASK)
+    PM_PASSWORD | ((current & !PM_RSTS_COHESIX_FASTBOOT_MASK) | PM_RSTS_COHESIX_FASTBOOT_MAGIC)
 }
 
 #[cfg(any(feature = "kernel", test))]
 fn rsts_fastboot_reboot_fallback_value() -> u32 {
-    PM_PASSWORD | PM_RSTS_COHESIX_FASTBOOT_MAGIC | PM_RSTS_COHESIX_FASTBOOT_LOW_MASK
+    PM_PASSWORD | PM_RSTS_COHESIX_FASTBOOT_MAGIC
 }
 
 #[cfg(any(feature = "kernel", test))]
@@ -122,7 +117,6 @@ fn rstc_full_reset_value(current: u32) -> u32 {
 #[cfg(any(feature = "kernel", test))]
 const fn rsts_has_fastboot_marker(value: u32) -> bool {
     value & PM_RSTS_COHESIX_FASTBOOT_MASK == PM_RSTS_COHESIX_FASTBOOT_MAGIC
-        || value & PM_RSTS_COHESIX_FASTBOOT_LOW_MASK == PM_RSTS_COHESIX_FASTBOOT_LOW_MASK
 }
 
 #[cfg(feature = "kernel")]
@@ -251,6 +245,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::vec::Vec;
 
+    const PM_RSTS_SOFTWARE_RESET_STATUS_MASK: u32 = 0x0000_0400;
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum FakeAccessEvent {
         Read(usize),
@@ -309,24 +305,15 @@ mod tests {
             PM_RSTS_COHESIX_FASTBOOT_MASK & PM_RSTS_PI_FIRMWARE_PARTITION_MASK,
             0
         );
-        assert_eq!(
-            PM_RSTS_COHESIX_FASTBOOT_LOW_MASK & PM_RSTS_PI_FIRMWARE_PARTITION_MASK,
-            0
-        );
-
         let current = PM_RSTS_PI_FIRMWARE_PARTITION_MASK | 0x0000_a020 | 0x00aa_0000;
         let encoded = rsts_fastboot_reboot_value(current);
         let low_payload_mask = 0x00ff_ffff;
-        let marker_mask = PM_RSTS_COHESIX_FASTBOOT_MASK | PM_RSTS_COHESIX_FASTBOOT_LOW_MASK;
+        let marker_mask = PM_RSTS_COHESIX_FASTBOOT_MASK;
         let preserved_payload_mask = low_payload_mask & !marker_mask;
 
         assert_eq!(
             encoded & PM_RSTS_COHESIX_FASTBOOT_MASK,
             PM_RSTS_COHESIX_FASTBOOT_MAGIC
-        );
-        assert_eq!(
-            encoded & PM_RSTS_COHESIX_FASTBOOT_LOW_MASK,
-            PM_RSTS_COHESIX_FASTBOOT_LOW_MASK
         );
         assert_eq!(
             encoded & preserved_payload_mask,
@@ -385,15 +372,15 @@ mod tests {
     }
 
     #[test]
-    fn fastboot_marker_detection_ignores_non_marker_bits() {
+    fn fastboot_marker_detection_requires_cohesix_high_marker() {
         assert!(rsts_has_fastboot_marker(
             PM_RSTS_COHESIX_FASTBOOT_MAGIC | PM_RSTS_PI_FIRMWARE_PARTITION_MASK | 0x0000_a020
         ));
-        assert!(rsts_has_fastboot_marker(
-            PM_RSTS_COHESIX_FASTBOOT_LOW_MASK | PM_RSTS_PI_FIRMWARE_PARTITION_MASK
+        assert!(!rsts_has_fastboot_marker(
+            PM_RSTS_SOFTWARE_RESET_STATUS_MASK | PM_RSTS_PI_FIRMWARE_PARTITION_MASK | 0x0000_0020
         ));
         assert!(!rsts_has_fastboot_marker(
-            0x00aa_0000 | PM_RSTS_PI_FIRMWARE_PARTITION_MASK
+            0x00aa_0000 | PM_RSTS_PI_FIRMWARE_PARTITION_MASK | 0x0000_0020
         ));
     }
 

@@ -1346,7 +1346,8 @@ const CYW43_POST_RELEASE_CLOCK_READY_MASK: u8 = SBSDIO_ALP_AVAIL | SBSDIO_HT_AVA
 const SBSDIO_WAKE_TILL_HT_AVAIL: u8 = 0x02;
 const SBSDIO_FUNC1_SLEEPCSR_KSO_EN: u8 = 0x01;
 const CY_43455_F2_WATERMARK: u8 = 0x60;
-const CYW43_DATA_TX_MIN_FUNCTION2_BYTES: usize = CY_43455_F2_WATERMARK as usize;
+const CYW43_DATA_TX_MIN_FUNCTION2_BYTES: usize = 128;
+const CYW43_CONTROL_TX_MIN_FUNCTION2_BYTES: usize = 128;
 const CY_43455_MESBUSYCTRL: u8 = 0xd0;
 const CYW43_F2_READY_DETAIL_REASON_TIMEOUT: u8 = 0;
 const CYW43_F2_READY_DETAIL_REASON_IOEX_READ_FAILED: u8 = 1;
@@ -1382,6 +1383,10 @@ const CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_POLLS: usize = SDHCI_INIT_SPINS / 1
 const CYW43_POST_RELEASE_HT_REQUEST_ATTEMPTS: usize = 2;
 const CYW43_POST_RELEASE_HT_TIMEOUT_MS: u64 = 1_600;
 const CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS: u64 = 3_000;
+const CYW43_FUNCTION2_WRITE_READY_TIMEOUT_MS: u64 = 100;
+const CYW43_FUNCTION2_WRITE_READY_POLLS: usize = 128;
+const CYW43_FUNCTION2_RECOVERY_READY_TIMEOUT_MS: u64 = 100;
+const CYW43_FUNCTION2_RECOVERY_READY_POLLS: usize = 128;
 const CYW43_TX_CREDIT_TIMEOUT_MS: u64 = 100;
 const CYW43_DATA_TX_CREDIT_TIMEOUT_MS: u64 = 20;
 const CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS: u64 = CYW43_TX_CREDIT_TIMEOUT_MS;
@@ -8846,6 +8851,9 @@ fn cyw43_function2_execute_transfer_with_policy(
     if !cyw43_function2_prepare_fifo_window(state, trace_read) {
         return false;
     }
+    if write && !cyw43_runtime_wait_for_function2_ready_before_write() {
+        return false;
+    }
     if let Some(result) =
         sdio_execute_transfer(SDIO_CMD53, arg, flags, frame, block_size, block_count)
     {
@@ -8864,6 +8872,9 @@ fn cyw43_function2_execute_transfer_with_policy(
         return false;
     }
     if !cyw43_function2_prepare_fifo_window(state, trace_read) {
+        return false;
+    }
+    if write && !cyw43_runtime_wait_for_function2_ready_before_write() {
         return false;
     }
     if let Some(result) =
@@ -8927,7 +8938,59 @@ fn cyw43_runtime_recover_failed_function2_transfer(
         state.rx_retransmit_pending = retransmit_posted;
         return retransmit_posted;
     }
-    true
+    cyw43_runtime_wait_for_function2_ready_after_write_recovery()
+}
+
+fn cyw43_runtime_wait_for_function2_ready_before_write() -> bool {
+    cyw43_runtime_wait_for_function2_ready(
+        CYW43_FUNCTION2_WRITE_READY_TIMEOUT_MS,
+        CYW43_FUNCTION2_WRITE_READY_POLLS,
+    )
+}
+
+fn cyw43_runtime_wait_for_function2_ready_after_write_recovery() -> bool {
+    cyw43_runtime_wait_for_function2_ready(
+        CYW43_FUNCTION2_RECOVERY_READY_TIMEOUT_MS,
+        CYW43_FUNCTION2_RECOVERY_READY_POLLS,
+    )
+}
+
+fn cyw43_runtime_wait_for_function2_ready(timeout_ms: u64, max_polls: usize) -> bool {
+    #[cfg(all(not(target_os = "none"), not(test)))]
+    {
+        let _ = (timeout_ms, max_polls);
+        return true;
+    }
+    #[cfg(any(target_os = "none", test))]
+    {
+        let mut polls = 0usize;
+        let mut last_iordy = 0u8;
+        let mut deadline = runtime_deadline_from_millis_or_iterations(timeout_ms, max_polls);
+        while !runtime_deadline_iteration_cap_reached(&deadline, polls, max_polls)
+            && !runtime_deadline_expired(&mut deadline)
+        {
+            if let Some(iordy) = cyw43_sdio_cmd52_read(0, SDIO_CCCR_IORX) {
+                last_iordy = iordy;
+                if iordy & SDIO_FUNC_READY_2 != 0 {
+                    cyw43_clear_last_fault();
+                    return true;
+                }
+            }
+            runtime_poll_pause();
+            polls = polls.saturating_add(1);
+        }
+        cyw43_record_last_fault_with_result(
+            FAULT_CYW43_POST_RELEASE_F2_READY,
+            cyw43_f2_ready_fault_detail(
+                CYW43_F2_READY_DETAIL_REASON_TIMEOUT,
+                0,
+                polls,
+                SDIO_FUNC_ENABLE_2,
+                last_iordy,
+            ),
+        );
+        false
+    }
 }
 
 const fn sdio_function2_trace_read(frame: DriverFrameDescriptor) -> bool {
@@ -11764,7 +11827,7 @@ fn cyw43_write_sdpcm_control_tx_header(
 }
 
 const fn cyw43_control_tx_request_len(unpadded_len: usize) -> usize {
-    if unpadded_len > CYW43_SDPCM_CONTROL_TX_BLOCK_BYTES {
+    let request_len = if unpadded_len > CYW43_SDPCM_CONTROL_TX_BLOCK_BYTES {
         let remainder = unpadded_len % CYW43_SDPCM_CONTROL_TX_BLOCK_BYTES;
         if remainder == 0 {
             unpadded_len
@@ -11773,6 +11836,11 @@ const fn cyw43_control_tx_request_len(unpadded_len: usize) -> usize {
         }
     } else {
         align4(unpadded_len)
+    };
+    if request_len < CYW43_CONTROL_TX_MIN_FUNCTION2_BYTES {
+        CYW43_CONTROL_TX_MIN_FUNCTION2_BYTES
+    } else {
+        request_len
     }
 }
 
@@ -11799,10 +11867,12 @@ fn cyw43_data_tx_request_len_for_frame(
     unpadded_len: usize,
 ) -> (usize, bool) {
     let _ = frame;
-    (
-        cyw43_data_tx_request_len_default(unpadded_len).max(CYW43_DATA_TX_MIN_FUNCTION2_BYTES),
-        false,
-    )
+    let request_len = cyw43_data_tx_request_len_default(unpadded_len);
+    if request_len < CYW43_DATA_TX_MIN_FUNCTION2_BYTES {
+        (CYW43_DATA_TX_MIN_FUNCTION2_BYTES, false)
+    } else {
+        (request_len, false)
+    }
 }
 
 const fn cyw43_control_rx_request_len(unpadded_len: usize) -> usize {
@@ -25411,6 +25481,7 @@ mod tests {
             data_tx_len,
         )
         .0;
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
         assert_eq!(service_command(0, cyw43_descriptor_command(75)), {
             let mut completion = DriverTaskCompletionRecord::progress_with_detail(
                 75,
@@ -25452,6 +25523,7 @@ mod tests {
             arg1: 0,
             reserved: 0,
         });
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
         assert_eq!(
             service_command(0, cyw43_descriptor_command(76)),
             DriverTaskCompletionRecord::progress(76, (CYW43_SDPCM_HEADER_BYTES + 4) as u32)
@@ -25534,11 +25606,11 @@ mod tests {
             cyw43_data_tx_request_len_for_frame(frame, ipv4_tcp_total_len);
         assert_eq!(ipv4_tcp_total_len, 124);
         assert_eq!(cyw43_data_tx_request_len_default(ipv4_tcp_total_len), 124);
-        assert_eq!(ipv4_tcp_request_len, 124);
+        assert_eq!(ipv4_tcp_request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert!(!ipv4_tcp_block_mode);
         assert_eq!(
             cyw43_function2_data_tx_cmd53_shape(ipv4_tcp_request_len, ipv4_tcp_block_mode),
-            (124, 0)
+            (CYW43_DATA_TX_MIN_FUNCTION2_BYTES as u16, 0)
         );
 
         let mut dhcp_discover = [0u8; 300];
@@ -25656,6 +25728,7 @@ mod tests {
         ];
         stage_bytes(payload_offset, &outbound);
         reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         let frame = DriverFrameDescriptor {
             offset: payload_offset as u32,
@@ -25712,16 +25785,19 @@ mod tests {
         dhcp_discover[udp + 2..udp + 4].copy_from_slice(&CYW43_DHCP_SERVER_PORT.to_be_bytes());
         stage_bytes(payload_offset, &dhcp_discover);
         reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_discover.len();
-        let request_len = cyw43_data_tx_request_len_default(total_len);
         assert_eq!(total_len, 330);
-        assert_eq!(request_len, 332);
+        assert_eq!(cyw43_data_tx_request_len_default(total_len), 332);
         let frame = DriverFrameDescriptor {
             offset: payload_offset as u32,
             len: dhcp_discover.len() as u16,
             flags: 0,
         };
+        let (request_len, block_mode) = cyw43_data_tx_request_len_for_frame(frame, total_len);
+        assert_eq!(request_len, cyw43_data_tx_request_len_default(total_len));
+        assert!(!block_mode);
         assert_eq!(
             cyw43_submit_sdpcm_frame(&mut state, frame, true, false),
             total_len
@@ -25772,7 +25848,6 @@ mod tests {
         dhcp_request[udp + 2..udp + 4].copy_from_slice(&CYW43_DHCP_SERVER_PORT.to_be_bytes());
         stage_bytes(payload_offset, &dhcp_request);
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_request.len();
-        let request_len = cyw43_data_tx_request_len_default(total_len);
         test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
         test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
         reset_test_sdio_transfer_log();
@@ -25782,6 +25857,10 @@ mod tests {
             len: dhcp_request.len() as u16,
             flags: 0,
         };
+        let (request_len, block_mode) = cyw43_data_tx_request_len_for_frame(frame, total_len);
+        assert_eq!(request_len, cyw43_data_tx_request_len_default(total_len));
+        assert!(!block_mode);
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         assert_eq!(
             cyw43_submit_sdpcm_frame(&mut state, frame, true, false),
@@ -25842,6 +25921,7 @@ mod tests {
             reserved: 0,
         });
         reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + arp_reply.len();
         let request_len = cyw43_data_tx_request_len_for_frame(
@@ -25854,6 +25934,7 @@ mod tests {
         )
         .0;
         assert_eq!(total_len, 72);
+        assert_eq!(CYW43_DATA_TX_MIN_FUNCTION2_BYTES, 128);
         assert_eq!(request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert_eq!(service_command(0, cyw43_descriptor_command(177)), {
             let mut completion = DriverTaskCompletionRecord::progress_with_detail(
@@ -25916,6 +25997,7 @@ mod tests {
             reserved: 0,
         });
         reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + outbound.len();
         let request_len = cyw43_data_tx_request_len_for_frame(
@@ -25982,6 +26064,7 @@ mod tests {
             reserved: 0,
         });
         reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         let total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + m2_frame.len();
         let request_len = cyw43_data_tx_request_len_default(total_len);
@@ -26058,6 +26141,7 @@ mod tests {
         stage_bytes(payload_offset, b"cdc-control");
         reset_test_sdio_transfer_log();
         test_sdio_transfer_fail_next(SDIO_CMD53, 2, true);
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         let frame = DriverFrameDescriptor {
             offset: payload_offset as u32,
@@ -26070,6 +26154,11 @@ mod tests {
             CYW43_SDPCM_HEADER_BYTES + 11
         );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 2);
+        assert!(!test_sdio_cmd52_write_seen(
+            1,
+            SBSDIO_FUNC1_CHIPCLKCSR,
+            SBSDIO_HT_AVAIL_REQ
+        ));
         assert!(test_sdio_cmd52_write_seen(
             0,
             SDIO_CCCR_ABORT,
@@ -26082,6 +26171,44 @@ mod tests {
         ));
         assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_WFRAMEBCLO) >= 1);
         assert!(test_sdio_cmd52_read_count(1, SBSDIO_FUNC1_WFRAMEBCHI) >= 1);
+        assert!(test_sdio_cmd52_read_count(0, SDIO_CCCR_IORX) >= 1);
+    }
+
+    #[test]
+    fn cyw43_function2_write_requires_ready_before_cmd53() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.initialized = true;
+        state.transport_ready = true;
+        state.firmware_released = true;
+        state.sdpcm_seq = 4;
+        state.sdpcm_seq_max = 5;
+        let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
+        stage_bytes(payload_offset, b"cdc-control");
+        reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(0);
+
+        let frame = DriverFrameDescriptor {
+            offset: payload_offset as u32,
+            len: 11,
+            flags: 0,
+        };
+
+        assert_eq!(cyw43_submit_sdpcm_frame(&mut state, frame, false, false), 0);
+        assert_eq!(test_sdio_cmd53_transfer_count(2, true), 0);
+        assert!(!test_sdio_cmd52_write_seen(
+            1,
+            SBSDIO_FUNC1_CHIPCLKCSR,
+            SBSDIO_HT_AVAIL_REQ
+        ));
+        assert!(test_sdio_cmd52_read_count(0, SDIO_CCCR_IORX) >= CYW43_FUNCTION2_WRITE_READY_POLLS);
+        assert_eq!(
+            cyw43_take_last_fault_detail(),
+            Some(FAULT_CYW43_POST_RELEASE_F2_READY)
+        );
+        assert_eq!(state.sdpcm_seq, 4);
+        assert_eq!(state.tx_frames, 0);
     }
 
     #[test]
@@ -26117,6 +26244,7 @@ mod tests {
             reserved: 0,
         });
         reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         assert_eq!(
             service_command(0, cyw43_descriptor_command(86)),
@@ -26194,6 +26322,7 @@ mod tests {
             reserved: 0,
         });
         reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         assert_eq!(
             service_command(0, cyw43_descriptor_command(89)),
@@ -26244,6 +26373,7 @@ mod tests {
             reserved: 0,
         });
         reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         assert_eq!(
             service_command(0, cyw43_descriptor_command(87)),
@@ -26294,6 +26424,7 @@ mod tests {
             reserved: 0,
         });
         reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         assert_eq!(
             service_command(0, cyw43_descriptor_command(88)),
@@ -26333,6 +26464,7 @@ mod tests {
             len: packet.len() as u16,
             flags: 0,
         };
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
         assert_eq!(
             cyw43_submit_sdpcm_frame(&mut state, frame, true, false),
             CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + packet.len()
@@ -26508,6 +26640,7 @@ mod tests {
         };
         let unpadded_len = CYW43_SDPCM_CONTROL_TX_EXT_HEADER_BYTES + 15;
         let request_len = cyw43_control_tx_request_len(unpadded_len);
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
         assert_eq!(
             cyw43_submit_sdpcm_frame(&mut state, frame, false, true),
             unpadded_len
@@ -26566,6 +26699,7 @@ mod tests {
             arg1: u32::from(id),
             reserved: 0,
         });
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
         assert_eq!(
             service_command(0, cyw43_descriptor_command(78)),
             DriverTaskCompletionRecord::frame_ready_with_descriptor(
@@ -26632,6 +26766,7 @@ mod tests {
             arg1: u32::from(id),
             reserved: 0,
         });
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         assert_eq!(
             service_command(0, cyw43_descriptor_command(81)),
@@ -26707,6 +26842,7 @@ mod tests {
             arg1: u32::from(id),
             reserved: 0,
         });
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         assert_eq!(
             service_command(0, cyw43_descriptor_command(83)),
@@ -26761,6 +26897,7 @@ mod tests {
             arg1: u32::from(id),
             reserved: 0,
         });
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         assert_eq!(
             service_command(0, cyw43_descriptor_command(82)),
@@ -26821,6 +26958,7 @@ mod tests {
             arg1: u32::from(id),
             reserved: 0,
         });
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
         assert_eq!(
             service_command(0, cyw43_descriptor_command(79)),
             DriverTaskCompletionRecord::fault_with_result(
@@ -26927,6 +27065,7 @@ mod tests {
             arg1: u32::from(id),
             reserved: 0,
         });
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
 
         assert_eq!(
             service_command(0, cyw43_descriptor_command(80)),
@@ -26934,7 +27073,7 @@ mod tests {
                 80,
                 FAULT_CYW43_CONTROL_EXCHANGE,
                 cyw43_control_exchange_timeout_result(
-                    CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_EMPTY,
+                    CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_FIRSTREAD_SOURCE_ASSERTED_EMPTY,
                     CYW43_CONTROL_RX_FIRSTREAD_BYTES as u32
                 )
             )
@@ -29836,6 +29975,24 @@ mod tests {
             332
         );
         assert_eq!(
+            cyw43_data_tx_request_len_for_frame(
+                DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: 300,
+                    flags: 0,
+                },
+                CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 300
+            ),
+            (
+                cyw43_data_tx_request_len_default(CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + 300),
+                false
+            )
+        );
+        assert_eq!(
+            cyw43_control_tx_request_len(CYW43_SDPCM_CONTROL_TX_EXT_HEADER_BYTES + 37),
+            CYW43_CONTROL_TX_MIN_FUNCTION2_BYTES
+        );
+        assert_eq!(
             cyw43_data_tx_request_len_default(SDIO_CMD53_BYTE_MODE_MAX),
             SDIO_CMD53_BYTE_MODE_MAX
         );
@@ -29912,6 +30069,7 @@ mod tests {
             block_size,
             block_count
         ));
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
         assert!(cyw43_function2_execute_transfer(
             &mut state,
             true,

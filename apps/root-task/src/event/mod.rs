@@ -218,6 +218,14 @@ const WIFI_SLEEPCSR_KSO: u8 = 0x01;
 const WIFI_SLEEPCSR_DEVON: u8 = 0x02;
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_LIMIT_MS: u64 = 15_000;
+
+#[cfg(any(test, feature = "kernel"))]
+const fn serial_prompt_refresh_after_console_ready(
+    local_seat_attached: bool,
+    local_seat_command_ready: bool,
+) -> bool {
+    local_seat_attached && local_seat_command_ready
+}
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_KINDS: usize = 1;
 #[cfg(feature = "net-console")]
@@ -2735,9 +2743,18 @@ where
         boot_log::force_uart_line_raw_without_prompt_refresh("[mark] root-console.prompt.write.ok");
         self.serial.poll_io();
         #[cfg(feature = "kernel")]
-        boot_log::set_serial_prompt_refresh_after_logs(
-            crate::generated::hardware_config().local_seat.enabled,
-        );
+        {
+            let local_seat_command_ready = self
+                .local_seat
+                .as_ref()
+                .is_some_and(|runtime| runtime.usb_keyboard_command_ready_latched());
+            boot_log::set_serial_prompt_refresh_after_logs(
+                serial_prompt_refresh_after_console_ready(
+                    self.local_seat.is_some(),
+                    local_seat_command_ready,
+                ),
+            );
+        }
         if let Some(runtime) = self.local_seat.as_mut() {
             runtime.mark_root_console_ready();
             runtime.mirror_line("Cohesix console ready");
@@ -14504,6 +14521,13 @@ mod tests {
         assert_eq!(backoff.observe(true), None);
         assert_eq!(backoff.observe(false), None);
         assert_eq!(backoff.observe(false), Some(2));
+    }
+
+    #[test]
+    fn serial_prompt_refresh_waits_for_local_seat_command_ready() {
+        assert!(!serial_prompt_refresh_after_console_ready(false, false));
+        assert!(!serial_prompt_refresh_after_console_ready(true, false));
+        assert!(serial_prompt_refresh_after_console_ready(true, true));
     }
 
     #[cfg(feature = "kernel")]

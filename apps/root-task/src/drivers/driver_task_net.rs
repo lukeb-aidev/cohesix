@@ -152,7 +152,7 @@ const CYW43_HOST_EAPOL_START_INTERVAL_MS: u64 = 8_192;
 const CYW43_HOST_EAPOL_START_MAX: u32 = 12;
 const CYW43_DATA_TX_ATTEMPTS: usize = 8;
 const CYW43_DATA_TX_RETRY_RECOVERY_POLLS: usize = 4;
-const CYW43_DATA_TX_MIN_FUNCTION2_BYTES: usize = 96;
+const CYW43_DATA_TX_MIN_FUNCTION2_BYTES: usize = 128;
 const CYW43_DATA_RX_STEADY_POLL_FLAGS: u16 = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
     | DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN;
 const CYW43_HOST_EAPOL_TX_ATTEMPTS: usize = 8;
@@ -7370,10 +7370,12 @@ const fn cyw43_data_tx_request_len(unpadded_len: usize) -> usize {
 #[cfg(feature = "kernel")]
 fn cyw43_data_tx_request_len_for_frame(frame: &[u8], unpadded_len: usize) -> (usize, bool) {
     let _ = frame;
-    (
-        cyw43_data_tx_request_len(unpadded_len).max(CYW43_DATA_TX_MIN_FUNCTION2_BYTES),
-        false,
-    )
+    let request_len = cyw43_data_tx_request_len(unpadded_len);
+    if request_len < CYW43_DATA_TX_MIN_FUNCTION2_BYTES {
+        (CYW43_DATA_TX_MIN_FUNCTION2_BYTES, false)
+    } else {
+        (request_len, false)
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -15835,7 +15837,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_shape_pads_short_frames_to_f2_watermark() {
+    fn cyw43_data_tx_shape_pads_short_frames_to_data_tx_floor() {
         let dhcp_discover =
             test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
         let dhcp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + dhcp_discover.len();
@@ -15852,14 +15854,11 @@ mod tests {
         let eapol_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + eapol.len();
         let (eapol_request_len, eapol_block_mode) =
             cyw43_data_tx_request_len_for_frame(&eapol, eapol_total_len);
-        assert_eq!(
-            eapol_request_len,
-            cyw43_data_tx_request_len(eapol_total_len)
-        );
+        assert_eq!(eapol_request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert!(!eapol_block_mode);
         assert_eq!(
             cyw43_function2_data_tx_cmd53_shape(eapol_request_len, eapol_block_mode),
-            (eapol_request_len as u16, 0)
+            (CYW43_DATA_TX_MIN_FUNCTION2_BYTES as u16, 0)
         );
 
         let arp_reply = test_cyw43_arp_frame(2);
@@ -15867,6 +15866,7 @@ mod tests {
         let (arp_request_len, arp_block_mode) =
             cyw43_data_tx_request_len_for_frame(&arp_reply, arp_total_len);
         assert_eq!(arp_total_len, 72);
+        assert_eq!(CYW43_DATA_TX_MIN_FUNCTION2_BYTES, 128);
         assert_eq!(arp_request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert!(!arp_block_mode);
         assert_eq!(
@@ -15891,11 +15891,11 @@ mod tests {
             cyw43_data_tx_request_len_for_frame(&tcp_frame, tcp_total_len);
         assert_eq!(tcp_total_len, 124);
         assert_eq!(cyw43_data_tx_request_len(tcp_total_len), 124);
-        assert_eq!(tcp_request_len, 124);
+        assert_eq!(tcp_request_len, CYW43_DATA_TX_MIN_FUNCTION2_BYTES);
         assert!(!tcp_block_mode);
         assert_eq!(
             cyw43_function2_data_tx_cmd53_shape(tcp_request_len, tcp_block_mode),
-            (124, 0)
+            (CYW43_DATA_TX_MIN_FUNCTION2_BYTES as u16, 0)
         );
     }
 

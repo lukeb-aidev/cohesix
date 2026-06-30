@@ -944,6 +944,21 @@ def split_trace_segments(line: str) -> list[str]:
     return segments
 
 
+def prompt_trace_interleaving_reason(line: str) -> str | None:
+    """Return a serial cleanliness reason for prompt/log glued evidence."""
+
+    clean = ANSI_RE.sub("", line).replace("\r", "").strip()
+    if not clean.startswith("cohesix> "):
+        return None
+    payload = clean.removeprefix("cohesix> ").strip()
+    if not payload:
+        return None
+    match = TRACE_SEGMENT_RE.match(payload)
+    if match is None or match.start() != 0:
+        return None
+    return "prompt-prefixed-trace"
+
+
 def parse_fields(text: str) -> dict[str, str]:
     """Extract key=value fields from one trace line."""
 
@@ -1390,6 +1405,22 @@ def parse_events(lines: Iterable[str], line_base: int = 0) -> list[TraceEvent]:
                     stage="prompt",
                 )
             )
+            prompt_interleave_reason = prompt_trace_interleaving_reason(line)
+            if prompt_interleave_reason is not None:
+                events.append(
+                    TraceEvent(
+                        line=line_number,
+                        domain="console",
+                        source="cohesix",
+                        message=(
+                            "serial-interleaving "
+                            f"reason={prompt_interleave_reason}"
+                        ),
+                        raw="cohesix>",
+                        fields={"serial_error": prompt_interleave_reason},
+                        stage="serial-interleave",
+                    )
+                )
         for segment in split_trace_segments(line):
             event = parse_line(segment, line_number)
             if event is not None:
@@ -1976,6 +2007,24 @@ def parse_hex_int(value: str | None) -> int | None:
         return int(value, 0)
     except ValueError:
         return None
+
+
+def driver_task_service_budget_overrun(fields: Mapping[str, str]) -> bool:
+    """Return true when observed service time exceeds a declared max budget."""
+
+    observed_us = parse_hex_int(fields.get("observed_service_us"))
+    if observed_us is None:
+        observed_us = parse_hex_int(fields.get("service_us"))
+    if observed_us is None:
+        observed_us = parse_hex_int(fields.get("latency_us"))
+    max_service_us = parse_hex_int(fields.get("max_service_us"))
+    if max_service_us is None:
+        max_service_us = parse_hex_int(fields.get("service_max_us"))
+    if max_service_us is None:
+        max_service_us = parse_hex_int(fields.get("max_latency_us"))
+    if observed_us is None or max_service_us is None or max_service_us <= 0:
+        return False
+    return observed_us > max_service_us
 
 
 CYW43_CONTROL_EXCHANGE_FAULT_DETAIL = 0x530B
@@ -4924,6 +4973,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     netstats_status_wifi_bound_seen = False
     netstats_wifi_secure_seen = False
     netstats_txrx_seen = False
+    dhcp_bound_seen = False
+    root_console_net_ready_seen = False
     linux_probe_attach_seen = False
     linux_probe_pmu_write_active = False
     armcr4_prereset_ioctrl_active = False
@@ -4970,6 +5021,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "exact_error",
         ):
             value = fields.get(key)
+            if key == "reason" and value and value.lower() == "net-ready":
+                continue
             if value and value not in {"none", "n/a"}:
                 normalized_value = normalize_wifi_blocker(value)
                 if normalized_value not in {"none", "unknown"}:
@@ -5125,6 +5178,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 and fields.get("dhcp") == "bound"
             ):
                 netstats_status_wifi_bound_seen = True
+                dhcp_bound_seen = True
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
                 blocker = "none"
@@ -5571,9 +5625,18 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             "dhcp] lease bound" in raw
             or wifi_address_source(fields) == "dhcp-lease"
         ):
+            dhcp_bound_seen = True
             gate = max(gate, 9)
             post_f2_progress_seen = True
             blocker = "none"
+            continue
+        if wifi_root_console_net_ready_step(event):
+            root_console_net_ready_seen = True
+            if dhcp_bound_seen:
+                gate = max(gate, 10)
+                post_f2_progress_seen = True
+                blocker = "none"
+            continue
         if "[dhcp] tx queued" in raw:
             dhcp_started_seen = True
             gate = max(gate, 8)
@@ -6103,6 +6166,9 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 9)
             if blocker == "none":
                 blocker = "netstats-missing"
+    if dhcp_bound_seen and root_console_net_ready_seen:
+        gate = max(gate, 10)
+        blocker = "none"
     if blocker == "function2-disabled" and gate >= 4 and not ht_available_seen:
         blocker = "ht-clock-timeout"
     if terminal_ht_timeout_seen and not ht_available_seen and not post_f2_progress_seen:
@@ -6166,20 +6232,28 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     if early_startup_blackbox_blocker is not None and not post_f2_progress_seen:
         gate = early_startup_blackbox_gate
         blocker = early_startup_blackbox_blocker
-    if host_eapol_firstread_blocker_seen is not None and blocker in {
-        "cyw43-driver-task-replay",
-        "firmware-channel-f2",
-        "host-eapol-required",
-        "none",
-        "sdio-linked-runtime-progress-no-reply",
-        "unknown",
-        "wifi-host-eapol-pending",
-    }:
+    if (
+        host_eapol_firstread_blocker_seen is not None
+        and blocker
+        in {
+            "cyw43-driver-task-replay",
+            "firmware-channel-f2",
+            "host-eapol-required",
+            "none",
+            "sdio-linked-runtime-progress-no-reply",
+            "unknown",
+            "wifi-host-eapol-pending",
+        }
+        and not dhcp_bound_seen
+    ):
         gate = max(gate, 7)
         blocker = host_eapol_firstread_blocker_seen
-    if host_eapol_terminal_blocker is not None:
+    if host_eapol_terminal_blocker is not None and not dhcp_bound_seen:
         gate = max(gate, 7)
         blocker = host_eapol_terminal_blocker
+    if dhcp_bound_seen and root_console_net_ready_seen:
+        gate = max(gate, 10)
+        blocker = "none"
     return gate, blocker
 
 
@@ -6862,6 +6936,17 @@ def wifi_dhcp_phase(fields: Mapping[str, str]) -> str | None:
     return fields.get("dhcp") or fields.get("dhcp_phase")
 
 
+def wifi_root_console_net_ready_step(event: TraceEvent) -> bool:
+    """Return true when the root-console wait ended because WiFi networking is up."""
+
+    return (
+        event.domain == "wifi"
+        and "[net-console]" in event.raw.lower()
+        and "root console wait complete" in event.raw.lower()
+        and field_lower(event, "reason") == "net-ready"
+    )
+
+
 def wifi_fields_active(fields: Mapping[str, str]) -> bool:
     """Return whether a parsed event describes the active Wi-Fi interface."""
 
@@ -7299,7 +7384,22 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str]:
     active = "unknown"
     addr_src = "unknown"
     dhcp = "unknown"
+    dhcp_interface = "unknown"
     for event in events:
+        raw = event.raw.lower()
+        if raw.startswith("[dhcp]") or "[dhcp]" in raw:
+            interface = event.fields.get("interface")
+            if interface:
+                dhcp_interface = interface
+            if "[dhcp] lease bound" in raw:
+                active = (
+                    dhcp_interface
+                    if dhcp_interface != "unknown"
+                    else ("wifi" if event.domain == "wifi" else active)
+                )
+                addr_src = "dhcp-lease"
+                dhcp = "bound"
+                continue
         if not event.raw.lower().startswith(
             ("netstats:", "netstatus:", "[smp] activity net")
         ):
@@ -7719,6 +7819,7 @@ def summarize_driver_task_proofs(
                 or "budget overrun" in raw
                 or _truthy_field(fields.get("budget_overrun"))
                 or (budget_overrun_count or 0) > 0
+                or driver_task_service_budget_overrun(fields)
             ):
                 budget_overruns += 1
             if any(
@@ -10970,29 +11071,138 @@ def latest_boot_lines(lines: list[str]) -> list[str]:
     return latest_lines
 
 
-def latest_boot_slice(lines: list[str]) -> tuple[int, list[str]]:
-    """Return the latest boot slice plus its original zero-based line offset."""
+def boot_slices(lines: list[str]) -> list[tuple[int, list[str]]]:
+    """Return all detected boot slices with original zero-based line offsets."""
 
+    starts: list[int] = []
     latest_start = None
     latest_start_is_chain = False
     for index, line in enumerate(lines):
         clean = ANSI_RE.sub("", line).lower()
-        if any(marker in clean for marker in BOOT_CHAIN_ROOT_MARKERS):
+        if any(clean.startswith(marker) for marker in BOOT_CHAIN_ROOT_MARKERS):
             latest_start = index
             latest_start_is_chain = True
-            continue
-        if any(marker in clean for marker in BOOT_CHAIN_CONTINUATION_MARKERS):
+        elif any(clean.startswith(marker) for marker in BOOT_CHAIN_CONTINUATION_MARKERS):
             if latest_start_is_chain and latest_start is not None:
                 continue
             latest_start = index
             latest_start_is_chain = True
-            continue
-        if any(marker in clean for marker in BOOT_START_MARKERS) and not latest_start_is_chain:
+        elif (
+            any(marker in clean for marker in BOOT_START_MARKERS)
+            and not latest_start_is_chain
+        ):
             latest_start = index
             latest_start_is_chain = False
-    if latest_start is None:
-        return 0, lines
-    return latest_start, lines[latest_start:]
+        else:
+            continue
+        if not starts or starts[-1] != latest_start:
+            starts.append(latest_start)
+    if not starts:
+        return [(0, lines)]
+    slices: list[tuple[int, list[str]]] = []
+    for position, start in enumerate(starts):
+        end = starts[position + 1] if position + 1 < len(starts) else len(lines)
+        slices.append((start, lines[start:end]))
+    return slices
+
+
+def uboot_menu_save_reset_slice(lines: list[str]) -> bool:
+    """Return true for U-Boot menu settings saves that reset before Cohesix runs."""
+
+    lowered = "\n".join(lines).lower()
+    return (
+        "[cohesix] saved settings to cohesix.env" in lowered
+        and "resetting ..." in lowered
+        and "[cohesix:root-task] cohesix boot: root-task online" not in lowered
+        and not any(marker in lowered for marker in BOOT_START_MARKERS)
+        and not any(marker in lowered for marker in BOOT_CHAIN_CONTINUATION_MARKERS)
+    )
+
+
+def proof_boot_slices(lines: list[str]) -> list[tuple[int, list[str]]]:
+    """Return boot slices that can be scored as Cohesix root-task boot evidence."""
+
+    slices = boot_slices(lines)
+    proof_slices = [
+        (line_offset, boot_lines)
+        for line_offset, boot_lines in slices
+        if not uboot_menu_save_reset_slice(boot_lines)
+    ]
+    return proof_slices or slices
+
+
+def latest_boot_slice(lines: list[str]) -> tuple[int, list[str]]:
+    """Return the latest boot slice plus its original zero-based line offset."""
+
+    slices = proof_boot_slices(lines)
+    return slices[-1]
+
+
+def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
+    """Return stable blocker labels for a boot-slice evidence score."""
+
+    blockers: list[str] = []
+    if record.get("BOOT_HALTED") == "yes":
+        blockers.append("boot-halted")
+    if record.get("PANIC_SEEN") == "yes":
+        blockers.append("panic")
+    if record.get("SERIAL_CLEAN") != "yes":
+        blockers.append("serial-unclean")
+    if record.get("ROOT_CONSOLE_READY") != "yes":
+        blockers.append("root-console-not-ready")
+    if record.get("ROOT_PROMPT_SEEN") != "yes":
+        blockers.append("root-prompt-missing")
+    if (parse_hex_int(str(record.get("DRIVER_TASK_BUDGET_OVERRUNS", "0"))) or 0) > 0:
+        blockers.append("driver-task-budget-overrun")
+    if (parse_hex_int(str(record.get("DRIVER_TASK_RING_CALL_OUTSTANDING", "0"))) or 0) > 0:
+        blockers.append("driver-task-ring-call-outstanding")
+    if (
+        parse_hex_int(str(record.get("DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT", "0")))
+        or 0
+    ) > 0:
+        blockers.append("driver-task-ring-call-unresolved-timeout")
+    if record.get("SERIAL_RESPONSIVE_PROOF") != "yes":
+        blockers.append("serial-responsive-proof-missing")
+    if (parse_hex_int(str(record.get("USB_GATE", "0"))) or 0) < 10:
+        blockers.append("local-seat-usb-gate-incomplete")
+    if record.get("USB_BURST_PROOF") != "yes":
+        blockers.append("local-seat-usb-burst-proof-missing")
+    return blockers
+
+
+def summarize_boot_slices(lines: list[str]) -> list[dict[str, object]]:
+    """Score each boot slice independently so later success cannot hide failures."""
+
+    summaries: list[dict[str, object]] = []
+    for index, (line_offset, boot_lines) in enumerate(boot_slices(lines), start=1):
+        if uboot_menu_save_reset_slice(boot_lines):
+            summaries.append(
+                {
+                    "boot": index,
+                    "line_start": line_offset + 1,
+                    "line_end": line_offset + len(boot_lines),
+                    "score": "skip",
+                    "kind": "uboot-menu-save-reset",
+                    "blockers": [],
+                    "gates": {},
+                }
+            )
+            continue
+        events = parse_events(boot_lines, line_base=line_offset)
+        gates = summarize_gates(events).to_record()
+        blockers = boot_evidence_blockers(gates)
+        summaries.append(
+            {
+                "boot": index,
+                "line_start": line_offset + 1,
+                "line_end": line_offset + len(boot_lines),
+                "score": "pass" if not blockers else "fail",
+                "kind": "cohesix-boot",
+                "blockers": blockers,
+                "gates": gates,
+            }
+        )
+    return summaries
 
 
 def write_jsonl(events: Iterable[TraceEvent], output: TextIO) -> None:
@@ -11030,6 +11240,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--boot-summary",
+        action="store_true",
+        help="emit JSON scoring for every detected boot slice in the trace",
+    )
+    parser.add_argument(
         "--expect",
         action="append",
         default=[],
@@ -11057,6 +11272,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     lines = read_input(args.log)
     line_base = 0
+    if args.boot_summary:
+        print(
+            json.dumps(
+                {"boots": summarize_boot_slices(lines)},
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
     if args.gate_summary or args.summary:
         line_base, lines = latest_boot_slice(lines)
     events = filter_events(parse_events(lines, line_base=line_base), set(args.domain))

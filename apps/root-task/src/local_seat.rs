@@ -1251,6 +1251,11 @@ const fn local_seat_keyboard_result_blocks_prompt_ready(result: u32) -> bool {
         || (queued_reports != 0 && local_seat_keyboard_hard_recovery_report_status(report_status))
 }
 
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn local_seat_usb_owner_state_ready_allowed(first_byte_ready: bool, accepted: usize) -> bool {
+    first_byte_ready && accepted != 0
+}
+
 #[cfg(any(
     test,
     all(
@@ -2375,6 +2380,7 @@ impl LocalSeatRuntime {
         );
         let console_seq = boot_log::next_console_event_seq();
         boot_log::force_uart_line_raw_and_log_without_prompt_refresh(line.as_str(), console_seq);
+        boot_log::set_serial_prompt_refresh_after_logs(true);
     }
 
     #[cfg(all(
@@ -3709,7 +3715,6 @@ impl LocalSeatRuntime {
                         let command_ready_before_poll = self.hdmi_keyboard_command_ready_latched;
                         self.record_keyboard_poll_completion();
                         self.record_keyboard_post_first_byte_clean_poll(completion.result);
-                        publish_local_seat_usb_keyboard_owner_ready(contract, completion);
                         if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED
                             .swap(true, Ordering::AcqRel)
                         {
@@ -3786,25 +3791,6 @@ impl LocalSeatRuntime {
                                     "usb-keyboard-first-report",
                                     "ready",
                                     Some(completion),
-                                );
-                            }
-                            let usb_owner =
-                                crate::hal::driver_task::register_driver_task_runtime_owner_state(
-                                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
-                                );
-                            if usb_owner
-                                && !LINKED_LOCAL_SEAT_USB_OWNER_READY_LOGGED
-                                    .swap(true, Ordering::AcqRel)
-                            {
-                                crate::hal::driver_task::emit_driver_task_resource_init_status(
-                                    contract,
-                                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
-                                    "usb-owner-state",
-                                    "ready",
-                                    Some(completion),
-                                );
-                                crate::hal::driver_task::emit_owner_state_transition_boot_contract_proof(
-                                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
                                 );
                             }
                             self.record_keyboard_post_first_byte_clean_poll(completion.result);
@@ -4678,7 +4664,7 @@ fn publish_linked_local_seat_usb_first_report_event(
         );
         boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
     }
-    if accepted == 0 {
+    if !local_seat_usb_owner_state_ready_allowed(true, accepted) {
         return;
     }
     if !LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.swap(true, Ordering::AcqRel) {
@@ -4690,7 +4676,6 @@ fn publish_linked_local_seat_usb_first_report_event(
             Some(completion),
         );
     }
-    publish_local_seat_usb_keyboard_owner_ready(contract, completion);
     if !LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.swap(true, Ordering::AcqRel) {
         let byte = bytes.first().copied().unwrap_or(0);
         let mut line = heapless::String::<192>::new();
@@ -4704,6 +4689,7 @@ fn publish_linked_local_seat_usb_first_report_event(
         boot_log::force_uart_line_raw_without_prompt_refresh(line.as_str());
         emit_linked_local_seat_usb_keyboard_ready_alert(contract, completion, arming_bytes);
     }
+    publish_local_seat_usb_keyboard_owner_ready(contract, completion);
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -5823,7 +5809,9 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
         }
         let first_report_ready =
             LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire);
-        let usb_owner = first_report_ready
+        let first_byte_ready =
+            LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED.load(Ordering::Acquire);
+        let usb_owner = first_byte_ready
             && crate::hal::driver_task::register_driver_task_runtime_owner_state(
                 crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
             );
@@ -5832,8 +5820,10 @@ fn try_attach_linked_local_seat_runtime(root_console_ready: bool) -> bool {
                 usb_contract,
                 crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
                 "usb-owner-state",
-                if first_report_ready {
+                if first_byte_ready {
                     "descriptor-rejected"
+                } else if first_report_ready {
+                    "blocked-first-byte"
                 } else if usb_keyboard_ready {
                     "blocked-first-report"
                 } else {
@@ -9014,6 +9004,15 @@ mod tests {
         assert!(!local_seat_keyboard_bytes_enter_parser_state(true, false));
         assert!(local_seat_keyboard_bytes_enter_parser_state(true, true));
         assert!(local_seat_keyboard_bytes_enter_parser_state(false, false));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn physical_pi_usb_owner_state_waits_for_first_byte_acceptance() {
+        assert!(!local_seat_usb_owner_state_ready_allowed(false, 0));
+        assert!(!local_seat_usb_owner_state_ready_allowed(true, 0));
+        assert!(!local_seat_usb_owner_state_ready_allowed(false, 1));
+        assert!(local_seat_usb_owner_state_ready_allowed(true, 1));
     }
 
     #[test]

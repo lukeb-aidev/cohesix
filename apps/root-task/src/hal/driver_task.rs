@@ -7956,13 +7956,15 @@ impl DriverTaskContract {
     /// Nominal per-turn service latency budget surfaced in Pi 4 proof logs.
     #[must_use]
     pub const fn max_service_us(self) -> u32 {
-        match self.class {
-            DriverTaskClass::RealtimeInput => 250,
-            DriverTaskClass::ConsoleOutput => 500,
-            DriverTaskClass::NetworkControl => 750,
-            DriverTaskClass::NetworkData => 1_000,
-            DriverTaskClass::DisplayRefresh => 2_000,
-            DriverTaskClass::Background => 5_000,
+        match self.kind {
+            DriverTaskKind::Serial
+            | DriverTaskKind::LocalSeatUsb
+            | DriverTaskKind::SdioHost
+            | DriverTaskKind::WiredNic => 12_000,
+            DriverTaskKind::HdmiText => 300_000,
+            DriverTaskKind::WifiNic => 4_000_000,
+            DriverTaskKind::PcieRoot => 750,
+            DriverTaskKind::VirtualNic => 1_000,
         }
     }
 
@@ -9808,6 +9810,19 @@ mod tests {
         assert!(SDIO_HOST_DRIVER_TASK_CONTRACT.preempts_network_data());
         assert!(!CYW43_WIFI_DRIVER_TASK_CONTRACT.preempts_network_data());
         assert!(!GENET_DRIVER_TASK_CONTRACT.preempts_network_data());
+    }
+
+    #[test]
+    fn service_latency_envelopes_match_physical_boot_evidence() {
+        assert_eq!(SERIAL_DRIVER_TASK_CONTRACT.max_service_us(), 12_000);
+        assert_eq!(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.max_service_us(), 12_000);
+        assert_eq!(SDIO_HOST_DRIVER_TASK_CONTRACT.max_service_us(), 12_000);
+        assert_eq!(GENET_DRIVER_TASK_CONTRACT.max_service_us(), 12_000);
+        assert_eq!(HDMI_TEXT_DRIVER_TASK_CONTRACT.max_service_us(), 300_000);
+        assert_eq!(CYW43_WIFI_DRIVER_TASK_CONTRACT.max_service_us(), 4_000_000);
+        assert_eq!(PCIE_ROOT_DRIVER_TASK_CONTRACT.max_service_us(), 750);
+        assert_eq!(RTL8139_DRIVER_TASK_CONTRACT.max_service_us(), 1_000);
+        assert_eq!(VIRTIO_NET_DRIVER_TASK_CONTRACT.max_service_us(), 1_000);
     }
 
     #[test]
