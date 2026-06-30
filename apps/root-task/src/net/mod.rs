@@ -832,7 +832,9 @@ impl Default for NetSelfTestReport {
 /// Summary of the active network policy and address state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetStatusReport {
+    pub profile_backend: &'static str,
     pub backend: &'static str,
+    pub active_driver: &'static str,
     pub mode: &'static str,
     pub interface_policy: &'static str,
     pub active_interface: &'static str,
@@ -841,12 +843,15 @@ pub struct NetStatusReport {
     pub ip: HeaplessString<32>,
     pub gateway: HeaplessString<32>,
     pub dhcp_phase: &'static str,
+    pub tcp_ready: bool,
 }
 
 impl Default for NetStatusReport {
     fn default() -> Self {
         Self {
+            profile_backend: "disabled",
             backend: "disabled",
+            active_driver: "disabled",
             mode: "off",
             interface_policy: "wired",
             active_interface: "none",
@@ -855,6 +860,7 @@ impl Default for NetStatusReport {
             ip: HeaplessString::new(),
             gateway: HeaplessString::new(),
             dhcp_phase: "disabled",
+            tcp_ready: false,
         }
     }
 }

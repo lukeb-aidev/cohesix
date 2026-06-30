@@ -2123,6 +2123,7 @@ def test_gate_summary_does_not_double_count_prompt_line_driver_task_return() -> 
     assert record["DRIVER_TASK_RING_CALL_BEGIN"] == 0
     assert record["DRIVER_TASK_RING_CALL_RETURN"] == 1
     assert record["DRIVER_TASK_RING_CALL_OUTSTANDING"] == 0
+    assert record["SERIAL_CLEAN"] == "no"
 
 
 def test_gate_summary_tracks_driver_task_ring_call_timeout() -> None:
@@ -6687,6 +6688,26 @@ def test_gate_summary_replaces_stale_usb_first_report_frontier_after_ready() -> 
     assert record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"] == "none"
 
 
+def test_gate_summary_keeps_usb_owner_state_separate_from_first_byte() -> None:
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-engine-init "
+            "status=ready detail=0x0201 result=1 frame_len=0",
+            "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat "
+            "hot_path=usb-keyboard stage=usb-owner-state "
+            "status=ready detail=0x0201 result=1 frame_len=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_DRIVER_TASK_FRONTIER"] == "usb-owner-state-ready"
+    assert record["DRIVER_TASK_RESOURCE_CURRENT_BLOCKER"] == "none"
+    assert record["USB_GATE"] < 10
+    assert record["USB_BLOCKER"] != "none"
+
+
 def test_gate_summary_uses_resource_init_first_report_despite_stale_progress_marker() -> None:
     events = normalizer.parse_events(
         [
@@ -9712,8 +9733,8 @@ def test_gate_summary_tracks_root_console_waiting_for_wifi() -> None:
     assert gates.wifi_blocker == "boot-waiting-for-wifi"
 
 
-def test_gate_summary_treats_dhcp_bound_net_ready_as_wifi_ready() -> None:
-    """Fresh Pi logs can prove WiFi readiness before prompt-side netstats."""
+def test_gate_summary_keeps_dhcp_bound_net_ready_short_of_tcp_proof() -> None:
+    """DHCP plus root-console handoff is not remote TCP/cohsh proof."""
 
     events = normalizer.parse_events(
         [
@@ -9730,8 +9751,8 @@ def test_gate_summary_treats_dhcp_bound_net_ready_as_wifi_ready() -> None:
     gates = normalizer.summarize_gates(events)
     record = gates.to_record()
 
-    assert gates.wifi_gate == 10
-    assert gates.wifi_blocker == "none"
+    assert gates.wifi_gate == 9
+    assert gates.wifi_blocker == "tcp-proof-missing"
     assert record["NET_ACTIVE"] == "wifi"
     assert record["NET_ADDR_SRC"] == "dhcp-lease"
     assert record["NET_DHCP"] == "bound"
@@ -10368,7 +10389,7 @@ def test_gate_summary_requires_netstats_for_wifi_ready() -> None:
     assert gates.wifi_blocker == "netstats-missing"
 
 
-def test_gate_summary_accepts_dhcp_bound_root_console_net_ready() -> None:
+def test_gate_summary_keeps_dhcp_bound_root_console_net_ready_at_gate_nine() -> None:
     events = normalizer.parse_events(
         [
             "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
@@ -10392,8 +10413,8 @@ def test_gate_summary_accepts_dhcp_bound_root_console_net_ready() -> None:
 
     record = normalizer.summarize_gates(events).to_record()
 
-    assert record["WIFI_GATE"] == 10
-    assert record["WIFI_BLOCKER"] == "none"
+    assert record["WIFI_GATE"] == 9
+    assert record["WIFI_BLOCKER"] == "tcp-proof-missing"
     assert record["WIFI_EXACT"] == "none"
     assert record["NET_ACTIVE"] == "wifi"
     assert record["NET_ADDR_SRC"] == "dhcp-lease"

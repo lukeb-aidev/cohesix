@@ -235,7 +235,7 @@ const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 #[cfg(feature = "net-console")]
 const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
 #[cfg(feature = "net-console")]
-const PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS: usize = 4;
+const PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS: usize = 8;
 #[cfg(feature = "net-console")]
 // Network-origin NineDoor commands may enqueue multiple TCP response segments;
 // keep a small bounded flush window so replies are not deferred behind later
@@ -366,10 +366,11 @@ const fn local_seat_input_drain_contract_for_test(
 
 #[cfg(feature = "net-console")]
 fn net_status_allows_root_console(status: &NetStatusReport) -> bool {
-    matches!(
-        status.address_source,
-        "manifest-static" | "dev-virt" | "dhcp-lease"
-    )
+    status.tcp_ready
+        && matches!(
+            status.address_source,
+            "manifest-static" | "dev-virt" | "dhcp-lease"
+        )
 }
 
 #[cfg(feature = "net-console")]
@@ -398,10 +399,14 @@ fn net_status_active_interface_is_wifi(status: &NetStatusReport) -> bool {
 #[cfg(feature = "net-console")]
 fn net_status_needs_wifi_pre_root_dhcp_followup(status: &NetStatusReport) -> bool {
     net_status_active_interface_is_wifi(status)
-        && !net_status_allows_root_console(status)
         && net_status_terminal_failure_reason(status).is_none()
         && (matches!(status.address_source, "dhcp-pending")
+            || matches!(
+                status.address_source,
+                "dhcp-lease" | "wifi-data-rx-admission-blocked"
+            )
             || matches!(status.dhcp_phase, "selecting" | "requesting"))
+        && !net_status_allows_root_console(status)
 }
 
 #[cfg(feature = "net-console")]
@@ -540,7 +545,7 @@ fn net_status_needs_physical_pressure_service(status: &NetStatusReport) -> bool 
 
 #[cfg(feature = "net-console")]
 fn net_status_linked_runtime_data_ready(status: &NetStatusReport) -> bool {
-    matches!(status.backend, "bcmgenet-v5" | "cyw43")
+    matches!(status.active_driver, "bcmgenet-v5" | "cyw43")
         && matches!(status.active_interface, "wired" | "wifi")
         && status.address_source == "dhcp-lease"
         && status.dhcp_phase == "bound"
@@ -548,7 +553,7 @@ fn net_status_linked_runtime_data_ready(status: &NetStatusReport) -> bool {
 
 #[cfg(feature = "net-console")]
 fn net_status_cyw43_data_ready(status: &NetStatusReport) -> bool {
-    matches!(status.backend, "cyw43" | "bcmgenet-v5")
+    status.active_driver == "cyw43"
         && status.active_interface == "wifi"
         && status.address_source == "dhcp-lease"
         && status.dhcp_phase == "bound"
@@ -556,9 +561,10 @@ fn net_status_cyw43_data_ready(status: &NetStatusReport) -> bool {
 
 #[cfg(feature = "net-console")]
 fn net_status_cyw43_dhcp_pending(status: &NetStatusReport) -> bool {
-    matches!(status.backend, "cyw43" | "bcmgenet-v5")
+    status.active_driver == "cyw43"
         && status.active_interface == "wifi"
         && (status.address_source == "dhcp-pending"
+            || status.address_source == "wifi-data-rx-admission-blocked"
             || matches!(status.dhcp_phase, "selecting" | "requesting"))
 }
 
@@ -2410,7 +2416,6 @@ where
         let net_contract = net.driver_task_contract();
         let mut flush_polls = 0u64;
         let mut flush_exhausted = false;
-        let mut flush_activity = false;
         for _ in 0..flush_limit {
             let mut net_budget = match DriverServiceBudget::new(net_contract) {
                 Ok(budget) => budget,
@@ -2432,7 +2437,6 @@ where
                         flush_exhausted = false;
                         break;
                     }
-                    flush_activity = true;
                     flush_exhausted = true;
                 }
                 Err(err) => {
@@ -2459,7 +2463,7 @@ where
                 .net_post_dispatch_flush_exhaustions
                 .saturating_add(1);
         }
-        if flush_activity && net_status_cyw43_data_ready(&net.status_report()) {
+        if net_status_cyw43_data_ready(&net.status_report()) {
             let mut tail_polls = 0u64;
             let mut tail_hits = 0u64;
             let mut tail_idle = 0u64;
@@ -2484,13 +2488,11 @@ where
                         tail_polls = tail_polls.saturating_add(1);
                         tail_hits = tail_hits.saturating_add(1);
                     }
-                    // The host usually sends the next serialized console
-                    // command only after it observes our response. A first
-                    // CYW43 RX poll immediately after TX can therefore be
-                    // idle even though the follow-up packet is about to
-                    // arrive. Keep this WiFi-only tail window bounded rather
-                    // than deferring the next request to a later scheduler
-                    // tick.
+                    // DHCP proves the broadcast/control path, not unicast
+                    // delivery. Keep a bounded CYW43 RX-first maintenance
+                    // window after the lease as well as after TCP flush
+                    // activity so SYN/ARP/ICMP frames are not stranded until
+                    // an already-active TCP session makes progress.
                     Ok(false) => {
                         tail_polls = tail_polls.saturating_add(1);
                         tail_idle = tail_idle.saturating_add(1);
@@ -2729,18 +2731,14 @@ where
 
     /// Emit console audit messages once the UART bridge is connected.
     pub fn announce_console_ready(&mut self) {
-        self.emit_serial_line("Cohesix console ready");
-        self.emit_help_serial_only();
+        #[cfg(feature = "kernel")]
+        let log_channel_switched_before_prompt =
+            self.ninedoor.is_some() && boot_log::switch_logger_to_log_buffer();
+        self.emit_serial_line_atomic("Cohesix console ready");
+        self.emit_help_serial_only_atomic();
         #[cfg(feature = "net-console")]
-        self.emit_wifi_credential_warning_current_before_prompt();
-        debug_uart_str("[dbg] console: writing 'cohesix>' prompt\n");
-        #[cfg(feature = "kernel")]
-        boot_log::force_uart_line_raw_without_prompt_refresh(
-            "[mark] root-console.prompt.write.begin",
-        );
-        self.emit_prompt();
-        #[cfg(feature = "kernel")]
-        boot_log::force_uart_line_raw_without_prompt_refresh("[mark] root-console.prompt.write.ok");
+        self.emit_wifi_credential_warning_current_before_prompt_atomic();
+        self.emit_prompt_atomic();
         self.serial.poll_io();
         #[cfg(feature = "kernel")]
         {
@@ -2762,8 +2760,12 @@ where
         }
         #[cfg(feature = "kernel")]
         if self.ninedoor.is_some() {
-            if boot_log::switch_logger_to_log_buffer() {
-                boot_log::force_uart_line_raw_without_prompt_refresh(
+            if log_channel_switched_before_prompt {
+                boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
+                    "[trace] log channel switched to /log/queen.log; raw driver blockers remain on serial",
+                );
+            } else if boot_log::switch_logger_to_log_buffer() {
+                boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(
                     "[trace] log channel switched to /log/queen.log; raw driver blockers remain on serial",
                 );
             } else {
@@ -3579,6 +3581,11 @@ where
         self.service_local_seat_keyboard_during_output();
     }
 
+    fn emit_serial_line_atomic(&mut self, line: &str) {
+        self.serial.write_line_blocking(line);
+        self.mirror_local_seat_line_if_ready(line);
+    }
+
     fn emit_prompt(&mut self) {
         if self.should_defer_physical_console_output()
             && self.queue_physical_console_output(PendingConsoleOutputKind::Prompt, CONSOLE_PROMPT)
@@ -3602,6 +3609,11 @@ where
         self.service_local_seat_keyboard_during_output();
         self.mirror_local_seat_prompt_if_ready();
         self.service_local_seat_keyboard_during_output();
+    }
+
+    fn emit_prompt_atomic(&mut self) {
+        self.serial.write_bytes_blocking(CONSOLE_PROMPT.as_bytes());
+        self.mirror_local_seat_prompt_if_ready();
     }
 
     fn emit_serial_bytes_cooperative(&mut self, bytes: &[u8]) {
@@ -3659,6 +3671,26 @@ where
         self.emit_serial_line("  quit  - Exit the console session");
     }
 
+    fn emit_help_serial_only_atomic(&mut self) {
+        self.emit_serial_line_atomic("Commands:");
+        self.emit_serial_line_atomic("  help  - Show this help");
+        self.emit_serial_line_atomic("  bi    - Show bootinfo summary");
+        self.emit_serial_line_atomic("  caps  - Show capability slots");
+        self.emit_serial_line_atomic(
+            "  smp [activity] - Show SMP scheduler info or userspace activity",
+        );
+        self.emit_serial_line_atomic("  mem   - Show untyped summary");
+        self.emit_serial_line_atomic("  ping  - Respond with pong");
+        self.emit_serial_line_atomic("  test  - Self-test (host-only; use cohsh)");
+        self.emit_serial_line_atomic("  nettest  - Run network self-test");
+        self.emit_serial_line_atomic("  netstats - Show network counters");
+        #[cfg(feature = "kernel")]
+        self.emit_usb_debug_help_atomic();
+        #[cfg(feature = "kernel")]
+        self.emit_wifi_debug_help_atomic();
+        self.emit_serial_line_atomic("  quit  - Exit the console session");
+    }
+
     #[cfg(feature = "kernel")]
     fn emit_usb_debug_help(&mut self, serial_only: bool) {
         if !self.usb_debug_commands_enabled() || self.last_input_source == ConsoleInputSource::Net {
@@ -3673,6 +3705,16 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn emit_usb_debug_help_atomic(&mut self) {
+        if !self.usb_debug_commands_enabled() || self.last_input_source == ConsoleInputSource::Net {
+            return;
+        }
+        self.emit_serial_line_atomic(
+            "  usb <help|status|dump-state|diag|enable-kbd|probe-kbd> - USB local-seat diagnostics (serial/local only)",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_debug_help(&mut self, serial_only: bool) {
         if !self.wifi_debug_commands_enabled() || self.last_input_source == ConsoleInputSource::Net
         {
@@ -3684,6 +3726,17 @@ where
         } else {
             self.emit_console_line(line);
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_debug_help_atomic(&mut self) {
+        if !self.wifi_debug_commands_enabled() || self.last_input_source == ConsoleInputSource::Net
+        {
+            return;
+        }
+        self.emit_serial_line_atomic(
+            "  wifi <help|dump-state|probe-ht|diag|load-fw|retry> - WiFi bring-up diagnostics (serial/local only)",
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -4281,13 +4334,15 @@ where
         let status = net.status_report();
         let contract = net.driver_task_contract();
         let state = format_message(format_args!(
-            "[smp] activity net attached=yes backend={} mode={} active={} standby={} src={} dhcp={} contract={}",
-            status.backend,
+            "[smp] activity net attached=yes profile_backend={} active_driver={} mode={} active={} standby={} src={} dhcp={} tcp_ready={} contract={}",
+            status.profile_backend,
+            status.active_driver,
             status.mode,
             status.active_interface,
             status.standby_interface,
             status.address_source,
             status.dhcp_phase,
+            if status.tcp_ready { "yes" } else { "no" },
             contract.name,
         ));
         self.emit_console_line(state.as_str());
@@ -11189,13 +11244,18 @@ where
             if let Some(net) = self.net.as_ref() {
                 let status = net.status_report();
                 return format_message(format_args!(
-                    "active={} address_source={} dhcp_phase={} ip={}",
-                    status.active_interface, status.address_source, status.dhcp_phase, status.ip,
+                    "active={} active_driver={} address_source={} dhcp_phase={} tcp_ready={} ip={}",
+                    status.active_interface,
+                    status.active_driver,
+                    status.address_source,
+                    status.dhcp_phase,
+                    if status.tcp_ready { "yes" } else { "no" },
+                    status.ip,
                 ));
             }
         }
         format_message(format_args!(
-            "active=none address_source=unavailable dhcp_phase=unavailable ip=unavailable"
+            "active=none active_driver=unavailable address_source=unavailable dhcp_phase=unavailable tcp_ready=no ip=unavailable"
         ))
     }
 
@@ -11206,13 +11266,15 @@ where
             if let Some(net) = self.net.as_ref() {
                 let status = net.status_report();
                 return format_message(format_args!(
-                    "nettest=requires-command netstats=requires-command cohsh=requires-nettest backend={}",
-                    status.backend,
+                    "nettest=requires-command netstats=requires-command cohsh=requires-nettest profile_backend={} active_driver={} tcp_ready={}",
+                    status.profile_backend,
+                    status.active_driver,
+                    if status.tcp_ready { "yes" } else { "no" },
                 ));
             }
         }
         format_message(format_args!(
-            "nettest=unavailable netstats=unavailable cohsh=unavailable backend=none"
+            "nettest=unavailable netstats=unavailable cohsh=unavailable profile_backend=none active_driver=none tcp_ready=no"
         ))
     }
 
@@ -11276,6 +11338,33 @@ where
     }
 
     #[cfg(feature = "net-console")]
+    fn emit_wifi_credential_warning_current_before_prompt_atomic(&mut self) {
+        if self.wifi_credential_warning_emitted {
+            return;
+        }
+        let Some(net) = self.net.as_ref() else {
+            return;
+        };
+        let status = net.status_report();
+        let stats = net.stats();
+        let Some(warning) = wifi_credential_warning_for_status(
+            &status,
+            &stats,
+            wifi_runtime_credential_warning_reason(),
+        ) else {
+            return;
+        };
+        let line = Self::wifi_credential_warning_line(warning);
+        self.emit_serial_line_atomic(line.as_str());
+        if let Some(runtime) = self.local_seat.as_mut() {
+            if !runtime.root_console_ready() {
+                let _ = runtime.mirror_high_impact_line(line.as_str());
+            }
+        }
+        self.wifi_credential_warning_emitted = true;
+    }
+
+    #[cfg(feature = "net-console")]
     fn emit_wifi_network_status(&mut self) {
         let Some(net) = self.net.as_ref() else {
             return;
@@ -11286,14 +11375,16 @@ where
             return;
         }
         let line = format_message(format_args!(
-            "wifi: net backend={} mode={} policy={} active={} standby={} address_source={} dhcp_phase={}",
-            status.backend,
+            "wifi: net profile_backend={} active_driver={} mode={} policy={} active={} standby={} address_source={} dhcp_phase={} tcp_ready={}",
+            status.profile_backend,
+            status.active_driver,
             status.mode,
             status.interface_policy,
             status.active_interface,
             status.standby_interface,
             status.address_source,
             status.dhcp_phase,
+            if status.tcp_ready { "yes" } else { "no" },
         ));
         self.emit_console_line(line.as_str());
         self.emit_wifi_credential_warning_for_status(&status, &stats, true);
@@ -12659,12 +12750,17 @@ where
                             stats.genet_rx_pending_drops,
                         ));
                         let line_six = format_message(format_args!(
-                            "netstatus: ip={} gateway={} src={} dhcp={}",
-                            status.ip, status.gateway, status.address_source, status.dhcp_phase
+                            "netstatus: ip={} gateway={} src={} dhcp={} tcp_ready={}",
+                            status.ip,
+                            status.gateway,
+                            status.address_source,
+                            status.dhcp_phase,
+                            if status.tcp_ready { "yes" } else { "no" },
                         ));
                         let status_line = format_message(format_args!(
-                            "nettest: backend={} enabled={} running={} udp={} tcp={} last={:?}",
-                            report.backend,
+                            "nettest: profile_backend={} active_driver={} enabled={} running={} udp={} tcp={} last={:?}",
+                            status.profile_backend,
+                            status.active_driver,
                             report.enabled,
                             report.running,
                             report.udp_target,
@@ -15482,7 +15578,9 @@ mod tests {
     #[test]
     fn root_console_waits_for_reachable_net_console_status() {
         let mut status = NetStatusReport {
+            profile_backend: "bcmgenet-v5",
             backend: "bcmgenet-v5",
+            active_driver: "cyw43",
             mode: "dhcp",
             interface_policy: "wifi",
             active_interface: "wifi",
@@ -15491,6 +15589,7 @@ mod tests {
             ip: HeaplessString::new(),
             gateway: HeaplessString::new(),
             dhcp_phase: "associating",
+            tcp_ready: false,
         };
 
         assert!(!super::net_status_allows_root_console(&status));
@@ -15545,6 +15644,8 @@ mod tests {
         );
         status.address_source = "dhcp-lease";
         status.dhcp_phase = "bound";
+        assert!(!super::net_status_allows_root_console(&status));
+        status.tcp_ready = true;
         assert!(super::net_status_allows_root_console(&status));
         assert_eq!(super::net_status_terminal_failure_reason(&status), None);
         status.address_source = "dev-virt";
@@ -15641,7 +15742,9 @@ mod tests {
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
         net.status = NetStatusReport {
+            profile_backend: "bcmgenet-v5",
             backend: "cyw43",
+            active_driver: "cyw43",
             mode: "dhcp",
             interface_policy: "wifi",
             active_interface: "wifi",
@@ -15650,6 +15753,7 @@ mod tests {
             ip: HeaplessString::new(),
             gateway: HeaplessString::new(),
             dhcp_phase: "disabled",
+            tcp_ready: false,
         };
         let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
             keyboard_device: "usb-kbd0",
@@ -16619,6 +16723,7 @@ mod tests {
         release_line_after_flush_poll: bool,
         released_line_after_flush_poll: bool,
         idle_flush_polls_before_release: usize,
+        tcp_ready_after_polls: Option<usize>,
         exhaust_poll_budget: bool,
         exhaust_flush_budget: bool,
         disconnect_requests: usize,
@@ -16641,6 +16746,7 @@ mod tests {
                 release_line_after_flush_poll: false,
                 released_line_after_flush_poll: false,
                 idle_flush_polls_before_release: 0,
+                tcp_ready_after_polls: None,
                 exhaust_poll_budget: false,
                 exhaust_flush_budget: false,
                 disconnect_requests: 0,
@@ -16653,6 +16759,12 @@ mod tests {
     impl NetPoller for FakeNet {
         fn poll(&mut self, _now_ms: u64) -> bool {
             self.polls = self.polls.saturating_add(1);
+            if self
+                .tcp_ready_after_polls
+                .is_some_and(|target| self.polls >= target)
+            {
+                self.status.tcp_ready = true;
+            }
             if self.release_line_after_flush_poll
                 && !self.released_line_after_flush_poll
                 && self.tcp_flushes != 0
@@ -17436,12 +17548,15 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.status.profile_backend = "virtio-net";
         net.status.backend = "virtio-net";
+        net.status.active_driver = "virtio-net";
         net.status.mode = "dhcp";
         net.status.active_interface = "wired";
         net.status.standby_interface = "none";
         net.status.address_source = "dhcp-lease";
         net.status.dhcp_phase = "bound";
+        net.status.tcp_ready = true;
         net.status.ip.push_str("192.168.10.50").unwrap();
         net.status.gateway.push_str("192.168.10.1").unwrap();
         net.counters.rx_packets = 3;
@@ -17458,7 +17573,9 @@ mod tests {
         let rendered = String::from_utf8(transcript.into_iter().collect())
             .expect("serial output must be utf8");
         assert!(
-            rendered.contains("[smp] activity net attached=yes backend=virtio-net"),
+            rendered.contains(
+                "[smp] activity net attached=yes profile_backend=virtio-net active_driver=virtio-net"
+            ),
             "{rendered}"
         );
         assert!(rendered.contains("ip=192.168.10.50"), "{rendered}");
@@ -17484,7 +17601,9 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
-        net.status.backend = "cyw43";
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
         net.status.mode = "dhcp";
         net.status.active_interface = "wifi";
         net.status.standby_interface = "wired";
@@ -17667,6 +17786,7 @@ mod tests {
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
         net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "bcmgenet-v5";
         net.status.active_interface = "wired";
         net.status.address_source = "dhcp-lease";
         net.status.dhcp_phase = "bound";
@@ -17699,7 +17819,9 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
-        net.status.backend = "cyw43";
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.address_source = "dhcp-lease";
         net.status.dhcp_phase = "bound";
@@ -17737,7 +17859,9 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
-        net.status.backend = "cyw43";
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.address_source = "dhcp-lease";
         net.status.dhcp_phase = "bound";
@@ -17756,11 +17880,11 @@ mod tests {
         assert_eq!(metrics.accepted_commands, 2);
         assert_eq!(
             metrics.net_cyw43_tail_polls,
-            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
+            (NET_CYW43_POST_FLUSH_INGEST_POLLS * 2) as u64
         );
         assert_eq!(
             metrics.net_cyw43_tail_hits,
-            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
+            (NET_CYW43_POST_FLUSH_INGEST_POLLS * 2) as u64
         );
         assert_eq!(metrics.net_cyw43_tail_idle, 0);
         assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
@@ -17786,7 +17910,9 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
-        net.status.backend = "cyw43";
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.address_source = "dhcp-lease";
         net.status.dhcp_phase = "bound";
@@ -17806,15 +17932,54 @@ mod tests {
         assert_eq!(metrics.accepted_commands, 2);
         assert_eq!(
             metrics.net_cyw43_tail_polls,
-            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
+            (NET_CYW43_POST_FLUSH_INGEST_POLLS * 2) as u64
         );
-        assert_eq!(metrics.net_cyw43_tail_hits, 6);
+        assert_eq!(metrics.net_cyw43_tail_hits, 14);
         assert_eq!(metrics.net_cyw43_tail_idle, 2);
         assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
         assert!(net.released_line_after_flush_poll);
         assert_eq!(net.lines.len(), 0);
         assert!(net.polls >= 3);
         assert_eq!(NET_CYW43_POST_FLUSH_INGEST_POLLS, 8);
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn cyw43_data_ready_gets_tail_poll_even_when_tcp_flush_is_idle() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, 32>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 1)).is_ok());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        pump.poll();
+        let metrics = pump.metrics;
+        drop(pump);
+
+        assert_eq!(net.tcp_flushes, 1);
+        assert_eq!(
+            metrics.net_cyw43_tail_polls,
+            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
+        );
+        assert_eq!(
+            metrics.net_cyw43_tail_hits,
+            NET_CYW43_POST_FLUSH_INGEST_POLLS as u64
+        );
+        assert_eq!(metrics.net_cyw43_tail_idle, 0);
+        assert_eq!(metrics.net_cyw43_tail_budget_errors, 0);
     }
 
     #[cfg(feature = "net-console")]
@@ -17828,6 +17993,7 @@ mod tests {
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
         net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "bcmgenet-v5";
         net.status.active_interface = "wired";
         net.status.address_source = "dhcp-pending";
         net.status.dhcp_phase = "requesting";
@@ -17883,6 +18049,7 @@ mod tests {
     #[test]
     fn wifi_pre_root_dhcp_followup_is_limited_to_wifi_dhcp_progress() {
         let mut wifi = NetStatusReport::default();
+        wifi.active_driver = "cyw43";
         wifi.active_interface = "wifi";
         wifi.address_source = "dhcp-pending";
         wifi.dhcp_phase = "selecting";
@@ -17895,12 +18062,43 @@ mod tests {
         let mut bound = wifi.clone();
         bound.address_source = "dhcp-lease";
         bound.dhcp_phase = "bound";
+        assert!(net_status_needs_wifi_pre_root_dhcp_followup(&bound));
+        bound.tcp_ready = true;
         assert!(!net_status_needs_wifi_pre_root_dhcp_followup(&bound));
 
         let mut terminal = wifi.clone();
         terminal.address_source = "wifi-association-failed";
         terminal.dhcp_phase = "wifi-association-failed";
         assert!(!net_status_needs_wifi_pre_root_dhcp_followup(&terminal));
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn wifi_pre_root_followup_services_dhcp_bound_until_tcp_ready() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, 64>::new(driver);
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.tcp_ready_after_polls = Some(3);
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        assert!(!pump.net_console_ready_for_root());
+        let polls = pump.poll_pre_root_wifi_dhcp_followup();
+        assert!(pump.net_console_ready_for_root());
+        drop(pump);
+
+        assert_eq!(polls, 3);
+        assert_eq!(net.polls, 3);
+        assert_eq!(PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS, 8);
     }
 
     #[cfg(feature = "net-console")]
@@ -17992,18 +18190,21 @@ mod tests {
     #[test]
     fn dhcp_lease_data_paths_need_physical_pressure_service() {
         let mut wired = NetStatusReport::default();
+        wired.profile_backend = "bcmgenet-v5";
+        wired.backend = "bcmgenet-v5";
+        wired.active_driver = "bcmgenet-v5";
         wired.active_interface = "wired";
         wired.address_source = "dhcp-lease";
         wired.dhcp_phase = "bound";
         assert!(net_status_needs_physical_pressure_service(&wired));
 
         let mut wifi = wired.clone();
-        wifi.backend = "cyw43";
+        wifi.active_driver = "cyw43";
         wifi.active_interface = "wifi";
         assert!(net_status_needs_physical_pressure_service(&wifi));
 
         let mut stack_reported_wifi = wired.clone();
-        stack_reported_wifi.backend = "bcmgenet-v5";
+        stack_reported_wifi.active_driver = "cyw43";
         stack_reported_wifi.active_interface = "wifi";
         assert!(net_status_needs_physical_pressure_service(
             &stack_reported_wifi
@@ -18015,7 +18216,7 @@ mod tests {
         assert!(!net_status_needs_physical_pressure_service(&pre_lease));
 
         let mut wifi_dhcp_pending = pre_lease.clone();
-        wifi_dhcp_pending.backend = "cyw43";
+        wifi_dhcp_pending.active_driver = "cyw43";
         wifi_dhcp_pending.active_interface = "wifi";
         assert!(net_status_needs_physical_pressure_service(
             &wifi_dhcp_pending
@@ -18033,7 +18234,9 @@ mod tests {
     #[test]
     fn linked_runtime_data_ready_enables_hot_dispatch_rounds() {
         let mut genet = NetStatusReport::default();
+        genet.profile_backend = "bcmgenet-v5";
         genet.backend = "bcmgenet-v5";
+        genet.active_driver = "bcmgenet-v5";
         genet.active_interface = "wired";
         genet.address_source = "dhcp-lease";
         genet.dhcp_phase = "bound";
@@ -18043,7 +18246,7 @@ mod tests {
         );
 
         let mut wifi = genet.clone();
-        wifi.backend = "cyw43";
+        wifi.active_driver = "cyw43";
         wifi.active_interface = "wifi";
         assert_eq!(
             net_hot_dispatch_rounds_for_status(&wifi),
@@ -18051,6 +18254,7 @@ mod tests {
         );
 
         let mut stack_reported_wifi = genet.clone();
+        stack_reported_wifi.active_driver = "cyw43";
         stack_reported_wifi.active_interface = "wifi";
         assert_eq!(
             net_hot_dispatch_rounds_for_status(&stack_reported_wifi),
@@ -18063,7 +18267,9 @@ mod tests {
         assert_eq!(net_hot_dispatch_rounds_for_status(&pre_dhcp), 1);
 
         let mut virtio = genet.clone();
+        virtio.profile_backend = "virtio-net";
         virtio.backend = "virtio-net";
+        virtio.active_driver = "virtio-net";
         assert_eq!(net_hot_dispatch_rounds_for_status(&virtio), 1);
     }
 
@@ -18071,14 +18277,17 @@ mod tests {
     #[test]
     fn post_dispatch_flush_limit_extends_under_display_pressure() {
         let mut genet = NetStatusReport::default();
+        genet.profile_backend = "bcmgenet-v5";
         genet.backend = "bcmgenet-v5";
+        genet.active_driver = "bcmgenet-v5";
         genet.active_interface = "wired";
         genet.address_source = "dhcp-lease";
         genet.dhcp_phase = "bound";
         let mut wifi = genet.clone();
-        wifi.backend = "cyw43";
+        wifi.active_driver = "cyw43";
         wifi.active_interface = "wifi";
         let mut stack_reported_wifi = genet.clone();
+        stack_reported_wifi.active_driver = "cyw43";
         stack_reported_wifi.active_interface = "wifi";
 
         assert_eq!(
@@ -18364,6 +18573,9 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "bcmgenet-v5";
         net.status.active_interface = "wired";
         net.status.address_source = "dhcp-lease";
         net.status.dhcp_phase = "bound";
@@ -18390,7 +18602,9 @@ mod tests {
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
-        net.status.backend = "cyw43";
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
         net.status.active_interface = "wifi";
         net.status.address_source = "dhcp-lease";
         net.status.dhcp_phase = "bound";
@@ -18502,7 +18716,9 @@ mod tests {
     #[test]
     fn wifi_warning_names_password_mic_failure() {
         let mut status = NetStatusReport {
+            profile_backend: "bcmgenet-v5",
             backend: "cyw43",
+            active_driver: "cyw43",
             mode: "dhcp",
             interface_policy: "wifi",
             active_interface: "wifi",
@@ -18511,6 +18727,7 @@ mod tests {
             ip: HeaplessString::new(),
             gateway: HeaplessString::new(),
             dhcp_phase: "host-eapol-required",
+            tcp_ready: false,
         };
         let stats = NetCounters::default();
 
@@ -18541,7 +18758,9 @@ mod tests {
     #[test]
     fn wifi_warning_names_invalid_config_and_association_failure() {
         let mut status = NetStatusReport {
+            profile_backend: "bcmgenet-v5",
             backend: "cyw43",
+            active_driver: "cyw43",
             mode: "dhcp",
             interface_policy: "wifi",
             active_interface: "wifi",
@@ -18550,6 +18769,7 @@ mod tests {
             ip: HeaplessString::new(),
             gateway: HeaplessString::new(),
             dhcp_phase: "disabled",
+            tcp_ready: false,
         };
         let stats = NetCounters::default();
 
@@ -23164,7 +23384,9 @@ mod tests {
         let mut wifi = FakeWifiDebug::new();
         let mut net = FakeNet::new();
         net.status = NetStatusReport {
+            profile_backend: "bcmgenet-v5",
             backend: "bcmgenet-v5",
+            active_driver: "cyw43",
             mode: "dhcp",
             interface_policy: "wifi",
             active_interface: "wifi",
@@ -23173,6 +23395,7 @@ mod tests {
             ip: HeaplessString::new(),
             gateway: HeaplessString::new(),
             dhcp_phase: "associating",
+            tcp_ready: false,
         };
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
             .with_wifi_debug(&mut wifi)
@@ -23193,7 +23416,7 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
             rendered.contains(
-                "wifi: net backend=bcmgenet-v5 mode=dhcp policy=wifi active=wifi standby=wired address_source=wifi-associating dhcp_phase=associating"
+                "wifi: net profile_backend=bcmgenet-v5 active_driver=cyw43 mode=dhcp policy=wifi active=wifi standby=wired address_source=wifi-associating dhcp_phase=associating tcp_ready=no"
             ),
             "{rendered}"
         );

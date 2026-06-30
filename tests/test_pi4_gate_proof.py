@@ -904,6 +904,45 @@ def test_gate_proof_accepts_per_hot_path_owner_state_descriptors(
     assert "PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified" in result.stdout
 
 
+def test_gate_proof_driver_task_proof_does_not_require_usb_first_byte(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Owner-state proof is separate from local-seat HID first-byte proof."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    lines = [
+        line
+        for line in _strong_driver_task_proof_lines()
+        if not line.startswith("usb: runtime_gate")
+    ]
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-driver-task-proof",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "DRIVER_TASK_OWNER_STATE_PROOF=yes" in result.stdout
+    assert "USB_GATE=10" not in result.stdout
+    assert "first_byte=yes" not in "\n".join(lines)
+
+
 def test_gate_proof_accepts_wired_driver_task_proof_without_sdio(
     tmp_path: pathlib.Path,
 ) -> None:

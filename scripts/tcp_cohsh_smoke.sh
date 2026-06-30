@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
+# Purpose: Run a focused QEMU TCP cohsh smoke test against the Cohesix console.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
@@ -13,9 +15,49 @@ PROFILE="${PROFILE:-release}"
 CARGO_TARGET="${CARGO_TARGET:-aarch64-unknown-none}"
 SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-$HOME/seL4/build}"
 STARTUP_TIMEOUT="${STARTUP_TIMEOUT:-90}"
+BASE_MANIFEST="${BASE_MANIFEST:-configs/root_task.toml}"
+
+if ! [[ "${TCP_PORT}" =~ ^[0-9]+$ ]]; then
+    echo "[tcp-smoke] error: TCP_PORT must be numeric" >&2
+    exit 2
+fi
+
+resolve_manifest_auth_token() {
+    python3 - "$1" <<'PY'
+import pathlib
+import sys
+
+manifest = pathlib.Path(sys.argv[1])
+if not manifest.is_file():
+    raise SystemExit(0)
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    raise SystemExit(0)
+
+data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+for ticket in data.get("tickets", []):
+    if str(ticket.get("role", "")).strip() == "queen":
+        secret = str(ticket.get("secret", "")).strip()
+        if secret:
+            print(secret)
+        raise SystemExit(0)
+PY
+}
+
+COHSH_AUTH_TOKEN_RESOLVED="${COHSH_AUTH_TOKEN:-${COH_AUTH_TOKEN:-}}"
+if [[ -z "${COHSH_AUTH_TOKEN_RESOLVED}" ]]; then
+    COHSH_AUTH_TOKEN_RESOLVED="$(resolve_manifest_auth_token "${BASE_MANIFEST}")"
+fi
+if [[ -z "${COHSH_AUTH_TOKEN_RESOLVED}" ]]; then
+    echo "[tcp-smoke] error: COHSH_AUTH_TOKEN/COH_AUTH_TOKEN is required" >&2
+    exit 2
+fi
 
 QEMU_LOG="${OUT_DIR}/run.tcp.log"
 COHSH_LOG="${OUT_DIR}/cohsh.tcp.log"
+TCP_READY_RE="(TCP console listening on 0\\.0\\.0\\.0:${TCP_PORT}|\\[net-console\\] listening on 0\\.0\\.0\\.0:${TCP_PORT}|\\[cohsh-net\\] listen tcp 0\\.0\\.0\\.0:${TCP_PORT}([^0-9]|$)|\\[net-console\\] tcp listener bound: port=${TCP_PORT}([^0-9]|$))"
 QEMU_PID=""
 
 cleanup() {
@@ -41,13 +83,13 @@ QEMU_PID=$!
 
 deadline=$((SECONDS + STARTUP_TIMEOUT))
 while [[ $SECONDS -lt $deadline ]]; do
-    if rg -q "TCP console listening on 0.0.0.0:${TCP_PORT}" "${QEMU_LOG}"; then
+    if rg -q "${TCP_READY_RE}" "${QEMU_LOG}"; then
         break
     fi
     sleep 1
 done
 
-if ! rg -q "TCP console listening on 0.0.0.0:${TCP_PORT}" "${QEMU_LOG}"; then
+if ! rg -q "${TCP_READY_RE}" "${QEMU_LOG}"; then
     echo "[tcp-smoke] error: TCP console did not become ready within ${STARTUP_TIMEOUT}s" >&2
     tail -n 200 "${QEMU_LOG}" >&2 || true
     exit 1
@@ -60,7 +102,7 @@ ping
 quit
 COMMANDS
 
-if ! cargo run -p cohsh --features tcp -- \
+if ! COHSH_AUTH_TOKEN="${COHSH_AUTH_TOKEN_RESOLVED}" cargo run -p cohsh --features tcp -- \
     --transport tcp \
     --tcp-host 127.0.0.1 \
     --tcp-port "${TCP_PORT}" \

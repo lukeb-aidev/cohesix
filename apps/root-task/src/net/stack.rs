@@ -1233,6 +1233,7 @@ pub struct NetStack<D: NetDevice> {
     wifi_dhcp_last_eapol_rx: u64,
     wifi_dhcp_eapol_quiet_since_ms: Option<u64>,
     wifi_dhcp_eapol_settle_logged: bool,
+    wifi_rx_admission_blocked: bool,
     udp_beacon_handle: Option<SocketHandle>,
     udp_echo_handle: Option<SocketHandle>,
     tcp_smoke_handle: Option<SocketHandle>,
@@ -1998,6 +1999,19 @@ where
     Ok(DefaultNetStack::Cyw43DriverTask(stack))
 }
 
+fn configured_active_driver_label(config: &ConsoleNetConfig) -> &'static str {
+    match (config.backend, config.policy.interface) {
+        (NetBackend::BcmGenet, NetInterfacePolicy::Wifi) => "cyw43",
+        (NetBackend::BcmGenet, NetInterfacePolicy::Auto) if config.wifi_credentials.is_some() => {
+            "cyw43"
+        }
+        (NetBackend::BcmGenet, _) => "bcmgenet-v5",
+        (NetBackend::Rtl8139, _) => "rtl8139",
+        #[cfg(feature = "net-backend-virtio")]
+        (NetBackend::Virtio, _) => "virtio-net",
+    }
+}
+
 /// Initialise the network console stack, translating low-level errors into
 /// user-facing diagnostics.
 pub fn init_net_console<H>(
@@ -2055,8 +2069,9 @@ where
         .unwrap_or(Ipv4Address::UNSPECIFIED);
     let iface_ip = Ipv4Address::new(iface_ip[0], iface_ip[1], iface_ip[2], iface_ip[3]);
     log::info!(
-        "[net-console] config: backend={} mode={} interface={} iface_ip={}/{} gateway={} listen_port={} udp_echo_port={} tcp_smoke_port={} dhcp(discover_ms={} request_ms={} retries={})",
+        "[net-console] config: profile_backend={} active_driver={} mode={} interface={} static_default_ip={}/{} static_default_gateway={} listen_port={} udp_echo_port={} tcp_smoke_port={} dhcp(discover_ms={} request_ms={} retries={})",
         config.backend.label(),
+        configured_active_driver_label(&config),
         config.policy.mode.as_str(),
         config.policy.interface.as_str(),
         iface_ip,
@@ -2209,7 +2224,20 @@ impl<D: NetDevice> NetStack<D> {
         rx_capacity == TCP_RX_BUFFER && tx_capacity == TCP_TX_BUFFER
     }
 
+    fn active_driver_label(&self) -> &'static str {
+        match (self.backend, self.device.interface_label()) {
+            (NetBackend::BcmGenet, "wifi") => "cyw43",
+            (NetBackend::BcmGenet, _) => "bcmgenet-v5",
+            (NetBackend::Rtl8139, _) => "rtl8139",
+            #[cfg(feature = "net-backend-virtio")]
+            (NetBackend::Virtio, _) => "virtio-net",
+        }
+    }
+
     fn console_listener_defer_reason(&self) -> Option<&'static str> {
+        if self.wifi_rx_admission_blocked {
+            return Some("wifi-data-rx-admission-blocked");
+        }
         console_listener_defer_reason_for(self.mode, self.ip, self.device.bringup_status_label())
     }
 
@@ -2255,6 +2283,8 @@ impl<D: NetDevice> NetStack<D> {
                     );
                 } else {
                     NET_DIAG.record_listener_bound();
+                    self.listener_announced = true;
+                    self.listener_defer_reason = None;
                     info!(
                         "[net-console] console socket rebuilt at now_ms={} port={}",
                         now_ms, self.listen_port
@@ -2954,6 +2984,7 @@ impl<D: NetDevice> NetStack<D> {
             wifi_dhcp_last_eapol_rx: 0,
             wifi_dhcp_eapol_quiet_since_ms: None,
             wifi_dhcp_eapol_settle_logged: false,
+            wifi_rx_admission_blocked: false,
             udp_beacon_handle: None,
             udp_echo_handle: None,
             tcp_smoke_handle: None,
@@ -3334,22 +3365,45 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     #[cfg(feature = "kernel")]
-    fn reassert_cyw43_dhcp_rx_admission(&self, reason: &'static str, now_ms: u64) -> bool {
+    fn reassert_cyw43_dhcp_rx_admission(&mut self, reason: &'static str, now_ms: u64) -> bool {
         if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT {
-            return false;
+            self.wifi_rx_admission_blocked = false;
+            return true;
         }
         let reasserted = crate::drivers::driver_task_net::reassert_cyw43_post_secure_data_rx(
             D::driver_task_contract(),
         );
         if reasserted {
+            self.wifi_rx_admission_blocked = false;
             info!(
                 "[dhcp] wifi data admission reasserted reason={} interface={} now_ms={}",
                 reason,
                 self.device.interface_label(),
                 now_ms
             );
+        } else {
+            self.wifi_rx_admission_blocked = true;
+            warn!(
+                "[dhcp] wifi data admission blocked reason={} interface={} now_ms={} action=defer-tcp-listener",
+                reason,
+                self.device.interface_label(),
+                now_ms
+            );
         }
         reasserted
+    }
+
+    #[cfg(feature = "kernel")]
+    fn retry_blocked_cyw43_rx_admission(&mut self, now_ms: u64) -> bool {
+        if !self.wifi_rx_admission_blocked {
+            return false;
+        }
+        self.reassert_cyw43_dhcp_rx_admission("post-bind-retry", now_ms)
+    }
+
+    #[cfg(not(feature = "kernel"))]
+    fn retry_blocked_cyw43_rx_admission(&mut self, _now_ms: u64) -> bool {
+        false
     }
 
     #[cfg(feature = "kernel")]
@@ -3585,6 +3639,11 @@ impl<D: NetDevice> NetStack<D> {
             self.finish_poll_turn(now_ms, activity);
             return activity;
         }
+        activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
+        if self.wifi_rx_admission_blocked {
+            self.finish_poll_turn(now_ms, activity);
+            return activity;
+        }
         activity |= self.poll_smoltcp_once(timestamp, now_ms, "main");
         let dhcp_start_activity = self.start_dhcp_if_ready(now_ms);
         activity |= dhcp_start_activity;
@@ -3658,6 +3717,7 @@ impl<D: NetDevice> NetStack<D> {
             let mut activity = self.sync_interface_hardware_addr(now_ms);
             activity |= self.service_wifi_host_eapol_slice(now_ms);
             activity |= self.sync_interface_hardware_addr(now_ms);
+            activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
             if !wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
                 if self.budgeted_dhcp_service_required() {
                     Self::charge_dhcp_budget(budget)?;
@@ -3748,6 +3808,16 @@ impl<D: NetDevice> NetStack<D> {
         activity |= self.sync_interface_hardware_addr(now_ms);
         activity |= self.service_wifi_host_eapol_slice(now_ms);
         activity |= self.sync_interface_hardware_addr(now_ms);
+        activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
+        if self.wifi_rx_admission_blocked {
+            self.finish_poll_turn(now_ms, activity);
+            self.budgeted_phase = if cyw43_dhcp_preempts_phase {
+                scheduled_phase
+            } else {
+                phase.next()
+            };
+            return Ok(activity);
+        }
         if tcp_phase_borrow && phase != BudgetedNetPhase::Tcp {
             activity |= self.service_budgeted_tcp_turn(
                 timestamp,
@@ -4130,7 +4200,9 @@ impl<D: NetDevice> NetStack<D> {
             return false;
         }
         #[cfg(feature = "kernel")]
-        let _ = self.reassert_cyw43_dhcp_rx_admission("start", now_ms);
+        if !self.reassert_cyw43_dhcp_rx_admission("start", now_ms) {
+            return false;
+        }
         let Some(client) = self.dhcp.as_mut() else {
             return false;
         };
@@ -4152,8 +4224,15 @@ impl<D: NetDevice> NetStack<D> {
             DhcpEvent::SendQueued => true,
             DhcpEvent::LeaseAcquired(lease) => {
                 #[cfg(feature = "kernel")]
-                let _ = self.reassert_cyw43_dhcp_rx_admission("lease-bound", now_ms);
+                let admission_ready = self.reassert_cyw43_dhcp_rx_admission("lease-bound", now_ms);
                 self.apply_dhcp_lease(lease);
+                #[cfg(feature = "kernel")]
+                if !admission_ready {
+                    warn!(
+                        "[dhcp] lease retained while TCP listener is deferred reason=wifi-data-rx-admission-blocked now_ms={}",
+                        now_ms
+                    );
+                }
                 true
             }
             DhcpEvent::Failed(reason) => {
@@ -7075,8 +7154,9 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             "{}",
             self.gateway.unwrap_or(Ipv4Address::UNSPECIFIED)
         );
-        let (address_source, dhcp_phase) = if let Some(status) = self.device.bringup_status_label()
-        {
+        let (address_source, dhcp_phase) = if self.wifi_rx_admission_blocked {
+            ("wifi-data-rx-admission-blocked", "rx-admission-blocked")
+        } else if let Some(status) = self.device.bringup_status_label() {
             let phase = if matches!(self.mode, NetMode::Dhcp) {
                 dhcp_phase_for_bringup_status(status)
             } else {
@@ -7099,7 +7179,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                     (source, status.phase.as_str())
                 }
                 None if self.backend.uses_dev_virt_defaults() => ("dev-virt", "disabled"),
-                None => ("manifest-static", "disabled"),
+                None if matches!(self.mode, NetMode::Static) => ("manifest-static", "disabled"),
+                None => ("dhcp-uninitialized", "disabled"),
             }
         };
         let active_interface = self.device.interface_label();
@@ -7109,8 +7190,14 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             (NetInterfacePolicy::Auto, _, _) => "wired",
             _ => "none",
         };
+        let tcp_ready = self.stage_policy.allow_tcp
+            && self.listener_announced
+            && self.listener_defer_reason.is_none()
+            && !self.wifi_rx_admission_blocked;
         NetStatusReport {
+            profile_backend: self.backend.label(),
             backend: self.backend.label(),
+            active_driver: self.active_driver_label(),
             mode: self.mode.as_str(),
             interface_policy: self.interface_policy.as_str(),
             active_interface,
@@ -7119,6 +7206,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             ip,
             gateway,
             dhcp_phase,
+            tcp_ready,
         }
     }
 }
@@ -7584,6 +7672,26 @@ mod tests {
         TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
         TCP_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
         *TCP_RX_STORAGE_TAG_LABEL.lock() = None;
+    }
+
+    #[test]
+    fn pi4_config_reports_profile_backend_and_active_driver_separately() {
+        let mut config = ConsoleNetConfig::default();
+        config.backend = NetBackend::BcmGenet;
+        config.policy.interface = NetInterfacePolicy::Wired;
+        assert_eq!(configured_active_driver_label(&config), "bcmgenet-v5");
+
+        config.policy.interface = NetInterfacePolicy::Wifi;
+        assert_eq!(configured_active_driver_label(&config), "cyw43");
+
+        config.policy.interface = NetInterfacePolicy::Auto;
+        config.wifi_credentials = None;
+        assert_eq!(configured_active_driver_label(&config), "bcmgenet-v5");
+
+        config.wifi_credentials =
+            Some(WifiCredentials::new("cohesix", "passphrase").expect("valid WiFi credentials"));
+        assert_eq!(configured_active_driver_label(&config), "cyw43");
+        assert_eq!(config.backend.label(), "bcmgenet-v5");
     }
 
     #[test]

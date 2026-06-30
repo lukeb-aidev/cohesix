@@ -3577,7 +3577,7 @@ def normalize_wifi_exact(value: str) -> str:
     """Preserve exact CYW43 terminal reasons while keeping stable blockers."""
 
     lower = value.lower()
-    if lower.strip() in {"", "none", "n/a"}:
+    if lower.strip() in {"", "none", "n/a", "net-ready"}:
         return "none"
     cyw43_transport_details = {
         "1": "cyw43-runtime-command-rejected",
@@ -5181,7 +5181,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 dhcp_bound_seen = True
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
-                blocker = "none"
+                if nettest_success_seen:
+                    if blocker in {"none", "tcp-proof-missing"}:
+                        blocker = "netstats-missing"
+                elif blocker == "none":
+                    blocker = "tcp-proof-missing"
             if fields.get("active") == "wifi" and (
                 wifi_address_source(fields) == "dhcp-pending"
                 or wifi_dhcp_phase(fields) == "selecting"
@@ -5628,14 +5632,13 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             dhcp_bound_seen = True
             gate = max(gate, 9)
             post_f2_progress_seen = True
-            blocker = "none"
+            if blocker in {"none", "dhcp-pending", "wifi-host-eapol-pending"}:
+                blocker = "tcp-proof-missing"
             continue
         if wifi_root_console_net_ready_step(event):
             root_console_net_ready_seen = True
-            if dhcp_bound_seen:
-                gate = max(gate, 10)
-                post_f2_progress_seen = True
-                blocker = "none"
+            if dhcp_bound_seen and blocker == "none":
+                blocker = "tcp-proof-missing"
             continue
         if "[dhcp] tx queued" in raw:
             dhcp_started_seen = True
@@ -6166,9 +6169,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             gate = max(gate, 9)
             if blocker == "none":
                 blocker = "netstats-missing"
-    if dhcp_bound_seen and root_console_net_ready_seen:
-        gate = max(gate, 10)
-        blocker = "none"
+    if dhcp_bound_seen and root_console_net_ready_seen and blocker == "none":
+        blocker = "tcp-proof-missing"
     if blocker == "function2-disabled" and gate >= 4 and not ht_available_seen:
         blocker = "ht-clock-timeout"
     if terminal_ht_timeout_seen and not ht_available_seen and not post_f2_progress_seen:
@@ -6251,9 +6253,8 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     if host_eapol_terminal_blocker is not None and not dhcp_bound_seen:
         gate = max(gate, 7)
         blocker = host_eapol_terminal_blocker
-    if dhcp_bound_seen and root_console_net_ready_seen:
-        gate = max(gate, 10)
-        blocker = "none"
+    if dhcp_bound_seen and root_console_net_ready_seen and blocker == "none":
+        blocker = "tcp-proof-missing"
     return gate, blocker
 
 

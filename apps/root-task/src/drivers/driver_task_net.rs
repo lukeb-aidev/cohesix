@@ -4265,12 +4265,12 @@ const CYW43_POST_SECURE_DATA_ALLMULTI: u32 = 1;
 const CYW43_POST_SECURE_DATA_PROMISC: u32 = 1;
 
 #[cfg(feature = "kernel")]
-fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) {
+fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) -> bool {
     #[cfg(test)]
     if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
         CYW43_HOST_EAPOL_TEST_RX_RESTORED.fetch_add(1, Ordering::AcqRel);
         emit_cyw43_host_eapol_rx_admission_restore(contract, "ready");
-        return;
+        return true;
     }
     match cyw43_configure_host_eapol_rx_mode(
         contract,
@@ -4280,8 +4280,14 @@ fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) {
         "cyw43-host-eapol-restore-allmulti",
         "cyw43-host-eapol-restore-promisc",
     ) {
-        Ok(()) => emit_cyw43_host_eapol_rx_admission_restore(contract, "ready"),
-        Err(_) => emit_cyw43_host_eapol_rx_admission_restore(contract, "error"),
+        Ok(()) => {
+            emit_cyw43_host_eapol_rx_admission_restore(contract, "ready");
+            true
+        }
+        Err(_) => {
+            emit_cyw43_host_eapol_rx_admission_restore(contract, "error");
+            false
+        }
     }
 }
 
@@ -4292,8 +4298,7 @@ pub(crate) fn reassert_cyw43_post_secure_data_rx(contract: DriverTaskContract) -
     {
         return false;
     }
-    restore_cyw43_host_eapol_rx_after_secure(contract);
-    true
+    restore_cyw43_host_eapol_rx_after_secure(contract)
 }
 
 #[cfg(feature = "kernel")]

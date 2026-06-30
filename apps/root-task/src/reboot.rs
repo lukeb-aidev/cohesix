@@ -34,6 +34,8 @@ const PM_WDOG_RESET_TICKS: u32 = 10;
 #[cfg(any(feature = "kernel", test))]
 const PM_RSTS_PI_FIRMWARE_PARTITION_MASK: u32 = 0x0000_0555;
 #[cfg(any(feature = "kernel", test))]
+const PM_RSTS_SOFTWARE_RESET_STATUS_MASK: u32 = 0x0000_0400;
+#[cfg(any(feature = "kernel", test))]
 const PM_RSTS_COHESIX_FASTBOOT_MASK: u32 = 0x00ff_0000;
 #[cfg(any(feature = "kernel", test))]
 const PM_RSTS_COHESIX_FASTBOOT_MAGIC: u32 = 0x0043_0000;
@@ -125,6 +127,33 @@ fn pm_mmio_write_barrier() {
     fence(FenceOrdering::SeqCst);
 }
 
+#[cfg(feature = "kernel")]
+fn emit_bcm2711_fastboot_marker_trace(
+    before: Result<u32, RebootError>,
+    programmed: u32,
+    readback: Result<u32, RebootError>,
+) {
+    use core::fmt::Write as _;
+
+    let mut line = heapless::String::<192>::new();
+    let before_value = before.unwrap_or(0);
+    let readback_value = readback.unwrap_or(0);
+    let before_status = if before.is_ok() { "ok" } else { "err" };
+    let readback_status = if readback.is_ok() { "ok" } else { "err" };
+    let _ = write!(
+        line,
+        "[reboot] fastboot-marker before_status={} before=0x{:08x} programmed=0x{:08x} readback_status={} readback=0x{:08x} high=0x{:08x} reset=0x{:08x}",
+        before_status,
+        before_value,
+        programmed & !PM_PASSWORD,
+        readback_status,
+        readback_value,
+        readback_value & PM_RSTS_COHESIX_FASTBOOT_MASK,
+        readback_value & PM_RSTS_SOFTWARE_RESET_STATUS_MASK,
+    );
+    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+}
+
 #[cfg(any(feature = "kernel", test))]
 trait Bcm2711PmAccess {
     fn read_u32(&mut self, offset: usize) -> Result<u32, RebootError>;
@@ -171,12 +200,15 @@ fn prepare_bcm2711_watchdog_reset<A>(access: &mut A) -> Result<(), RebootError>
 where
     A: Bcm2711PmAccess,
 {
-    let rsts_value = match access.read_u32(PM_RSTS_OFFSET) {
+    let rsts_before = access.read_u32(PM_RSTS_OFFSET);
+    let rsts_value = match rsts_before {
         Ok(rsts) => rsts_fastboot_reboot_value(rsts),
         Err(_) => rsts_fastboot_reboot_fallback_value(),
     };
     write_u32_release(access, PM_RSTS_OFFSET, rsts_value)?;
-    let _ = access.read_u32(PM_RSTS_OFFSET);
+    let rsts_readback = access.read_u32(PM_RSTS_OFFSET);
+    #[cfg(feature = "kernel")]
+    emit_bcm2711_fastboot_marker_trace(rsts_before, rsts_value, rsts_readback);
     access.write_barrier();
     write_u32_release(access, PM_WDOG_OFFSET, PM_PASSWORD | PM_WDOG_RESET_TICKS)?;
     let rstc = access.read_u32(PM_RSTC_OFFSET)?;
@@ -244,8 +276,6 @@ mod tests {
     use super::*;
     use std::collections::VecDeque;
     use std::vec::Vec;
-
-    const PM_RSTS_SOFTWARE_RESET_STATUS_MASK: u32 = 0x0000_0400;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum FakeAccessEvent {

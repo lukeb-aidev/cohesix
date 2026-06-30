@@ -617,15 +617,18 @@ fn emit_deferred_net_console_result(stack: &NetStackHandle, local_seat_enabled: 
     let state = match status.address_source {
         "wifi-host-eapol-pending" => "deferred pending",
         "wifi-host-eapol-required" => "deferred blocked",
+        "wifi-data-rx-admission-blocked" => "deferred blocked",
         _ => "deferred ready",
     };
     let _ = write!(
         line,
-        "[net-console] {state} backend={} active={} address_source={} dhcp={} port={}",
-        status.backend,
+        "[net-console] {state} profile_backend={} active_driver={} active={} address_source={} dhcp={} tcp_ready={} port={}",
+        status.profile_backend,
+        status.active_driver,
         status.active_interface,
         status.address_source,
         status.dhcp_phase,
+        if status.tcp_ready { "yes" } else { "no" },
         crate::net::CONSOLE_TCP_PORT,
     );
     if local_seat_enabled {

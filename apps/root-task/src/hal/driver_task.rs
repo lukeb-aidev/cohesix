@@ -2110,7 +2110,7 @@ const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize =
     DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT;
 const DRIVER_TASK_USB_HID_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
-const DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
+const DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 4096;
 const DRIVER_TASK_USB_ENUM_ADDRESS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
 const DRIVER_TASK_USB_ENUM_TRANSFER_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
 const DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 256;
@@ -4646,7 +4646,7 @@ fn emit_deferred_runtime_init_status(
         proof_effect,
         next_action,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
 }
 
 /// Borrow a staged shared-ring payload for the current synchronous service turn.
@@ -4702,7 +4702,7 @@ fn emit_driver_task_ring_call_begin(
         command.aux1,
         command.frame.len,
     );
-    crate::bootstrap::log::force_uart_line(line.as_str());
+    crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -4727,11 +4727,7 @@ fn emit_driver_task_ring_call_return(
         completion.detail,
         completion.result,
     );
-    if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
-        crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line.as_str());
-    } else {
-        crate::bootstrap::log::force_uart_line(line.as_str());
-    }
+    crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -5635,7 +5631,7 @@ fn emit_driver_task_ring_call_abort(
     if repeat_count > 1 {
         let _ = write!(line, " repeat_count={}", repeat_count);
     }
-    crate::bootstrap::log::force_uart_line_raw(line.as_str());
+    emit_driver_task_ring_prompt_progress_line(contract, mode, line.as_str());
 }
 
 #[cfg(feature = "kernel")]
@@ -5697,20 +5693,8 @@ fn emit_driver_task_ring_prompt_progress_line(
     mode: DriverTaskRingCommandMode,
     line: &str,
 ) {
-    if driver_task_ring_prompt_progress_logs_to_buffer(contract, mode) {
-        crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line);
-    } else {
-        crate::bootstrap::log::force_uart_line_raw_without_prompt_refresh(line);
-    }
-}
-
-#[cfg(feature = "kernel")]
-const fn driver_task_ring_prompt_progress_logs_to_buffer(
-    contract: DriverTaskContract,
-    mode: DriverTaskRingCommandMode,
-) -> bool {
-    matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
-        && matches!(mode, DriverTaskRingCommandMode::PromptSlice)
+    let _ = (contract, mode);
+    crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line);
 }
 
 #[cfg(feature = "kernel")]
@@ -7256,20 +7240,8 @@ fn driver_task_resource_status_requires_uart(
     stage: &str,
     status: &str,
 ) -> bool {
-    if driver_task_resource_status_logs_to_buffer(contract, hot_path, stage, status) {
-        return false;
-    }
-    status == "failed"
-        || status == "no-reply"
-        || status == "invalid-contract"
-        || status == "slot-missing"
-        || status == "no-endpoint"
-        || status == "ring-missing"
-        || status == "busy"
-        || status == "poll-timeout"
-        || status == "tx-no-reply"
-        || status == "tx-submit-fail"
-        || status.starts_with("blocked")
+    let _ = (contract, hot_path, stage, status);
+    false
 }
 
 #[cfg(feature = "kernel")]
@@ -7279,55 +7251,8 @@ fn driver_task_resource_status_logs_to_buffer(
     stage: &str,
     status: &str,
 ) -> bool {
-    let _ = contract;
-    hot_path == DriverTaskHotPath::UsbKeyboard
-        && driver_task_usb_resource_status_logs_to_buffer(stage, status)
-}
-
-#[cfg(feature = "kernel")]
-fn driver_task_usb_resource_status_logs_to_buffer(stage: &str, status: &str) -> bool {
-    if matches!(
-        status,
-        "failed"
-            | "fault"
-            | "invalid-contract"
-            | "slot-missing"
-            | "no-endpoint"
-            | "ring-missing"
-            | "busy"
-            | "poll-timeout"
-            | "tx-no-reply"
-            | "tx-submit-fail"
-            | "unexpected-completion"
-            | "descriptor-rejected"
-            | "no-reply"
-    ) || status.ends_with("failed")
-    {
-        return false;
-    }
-    matches!(
-        stage,
-        "usb-runtime-descriptor-replay"
-            | "runtime-descriptor-replay"
-            | "usb-engine-init"
-            | "usb-xhci-init"
-            | "usb-owner-state"
-            | "usb-keyboard-enumeration"
-            | "usb-keyboard-enumeration-resume"
-            | "usb-keyboard-enumeration-retry"
-            | "usb-keyboard-first-report"
-    ) && (matches!(status, "ready" | "resumed" | "pending" | "progress")
-        || status.starts_with("blocked")
-        || matches!(
-            status,
-            "command-ring-ready"
-                | "root-port-connected"
-                | "device-addressed"
-                | "device-descriptor"
-                | "config-descriptor"
-                | "hid-endpoint-not-ready"
-                | "hub-topology-no-keyboard"
-        ))
+    let _ = (contract, hot_path, stage, status);
+    true
 }
 
 #[cfg(feature = "kernel")]
@@ -7341,7 +7266,7 @@ fn emit_driver_task_resource_init_hdmi_progress(
     if let Some(line) =
         driver_task_resource_hdmi_progress_line(contract, hot_path, stage, status, completion)
     {
-        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+        crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
         crate::local_seat::mirror_driver_start_progress_line(line.as_str());
     }
 }
@@ -11115,18 +11040,18 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn usb_prompt_slice_progress_routes_to_log_buffer_after_prompt() {
-        assert!(driver_task_ring_prompt_progress_logs_to_buffer(
+    fn prompt_side_driver_task_diagnostics_route_to_log_buffer_after_prompt() {
+        assert!(driver_task_resource_status_logs_to_buffer(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-            DriverTaskRingCommandMode::PromptSlice
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-owner-state",
+            "blocked-keyboard-enumeration"
         ));
-        assert!(!driver_task_ring_prompt_progress_logs_to_buffer(
-            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-            DriverTaskRingCommandMode::NonBlocking
-        ));
-        assert!(!driver_task_ring_prompt_progress_logs_to_buffer(
+        assert!(driver_task_resource_status_logs_to_buffer(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            DriverTaskRingCommandMode::PromptSlice
+            DriverTaskHotPath::Cyw43Wifi,
+            "cyw43-owner-state",
+            "blocked-dhcp"
         ));
     }
 
