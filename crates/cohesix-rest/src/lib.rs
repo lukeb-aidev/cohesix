@@ -79,6 +79,28 @@ impl GatewayClient {
         }
     }
 
+    /// Fetch gateway connection and broker backpressure status.
+    pub fn status(&self) -> Result<GatewayStatusResponse> {
+        let url = format!("{}/v1/meta/status", self.base_url);
+        match self.with_auth(self.agent.get(&url)).call() {
+            Ok(resp) => resp
+                .into_json()
+                .map_err(|err| anyhow!(err))
+                .context("decode status response"),
+            Err(ureq::Error::Status(code, resp)) => {
+                let body = resp.into_string().unwrap_or_default();
+                if body.is_empty() {
+                    Err(anyhow!("STATUS failed (http {code})"))
+                } else {
+                    Err(anyhow!("STATUS failed (http {code}): {body}"))
+                }
+            }
+            Err(ureq::Error::Transport(err)) => {
+                Err(anyhow!(err).context("gateway transport error"))
+            }
+        }
+    }
+
     /// Issue an LS request via the gateway.
     pub fn list(&self, path: &str) -> Result<Vec<String>> {
         let path = urlencoding::encode(path);
@@ -337,6 +359,72 @@ pub struct ProcLeaseBounds {
     pub preemptions_bytes: u32,
 }
 
+/// Gateway connection and broker status returned by `/v1/meta/status`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GatewayStatusResponse {
+    /// True when the gateway currently has a console connection.
+    pub connected: bool,
+    /// Last connection or relay error, when available.
+    #[serde(default)]
+    pub last_error: Option<String>,
+    /// Last connection state change timestamp in Unix milliseconds.
+    #[serde(default)]
+    pub last_change_unix_ms: Option<u128>,
+    /// Number of reconnects attempted by the gateway.
+    pub reconnects: u64,
+    /// Number of successful gateway console connections.
+    pub connects: u64,
+    /// Broker wait, retry, cache, and relay counters.
+    pub broker: BrokerStatusResponse,
+}
+
+/// Gateway broker counters returned by `/v1/meta/status`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BrokerStatusResponse {
+    /// Current waiters for control sessions.
+    pub control_waiters: u64,
+    /// Current waiters for telemetry sessions.
+    pub telemetry_waiters: u64,
+    /// High-water waiter count for control sessions.
+    pub control_waiters_high_water: u64,
+    /// High-water waiter count for telemetry sessions.
+    pub telemetry_waiters_high_water: u64,
+    /// Total control session checkouts.
+    pub control_checkouts: u64,
+    /// Total telemetry session checkouts.
+    pub telemetry_checkouts: u64,
+    /// Total pool exhaustion events.
+    pub pool_exhausted: u64,
+    /// Total checkout retries.
+    pub checkout_retries: u64,
+    /// Total timeout rejections.
+    pub timeout_rejections: u64,
+    /// Total telemetry yield events.
+    pub telemetry_yields: u64,
+    /// Total `/proc` cache hits.
+    pub proc_cache_hits: u64,
+    /// Total `/proc` cache misses.
+    pub proc_cache_misses: u64,
+    /// Total `/proc` cache evictions.
+    pub proc_cache_evictions: u64,
+    /// Total retryable control-write errors.
+    pub control_write_retryable_errors: u64,
+    /// Total control-write retry attempts.
+    pub control_write_retries: u64,
+    /// Total milliseconds slept for control-write retries.
+    pub control_write_retry_sleep_ms: u64,
+    /// Total exhausted control-write retry windows.
+    pub control_write_retry_exhaustions: u64,
+    /// Total control writes that succeeded after retrying.
+    pub control_write_success_after_retry: u64,
+    /// Current host relay queue depth.
+    pub relay_queue_depth: u64,
+    /// Total deduped relay updates.
+    pub relay_deduped: u64,
+    /// Total remote relay write failures.
+    pub relay_remote_write_failures: u64,
+}
+
 #[derive(Debug, serde::Serialize)]
 struct EchoRequest {
     path: String,
@@ -390,7 +478,7 @@ fn ensure_ok(verb: &str, response: GatewayResponse) -> Result<GatewayResponse> {
 
 #[cfg(test)]
 mod tests {
-    use super::BoundsResponse;
+    use super::{BoundsResponse, GatewayStatusResponse};
 
     #[test]
     fn bounds_response_parses_without_status_wrapper() {
@@ -436,5 +524,44 @@ mod tests {
         assert_eq!(parsed.manifest_sha256, "deadbeef");
         assert_eq!(parsed.secure9p.msize, 8192);
         assert_eq!(parsed.observability.proc_schedule.queue_bytes, 256);
+    }
+
+    #[test]
+    fn gateway_status_response_parses_broker_counters() {
+        let json = r#"{
+            "connected": true,
+            "last_change_unix_ms": 1782846123456,
+            "reconnects": 2,
+            "connects": 3,
+            "broker": {
+                "control_waiters": 1,
+                "telemetry_waiters": 57,
+                "control_waiters_high_water": 4,
+                "telemetry_waiters_high_water": 64,
+                "control_checkouts": 10,
+                "telemetry_checkouts": 200,
+                "pool_exhausted": 5,
+                "checkout_retries": 120,
+                "timeout_rejections": 3,
+                "telemetry_yields": 480,
+                "proc_cache_hits": 7,
+                "proc_cache_misses": 11,
+                "proc_cache_evictions": 2,
+                "control_write_retryable_errors": 1080,
+                "control_write_retries": 1080,
+                "control_write_retry_sleep_ms": 27000,
+                "control_write_retry_exhaustions": 1080,
+                "control_write_success_after_retry": 0,
+                "relay_queue_depth": 9,
+                "relay_deduped": 12,
+                "relay_remote_write_failures": 1
+            }
+        }"#;
+        let parsed: GatewayStatusResponse = serde_json::from_str(json).expect("status json");
+        assert!(parsed.connected);
+        assert_eq!(parsed.reconnects, 2);
+        assert_eq!(parsed.broker.telemetry_waiters, 57);
+        assert_eq!(parsed.broker.control_write_retry_exhaustions, 1080);
+        assert_eq!(parsed.broker.relay_queue_depth, 9);
     }
 }

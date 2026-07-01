@@ -474,7 +474,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN,
     DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY,
     DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED, DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
-    DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
+    DRIVER_RUNTIME_USB_KEYBOARD_FRAME_FLAG_INPUT, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODE_FAILED,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY,
@@ -2531,6 +2531,17 @@ impl DriverTaskCompletionRecord {
         }
     }
 
+    const fn keyboard_input_ready(sequence: u32, len: u16) -> Self {
+        Self::frame_ready_with_descriptor(
+            sequence,
+            DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len,
+                flags: DRIVER_RUNTIME_USB_KEYBOARD_FRAME_FLAG_INPUT,
+            },
+        )
+    }
+
     const fn idle(sequence: u32) -> Self {
         Self {
             sequence,
@@ -4337,7 +4348,7 @@ fn service_usb_keyboard(command: DriverTaskCommandRecord) -> DriverTaskCompletio
                 state.reports = state.reports.saturating_add(1);
             });
             USB_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_RX_PROGRESS, Ordering::AcqRel);
-            DriverTaskCompletionRecord::frame_ready(command.sequence, produced as u16)
+            DriverTaskCompletionRecord::keyboard_input_ready(command.sequence, produced as u16)
         };
     }
     #[cfg(not(test))]
@@ -4359,7 +4370,7 @@ fn service_usb_keyboard(command: DriverTaskCommandRecord) -> DriverTaskCompletio
                 state.reports = state.reports.saturating_add(1);
             });
             USB_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_RX_PROGRESS, Ordering::AcqRel);
-            DriverTaskCompletionRecord::frame_ready(command.sequence, produced as u16)
+            DriverTaskCompletionRecord::keyboard_input_ready(command.sequence, produced as u16)
         }
     }
 }
@@ -32028,6 +32039,7 @@ mod tests {
         );
         assert_eq!(DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT, 9);
         assert_eq!(DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK, 0x7f);
+        assert_eq!(DRIVER_RUNTIME_USB_KEYBOARD_FRAME_FLAG_INPUT, 0x0001);
         assert_eq!(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY, 7);
         assert_eq!(
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER,
@@ -32055,6 +32067,25 @@ mod tests {
         assert!(USB_COMMAND_COMPLETION_SPINS >= USB_CONTROL_TRANSFER_SPINS);
         assert!(USB_COMMAND_COMPLETION_SLICE_SPINS < USB_COMMAND_COMPLETION_SPINS);
         assert_eq!(USB_CONTROL_TRANSFER_SPINS, USB_XHCI_SPINS);
+    }
+
+    #[test]
+    fn usb_keyboard_input_completion_is_typed() {
+        let completion = DriverTaskCompletionRecord::keyboard_input_ready(7, 3);
+
+        assert_eq!(completion.sequence, 7);
+        assert_eq!(completion.code, COMPLETION_FRAME_READY);
+        assert_eq!(completion.detail, FAULT_NONE);
+        assert_eq!(completion.result, 3);
+        assert_eq!(
+            completion.frame.offset,
+            DRIVER_TASK_RING_FRAME_OFFSET as u32
+        );
+        assert_eq!(completion.frame.len, 3);
+        assert_eq!(
+            completion.frame.flags,
+            DRIVER_RUNTIME_USB_KEYBOARD_FRAME_FLAG_INPUT
+        );
     }
 
     #[test]
@@ -34743,6 +34774,10 @@ mod tests {
         assert_eq!(completion.sequence, 97);
         assert_eq!(completion.code, COMPLETION_FRAME_READY);
         assert_eq!(completion.frame.len, 1);
+        assert_eq!(
+            completion.frame.flags,
+            DRIVER_RUNTIME_USB_KEYBOARD_FRAME_FLAG_INPUT
+        );
         assert_eq!(read_ring_byte(DRIVER_TASK_RING_FRAME_OFFSET), b'a');
         USB_RUNTIME_STATE.with_ref(|state| {
             assert_eq!(state.keyboard_valid_report_events, 1);

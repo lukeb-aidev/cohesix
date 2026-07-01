@@ -733,7 +733,27 @@ const updateHivePressure = (batch) => {
   const pressure = batch.pressure ?? 0;
   const backlog = batch.backlog ?? 0;
   const dropped = batch.dropped ?? 0;
-  hivePressure.textContent = `Pressure ${(pressure * 100).toFixed(0)}% · backlog ${backlog} · dropped ${dropped}`;
+  const parts = [
+    `UI ${(pressure * 100).toFixed(0)}%`,
+    `backlog ${backlog}`,
+    `dropped ${dropped}`,
+  ];
+  const gateway = batch.gateway;
+  if (gateway) {
+    parts.push(`gateway ${((gateway.pressure ?? 0) * 100).toFixed(0)}%`);
+    hivePressure.title = [
+      `gateway connected=${gateway.connected ? "yes" : "no"}`,
+      `control=${((gateway.control_pressure ?? 0) * 100).toFixed(0)}%`,
+      `telemetry=${((gateway.telemetry_pressure ?? 0) * 100).toFixed(0)}%`,
+      `waiters=${gateway.control_waiters ?? 0}/${gateway.telemetry_waiters ?? 0}`,
+      `retryable=${gateway.control_write_retryable_errors_delta ?? 0}`,
+      `exhausted=${gateway.control_write_retry_exhaustions_delta ?? 0}`,
+      `relay=${gateway.relay_queue_depth ?? 0}`,
+    ].join(" · ");
+  } else {
+    hivePressure.title = "UI backlog pressure";
+  }
+  hivePressure.textContent = parts.join(" · ");
 };
 
 const updateHiveRoot = (batch) => {

@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use anyhow::{anyhow, Context, Result};
-use cohesix_rest::{BoundsResponse, GatewayClient};
+use cohesix_rest::{BoundsResponse, GatewayClient, GatewayStatusResponse};
 use cohesix_ticket::Role;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus};
 use cohsh_core::{normalize_ticket, role_label, ConsoleVerb, TicketPolicy};
@@ -56,6 +56,11 @@ impl RestTransport {
     pub fn with_max_tail_bytes(mut self, max_bytes: u32) -> Self {
         self.max_tail_bytes = max_bytes.max(1);
         self
+    }
+
+    /// Fetch gateway connection and broker backpressure status.
+    pub fn gateway_status(&self) -> Result<GatewayStatusResponse> {
+        self.client.status()
     }
 
     fn push_ack(&mut self, status: AckStatus, verb: &str, detail: Option<&str>) {

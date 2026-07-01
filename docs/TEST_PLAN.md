@@ -85,7 +85,11 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 - Pre-existing features continue to work; new features are validated against documented behaviour.
 - QEMU boots the VM and exposes Secure9P/TCP console without protocol drift.
 - TCP console remains reliable under load (no unexpected disconnects/resets/partial writes).
-- Performance baselines are captured and stored under `docs/bench/` (see `docs/BENCHMARKS.md`) for any changes affecting throughput/latency.
+- Performance baselines are captured with reviewable `*.summary.json` artifacts
+  and interpreted in `docs/BENCHMARKS.md` for any changes affecting
+  throughput/latency. Raw artifacts normally live under `logs/bench/` or
+  `out/bench/`; commit them under `docs/bench/` only when the active milestone
+  explicitly requires checked-in evidence.
 - Host tools behave correctly: `coh`, `cohsh`, `swarmui`, `cas-tool`, `gpu-bridge-host`, `host-sidecar-bridge`.
 - Deterministic replay passes for cohsh and SwarmUI (trace + hive snapshot).
 - Fixtures and manifests remain hash-consistent.
@@ -117,9 +121,13 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
 
 ## Performance baselines (Authoritative)
 - Performance evidence is only valid when it is **stored and reviewable**:
-  - Commit harness artifacts under `docs/bench/` (JSON/CSV/SVG) and
-  - Index/interpret them in `docs/BENCHMARKS.md`.
-- Do not use "last local run" as a baseline. If you need a new baseline, commit it and update `docs/BENCHMARKS.md` in the same change.
+  - Preserve the canonical harness `*.summary.json` plus associated logs or
+    target proof under `logs/bench/`, `out/bench/`, or a milestone-approved
+    committed evidence path; and
+  - Index/interpret the result in `docs/BENCHMARKS.md` when it becomes a
+    baseline, comparison point, or release claim.
+- Do not use "last local run" as a baseline. If you need a new baseline,
+  preserve the artifact path and update `docs/BENCHMARKS.md` in the same change.
 
 ## Execution order
 Run in order. Skips produce INCOMPLETE markers and the stage will fail.
@@ -323,7 +331,9 @@ Run while QEMU is up:
 - Reasonable acceptance:
   - `tcp-diag` has zero failures.
   - `pool bench` shows non-zero throughput and stable latency.
-  - Any performance regression claim must be backed by committed baseline artifacts under `docs/bench/` (and indexed in `docs/BENCHMARKS.md` when applicable); do not compare against unpublished local runs.
+  - Any performance regression claim must be backed by reviewable baseline
+    artifacts and indexed in `docs/BENCHMARKS.md` when applicable; do not
+    compare against unpublished local runs.
 - Capture logs:
   - cohsh: `logs/cohsh-session.log`
   - QEMU serial: `logs/qemu-console.log`

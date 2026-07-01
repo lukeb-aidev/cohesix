@@ -1,3 +1,7 @@
+// Author: Lukas Bower
+// Purpose: Define Live Hive renderer sizing, motion, and bounded visual budgets.
+// Copyright 2026 Lukas Bower
+
 export const buildHiveStyle = (tokens) => {
   const flowBlobRadius = Math.max(6, tokens.sizes.flow * 6);
   const flowBlobSpacing = Math.max(8, flowBlobRadius * 1.6);
@@ -20,7 +24,16 @@ export const buildHiveStyle = (tokens) => {
     driftRateX: 0.35,
     driftRateY: 0.28,
     maxPollen: 240,
+    maxBackpressurePollen: 16,
     maxPulses: 80,
+    backpressureRadiusBase: 36,
+    backpressureRadiusRange: 34,
+    backpressureOrbitSpeedBase: 0.45,
+    backpressureOrbitSpeedScale: 0.85,
+    backpressureAlphaMin: 0.22,
+    backpressureAlphaRange: 0.58,
+    backpressureScaleMin: 0.85,
+    backpressureScaleRange: 0.9,
     positionScale: 0.8,
     errorDecay: 1.4,
     flowIntensityMax: 6,

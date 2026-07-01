@@ -73,6 +73,7 @@ export const createHiveController = (container, status, options = {}) => {
   let pendingSize = 0;
   let pendingCap = 0;
   let pressure = 0;
+  let gatewayPressure = { overall: 0, control: 0, telemetry: 0 };
   let running = false;
   let frameScheduled = false;
   let lastFrame = 0;
@@ -261,7 +262,9 @@ export const createHiveController = (container, status, options = {}) => {
 
   const reset = () => {
     pressure = 0;
+    gatewayPressure = { overall: 0, control: 0, telemetry: 0 };
     world = new HiveWorld(style);
+    world.setGatewayPressure(0, 0, 0);
     resetPending();
     renderer.resetView();
     renderer.setSelectedAgent(null);
@@ -282,6 +285,7 @@ export const createHiveController = (container, status, options = {}) => {
         renderActive,
         interactionActive,
         frameScheduled,
+        gatewayPressure,
       }),
       forceFrame: () => {
         step(performance.now());
@@ -303,6 +307,17 @@ export const createHiveController = (container, status, options = {}) => {
     },
     ingest: (batch) => {
       pressure = batch.pressure ?? 0;
+      const gateway = batch.gateway || {};
+      gatewayPressure = {
+        overall: clamp(gateway.pressure ?? 0, 0, 1),
+        control: clamp(gateway.control_pressure ?? 0, 0, 1),
+        telemetry: clamp(gateway.telemetry_pressure ?? 0, 0, 1),
+      };
+      world.setGatewayPressure(
+        gatewayPressure.overall,
+        gatewayPressure.control,
+        gatewayPressure.telemetry,
+      );
       if (batch.events && batch.events.length) {
         enqueueBatch(batch.events);
       }

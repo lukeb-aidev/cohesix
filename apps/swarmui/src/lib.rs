@@ -20,11 +20,11 @@ pub use desktop::{
 };
 pub use hive::{
     SwarmUiHiveAgent, SwarmUiHiveBatch, SwarmUiHiveBootstrap, SwarmUiHiveConfig, SwarmUiHiveDetail,
-    SwarmUiHiveEvent, SwarmUiHiveEventKind, SwarmUiHiveLeaseEntry, SwarmUiHiveLeasePreemption,
-    SwarmUiHiveLeaseSnapshot, SwarmUiHiveLeaseSummary, SwarmUiHiveOverlay,
-    SwarmUiHivePressureCounters, SwarmUiHiveRootStatus, SwarmUiHiveScheduleEntry,
-    SwarmUiHiveScheduleSnapshot, SwarmUiHiveScheduleSummary, SwarmUiHiveSessionSummary,
-    SwarmUiHiveSnapshot,
+    SwarmUiHiveEvent, SwarmUiHiveEventKind, SwarmUiHiveGatewayStatus, SwarmUiHiveLeaseEntry,
+    SwarmUiHiveLeasePreemption, SwarmUiHiveLeaseSnapshot, SwarmUiHiveLeaseSummary,
+    SwarmUiHiveOverlay, SwarmUiHivePressureCounters, SwarmUiHiveRootStatus,
+    SwarmUiHiveScheduleEntry, SwarmUiHiveScheduleSnapshot, SwarmUiHiveScheduleSummary,
+    SwarmUiHiveSessionSummary, SwarmUiHiveSnapshot,
 };
 pub use transport::{TcpTransport, TcpTransportError, TcpTransportFactory, TraceTransportFactory};
 
@@ -233,8 +233,145 @@ struct HiveStatusCache {
     root: Option<SwarmUiHiveRootStatus>,
     sessions: Option<SwarmUiHiveSessionSummary>,
     pressure_counters: Option<SwarmUiHivePressureCounters>,
+    gateway: Option<SwarmUiHiveGatewayStatus>,
     schedule: Option<SwarmUiHiveScheduleSnapshot>,
     lease: Option<SwarmUiHiveLeaseSnapshot>,
+}
+
+type HiveStatusRead = (
+    Option<SwarmUiHiveRootStatus>,
+    Option<SwarmUiHiveSessionSummary>,
+    Option<SwarmUiHivePressureCounters>,
+    Option<SwarmUiHiveGatewayStatus>,
+    Option<SwarmUiHiveScheduleSnapshot>,
+    Option<SwarmUiHiveLeaseSnapshot>,
+);
+
+#[cfg(any(feature = "rest", test))]
+#[derive(Debug, Clone)]
+struct GatewayBrokerSnapshot {
+    control_waiters: u64,
+    telemetry_waiters: u64,
+    control_waiters_high_water: u64,
+    telemetry_waiters_high_water: u64,
+    pool_exhausted: u64,
+    checkout_retries: u64,
+    timeout_rejections: u64,
+    telemetry_yields: u64,
+    control_write_retryable_errors: u64,
+    control_write_retries: u64,
+    control_write_retry_sleep_ms: u64,
+    control_write_retry_exhaustions: u64,
+    relay_queue_depth: u64,
+    relay_remote_write_failures: u64,
+}
+
+#[cfg(any(feature = "rest", test))]
+const GATEWAY_CONTROL_PRESSURE_DENOMINATOR: f32 = 32.0;
+#[cfg(any(feature = "rest", test))]
+const GATEWAY_TELEMETRY_PRESSURE_DENOMINATOR: f32 = 64.0;
+#[cfg(any(feature = "rest", test))]
+const GATEWAY_CONTROL_WAITER_SCORE_CAP: u64 = 16;
+#[cfg(any(feature = "rest", test))]
+const GATEWAY_TELEMETRY_WAITER_SCORE_CAP: u64 = 32;
+#[cfg(any(feature = "rest", test))]
+const GATEWAY_RELAY_QUEUE_SCORE_CAP: u64 = 32;
+
+#[cfg(any(feature = "rest", test))]
+fn counter_delta(current: u64, previous: Option<u64>) -> u64 {
+    previous.map_or(0, |value| current.saturating_sub(value))
+}
+
+#[cfg(any(feature = "rest", test))]
+fn gateway_pressure(score: u64, denominator: f32) -> f32 {
+    ((score as f32) / denominator).clamp(0.0, 1.0)
+}
+
+#[cfg(any(feature = "rest", test))]
+fn gateway_status_from_snapshot(
+    connected: bool,
+    current: &GatewayBrokerSnapshot,
+    previous: Option<&GatewayBrokerSnapshot>,
+) -> SwarmUiHiveGatewayStatus {
+    let pool_exhausted_delta = counter_delta(
+        current.pool_exhausted,
+        previous.map(|item| item.pool_exhausted),
+    );
+    let checkout_retries_delta = counter_delta(
+        current.checkout_retries,
+        previous.map(|item| item.checkout_retries),
+    );
+    let timeout_rejections_delta = counter_delta(
+        current.timeout_rejections,
+        previous.map(|item| item.timeout_rejections),
+    );
+    let telemetry_yields_delta = counter_delta(
+        current.telemetry_yields,
+        previous.map(|item| item.telemetry_yields),
+    );
+    let control_write_retryable_errors_delta = counter_delta(
+        current.control_write_retryable_errors,
+        previous.map(|item| item.control_write_retryable_errors),
+    );
+    let control_write_retries_delta = counter_delta(
+        current.control_write_retries,
+        previous.map(|item| item.control_write_retries),
+    );
+    let control_write_retry_sleep_ms_delta = counter_delta(
+        current.control_write_retry_sleep_ms,
+        previous.map(|item| item.control_write_retry_sleep_ms),
+    );
+    let control_write_retry_exhaustions_delta = counter_delta(
+        current.control_write_retry_exhaustions,
+        previous.map(|item| item.control_write_retry_exhaustions),
+    );
+    let relay_remote_write_failures_delta = counter_delta(
+        current.relay_remote_write_failures,
+        previous.map(|item| item.relay_remote_write_failures),
+    );
+
+    let control_score = current
+        .control_waiters
+        .min(GATEWAY_CONTROL_WAITER_SCORE_CAP)
+        + pool_exhausted_delta.saturating_mul(2)
+        + timeout_rejections_delta.saturating_mul(4)
+        + checkout_retries_delta / 8
+        + control_write_retryable_errors_delta
+        + control_write_retries_delta / 4
+        + control_write_retry_exhaustions_delta.saturating_mul(2);
+    let telemetry_score = current
+        .telemetry_waiters
+        .min(GATEWAY_TELEMETRY_WAITER_SCORE_CAP)
+        + current.relay_queue_depth.min(GATEWAY_RELAY_QUEUE_SCORE_CAP)
+        + pool_exhausted_delta.saturating_mul(2)
+        + timeout_rejections_delta.saturating_mul(4)
+        + telemetry_yields_delta / 8
+        + relay_remote_write_failures_delta.saturating_mul(4);
+    let control_pressure = gateway_pressure(control_score, GATEWAY_CONTROL_PRESSURE_DENOMINATOR);
+    let telemetry_pressure =
+        gateway_pressure(telemetry_score, GATEWAY_TELEMETRY_PRESSURE_DENOMINATOR);
+    let pressure = control_pressure.max(telemetry_pressure);
+
+    SwarmUiHiveGatewayStatus {
+        connected,
+        pressure,
+        control_pressure,
+        telemetry_pressure,
+        control_waiters: current.control_waiters,
+        telemetry_waiters: current.telemetry_waiters,
+        control_waiters_high_water: current.control_waiters_high_water,
+        telemetry_waiters_high_water: current.telemetry_waiters_high_water,
+        pool_exhausted_delta,
+        checkout_retries_delta,
+        timeout_rejections_delta,
+        telemetry_yields_delta,
+        control_write_retryable_errors_delta,
+        control_write_retries_delta,
+        control_write_retry_sleep_ms_delta,
+        control_write_retry_exhaustions_delta,
+        relay_queue_depth: current.relay_queue_depth,
+        relay_remote_write_failures_delta,
+    }
 }
 
 /// Errors surfaced by SwarmUI backend operations.
@@ -1126,7 +1263,7 @@ where
             backlog as f32 / hive_config.lod_event_budget as f32
         };
         let dropped = state.dropped();
-        let (root, sessions, pressure_counters, schedule, lease) =
+        let (root, sessions, pressure_counters, gateway, schedule, lease) =
             self.read_hive_status_cached(role, ticket, hive_config.status_poll_ms);
         Ok(SwarmUiHiveBatch {
             events,
@@ -1136,6 +1273,7 @@ where
             root,
             sessions,
             pressure_counters,
+            gateway,
             schedule,
             lease,
             overlays,
@@ -1174,15 +1312,9 @@ where
         role: Role,
         ticket: Option<&str>,
         min_interval_ms: u32,
-    ) -> (
-        Option<SwarmUiHiveRootStatus>,
-        Option<SwarmUiHiveSessionSummary>,
-        Option<SwarmUiHivePressureCounters>,
-        Option<SwarmUiHiveScheduleSnapshot>,
-        Option<SwarmUiHiveLeaseSnapshot>,
-    ) {
+    ) -> HiveStatusRead {
         if self.config.offline {
-            return (None, None, None, None, None);
+            return (None, None, None, None, None, None);
         }
         let key = self.session_key(role, ticket);
         if min_interval_ms > 0 {
@@ -1192,13 +1324,14 @@ where
                         cache.root.clone(),
                         cache.sessions.clone(),
                         cache.pressure_counters.clone(),
+                        cache.gateway.clone(),
                         cache.schedule.clone(),
                         cache.lease.clone(),
                     );
                 }
             }
         }
-        let (root, sessions, pressure_counters, schedule, lease) =
+        let (root, sessions, pressure_counters, gateway, schedule, lease) =
             self.read_hive_status(role, ticket);
         self.hive_status_cache.insert(
             key,
@@ -1207,30 +1340,21 @@ where
                 root: root.clone(),
                 sessions: sessions.clone(),
                 pressure_counters: pressure_counters.clone(),
+                gateway: gateway.clone(),
                 schedule: schedule.clone(),
                 lease: lease.clone(),
             },
         );
-        (root, sessions, pressure_counters, schedule, lease)
+        (root, sessions, pressure_counters, gateway, schedule, lease)
     }
 
-    fn read_hive_status(
-        &mut self,
-        role: Role,
-        ticket: Option<&str>,
-    ) -> (
-        Option<SwarmUiHiveRootStatus>,
-        Option<SwarmUiHiveSessionSummary>,
-        Option<SwarmUiHivePressureCounters>,
-        Option<SwarmUiHiveScheduleSnapshot>,
-        Option<SwarmUiHiveLeaseSnapshot>,
-    ) {
+    fn read_hive_status(&mut self, role: Role, ticket: Option<&str>) -> HiveStatusRead {
         if self.config.offline {
-            return (None, None, None, None, None);
+            return (None, None, None, None, None, None);
         }
         let session = match self.session_for(role, ticket) {
             Ok(session) => session,
-            Err(_) => return (None, None, None, None, None),
+            Err(_) => return (None, None, None, None, None, None),
         };
 
         let reachable_line = read_single_line(&mut session.client, "/proc/root/reachable");
@@ -1328,7 +1452,7 @@ where
             None
         };
 
-        (root, sessions, pressure_counters, schedule, lease)
+        (root, sessions, pressure_counters, None, schedule, lease)
     }
 
     /// Cache a CBOR snapshot payload.
@@ -1517,6 +1641,8 @@ pub struct SwarmUiConsoleBackend<T: CohshTransport> {
     session_claims: Option<TicketClaims>,
     hive_states: HashMap<SessionKey, hive::ConsoleHiveSessionState>,
     hive_status_cache: HashMap<SessionKey, HiveStatusCache>,
+    #[cfg(feature = "rest")]
+    hive_gateway_snapshots: HashMap<SessionKey, GatewayBrokerSnapshot>,
     hive_replay: Option<hive::HiveReplay>,
     audit: VecDeque<String>,
     active_tails: usize,
@@ -1576,6 +1702,8 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             session_claims: None,
             hive_states: HashMap::new(),
             hive_status_cache: HashMap::new(),
+            #[cfg(feature = "rest")]
+            hive_gateway_snapshots: HashMap::new(),
             hive_replay: None,
             audit: VecDeque::new(),
             active_tails: 0,
@@ -2621,13 +2749,14 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         };
         let dropped = state.dropped();
         #[cfg(feature = "rest")]
-        let (root, sessions, pressure_counters, schedule, lease) = if self.rest_parallel.is_some() {
-            self.read_hive_status_cached(role, ticket, hive_config.status_poll_ms)
-        } else {
-            self.read_hive_status(role, ticket)
-        };
+        let (root, sessions, pressure_counters, gateway, schedule, lease) =
+            if self.rest_parallel.is_some() {
+                self.read_hive_status_cached(role, ticket, hive_config.status_poll_ms)
+            } else {
+                self.read_hive_status(role, ticket)
+            };
         #[cfg(not(feature = "rest"))]
-        let (root, sessions, pressure_counters, schedule, lease) =
+        let (root, sessions, pressure_counters, gateway, schedule, lease) =
             self.read_hive_status(role, ticket);
         Ok(SwarmUiHiveBatch {
             events,
@@ -2637,6 +2766,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             root,
             sessions,
             pressure_counters,
+            gateway,
             schedule,
             lease,
             overlays,
@@ -2656,6 +2786,8 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         }
         let key = self.session_key(role, ticket);
         self.hive_status_cache.remove(&key);
+        #[cfg(feature = "rest")]
+        self.hive_gateway_snapshots.remove(&key);
         if let Some(mut state) = self.hive_states.remove(&key) {
             state.reset();
         }
@@ -2742,15 +2874,9 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         role: Role,
         ticket: Option<&str>,
         min_interval_ms: u32,
-    ) -> (
-        Option<SwarmUiHiveRootStatus>,
-        Option<SwarmUiHiveSessionSummary>,
-        Option<SwarmUiHivePressureCounters>,
-        Option<SwarmUiHiveScheduleSnapshot>,
-        Option<SwarmUiHiveLeaseSnapshot>,
-    ) {
+    ) -> HiveStatusRead {
         if self.config.offline {
-            return (None, None, None, None, None);
+            return (None, None, None, None, None, None);
         }
         let key = self.session_key(role, ticket);
         if min_interval_ms > 0 {
@@ -2760,13 +2886,14 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                         cache.root.clone(),
                         cache.sessions.clone(),
                         cache.pressure_counters.clone(),
+                        cache.gateway.clone(),
                         cache.schedule.clone(),
                         cache.lease.clone(),
                     );
                 }
             }
         }
-        let (root, sessions, pressure_counters, schedule, lease) =
+        let (root, sessions, pressure_counters, gateway, schedule, lease) =
             self.read_hive_status(role, ticket);
         self.hive_status_cache.insert(
             key,
@@ -2775,26 +2902,17 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 root: root.clone(),
                 sessions: sessions.clone(),
                 pressure_counters: pressure_counters.clone(),
+                gateway: gateway.clone(),
                 schedule: schedule.clone(),
                 lease: lease.clone(),
             },
         );
-        (root, sessions, pressure_counters, schedule, lease)
+        (root, sessions, pressure_counters, gateway, schedule, lease)
     }
 
-    fn read_hive_status(
-        &mut self,
-        role: Role,
-        ticket: Option<&str>,
-    ) -> (
-        Option<SwarmUiHiveRootStatus>,
-        Option<SwarmUiHiveSessionSummary>,
-        Option<SwarmUiHivePressureCounters>,
-        Option<SwarmUiHiveScheduleSnapshot>,
-        Option<SwarmUiHiveLeaseSnapshot>,
-    ) {
+    fn read_hive_status(&mut self, role: Role, ticket: Option<&str>) -> HiveStatusRead {
         if self.config.offline {
-            return (None, None, None, None, None);
+            return (None, None, None, None, None, None);
         }
         #[cfg(feature = "rest")]
         if let Some(rest_parallel) = self.rest_parallel.clone() {
@@ -2802,7 +2920,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         }
         let session = match self.session_for(role, ticket) {
             Ok(session) => session,
-            Err(_) => return (None, None, None, None, None),
+            Err(_) => return (None, None, None, None, None, None),
         };
 
         let reachable_line = read_lines_console(
@@ -2951,7 +3069,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             None
         };
 
-        (root, sessions, pressure_counters, schedule, lease)
+        (root, sessions, pressure_counters, None, schedule, lease)
     }
 
     #[cfg(feature = "rest")]
@@ -2960,14 +3078,10 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         role: Role,
         ticket: Option<&str>,
         rest_parallel: &RestParallelConfig,
-    ) -> (
-        Option<SwarmUiHiveRootStatus>,
-        Option<SwarmUiHiveSessionSummary>,
-        Option<SwarmUiHivePressureCounters>,
-        Option<SwarmUiHiveScheduleSnapshot>,
-        Option<SwarmUiHiveLeaseSnapshot>,
-    ) {
+    ) -> HiveStatusRead {
         let _ = self.session_for(role, ticket);
+        let key = self.session_key(role, ticket);
+        let gateway = self.read_gateway_status_rest(&key, rest_parallel);
         let parallel_limit = rest_parallel.parallel_limit();
         let rest_url = rest_parallel.base_url.clone();
         let rest_auth_token = rest_parallel.request_auth_token.clone();
@@ -3146,7 +3260,46 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             None
         };
 
-        (root, sessions, pressure_counters, schedule, lease)
+        (root, sessions, pressure_counters, gateway, schedule, lease)
+    }
+
+    #[cfg(feature = "rest")]
+    fn read_gateway_status_rest(
+        &mut self,
+        key: &SessionKey,
+        rest_parallel: &RestParallelConfig,
+    ) -> Option<SwarmUiHiveGatewayStatus> {
+        let transport = CohshRestTransport::new(
+            rest_parallel.base_url.clone(),
+            rest_parallel.request_auth_token.clone(),
+        );
+        let status = transport.gateway_status().ok()?;
+        let connected = status.connected;
+        let broker = status.broker;
+        let current = GatewayBrokerSnapshot {
+            control_waiters: broker.control_waiters,
+            telemetry_waiters: broker.telemetry_waiters,
+            control_waiters_high_water: broker.control_waiters_high_water,
+            telemetry_waiters_high_water: broker.telemetry_waiters_high_water,
+            pool_exhausted: broker.pool_exhausted,
+            checkout_retries: broker.checkout_retries,
+            timeout_rejections: broker.timeout_rejections,
+            telemetry_yields: broker.telemetry_yields,
+            control_write_retryable_errors: broker.control_write_retryable_errors,
+            control_write_retries: broker.control_write_retries,
+            control_write_retry_sleep_ms: broker.control_write_retry_sleep_ms,
+            control_write_retry_exhaustions: broker.control_write_retry_exhaustions,
+            relay_queue_depth: broker.relay_queue_depth,
+            relay_remote_write_failures: broker.relay_remote_write_failures,
+        };
+        let previous = self
+            .hive_gateway_snapshots
+            .insert(key.clone(), current.clone());
+        Some(gateway_status_from_snapshot(
+            connected,
+            &current,
+            previous.as_ref(),
+        ))
     }
 
     fn record_audit(&mut self, entry: String) {
@@ -3392,6 +3545,91 @@ mod tests {
         }
     }
 
+    fn gateway_snapshot() -> GatewayBrokerSnapshot {
+        GatewayBrokerSnapshot {
+            control_waiters: 0,
+            telemetry_waiters: 0,
+            control_waiters_high_water: 0,
+            telemetry_waiters_high_water: 0,
+            pool_exhausted: 0,
+            checkout_retries: 0,
+            timeout_rejections: 0,
+            telemetry_yields: 0,
+            control_write_retryable_errors: 0,
+            control_write_retries: 0,
+            control_write_retry_sleep_ms: 0,
+            control_write_retry_exhaustions: 0,
+            relay_queue_depth: 0,
+            relay_remote_write_failures: 0,
+        }
+    }
+
+    #[test]
+    fn gateway_pressure_ignores_first_sample_lifetime_counters() {
+        let current = GatewayBrokerSnapshot {
+            pool_exhausted: 10,
+            checkout_retries: 640,
+            timeout_rejections: 12,
+            telemetry_yields: 2_000,
+            control_write_retryable_errors: 1_080,
+            control_write_retries: 1_080,
+            control_write_retry_sleep_ms: 27_000,
+            control_write_retry_exhaustions: 1_080,
+            relay_remote_write_failures: 4,
+            ..gateway_snapshot()
+        };
+
+        let status = gateway_status_from_snapshot(true, &current, None);
+
+        assert_eq!(status.pool_exhausted_delta, 0);
+        assert_eq!(status.control_write_retryable_errors_delta, 0);
+        assert_eq!(status.telemetry_yields_delta, 0);
+        assert_eq!(status.pressure, 0.0);
+    }
+
+    #[test]
+    fn gateway_pressure_uses_recent_deltas_and_current_depth() {
+        let previous = GatewayBrokerSnapshot {
+            control_write_retryable_errors: 100,
+            control_write_retries: 100,
+            control_write_retry_sleep_ms: 2_500,
+            control_write_retry_exhaustions: 50,
+            telemetry_yields: 80,
+            relay_remote_write_failures: 1,
+            ..gateway_snapshot()
+        };
+        let current = GatewayBrokerSnapshot {
+            control_waiters: 8,
+            telemetry_waiters: 57,
+            telemetry_waiters_high_water: 64,
+            pool_exhausted: 2,
+            checkout_retries: 64,
+            timeout_rejections: 3,
+            telemetry_yields: 640,
+            control_write_retryable_errors: 132,
+            control_write_retries: 148,
+            control_write_retry_sleep_ms: 3_100,
+            control_write_retry_exhaustions: 58,
+            relay_queue_depth: 24,
+            relay_remote_write_failures: 3,
+            ..gateway_snapshot()
+        };
+
+        let status = gateway_status_from_snapshot(true, &current, Some(&previous));
+
+        assert_eq!(status.control_write_retryable_errors_delta, 32);
+        assert_eq!(status.control_write_retry_exhaustions_delta, 8);
+        assert_eq!(status.telemetry_yields_delta, 560);
+        assert_eq!(status.relay_remote_write_failures_delta, 2);
+        assert!(status.control_pressure > 0.9);
+        assert!(status.telemetry_pressure > 0.8);
+        assert_eq!(
+            status.pressure,
+            status.control_pressure.max(status.telemetry_pressure)
+        );
+    }
+
+    #[cfg(feature = "rest")]
     #[test]
     fn console_hive_status_cache_respects_interval() {
         let temp_dir = tempfile::tempdir().expect("tempdir");

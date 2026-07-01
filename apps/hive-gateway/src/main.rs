@@ -61,7 +61,7 @@ const PROC_LEASE_PREEMPTIONS_PATH: &str = "/proc/lease/preemptions";
 const REQUEST_AUTH_HEADER: &str = "x-cohesix-auth";
 const AUTHORIZATION_BEARER_PREFIX: &str = "bearer ";
 const INSECURE_PLACEHOLDER_TOKEN: &str = concat!("change", "me");
-const DEFAULT_PROC_CACHE_TTL_MS: u64 = 500;
+const DEFAULT_PROC_CACHE_TTL_MS: u64 = 2_000;
 const DEFAULT_PROC_CACHE_MAX_ENTRIES: usize = 64;
 const BROKER_QUEUE_WAIT_LIMIT_MS: u64 = 5_000;
 const DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS: u64 = 120_000;
@@ -174,6 +174,7 @@ struct AppState {
 }
 
 struct GatewayInner {
+    pool: SharedPool,
     broker_client: GatewayBrokerClient,
     role: Role,
     ticket: Option<String>,
@@ -639,6 +640,7 @@ async fn main() -> Result<()> {
 
     let state = AppState {
         inner: Arc::new(GatewayInner {
+            pool: pool.clone(),
             broker_client,
             role: config.role,
             ticket: config.ticket.clone(),
@@ -1326,6 +1328,7 @@ fn spawn_connection_manager(state: AppState, host: String, port: u16) {
             if state.is_connected() {
                 if let Err(err) = state.ping() {
                     state.mark_disconnected(err);
+                    state.inner.pool.shutdown();
                     attempt = 0;
                     backoff = Duration::from_millis(state.inner.policy.retry.backoff_ms);
                     warn!("hive-gateway disconnected");
@@ -1512,7 +1515,6 @@ impl AppState {
     }
 
     fn list(&self, path: &str) -> Result<Vec<String>> {
-        self.ensure_connected()?;
         if is_cacheable_list_path(path) {
             if let Some(lines) = self.read_cache_get(path) {
                 return Ok(lines);
@@ -1522,6 +1524,7 @@ impl AppState {
                 .proc_cache_misses
                 .fetch_add(1, Ordering::Relaxed);
         }
+        self.ensure_connected()?;
         let lines = match self.submit_broker(
             PoolKind::Telemetry,
             BrokerRequest::List {
@@ -1538,7 +1541,6 @@ impl AppState {
     }
 
     fn read(&self, path: &str) -> Result<Vec<String>> {
-        self.ensure_connected()?;
         if is_cacheable_read_path(path) {
             if let Some(lines) = self.read_cache_get(path) {
                 return Ok(lines);
@@ -1548,6 +1550,7 @@ impl AppState {
                 .proc_cache_misses
                 .fetch_add(1, Ordering::Relaxed);
         }
+        self.ensure_connected()?;
         let lines = match self.submit_broker(
             PoolKind::Telemetry,
             BrokerRequest::Read {
@@ -2795,6 +2798,94 @@ mod tests {
         assert_eq!(
             unchanged.pool.telemetry_sessions,
             CohshPolicy::from_generated().pool.telemetry_sessions
+        );
+    }
+
+    fn disconnected_cached_state() -> AppState {
+        let (control_tx, _control_rx) = mpsc::sync_channel(0);
+        let (telemetry_tx, _telemetry_rx) = mpsc::sync_channel(0);
+        let factory: Arc<dyn TransportFactory> = Arc::new(|| {
+            Err(anyhow!(
+                "cached read/list regression test should not construct transport"
+            ))
+        });
+        AppState {
+            inner: Arc::new(GatewayInner {
+                pool: SessionPool::new(1, 1, factory),
+                broker_client: GatewayBrokerClient {
+                    control_tx,
+                    telemetry_tx,
+                },
+                role: Role::Queen,
+                ticket: None,
+                request_auth_token: "request-token".to_owned(),
+                status: Mutex::new(GatewayStatus {
+                    connected: false,
+                    last_error: Some("offline".to_owned()),
+                    last_change: None,
+                    reconnects: 1,
+                    connects: 0,
+                }),
+                shutdown: Arc::new(AtomicBool::new(false)),
+                broker_timeouts: BrokerTimeouts {
+                    control_response_ms: DEFAULT_BROKER_CONTROL_RESPONSE_TIMEOUT_MS,
+                    telemetry_response_ms: DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS,
+                },
+                control_write_retry_window_ms: DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS,
+                bounds: build_bounds(),
+                policy: CohshPolicy::from_generated(),
+                broker: Arc::new(BrokerMetrics::default()),
+                proc_cache: Mutex::new(ProcReadCache::default()),
+                control_write_backpressure: Mutex::new(ControlWriteBackpressure::default()),
+            }),
+        }
+    }
+
+    #[test]
+    fn cached_read_hit_does_not_require_connected_gateway() {
+        let state = disconnected_cached_state();
+        state.read_cache_insert("/proc/root/reachable", vec!["reachable=yes".to_owned()]);
+
+        let lines = state
+            .read("/proc/root/reachable")
+            .expect("cached read should bypass reconnect");
+
+        assert_eq!(lines, vec!["reachable=yes"]);
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .inner
+                .broker
+                .timeout_rejections
+                .load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn cached_list_hit_does_not_require_connected_gateway() {
+        let state = disconnected_cached_state();
+        state.read_cache_insert("/proc", vec!["root".to_owned(), "lease".to_owned()]);
+
+        let lines = state
+            .list("/proc")
+            .expect("cached list should bypass reconnect");
+
+        assert_eq!(lines, vec!["root", "lease"]);
+        assert_eq!(
+            state.inner.broker.proc_cache_hits.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            state
+                .inner
+                .broker
+                .timeout_rejections
+                .load(Ordering::Relaxed),
+            0
         );
     }
 }

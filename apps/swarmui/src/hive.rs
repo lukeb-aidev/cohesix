@@ -148,6 +148,47 @@ pub struct SwarmUiHivePressureCounters {
     pub policy: u64,
 }
 
+/// Gateway broker backpressure snapshot for Live Hive.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmUiHiveGatewayStatus {
+    /// True when the gateway currently has a console connection.
+    pub connected: bool,
+    /// Normalized broker pressure in the range 0..=1.
+    pub pressure: f32,
+    /// Normalized control-session pressure in the range 0..=1.
+    pub control_pressure: f32,
+    /// Normalized telemetry-session pressure in the range 0..=1.
+    pub telemetry_pressure: f32,
+    /// Current waiters for control sessions.
+    pub control_waiters: u64,
+    /// Current waiters for telemetry sessions.
+    pub telemetry_waiters: u64,
+    /// High-water waiter count for control sessions.
+    pub control_waiters_high_water: u64,
+    /// High-water waiter count for telemetry sessions.
+    pub telemetry_waiters_high_water: u64,
+    /// Pool exhaustion events since the previous Live Hive status sample.
+    pub pool_exhausted_delta: u64,
+    /// Checkout retry events since the previous Live Hive status sample.
+    pub checkout_retries_delta: u64,
+    /// Timeout rejections since the previous Live Hive status sample.
+    pub timeout_rejections_delta: u64,
+    /// Telemetry yield events since the previous Live Hive status sample.
+    pub telemetry_yields_delta: u64,
+    /// Retryable control-write errors since the previous Live Hive status sample.
+    pub control_write_retryable_errors_delta: u64,
+    /// Control-write retry attempts since the previous Live Hive status sample.
+    pub control_write_retries_delta: u64,
+    /// Control-write retry sleep milliseconds since the previous Live Hive status sample.
+    pub control_write_retry_sleep_ms_delta: u64,
+    /// Exhausted control-write retry windows since the previous Live Hive status sample.
+    pub control_write_retry_exhaustions_delta: u64,
+    /// Current host relay queue depth.
+    pub relay_queue_depth: u64,
+    /// Remote relay write failures since the previous Live Hive status sample.
+    pub relay_remote_write_failures_delta: u64,
+}
+
 /// Scheduler summary counters for Live Hive.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmUiHiveScheduleSummary {
@@ -332,6 +373,9 @@ pub struct SwarmUiHiveBatch {
     /// Pressure counter snapshot.
     #[serde(default)]
     pub pressure_counters: Option<SwarmUiHivePressureCounters>,
+    /// Gateway broker backpressure snapshot.
+    #[serde(default)]
+    pub gateway: Option<SwarmUiHiveGatewayStatus>,
     /// Scheduler snapshot.
     #[serde(default)]
     pub schedule: Option<SwarmUiHiveScheduleSnapshot>,
@@ -416,6 +460,7 @@ impl HiveReplay {
             root: None,
             sessions: None,
             pressure_counters: None,
+            gateway: None,
             schedule: None,
             lease: None,
             overlays: Vec::new(),

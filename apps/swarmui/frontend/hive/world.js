@@ -1,5 +1,10 @@
+// Author: Lukas Bower
+// Purpose: Model Live Hive agent, flow, and bounded pressure particle state.
+// Copyright 2026 Lukas Bower
+
 const FNV_OFFSET = 0x811c9dc5;
 const FNV_PRIME = 0x01000193;
+const TAU = Math.PI * 2;
 
 const hashString = (value) => {
   let hash = FNV_OFFSET;
@@ -46,10 +51,13 @@ export class HiveWorld {
     this.agents = new Map();
     this.labelDirty = false;
     this.pollen = [];
+    this.backpressurePollen = [];
     this.pulses = [];
     this.flows = new Map();
     this.clusters = new Map();
+    this.gatewayPressure = { overall: 0, control: 0, telemetry: 0 };
     this.maxPollenBase = style.maxPollen;
+    this.maxBackpressurePollen = style.maxBackpressurePollen || 0;
     this.maxPulsesBase = style.maxPulses;
     this.maxPollen = style.maxPollen;
     this.maxPulses = style.maxPulses;
@@ -70,6 +78,35 @@ export class HiveWorld {
     }
     if (this.pulses.length > nextPulses) {
       this.pulses.length = nextPulses;
+    }
+  }
+
+  setGatewayPressure(overall = 0, control = 0, telemetry = 0) {
+    const next = {
+      overall: clamp(Number(overall) || 0, 0, 1),
+      control: clamp(Number(control) || 0, 0, 1),
+      telemetry: clamp(Number(telemetry) || 0, 0, 1),
+    };
+    this.gatewayPressure = next;
+    if (next.overall <= 0.01 || this.maxBackpressurePollen <= 0) {
+      this.backpressurePollen.length = 0;
+      return;
+    }
+    while (this.backpressurePollen.length < this.maxBackpressurePollen) {
+      const idx = this.backpressurePollen.length;
+      this.backpressurePollen.push({
+        x: 0,
+        y: 0,
+        phase: (idx / this.maxBackpressurePollen) * TAU,
+        ring: idx % 4,
+        lane: idx % 2 === 0 ? "control" : "telemetry",
+        alpha: 0,
+        scale: 1,
+        pressure: next.overall,
+      });
+    }
+    if (this.backpressurePollen.length > this.maxBackpressurePollen) {
+      this.backpressurePollen.length = this.maxBackpressurePollen;
     }
   }
 
@@ -215,9 +252,39 @@ export class HiveWorld {
     return agent.pos;
   }
 
+  updateBackpressurePollen(dt) {
+    const pressure = this.gatewayPressure.overall;
+    if (pressure <= 0.01 || this.backpressurePollen.length === 0) {
+      this.backpressurePollen.length = 0;
+      return;
+    }
+    const queen = this.agents.get("queen");
+    const center = queen ? this.positionForAgent(queen) : { x: 0, y: 0 };
+    for (const particle of this.backpressurePollen) {
+      const lanePressure = particle.lane === "control"
+        ? this.gatewayPressure.control
+        : this.gatewayPressure.telemetry;
+      const speed = this.style.backpressureOrbitSpeedBase
+        + lanePressure * this.style.backpressureOrbitSpeedScale;
+      const radius = this.style.backpressureRadiusBase
+        + pressure * this.style.backpressureRadiusRange
+        + particle.ring * 3;
+      particle.phase += dt * speed;
+      particle.x = center.x + Math.cos(particle.phase) * radius;
+      particle.y = center.y + Math.sin(particle.phase) * radius * 0.62;
+      particle.alpha = this.style.backpressureAlphaMin
+        + pressure * this.style.backpressureAlphaRange;
+      particle.scale = this.style.backpressureScaleMin
+        + pressure * this.style.backpressureScaleRange;
+      particle.pressure = pressure;
+      particle.lanePressure = lanePressure;
+    }
+  }
+
   update(dt) {
     this.time += dt;
     this.updatePositions();
+    this.updateBackpressurePollen(dt);
     for (const agent of this.agents.values()) {
       agent.heat = clamp(agent.heat - dt * this.style.heatDecay, 0, 1);
       agent.error = clamp(agent.error - dt * this.style.errorDecay, 0, 1);

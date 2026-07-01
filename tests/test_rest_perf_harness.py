@@ -695,6 +695,22 @@ def test_error_rate_helper() -> None:
     assert abs(rest_perf.error_rate(stats) - 0.5) < 1e-9
 
 
+def test_operation_summary_includes_report_quantiles() -> None:
+    stats = rest_perf.OpStats()
+    stats.record(0.01, True, None)
+    stats.record(0.02, True, None)
+    stats.record(0.03, False, "quota")
+
+    summary = rest_perf.operation_summary(stats, 4)
+
+    assert summary["count"] == 3
+    assert summary["err"] == 1
+    assert abs(summary["error_rate"] - (1 / 3)) < 1e-9
+    assert summary["p50_s"] >= 0.01
+    assert summary["p90_s"] >= summary["p50_s"]
+    assert summary["p99_s"] >= summary["p95_s"]
+
+
 def test_gateway_status_delta_saturates_missing_fields() -> None:
     before = {
         "broker": {
@@ -736,6 +752,8 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
         intensity_min=1,
         intensity_max=2,
         duration_mins=1,
+        base_rps=0.5,
+        max_inflight=8,
         transient_retries=True,
         strict_control_errors=False,
         fast_ramp=False,
@@ -751,9 +769,37 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
     )
     overall = rest_perf.OpStats()
     overall.record(0.01, True, None)
+    operation = rest_perf.OpStats()
+    operation.record(0.01, True, None)
+    ramp_rows = [
+        {
+            "step": 0,
+            "workers": 2,
+            "intensity": 2.0,
+            "rps": 2.0,
+            "ops": 1,
+            "ok": 1,
+            "err": 0,
+            "err_rate": 0.0,
+            "throughput_ops_s": 1.0,
+            "ok_ops_s": 1.0,
+            "max_inflight_observed": 1,
+            "max_inflight_configured": 8,
+            "cumulative_avg_s": 0.01,
+            "cumulative_p95_s": 0.01,
+            "cumulative_p99_s": 0.01,
+        }
+    ]
     gateway_start = {"broker": {"proc_cache_hits": 10, "pool_exhausted": 0}}
     gateway_end = {"broker": {"proc_cache_hits": 15, "pool_exhausted": 1}}
     gateway_diff = rest_perf.gateway_status_delta(gateway_start, gateway_end)
+    concurrency = {
+        "configured_max_inflight": 8,
+        "observed_high_water": 1,
+        "current_inflight": 0,
+        "submitted": 1,
+        "completed": 1,
+    }
 
     with log_path.open("w", encoding="utf-8") as handle:
         logger = rest_perf.RunLogger(str(log_path), handle, echo_stdout=False)
@@ -761,14 +807,15 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
             args,
             logger,
             overall,
-            {},
-            [],
+            {"status": operation},
+            ramp_rows,
             None,
             0.0,
             True,
             gateway_start,
             gateway_end,
             gateway_diff,
+            concurrency,
         )
 
     payload = json.loads(pathlib.Path(artifacts["summary_json"]).read_text())
@@ -777,6 +824,13 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
     assert payload["gateway_status_delta"] == {
         "broker": {"proc_cache_hits": 5, "pool_exhausted": 1}
     }
+    assert payload["concurrency"]["observed_high_water"] == 1
+    assert payload["overall"]["p99_s"] == 0.01
+    assert payload["operations"]["status"]["error_rate"] == 0.0
+    assert payload["report"]["schema"] == "cohesix-benchmark-report/v1"
+    assert payload["report"]["workload"]["target_rps_max"] == 2.0
+    assert payload["report"]["backpressure"]["pool_exhausted"] == 1
+    assert payload["report"]["visualization"]["recommended_charts"]
 
 
 def test_parse_args_no_retries_alias_disables_transient_retries() -> None:

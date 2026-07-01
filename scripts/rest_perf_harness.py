@@ -67,6 +67,8 @@ BENCHMARK_MARKER_SETTLE_SECS = 1.0
 GATEWAY_STATUS_BROKER_COUNTERS = (
     "control_waiters",
     "telemetry_waiters",
+    "control_waiters_high_water",
+    "telemetry_waiters_high_water",
     "control_checkouts",
     "telemetry_checkouts",
     "pool_exhausted",
@@ -309,6 +311,40 @@ class OpStats:
         ordered = sorted(self.samples)
         index = int(round((pct / 100.0) * (len(ordered) - 1)))
         return ordered[min(max(index, 0), len(ordered) - 1)]
+
+
+@dataclass
+class ConcurrencyStats:
+    """Track REST operations that are currently in flight."""
+
+    current: int = 0
+    high_water: int = 0
+    submitted: int = 0
+    completed: int = 0
+    lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def start(self) -> int:
+        with self.lock:
+            self.current += 1
+            self.submitted += 1
+            self.high_water = max(self.high_water, self.current)
+            return self.current
+
+    def finish(self) -> None:
+        with self.lock:
+            if self.current > 0:
+                self.current -= 1
+            self.completed += 1
+
+    def snapshot(self, configured_max: int) -> Dict[str, object]:
+        with self.lock:
+            return {
+                "configured_max_inflight": configured_max,
+                "observed_high_water": self.high_water,
+                "current_inflight": self.current,
+                "submitted": self.submitted,
+                "completed": self.completed,
+            }
 
 
 @dataclass
@@ -2749,6 +2785,7 @@ def run_simulation(args: argparse.Namespace) -> int:
         stats: Dict[str, OpStats] = {}
         stats_lock = threading.Lock()
         overall = OpStats()
+        concurrency = ConcurrencyStats()
         ramp_rows: List[Dict[str, object]] = []
         run_error: Optional[Exception] = None
 
@@ -2842,6 +2879,8 @@ def run_simulation(args: argparse.Namespace) -> int:
                         step_start_count = overall.count
                         step_start_ok = overall.ok
                         step_start_err = overall.err
+                    step_started_at = time.time()
+                    step_max_inflight = 0
 
                     while time.time() < step_end:
                         remaining_s = step_end - time.time()
@@ -2852,17 +2891,25 @@ def run_simulation(args: argparse.Namespace) -> int:
                         op = pick_weighted(rng, profile.op_weights)
                         if not semaphore.acquire(timeout=remaining_s):
                             break
-                        executor.submit(
-                            execute_operation,
-                            client,
-                            op,
-                            worker_id,
-                            state,
-                            stats,
-                            stats_lock,
-                            overall,
-                            semaphore,
-                        )
+                        current_inflight = concurrency.start()
+                        step_max_inflight = max(step_max_inflight, current_inflight)
+                        try:
+                            executor.submit(
+                                execute_operation,
+                                client,
+                                op,
+                                worker_id,
+                                state,
+                                stats,
+                                stats_lock,
+                                overall,
+                                semaphore,
+                                concurrency,
+                            )
+                        except Exception:
+                            concurrency.finish()
+                            semaphore.release()
+                            raise
                         sleep_s = min(interval, max(0.0, step_end - time.time()))
                         if sleep_s > 0:
                             time.sleep(sleep_s)
@@ -2871,7 +2918,11 @@ def run_simulation(args: argparse.Namespace) -> int:
                         step_ops = overall.count - step_start_count
                         step_ok = overall.ok - step_start_ok
                         step_err = overall.err - step_start_err
+                        cumulative_avg_s = overall.avg()
+                        cumulative_p95_s = overall.percentile(95)
+                        cumulative_p99_s = overall.percentile(99)
                     err_rate = 0.0 if step_ops == 0 else step_err / step_ops
+                    step_elapsed_s = max(time.time() - step_started_at, 1e-9)
                     ramp_rows.append(
                         {
                             "step": step_index,
@@ -2882,6 +2933,13 @@ def run_simulation(args: argparse.Namespace) -> int:
                             "ok": step_ok,
                             "err": step_err,
                             "err_rate": round(err_rate, 6),
+                            "throughput_ops_s": round(step_ops / step_elapsed_s, 3),
+                            "ok_ops_s": round(step_ok / step_elapsed_s, 3),
+                            "max_inflight_observed": step_max_inflight,
+                            "max_inflight_configured": args.max_inflight,
+                            "cumulative_avg_s": round(cumulative_avg_s, 6),
+                            "cumulative_p95_s": round(cumulative_p95_s, 6),
+                            "cumulative_p99_s": round(cumulative_p99_s, 6),
                         }
                     )
                     step_index += 1
@@ -2928,6 +2986,7 @@ def run_simulation(args: argparse.Namespace) -> int:
             gateway_status_start,
             gateway_status_end,
             gateway_status_diff,
+            concurrency.snapshot(args.max_inflight),
         )
         for label, path in artifacts.items():
             args.logger.log(f"[artifact] {label}={path}")
@@ -2988,6 +3047,7 @@ def execute_operation(
     stats_lock: threading.Lock,
     overall: OpStats,
     semaphore: threading.BoundedSemaphore,
+    concurrency: ConcurrencyStats,
 ) -> None:
     start = time.perf_counter()
     ok = True
@@ -2997,15 +3057,19 @@ def execute_operation(
     except Exception as exc:  # pragma: no cover - runtime errors
         ok = False
         error = str(exc)
-    elapsed = time.perf_counter() - start
-    with stats_lock:
-        if op.name not in stats:
-            stats[op.name] = OpStats()
-        stats[op.name].record(elapsed, ok, error)
-        overall.record(elapsed, ok, error)
-    if not ok and state.logger is not None:
-        state.logger.log(f"[op] {op.name} worker={worker_id} error={error}")
-    semaphore.release()
+    finally:
+        elapsed = time.perf_counter() - start
+        try:
+            with stats_lock:
+                if op.name not in stats:
+                    stats[op.name] = OpStats()
+                stats[op.name].record(elapsed, ok, error)
+                overall.record(elapsed, ok, error)
+            if not ok and state.logger is not None:
+                state.logger.log(f"[op] {op.name} worker={worker_id} error={error}")
+        finally:
+            concurrency.finish()
+            semaphore.release()
 
 
 def report_stats(overall: OpStats, stats: Dict[str, OpStats], logger: RunLogger) -> None:
@@ -3029,16 +3093,188 @@ def summarize_errors(errors: Dict[str, int], max_lines: int) -> List[Dict[str, o
     ]
 
 
-def operation_summary(entry: OpStats, max_error_lines: int) -> Dict[str, object]:
+def latency_summary(entry: OpStats) -> Dict[str, float]:
     return {
-        "count": entry.count,
-        "ok": entry.ok,
-        "err": entry.err,
         "avg_s": entry.avg(),
         "min_s": entry.min_s,
         "max_s": entry.max_s,
+        "p50_s": entry.percentile(50),
+        "p90_s": entry.percentile(90),
         "p95_s": entry.percentile(95),
+        "p99_s": entry.percentile(99),
+    }
+
+
+def operation_summary(entry: OpStats, max_error_lines: int) -> Dict[str, object]:
+    summary: Dict[str, object] = {
+        "count": entry.count,
+        "ok": entry.ok,
+        "err": entry.err,
+        "error_rate": error_rate(entry),
         "errors": summarize_errors(entry.errors, max_error_lines),
+    }
+    summary.update(latency_summary(entry))
+    return summary
+
+
+def numeric_broker_delta(
+    gateway_status_diff: Optional[Dict[str, Dict[str, object]]],
+    key: str,
+) -> float:
+    if gateway_status_diff is None:
+        return 0.0
+    broker = gateway_status_diff.get("broker", {})
+    value = broker.get(key, 0)
+    if is_json_number(value):
+        return float(value)
+    return 0.0
+
+
+def benchmark_backpressure_summary(
+    gateway_status_diff: Optional[Dict[str, Dict[str, object]]],
+) -> Dict[str, object]:
+    cache_hits = numeric_broker_delta(gateway_status_diff, "proc_cache_hits")
+    cache_misses = numeric_broker_delta(gateway_status_diff, "proc_cache_misses")
+    cache_total = cache_hits + cache_misses
+    return {
+        "source": "gateway_status_delta",
+        "pool_exhausted": int(numeric_broker_delta(gateway_status_diff, "pool_exhausted")),
+        "checkout_retries": int(
+            numeric_broker_delta(gateway_status_diff, "checkout_retries")
+        ),
+        "timeout_rejections": int(
+            numeric_broker_delta(gateway_status_diff, "timeout_rejections")
+        ),
+        "control_write_retryable_errors": int(
+            numeric_broker_delta(gateway_status_diff, "control_write_retryable_errors")
+        ),
+        "control_write_retries": int(
+            numeric_broker_delta(gateway_status_diff, "control_write_retries")
+        ),
+        "control_write_retry_exhaustions": int(
+            numeric_broker_delta(gateway_status_diff, "control_write_retry_exhaustions")
+        ),
+        "control_write_success_after_retry": int(
+            numeric_broker_delta(gateway_status_diff, "control_write_success_after_retry")
+        ),
+        "control_write_retry_sleep_ms": int(
+            numeric_broker_delta(gateway_status_diff, "control_write_retry_sleep_ms")
+        ),
+        "proc_cache_hits": int(cache_hits),
+        "proc_cache_misses": int(cache_misses),
+        "proc_cache_hit_rate": 0.0 if cache_total <= 0 else cache_hits / cache_total,
+    }
+
+
+def top_operations_by(
+    stats: Dict[str, OpStats],
+    metric: str,
+    limit: int = 10,
+) -> List[Dict[str, object]]:
+    rows = []
+    for name, entry in stats.items():
+        if metric == "p95_s":
+            value = entry.percentile(95)
+        elif metric == "error_rate":
+            value = error_rate(entry)
+        elif metric == "count":
+            value = float(entry.count)
+        else:
+            raise ValueError(f"unsupported operation metric: {metric}")
+        rows.append(
+            {
+                "operation": name,
+                "metric": metric,
+                "value": value,
+                "count": entry.count,
+                "ok": entry.ok,
+                "err": entry.err,
+            }
+        )
+    rows.sort(key=lambda row: (float(row["value"]), int(row["count"])), reverse=True)
+    return rows[:limit]
+
+
+def target_rps_bounds(args: argparse.Namespace) -> Tuple[float, float]:
+    min_rps = args.base_rps * args.intensity_min * max(args.workers_min, 1)
+    max_rps = args.base_rps * args.intensity_max * max(args.workers_max, 1)
+    scenario = resolve_telemetry_scenario(
+        args.scenario,
+        args.telemetry_reference_chunk_bytes,
+    )
+    if scenario is not None and scenario.requests_per_operation > 0:
+        min_rps /= scenario.requests_per_operation
+        max_rps /= scenario.requests_per_operation
+    return min_rps, max_rps
+
+
+def benchmark_report_payload(
+    args: argparse.Namespace,
+    overall: OpStats,
+    stats: Dict[str, OpStats],
+    ramp_rows: List[Dict[str, object]],
+    worker_cap: Optional[int],
+    overall_error_rate: float,
+    error_budget_pass: bool,
+    gateway_status_diff: Optional[Dict[str, Dict[str, object]]],
+    concurrency: Dict[str, object],
+) -> Dict[str, object]:
+    duration_s = max(float(args.duration_mins) * 60.0, 1e-9)
+    target_rps_min, target_rps_max = target_rps_bounds(args)
+    latency = latency_summary(overall)
+    return {
+        "schema": "cohesix-benchmark-report/v1",
+        "workload": {
+            "mode": "simulate",
+            "scenario": args.scenario or "mixed",
+            "workers_min": args.workers_min,
+            "workers_max": args.workers_max,
+            "worker_cap": worker_cap,
+            "intensity_min": args.intensity_min,
+            "intensity_max": args.intensity_max,
+            "base_rps": args.base_rps,
+            "target_rps_min": target_rps_min,
+            "target_rps_max": target_rps_max,
+            "duration_s": duration_s,
+            "max_inflight_configured": args.max_inflight,
+            "transient_retries": args.transient_retries,
+            "strict_control_errors": args.strict_control_errors,
+        },
+        "throughput": {
+            "ops_per_s": overall.count / duration_s,
+            "ok_ops_per_s": overall.ok / duration_s,
+            "err_ops_per_s": overall.err / duration_s,
+        },
+        "latency": latency,
+        "reliability": {
+            "error_rate": overall_error_rate,
+            "error_budget_rate": args.error_budget_rate,
+            "error_budget_pass": error_budget_pass,
+            "ok": overall.ok,
+            "err": overall.err,
+            "count": overall.count,
+        },
+        "concurrency": concurrency,
+        "backpressure": benchmark_backpressure_summary(gateway_status_diff),
+        "top_operations_by_p95": top_operations_by(stats, "p95_s"),
+        "top_operations_by_error_rate": top_operations_by(stats, "error_rate"),
+        "visualization": {
+            "primary_series": [
+                "ramp.workers",
+                "ramp.throughput_ops_s",
+                "ramp.err_rate",
+                "ramp.cumulative_p95_s",
+                "ramp.max_inflight_observed",
+                "report.backpressure.control_write_retryable_errors",
+            ],
+            "recommended_charts": [
+                "workers_vs_error_rate",
+                "target_rps_vs_observed_throughput",
+                "latency_quantiles_by_operation",
+                "gateway_backpressure_delta",
+                "inflight_high_water_by_ramp_step",
+            ],
+        },
     }
 
 
@@ -3092,12 +3328,20 @@ def write_simulation_artifacts(
     gateway_status_start: Optional[Dict[str, object]] = None,
     gateway_status_end: Optional[Dict[str, object]] = None,
     gateway_status_diff: Optional[Dict[str, Dict[str, object]]] = None,
+    concurrency: Optional[Dict[str, object]] = None,
 ) -> Dict[str, str]:
     base_path = logger.path.rsplit(".", 1)[0]
     summary_json = f"{base_path}.summary.json"
     ops_csv = f"{base_path}.ops.csv"
     ramp_csv = f"{base_path}.ramp.csv"
     ramp_svg = f"{base_path}.ramp.svg"
+    concurrency_summary = concurrency or {
+        "configured_max_inflight": args.max_inflight,
+        "observed_high_water": 0,
+        "current_inflight": 0,
+        "submitted": 0,
+        "completed": 0,
+    }
 
     summary_payload = {
         "mode": "simulate",
@@ -3138,6 +3382,18 @@ def write_simulation_artifacts(
         "gateway_status_start": gateway_status_start,
         "gateway_status_end": gateway_status_end,
         "gateway_status_delta": gateway_status_diff,
+        "concurrency": concurrency_summary,
+        "report": benchmark_report_payload(
+            args,
+            overall,
+            stats,
+            ramp_rows,
+            worker_cap,
+            overall_error_rate,
+            error_budget_pass,
+            gateway_status_diff,
+            concurrency_summary,
+        ),
         "overall": operation_summary(overall, args.summary_max_error_lines),
         "operations": {
             name: operation_summary(entry, args.summary_max_error_lines)
@@ -3151,7 +3407,20 @@ def write_simulation_artifacts(
     with open(ops_csv, "w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(
-            ["operation", "count", "ok", "err", "avg_s", "p95_s", "min_s", "max_s"]
+            [
+                "operation",
+                "count",
+                "ok",
+                "err",
+                "error_rate",
+                "avg_s",
+                "p50_s",
+                "p90_s",
+                "p95_s",
+                "p99_s",
+                "min_s",
+                "max_s",
+            ]
         )
         for name, entry in sorted(stats.items()):
             writer.writerow(
@@ -3160,8 +3429,12 @@ def write_simulation_artifacts(
                     entry.count,
                     entry.ok,
                     entry.err,
+                    f"{error_rate(entry):.6f}",
                     f"{entry.avg():.6f}",
+                    f"{entry.percentile(50):.6f}",
+                    f"{entry.percentile(90):.6f}",
                     f"{entry.percentile(95):.6f}",
+                    f"{entry.percentile(99):.6f}",
                     f"{entry.min_s:.6f}",
                     f"{entry.max_s:.6f}",
                 ]
@@ -3179,6 +3452,13 @@ def write_simulation_artifacts(
                 "ok",
                 "err",
                 "err_rate",
+                "throughput_ops_s",
+                "ok_ops_s",
+                "max_inflight_observed",
+                "max_inflight_configured",
+                "cumulative_avg_s",
+                "cumulative_p95_s",
+                "cumulative_p99_s",
             ],
         )
         writer.writeheader()

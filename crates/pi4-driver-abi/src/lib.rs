@@ -749,6 +749,8 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_USB_HID_REPORT_FLEXIBLE_KEY_FALLBACK: u32
 pub const DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT: u32 = 9;
 /// USB keyboard service result mask for the last HID report classification.
 pub const DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK: u32 = 0x7f;
+/// USB keyboard frame flag: payload contains decoded console input bytes only.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_FRAME_FLAG_INPUT: u16 = 0x0001;
 /// USB keyboard report status: no interrupt report has been classified yet.
 pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE: u8 = 0;
 /// USB keyboard report status: interrupt completion carried too little payload.

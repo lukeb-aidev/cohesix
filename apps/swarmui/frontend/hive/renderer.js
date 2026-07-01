@@ -96,7 +96,9 @@ export class HiveRenderer {
     this.heatLayer.blendMode = PIXI.BLEND_MODES.ADD;
     this.agentLayer = new PIXI.Container();
     this.labelLayer = new PIXI.Container();
-    this.pollenLayer = createParticleLayer(this.style.maxPollen);
+    this.pollenLayer = createParticleLayer(
+      this.style.maxPollen + (this.style.maxBackpressurePollen || 0),
+    );
     this.pulseLayer = createParticleLayer(this.style.maxPulses);
     this.pulseLayer.blendMode = PIXI.BLEND_MODES.ADD;
     this.root.addChild(this.flowLayer);
@@ -500,23 +502,48 @@ export class HiveRenderer {
   }
 
   drawPollen(world, lodMode) {
-    const show = lodMode === "detail";
+    const showTelemetry = lodMode === "detail";
     const pollen = world.pollen;
     const limit = Math.min(pollen.length, world.maxPollen);
+    let used = 0;
     for (let idx = 0; idx < limit; idx += 1) {
       const particle = pollen[idx];
-      const sprite = this.pollenPool[idx] || new PIXI.Sprite(this.pollenTexture);
-      if (!this.pollenPool[idx]) {
+      const sprite = this.pollenPool[used] || new PIXI.Sprite(this.pollenTexture);
+      if (!this.pollenPool[used]) {
         sprite.anchor.set(0.5);
-        this.pollenPool[idx] = sprite;
+        this.pollenPool[used] = sprite;
         this.pollenLayer.addChild(sprite);
       }
-      sprite.visible = show;
+      sprite.visible = showTelemetry;
       sprite.position.set(particle.x, particle.y);
       sprite.alpha = clamp(1 - particle.age / particle.life, 0, 1);
       sprite.tint = this.palette.pollen;
+      sprite.scale.set(1);
+      used += 1;
     }
-    for (let idx = limit; idx < this.pollenPool.length; idx += 1) {
+
+    const backpressurePollen = world.backpressurePollen || [];
+    const pressureLimit = Math.min(
+      backpressurePollen.length,
+      this.style.maxBackpressurePollen || 0,
+    );
+    for (let idx = 0; idx < pressureLimit; idx += 1) {
+      const particle = backpressurePollen[idx];
+      const sprite = this.pollenPool[used] || new PIXI.Sprite(this.pollenTexture);
+      if (!this.pollenPool[used]) {
+        sprite.anchor.set(0.5);
+        this.pollenPool[used] = sprite;
+        this.pollenLayer.addChild(sprite);
+      }
+      sprite.visible = true;
+      sprite.position.set(particle.x, particle.y);
+      sprite.alpha = clamp(particle.alpha ?? 0, 0, 1);
+      sprite.tint = particle.lane === "control" ? this.palette.error : this.palette.pollen;
+      sprite.scale.set(particle.scale ?? 1);
+      used += 1;
+    }
+
+    for (let idx = used; idx < this.pollenPool.length; idx += 1) {
       this.pollenPool[idx].visible = false;
     }
   }
