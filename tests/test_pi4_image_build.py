@@ -9,6 +9,12 @@ import pathlib
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "pi4-image-build.sh"
+U_BOOT_DEFCONFIG_PATH = (
+    REPO_ROOT / "third_party" / "u-boot" / "configs" / "rpi_4_defconfig"
+)
+U_BOOT_GENERATED_DEFCONFIG_PATH = (
+    REPO_ROOT / "third_party" / "u-boot" / "generated_defconfig-e"
+)
 
 
 def test_pi4_image_build_respects_cargo_target_dir_for_root_task() -> None:
@@ -88,6 +94,50 @@ def test_pi4_image_build_keeps_dtb_policy_handoff_common() -> None:
     assert 'bootm ${coh_addr} ${coh_runtime_cpio_addr} ${coh_dtb_addr}' in source
 
 
+def test_pi4_image_build_does_not_echo_wifi_psk_to_serial() -> None:
+    """Wi-Fi PSK entry must stay inside the USB local console."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    boot_template = source[
+        source.index('echo "[cohesix] pi4 autoboot script"') : source.index(
+            '\nEOF\n    sed -i \'\' "s/__COH_IMAGE__/'
+        )
+    ]
+
+    wifi_setup = next(
+        line
+        for line in boot_template.splitlines()
+        if line.startswith("setenv coh_wifi_setup ")
+    )
+
+    assert "askenv coh_wifi_psk" in wifi_setup
+    assert "run coh_begin_wifi_secret_input" in wifi_setup
+    assert "run coh_end_wifi_secret_input" in wifi_setup
+    assert wifi_setup.index("run coh_begin_wifi_secret_input") < wifi_setup.index(
+        "askenv coh_wifi_psk"
+    )
+    assert wifi_setup.index("askenv coh_wifi_psk") < wifi_setup.rindex(
+        "run coh_end_wifi_secret_input"
+    )
+    assert (
+        "setenv coh_begin_wifi_secret_input "
+        "'setenv stdin usbkbd; setenv stdout vidconsole; setenv stderr vidconsole'"
+    ) in boot_template
+    assert (
+        "setenv coh_end_wifi_secret_input "
+        "'if test \"${coh_usb_input_ready}\" = \"1\"; then setenv stdin usbkbd,serial; "
+        "else setenv stdin serial; fi; setenv stdout serial,vidconsole; "
+        "setenv stderr serial,vidconsole'"
+    ) in boot_template
+    assert "USB-only Wi-Fi credential entry; serial echo disabled" in boot_template
+    assert "Serial Wi-Fi password entry is disabled because U-Boot echoes input" in (
+        boot_template
+    )
+    assert "coh_wifi_psk in ${coh_policy_file}" in boot_template
+    assert "boot.cmd does not suppress serial echo during Wi-Fi secret entry" in source
+    assert "boot.cmd does not collect Wi-Fi PSKs in the protected USB-only prompt" in source
+
+
 def test_pi4_image_build_fastboot_prefers_marker_and_falls_back_to_saved_policy_reset() -> None:
     """Software-reset fallback must be gated by saved Cohesix policy."""
 
@@ -143,3 +193,51 @@ def test_pi4_image_build_allows_serial_menu_without_usb_keyboard() -> None:
     assert usb_gate in source
     assert source.index(usb_gate) < source.index(usb_keyboard)
     assert source.index(usb_gate) < source.index(usb_poll)
+
+
+def test_pi4_uboot_defconfigs_keep_remote_recovery_bootdelay() -> None:
+    """Pi 4 U-Boot must leave a serial window for remote menu recovery."""
+
+    for path in (U_BOOT_DEFCONFIG_PATH, U_BOOT_GENERATED_DEFCONFIG_PATH):
+        source = path.read_text(encoding="utf-8")
+
+        assert "CONFIG_BOOTDELAY=2" in source
+        assert "CONFIG_BOOTDELAY=0" not in source
+
+
+def test_pi4_image_build_verifies_remote_recovery_bootdelay() -> None:
+    """The image wrapper must reject stale U-Boot binaries with no abort window."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "CONFIG_BOOTDELAY=2" in source
+    assert "2-second serial autoboot abort window" in source
+
+
+def test_pi4_image_build_keeps_recovery_menu_escape_before_fastboot() -> None:
+    """Manual U-Boot recovery must bypass saved-policy fastboot on request."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    boot_template = source[
+        source.index('echo "[cohesix] pi4 autoboot script"') : source.index(
+            '\nEOF\n    sed -i \'\' "s/__COH_IMAGE__/'
+        )
+    ]
+
+    recovery_guard = next(
+        line
+        for line in boot_template.splitlines()
+        if line.startswith("setenv coh_maybe_fastboot_or_recovery ")
+    )
+    generated_tail = boot_template[boot_template.rindex("run coh_force_serial_preboot") :]
+
+    assert "setenv bootdelay 0" not in boot_template
+    assert 'test "${coh_recovery_menu}" = "1"' in recovery_guard
+    assert "recovery menu requested: skipping reboot fast boot" in recovery_guard
+    assert "else run coh_maybe_fastboot" in recovery_guard
+    assert generated_tail.index("run coh_detect_saved_config") < generated_tail.index(
+        "run coh_maybe_fastboot_or_recovery"
+    )
+    assert generated_tail.index("run coh_maybe_fastboot_or_recovery") < (
+        generated_tail.index("run coh_prompt_root")
+    )

@@ -235,7 +235,9 @@ const WIFI_HOST_EAPOL_PRE_ROOT_BURST_POLLS: usize = 96;
 #[cfg(feature = "net-console")]
 const WIFI_HOST_EAPOL_RUNTIME_BURST_POLLS: usize = 8;
 #[cfg(feature = "net-console")]
-const PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS: usize = 8;
+// Wi-Fi can bind DHCP before ARP/TCP admission is ready; keep this bounded
+// pre-root window wide enough for CYW43 RX/TX drain without delaying Genet.
+const PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS: usize = 32;
 #[cfg(feature = "net-console")]
 // Network-origin NineDoor commands may enqueue multiple TCP response segments;
 // keep a small bounded flush window so replies are not deferred behind later
@@ -264,6 +266,7 @@ const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 4;
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 32;
 const CONSOLE_OUTPUT_LINES_PER_IDLE_TURN: usize = 2;
 const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
+const CONSOLE_PARSE_ERROR_REPEAT_MAX: u16 = 1024;
 #[cfg(feature = "kernel")]
 const SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS: u64 = 10_000;
 #[cfg(feature = "kernel")]
@@ -284,6 +287,10 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS: u64 = 0;
 const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS: u16 = 0;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS: u16 = 1;
+#[cfg(all(feature = "kernel", feature = "usb"))]
+// Serial/scripted activity must not permanently starve the one-shot owner-state
+// replay needed for driver-task acceptance.
+const POST_PROMPT_LOCAL_SEAT_ATTACH_FORCE_BLOCKED_TURNS: u16 = 4;
 
 const fn local_seat_usb_burst_proof(
     accepted_bytes: u64,
@@ -326,7 +333,11 @@ const fn post_prompt_local_seat_attach_retry_policy(
             "serial-safe-active-usb-progress",
         ))
     } else if usb_no_reply {
-        None
+        Some((
+            POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS,
+            POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS,
+            "serial-safe-usb-no-reply",
+        ))
     } else {
         Some((
             POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS,
@@ -1692,6 +1703,35 @@ enum PendingConsoleOutputKind {
     Prompt,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ConsoleErrorKey {
+    LineTooLong,
+    EmptyLine,
+    InvalidVerb,
+    MissingArgument,
+    ValueTooLong,
+    RateLimited,
+    InvalidValue,
+}
+
+impl ConsoleErrorKey {
+    const fn from_error(err: &ConsoleError) -> Self {
+        match err {
+            ConsoleError::LineTooLong => Self::LineTooLong,
+            ConsoleError::EmptyLine => Self::EmptyLine,
+            ConsoleError::InvalidVerb => Self::InvalidVerb,
+            ConsoleError::MissingArgument(_) => Self::MissingArgument,
+            ConsoleError::ValueTooLong(_) => Self::ValueTooLong,
+            ConsoleError::RateLimited(_) => Self::RateLimited,
+            ConsoleError::InvalidValue(_) => Self::InvalidValue,
+        }
+    }
+}
+
+const fn console_parse_error_repeat_checkpoint(count: u16) -> bool {
+    count != 0 && (count & (count - 1)) == 0
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PendingConsoleOutput {
     kind: PendingConsoleOutputKind,
@@ -1844,9 +1884,12 @@ where
     #[cfg(test)]
     test_pi4_debug_commands: bool,
     banner_emitted: bool,
+    console_ready_announced: bool,
     serial_console_turn_active: bool,
     console_input_turn_active: bool,
     console_input_turn_output_budget: usize,
+    last_console_error_key: Option<ConsoleErrorKey>,
+    console_error_repeat_count: u16,
     local_seat_chunk_input_pending: bool,
     console_output_flush_active: bool,
     local_seat_mirror_suppressed: bool,
@@ -1871,6 +1914,8 @@ where
     post_prompt_local_seat_attach_idle_turns: u8,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_blocked_traces: u8,
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    post_prompt_local_seat_attach_blocked_turns: u16,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_retry_turns: u16,
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -1962,9 +2007,12 @@ where
             #[cfg(test)]
             test_pi4_debug_commands: false,
             banner_emitted: false,
+            console_ready_announced: false,
             serial_console_turn_active: false,
             console_input_turn_active: false,
             console_input_turn_output_budget: 0,
+            last_console_error_key: None,
+            console_error_repeat_count: 0,
             local_seat_chunk_input_pending: false,
             console_output_flush_active: false,
             local_seat_mirror_suppressed: false,
@@ -1989,6 +2037,8 @@ where
             post_prompt_local_seat_attach_idle_turns: 0,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_blocked_traces: 0,
+            #[cfg(all(feature = "kernel", feature = "usb"))]
+            post_prompt_local_seat_attach_blocked_turns: 0,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_retry_turns: 0,
             #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -2106,6 +2156,9 @@ where
                 || self.serial.tx_pending();
             self.serial_console_turn_active = false;
             if serial_turn_should_return {
+                self.maybe_run_post_prompt_local_seat_attach(
+                    serial_rx_activity || serial_input || serial_followup_input,
+                );
                 return;
             }
         }
@@ -2731,6 +2784,10 @@ where
 
     /// Emit console audit messages once the UART bridge is connected.
     pub fn announce_console_ready(&mut self) {
+        if self.console_ready_announced {
+            return;
+        }
+        self.console_ready_announced = true;
         #[cfg(feature = "kernel")]
         let log_channel_switched_before_prompt =
             self.ninedoor.is_some() && boot_log::switch_logger_to_log_buffer();
@@ -3320,6 +3377,7 @@ where
             self.post_prompt_local_seat_attach_pending = true;
             self.post_prompt_local_seat_attach_idle_turns = 0;
             self.post_prompt_local_seat_attach_blocked_traces = 0;
+            self.post_prompt_local_seat_attach_blocked_turns = 0;
             self.post_prompt_local_seat_attach_retry_turns = 0;
             self.post_prompt_local_seat_attach_attempts = 0;
             self.post_prompt_local_seat_attach_active_usb_traced = false;
@@ -3349,10 +3407,24 @@ where
             } else {
                 None
             };
+            let mut force_owner_state_replay = false;
             if let Some(reason) = blocked_reason {
-                self.emit_post_prompt_local_seat_attach_blocked(reason);
-                self.post_prompt_local_seat_attach_idle_turns = 0;
-                return;
+                self.post_prompt_local_seat_attach_blocked_turns = self
+                    .post_prompt_local_seat_attach_blocked_turns
+                    .saturating_add(1);
+                force_owner_state_replay = reason != "idle-grace"
+                    && self.post_prompt_local_seat_attach_attempts == 0
+                    && self.now_ms >= self.post_prompt_local_seat_attach_not_before_ms
+                    && self.post_prompt_local_seat_attach_blocked_turns
+                        >= POST_PROMPT_LOCAL_SEAT_ATTACH_FORCE_BLOCKED_TURNS;
+                if !force_owner_state_replay {
+                    self.emit_post_prompt_local_seat_attach_blocked(reason);
+                    self.post_prompt_local_seat_attach_idle_turns = 0;
+                    return;
+                }
+                self.emit_post_prompt_local_seat_attach_blocked("forced-owner-state-replay");
+            } else {
+                self.post_prompt_local_seat_attach_blocked_turns = 0;
             }
             if self.post_prompt_local_seat_attach_retry_turns != 0 {
                 self.post_prompt_local_seat_attach_retry_turns = self
@@ -3365,6 +3437,10 @@ where
             self.post_prompt_local_seat_attach_idle_turns = self
                 .post_prompt_local_seat_attach_idle_turns
                 .saturating_add(1);
+            if force_owner_state_replay {
+                self.post_prompt_local_seat_attach_idle_turns =
+                    POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_TURNS;
+            }
             if self.post_prompt_local_seat_attach_idle_turns
                 < POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_TURNS
             {
@@ -12121,7 +12197,46 @@ where
         buf
     }
 
-    fn handle_console_error(&mut self, err: ConsoleError) {
+    fn reset_console_error_coalescer(&mut self) {
+        self.last_console_error_key = None;
+        self.console_error_repeat_count = 0;
+    }
+
+    fn advance_console_error_coalescer(&mut self, err: &ConsoleError) -> Option<u16> {
+        let key = ConsoleErrorKey::from_error(err);
+        let repeat_count = if self.last_console_error_key == Some(key) {
+            self.console_error_repeat_count
+                .saturating_add(1)
+                .min(CONSOLE_PARSE_ERROR_REPEAT_MAX)
+        } else {
+            self.last_console_error_key = Some(key);
+            1
+        };
+        self.console_error_repeat_count = repeat_count;
+        if repeat_count == 1 || console_parse_error_repeat_checkpoint(repeat_count) {
+            Some(repeat_count)
+        } else {
+            None
+        }
+    }
+
+    fn ignore_empty_console_line(&mut self) {
+        if self.parser.clear_buffer() {
+            self.audit
+                .info("console: cleared partial input after blank line");
+        }
+        self.local_line.clear();
+    }
+
+    fn handle_console_error(&mut self, err: ConsoleError) -> bool {
+        let Some(repeat_count) = self.advance_console_error_coalescer(&err) else {
+            if self.parser.clear_buffer() {
+                self.audit
+                    .info("console: cleared partial input after coalesced parse error");
+            }
+            self.local_line.clear();
+            return false;
+        };
         let message = format_message(format_args!("console error: {}", err));
         self.audit.info(message.as_str());
         match err {
@@ -12130,7 +12245,11 @@ where
                 self.emit_refusal("PARSE", RefusalReason::Quota, Some(detail.as_str()));
             }
             other => {
-                let detail = format_message(format_args!("detail={}", other));
+                let detail = if repeat_count > 1 {
+                    format_message(format_args!("detail={} repeats={}", other, repeat_count))
+                } else {
+                    format_message(format_args!("detail={}", other))
+                };
                 self.emit_refusal("PARSE", RefusalReason::Policy, Some(detail.as_str()));
             }
         }
@@ -12139,6 +12258,7 @@ where
                 .info("console: cleared partial input after parse error");
         }
         self.local_line.clear();
+        true
     }
 
     fn consume_serial(&mut self) -> bool {
@@ -12293,8 +12413,8 @@ where
                 match byte {
                     b'\r' => {}
                     b'\n' => {
-                        if self.local_line.is_empty() {
-                            self.handle_console_error(ConsoleError::EmptyLine);
+                        if self.local_line.as_str().trim().is_empty() {
+                            self.ignore_empty_console_line();
                         } else {
                             let mut line = HeaplessString::new();
                             core::mem::swap(&mut line, &mut self.local_line);
@@ -12314,7 +12434,7 @@ where
                         }
                         if self.local_line.push(ch).is_err() {
                             self.local_line.clear();
-                            self.handle_console_error(ConsoleError::LineTooLong);
+                            let _ = self.handle_console_error(ConsoleError::LineTooLong);
                         }
                     }
                 }
@@ -12347,6 +12467,10 @@ where
     }
 
     fn process_console_line(&mut self, line: &HeaplessString<LINE>) {
+        if line.as_str().trim().is_empty() {
+            self.ignore_empty_console_line();
+            return;
+        }
         self.metrics.console_lines = self.metrics.console_lines.saturating_add(1);
         let prior_input_turn_active = self.console_input_turn_active;
         let prior_output_budget = self.console_input_turn_output_budget;
@@ -12370,10 +12494,14 @@ where
             self.console_input_turn_output_budget = prior_output_budget;
             return;
         }
+        let mut prompt_after_line = true;
         if let Err(err) = self.feed_parser(line) {
-            self.handle_console_error(err);
+            prompt_after_line = self.handle_console_error(err);
+        } else {
+            self.reset_console_error_coalescer();
         }
-        if self.last_input_source.is_physical_console() && !self.reboot_pending {
+        if prompt_after_line && self.last_input_source.is_physical_console() && !self.reboot_pending
+        {
             self.emit_prompt();
         }
         self.console_input_turn_active = prior_input_turn_active;
@@ -15727,6 +15855,49 @@ mod tests {
             .any(|line| line.as_str() == CONSOLE_PROMPT));
     }
 
+    #[test]
+    fn console_ready_announcement_is_idempotent() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.announce_console_ready();
+        let first_ready = pump.serial_mut().driver_mut().drain_tx();
+        let first_transcript = core::str::from_utf8(first_ready.as_slice()).unwrap();
+        assert_eq!(first_transcript.matches("Cohesix console ready").count(), 1);
+        assert_eq!(first_transcript.matches("Commands:").count(), 1);
+        #[cfg(all(feature = "kernel", feature = "usb"))]
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+
+        #[cfg(all(feature = "kernel", feature = "usb"))]
+        {
+            pump.post_prompt_local_seat_attach_pending = false;
+        }
+        pump.announce_console_ready();
+        let second_ready = pump.serial_mut().driver_mut().drain_tx();
+        let second_transcript = core::str::from_utf8(second_ready.as_slice()).unwrap();
+        assert!(!second_transcript.contains("Cohesix console ready"));
+        assert!(!second_transcript.contains("Commands:"));
+        assert!(!second_transcript.contains(CONSOLE_PROMPT));
+        #[cfg(all(feature = "kernel", feature = "usb"))]
+        assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+    }
+
     #[cfg(feature = "net-console")]
     #[test]
     fn console_ready_wifi_warning_reaches_serial_and_hdmi_before_prompt() {
@@ -15827,7 +15998,11 @@ mod tests {
         );
         assert_eq!(
             post_prompt_local_seat_attach_retry_policy(true, false),
-            None
+            Some((
+                POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS,
+                POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS,
+                "serial-safe-usb-no-reply"
+            ))
         );
         assert_eq!(
             post_prompt_local_seat_attach_retry_policy(true, true),
@@ -15878,6 +16053,41 @@ mod tests {
         assert_eq!(pump.post_prompt_local_seat_attach_retry_turns, 0);
         assert_eq!(pump.post_prompt_local_seat_attach_not_before_ms, 0);
         assert!(pump.post_prompt_local_seat_attach_active_usb_traced);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn post_prompt_local_seat_attach_forces_owner_replay_after_serial_starvation() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1_000);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+        pump.post_prompt_local_seat_attach_pending = true;
+        pump.post_prompt_local_seat_attach_not_before_ms = 0;
+        pump.post_prompt_local_seat_attach_usb_active_override = Some(false);
+
+        for _ in 0..POST_PROMPT_LOCAL_SEAT_ATTACH_FORCE_BLOCKED_TURNS.saturating_sub(1) {
+            pump.maybe_run_post_prompt_local_seat_attach(true);
+            assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+        }
+
+        pump.maybe_run_post_prompt_local_seat_attach(true);
+        assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+        assert_eq!(
+            pump.post_prompt_local_seat_attach_idle_turns,
+            POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_TURNS
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -18098,7 +18308,7 @@ mod tests {
 
         assert_eq!(polls, 3);
         assert_eq!(net.polls, 3);
-        assert_eq!(PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS, 8);
+        assert_eq!(PRE_ROOT_WIFI_DHCP_FOLLOWUP_POLLS, 32);
     }
 
     #[cfg(feature = "net-console")]
@@ -19276,6 +19486,93 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(rendered.contains("ERR PARSE"), "{rendered}");
         assert!(rendered.contains("Commands:"), "{rendered}");
+    }
+
+    #[test]
+    fn serial_blank_line_flood_is_silent_and_next_command_runs() {
+        let driver = LoopbackSerial::<1024>::new();
+        let serial = SerialPort::<_, 1024, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.serial_mut()
+            .driver_mut()
+            .push_rx(b"\n\r\n    \n\nping\n");
+        pump.poll();
+
+        let tx = pump.serial_mut().driver_mut().drain_tx();
+        let rendered =
+            String::from_utf8(tx.into_iter().collect()).expect("serial output must be utf8");
+        assert!(!rendered.contains("ERR PARSE"), "{rendered}");
+        assert!(!rendered.contains("empty command"), "{rendered}");
+        assert!(rendered.contains("PONG"), "{rendered}");
+        assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
+        assert_eq!(pump.metrics().console_lines, 1);
+    }
+
+    #[test]
+    fn local_seat_blank_line_flood_is_silent_and_next_command_runs() {
+        let driver = LoopbackSerial::<1024>::new();
+        let serial = SerialPort::<_, 1024, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        local_seat.mark_root_console_ready();
+        local_seat.enqueue_keyboard_bytes(b"\n   \n\nping\n");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
+
+        pump.poll();
+
+        let tx = pump.serial_mut().driver_mut().drain_tx();
+        let rendered =
+            String::from_utf8(tx.into_iter().collect()).expect("serial output must be utf8");
+        assert!(!rendered.contains("ERR PARSE"), "{rendered}");
+        assert!(!rendered.contains("empty command"), "{rendered}");
+        assert!(rendered.contains("PONG"), "{rendered}");
+        assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
+        assert_eq!(pump.metrics().console_lines, 1);
+        assert!(pump.local_line.is_empty());
+    }
+
+    #[test]
+    fn repeated_parse_errors_are_coalesced_before_following_command() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        for _ in 0..16 {
+            pump.serial_mut().driver_mut().push_rx(b"bogus\n");
+        }
+        pump.serial_mut().driver_mut().push_rx(b"ping\n");
+        pump.poll();
+
+        let tx = pump.serial_mut().driver_mut().drain_tx();
+        let rendered =
+            String::from_utf8(tx.into_iter().collect()).expect("serial output must be utf8");
+        assert_eq!(rendered.matches("ERR PARSE").count(), 5, "{rendered}");
+        assert!(rendered.contains("repeats=16"), "{rendered}");
+        assert!(rendered.contains("PONG"), "{rendered}");
+        assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
+        assert_eq!(pump.metrics().console_lines, 17);
     }
 
     #[test]

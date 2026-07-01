@@ -212,6 +212,8 @@ verify_u_boot_pi4_target() {
       fail "u-boot.bin does not boot the Cohesix script directly; rebuild U-Boot from third_party/u-boot/configs/rpi_4_defconfig"
     ! grep -q '^CONFIG_BOOTCOMMAND="bootflow scan' "${config_file}" || \
       fail "u-boot.bin still uses bootflow scan; rebuild U-Boot from third_party/u-boot/configs/rpi_4_defconfig"
+    grep -q '^CONFIG_BOOTDELAY=2$' "${config_file}" || \
+      fail "u-boot.bin must expose a 2-second serial autoboot abort window for remote Cohesix menu recovery"
     grep -q '^CONFIG_USE_PREBOOT=y$' "${config_file}" || \
       fail "u-boot.bin is missing CONFIG_PREBOOT; rebuild U-Boot from third_party/u-boot/configs/rpi_4_defconfig"
     grep -Fq 'CONFIG_PREBOOT="setenv stdin serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole"' "${config_file}" || \
@@ -289,6 +291,9 @@ verify_boot_cmd_handoff() {
     grep -q '^run coh_force_serial_preboot$' "$path" || fail "boot.cmd does not arm the serial-only preboot path before loading policy"
     grep -q '^run coh_detect_saved_config$' "$path" || fail "boot.cmd does not resolve saved policy before fast-boot detection"
     grep -q 'run coh_maybe_fastboot' "$path" || fail "boot.cmd does not check the Cohesix fast-boot path before the wizard"
+    grep -q 'test "${coh_recovery_menu}" = "1"' "$path" || fail "boot.cmd is missing the explicit Cohesix recovery-menu escape"
+    grep -q 'recovery menu requested: skipping reboot fast boot' "$path" || fail "boot.cmd does not report manual recovery-menu fast-boot bypass"
+    ! grep -q '^setenv bootdelay 0$' "$path" || fail "boot.cmd must not erase the compiled U-Boot autoboot abort window"
     grep -q '^run coh_prompt_root$' "$path" || fail "boot.cmd does not enter the interactive Cohesix menu on cold boot"
     ! grep -q 'unattended boot: using saved or manifest settings' "$path" || fail "boot.cmd must not bypass the menu without a Cohesix fast-boot source"
     grep -q 'test "${coh_menu_input}" = "usb"' "$path" || fail "boot.cmd is missing guarded USB menu-input setup"
@@ -316,6 +321,13 @@ verify_boot_cmd_handoff() {
     ! grep -q 'cohesix,xhci-handoff-halted' "$path" || fail "boot.cmd still mirrors obsolete xHCI halted handoff diagnostics"
     ! grep -q 'cohesix,xhci-handoff-safe' "$path" || fail "boot.cmd still mirrors obsolete xHCI handoff-safe diagnostics"
     ! grep -q 'cohesix,xhci-handoff-source' "$path" || fail "boot.cmd still mirrors obsolete xHCI handoff source diagnostics"
+    grep -q 'setenv coh_begin_wifi_secret_input' "$path" || fail "boot.cmd is missing USB-only Wi-Fi secret-entry setup"
+    grep -q 'setenv stdout vidconsole; setenv stderr vidconsole' "$path" || fail "boot.cmd does not suppress serial echo during Wi-Fi secret entry"
+    grep -q 'setenv coh_end_wifi_secret_input' "$path" || fail "boot.cmd is missing Wi-Fi secret-entry console restore"
+    grep -q 'setenv stdout serial,vidconsole; setenv stderr serial,vidconsole' "$path" || fail "boot.cmd does not restore serial output after Wi-Fi secret entry"
+    grep -q 'USB-only Wi-Fi credential entry; serial echo disabled' "$path" || fail "boot.cmd does not explain USB-only Wi-Fi secret entry"
+    grep -q 'askenv coh_wifi_psk "Wi-Fi PSK (blank for open network): " 64' "$path" || fail "boot.cmd does not collect Wi-Fi PSKs in the protected USB-only prompt"
+    grep -q 'Serial Wi-Fi password entry is disabled because U-Boot echoes input' "$path" || fail "boot.cmd does not explain serial-safe Wi-Fi policy staging"
 }
 
 resolve_sel4_source_dir() {
@@ -1168,7 +1180,6 @@ write_boot_cmd() {
     local fallback_image="$3"
     cat >"$out" <<'EOF'
 echo "[cohesix] pi4 autoboot script"
-setenv bootdelay 0
 setenv coh_image __COH_IMAGE__
 setenv coh_image_fallback __COH_IMAGE_FALLBACK__
 setenv coh_addr 0x10000000
@@ -1199,6 +1210,7 @@ setenv coh_clear_fastboot_marker 'setexpr.l coh_fastboot_rsts_clear *${coh_fastb
 setenv coh_report_fastboot_miss 'echo "[cohesix] fast boot marker absent: rsts=${coh_fastboot_rsts} high=${coh_fastboot_rsts_marker} reset=${coh_fastboot_rsts_reset} saved=${coh_has_saved_config}"'
 setenv coh_run_fastboot 'echo "[cohesix] reboot fast boot: source=${coh_fastboot_source} using saved or manifest settings"; run coh_clear_fastboot_marker; run coh_boot_sequence; echo "[cohesix] reboot fast boot returned; entering recovery menu"'
 setenv coh_maybe_fastboot 'run coh_detect_fastboot; if test "${coh_fastboot}" = "1"; then run coh_run_fastboot; else run coh_report_fastboot_miss; fi'
+setenv coh_maybe_fastboot_or_recovery 'if test "${coh_recovery_menu}" = "1"; then echo "[cohesix] recovery menu requested: skipping reboot fast boot"; else run coh_maybe_fastboot; fi'
 setenv coh_bootstrap_usb_session 'if test "${coh_menu_input}" = "usb"; then if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi; else setenv coh_usb_input_ready 0; fi'
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
 setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_mmio; setenv coh_xhci_pci_cmd; setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
@@ -1216,7 +1228,9 @@ setenv coh_boot_loaded_image 'run coh_load_runtime_dtb; if test "${coh_boot_erro
 setenv coh_boot_sequence 'run coh_emit_policy_summary; if fatload mmc 0:1 ${coh_addr} ${coh_image}; then run coh_boot_loaded_image; else echo "[cohesix] primary image load failed: ${coh_image}"; if fatload mmc 0:1 ${coh_addr} ${coh_image_fallback}; then setenv coh_image ${coh_image_fallback}; run coh_boot_loaded_image; else echo "[cohesix] ERROR: failed to load ${coh_image} or fallback ${coh_image_fallback} from mmc 0:1"; echo "[cohesix] manual: fatls mmc 0:1"; echo "[cohesix] manual: fatload mmc 0:1 0x10000000 ${coh_image}"; echo "[cohesix] manual: fatload mmc 0:1 0x14000000 ${coh_dtb_file}"; echo "[cohesix] manual: bootm 0x10000000 - 0x14000000"; fi; fi'
 setenv coh_prompt_dhcp 'run coh_prepare_input; cls; echo "[cohesix] Guided network setup"; echo "[cohesix] Select address acquisition mode"; echo "  1. DHCP ON (automatic address)"; echo "  2. DHCP OFF (static IPv4)"; echo "  3. Back to boot options"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then setenv coh_net_mode dhcp; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; run coh_prompt_interface; elif test "${coh_choice}" = "2"; then setenv coh_net_mode static; run coh_prompt_interface; elif test "${coh_choice}" = "3"; then run coh_prompt_root; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_dhcp; fi'
 setenv coh_prompt_interface 'run coh_prepare_input; cls; echo "[cohesix] Guided network setup"; echo "[cohesix] Select active interface"; echo "  1. Wired Ethernet (GENET)"; echo "  2. Wi-Fi (CYW43455)"; echo "  3. Back to DHCP selection"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then setenv coh_net_interface wired; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""; run coh_after_interface; elif test "${coh_choice}" = "2"; then setenv coh_net_interface wifi; run coh_after_interface; elif test "${coh_choice}" = "3"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_prompt_interface; fi'
-setenv coh_wifi_setup 'run coh_prepare_input; cls; echo "[cohesix] Configure Wi-Fi credentials"; askenv coh_wifi_ssid "Wi-Fi SSID (required): " 32; if test -z "${coh_wifi_ssid}"; then echo "[cohesix] Wi-Fi SSID is required"; run coh_prompt_interface; fi; askenv coh_wifi_psk "Wi-Fi PSK (blank for open network): " 64; if test "${coh_net_mode}" = "static"; then run coh_static_setup; else run coh_confirm_prompt; fi'
+setenv coh_begin_wifi_secret_input 'setenv stdin usbkbd; setenv stdout vidconsole; setenv stderr vidconsole'
+setenv coh_end_wifi_secret_input 'if test "${coh_usb_input_ready}" = "1"; then setenv stdin usbkbd,serial; else setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
+setenv coh_wifi_setup 'run coh_prepare_input; cls; echo "[cohesix] Configure Wi-Fi credentials"; if test -n "${coh_wifi_ssid}"; then echo "[cohesix] Wi-Fi credentials loaded from ${coh_policy_file}"; if test "${coh_net_mode}" = "static"; then run coh_static_setup; else run coh_confirm_prompt; fi; else if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB-only Wi-Fi credential entry; serial echo disabled"; run coh_begin_wifi_secret_input; askenv coh_wifi_ssid "Wi-Fi SSID (required): " 32; if test -z "${coh_wifi_ssid}"; then run coh_end_wifi_secret_input; echo "[cohesix] Wi-Fi SSID is required"; run coh_prompt_interface; else askenv coh_wifi_psk "Wi-Fi PSK (blank for open network): " 64; run coh_end_wifi_secret_input; echo "[cohesix] Wi-Fi credentials captured via USB local console"; if test "${coh_net_mode}" = "static"; then run coh_static_setup; else run coh_confirm_prompt; fi; fi; else echo "[cohesix] Serial Wi-Fi password entry is disabled because U-Boot echoes input"; echo "[cohesix] Stage coh_wifi_ssid and coh_wifi_psk in ${coh_policy_file} on the boot partition, then reboot"; run coh_prompt_interface; fi; fi'
 setenv coh_static_setup 'run coh_prepare_input; cls; echo "[cohesix] Configure static IPv4 for ${coh_net_interface}"; askenv coh_static_ip "Static IPv4 address (required): " 15; if test -z "${coh_static_ip}"; then echo "[cohesix] Static IPv4 address is required"; run coh_static_setup; fi; askenv coh_static_prefix_len "Prefix length (required, 1-32): " 2; if test -z "${coh_static_prefix_len}"; then echo "[cohesix] Prefix length is required"; run coh_static_setup; fi; askenv coh_static_gateway "Gateway IPv4 (optional): " 15; run coh_confirm_prompt'
 setenv coh_after_interface 'if test "${coh_net_interface}" = "wifi"; then run coh_wifi_setup; elif test "${coh_net_mode}" = "static"; then run coh_static_setup; else run coh_confirm_prompt; fi'
 setenv coh_confirm_prompt 'run coh_prepare_input; cls; echo "[cohesix] Review network settings"; run coh_emit_policy_summary; echo "  1. Boot with these settings"; echo "  2. Save settings and reboot"; echo "  3. Edit settings"; echo "  4. Discard changes and return"; echo "  0. Exit to U-Boot prompt"; setenv coh_choice; askenv coh_choice "Select option [1]: " 1; if test -z "${coh_choice}"; then setenv coh_choice 1; fi; if test "${coh_choice}" = "1"; then run coh_boot_sequence; elif test "${coh_choice}" = "2"; then run coh_persist_policy; reset; elif test "${coh_choice}" = "3"; then run coh_prompt_dhcp; elif test "${coh_choice}" = "4"; then run coh_load_saved_policy; run coh_prompt_root; elif test "${coh_choice}" = "0"; then exit; else echo "[cohesix] invalid selection"; run coh_confirm_prompt; fi'
@@ -1224,7 +1238,7 @@ setenv coh_prompt_root 'run coh_show_logo_splash; run coh_prepare_input; run coh
 run coh_force_serial_preboot
 run coh_load_saved_policy
 run coh_detect_saved_config
-run coh_maybe_fastboot
+run coh_maybe_fastboot_or_recovery
 run coh_prompt_root
 EOF
     sed -i '' "s/__COH_IMAGE__/${coh_image}/g" "$out"

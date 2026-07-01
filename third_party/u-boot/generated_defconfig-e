@@ -22,7 +22,7 @@ CONFIG_EFI_CAPSULE_FIRMWARE_RAW=y
 CONFIG_BOOTSTD_DEFAULTS=y
 CONFIG_OF_BOARD_SETUP=y
 CONFIG_FDT_SIMPLEFB=y
-CONFIG_BOOTDELAY=0
+CONFIG_BOOTDELAY=2
 # CONFIG_BOOTSTD_BOOTCOMMAND is not set
 CONFIG_USE_BOOTCOMMAND=y
 CONFIG_BOOTCOMMAND="if fatload mmc 0:1 ${scriptaddr} boot.scr.uimg; then source ${scriptaddr}; else echo [cohesix] ERROR: boot.scr.uimg missing on mmc 0:1; fi"

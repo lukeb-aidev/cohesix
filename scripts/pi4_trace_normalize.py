@@ -2908,6 +2908,11 @@ def normalize_wifi_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
+    if "wifi-data-rx-admission-blocked" in lower or (
+        "cyw43_driver_task_host_eapol_rx_admission" in lower
+        and "status=error" in lower
+    ):
+        return "wifi-data-rx-admission-blocked"
     if "cyw43-transport-command-admission" in lower:
         return "cyw43-runtime-command-rejected"
     if stripped in {"21259", "0x530b"}:
@@ -5028,6 +5033,11 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 if normalized_value not in {"none", "unknown"}:
                     explicit_blocker = normalized_value
         raw_contract_blocker = normalize_wifi_blocker(raw)
+        if raw_contract_blocker == "wifi-data-rx-admission-blocked":
+            gate = max(gate, 9)
+            post_f2_progress_seen = True
+            blocker = raw_contract_blocker
+            explicit_blocker = raw_contract_blocker
         if raw_contract_blocker == "control-plane-legacy-gmode-stall":
             legacy_gmode_stall_seen = True
         if "cyw43_driver_task_host_eapol_status" in raw:
@@ -5187,6 +5197,14 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 elif blocker == "none":
                     blocker = "tcp-proof-missing"
             if fields.get("active") == "wifi" and (
+                wifi_address_source(fields) == "wifi-data-rx-admission-blocked"
+                or wifi_dhcp_phase(fields) == "rx-admission-blocked"
+            ):
+                dhcp_started_seen = False
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+                blocker = "wifi-data-rx-admission-blocked"
+            if fields.get("active") == "wifi" and (
                 wifi_address_source(fields) == "dhcp-pending"
                 or wifi_dhcp_phase(fields) == "selecting"
             ):
@@ -5230,6 +5248,15 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             ):
                 gate = max(gate, 10)
                 blocker = "none"
+            continue
+        if wifi_fields_active(fields) and (
+            wifi_address_source(fields) == "wifi-data-rx-admission-blocked"
+            or wifi_dhcp_phase(fields) == "rx-admission-blocked"
+        ):
+            dhcp_started_seen = False
+            gate = max(gate, 9)
+            post_f2_progress_seen = True
+            blocker = "wifi-data-rx-admission-blocked"
             continue
         if wifi_fields_active(fields) and (
             wifi_address_source(fields) == "dhcp-pending"
@@ -6966,7 +6993,9 @@ def summarize_wifi_dhcp_frontier(
             continue
         addr_src = wifi_address_source(fields)
         dhcp = wifi_dhcp_phase(fields)
-        if addr_src == "dhcp-pending" and dhcp == "disabled":
+        if addr_src == "wifi-data-rx-admission-blocked" or dhcp == "rx-admission-blocked":
+            frontier = ("wifi-data-rx-admission-blocked", "dhcp", event.line)
+        elif addr_src == "dhcp-pending" and dhcp == "disabled":
             frontier = ("dhcp-not-started", "dhcp", event.line)
         elif addr_src == "dhcp-pending" or dhcp == "selecting":
             frontier = ("dhcp-pending", "dhcp", event.line)

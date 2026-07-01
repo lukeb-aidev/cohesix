@@ -379,6 +379,7 @@ static CYW43_HOST_EAPOL_GTK: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_ACTIVE: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_REQUIRED: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_SECURE: AtomicU32 = AtomicU32::new(0);
+static CYW43_POST_SECURE_DATA_RX_ADMITTED: AtomicU32 = AtomicU32::new(0);
 static CYW43_DATA_TX_RETRIES: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_TX_RETRIES: AtomicU32 = AtomicU32::new(0);
 static CYW43_PRIMARY_BSSCFG_JOIN_READY: AtomicU32 = AtomicU32::new(0);
@@ -4269,6 +4270,7 @@ fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) -> boo
     #[cfg(test)]
     if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
         CYW43_HOST_EAPOL_TEST_RX_RESTORED.fetch_add(1, Ordering::AcqRel);
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
         emit_cyw43_host_eapol_rx_admission_restore(contract, "ready");
         return true;
     }
@@ -4281,10 +4283,12 @@ fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) -> boo
         "cyw43-host-eapol-restore-promisc",
     ) {
         Ok(()) => {
+            CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
             emit_cyw43_host_eapol_rx_admission_restore(contract, "ready");
             true
         }
         Err(_) => {
+            CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
             emit_cyw43_host_eapol_rx_admission_restore(contract, "error");
             false
         }
@@ -4399,6 +4403,7 @@ fn arm_cyw43_host_eapol_pending(
     CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
     CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+    CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
     crate::hal::driver_task::emit_driver_task_resource_init_status(
         contract,
         DriverTaskHotPath::Cyw43Wifi,
@@ -5692,6 +5697,9 @@ fn mark_cyw43_host_eapol_secure(contract: DriverTaskContract, progress: &Cyw43Ho
     if !progress.associated || !progress.link_up {
         mark_cyw43_host_eapol_required(contract, progress);
         return;
+    }
+    if CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire) == 0 {
+        let _ = restore_cyw43_host_eapol_rx_after_secure(contract);
     }
     CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
     CYW43_HOST_EAPOL_ACTIVE.store(0, Ordering::Release);
@@ -9309,6 +9317,7 @@ fn reset_cyw43_control_plane_state() {
     CYW43_HOST_EAPOL_ACTIVE.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+    CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
     CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
@@ -11436,17 +11445,21 @@ fn runtime_ready(hot_path: DriverTaskHotPath) -> bool {
     }
 }
 
-fn cyw43_data_plane_ready() -> bool {
+fn cyw43_secure_carrier_ready() -> bool {
     CYW43_ASSOCIATED.load(Ordering::Acquire) != 0
         && CYW43_LINK_UP.load(Ordering::Acquire) != 0
         && CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
+}
+
+fn cyw43_data_plane_ready() -> bool {
+    cyw43_secure_carrier_ready() && CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire) != 0
 }
 
 fn cyw43_driver_task_bringup_status_label() -> Option<&'static str> {
     if !runtime_ready(DriverTaskHotPath::Cyw43Wifi) {
         return Some(DRIVER_TASK_NET_STATUS);
     }
-    if cyw43_data_plane_ready() {
+    if cyw43_secure_carrier_ready() {
         return None;
     }
     if CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0 {
@@ -11888,6 +11901,9 @@ pub(crate) fn preserve_driver_task_pre_poll_completion(
             if let Some((flags, token)) =
                 cyw43_driver_task_data_frame_with_flags_from_completion(contract, completion)
             {
+                if consume_cyw43_post_secure_eapol_frame(contract, flags, &token, "pre-poll") {
+                    return true;
+                }
                 let pending_before = cyw43_pending_rx_token_occupied();
                 let stored = cyw43_pending_rx_token_store_possible(flags, &token);
                 let pending_after = pending_before || stored;
@@ -12681,10 +12697,22 @@ fn take_cyw43_pending_rx_token() -> Option<(u16, DriverTaskNetRxToken)> {
 #[cfg(feature = "kernel")]
 fn store_cyw43_pending_rx_token(flags: u16, token: DriverTaskNetRxToken) -> bool {
     let mut queue = CYW43_PENDING_RX_QUEUE.lock();
-    if queue
-        .push_back(DriverTaskNetPendingRxToken { flags, token })
-        .is_ok()
+    let pending = match queue.push_back(DriverTaskNetPendingRxToken { flags, token }) {
+        Ok(()) => {
+            update_atomic_u32_max(&CYW43_PENDING_RX_HIGH_WATER, queue.len() as u32);
+            return true;
+        }
+        Err(pending) => pending,
+    };
+    if !cyw43_rx_token_preempts_post_secure_eapol(flags, &pending.token)
+        || !cyw43_evict_one_post_secure_eapol_from_pending_queue(&mut queue)
     {
+        record_cyw43_pending_rx_drop();
+        return false;
+    }
+
+    record_cyw43_pending_rx_drop();
+    if queue.push_back(pending).is_ok() {
         update_atomic_u32_max(&CYW43_PENDING_RX_HIGH_WATER, queue.len() as u32);
         true
     } else {
@@ -12694,8 +12722,62 @@ fn store_cyw43_pending_rx_token(flags: u16, token: DriverTaskNetRxToken) -> bool
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_pending_rx_token_store_possible(_flags: u16, _token: &DriverTaskNetRxToken) -> bool {
-    CYW43_PENDING_RX_QUEUE.lock().len() < CYW43_PENDING_RX_QUEUE_CAP
+fn cyw43_pending_rx_token_store_possible(flags: u16, token: &DriverTaskNetRxToken) -> bool {
+    let queue = CYW43_PENDING_RX_QUEUE.lock();
+    queue.len() < CYW43_PENDING_RX_QUEUE_CAP
+        || (cyw43_rx_token_preempts_post_secure_eapol(flags, token)
+            && cyw43_pending_rx_queue_contains_post_secure_eapol(&queue))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_rx_token_preempts_post_secure_eapol(flags: u16, token: &DriverTaskNetRxToken) -> bool {
+    CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
+        && matches!(
+            cyw43_rx_token_ethertype(flags, token),
+            Some(CYW43_ETH_P_IPV4 | CYW43_ETH_P_ARP)
+        )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pending_rx_is_post_secure_eapol(pending: &DriverTaskNetPendingRxToken) -> bool {
+    CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
+        && cyw43_rx_token_ethertype(pending.flags, &pending.token) == Some(ETH_P_EAPOL)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pending_rx_queue_contains_post_secure_eapol(
+    queue: &heapless::Deque<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>,
+) -> bool {
+    let (front, back) = queue.as_slices();
+    front
+        .iter()
+        .chain(back.iter())
+        .any(cyw43_pending_rx_is_post_secure_eapol)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_evict_one_post_secure_eapol_from_pending_queue(
+    queue: &mut heapless::Deque<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>,
+) -> bool {
+    let original_len = queue.len();
+    let mut retained =
+        heapless::Deque::<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>::new();
+    let mut evicted = false;
+
+    for _ in 0..original_len {
+        let Some(pending) = queue.pop_front() else {
+            break;
+        };
+        if !evicted && cyw43_pending_rx_is_post_secure_eapol(&pending) {
+            evicted = true;
+            continue;
+        }
+        let _ = retained.push_back(pending);
+    }
+    while let Some(pending) = retained.pop_front() {
+        let _ = queue.push_back(pending);
+    }
+    evicted
 }
 
 #[cfg(feature = "kernel")]
@@ -12957,6 +13039,14 @@ fn resume_cyw43_active_prompt_poll_for_tx_retry(contract: DriverTaskContract) ->
         if let Some((flags, token)) = poll_cyw43_driver_task_any_frame() {
             let frame_channel = cyw43_frame_channel(flags);
             if frame_channel == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA {
+                if consume_cyw43_post_secure_eapol_frame(
+                    contract,
+                    flags,
+                    &token,
+                    "tx-retry-control-fallback",
+                ) {
+                    return true;
+                }
                 emit_cyw43_data_path_trace(
                     contract,
                     "rx-preserve",
@@ -12989,6 +13079,9 @@ fn resume_cyw43_active_prompt_poll_for_tx_retry(contract: DriverTaskContract) ->
     if let Some((flags, token)) =
         cyw43_driver_task_data_frame_with_flags_from_completion(contract, completion)
     {
+        if consume_cyw43_post_secure_eapol_frame(contract, flags, &token, "tx-retry") {
+            return true;
+        }
         emit_cyw43_data_path_trace(
             contract,
             "rx-preserve",
@@ -13467,6 +13560,7 @@ mod tests {
         CYW43_HOST_EAPOL_ACTIVE.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
         CYW43_DATA_TX_RETRIES.store(0, Ordering::Release);
         CYW43_DATA_TRACE_DHCP_COUNT.store(0, Ordering::Release);
         CYW43_DATA_TRACE_DROP_COUNT.store(0, Ordering::Release);
@@ -14423,6 +14517,10 @@ mod tests {
             CYW43_WIFI_DRIVER_TASK_CONTRACT
         ));
         assert_eq!(CYW43_HOST_EAPOL_TEST_RX_RESTORED.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire),
+            1
+        );
 
         reset_cyw43_status_flags();
     }
@@ -14816,8 +14914,14 @@ mod tests {
         CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
         assert_eq!(dev.bringup_status_label(), None);
         assert!(
+            dev.transmit(Instant::from_millis(0)).is_none(),
+            "secure carrier still needs explicit post-secure data RX admission"
+        );
+
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+        assert!(
             dev.transmit(Instant::from_millis(0)).is_some(),
-            "descriptor data TX should become available after host-EAPOL"
+            "descriptor data TX should become available after post-secure data RX admission"
         );
 
         CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
@@ -14825,6 +14929,7 @@ mod tests {
         CYW43_ASSOCIATED.store(0, Ordering::Release);
         CYW43_LINK_UP.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
     }
 
     #[cfg(feature = "kernel")]
@@ -19599,6 +19704,7 @@ mod tests {
         CYW43_ASSOCIATED.store(1, Ordering::Release);
         CYW43_LINK_UP.store(1, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
 
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
         let _ring = test_publish_cyw43_ring(&mut ring_page);
@@ -19640,6 +19746,7 @@ mod tests {
         CYW43_ASSOCIATED.store(1, Ordering::Release);
         CYW43_LINK_UP.store(1, Ordering::Release);
         CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
 
         let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
         let eapol = test_cyw43_eapol_frame();
@@ -19660,6 +19767,81 @@ mod tests {
         let (rx, _) = dev
             .receive(Instant::from_millis(0))
             .expect("post-secure EAPOL is consumed and DHCP is delivered in the same receive turn");
+        rx.consume(|bytes| assert_eq!(bytes, &dhcp));
+        assert!(take_cyw43_pending_rx_token().is_none());
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_prepoll_post_secure_eapol_is_consumed_not_queued() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring = test_publish_cyw43_ring(&mut ring_page);
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let eapol = test_cyw43_eapol_frame();
+        let completion = test_stage_cyw43_completion(&eapol, flags, 73);
+
+        assert!(preserve_driver_task_pre_poll_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            completion
+        ));
+        assert!(!cyw43_pending_rx_token_occupied());
+        assert_eq!(
+            CYW43_DATA_TRACE_EAPOL_CONSUME_COUNT.load(Ordering::Acquire),
+            1
+        );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_full_post_secure_eapol_queue_admits_dhcp_offer() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let eapol = test_cyw43_eapol_frame();
+        let dhcp = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);
+        for _ in 0..CYW43_PENDING_RX_QUEUE_CAP {
+            assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&eapol)));
+        }
+
+        assert!(cyw43_pending_rx_token_store_possible(
+            flags,
+            &test_rx_token(&dhcp)
+        ));
+        assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&dhcp)));
+        assert_eq!(
+            cyw43_pending_rx_queue_len(),
+            CYW43_PENDING_RX_QUEUE_CAP as u64
+        );
+        assert_eq!(
+            CYW43_PENDING_RX_DROPS.load(Ordering::Acquire),
+            1,
+            "one post-secure EAPOL retransmit is evicted for DHCP"
+        );
+
+        let mut dev = Cyw43DriverTaskDevice::default();
+        let (rx, _) = dev
+            .receive(Instant::from_millis(0))
+            .expect("DHCP survives a full queue of post-secure EAPOL retransmits");
         rx.consume(|bytes| assert_eq!(bytes, &dhcp));
         assert!(take_cyw43_pending_rx_token().is_none());
 

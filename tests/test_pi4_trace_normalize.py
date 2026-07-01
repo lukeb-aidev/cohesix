@@ -10548,6 +10548,32 @@ def test_gate_summary_reports_dhcp_not_started_after_secure_release() -> None:
     assert record["WIFI_SUBGATE_NAME"] == "secure-release"
 
 
+def test_gate_summary_reports_rx_admission_blocked_after_secure_release() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            "status=secure reason=none polls=8194 associated=yes link_up=yes "
+            "event_rx=1 eapol_rx=4 data_rx=4 next_action=release-dhcp-data",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_RX_ADMISSION contract=cyw43455 "
+            "action=restore-after-secure status=error allmulti=1 promisc=1 "
+            "data=allowed-after-keys",
+            "netstats: mode=dhcp policy=wifi active=wifi standby=none "
+            "addr_src=wifi-data-rx-admission-blocked ip=0.0.0.0 "
+            "gateway=0.0.0.0 dhcp=rx-admission-blocked",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE"] == 9
+    assert record["WIFI_BLOCKER"] == "wifi-data-rx-admission-blocked"
+    assert record["WIFI_EXACT"] == "wifi-data-rx-admission-blocked"
+    assert record["WIFI_PHASE"] == "dhcp"
+    assert record["WIFI_BLOCKER_LINE"] == 3
+    assert record["WIFI_SUBGATE"] == "7e"
+    assert record["WIFI_SUBGATE_NAME"] == "secure-release"
+
+
 def test_gate_summary_accepts_oldgood_wifi_replay_contract() -> None:
     events = normalizer.parse_events(oldgood_wifi_replay_lines())
 

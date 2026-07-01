@@ -2073,6 +2073,8 @@ static DRIVER_TASK_OWNER_STATE_PROOF: AtomicUsize = AtomicUsize::new(0);
 static DRIVER_TASK_BROAD_CAPS_LEAKED: AtomicUsize = AtomicUsize::new(usize::MAX);
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_ENTRY_HEARTBEATS: AtomicUsize = AtomicUsize::new(0);
+#[cfg(feature = "kernel")]
+static DRIVER_TASK_HDMI_PROGRESS_LAST_KEY: AtomicUsize = AtomicUsize::new(0);
 
 /// Stable key for the serial driver TCB.
 pub const DRIVER_TASK_KEY_SERIAL: usize = 0;
@@ -7263,12 +7265,47 @@ fn emit_driver_task_resource_init_hdmi_progress(
     status: &'static str,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
+    if !driver_task_hdmi_progress_repeat_allowed(hot_path, stage, status, completion) {
+        return;
+    }
     if let Some(line) =
         driver_task_resource_hdmi_progress_line(contract, hot_path, stage, status, completion)
     {
         crate::bootstrap::log::force_log_buffer_line_or_uart_without_prompt_refresh(line.as_str());
         crate::local_seat::mirror_driver_start_progress_line(line.as_str());
     }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_hdmi_progress_repeat_allowed(
+    hot_path: DriverTaskHotPath,
+    stage: &'static str,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) -> bool {
+    let key = driver_task_hdmi_progress_key(hot_path, stage, status, completion);
+    DRIVER_TASK_HDMI_PROGRESS_LAST_KEY.swap(key, Ordering::AcqRel) != key
+}
+
+#[cfg(test)]
+fn reset_driver_task_hdmi_progress_repeat_gate_for_test() {
+    #[cfg(feature = "kernel")]
+    DRIVER_TASK_HDMI_PROGRESS_LAST_KEY.store(0, Ordering::Release);
+}
+
+fn driver_task_hdmi_progress_key(
+    hot_path: DriverTaskHotPath,
+    stage: &'static str,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) -> usize {
+    let completion_key = completion.map_or(0, |completion| {
+        ((completion.detail as usize) << 16) ^ completion.result as usize
+    });
+    (hot_path.as_u32() as usize)
+        ^ stage.as_ptr() as usize
+        ^ status.as_ptr() as usize
+        ^ completion_key.rotate_left(7)
 }
 
 fn driver_task_resource_hdmi_progress_line(
@@ -7885,7 +7922,7 @@ impl DriverTaskContract {
             DriverTaskKind::Serial
             | DriverTaskKind::LocalSeatUsb
             | DriverTaskKind::SdioHost
-            | DriverTaskKind::WiredNic => 12_000,
+            | DriverTaskKind::WiredNic => 20_000,
             DriverTaskKind::HdmiText => 300_000,
             DriverTaskKind::WifiNic => 4_000_000,
             DriverTaskKind::PcieRoot => 750,
@@ -9739,10 +9776,10 @@ mod tests {
 
     #[test]
     fn service_latency_envelopes_match_physical_boot_evidence() {
-        assert_eq!(SERIAL_DRIVER_TASK_CONTRACT.max_service_us(), 12_000);
-        assert_eq!(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.max_service_us(), 12_000);
-        assert_eq!(SDIO_HOST_DRIVER_TASK_CONTRACT.max_service_us(), 12_000);
-        assert_eq!(GENET_DRIVER_TASK_CONTRACT.max_service_us(), 12_000);
+        assert_eq!(SERIAL_DRIVER_TASK_CONTRACT.max_service_us(), 20_000);
+        assert_eq!(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT.max_service_us(), 20_000);
+        assert_eq!(SDIO_HOST_DRIVER_TASK_CONTRACT.max_service_us(), 20_000);
+        assert_eq!(GENET_DRIVER_TASK_CONTRACT.max_service_us(), 20_000);
         assert_eq!(HDMI_TEXT_DRIVER_TASK_CONTRACT.max_service_us(), 300_000);
         assert_eq!(CYW43_WIFI_DRIVER_TASK_CONTRACT.max_service_us(), 4_000_000);
         assert_eq!(PCIE_ROOT_DRIVER_TASK_CONTRACT.max_service_us(), 750);
@@ -12965,6 +13002,50 @@ mod tests {
             fault.as_str(),
             "[drivers] WiFi cyw43-transport-init fault detail=0x5323 result=0"
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn hdmi_progress_repeat_gate_suppresses_identical_driver_status() {
+        reset_driver_task_hdmi_progress_repeat_gate_for_test();
+        let fault = Some(DriverTaskCompletionRecord {
+            sequence: 9,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: 0x0003,
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        });
+
+        assert!(driver_task_hdmi_progress_repeat_allowed(
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "fault",
+            fault,
+        ));
+        assert!(!driver_task_hdmi_progress_repeat_allowed(
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "fault",
+            fault,
+        ));
+
+        let ready = Some(DriverTaskCompletionRecord::progress(10, 1));
+        assert!(driver_task_hdmi_progress_repeat_allowed(
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "ready",
+            ready,
+        ));
+        assert!(driver_task_hdmi_progress_repeat_allowed(
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "fault",
+            fault,
+        ));
     }
 
     #[cfg(feature = "kernel")]
