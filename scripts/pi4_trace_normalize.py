@@ -2934,6 +2934,12 @@ def normalize_wifi_blocker(value: str) -> str:
         and "status=error" in lower
     ):
         return "wifi-data-rx-admission-blocked"
+    if "wifi-rx-overflow" in lower or stripped == "rx-overflow":
+        return "wifi-rx-overflow"
+    if "wifi-rx-starvation" in lower or stripped == "rx-starvation":
+        return "wifi-rx-starvation"
+    if "wifi-tx-credit-anomaly" in lower or stripped == "tx-credit-anomaly":
+        return "wifi-tx-credit-anomaly"
     if "cyw43-transport-command-admission" in lower:
         return "cyw43-runtime-command-rejected"
     if stripped in {"21259", "0x530b"}:
@@ -5236,14 +5242,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         blocker = "netstats-missing"
                 elif blocker == "none":
                     blocker = "tcp-proof-missing"
-            if fields.get("active") == "wifi" and (
-                wifi_address_source(fields) == "wifi-data-rx-admission-blocked"
-                or wifi_dhcp_phase(fields) == "rx-admission-blocked"
-            ):
-                dhcp_started_seen = False
+            cyw43_status_blocker = wifi_cyw43_status_blocker(fields)
+            if fields.get("active") == "wifi" and cyw43_status_blocker is not None:
+                dhcp_started_seen = cyw43_status_blocker[0] != "wifi-data-rx-admission-blocked"
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
-                blocker = "wifi-data-rx-admission-blocked"
+                blocker = cyw43_status_blocker[0]
             if fields.get("active") == "wifi" and (
                 wifi_address_source(fields) == "dhcp-pending"
                 or wifi_dhcp_phase(fields) == "selecting"
@@ -5289,14 +5293,12 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 gate = max(gate, 10)
                 blocker = "none"
             continue
-        if wifi_fields_active(fields) and (
-            wifi_address_source(fields) == "wifi-data-rx-admission-blocked"
-            or wifi_dhcp_phase(fields) == "rx-admission-blocked"
-        ):
-            dhcp_started_seen = False
+        cyw43_status_blocker = wifi_cyw43_status_blocker(fields)
+        if wifi_fields_active(fields) and cyw43_status_blocker is not None:
+            dhcp_started_seen = cyw43_status_blocker[0] != "wifi-data-rx-admission-blocked"
             gate = max(gate, 9)
             post_f2_progress_seen = True
-            blocker = "wifi-data-rx-admission-blocked"
+            blocker = cyw43_status_blocker[0]
             continue
         if wifi_fields_active(fields) and (
             wifi_address_source(fields) == "dhcp-pending"
@@ -7004,6 +7006,22 @@ def wifi_dhcp_phase(fields: Mapping[str, str]) -> str | None:
     return fields.get("dhcp") or fields.get("dhcp_phase")
 
 
+def wifi_cyw43_status_blocker(fields: Mapping[str, str]) -> tuple[str, str] | None:
+    """Return CYW43 data-path status blockers reported by netstats/netstatus."""
+
+    addr_src = wifi_address_source(fields)
+    dhcp = wifi_dhcp_phase(fields)
+    if addr_src == "wifi-data-rx-admission-blocked" or dhcp == "rx-admission-blocked":
+        return "wifi-data-rx-admission-blocked", "dhcp"
+    if addr_src == "wifi-rx-overflow" or dhcp == "rx-overflow":
+        return "wifi-rx-overflow", "runtime-rx"
+    if addr_src == "wifi-rx-starvation" or dhcp == "rx-starvation":
+        return "wifi-rx-starvation", "runtime-rx"
+    if addr_src == "wifi-tx-credit-anomaly" or dhcp == "tx-credit-anomaly":
+        return "wifi-tx-credit-anomaly", "data-tx"
+    return None
+
+
 def wifi_root_console_net_ready_step(event: TraceEvent) -> bool:
     """Return true when the root-console wait ended because WiFi networking is up."""
 
@@ -7033,8 +7051,9 @@ def summarize_wifi_dhcp_frontier(
             continue
         addr_src = wifi_address_source(fields)
         dhcp = wifi_dhcp_phase(fields)
-        if addr_src == "wifi-data-rx-admission-blocked" or dhcp == "rx-admission-blocked":
-            frontier = ("wifi-data-rx-admission-blocked", "dhcp", event.line)
+        cyw43_status_blocker = wifi_cyw43_status_blocker(fields)
+        if cyw43_status_blocker is not None:
+            frontier = (cyw43_status_blocker[0], cyw43_status_blocker[1], event.line)
         elif addr_src == "dhcp-pending" and dhcp == "disabled":
             frontier = ("dhcp-not-started", "dhcp", event.line)
         elif addr_src == "dhcp-pending" or dhcp == "selecting":

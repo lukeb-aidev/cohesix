@@ -427,6 +427,8 @@ static CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_SECURE: AtomicU32 = AtomicU32::new(0);
 static CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN: AtomicU32 = AtomicU32::new(0);
 #[cfg(test)]
 static CYW43_HOST_EAPOL_TEST_RX_RESTORED: AtomicU32 = AtomicU32::new(0);
+#[cfg(test)]
+static CYW43_HOST_EAPOL_TEST_BSSID_VALID: AtomicU32 = AtomicU32::new(0);
 static CYW43_BCDC_IOCTL_ID: AtomicU32 = AtomicU32::new(0);
 static CYW43_RUNTIME_MAC: Mutex<EthernetAddress> = Mutex::new(CYW43_DRIVER_TASK_MAC);
 #[cfg(feature = "kernel")]
@@ -2009,6 +2011,22 @@ fn driver_task_resource_completion_status(
 }
 
 #[cfg(feature = "kernel")]
+const CYW43_ENGINE_INIT_REPLAY_ATTEMPTS: usize = 3;
+
+#[cfg(feature = "kernel")]
+const fn cyw43_engine_init_completion_allows_replay(
+    completion: Option<DriverTaskCompletionRecord>,
+) -> bool {
+    match completion {
+        None => true,
+        Some(completion) => {
+            completion.code == DriverTaskCompletionCode::Fault.as_u16()
+                && completion.detail == DriverTaskFaultCode::DeviceUnavailable.as_u16()
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
 const fn sdio_engine_init_detail_status(detail: u16) -> Option<&'static str> {
     match detail {
         detail if detail == DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH as u16 => {
@@ -2236,20 +2254,45 @@ where
             emit_net_driver_task_replay_status(config, hot_path, "cyw43-sdio-prereq", "ready");
         }
         let command = driver_task_net_engine_init_command(contract, hot_path);
-        emit_net_driver_task_replay_status(config, hot_path, "engine-init", "begin");
-        let completion = run_driver_task_net_service(contract, command);
-        let initialized = completion.is_some_and(|completion| {
-            completion.code == DriverTaskCompletionCode::Progress.as_u16() && completion.result == 1
-        });
-        let status = driver_task_resource_completion_status(completion, initialized);
-        emit_net_driver_task_replay_status(config, hot_path, "engine-init", status);
-        crate::hal::driver_task::emit_driver_task_resource_init_status(
-            contract,
-            hot_path,
-            "net-engine-init",
-            status,
-            completion,
-        );
+        let max_engine_init_attempts = if hot_path == DriverTaskHotPath::Cyw43Wifi {
+            CYW43_ENGINE_INIT_REPLAY_ATTEMPTS
+        } else {
+            1
+        };
+        let mut initialized = false;
+        for attempt in 0..max_engine_init_attempts {
+            let replay_stage = if attempt == 0 {
+                "engine-init"
+            } else {
+                "engine-init-replay"
+            };
+            let resource_stage = if attempt == 0 {
+                "net-engine-init"
+            } else {
+                "net-engine-init-replay"
+            };
+            emit_net_driver_task_replay_status(config, hot_path, replay_stage, "begin");
+            let completion = run_driver_task_net_service(contract, command);
+            initialized = completion.is_some_and(|completion| {
+                completion.code == DriverTaskCompletionCode::Progress.as_u16()
+                    && completion.result == 1
+            });
+            let status = driver_task_resource_completion_status(completion, initialized);
+            emit_net_driver_task_replay_status(config, hot_path, replay_stage, status);
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                hot_path,
+                resource_stage,
+                status,
+                completion,
+            );
+            if initialized
+                || hot_path != DriverTaskHotPath::Cyw43Wifi
+                || !cyw43_engine_init_completion_allows_replay(completion)
+            {
+                break;
+            }
+        }
         if initialized {
             match hot_path {
                 DriverTaskHotPath::GenetNic => {
@@ -2917,6 +2960,35 @@ fn cyw43_submit_bcdc_u32_with_options(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_u32_optional_filter(
+    contract: DriverTaskContract,
+    cmd: u32,
+    value: u32,
+    stage: &'static str,
+    pre_tx_drain: bool,
+) -> Result<bool, DriverTaskNetError> {
+    #[cfg(test)]
+    if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
+        let _ = (contract, cmd, value, stage, pre_tx_drain);
+        return Ok(false);
+    }
+    let mut payload = [0u8; 4];
+    payload.copy_from_slice(&value.to_le_bytes());
+    let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    let id = cyw43_next_bcdc_ioctl_id();
+    let len = cyw43_write_bcdc_frame(&mut frame, cmd, CYW43_BCDC_FLAG_SET, id, &payload)?;
+    cyw43_submit_bcdc_optional_filter_exchange(
+        contract,
+        &frame[..len],
+        cmd,
+        id,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+        pre_tx_drain,
+    )
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_submit_bcdc_ssid(
     contract: DriverTaskContract,
     credentials: crate::net::WifiCredentials,
@@ -3340,6 +3412,16 @@ fn cyw43_submit_bcdc_iovar_u32_with_options(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_iovar_u32_optional_filter(
+    contract: DriverTaskContract,
+    name: &str,
+    value: u32,
+    stage: &'static str,
+) -> Result<bool, DriverTaskNetError> {
+    cyw43_submit_bcdc_iovar_bytes_optional_filter(contract, name, &value.to_le_bytes(), stage)
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_submit_bcdc_iovar_u32_optional_unsupported(
     contract: DriverTaskContract,
     name: &str,
@@ -3438,6 +3520,50 @@ fn cyw43_optional_iovar_submit_fault_is_fail_soft(
             | ("ndoe", "cyw43-control-connect-ndoe")
     ) && completion.code == DriverTaskCompletionCode::Fault.as_u16()
         && cyw43_fault_detail_allows_same_command_retry(completion.detail)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_iovar_bytes_optional_filter(
+    contract: DriverTaskContract,
+    name: &str,
+    data: &[u8],
+    stage: &'static str,
+) -> Result<bool, DriverTaskNetError> {
+    #[cfg(test)]
+    if CYW43_HOST_EAPOL_TEST_IO_STUB.load(Ordering::Acquire) != 0 {
+        let _ = (contract, name, data, stage);
+        return Ok(false);
+    }
+    let name_len = name.len();
+    let payload_len = name_len
+        .checked_add(1)
+        .and_then(|len| len.checked_add(data.len()))
+        .ok_or(DriverTaskNetError::RuntimeInit("cyw43-iovar-len"))?;
+    if payload_len > MAX_DRIVER_TASK_FRAME_BYTES.saturating_sub(CYW43_BCDC_HEADER_BYTES) {
+        return Err(DriverTaskNetError::RuntimeInit("cyw43-iovar-len"));
+    }
+    let mut payload = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    payload[..name_len].copy_from_slice(name.as_bytes());
+    payload[name_len] = 0;
+    payload[name_len + 1..payload_len].copy_from_slice(data);
+    let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
+    let id = cyw43_next_bcdc_ioctl_id();
+    let len = cyw43_write_bcdc_frame(
+        &mut frame,
+        CYW43_WLC_SET_VAR,
+        CYW43_BCDC_FLAG_SET,
+        id,
+        &payload[..payload_len],
+    )?;
+    cyw43_submit_bcdc_optional_filter_exchange(
+        contract,
+        &frame[..len],
+        CYW43_WLC_SET_VAR,
+        id,
+        stage,
+        Cyw43ControlHeaderMode::Extended,
+        false,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -4024,6 +4150,11 @@ fn cyw43_get_bcdc_bssid(
     contract: DriverTaskContract,
     stage: &'static str,
 ) -> Result<EthernetAddress, Cyw43BssidRefreshError> {
+    #[cfg(test)]
+    if CYW43_HOST_EAPOL_TEST_BSSID_VALID.load(Ordering::Acquire) != 0 {
+        let _ = (contract, stage);
+        return Ok(EthernetAddress([0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5]));
+    }
     let mut frame = [0u8; MAX_DRIVER_TASK_FRAME_BYTES];
     let response = [0u8; ETHER_ADDR_LEN];
     let id = cyw43_next_bcdc_ioctl_id();
@@ -4265,6 +4396,72 @@ const fn cyw43_control_exchange_completion_is_unsupported(
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_control_exchange_completion_is_optional_filter_reject(
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    completion.code == DriverTaskCompletionCode::Fault.as_u16()
+        && completion.detail == CYW43_CONTROL_EXCHANGE_FAULT_DETAIL
+        && (completion.result == CYW43_BCME_UNSUPPORTED_STATUS
+            || completion.result == CYW43_BCME_BADARG_STATUS)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_submit_bcdc_optional_filter_exchange(
+    contract: DriverTaskContract,
+    payload: &[u8],
+    cmd: u32,
+    id: u16,
+    stage: &'static str,
+    header_mode: Cyw43ControlHeaderMode,
+    pre_tx_drain: bool,
+) -> Result<bool, DriverTaskNetError> {
+    match cyw43_submit_control_exchange_unmapped_with_options(
+        contract,
+        payload,
+        cmd,
+        id,
+        stage,
+        header_mode,
+        pre_tx_drain,
+    ) {
+        Ok(completion) if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() => {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "ready",
+                Some(completion),
+            );
+            Ok(false)
+        }
+        Ok(completion) => {
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "fail",
+                Some(completion),
+            );
+            Err(DriverTaskNetError::RuntimeInit(stage))
+        }
+        Err(Cyw43CommandSubmitError::Completion(completion))
+            if cyw43_control_exchange_completion_is_optional_filter_reject(completion) =>
+        {
+            clear_cyw43_runtime_command_fault_status();
+            crate::hal::driver_task::emit_driver_task_resource_init_status(
+                contract,
+                DriverTaskHotPath::Cyw43Wifi,
+                stage,
+                "optional-filter-reject",
+                Some(completion),
+            );
+            Ok(true)
+        }
+        Err(err) => Err(err.into_net_error()),
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_configure_host_eapol_rx(contract: DriverTaskContract) -> Result<(), DriverTaskNetError> {
     cyw43_configure_host_eapol_rx_mode(
         contract,
@@ -4319,17 +4516,15 @@ fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) -> boo
         emit_cyw43_host_eapol_rx_admission_restore(contract, "ready");
         return true;
     }
-    match cyw43_configure_host_eapol_rx_mode(
-        contract,
-        CYW43_POST_SECURE_DATA_ALLMULTI,
-        CYW43_POST_SECURE_DATA_PROMISC,
-        "cyw43-host-eapol-restore-mcast",
-        "cyw43-host-eapol-restore-allmulti",
-        "cyw43-host-eapol-restore-promisc",
-    ) {
-        Ok(()) => {
+    match cyw43_restore_post_secure_data_filters(contract) {
+        Ok(repair_pending) => {
             CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
-            emit_cyw43_host_eapol_rx_admission_restore(contract, "ready");
+            let status = if repair_pending {
+                "repair-pending"
+            } else {
+                "ready"
+            };
+            emit_cyw43_host_eapol_rx_admission_restore(contract, status);
             true
         }
         Err(_) => {
@@ -4338,6 +4533,35 @@ fn restore_cyw43_host_eapol_rx_after_secure(contract: DriverTaskContract) -> boo
             false
         }
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_restore_post_secure_data_filters(
+    contract: DriverTaskContract,
+) -> Result<bool, DriverTaskNetError> {
+    let mut mcast = [0u8; 10];
+    mcast[..4].copy_from_slice(&1u32.to_le_bytes());
+    mcast[4..10].copy_from_slice(&CYW43_PAE_GROUP_ADDR);
+    cyw43_submit_bcdc_iovar_bytes(
+        contract,
+        "mcast_list",
+        &mcast,
+        "cyw43-host-eapol-restore-mcast",
+    )?;
+    let allmulti_repair_pending = cyw43_submit_bcdc_iovar_u32_optional_filter(
+        contract,
+        "allmulti",
+        CYW43_POST_SECURE_DATA_ALLMULTI,
+        "cyw43-host-eapol-restore-allmulti",
+    )?;
+    let promisc_repair_pending = cyw43_submit_bcdc_u32_optional_filter(
+        contract,
+        CYW43_WLC_SET_PROMISC,
+        CYW43_POST_SECURE_DATA_PROMISC,
+        "cyw43-host-eapol-restore-promisc",
+        CYW43_HOST_EAPOL_PROMISC_PRE_TX_DRAIN,
+    )?;
+    Ok(allmulti_repair_pending || promisc_repair_pending)
 }
 
 #[cfg(feature = "kernel")]
@@ -5449,7 +5673,7 @@ fn cyw43_host_eapol_join_timeout_expired(session: &Cyw43HostEapolSession, now_ms
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43AssocProbeResult {
-    Associated,
+    BssidObserved,
     NotAssociated,
     Ignored,
     ControlError,
@@ -5502,17 +5726,11 @@ fn cyw43_probe_host_eapol_assoc_state(
                 },
                 0,
             );
-            if accepted {
-                session.progress.associated = true;
-                session.progress.association_event = Some("bssid-probe");
-                session.progress.association_poll = poll.min(u32::MAX as usize) as u32;
-                CYW43_ASSOCIATED.store(1, Ordering::Release);
-            }
             emit_cyw43_host_eapol_assoc_probe(
                 contract,
                 poll,
                 attempt,
-                if accepted { "ready" } else { "ignored" },
+                if accepted { "observed" } else { "ignored" },
                 bssid,
                 if accepted {
                     "valid-bssid"
@@ -5524,7 +5742,7 @@ fn cyw43_probe_host_eapol_assoc_state(
             emit_cyw43_host_eapol_bssid_refresh(
                 contract,
                 poll,
-                if accepted { "ready" } else { "ignored" },
+                if accepted { "observed" } else { "ignored" },
                 bssid,
                 if accepted {
                     "pre-required-valid-bssid"
@@ -5534,7 +5752,7 @@ fn cyw43_probe_host_eapol_assoc_state(
                 0,
             );
             if accepted {
-                Cyw43AssocProbeResult::Associated
+                Cyw43AssocProbeResult::BssidObserved
             } else {
                 Cyw43AssocProbeResult::Ignored
             }
@@ -13781,6 +13999,7 @@ mod tests {
         CYW43_HOST_EAPOL_TEST_DRAIN_BEFORE_SECURE.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_WSEC_PRE_TX_DRAIN.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TEST_RX_RESTORED.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_BSSID_VALID.store(0, Ordering::Release);
         while take_cyw43_pending_rx_token().is_some() {}
         clear_cyw43_pending_control_replies();
         clear_cyw43_host_eapol_status_throttle();
@@ -14026,6 +14245,7 @@ mod tests {
         assert_eq!(CYW43_WLC_SET_PM, 86);
         assert_eq!(CYW43_CONTROL_EXCHANGE_FAULT_DETAIL, 0x530b);
         assert_eq!(CYW43_BCME_UNSUPPORTED_STATUS, 0xffff_ffe9);
+        assert_eq!(CYW43_BCME_BADARG_STATUS, 0xffff_fffe);
         assert_eq!(CYW43_BCME_NOTASSOCIATED_STATUS, 0xffff_ffef);
         assert_eq!(CYW43_MFP_NONE, 0);
         assert_eq!(CYW43_WME_BSS_DISABLE_RSN_DEFAULT, 1);
@@ -14045,12 +14265,31 @@ mod tests {
             result: 0xffff_ffff,
             ..unsupported
         };
+        let badarg = DriverTaskCompletionRecord {
+            result: CYW43_BCME_BADARG_STATUS,
+            ..unsupported
+        };
         assert!(cyw43_control_exchange_completion_is_unsupported(
             unsupported
         ));
         assert!(!cyw43_control_exchange_completion_is_unsupported(
             other_fault
         ));
+        assert!(cyw43_control_exchange_completion_is_optional_filter_reject(
+            unsupported
+        ));
+        assert!(cyw43_control_exchange_completion_is_optional_filter_reject(
+            badarg
+        ));
+        assert!(!cyw43_control_exchange_completion_is_optional_filter_reject(other_fault));
+        assert_eq!(CYW43_ENGINE_INIT_REPLAY_ATTEMPTS, 3);
+        assert!(cyw43_engine_init_completion_allows_replay(None));
+        assert!(cyw43_engine_init_completion_allows_replay(Some(
+            DriverTaskCompletionRecord::fault(2, DriverTaskFaultCode::DeviceUnavailable)
+        )));
+        assert!(!cyw43_engine_init_completion_allows_replay(Some(
+            DriverTaskCompletionRecord::fault(3, DriverTaskFaultCode::RejectedCommand)
+        )));
         let not_associated = DriverTaskCompletionRecord {
             result: CYW43_BCME_NOTASSOCIATED_STATUS,
             ..unsupported
@@ -15152,17 +15391,52 @@ mod tests {
         CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
         CYW43_ASSOCIATED.store(1, Ordering::Release);
         CYW43_LINK_UP.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_TEST_IO_STUB.store(1, Ordering::Release);
         mark_cyw43_host_eapol_secure(CYW43_WIFI_DRIVER_TASK_CONTRACT, &progress);
 
         assert_eq!(CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(cyw43_driver_task_bringup_status_label(), None);
+        assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 1);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn post_secure_rx_admission_transport_failure_blocks_data_plane() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status-label tests must serialize");
+        reset_cyw43_status_flags();
+
+        let progress = Cyw43HostEapolProgress {
+            associated: true,
+            link_up: true,
+            eapol_rx: 4,
+            ..Cyw43HostEapolProgress::default()
+        };
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+        mark_cyw43_host_eapol_secure(CYW43_WIFI_DRIVER_TASK_CONTRACT, &progress);
+
+        assert_eq!(CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire), 0);
+        assert_eq!(
+            CYW43_POST_SECURE_DATA_RX_ADMITTED.load(Ordering::Acquire),
+            0
+        );
         assert_eq!(
             cyw43_driver_task_bringup_status_label(),
             Some("wifi-data-rx-admission-blocked")
         );
-        assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 1);
-        assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 1);
 
         reset_cyw43_status_flags();
     }
@@ -15879,6 +16153,41 @@ mod tests {
         assert_eq!(session.progress.eapol_rx, 0);
         assert_eq!(session.progress.association_event, None);
         assert_eq!(session.progress.association_poll, 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn host_eapol_bssid_probe_records_metadata_not_carrier() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        CYW43_HOST_EAPOL_TEST_BSSID_VALID.store(1, Ordering::Release);
+
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let station = EthernetAddress([0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10]);
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host eapol session starts");
+
+        assert_eq!(
+            cyw43_probe_host_eapol_assoc_state(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                station,
+                &mut session,
+                7,
+                1,
+                "test-bssid-probe",
+            ),
+            Cyw43AssocProbeResult::BssidObserved
+        );
+        assert_eq!(session.progress.assoc_probe_status, Some("valid-bssid"));
+        assert!(!session.progress.associated);
+        assert!(!session.progress.link_up);
+        assert_eq!(session.progress.association_event, None);
+        assert_eq!(session.progress.association_poll, 0);
+        assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 0);
+        assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 0);
+
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]

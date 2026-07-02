@@ -1196,10 +1196,10 @@ const CYW43_SDPCM_CHANNEL_EVENT: u8 = 1;
 const CYW43_SDPCM_CHANNEL_DATA: u8 = 2;
 const CYW43_SDPCM_CHANNEL_GLOM: u8 = 3;
 const CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES: usize = 16;
-const CYW43_RX_DRAIN_BUDGET: usize = 16;
-const CYW43_DATA_TX_POST_DRAIN_BUDGET: usize = 8;
+const CYW43_RX_DRAIN_BUDGET: usize = 50;
+const CYW43_DATA_TX_POST_DRAIN_BUDGET: usize = 20;
 const CYW43_DATA_TX_FUNCTION2_RETRIES: usize = 2;
-const CYW43_DATA_TX_COMPLETION_DRAIN_POLLS: usize = 2;
+const CYW43_DATA_TX_COMPLETION_DRAIN_POLLS: usize = 8;
 const CYW43_TX_CREDIT_WAIT_LOOPS: usize = 2_000;
 const CYW43_RX_FRAME_FLAG_MASK_DATA: u16 = 1 << CYW43_SDPCM_CHANNEL_DATA;
 const CYW43_RX_FRAME_FLAG_MASK_CONTROL: u16 = 1 << CYW43_SDPCM_CHANNEL_CONTROL;
@@ -1398,16 +1398,16 @@ const CYW43_FUNCTION2_WRITE_READY_POLLS: usize = 128;
 const CYW43_FUNCTION2_RECOVERY_READY_TIMEOUT_MS: u64 = 100;
 const CYW43_FUNCTION2_RECOVERY_READY_POLLS: usize = 128;
 const CYW43_TX_CREDIT_TIMEOUT_MS: u64 = 100;
-const CYW43_DATA_TX_CREDIT_TIMEOUT_MS: u64 = 20;
+const CYW43_DATA_TX_CREDIT_TIMEOUT_MS: u64 = 80;
 const CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS: u64 = CYW43_TX_CREDIT_TIMEOUT_MS;
 const CYW43_ETH_TX_RESULT_REASON_NO_COMPLETION_CREDIT: u8 = 1;
 const CYW43_ETH_TX_RESULT_REASON_STALE_COMPLETION_CREDIT: u8 = 2;
 const CYW43_FUNCTION2_FIFO_WINDOW_ATTEMPTS: usize = 2;
 const CYW43_RX_SOURCE_SAMPLE_INTERVAL_EMPTY_POLLS: u32 = 1024;
-const CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS: usize = 1;
-const CYW43_RX_SOURCE_ASSERTED_EMPTY_FIRSTREAD_RETRIES: usize = 1;
-const CYW43_RX_SOURCE_RECOVERY_DRAIN_POLLS: usize = 16;
-const CYW43_RX_SOURCE_ASSERTED_EMPTY_RFRAME_POLLS: usize = 4;
+const CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS: usize = 3;
+const CYW43_RX_SOURCE_ASSERTED_EMPTY_FIRSTREAD_RETRIES: usize = 3;
+const CYW43_RX_SOURCE_RECOVERY_DRAIN_POLLS: usize = 32;
+const CYW43_RX_SOURCE_ASSERTED_EMPTY_RFRAME_POLLS: usize = 8;
 const CYW43_RX_SOURCE_RETRANSMIT_ACK_POLLS: usize = 32;
 const CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS: u64 = 20;
 const CYW43_RX_SOURCE_RECOVERY_SETTLE_SPINS: usize = 5_000;
@@ -23685,7 +23685,7 @@ mod tests {
         );
         assert_eq!(
             runtime_millis_to_cycles_at_hz(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 54_000_000),
-            1_080_000
+            4_320_000
         );
         assert_eq!(
             runtime_millis_to_cycles_at_hz(CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS, 54_000_000),
@@ -25954,6 +25954,9 @@ mod tests {
         );
 
         stage_bytes(usize::from(payload_offset), b"ethernet-frame");
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(2);
+        });
         stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
             flags: 0,
@@ -25982,7 +25985,7 @@ mod tests {
                 data_tx_request_len as u16,
                 data_tx_len as u32,
             );
-            completion.frame = cyw43_sdpcm_tx_credit_proof_frame(0, 1, 0);
+            completion.frame = cyw43_sdpcm_tx_credit_proof_frame(0, 2, 0);
             completion
         });
         assert_eq!(
@@ -26070,7 +26073,7 @@ mod tests {
         let _guard = test_guard();
         reset_runtime_for_test();
         assert_eq!(CYW43_TX_CREDIT_TIMEOUT_MS, 100);
-        assert_eq!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 20);
+        assert_eq!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 80);
         assert_eq!(
             CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS,
             CYW43_TX_CREDIT_TIMEOUT_MS
@@ -27023,9 +27026,9 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_rx_glom_and_deferred_queue_caps_match_old_good_envelope() {
-        assert_eq!(CYW43_RX_DRAIN_BUDGET, 16);
-        assert_eq!(CYW43_DATA_TX_POST_DRAIN_BUDGET, 8);
+    fn cyw43_rx_glom_and_deferred_queue_caps_match_pi4_stability_envelope() {
+        assert_eq!(CYW43_RX_DRAIN_BUDGET, 50);
+        assert_eq!(CYW43_DATA_TX_POST_DRAIN_BUDGET, 20);
         assert_eq!(CYW43_RX_GLOM_SUBFRAME_CAP, 8);
         assert_eq!(CYW43_RX_QUEUE_CAP, CYW43_RX_DRAIN_BUDGET);
         assert!(CYW43_RX_QUEUE_CAP >= CYW43_RX_GLOM_SUBFRAME_CAP);
@@ -29118,7 +29121,7 @@ mod tests {
         assert_eq!(read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 36), 0);
         assert_eq!(read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 70), u16::MAX);
         assert_eq!(read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 72), 0);
-        assert_eq!(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET + 136), 1);
+        assert!(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET + 136) >= 1);
         assert!(test_sdio_cmd53_read_shape_seen(
             2,
             BACKPLANE_32BIT_FLAG,
@@ -30079,7 +30082,7 @@ mod tests {
         assert_eq!(CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS, 3_000);
         assert_eq!(CYW43_CONTROL_EXCHANGE_TIMEOUT_MS, 1_000);
         assert_eq!(CYW43_TX_CREDIT_TIMEOUT_MS, 100);
-        assert_eq!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 20);
+        assert_eq!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 80);
         assert_eq!(CYW43_RX_RETRANSMIT_ACK_TIMEOUT_MS, 20);
         assert!(
             runtime_millis_to_cycles_at_hz(CYW43_POST_RELEASE_HT_TIMEOUT_MS, 54_000_000)
