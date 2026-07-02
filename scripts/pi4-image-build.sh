@@ -281,18 +281,17 @@ verify_boot_cmd_handoff() {
     grep -q 'setexpr.l coh_fastboot_rsts \*${coh_fastboot_rsts_addr}' "$path" || fail "boot.cmd does not read Cohesix fast-boot RSTS state"
     grep -q 'setexpr.l coh_fastboot_rsts_marker ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_mask}' "$path" || fail "boot.cmd does not mask Cohesix high fast-boot RSTS state"
     grep -q 'setexpr.l coh_fastboot_rsts_reset ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_reset_mask}' "$path" || fail "boot.cmd does not mask reset-status diagnostics"
-    grep -q 'coh_fastboot_source software-reset-saved-policy' "$path" || fail "boot.cmd is missing software-reset saved-policy fast-boot fallback"
-    grep -q 'itest.l ${coh_fastboot_rsts_reset} == ${coh_fastboot_rsts_reset_mask}' "$path" || fail "boot.cmd does not check reset-status fallback diagnostics"
-    grep -q 'test "${coh_has_saved_config}" = "1"; then setenv coh_fastboot 1' "$path" || fail "boot.cmd reset-status fallback is not gated by saved Cohesix policy"
+    ! grep -q 'coh_fastboot_source software-reset-saved-policy' "$path" || fail "boot.cmd must not auto boot saved policy from the software-reset bit"
+    grep -q 'setexpr.l coh_fastboot_rsts_reset ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_reset_mask}' "$path" || fail "boot.cmd does not retain reset-status diagnostics"
+    ! grep -q 'test "${coh_has_saved_config}" = "1"; then setenv coh_fastboot 1' "$path" || fail "boot.cmd must not gate an auto boot on saved Cohesix policy"
     grep -q 'mw.l ${coh_fastboot_rsts_addr} ${coh_fastboot_rsts_clear} 1' "$path" || fail "boot.cmd does not clear the Cohesix fast-boot marker"
-    grep -q 'fast boot marker absent: rsts=${coh_fastboot_rsts}' "$path" || fail "boot.cmd does not report bounded Cohesix fast-boot marker misses"
-    grep -q 'reboot fast boot returned; entering recovery menu' "$path" || fail "boot.cmd does not report fast-boot fallback to the recovery menu"
+    grep -q 'boot marker diagnostics: rsts=${coh_fastboot_rsts}' "$path" || fail "boot.cmd does not report bounded Cohesix boot marker diagnostics"
     grep -q "setenv coh_force_serial_preboot 'setenv stdin serial" "$path" || fail "boot.cmd does not force serial input before fast-boot detection"
     grep -q '^run coh_force_serial_preboot$' "$path" || fail "boot.cmd does not arm the serial-only preboot path before loading policy"
     grep -q '^run coh_detect_saved_config$' "$path" || fail "boot.cmd does not resolve saved policy before fast-boot detection"
-    grep -q 'run coh_maybe_fastboot' "$path" || fail "boot.cmd does not check the Cohesix fast-boot path before the wizard"
-    grep -q 'test "${coh_recovery_menu}" = "1"' "$path" || fail "boot.cmd is missing the explicit Cohesix recovery-menu escape"
-    grep -q 'recovery menu requested: skipping reboot fast boot' "$path" || fail "boot.cmd does not report manual recovery-menu fast-boot bypass"
+    ! grep -q 'run coh_maybe_fastboot' "$path" || fail "boot.cmd must enter the interactive menu by default instead of fast-booting"
+    grep -q 'run coh_report_fastboot_miss' "$path" || fail "boot.cmd must log reset marker diagnostics before the menu"
+    ! grep -q 'coh_maybe_fastboot_or_recovery' "$path" || fail "boot.cmd must not retain the fast-boot-or-recovery bypass"
     ! grep -q '^setenv bootdelay 0$' "$path" || fail "boot.cmd must not erase the compiled U-Boot autoboot abort window"
     grep -q '^run coh_prompt_root$' "$path" || fail "boot.cmd does not enter the interactive Cohesix menu on cold boot"
     ! grep -q 'unattended boot: using saved or manifest settings' "$path" || fail "boot.cmd must not bypass the menu without a Cohesix fast-boot source"
@@ -302,7 +301,7 @@ verify_boot_cmd_handoff() {
     grep -q 'setenv coh_xhci_mmio;' "$path" || fail "boot.cmd does not clear stale xHCI MMIO before usb stop"
     grep -q 'setenv coh_xhci_pci_cmd;' "$path" || fail "boot.cmd does not clear stale xHCI PCI command before usb stop"
     grep -q 'xHCI trust tokens cleared before Cohesix cold boot' "$path" || fail "boot.cmd does not clear U-Boot xHCI trust tokens before Cohesix cold boot"
-    grep -q 'xHCI cold boot starts unseeded' "$path" || fail "boot.cmd does not make the no-U-Boot-USB cold-boot path explicit"
+    grep -q 'usb stop failed or was inactive before Cohesix boot' "$path" || fail "boot.cmd must tolerate unconditional U-Boot USB stop before Cohesix handoff"
     ! grep -q 'coh_export_xhci_stop_seed' "$path" || fail "boot.cmd still exports an xHCI stop-state seed"
     ! grep -q 'run coh_export_xhci_handoff' "$path" || fail "boot.cmd still contains obsolete xHCI handoff export"
     ! grep -q 'setenv coh_xhci_mmio 0x' "$path" || fail "boot.cmd still exports obsolete xHCI MMIO handoff"
@@ -1205,16 +1204,13 @@ setenv coh_fastboot_rsts_clear_mask 0xff00ffff
 setenv coh_reset_policy 'setenv coh_net_mode ""; setenv coh_net_interface ""; setenv coh_static_ip ""; setenv coh_static_prefix_len ""; setenv coh_static_gateway ""; setenv coh_wifi_ssid ""; setenv coh_wifi_psk ""'
 setenv coh_clear_saved_policy 'run coh_reset_policy; setenv coh_show_logo ""'
 setenv coh_force_serial_preboot 'setenv stdin serial; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole; setenv coh_usb_input_ready 0'
-setenv coh_detect_fastboot 'setenv coh_fastboot 0; setenv coh_fastboot_source none; setexpr.l coh_fastboot_rsts *${coh_fastboot_rsts_addr}; setexpr.l coh_fastboot_rsts_marker ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_mask}; setexpr.l coh_fastboot_rsts_reset ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_reset_mask}; if itest.l ${coh_fastboot_rsts_marker} == ${coh_fastboot_rsts_magic}; then setenv coh_fastboot 1; setenv coh_fastboot_source marker; fi; if test "${coh_fastboot}" != "1"; then if itest.l ${coh_fastboot_rsts_reset} == ${coh_fastboot_rsts_reset_mask}; then if test "${coh_has_saved_config}" = "1"; then setenv coh_fastboot 1; setenv coh_fastboot_source software-reset-saved-policy; fi; fi; fi'
+setenv coh_detect_fastboot 'setenv coh_fastboot 0; setenv coh_fastboot_source menu; setexpr.l coh_fastboot_rsts *${coh_fastboot_rsts_addr}; setexpr.l coh_fastboot_rsts_marker ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_mask}; setexpr.l coh_fastboot_rsts_reset ${coh_fastboot_rsts} "&" ${coh_fastboot_rsts_reset_mask}; if itest.l ${coh_fastboot_rsts_marker} == ${coh_fastboot_rsts_magic}; then setenv coh_fastboot_source marker-diagnostic; run coh_clear_fastboot_marker; fi'
 setenv coh_clear_fastboot_marker 'setexpr.l coh_fastboot_rsts_clear *${coh_fastboot_rsts_addr} "&" ${coh_fastboot_rsts_clear_mask}; setexpr.l coh_fastboot_rsts_clear ${coh_fastboot_rsts_clear} "|" ${coh_pm_password}; mw.l ${coh_fastboot_rsts_addr} ${coh_fastboot_rsts_clear} 1'
-setenv coh_report_fastboot_miss 'echo "[cohesix] fast boot marker absent: rsts=${coh_fastboot_rsts} high=${coh_fastboot_rsts_marker} reset=${coh_fastboot_rsts_reset} saved=${coh_has_saved_config}"'
-setenv coh_run_fastboot 'echo "[cohesix] reboot fast boot: source=${coh_fastboot_source} using saved or manifest settings"; run coh_clear_fastboot_marker; run coh_boot_sequence; echo "[cohesix] reboot fast boot returned; entering recovery menu"'
-setenv coh_maybe_fastboot 'run coh_detect_fastboot; if test "${coh_fastboot}" = "1"; then run coh_run_fastboot; else run coh_report_fastboot_miss; fi'
-setenv coh_maybe_fastboot_or_recovery 'if test "${coh_recovery_menu}" = "1"; then echo "[cohesix] recovery menu requested: skipping reboot fast boot"; else run coh_maybe_fastboot; fi'
+setenv coh_report_fastboot_miss 'echo "[cohesix] boot marker diagnostics: rsts=${coh_fastboot_rsts} high=${coh_fastboot_rsts_marker} reset=${coh_fastboot_rsts_reset} saved=${coh_has_saved_config} source=${coh_fastboot_source}"'
 setenv coh_bootstrap_usb_session 'if test "${coh_menu_input}" = "usb"; then if test "${coh_usb_input_ready}" != "1"; then echo "[cohesix] starting USB host session for menu/input"; pci enum; if usb start; then setenv coh_usb_input_ready 1; echo "[cohesix] USB host session active"; else setenv coh_usb_input_ready 0; echo "[cohesix] WARNING: usb start failed before menu/input"; fi; fi; else setenv coh_usb_input_ready 0; fi'
 setenv coh_prepare_input 'run coh_bootstrap_usb_session; if test "${coh_usb_input_ready}" = "1"; then echo "[cohesix] USB keyboard input active"; setenv stdin usbkbd,serial; else echo "[cohesix] USB keyboard input unavailable; serial only"; setenv stdin serial; fi; setenv stdout serial,vidconsole; setenv stderr serial,vidconsole'
 setenv coh_clear_xhci_handoff_live 'setenv coh_xhci_mmio; setenv coh_xhci_pci_cmd; setenv coh_xhci_handoff_ready; setenv coh_xhci_irq_quiesced; setenv coh_xhci_halted; setenv coh_xhci_handoff_safe; setenv coh_xhci_usbcmd; setenv coh_xhci_usbsts; setenv coh_xhci_iman0'
-setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if test "${coh_usb_input_ready}" = "1"; then if usb stop; then run coh_clear_xhci_handoff_live; echo "[cohesix] USB host stop requested; xHCI trust tokens cleared before Cohesix cold boot"; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot"; fi; else run coh_clear_xhci_handoff_live; echo "[cohesix] USB host session was not active; xHCI trust tokens cleared before Cohesix cold boot; xHCI cold boot starts unseeded"; fi'
+setenv coh_quiesce_usb 'setenv stdin serial; run coh_clear_xhci_handoff_live; if usb stop; then run coh_clear_xhci_handoff_live; echo "[cohesix] USB host stop requested; xHCI trust tokens cleared before Cohesix cold boot"; else run coh_clear_xhci_handoff_live; echo "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot"; fi'
 setenv coh_toggle_logo 'if test "${coh_show_logo}" = "1"; then setenv coh_show_logo 0; echo "[cohesix] HDMI logo disabled"; else setenv coh_show_logo 1; echo "[cohesix] HDMI logo enabled"; fi'
 setenv coh_detect_saved_config 'setenv coh_has_saved_config 0; if test -n "${coh_net_mode}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_net_interface}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_ip}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_prefix_len}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_static_gateway}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_ssid}"; then setenv coh_has_saved_config 1; fi; if test -n "${coh_wifi_psk}"; then setenv coh_has_saved_config 1; fi'
 setenv coh_load_saved_policy 'run coh_clear_saved_policy; if fatload mmc 0:1 ${coh_policy_addr} ${coh_policy_file}; then if env import -d -t ${coh_policy_addr} ${filesize} coh_net_mode coh_net_interface coh_static_ip coh_static_prefix_len coh_static_gateway coh_wifi_ssid coh_wifi_psk coh_show_logo; then echo "[cohesix] loaded saved settings from ${coh_policy_file}"; else echo "[cohesix] WARNING: failed to import ${coh_policy_file}; ignoring saved settings"; run coh_clear_saved_policy; fi; fi; if test -z "${coh_show_logo}"; then setenv coh_show_logo 1; fi'
@@ -1238,7 +1234,8 @@ setenv coh_prompt_root 'run coh_show_logo_splash; run coh_prepare_input; run coh
 run coh_force_serial_preboot
 run coh_load_saved_policy
 run coh_detect_saved_config
-run coh_maybe_fastboot_or_recovery
+run coh_detect_fastboot
+run coh_report_fastboot_miss
 run coh_prompt_root
 EOF
     sed -i '' "s/__COH_IMAGE__/${coh_image}/g" "$out"

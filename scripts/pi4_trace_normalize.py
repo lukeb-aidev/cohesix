@@ -102,7 +102,8 @@ USB_PROGRESS_GATES = {
     "first-report": 9,
     "hid-first-report": 9,
     "keyboard-report": 9,
-    "first-byte": 10,
+    "command-input-ready": 10,
+    "first-byte": 9,
     "console-byte": 10,
 }
 USB_RUNTIME_DETAIL_GATES = {
@@ -126,7 +127,7 @@ USB_RUNTIME_DETAIL_GATES = {
     0x0219: (7, "hub-descriptor-failed"),
     0x021A: (7, "hub-context-failed"),
     0x0500: (9, "hid-first-report"),
-    0x0501: (9, "keyboard-first-byte"),
+    0x0501: (9, "command-input-ready"),
 }
 WIFI_PROGRESS_GATES = {
     "function2-ready": 6,
@@ -541,6 +542,15 @@ class GateSummary:
     wifi_data_path_rx_delivered: int = 0
     wifi_data_path_rx_dropped: int = 0
     wifi_data_path_last: str = "none"
+    wifi_rx_irq_preserve_count: int = 0
+    wifi_rx_irq_preserve_reason: str = "none"
+    wifi_rx_irq_preserve_int: int = 0
+    wifi_rx_irq_preserve_ack: int = 0
+    wifi_rxtrace_seq: int = 0
+    wifi_rxtrace_start_ticks: int = 0
+    wifi_rxtrace_pre_sample_delta_ticks: int = 0
+    wifi_rxtrace_transfer_delta_ticks: int = 0
+    wifi_rxtrace_post_sample_delta_ticks: int = 0
     driver_task_default_requested: bool = False
     driver_task_live_hot_paths: bool = False
     driver_task_contracts: int = 0
@@ -710,6 +720,15 @@ class GateSummary:
             "WIFI_DATA_PATH_RX_DELIVERED": self.wifi_data_path_rx_delivered,
             "WIFI_DATA_PATH_RX_DROPPED": self.wifi_data_path_rx_dropped,
             "WIFI_DATA_PATH_LAST": self.wifi_data_path_last,
+            "WIFI_RX_IRQ_PRESERVE_COUNT": self.wifi_rx_irq_preserve_count,
+            "WIFI_RX_IRQ_PRESERVE_REASON": self.wifi_rx_irq_preserve_reason,
+            "WIFI_RX_IRQ_PRESERVE_INT": f"0x{self.wifi_rx_irq_preserve_int:08x}",
+            "WIFI_RX_IRQ_PRESERVE_ACK": f"0x{self.wifi_rx_irq_preserve_ack:08x}",
+            "WIFI_RXTRACE_SEQ": self.wifi_rxtrace_seq,
+            "WIFI_RXTRACE_START_TICKS": f"0x{self.wifi_rxtrace_start_ticks:08x}",
+            "WIFI_RXTRACE_PRE_SAMPLE_DELTA_TICKS": self.wifi_rxtrace_pre_sample_delta_ticks,
+            "WIFI_RXTRACE_TRANSFER_DELTA_TICKS": self.wifi_rxtrace_transfer_delta_ticks,
+            "WIFI_RXTRACE_POST_SAMPLE_DELTA_TICKS": self.wifi_rxtrace_post_sample_delta_ticks,
             "DRIVER_TASK_DEFAULT_REQUESTED": (
                 "yes" if self.driver_task_default_requested else "no"
             ),
@@ -1877,6 +1896,8 @@ def normalize_usb_blocker(value: str) -> str:
         token in lower for token in ("fail", "missing", "timeout")
     ):
         return "hid-first-report"
+    if "command-input-ready" in lower or "command-ready" in lower:
+        return "command-input-ready"
     if "interrupt-in" in lower and any(
         token in lower for token in ("fail", "missing", "timeout")
     ):
@@ -3813,12 +3834,15 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     usb_events = [event for event in event_list if event.domain == "usb"]
     linked_first_report_seen = any(usb_first_report_step(event) for event in event_list)
     linked_first_byte_seen = any(usb_first_byte_step(event) for event in event_list)
+    linked_command_ready_seen = any(usb_command_ready_step(event) for event in event_list)
     usb_driver_progress_seen = any(
         "driver_task_ring_progress" in event.raw.lower()
         and usb_raw_driver_task_progress_blocker(event.fields) is not None
         for event in event_list
     )
-    usb_resource_progress_seen = linked_first_report_seen or linked_first_byte_seen
+    usb_resource_progress_seen = (
+        linked_first_report_seen or linked_first_byte_seen or linked_command_ready_seen
+    )
     if not usb_events and not usb_driver_progress_seen and not usb_resource_progress_seen:
         return 0, "missing"
 
@@ -3991,10 +4015,21 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                         blocker = progress_blocker
                     direct_usb_progress_blocker = progress_blocker
                     continue
-        if usb_first_byte_step(event):
+        if usb_command_ready_step(event):
             gate = max(gate, 10)
             linked_runtime_gate10_seen = True
             blocker = "none"
+            continue
+        if usb_first_byte_step(event):
+            gate = max(gate, 9)
+            if blocker in {
+                "unknown",
+                "none",
+                "keyboard-first-byte",
+                "first-console-byte",
+                "hid-first-report",
+            }:
+                blocker = "command-input-ready"
             continue
         if usb_first_report_step(event):
             gate = max(gate, 9)
@@ -4062,7 +4097,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             if (
                 raw.startswith("usb: runtime_gate")
                 and explicit_proof_gate >= 10
-                and field_lower(event, "first_byte_source") != "linked-runtime-hid"
+                and not linked_command_ready_seen
             ):
                 explicit_proof_gate = 9
             gate = max(gate, explicit_proof_gate)
@@ -4111,18 +4146,17 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             continue
         if raw.startswith("usb: runtime_gate"):
             proof_gate = parse_hex_int(fields.get("proof_gate"))
-            linked_first_byte = field_lower(event, "first_byte_source") == "linked-runtime-hid"
             if proof_gate is not None and proof_gate > 0:
-                clamped_unlinked_gate10 = proof_gate >= 10 and not linked_first_byte
-                if proof_gate >= 10 and not linked_first_byte:
+                waiting_for_command_ready = proof_gate >= 10 and not linked_command_ready_seen
+                if waiting_for_command_ready:
                     proof_gate = 9
                 gate = max(gate, proof_gate)
                 runtime_blocker = normalize_usb_blocker(fields.get("blocker", "none"))
-                if runtime_blocker == "none" and proof_gate >= 10:
+                if runtime_blocker == "none" and waiting_for_command_ready:
+                    blocker = "command-input-ready"
+                elif runtime_blocker == "none" and proof_gate >= 10:
                     linked_runtime_gate10_seen = True
                     blocker = "none"
-                elif runtime_blocker == "none" and clamped_unlinked_gate10:
-                    blocker = "keyboard-first-byte"
                 elif runtime_blocker == "none":
                     blocker = "none"
                 elif runtime_blocker in {
@@ -4131,7 +4165,7 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                     "awaiting-physical-key",
                 } and field_lower(event, "input_observation") == "idle-report-no-key-byte":
                     usb_idle_no_key_byte_seen = True
-                    blocker = "awaiting-physical-key"
+                    blocker = "command-input-ready"
                 else:
                     blocker = runtime_blocker
             continue
@@ -4374,9 +4408,9 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         elif "usb hid first report" in raw and blocker in {"unknown", "none"}:
             blocker = "hid-first-report"
         if "runtime keyboard first-byte" in raw and usb_linked_hid_source(event):
-            gate = max(gate, 10)
-            linked_runtime_gate10_seen = True
-            blocker = "none"
+            gate = max(gate, 9)
+            if blocker in {"unknown", "none", "keyboard-first-byte", "first-console-byte"}:
+                blocker = "command-input-ready"
         elif "runtime keyboard first-byte" in raw and blocker in {"unknown", "none"}:
             blocker = "keyboard-first-byte"
         if "pi4 keyboard runtime proof" in raw:
@@ -4786,7 +4820,13 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     if linked_runtime_gate10_seen and (
         blocker
         in USB_OUTCOME_BLOCKERS.union(
-            {"unknown", "none", "keyboard-first-byte", "first-console-byte"}
+            {
+                "unknown",
+                "none",
+                "command-input-ready",
+                "keyboard-first-byte",
+                "first-console-byte",
+            }
         )
         or blocker.startswith("usb-keyboard-enumeration-")
     ):
@@ -7040,6 +7080,74 @@ def summarize_wifi_data_path(
     return tx, rx_preserved, rx_delivered, rx_dropped, last
 
 
+WIFI_RX_IRQ_PRESERVE_REASONS = {
+    0: "none",
+    1: "sdpcm-next-frame",
+    2: "rframe-pending",
+    3: "rframe-unavailable",
+    4: "rframe-invalid",
+}
+
+
+def summarize_wifi_rx_irq_preserve(
+    events: Iterable[TraceEvent],
+) -> tuple[int, str, int, int]:
+    """Return CYW43 frame-interrupt preservation proof from RX trace lines."""
+
+    best_count = 0
+    best_reason = "none"
+    best_int = 0
+    best_ack = 0
+    best_line = 0
+    for event in events:
+        raw = event.raw.lower()
+        if "cyw43_driver_task_host_eapol_rxtrace" not in raw:
+            continue
+        count = parse_hex_int(event.fields.get("irq_preserve_count")) or 0
+        if count <= 0:
+            continue
+        if count < best_count or (count == best_count and event.line < best_line):
+            continue
+        reason_code = parse_hex_int(event.fields.get("irq_preserve_reason")) or 0
+        best_count = count
+        best_reason = WIFI_RX_IRQ_PRESERVE_REASONS.get(
+            reason_code, f"unknown-{reason_code}"
+        )
+        best_int = parse_hex_int(event.fields.get("irq_preserve_int")) or 0
+        best_ack = parse_hex_int(event.fields.get("irq_preserve_ack")) or 0
+        best_line = event.line
+    return best_count, best_reason, best_int, best_ack
+
+
+def summarize_wifi_rxtrace_timing(
+    events: Iterable[TraceEvent],
+) -> tuple[int, int, int, int, int]:
+    """Return the latest CYW43 RX trace sequence and compact timing deltas."""
+
+    best_seq = 0
+    best_start = 0
+    best_pre_delta = 0
+    best_transfer_delta = 0
+    best_post_delta = 0
+    best_line = 0
+    for event in events:
+        raw = event.raw.lower()
+        if "cyw43_driver_task_host_eapol_rxtrace" not in raw:
+            continue
+        sequence = parse_hex_int(event.fields.get("trace_seq")) or 0
+        if sequence == 0:
+            continue
+        if sequence < best_seq or (sequence == best_seq and event.line < best_line):
+            continue
+        best_seq = sequence
+        best_start = parse_hex_int(event.fields.get("start_ticks_lo")) or 0
+        best_pre_delta = parse_hex_int(event.fields.get("pre_sample_delta_ticks")) or 0
+        best_transfer_delta = parse_hex_int(event.fields.get("transfer_delta_ticks")) or 0
+        best_post_delta = parse_hex_int(event.fields.get("post_sample_delta_ticks")) or 0
+        best_line = event.line
+    return best_seq, best_start, best_pre_delta, best_transfer_delta, best_post_delta
+
+
 def _truthy_field(value: str | None) -> bool:
     """Return whether a normalized field value represents true/non-zero."""
 
@@ -8909,18 +9017,37 @@ def usb_first_byte_step(event: TraceEvent) -> bool:
 
     if event.domain != "usb":
         return False
-    return (
-        "runtime keyboard first-byte" in event.raw.lower()
-        and usb_linked_hid_source(event)
-    ) or (
-        "pi4 keyboard runtime proof" in event.raw.lower()
+    return "runtime keyboard first-byte" in event.raw.lower() and usb_linked_hid_source(event)
+
+
+def usb_command_ready_step(event: TraceEvent) -> bool:
+    """Return true when the linked USB keyboard is ready for command input."""
+
+    raw = event.raw.lower()
+    if "[local-seat] usb keyboard command-ready" in raw:
+        return True
+    if (
+        "[local-seat] hdmi prompt enabled" in raw
+        and field_lower(event, "reason") == "usb-console-command-ready"
+    ):
+        return True
+    if raw.startswith("usb: acceptance"):
+        return (
+            field_lower(event, "command_ready") == "yes"
+            and field_lower(event, "usable") == "yes"
+        )
+    if (
+        "pi4 keyboard runtime proof" in raw
         and field_lower(event, "result") in {"online", "ready"}
         and usb_linked_hid_source(event)
-    )
+        and (parse_hex_int(event.fields.get("gate")) or 0) >= 10
+    ):
+        return True
+    return False
 
 
 def usb_runtime_gate10_step(event: TraceEvent) -> bool:
-    """Return true for the final USB gate-10 summary after first byte."""
+    """Return true for the final USB gate-10 command-input summary."""
 
     if event.domain != "usb":
         return False
@@ -8931,8 +9058,6 @@ def usb_runtime_gate10_step(event: TraceEvent) -> bool:
         and proof_gate >= 10
         and field_lower(event, "keyboard") == "yes"
         and field_lower(event, "first_report") == "yes"
-        and field_lower(event, "first_byte") == "yes"
-        and field_lower(event, "first_byte_source") == "linked-runtime-hid"
         and normalize_usb_blocker(event.fields.get("blocker", "none")) == "none"
     )
 
@@ -8941,8 +9066,7 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
     """Return sustained-input blocker after linked first-byte proof."""
 
     first_byte_seen = False
-    last_usb_counter: tuple[int, int, int, int] | None = None
-    last_local_seat: tuple[int, int, int, int, int] | None = None
+    last_local_seat: tuple[int, int, int, int, int, int] | None = None
     saw_keyboard_no_reply = False
     sustained_progress_seen = False
     blocker = "none"
@@ -9021,33 +9145,6 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
             if runtime_skipped > 0 and not sustained_progress_seen:
                 saw_keyboard_no_reply = True
 
-        if raw.startswith("driver_task_counter "):
-            fields = event.fields
-            if (
-                field_lower(event, "contract") == "usb-local-seat"
-                and field_lower(event, "hot_path") == "usb-keyboard"
-                and field_lower(event, "source") == "root-ring"
-            ):
-                submitted = parse_hex_int(fields.get("submitted"))
-                timeouts = parse_hex_int(fields.get("timeouts"))
-                rx_frames = parse_hex_int(fields.get("rx_frames"))
-                rx_bytes = parse_hex_int(fields.get("rx_bytes"))
-                if None not in {submitted, timeouts, rx_frames, rx_bytes}:
-                    snapshot = (
-                        submitted or 0,
-                        timeouts or 0,
-                        rx_frames or 0,
-                        rx_bytes or 0,
-                    )
-                    if (
-                        last_usb_counter is not None
-                        and snapshot[1] > last_usb_counter[1]
-                        and snapshot[2] == last_usb_counter[2]
-                        and snapshot[3] == last_usb_counter[3]
-                    ):
-                        blocker = "usb-post-first-byte-no-progress"
-                    last_usb_counter = snapshot
-
         if raw.startswith("[smp] activity local-seat "):
             fields = event.fields
             backend_polls = parse_hex_int(fields.get("backend_polls"))
@@ -9056,6 +9153,7 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
             drained = parse_hex_int(fields.get("drained"))
             echoed = parse_hex_int(fields.get("echoed"))
             no_reply = parse_hex_int(fields.get("no_reply"))
+            previous_local_seat = last_local_seat
             if None not in {backend_polls, backend_bytes, accepted, drained, echoed}:
                 snapshot = (
                     backend_polls or 0,
@@ -9063,11 +9161,13 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
                     accepted or 0,
                     drained or 0,
                     echoed or 0,
+                    no_reply or 0,
                 )
                 if (
-                    last_local_seat is not None
-                    and snapshot[0] > last_local_seat[0]
-                    and snapshot[1:] == last_local_seat[1:]
+                    previous_local_seat is not None
+                    and snapshot[0] > previous_local_seat[0]
+                    and snapshot[1:5] == previous_local_seat[1:5]
+                    and snapshot[5] > previous_local_seat[5]
                 ):
                     blocker = "usb-post-first-byte-no-progress"
                 last_local_seat = snapshot
@@ -9080,7 +9180,11 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
                     blocker = "none"
                     saw_keyboard_no_reply = False
                     continue
-            if (no_reply or 0) > 0:
+            if (
+                no_reply is not None
+                and previous_local_seat is not None
+                and no_reply > previous_local_seat[5]
+            ):
                 saw_keyboard_no_reply = True
 
     if blocker != "none":
@@ -9129,6 +9233,7 @@ def summarize_usb_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResult
             SequenceStep("hid-endpoint", usb_hid_endpoint_step),
             SequenceStep("interrupt-in-armed", usb_interrupt_in_step),
             SequenceStep("first-report", usb_first_report_step),
+            SequenceStep("command-ready", usb_command_ready_step),
             SequenceStep("first-byte", usb_first_byte_step),
             SequenceStep("runtime-gate10", usb_runtime_gate10_step),
         ],
@@ -9736,6 +9841,19 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_data_path_last,
     ) = summarize_wifi_data_path(event_list)
     (
+        wifi_rx_irq_preserve_count,
+        wifi_rx_irq_preserve_reason,
+        wifi_rx_irq_preserve_int,
+        wifi_rx_irq_preserve_ack,
+    ) = summarize_wifi_rx_irq_preserve(event_list)
+    (
+        wifi_rxtrace_seq,
+        wifi_rxtrace_start_ticks,
+        wifi_rxtrace_pre_sample_delta_ticks,
+        wifi_rxtrace_transfer_delta_ticks,
+        wifi_rxtrace_post_sample_delta_ticks,
+    ) = summarize_wifi_rxtrace_timing(event_list)
+    (
         driver_task_default_requested,
         driver_task_live_hot_paths,
         driver_task_contracts,
@@ -10091,6 +10209,15 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_data_path_rx_delivered=wifi_data_path_rx_delivered,
         wifi_data_path_rx_dropped=wifi_data_path_rx_dropped,
         wifi_data_path_last=wifi_data_path_last,
+        wifi_rx_irq_preserve_count=wifi_rx_irq_preserve_count,
+        wifi_rx_irq_preserve_reason=wifi_rx_irq_preserve_reason,
+        wifi_rx_irq_preserve_int=wifi_rx_irq_preserve_int,
+        wifi_rx_irq_preserve_ack=wifi_rx_irq_preserve_ack,
+        wifi_rxtrace_seq=wifi_rxtrace_seq,
+        wifi_rxtrace_start_ticks=wifi_rxtrace_start_ticks,
+        wifi_rxtrace_pre_sample_delta_ticks=wifi_rxtrace_pre_sample_delta_ticks,
+        wifi_rxtrace_transfer_delta_ticks=wifi_rxtrace_transfer_delta_ticks,
+        wifi_rxtrace_post_sample_delta_ticks=wifi_rxtrace_post_sample_delta_ticks,
         driver_task_default_requested=driver_task_default_requested,
         driver_task_live_hot_paths=driver_task_live_hot_paths,
         driver_task_contracts=driver_task_contracts,

@@ -107,6 +107,7 @@ const DHCP_RESTART_BACKOFF_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 };
 const CYW43_DHCP_POST_SECURE_EAPOL_QUIET_MS: u64 = 500;
 const CYW43_DHCP_POST_SECURE_EAPOL_OVERSHOOT_LOG_MS: u64 = 1_000;
+const CYW43_DHCP_RX_ADMISSION_RETRY_MS: u64 = 250;
 const UDP_ECHO_PORT: u16 = 31_338;
 const UDP_BEACON_PORT: u16 = 40_000;
 const TCP_SMOKE_PORT: u16 = 31_339;
@@ -248,6 +249,65 @@ fn dhcp_start_defer_reason_for(bringup_status: Option<&'static str>) -> Option<&
         Some("dhcp-pending" | "dhcp-failed") | None => None,
         Some(status) => Some(status),
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43StatusBlocker {
+    address_source: &'static str,
+    dhcp_phase: &'static str,
+}
+
+fn cyw43_tcp_data_path_proven(
+    active_driver: &'static str,
+    active_interface: &'static str,
+    counters: NetCounters,
+) -> bool {
+    active_driver == "cyw43"
+        && active_interface == "wifi"
+        && (counters.tcp_accepts != 0 || counters.tcp_auth_sessions != 0)
+}
+
+fn cyw43_status_blocker_for(
+    active_driver: &'static str,
+    active_interface: &'static str,
+    counters: NetCounters,
+) -> Option<Cyw43StatusBlocker> {
+    if active_driver != "cyw43" || active_interface != "wifi" {
+        return None;
+    }
+    if cyw43_tcp_data_path_proven(active_driver, active_interface, counters) {
+        return None;
+    }
+    if counters.wifi_rx_runtime_queue_overflow_seen != 0 || counters.wifi_rx_pending_drops != 0 {
+        return Some(Cyw43StatusBlocker {
+            address_source: "wifi-rx-overflow",
+            dhcp_phase: "rx-overflow",
+        });
+    }
+    if counters.wifi_rx_runtime_drain_budget_hit != 0
+        && (counters.wifi_rx_runtime_queue_count != 0
+            || counters.wifi_rx_runtime_queue_high_water != 0
+            || counters.wifi_rx_pending_queue_count != 0)
+    {
+        return Some(Cyw43StatusBlocker {
+            address_source: "wifi-rx-starvation",
+            dhcp_phase: "rx-starvation",
+        });
+    }
+    if counters.wifi_data_trace_faults != 0
+        || (counters.tx_submit > counters.tx_complete
+            && (counters.wifi_data_trace_tx_retries != 0 || counters.tx_in_flight != 0))
+        || (counters.wifi_data_trace_tx_retries != 0
+            && counters.tx_free == 0
+            && counters.tx_in_flight == 0
+            && counters.tx_submit != 0)
+    {
+        return Some(Cyw43StatusBlocker {
+            address_source: "wifi-tx-credit-anomaly",
+            dhcp_phase: "tx-credit-anomaly",
+        });
+    }
+    None
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1234,6 +1294,7 @@ pub struct NetStack<D: NetDevice> {
     wifi_dhcp_eapol_quiet_since_ms: Option<u64>,
     wifi_dhcp_eapol_settle_logged: bool,
     wifi_rx_admission_blocked: bool,
+    wifi_rx_admission_next_retry_ms: u64,
     udp_beacon_handle: Option<SocketHandle>,
     udp_echo_handle: Option<SocketHandle>,
     tcp_smoke_handle: Option<SocketHandle>,
@@ -2985,6 +3046,7 @@ impl<D: NetDevice> NetStack<D> {
             wifi_dhcp_eapol_quiet_since_ms: None,
             wifi_dhcp_eapol_settle_logged: false,
             wifi_rx_admission_blocked: false,
+            wifi_rx_admission_next_retry_ms: 0,
             udp_beacon_handle: None,
             udp_echo_handle: None,
             tcp_smoke_handle: None,
@@ -3368,13 +3430,18 @@ impl<D: NetDevice> NetStack<D> {
     fn reassert_cyw43_dhcp_rx_admission(&mut self, reason: &'static str, now_ms: u64) -> bool {
         if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT {
             self.wifi_rx_admission_blocked = false;
+            self.wifi_rx_admission_next_retry_ms = 0;
             return true;
+        }
+        if self.wifi_rx_admission_blocked && now_ms < self.wifi_rx_admission_next_retry_ms {
+            return false;
         }
         let reasserted = crate::drivers::driver_task_net::reassert_cyw43_post_secure_data_rx(
             D::driver_task_contract(),
         );
         if reasserted {
             self.wifi_rx_admission_blocked = false;
+            self.wifi_rx_admission_next_retry_ms = 0;
             info!(
                 "[dhcp] wifi data admission reasserted reason={} interface={} now_ms={}",
                 reason,
@@ -3383,11 +3450,14 @@ impl<D: NetDevice> NetStack<D> {
             );
         } else {
             self.wifi_rx_admission_blocked = true;
+            self.wifi_rx_admission_next_retry_ms =
+                now_ms.saturating_add(CYW43_DHCP_RX_ADMISSION_RETRY_MS);
             warn!(
-                "[dhcp] wifi data admission blocked reason={} interface={} now_ms={} action=defer-tcp-listener",
+                "[dhcp] wifi data admission blocked reason={} interface={} now_ms={} retry_after_ms={} action=defer-tcp-listener",
                 reason,
                 self.device.interface_label(),
-                now_ms
+                now_ms,
+                self.wifi_rx_admission_next_retry_ms
             );
         }
         reasserted
@@ -4189,6 +4259,14 @@ impl<D: NetDevice> NetStack<D> {
                 status,
                 now_ms
             );
+            return false;
+        }
+        #[cfg(feature = "kernel")]
+        if matches!(
+            self.device.bringup_status_label(),
+            Some("wifi-data-rx-admission-blocked")
+        ) && !self.reassert_cyw43_dhcp_rx_admission("start", now_ms)
+        {
             return false;
         }
         if let Some(status) = self.cyw43_dhcp_start_defer_reason(now_ms) {
@@ -7154,15 +7232,23 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             "{}",
             self.gateway.unwrap_or(Ipv4Address::UNSPECIFIED)
         );
+        let active_interface = self.device.interface_label();
+        let active_driver = self.active_driver_label();
+        let current_counters = self.current_counters();
+        let bringup_status = self.device.bringup_status_label();
+        let cyw43_blocker =
+            cyw43_status_blocker_for(active_driver, active_interface, current_counters);
         let (address_source, dhcp_phase) = if self.wifi_rx_admission_blocked {
             ("wifi-data-rx-admission-blocked", "rx-admission-blocked")
-        } else if let Some(status) = self.device.bringup_status_label() {
+        } else if let Some(status) = bringup_status {
             let phase = if matches!(self.mode, NetMode::Dhcp) {
                 dhcp_phase_for_bringup_status(status)
             } else {
                 "disabled"
             };
             (status, phase)
+        } else if let Some(blocker) = cyw43_blocker {
+            (blocker.address_source, blocker.dhcp_phase)
         } else {
             match self.dhcp.as_ref() {
                 Some(client) => {
@@ -7183,21 +7269,21 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
                 None => ("dhcp-uninitialized", "disabled"),
             }
         };
-        let active_interface = self.device.interface_label();
         let standby_interface = match (self.interface_policy, self.backend, active_interface) {
             (NetInterfacePolicy::Auto, NetBackend::BcmGenet, "wifi") => "wired",
             (NetInterfacePolicy::Auto, NetBackend::BcmGenet, _) => "wifi",
             (NetInterfacePolicy::Auto, _, _) => "wired",
             _ => "none",
         };
-        let tcp_ready = self.stage_policy.allow_tcp
+        let listener_ready = self.stage_policy.allow_tcp
             && self.listener_announced
             && self.listener_defer_reason.is_none()
             && !self.wifi_rx_admission_blocked;
+        let tcp_ready = listener_ready && cyw43_blocker.is_none();
         NetStatusReport {
             profile_backend: self.backend.label(),
             backend: self.backend.label(),
-            active_driver: self.active_driver_label(),
+            active_driver,
             mode: self.mode.as_str(),
             interface_policy: self.interface_policy.as_str(),
             active_interface,
@@ -8614,6 +8700,125 @@ mod tests {
         assert!(!budgeted_cyw43_smoltcp_poll_after_tcp_borrow(
             BudgetedNetPhase::SelfTest
         ));
+    }
+
+    #[test]
+    fn cyw43_tcp_ready_requires_observed_host_data_path() {
+        let counters = NetCounters {
+            tx_submit: 8,
+            ..NetCounters::default()
+        };
+
+        assert!(!cyw43_tcp_data_path_proven("cyw43", "wifi", counters));
+        assert!(cyw43_tcp_data_path_proven(
+            "cyw43",
+            "wifi",
+            NetCounters {
+                tcp_accepts: 1,
+                ..counters
+            }
+        ));
+        assert!(cyw43_tcp_data_path_proven(
+            "cyw43",
+            "wifi",
+            NetCounters {
+                tcp_auth_sessions: 1,
+                ..counters
+            }
+        ));
+        assert!(!cyw43_tcp_data_path_proven(
+            "bcmgenet-v5",
+            "wired",
+            NetCounters {
+                tcp_accepts: 1,
+                ..counters
+            }
+        ));
+    }
+
+    #[test]
+    fn cyw43_status_reports_rx_overflow_and_starvation_blockers() {
+        assert_eq!(
+            cyw43_status_blocker_for(
+                "cyw43",
+                "wifi",
+                NetCounters {
+                    wifi_rx_runtime_queue_overflow_seen: 1,
+                    wifi_rx_runtime_queue_count: 16,
+                    wifi_rx_runtime_queue_high_water: 16,
+                    ..NetCounters::default()
+                }
+            ),
+            Some(Cyw43StatusBlocker {
+                address_source: "wifi-rx-overflow",
+                dhcp_phase: "rx-overflow"
+            })
+        );
+        assert_eq!(
+            cyw43_status_blocker_for(
+                "cyw43",
+                "wifi",
+                NetCounters {
+                    wifi_rx_runtime_drain_budget_hit: 1,
+                    wifi_rx_runtime_queue_count: 4,
+                    ..NetCounters::default()
+                }
+            ),
+            Some(Cyw43StatusBlocker {
+                address_source: "wifi-rx-starvation",
+                dhcp_phase: "rx-starvation"
+            })
+        );
+    }
+
+    #[test]
+    fn cyw43_status_reports_tx_credit_anomaly_until_host_proof() {
+        let counters = NetCounters {
+            tx_submit: 60,
+            tx_free: 0,
+            tx_in_flight: 0,
+            wifi_data_trace_tx_retries: 3,
+            ..NetCounters::default()
+        };
+
+        assert_eq!(
+            cyw43_status_blocker_for("cyw43", "wifi", counters),
+            Some(Cyw43StatusBlocker {
+                address_source: "wifi-tx-credit-anomaly",
+                dhcp_phase: "tx-credit-anomaly"
+            })
+        );
+        assert_eq!(
+            cyw43_status_blocker_for(
+                "cyw43",
+                "wifi",
+                NetCounters {
+                    tx_submit: 60,
+                    tx_complete: 59,
+                    tx_in_flight: 1,
+                    ..NetCounters::default()
+                }
+            ),
+            Some(Cyw43StatusBlocker {
+                address_source: "wifi-tx-credit-anomaly",
+                dhcp_phase: "tx-credit-anomaly"
+            })
+        );
+        assert_eq!(
+            cyw43_status_blocker_for(
+                "cyw43",
+                "wifi",
+                NetCounters {
+                    tcp_auth_sessions: 1,
+                    ..counters
+                }
+            ),
+            None
+        );
+        assert_eq!(
+            cyw43_status_blocker_for("bcmgenet-v5", "wired", counters),
+            None
+        );
     }
 
     #[test]

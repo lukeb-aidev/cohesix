@@ -7366,6 +7366,21 @@ fn driver_task_resource_status_mirrors_to_hdmi(
 }
 
 fn driver_task_usb_resource_status_mirrors_to_hdmi(stage: &str, status: &str) -> bool {
+    if matches!(
+        (stage, status),
+        (
+            "usb-engine-init",
+            "fault" | "no-reply" | "busy" | "poll-timeout"
+        ) | (
+            "usb-xhci-init",
+            "fault" | "no-reply" | "busy" | "poll-timeout"
+        ) | (
+            "usb-keyboard-first-report",
+            "no-reply" | "busy" | "poll-timeout"
+        )
+    ) {
+        return false;
+    }
     if status == "fault"
         || status == "failed"
         || status == "invalid-contract"
@@ -7384,9 +7399,7 @@ fn driver_task_usb_resource_status_mirrors_to_hdmi(stage: &str, status: &str) ->
     }
     matches!(
         (stage, status),
-        ("usb-engine-init", "ready")
-            | ("usb-keyboard-enumeration-resume", "device-addressed")
-            | ("usb-keyboard-first-report", "no-reply")
+        ("usb-engine-init", "ready") | ("usb-keyboard-enumeration-resume", "device-addressed")
     )
 }
 
@@ -11112,17 +11125,17 @@ mod tests {
             "blocked-keyboard-enumeration"
         ));
 
-        assert!(driver_task_resource_status_requires_uart(
+        assert!(!driver_task_resource_status_requires_uart(
             USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::UsbKeyboard,
             "usb-keyboard-first-report",
             "no-reply"
         ));
-        assert!(driver_task_usb_resource_status_mirrors_to_hdmi(
+        assert!(!driver_task_usb_resource_status_mirrors_to_hdmi(
             "usb-keyboard-first-report",
             "no-reply"
         ));
-        assert!(driver_task_resource_status_requires_uart(
+        assert!(!driver_task_resource_status_requires_uart(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::Cyw43Wifi,
             "cyw43-owner-state",
@@ -13026,6 +13039,14 @@ mod tests {
             "fault",
             fault,
         ));
+        assert!(driver_task_resource_hdmi_progress_line(
+            USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::UsbKeyboard,
+            "usb-engine-init",
+            "fault",
+            fault,
+        )
+        .is_none());
         assert!(!driver_task_hdmi_progress_repeat_allowed(
             DriverTaskHotPath::UsbKeyboard,
             "usb-engine-init",
@@ -13112,19 +13133,19 @@ mod tests {
             "cyw43-owner-state",
             "ready"
         ));
-        assert!(driver_task_resource_status_requires_uart(
+        assert!(!driver_task_resource_status_requires_uart(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::Cyw43Wifi,
             "cyw43-owner-state",
             "blocked-live-proof-missing"
         ));
-        assert!(driver_task_resource_status_requires_uart(
+        assert!(!driver_task_resource_status_requires_uart(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::Cyw43Wifi,
             "cyw43-owner-state",
             "no-reply"
         ));
-        assert!(driver_task_resource_status_requires_uart(
+        assert!(!driver_task_resource_status_requires_uart(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             DriverTaskHotPath::Cyw43Wifi,
             "cyw43-owner-state",

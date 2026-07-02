@@ -123,7 +123,7 @@ def _driver_task_dma_proof_lines(include_wifi: bool = True) -> list[str]:
 def _strong_driver_task_proof_lines() -> list[str]:
     return [
         "U-Boot 2026.01-dirty",
-        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
         "[Cohesix] Root console ready (type 'help' for commands)",
         "cohesix> driver proof",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
@@ -172,7 +172,7 @@ def _strong_driver_task_proof_lines() -> list[str]:
 def _strong_wired_driver_task_proof_lines() -> list[str]:
     return [
         "U-Boot 2026.01-dirty",
-        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
         "[Cohesix] Root console ready (type 'help' for commands)",
         "cohesix> driver proof",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
@@ -268,6 +268,7 @@ def _oldgood_usb_replay_lines() -> list[str]:
         "usb: phase=usb-hid-interrupt-queue-ready slot=2 ep=0x81 dci=3 queued=1",
         "[local-seat] usb hid first report source=linked-runtime-hid "
         "len=8 keys=0x17 transfer_event=yes",
+        "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
         "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
         "read=1 ascii=0x74 key=0x17",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
@@ -407,7 +408,7 @@ def test_gate_proof_rejects_current_usb_and_wifi_blockers(tmp_path: pathlib.Path
         "\n".join(
             [
                 "U-Boot 2026.01-dirty",
-                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
                 "[cohesix:root-task] Cohesix boot: root-task online",
                 "[local-seat] xhci probe begin mmio=0x0000000600000000 "
                 "attempt=2/2 policy=platform-reset-complete",
@@ -461,7 +462,7 @@ def test_gate_proof_rejects_unproved_driver_task_runtime_blockers(
         "\n".join(
             [
                 "U-Boot 2026.01-dirty",
-                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
                 "[Cohesix] Root console ready (type 'help' for commands)",
                 "cohesix> usb status",
                 "usb: ownership_blocker current=pcie-vl805-config-contract-missing "
@@ -520,7 +521,7 @@ def test_gate_proof_rejects_unknown_default_gate_evidence(
         "\n".join(
             [
                 "U-Boot 2026.01-dirty",
-                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
                 "[cohesix:root-task] Cohesix boot: root-task online",
                 "[local-seat] xhci runtime candidates=1 hint=no pci_cfg_ready=no",
                 "[pi4-wifi] mailbox request page paddr=0x04000000 "
@@ -566,7 +567,7 @@ def test_gate_proof_rejects_local_seat_wifi_boot_deferral(
         "\n".join(
             [
                 "U-Boot 2026.01-dirty",
-                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
                 "[cohesix:root-task] Cohesix boot: root-task online",
                 "[local-seat] xhci enumerate outcome=keyboard-ready",
                 "[net-console] deferred reason=pi4-local-seat-explicit-wifi "
@@ -610,7 +611,7 @@ def test_gate_proof_rejects_missing_root_console_prompt(
         "\n".join(
             [
                 "U-Boot 2026.01-dirty",
-                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
                 "[cohesix:root-task] Cohesix boot: root-task online",
                 "usb: linked_runtime command-probe result=enable-slot-ok",
                 "wifi: firmware-ready",
@@ -1149,7 +1150,7 @@ def test_gate_proof_rejects_root_task_panic(tmp_path: pathlib.Path) -> None:
         "\n".join(
             [
                 "U-Boot 2026.01-dirty",
-                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
                 "[cohesix:root-task] Cohesix boot: root-task online",
                 "usb: linked_runtime command-probe result=enable-slot-ok",
                 "[pi4-wifi] sdio function-ready fn=2 block=512 ready=0x06",
@@ -1195,7 +1196,7 @@ def test_gate_proof_rejects_stale_uefi_usb_hint(tmp_path: pathlib.Path) -> None:
         "\n".join(
             [
                 "U-Boot 2026.01-dirty",
-                "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+                "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
                 "[cohesix:root-task] Cohesix boot: root-task online",
                 "[local-seat] pi4 keyboard unavailable detail=usb-keyboard-missing "
                 'hint="UEFI vars: XhciPci=0 XhciReload=1 SystemTableMode=1"',

@@ -344,6 +344,13 @@ pub fn snapshot_user_lines_into<const LINE: usize, const LIMIT: usize>(
 }
 
 #[cfg(test)]
+pub fn clear_for_test() {
+    LOG_RING.lock().clear_for_test();
+    USER_RING.lock().lines.clear();
+    LOG_CHANNEL_ACTIVE.store(false, Ordering::Release);
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use core::fmt::Write;

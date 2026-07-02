@@ -48,7 +48,7 @@ def oldgood_usb_replay_lines() -> list[str]:
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
         "owner_state=driver-owned descriptor=present root_pointer=no",
-        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
         "usb: controller-ready source=linked-runtime",
         "usb: linked_runtime command-probe result=enable-slot-ok",
         "usb: phase=usb-root-port-reset-done cmd_path=yes",
@@ -65,6 +65,7 @@ def oldgood_usb_replay_lines() -> list[str]:
         "usb: phase=usb-hid-interrupt-queue-ready slot=2 ep=0x81 dci=3 queued=1",
         "[local-seat] usb hid first report source=linked-runtime-hid "
         "len=8 keys=0x17 transfer_event=yes",
+        "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
         "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
         "read=1 ascii=0x74 key=0x17",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
@@ -118,7 +119,7 @@ def oldgood_usb_resource_replay_lines() -> list[str]:
         "owner_state=driver-owned descriptor=present root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
         "owner_state=driver-owned descriptor=present root_pointer=no",
-        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
         "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
         "stage=usb-engine-init status=ready",
         "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
@@ -145,6 +146,7 @@ def oldgood_usb_resource_replay_lines() -> list[str]:
         "stage=usb-keyboard-interrupt-in status=ready",
         "DRIVER_TASK_RESOURCE_INIT contract=usb-local-seat hot_path=usb-keyboard "
         "stage=usb-keyboard-first-report status=ready",
+        "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
         "[local-seat] runtime keyboard first-byte source=linked-runtime-hid read=1 "
         "ascii=0x74 detail=0x0501 result=0x00000001",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
@@ -507,6 +509,7 @@ def test_cli_boot_summary_scores_each_boot_slice(
                 "Cohesix console ready",
                 "cohesix> ",
                 "SERIAL_ECHO result=ok serial_responsive=yes",
+                "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
                 "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
                 "proof_gate=10 blocker=none",
                 "usb: gate 10 name=first-console-byte status=pass "
@@ -553,6 +556,7 @@ def test_cli_boot_summary_skips_uboot_menu_save_reset(
                 "Cohesix console ready",
                 "cohesix> ",
                 "SERIAL_ECHO result=ok serial_responsive=yes",
+                "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
                 "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
                 "proof_gate=10 blocker=none",
                 "usb: sustained_input queue_valid=yes blocker=none "
@@ -598,7 +602,7 @@ def test_latest_boot_slice_prefers_later_uboot_chain() -> None:
         "Starting kernel ...",
         "wifi: boot_failure source=live exact=old-failure",
         "U-Boot 2026.01-dirty",
-        "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+        "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
         "Starting kernel ...",
         "wifi: boot_failure source=live exact=new-failure",
     ]
@@ -641,6 +645,7 @@ def test_boot_summary_skips_uboot_save_reset_menu_slice() -> None:
         "Cohesix console ready",
         "cohesix> ",
         "SERIAL_ECHO result=ok serial_responsive=yes",
+        "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
         "proof_gate=10 blocker=none",
         "usb: gate 10 name=first-console-byte status=pass "
@@ -752,6 +757,15 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DATA_PATH_RX_DELIVERED": 0,
         "WIFI_DATA_PATH_RX_DROPPED": 0,
         "WIFI_DATA_PATH_LAST": "none",
+        "WIFI_RX_IRQ_PRESERVE_COUNT": 0,
+        "WIFI_RX_IRQ_PRESERVE_REASON": "none",
+        "WIFI_RX_IRQ_PRESERVE_INT": "0x00000000",
+        "WIFI_RX_IRQ_PRESERVE_ACK": "0x00000000",
+        "WIFI_RXTRACE_SEQ": 0,
+        "WIFI_RXTRACE_START_TICKS": "0x00000000",
+        "WIFI_RXTRACE_PRE_SAMPLE_DELTA_TICKS": 0,
+        "WIFI_RXTRACE_TRANSFER_DELTA_TICKS": 0,
+        "WIFI_RXTRACE_POST_SAMPLE_DELTA_TICKS": 0,
         "DRIVER_TASK_DEFAULT_REQUESTED": "no",
         "DRIVER_TASK_LIVE_HOT_PATHS": "no",
         "DRIVER_TASK_CONTRACTS": 0,
@@ -944,7 +958,7 @@ def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
     events = normalizer.parse_events(
         [
             "U-Boot 2026.01",
-            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
             "cohesix> driver proof",
             "[timers] backend=arch-counter counter=vct timer_freq_hz=54000000",
             "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
@@ -1058,7 +1072,7 @@ def test_gate_summary_accepts_late_wired_owner_state_refresh() -> None:
     events = normalizer.parse_events(
         [
             "U-Boot 2026.01",
-            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
             "usb: platform_reset policy=full-reset-start "
             "origin=live-runtime-default handoff=none seed=none run=run-cold",
             "[Cohesix] Root console ready (type 'help' for commands)",
@@ -1195,7 +1209,7 @@ def test_gate_summary_replaces_superseded_dma_blockers() -> None:
     events = normalizer.parse_events(
         [
             "U-Boot 2026.01",
-            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
             "usb: platform_reset policy=full-reset-start "
             "origin=live-runtime-default handoff=none seed=none run=run-cold",
             "[Cohesix] Root console ready (type 'help' for commands)",
@@ -4236,7 +4250,7 @@ def test_gate_summary_keeps_cold_usb_path_handoff_clean() -> None:
 def test_gate_summary_flags_stale_uefi_usb_hint() -> None:
     events = normalizer.parse_events(
         [
-            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
             "[local-seat] pi4 keyboard unavailable detail=usb-keyboard-missing "
             'hint="UEFI vars: XhciPci=0 XhciReload=1 SystemTableMode=1"',
         ]
@@ -6608,8 +6622,8 @@ def test_gate_summary_tracks_linked_usb_keyboard_report_and_first_byte() -> None
 
     gates = normalizer.summarize_gates(events)
 
-    assert gates.usb_gate == 10
-    assert gates.usb_blocker == "none"
+    assert gates.usb_gate == 9
+    assert gates.usb_blocker == "command-input-ready"
 
 
 def test_gate_summary_tracks_prompt_prefixed_linked_usb_first_byte() -> None:
@@ -6624,6 +6638,7 @@ def test_gate_summary_tracks_prompt_prefixed_linked_usb_first_byte() -> None:
             "cohesix> [local-seat] usb hid first report contract=usb-local-seat "
             "source=linked-runtime-hid tag=usb-hid-report-event len=1 accepted=1 "
             "detail=0x0000 result=0x00000001 transfer_event=yes",
+            "cohesix> [local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "cohesix> [local-seat] runtime keyboard first-byte "
             "source=linked-runtime-hid read=1 ascii=0x54 detail=0x0000 "
             "result=0x00000001",
@@ -6643,6 +6658,7 @@ def test_gate_summary_keeps_linked_gate10_over_later_stale_hub_blocker() -> None
         [
             "[local-seat] usb hid first report source=linked-runtime-hid "
             "shift=0 keys=04,00,00,00,00,00",
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x61",
             "usb: linked_runtime_progress marker_valid=yes sequence=8 "
@@ -6759,8 +6775,9 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
             "proof_gate=8 target_gate=10 next=hid-first-report "
             "blocker=hid-first-report",
             "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
-            "proof_gate=9 target_gate=10 next=keyboard-first-byte "
-            "blocker=keyboard-first-byte",
+            "proof_gate=9 target_gate=10 next=command-input-ready "
+            "blocker=command-input-ready",
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
             "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 "
             "next=none blocker=none",
@@ -6776,6 +6793,7 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
 def test_gate_summary_reports_post_first_byte_unmatched_transfer() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x61",
             "usb: runtime_queue queue_valid=yes queued_reports=73 "
@@ -6797,6 +6815,7 @@ def test_gate_summary_reports_post_first_byte_unmatched_transfer() -> None:
 def test_gate_summary_reports_post_first_byte_queue_collapse() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x61",
             "usb: runtime_queue queue_valid=yes queued_reports=4 "
@@ -6821,6 +6840,7 @@ def test_gate_summary_reports_post_first_byte_queue_collapse() -> None:
 def test_gate_summary_reports_usb_runtime_recovery_diagnostics() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x61",
             "usb: runtime_queue queue_valid=yes queued_reports=32 "
@@ -6850,6 +6870,7 @@ def test_gate_summary_reports_usb_runtime_recovery_diagnostics() -> None:
 def test_gate_summary_reports_post_first_byte_recovery_request_timeout() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x65",
             "DRIVER_TASK_RING_CALL_ABORT contract=usb-local-seat "
@@ -6873,6 +6894,7 @@ def test_gate_summary_reports_post_first_byte_recovery_request_timeout() -> None
 def test_gate_summary_reports_post_first_byte_recovery_request_no_reply() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x65",
             "usb: recovery_request action=no-reply aux0=0x55534252 "
@@ -6898,6 +6920,7 @@ def test_gate_summary_reports_post_first_byte_recovery_request_no_reply() -> Non
 def test_gate_summary_reports_post_first_byte_recovery_pending_without_diag() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x65",
             "usb: sustained_input queue_valid=no detail=0x0501 result=0x00000000 "
@@ -6919,6 +6942,7 @@ def test_gate_summary_reports_post_first_byte_recovery_pending_without_diag() ->
 def test_gate_summary_reports_post_first_byte_recovery_failed() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x61",
             "usb: runtime_queue queue_valid=yes queued_reports=4 "
@@ -6938,6 +6962,7 @@ def test_gate_summary_reports_post_first_byte_recovery_failed() -> None:
 def test_gate_summary_reports_post_first_byte_queue_collapse_risk() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x61",
             "usb: runtime_queue queue_valid=yes queued_reports=4 "
@@ -6964,6 +6989,7 @@ def test_gate_summary_reports_post_first_byte_queue_collapse_risk() -> None:
 def test_gate_summary_prefers_sustained_input_blocker() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x61",
             "usb: sustained_input queued_reports=4 transfer_events=255 "
@@ -6984,9 +7010,10 @@ def test_gate_summary_prefers_sustained_input_blocker() -> None:
     assert record["USB_EVENT_LOOP_RUNTIME_SKIPPED"] == 97
 
 
-def test_gate_summary_reports_post_first_byte_no_progress() -> None:
+def test_gate_summary_keeps_cumulative_usb_counters_diagnostic_after_ready() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x61",
             "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
@@ -7016,10 +7043,37 @@ def test_gate_summary_reports_post_first_byte_no_progress() -> None:
 
     record = normalizer.summarize_gates(events).to_record()
 
+    assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
+    assert record["DRIVER_TASK_COUNTER_TIMEOUTS"] == 48932
+    assert record["USB_KEYBOARD_NO_REPLIES"] == 0
+
+
+def test_gate_summary_reports_active_post_first_byte_no_reply_delta() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "[smp] activity local-seat runtime=present attached=yes "
+            "keyboard_device=usb-kbd0 display=hdmi0 backend_poll=yes "
+            "backend_polls=320009 backend_bytes=27 keyboard_ready=yes "
+            "first_report=yes first_byte=yes queued=0 accepted=27 drained=27 "
+            "echoed=27 drop=0 no_reply=6 cooldown=0 cooldown_skips=0 hdmi_drop=0",
+            "[smp] activity local-seat runtime=present attached=yes "
+            "keyboard_device=usb-kbd0 display=hdmi0 backend_poll=yes "
+            "backend_polls=321645 backend_bytes=27 keyboard_ready=yes "
+            "first_report=yes first_byte=yes queued=0 accepted=27 drained=27 "
+            "echoed=27 drop=0 no_reply=8 cooldown=0 cooldown_skips=0 hdmi_drop=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
     assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "usb-post-first-byte-no-progress"
+    assert record["USB_KEYBOARD_NO_REPLIES"] == 8
 
 
-def test_gate_summary_rejects_runtime_gate10_without_linked_hid_source() -> None:
+def test_gate_summary_requires_command_ready_for_runtime_gate10_status() -> None:
     events = normalizer.parse_events(
         [
             "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
@@ -7030,7 +7084,7 @@ def test_gate_summary_rejects_runtime_gate10_without_linked_hid_source() -> None
     gates = normalizer.summarize_gates(events)
 
     assert gates.usb_gate == 9
-    assert gates.usb_blocker == "keyboard-first-byte"
+    assert gates.usb_blocker == "command-input-ready"
 
 
 def test_gate_summary_accepts_oldgood_usb_replay_contract() -> None:
@@ -7095,7 +7149,8 @@ def test_gate_summary_rejects_usb_gate10_without_oldgood_replay() -> None:
             "owner_state=driver-owned descriptor=present root_pointer=no",
             "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
             "owner_state=driver-owned descriptor=present root_pointer=no",
-            "[cohesix] USB host session was not active; xHCI cold boot starts unseeded",
+            "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
             "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
             "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 "
             "next=none blocker=none",
@@ -8931,7 +8986,12 @@ def test_gate_summary_preserves_v3_rxtrace_shape_from_detail_line() -> None:
             "flags=0x0000 detail=0x5709 request_len=64 "
             "cmd53_arg=0x21000040 cmd53_fn=2 cmd53_addr=0x08000 "
             "cmd53_write=no cmd53_mode=byte cmd53_inc=no cmd53_count=64 "
-            "transfer_result=0x00000000 payload_after=0x00000000",
+            "transfer_result=0x00000000 payload_after=0x00000000 "
+            "irq_preserve_count=2 irq_preserve_reason=2 "
+            "irq_preserve_int=0x20000040 irq_preserve_ack=0x20000000 "
+            "trace_seq=17 start_ticks_lo=0x12345678 "
+            "pre_sample_delta_ticks=12 transfer_delta_ticks=345 "
+            "post_sample_delta_ticks=456",
         ]
     )
 
@@ -8941,6 +9001,13 @@ def test_gate_summary_preserves_v3_rxtrace_shape_from_detail_line() -> None:
     assert gates.wifi_blocker == "cyw43-data-rx-firstread-transfer-no-result"
     assert gates.wifi_exact == "cyw43-data-rx-firstread-transfer-no-result"
     assert gates.wifi_phase == "runtime-rx"
+    assert gates.wifi_rx_irq_preserve_count == 2
+    assert gates.wifi_rx_irq_preserve_reason == "rframe-pending"
+    assert gates.wifi_rxtrace_seq == 17
+    assert gates.wifi_rxtrace_start_ticks == 0x12345678
+    assert gates.wifi_rxtrace_pre_sample_delta_ticks == 12
+    assert gates.wifi_rxtrace_transfer_delta_ticks == 345
+    assert gates.wifi_rxtrace_post_sample_delta_ticks == 456
 
 
 def test_gate_summary_names_bssid_probe_tx_submit_fail_over_firstread_idle() -> None:

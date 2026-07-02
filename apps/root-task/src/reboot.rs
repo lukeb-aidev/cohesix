@@ -209,6 +209,8 @@ where
     let rsts_readback = access.read_u32(PM_RSTS_OFFSET);
     #[cfg(feature = "kernel")]
     emit_bcm2711_fastboot_marker_trace(rsts_before, rsts_value, rsts_readback);
+    #[cfg(not(feature = "kernel"))]
+    let _ = rsts_readback;
     access.write_barrier();
     write_u32_release(access, PM_WDOG_OFFSET, PM_PASSWORD | PM_WDOG_RESET_TICKS)?;
     let rstc = access.read_u32(PM_RSTC_OFFSET)?;

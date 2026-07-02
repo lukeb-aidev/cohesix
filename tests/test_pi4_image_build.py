@@ -138,8 +138,8 @@ def test_pi4_image_build_does_not_echo_wifi_psk_to_serial() -> None:
     assert "boot.cmd does not collect Wi-Fi PSKs in the protected USB-only prompt" in source
 
 
-def test_pi4_image_build_fastboot_prefers_marker_and_falls_back_to_saved_policy_reset() -> None:
-    """Software-reset fallback must be gated by saved Cohesix policy."""
+def test_pi4_image_build_reports_reset_markers_without_autoboot() -> None:
+    """Saved policy must not bypass the interactive U-Boot menu."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     boot_template = source[
@@ -163,18 +163,20 @@ def test_pi4_image_build_fastboot_prefers_marker_and_falls_back_to_saved_policy_
     assert "setenv coh_fastboot_rsts_low_mask 0x00000020" not in source
     assert marker_check in detect_fastboot
     assert "coh_fastboot_rsts_reset" in detect_fastboot
-    assert 'test "${coh_fastboot}" != "1"' in detect_fastboot
-    assert reset_check in detect_fastboot
-    assert 'test "${coh_has_saved_config}" = "1"' in detect_fastboot
-    assert "software-reset-saved-policy" in boot_template
-    assert "reboot fast boot: source=${coh_fastboot_source}" in boot_template
+    assert reset_check not in detect_fastboot
+    assert 'test "${coh_has_saved_config}" = "1"' not in detect_fastboot
+    assert "software-reset-saved-policy" not in boot_template
+    assert "reboot fast boot: source=${coh_fastboot_source}" not in boot_template
     assert "reset=${coh_fastboot_rsts_reset} saved=${coh_has_saved_config}" in boot_template
     generated_tail = boot_template[boot_template.rindex("run coh_force_serial_preboot") :]
     assert generated_tail.index("run coh_load_saved_policy") < generated_tail.index(
         "run coh_detect_saved_config"
     )
     assert generated_tail.index("run coh_detect_saved_config") < generated_tail.index(
-        "run coh_maybe_fastboot"
+        "run coh_detect_fastboot"
+    )
+    assert generated_tail.index("run coh_report_fastboot_miss") < generated_tail.index(
+        "run coh_prompt_root"
     )
 
 
@@ -193,6 +195,24 @@ def test_pi4_image_build_allows_serial_menu_without_usb_keyboard() -> None:
     assert usb_gate in source
     assert source.index(usb_gate) < source.index(usb_keyboard)
     assert source.index(usb_gate) < source.index(usb_poll)
+
+
+def test_pi4_image_build_quiesces_uboot_usb_unconditionally() -> None:
+    """Cohesix handoff must request U-Boot USB stop even on serial menu paths."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    boot_template = source[
+        source.index('echo "[cohesix] pi4 autoboot script"') : source.index(
+            '\nEOF\n    sed -i \'\' "s/__COH_IMAGE__/'
+        )
+    ]
+    quiesce = next(
+        line for line in boot_template.splitlines() if line.startswith("setenv coh_quiesce_usb ")
+    )
+
+    assert 'if usb stop; then' in quiesce
+    assert 'test "${coh_usb_input_ready}" = "1"' not in quiesce
+    assert "usb stop failed or was inactive before Cohesix boot" in quiesce
 
 
 def test_pi4_uboot_defconfigs_keep_remote_recovery_bootdelay() -> None:
@@ -214,8 +234,8 @@ def test_pi4_image_build_verifies_remote_recovery_bootdelay() -> None:
     assert "2-second serial autoboot abort window" in source
 
 
-def test_pi4_image_build_keeps_recovery_menu_escape_before_fastboot() -> None:
-    """Manual U-Boot recovery must bypass saved-policy fastboot on request."""
+def test_pi4_image_build_enters_interactive_menu_after_marker_diagnostics() -> None:
+    """The generated boot script must default to the interactive menu."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     boot_template = source[
@@ -224,20 +244,18 @@ def test_pi4_image_build_keeps_recovery_menu_escape_before_fastboot() -> None:
         )
     ]
 
-    recovery_guard = next(
-        line
-        for line in boot_template.splitlines()
-        if line.startswith("setenv coh_maybe_fastboot_or_recovery ")
-    )
     generated_tail = boot_template[boot_template.rindex("run coh_force_serial_preboot") :]
 
     assert "setenv bootdelay 0" not in boot_template
-    assert 'test "${coh_recovery_menu}" = "1"' in recovery_guard
-    assert "recovery menu requested: skipping reboot fast boot" in recovery_guard
-    assert "else run coh_maybe_fastboot" in recovery_guard
+    assert "coh_maybe_fastboot_or_recovery" not in boot_template
+    assert "run coh_maybe_fastboot" not in boot_template
+    assert "reboot fast boot" not in boot_template
     assert generated_tail.index("run coh_detect_saved_config") < generated_tail.index(
-        "run coh_maybe_fastboot_or_recovery"
+        "run coh_detect_fastboot"
     )
-    assert generated_tail.index("run coh_maybe_fastboot_or_recovery") < (
+    assert generated_tail.index("run coh_detect_fastboot") < generated_tail.index(
+        "run coh_report_fastboot_miss"
+    )
+    assert generated_tail.index("run coh_report_fastboot_miss") < (
         generated_tail.index("run coh_prompt_root")
     )

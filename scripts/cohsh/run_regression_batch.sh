@@ -41,8 +41,8 @@
 #      reset in the minicom log.
 #   4. When U-Boot reaches the menu, press Enter over the UART device:
 #        python3 -c 'import os, sys; fd=os.open(sys.argv[1], os.O_WRONLY | os.O_NOCTTY); os.write(fd, b"\r"); os.close(fd)' "$serial_dev"
-#      If U-Boot reports "fast boot marker absent", that is expected while the
-#      one-shot bypass is parked; pressing Enter should continue the normal boot.
+#      If U-Boot reports "boot marker diagnostics", that is expected; pressing
+#      Enter should continue the normal boot from the interactive menu.
 #   5. Wait for fresh Cohesix proof in the same capture log: DHCP bound,
 #      root prompt, then a new clean "smp activity" block. If USB/local-seat
 #      boot chatter interleaves with a partial command, send a blank line,

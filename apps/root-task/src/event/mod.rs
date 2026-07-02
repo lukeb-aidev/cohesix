@@ -5582,6 +5582,19 @@ where
             "hdmi-display",
             crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
         );
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let diag_exact_issue = {
+            let command_ready = self
+                .local_seat
+                .as_ref()
+                .is_some_and(|local_seat| local_seat.usb_keyboard_command_ready_latched());
+            if command_ready {
+                Some("command-input-ready")
+            } else {
+                None
+            }
+        };
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let diag_exact_issue = None;
         let (verdict, focus) =
             Self::usb_capture_verdict(backend_attached, polling_enabled, diag_exact_issue);
@@ -5638,6 +5651,10 @@ where
             );
             let keyboard_ready = linked_keyboard_ready;
             let first_report = linked_first_report;
+            let command_ready = self
+                .local_seat
+                .as_ref()
+                .is_some_and(|local_seat| local_seat.usb_keyboard_command_ready_latched());
             let prompt_polling_enabled = self
                 .local_seat
                 .as_ref()
@@ -5650,7 +5667,7 @@ where
             } else {
                 "none"
             };
-            let proof_gate = if first_byte {
+            let proof_gate = if command_ready {
                 linked_gate.max(10)
             } else if first_report {
                 linked_gate.max(9)
@@ -5663,12 +5680,10 @@ where
             };
             let progress_next = linked_progress
                 .map(|progress| Self::usb_runtime_next_action_for_progress_phase(progress.phase));
-            let next_step = if first_byte {
-                "keyboard-first-byte"
-            } else if input_observation == "idle-report-no-key-byte" {
-                "press-key-for-first-byte"
+            let next_step = if command_ready {
+                "command-input-ready"
             } else if first_report {
-                "keyboard-first-byte"
+                "enable-command-input"
             } else if keyboard_ready {
                 "keyboard-first-report"
             } else if progress_refines_linked_detail {
@@ -5682,12 +5697,10 @@ where
             };
             let progress_blocker = linked_progress
                 .map(|progress| Self::usb_runtime_blocker_for_progress_phase(progress.phase));
-            let blocker = if first_byte {
+            let blocker = if command_ready {
                 "none"
-            } else if input_observation == "idle-report-no-key-byte" {
-                "awaiting-physical-key"
             } else if first_report {
-                "keyboard-first-byte"
+                "command-input-ready"
             } else if keyboard_ready {
                 "hid-first-report"
             } else if progress_refines_linked_detail {
@@ -5720,12 +5733,13 @@ where
             );
             self.emit_console_line(runtime_line.as_str());
             let acceptance_line = format_message(format_args!(
-                "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} usable={} prompt_polling={} input_observation={} death_proof=no note=hid_keyboard_requires_first_byte_for_input",
+                "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} command_ready={} usable={} prompt_polling={} input_observation={} death_proof=no note=first_byte_is_input_evidence_not_readiness_gate",
                 Self::yes_no(proof_gate >= 3),
                 Self::yes_no(keyboard_ready),
                 Self::yes_no(first_report),
                 Self::yes_no(first_byte),
-                Self::yes_no(first_byte),
+                Self::yes_no(command_ready),
+                Self::yes_no(command_ready),
                 Self::yes_no(prompt_polling_enabled),
                 input_observation,
             ));
@@ -5757,8 +5771,8 @@ where
             self.emit_console_line(linked_runtime_snapshot.as_str());
             if let Some(progress) = linked_progress {
                 let raw_progress_gate = Self::usb_runtime_gate_for_progress_phase(progress.phase);
-                let progress_superseded = Self::usb_runtime_progress_superseded_by_keyboard(
-                    first_byte,
+                let progress_superseded = Self::usb_runtime_progress_superseded_by_command_ready(
+                    command_ready,
                     proof_gate,
                     raw_progress_gate,
                 );
@@ -5773,7 +5787,7 @@ where
                     Self::usb_runtime_blocker_for_progress_phase(progress.phase)
                 };
                 let progress_line_next = if progress_superseded {
-                    "keyboard-first-byte"
+                    "command-input-ready"
                 } else {
                     Self::usb_runtime_next_action_for_progress_phase(progress.phase)
                 };
@@ -5908,6 +5922,7 @@ where
             Some("usbcmd-run-barrier-wedged") | Some("usbcmd-run-store-wedged") => {
                 ("run-transition-edge", "usbcmd-run")
             }
+            Some("command-input-ready") => ("acceptance-complete", "command-input-ready"),
             Some(_) => ("xhci-diagnostic-edge", "controller-transition"),
             None if !backend_attached => ("backend-not-attached", "probe-controller"),
             None if polling_enabled => ("probe-in-progress", "poll-keyboard"),
@@ -5923,7 +5938,7 @@ where
             5..=7 => "enumeration",
             8 => "keyboard-ready",
             9 => "hid-first-report",
-            _ => "keyboard-online",
+            _ => "command-input-ready",
         }
     }
 
@@ -7823,7 +7838,7 @@ where
                 "keyboard-first-report"
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => {
-                "keyboard-first-byte"
+                "command-input-ready"
             }
             _ => "keyboard-ready",
         }
@@ -7881,7 +7896,7 @@ where
                 "hid-first-report"
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => {
-                "keyboard-first-byte"
+                "command-input-ready"
             }
             _ => "keyboard-not-ready",
         }
@@ -7914,7 +7929,7 @@ where
                 "poll-linked-interrupt-in-and-rering-endpoint-doorbell"
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY => {
-                "wait-first-keyboard-byte"
+                "enable-command-input"
             }
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED
             | pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_DEVICE_ADDRESSED
@@ -8185,12 +8200,12 @@ where
         )
     }
 
-    const fn usb_runtime_progress_superseded_by_keyboard(
-        first_byte: bool,
+    const fn usb_runtime_progress_superseded_by_command_ready(
+        command_ready: bool,
         proof_gate: u8,
         progress_gate: u8,
     ) -> bool {
-        first_byte && progress_gate < proof_gate
+        command_ready && progress_gate < proof_gate
     }
 
     #[cfg(feature = "kernel")]
@@ -8375,6 +8390,10 @@ where
                 .unwrap_or_default();
             let keyboard_ready = linked_keyboard_ready;
             let first_report = linked_first_report;
+            let command_ready = self
+                .local_seat
+                .as_ref()
+                .is_some_and(|local_seat| local_seat.usb_keyboard_command_ready_latched());
             let parser_ingress = local_trace.accepted_bytes != 0
                 || local_trace.drained_bytes != 0
                 || local_trace.echoed_bytes != 0;
@@ -8405,15 +8424,15 @@ where
             if first_report {
                 proof_gate = proof_gate.max(9);
             }
-            if first_byte {
+            if command_ready || first_byte {
                 proof_gate = proof_gate.max(10);
             }
             let active_blocker = if proof_gate >= 10 {
                 "none"
             } else if keyboard_ready && !first_report {
                 "hid-first-report"
-            } else if first_report && !first_byte {
-                "keyboard-first-byte"
+            } else if first_report && !command_ready {
+                "command-input-ready"
             } else if progress_refines_linked_detail {
                 linked_progress_blocker
             } else if linked_detail != 0 {
@@ -8446,8 +8465,8 @@ where
                 "acceptance-complete"
             } else if keyboard_ready && !first_report {
                 "inspect-xhci-event-ring-interrupt-delivery"
-            } else if first_report && !first_byte {
-                "inspect-hid-report-to-console-byte-path"
+            } else if first_report && !command_ready {
+                "enable-command-input"
             } else if progress_refines_linked_detail {
                 linked_progress_next_action
             } else if linked_detail != 0 {
@@ -8458,16 +8477,38 @@ where
                 "wait-linked-runtime-init"
             };
             if let Some(progress) = linked_progress {
+                let raw_progress_gate = Self::usb_runtime_gate_for_progress_phase(progress.phase);
+                let progress_superseded = Self::usb_runtime_progress_superseded_by_command_ready(
+                    command_ready || first_byte,
+                    proof_gate,
+                    raw_progress_gate,
+                );
+                let progress_line_gate = if progress_superseded {
+                    proof_gate
+                } else {
+                    raw_progress_gate
+                };
+                let progress_line_blocker = if progress_superseded {
+                    "none"
+                } else {
+                    Self::usb_runtime_blocker_for_progress_phase(progress.phase)
+                };
+                let progress_line_next = if progress_superseded {
+                    "command-input-ready"
+                } else {
+                    Self::usb_runtime_next_action_for_progress_phase(progress.phase)
+                };
                 let progress_line = format_message(format_args!(
-                    "usb: diag linked_runtime_progress marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} gate={} blocker={} next_action={}",
+                    "usb: diag linked_runtime_progress marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} gate={} blocker={} next_action={} superseded={}",
                     Self::yes_no(progress.marker_valid),
                     progress.sequence,
                     progress.phase,
                     progress.phase_name,
                     progress.aux0,
-                    Self::usb_runtime_gate_for_progress_phase(progress.phase),
-                    Self::usb_runtime_blocker_for_progress_phase(progress.phase),
-                    Self::usb_runtime_next_action_for_progress_phase(progress.phase),
+                    progress_line_gate,
+                    progress_line_blocker,
+                    progress_line_next,
+                    Self::yes_no(progress_superseded),
                 ));
                 self.emit_console_line(progress_line.as_str());
             }
@@ -8608,14 +8649,15 @@ where
                     transfer_events,
                     Self::usb_runtime_keyboard_report_status_label(report_status),
                 ),
-                "first-console-byte",
+                "command-input-ready",
             );
             self.emit_usb_gate_line(
                 10,
-                "first-console-byte",
+                "command-input-ready",
                 Self::usb_startup_gate_status(10, proof_gate, failing_gate),
                 format_args!(
-                    "first_byte={} first_byte_source={} parser_ingress={} backend_bytes={} arming={} accepted={} echoed={} input_observation={}",
+                    "command_ready={} first_byte={} first_byte_source={} parser_ingress={} backend_bytes={} arming={} accepted={} echoed={} input_observation={}",
+                    Self::yes_no(command_ready),
                     Self::yes_no(first_byte),
                     if first_byte {
                         "linked-runtime-hid"
@@ -8755,7 +8797,7 @@ where
             7 => "config-and-hid-descriptors",
             8 => "keyboard-ready",
             9 => "first-hid-report",
-            10 => "first-console-byte",
+            10 => "command-input-ready",
             _ => "unknown",
         }
     }
@@ -14685,14 +14727,39 @@ mod tests {
     use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer, TicketKey};
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[cfg(feature = "kernel")]
     static WIFI_DRIVER_TASK_PROGRESS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    fn wifi_driver_task_progress_test_guard() -> std::sync::MutexGuard<'static, ()> {
-        WIFI_DRIVER_TASK_PROGRESS_TEST_LOCK
+    #[cfg(feature = "kernel")]
+    struct WifiDriverTaskProgressTestGuard {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    #[cfg(feature = "kernel")]
+    impl Drop for WifiDriverTaskProgressTestGuard {
+        fn drop(&mut self) {
+            clear_wifi_driver_task_test_state();
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn clear_wifi_driver_task_test_state() {
+        crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_driver_task_progress_test_guard() -> WifiDriverTaskProgressTestGuard {
+        let guard = WIFI_DRIVER_TASK_PROGRESS_TEST_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_wifi_driver_task_test_state();
+        WifiDriverTaskProgressTestGuard { _guard: guard }
     }
 
     struct TestTimer {
@@ -16084,10 +16151,7 @@ mod tests {
 
         pump.maybe_run_post_prompt_local_seat_attach(true);
         assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
-        assert_eq!(
-            pump.post_prompt_local_seat_attach_idle_turns,
-            POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_TURNS
-        );
+        assert_eq!(pump.post_prompt_local_seat_attach_idle_turns, 0);
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -16763,13 +16827,13 @@ mod tests {
     }
 
     #[test]
-    fn usb_runtime_progress_supersession_requires_keyboard_byte() {
+    fn usb_runtime_progress_supersession_requires_command_ready() {
         type ConsoleTestPump =
             EventPump<'static, LoopbackSerial<32>, TestTimer, NullIpc, TicketTable<4>, 32, 32, 32>;
 
-        assert!(ConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(true, 10, 7));
-        assert!(!ConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(false, 10, 7));
-        assert!(!ConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(true, 10, 10));
+        assert!(ConsoleTestPump::usb_runtime_progress_superseded_by_command_ready(true, 10, 7));
+        assert!(!ConsoleTestPump::usb_runtime_progress_superseded_by_command_ready(false, 10, 7));
+        assert!(!ConsoleTestPump::usb_runtime_progress_superseded_by_command_ready(true, 10, 10));
     }
 
     #[cfg(feature = "kernel")]
@@ -20225,8 +20289,50 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cat_queen_log_ack_includes_recent_echo_batch() {
+        let _root_guard = ReachableRootGuard::new(1);
+        log_buffer::clear_for_test();
+        let driver = LoopbackSerial::<16384>::new();
+        let serial = SerialPort::<_, 16384, 16384, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(16, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
+        pump.session = Some(SessionRole::Queen);
+        {
+            let driver = pump.serial_mut().driver_mut();
+            driver.push_rx(
+                b"echo /log/queen.log batch-1\n\
+                  echo /log/queen.log batch-2\n\
+                  echo /log/queen.log batch-3\n\
+                  cat /log/queen.log\n",
+            );
+        }
+        for _ in 0..16 {
+            pump.poll();
+        }
+        let rendered = String::from_utf8(
+            pump.serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect(),
+        )
+        .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("OK CAT path=/log/queen.log data=batch-1|batch-2|batch-3"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cat_queen_log_streams_full_payload_after_ack() {
         let _root_guard = ReachableRootGuard::new(1);
+        log_buffer::clear_for_test();
         let first_marker = "[test] cat-queen-log-streams-full-payload marker=batch-first index=00";
         let last_marker = "[test] cat-queen-log-streams-full-payload marker=batch-last index=69";
         for index in 0..70 {
@@ -20701,7 +20807,7 @@ mod tests {
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_step_label(10),
-            "keyboard-online"
+            "command-input-ready"
         );
     }
 
@@ -20891,7 +20997,7 @@ mod tests {
             KernelConsoleTestPump::usb_runtime_next_action_for_linked_detail(
                 pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
             ),
-            "wait-first-keyboard-byte"
+            "enable-command-input"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_blocker_for_linked_detail(
@@ -20903,7 +21009,7 @@ mod tests {
             KernelConsoleTestPump::usb_runtime_blocker_for_linked_detail(
                 pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
             ),
-            "keyboard-first-byte"
+            "command-input-ready"
         );
         assert!(
             KernelConsoleTestPump::usb_runtime_blocker_holds_current_gate(
@@ -21280,9 +21386,15 @@ mod tests {
         assert!(KernelConsoleTestPump::usb_runtime_detail_has_queue_result(
             pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
         ));
-        assert!(KernelConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(true, 10, 7));
-        assert!(!KernelConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(false, 10, 7));
-        assert!(!KernelConsoleTestPump::usb_runtime_progress_superseded_by_keyboard(true, 10, 10));
+        assert!(
+            KernelConsoleTestPump::usb_runtime_progress_superseded_by_command_ready(true, 10, 7)
+        );
+        assert!(
+            !KernelConsoleTestPump::usb_runtime_progress_superseded_by_command_ready(false, 10, 7)
+        );
+        assert!(
+            !KernelConsoleTestPump::usb_runtime_progress_superseded_by_command_ready(true, 10, 10)
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -21641,6 +21753,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_wifi_diag_command_runs_dump_probe_dump() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -21733,6 +21846,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_wifi_diag_skips_probe_after_control_plane_failure() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -21785,6 +21899,7 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_diag_reports_cached_driver_task_failure_without_hal_debug_handle() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<2048>::new();
         let serial = SerialPort::<_, 2048, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -21866,8 +21981,6 @@ mod tests {
 
         transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         drop(pump);
-        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(cyw43);
-        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(sdio);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
             rendered.contains(
@@ -21892,6 +22005,7 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_diag_reports_host_eapol_required_as_live_frontier() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -21945,6 +22059,7 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_diag_reports_host_eapol_pending_as_live_frontier() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -21994,6 +22109,7 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_diag_prefers_live_net_host_eapol_pending_frontier() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -22109,7 +22225,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: gate 9 name=dhcp-bound status=fail evidence=active=wifi address_source=dhcp-pending dhcp_phase=selecting ip=0.0.0.0"
+                "wifi: gate 9 name=dhcp-bound status=fail evidence=active=wifi active_driver=disabled address_source=dhcp-pending dhcp_phase=selecting tcp_ready=no ip=0.0.0.0"
             ),
             "{rendered}"
         );
@@ -22196,6 +22312,7 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_diag_reports_runtime_required_driver_task_snapshot() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -22689,7 +22806,7 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("usb: gate 10 name=first-console-byte"),
+            rendered.contains("usb: gate 10 name=command-input-ready"),
             "{rendered}"
         );
         assert!(

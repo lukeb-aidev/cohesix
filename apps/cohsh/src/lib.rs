@@ -268,6 +268,7 @@ const TEST_SCRIPT_SMP_PATH: &str = "/proc/tests/selftest_smp.coh";
 const PROC_LIFECYCLE_STATE_PATH: &str = "/proc/lifecycle/state";
 const DEFAULT_TEST_TIMEOUT_SECS: u64 = 30;
 const MAX_TEST_TIMEOUT_SECS: u64 = 120;
+const CAT_ACK_DATA_SUMMARY_BYTES: usize = 96;
 const TEST_REPORT_VERSION: &str = "1";
 const REPL_KEEPALIVE_SECS: u64 = 15;
 const TEST_TRANSCRIPT_MAX_BYTES: usize = 512;
@@ -387,6 +388,31 @@ fn parse_expect_selector<'a>(
         state,
         "EXPECT selector is invalid",
     ))
+}
+
+fn cat_ack_detail(path: &str, lines: &[String]) -> String {
+    if path != QUEEN_LOG_PATH {
+        return format!("path={path}");
+    }
+    let mut selected: Vec<&str> = Vec::new();
+    let mut total_len = 0usize;
+    for line in lines.iter().rev() {
+        let line = line.as_str();
+        if line.is_empty() {
+            continue;
+        }
+        let sep = usize::from(!selected.is_empty());
+        if total_len.saturating_add(sep).saturating_add(line.len()) > CAT_ACK_DATA_SUMMARY_BYTES {
+            if selected.is_empty() {
+                selected.push(line);
+            }
+            break;
+        }
+        total_len = total_len.saturating_add(sep).saturating_add(line.len());
+        selected.push(line);
+    }
+    selected.reverse();
+    format!("path={path} data={}", selected.join("|"))
 }
 
 fn parse_wait_ms(entry: &ScriptLine, text: &str, state: Option<&ScriptState>) -> Result<u64> {
@@ -876,7 +902,7 @@ impl Transport for NineDoorTransport {
     fn read(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
         match self.read_lines(path) {
             Ok(lines) => {
-                let detail = format!("path={path}");
+                let detail = cat_ack_detail(path, &lines);
                 self.push_ack(
                     AckStatus::Ok,
                     ConsoleVerb::Cat.ack_label(),
@@ -4839,6 +4865,25 @@ mod tests {
 
         assert!(err.to_string().contains("create log dump file"));
         assert_eq!(std::fs::read_to_string(&dump_path).unwrap(), "existing\n");
+    }
+
+    #[test]
+    fn cat_queen_log_ack_includes_recent_echo_batch() {
+        let transport = NineDoorTransport::new(NineDoor::new());
+        let buffer = Vec::new();
+        let mut shell = Shell::new(transport, Cursor::new(buffer));
+        shell.attach(Role::Queen, None).unwrap();
+        shell.execute("echo batch-1 > /log/queen.log").unwrap();
+        shell.execute("echo batch-2 > /log/queen.log").unwrap();
+        shell.execute("echo batch-3 > /log/queen.log").unwrap();
+        shell.execute("cat /log/queen.log").unwrap();
+        let (_transport, cursor) = shell.into_parts();
+        let rendered = String::from_utf8(cursor.into_inner()).unwrap();
+        assert!(
+            rendered.contains("OK CAT path=/log/queen.log data=")
+                && rendered.contains("batch-1|batch-2|batch-3"),
+            "{rendered}"
+        );
     }
 
     #[test]
