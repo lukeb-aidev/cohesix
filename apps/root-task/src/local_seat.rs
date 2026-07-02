@@ -2508,9 +2508,11 @@ impl LocalSeatRuntime {
             return false;
         }
         if matches!(reason, "keyboard-poll-no-reply" | "keyboard-poll-cooldown")
-            && LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire)
-            && self.keyboard_poll_no_reply_streak <= 1
-            && !self.keyboard_recovery_aux_pending
+            && !local_seat_keyboard_cooldown_should_show_busy(
+                self.hdmi_keyboard_command_ready_latched || self.linked_usb_command_input_ready(),
+                self.keyboard_poll_no_reply_streak,
+                self.keyboard_recovery_aux_pending,
+            )
         {
             return false;
         }
@@ -3518,7 +3520,7 @@ impl LocalSeatRuntime {
         ))]
         {
             if local_seat_keyboard_cooldown_should_show_busy(
-                self.hdmi_keyboard_command_ready_latched,
+                self.hdmi_keyboard_command_ready_latched || self.linked_usb_command_input_ready(),
                 self.keyboard_poll_no_reply_streak,
                 self.keyboard_recovery_aux_pending,
             ) {

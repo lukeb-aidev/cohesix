@@ -313,8 +313,21 @@ def test_gate_proof_does_not_emit_leading_carriage_return() -> None:
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
-    assert "printf '%s\\r'" in source
+    assert "send_console_line()" in source
+    assert "printf '%s' \"${char}\"" in source
+    assert "printf '\\r' > \"${SERIAL_DEVICE}\"" in source
     assert "printf '\\r%s\\r'" not in source
+
+
+def test_gate_proof_waits_for_prompt_between_commands() -> None:
+    """Serial proof commands must not overlap long diagnostic output."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "console_prompt_count()" in source
+    assert "wait_for_prompt_after_command" in source
+    assert "COMMAND_PROMPT_TIMEOUT_SECONDS=30" in source
+    assert "COMMAND_CHAR_DELAY_SECONDS=" in source
 
 
 def test_gate_proof_waits_for_prompt_at_line_start() -> None:
@@ -1058,6 +1071,48 @@ def test_gate_proof_requires_usb_oldgood_replay_for_ready(
     assert result.returncode == 2
     assert "USB_OLDGOOD_REPLAY=no" in result.stdout
     assert "USB_OLDGOOD_REPLAY expected yes got no" in result.stderr
+
+
+def test_gate_proof_requires_usb_first_report_for_ready(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Full USB ready proof must not accept parser admission alone."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    lines = [
+        *(
+            line.replace("first_report=yes", "first_report=no")
+            .replace("first_byte=yes", "first_byte=no")
+            .replace("first_byte_source=linked-runtime-hid", "first_byte_source=none")
+            for line in _strong_driver_task_proof_lines()
+        ),
+        "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
+    ]
+    log_path.write_text("\n".join(lines), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-usb-ready",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "USB_FIRST_REPORT_READY=no" in result.stdout
+    assert "USB_FIRST_REPORT_READY expected yes got no" in result.stderr
 
 
 def test_gate_proof_accepts_ready_with_oldgood_replay_contracts(

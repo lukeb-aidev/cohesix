@@ -5,6 +5,7 @@
 """Tests for scripts/pi4_trace_normalize.py."""
 
 import importlib.util
+import io
 import json
 import pathlib
 import sys
@@ -70,6 +71,105 @@ def oldgood_usb_replay_lines() -> list[str]:
         "read=1 ascii=0x74 key=0x17",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
         "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 blocker=none",
+    ]
+
+
+def strict_wired_boot_proof_lines() -> list[str]:
+    """Return a synthetic boot slice that satisfies strict Pi 4 proof gates."""
+
+    return [
+        "U-Boot 2026.01-dirty",
+        "Starting kernel ...",
+        "[cohesix:root-task] Cohesix boot: root-task online",
+        "[timers] backend=arch-counter counter=vct timer_freq_hz=54000000",
+        "[Cohesix] Root console ready (type 'help' for commands)",
+        "Cohesix console ready",
+        "cohesix> ",
+        "SERIAL_ECHO result=ok serial_responsive=yes",
+        "USB_BURST bytes=256 drops=0 max_latency_us=900",
+        "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
+        "DRIVER_TASK_DEFAULT requested=dedicated required=yes "
+        "substrate_active=yes live_hot_paths=yes",
+        "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wired "
+        "active_net=genet required_roles=0x2f required_hot_paths=0x4f "
+        "required_tasks=5",
+        "DRIVER_TASK_BOOT contract=serial role=serial started=yes affinity_core=1",
+        "DRIVER_TASK_BOOT contract=usb-local-seat role=usb started=yes affinity_core=1",
+        "DRIVER_TASK_BOOT contract=hdmi-text role=display started=yes affinity_core=2",
+        "DRIVER_TASK_BOOT contract=bcmgenet-v5 role=net started=yes affinity_core=3",
+        "DRIVER_TASK_BOOT contract=pcie-root role=pcie started=yes affinity_core=2",
+        "DRIVER_TASK_SUBSTRATE active=yes profile=pi4-hardware "
+        "task_count=5 failed_count=0 live_tcb_count=5 "
+        "root_authority=admission-descriptor-diagnostics-only "
+        "hardware_owner=linked-runtime fault_endpoint_ready=yes "
+        "revoke_ready=yes broad_caps_leaked=0 sched=yes "
+        "affinity=per-driver affinity_configured=5 affinity_applied=5 "
+        "vspace=isolated ipc_abi=shared-ring-command pointer_free_ipc=yes "
+        "owner_state=driver-owned live_hot_paths=yes",
+        "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+        "owner_state=driver-owned descriptor=present root_pointer=no",
+        "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=18",
+        "SCHED_CONTRACT contract=usb-local-seat isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=22",
+        "SCHED_CONTRACT contract=hdmi-text isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=44",
+        "SCHED_CONTRACT contract=bcmgenet-v5 isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=31",
+        "SCHED_CONTRACT contract=pcie-root isolation=dedicated-sel4-task "
+        "live_tcb=yes hot_path=dedicated observed_service_us=36",
+        "DRIVER_TASK_DMA_PROOF contract=serial hot_path=serial-console "
+        "status=ready profile=bounded-no-iommu descriptor=present "
+        "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=0 "
+        "shared_pages=4 bus_address_policy=zero-dma "
+        "cache_policy=uncached-plus-root-maintenance proof_effect=runtime-dma-proof-ready",
+        "DRIVER_TASK_DMA_PROOF contract=usb-local-seat hot_path=usb-keyboard "
+        "status=ready profile=bounded-no-iommu descriptor=present "
+        "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=128 "
+        "shared_pages=32 bus_address_policy=hal-bounded-bus-address "
+        "cache_policy=uncached-plus-root-maintenance proof_effect=runtime-dma-proof-ready",
+        "DRIVER_TASK_DMA_PROOF contract=hdmi-text hot_path=hdmi-text "
+        "status=ready profile=bounded-no-iommu descriptor=present "
+        "root_pointer=no owner=linked-runtime mmio_pages=0 dma_pages=0 "
+        "shared_pages=16 bus_address_policy=zero-dma "
+        "cache_policy=uncached-plus-root-maintenance proof_effect=runtime-dma-proof-ready",
+        "DRIVER_TASK_DMA_PROOF contract=bcmgenet-v5 hot_path=genet-nic "
+        "status=ready profile=bounded-no-iommu descriptor=present "
+        "root_pointer=no owner=linked-runtime mmio_pages=6 dma_pages=64 "
+        "shared_pages=32 bus_address_policy=hal-bounded-bus-address "
+        "cache_policy=uncached-plus-root-maintenance proof_effect=runtime-dma-proof-ready",
+        "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
+        "status=ready profile=bounded-no-iommu descriptor=present "
+        "root_pointer=no owner=linked-runtime mmio_pages=10 dma_pages=0 "
+        "shared_pages=16 bus_address_policy=zero-dma "
+        "cache_policy=uncached-plus-root-maintenance proof_effect=runtime-dma-proof-ready",
+        "DRIVER_TASK_COUNTER contract=usb-local-seat hot_path=usb-keyboard "
+        "source=root-ring sequence=1 submitted=2 completed=2 idle=0 fault=0 "
+        "budget=0 frame=1 desc=1 staged_bytes=64 clean_ops=1 clean_bytes=64 "
+        "inv_ops=1 inv_bytes=64 sends=2 yields=0 busy=0 same_request=0 "
+        "timeouts=0 keep_active=0 aborts=0 overruns=0 drops=0 rx_frames=1 "
+        "rx_bytes=8 tx_frames=1 tx_bytes=8 role_aux0=0 role_aux1=0 "
+        "role_aux2=0 role_aux3=0",
+        "DRIVER_TASK_ACCEPTANCE dedicated_ready=yes reason=active-substrate "
+        "substrate=active capset=pass fault=pass revoke=pass sched=pass "
+        "affinity=pass vspace=isolated ipc_abi=shared-ring-command "
+        "pointer_free_ipc=yes owner_state=driver-owned required=5 "
+        "dedicated=5 compatibility=0 active_net=genet live_hot_paths=yes",
+        *oldgood_usb_replay_lines(),
+        "OK NETTEST detail=pass scope=serial-local",
+        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+        "netstats: mode=dhcp policy=wired active=wired standby=wifi "
+        "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
+        "netstatus: ip=192.168.10.50 gateway=192.168.10.1 "
+        "src=dhcp-lease dhcp=bound tcp_ready=yes",
     ]
 
 
@@ -504,22 +604,7 @@ def test_cli_boot_summary_scores_each_boot_slice(
                 "status=ready root_console_ready=yes attached=yes bytes=1",
                 "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
                 "max_service_us=1000 observed_service_us=3281157",
-                "U-Boot 2026.01-dirty",
-                "[cohesix:root-task] Cohesix boot: root-task online",
-                "Cohesix console ready",
-                "cohesix> ",
-                "SERIAL_ECHO result=ok serial_responsive=yes",
-                "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
-                "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
-                "proof_gate=10 blocker=none",
-                "usb: gate 10 name=first-console-byte status=pass "
-                "evidence=first_byte=yes first_byte_source=linked-runtime-hid "
-                "parser_ingress=yes backend_bytes=1 accepted=1 echoed=1 "
-                "next=acceptance-complete",
-                "usb: sustained_input queue_valid=yes blocker=none "
-                "report_status=idle-report accepted=1 drained=1 echoed=1",
-                "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task "
-                "max_service_us=1000 observed_service_us=91",
+                *strict_wired_boot_proof_lines(),
             ]
         ),
         encoding="utf-8",
@@ -550,17 +635,7 @@ def test_cli_boot_summary_skips_uboot_menu_save_reset(
                 "[cohesix] Cohesix boot options",
                 "[cohesix] saved settings to cohesix.env",
                 "resetting ...",
-                "U-Boot 2026.01-dirty",
-                "Starting kernel ...",
-                "[cohesix:root-task] Cohesix boot: root-task online",
-                "Cohesix console ready",
-                "cohesix> ",
-                "SERIAL_ECHO result=ok serial_responsive=yes",
-                "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
-                "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
-                "proof_gate=10 blocker=none",
-                "usb: sustained_input queue_valid=yes blocker=none "
-                "report_status=idle-report accepted=1 drained=1 echoed=1",
+                *strict_wired_boot_proof_lines(),
             ]
         ),
         encoding="utf-8",
@@ -574,6 +649,29 @@ def test_cli_boot_summary_skips_uboot_menu_save_reset(
     assert summary["boots"][0]["score"] == "skip"
     assert summary["boots"][0]["kind"] == "uboot-menu-save-reset"
     assert summary["boots"][1]["kind"] == "cohesix-boot"
+
+
+def test_boot_summary_rejects_console_only_boot_without_network_proof() -> None:
+    """A prompt plus USB readiness is not a perfect Pi boot proof."""
+
+    summaries = normalizer.summarize_boot_slices(
+        [
+            "U-Boot 2026.01-dirty",
+            "Starting kernel ...",
+            "[cohesix:root-task] Cohesix boot: root-task online",
+            "Cohesix console ready",
+            "cohesix> ",
+            "SERIAL_ECHO result=ok serial_responsive=yes",
+            *oldgood_usb_replay_lines(),
+            "USB_BURST bytes=256 drops=0 max_latency_us=900",
+            "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
+        ]
+    )
+
+    assert summaries[0]["score"] == "fail"
+    assert "network-active-missing" in summaries[0]["blockers"]
+    assert "network-tcp-proof-missing" in summaries[0]["blockers"]
+    assert "driver-task-dedicated-not-ready" in summaries[0]["blockers"]
 
 
 def test_latest_boot_slice_keeps_same_boot_uboot_usb_evidence() -> None:
@@ -639,21 +737,7 @@ def test_boot_summary_skips_uboot_save_reset_menu_slice() -> None:
         "[cohesix] mode=dhcp",
         "[cohesix] saved settings to cohesix.env",
         "resetting ...",
-        "U-Boot 2026.01-dirty",
-        "Starting kernel ...",
-        "[cohesix:root-task] Cohesix boot: root-task online",
-        "Cohesix console ready",
-        "cohesix> ",
-        "SERIAL_ECHO result=ok serial_responsive=yes",
-        "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
-        "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
-        "proof_gate=10 blocker=none",
-        "usb: gate 10 name=first-console-byte status=pass "
-        "evidence=first_byte=yes first_byte_source=linked-runtime-hid "
-        "parser_ingress=yes backend_bytes=1 accepted=1 echoed=1 "
-        "next=acceptance-complete",
-        "usb: sustained_input queue_valid=yes blocker=none "
-        "report_status=idle-report accepted=1 drained=1 echoed=1",
+        *strict_wired_boot_proof_lines(),
     ]
 
     summaries = normalizer.summarize_boot_slices(lines)
@@ -752,6 +836,8 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "NET_ACTIVE": "unknown",
         "NET_ADDR_SRC": "unknown",
         "NET_DHCP": "unknown",
+        "NET_TCP_READY": "no",
+        "NETTEST_PROOF": "no",
         "WIFI_DATA_PATH_TX": 0,
         "WIFI_DATA_PATH_RX_PRESERVED": 0,
         "WIFI_DATA_PATH_RX_DELIVERED": 0,
@@ -850,6 +936,8 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_RUNTIME_QUEUED_REPORTS": 0,
         "USB_RUNTIME_TRANSFER_EVENTS": 0,
         "USB_RUNTIME_REPORT_STATUS": "unknown",
+        "USB_RUNTIME_QUEUE_VALID": "unknown",
+        "USB_RUNTIME_DOORBELL_PENDING": "unknown",
         "USB_RUNTIME_RECOVERY_DIAG_VALID": "unknown",
         "USB_RUNTIME_ENDPOINT_RECOVERIES": 0,
         "USB_RUNTIME_ENDPOINT_RECOVERY_FAILURES": 0,
@@ -859,6 +947,16 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_RUNTIME_COMMAND_COMPLETION_BLOCKED": 0,
         "USB_EVENT_LOOP_RUNTIME_SKIPPED": 0,
         "USB_POST_FIRST_BYTE_BLOCKER": "none",
+        "USB_STARTUP_BLOCKER_SEEN": "no",
+        "USB_ACTIVE_BLOCKER_SEEN": "no",
+        "USB_RECOVERED_FROM_BLOCKER": "no",
+        "USB_RECOVERY_STATE": "unknown",
+        "USB_LOCAL_SEAT_STATE": "blocked",
+        "USB_LOCAL_SEAT_REASON": "cmd-poll-only-timeout",
+        "USB_COMMAND_READY": "no",
+        "USB_FIRST_REPORT_READY": "no",
+        "USB_FIRST_BYTE_READY": "no",
+        "USB_BUSY_AFTER_READY": "no",
         "SERIAL_DRIVER_ACCEPTED": "no",
         "SERIAL_FALLBACK_ACTIVE": "no",
         "SERIAL_RUNTIME_FRONTIER": "none",
@@ -899,6 +997,8 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["NET_ACTIVE"] == "wired"
     assert record["NET_ADDR_SRC"] == "static"
     assert record["NET_DHCP"] == "off"
+    assert record["NET_TCP_READY"] == "no"
+    assert record["NETTEST_PROOF"] == "no"
     assert record["DRIVER_TASK_CONTRACTS"] == 2
     assert record["DRIVER_TASK_DEDICATED"] == 1
     assert record["DRIVER_TASK_COMPATIBILITY"] == 1
@@ -950,6 +1050,23 @@ def test_gate_summary_tracks_smp_activity_net_state() -> None:
     assert record["NET_ACTIVE"] == "wired"
     assert record["NET_ADDR_SRC"] == "dhcp-lease"
     assert record["NET_DHCP"] == "bound"
+    assert record["NET_TCP_READY"] == "no"
+    assert record["NETTEST_PROOF"] == "no"
+
+
+def test_gate_summary_tracks_netstatus_tcp_ready_proof() -> None:
+    events = normalizer.parse_events(
+        [
+            "netstatus: ip=192.168.10.50 gateway=192.168.10.1 "
+            "src=dhcp-lease dhcp=bound tcp_ready=yes",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["NET_ADDR_SRC"] == "dhcp-lease"
+    assert record["NET_DHCP"] == "bound"
+    assert record["NET_TCP_READY"] == "yes"
+    assert record["NETTEST_PROOF"] == "no"
 
 
 def test_gate_summary_classifies_fresh_pi_runtime_dma_proof() -> None:
@@ -6771,7 +6888,7 @@ def test_gate_summary_treats_usb_keyboard_runtime_online_as_ready() -> None:
 def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
     events = normalizer.parse_events(
         [
-            "usb: runtime_gate keyboard=yes first_report=no first_byte=no "
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
             "proof_gate=8 target_gate=10 next=hid-first-report "
             "blocker=hid-first-report",
             "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
@@ -6788,6 +6905,101 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
 
     assert gates.usb_gate == 10
     assert gates.usb_blocker == "none"
+
+
+def test_gate_summary_accepts_command_ready_without_first_report_as_ready_not_perfect() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
+            "usb: runtime_gate keyboard=yes first_report=no first_byte=no "
+            "proof_gate=10 target_gate=10 next=none blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+    assert record["USB_COMMAND_READY"] == "yes"
+    assert record["USB_FIRST_REPORT_READY"] == "no"
+    assert record["USB_FIRST_BYTE_READY"] == "no"
+    assert "local-seat-usb-first-report-missing" in blockers
+
+
+def test_gate_summary_tracks_usb_startup_churn_without_marking_recovered() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_queue queue_valid=no queued_reports=0 "
+            "doorbell_pending=no preserved_events=0 transfer_events=0 "
+            "report_status=none",
+            "usb: recovery_request action=no-reply queued_reports=0 "
+            "transfer_events=0 report_status=none",
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "proof_gate=10 target_gate=10 next=none blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_STARTUP_BLOCKER_SEEN"] == "yes"
+    assert record["USB_ACTIVE_BLOCKER_SEEN"] == "no"
+    assert record["USB_RECOVERED_FROM_BLOCKER"] == "no"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+    assert record["USB_LOCAL_SEAT_REASON"] == "command-ready"
+
+
+def test_gate_summary_marks_usb_degraded_after_post_ready_blocker() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
+            "usb: runtime_queue queue_valid=no queued_reports=0 "
+            "doorbell_pending=no preserved_events=0 transfer_events=0 "
+            "report_status=none",
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "proof_gate=10 target_gate=10 next=none blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_STARTUP_BLOCKER_SEEN"] == "no"
+    assert record["USB_ACTIVE_BLOCKER_SEEN"] == "yes"
+    assert record["USB_RECOVERED_FROM_BLOCKER"] == "yes"
+    assert record["USB_LOCAL_SEAT_STATE"] == "degraded"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-post-ready-busy"
+    assert "local-seat-usb-degraded" in blockers
+
+
+def test_gate_summary_marks_usb_degraded_when_busy_reappears_after_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "proof_gate=10 target_gate=10 next=none blocker=none",
+            "[local-seat] usb keyboard command-deferred "
+            "reason=keyboard-poll-cooldown action=show-hdmi-busy",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_LOCAL_SEAT_STATE"] == "degraded"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-post-ready-busy"
+    assert record["USB_BUSY_AFTER_READY"] == "yes"
+    assert "local-seat-usb-degraded" in blockers
+    assert "local-seat-usb-busy-after-ready" in blockers
 
 
 def test_gate_summary_reports_post_first_byte_unmatched_transfer() -> None:
@@ -9010,6 +9222,48 @@ def test_gate_summary_preserves_v3_rxtrace_shape_from_detail_line() -> None:
     assert gates.wifi_rxtrace_post_sample_delta_ticks == 456
 
 
+def test_gate_summary_labels_deprecated_cyw43_rx_irq_source_asserted_preserve_reason() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_DRIVER_TASK_HOST_EAPOL_RXTRACE contract=cyw43455 lane=data "
+            "flags=0x0000 detail=0x5709 request_len=64 "
+            "cmd53_arg=0x21000040 cmd53_fn=2 cmd53_addr=0x08000 "
+            "cmd53_write=no cmd53_mode=byte cmd53_inc=no cmd53_count=64 "
+            "transfer_result=0x00000000 payload_after=0x00000000 "
+            "irq_preserve_count=1 irq_preserve_reason=5 "
+            "irq_preserve_int=0x20000040 irq_preserve_ack=0x20000000",
+        ]
+    )
+
+    gates = normalizer.summarize_gates(events)
+
+    assert gates.wifi_rx_irq_preserve_count == 1
+    assert gates.wifi_rx_irq_preserve_reason == "deprecated-source-asserted"
+
+
+def test_cli_suppresses_broken_pipe(monkeypatch) -> None:
+    """Piped consumers such as head must not turn valid output into a traceback."""
+
+    class BrokenPipeStdout:
+        closed = False
+
+        def write(self, _value: str) -> int:
+            raise BrokenPipeError()
+
+        def flush(self) -> None:
+            pass
+
+        def close(self) -> None:
+            self.closed = True
+
+    stdout = BrokenPipeStdout()
+    monkeypatch.setattr(normalizer.sys, "stdin", io.StringIO("U-Boot 2026.01\n"))
+    monkeypatch.setattr(normalizer.sys, "stdout", stdout)
+
+    assert normalizer.run_cli(["-", "--boot-summary"]) == 0
+    assert stdout.closed
+
+
 def test_gate_summary_names_bssid_probe_tx_submit_fail_over_firstread_idle() -> None:
     events = normalizer.parse_events(
         [
@@ -10434,9 +10688,12 @@ def test_gate_summary_tracks_wifi_dhcp_and_nettest_success() -> None:
     )
 
     gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
 
     assert gates.wifi_gate == 10
     assert gates.wifi_blocker == "none"
+    assert record["NET_TCP_READY"] == "yes"
+    assert record["NETTEST_PROOF"] == "yes"
 
 
 def test_gate_summary_requires_netstats_for_wifi_ready() -> None:

@@ -389,8 +389,11 @@ proof from the isolated runtime model.
 `scripts/pi4_trace_normalize.py --gate-summary` now reports the old-good replay
 contract beside the existing frontier gates. `USB_GATE` / `USB_BLOCKER` and
 `WIFI_GATE` / `WIFI_BLOCKER` still describe the latest proven frontier and next
-blocker. Full ready proof additionally requires `USB_OLDGOOD_REPLAY=yes` and
-`WIFI_OLDGOOD_REPLAY=yes`; failures report `*_OLDGOOD_LAST` and
+blocker. Full ready proof additionally requires USB local-seat health fields
+(`USB_LOCAL_SEAT_STATE=ready`, `USB_COMMAND_READY=yes`,
+`USB_FIRST_REPORT_READY=yes`, and `USB_BUSY_AFTER_READY=no`) plus
+`USB_OLDGOOD_REPLAY=yes` and `WIFI_OLDGOOD_REPLAY=yes`; failures report
+`*_OLDGOOD_LAST` and
 `*_OLDGOOD_MISSING` so the next task targets the first missing translated
 May/U-Boot/Linux behavior instead of rediscovering it from late symptoms.
 
@@ -1074,6 +1077,10 @@ DHCP policy. After post-release Function 2 readiness, the isolated runtime also 
 interrupt path by writing CCCR `IENx=0x07` before the SDIO core `HOSTINTMASK` /
 `FUNCTIONINTMASK` programming, so association events and AP M1 can reach the
 Function 2 receive lane.
+After a successfully drained frame, the runtime preserves the frame interrupt
+only for concrete queued work such as a cached SDPCM next-frame length or a
+nonzero Function 1 `RFRAME` count; a pre-ACK reread of `I_HMB_FRAME_IND` alone
+is stale source evidence and must be cleared, not preserved.
 Post-release firmware-mailbox readiness, CYW43 control replies, SDPCM TX
 credit, and RX retransmit acknowledgement waits use Pi-counter millisecond
 deadlines on timer-enabled builds; their legacy loop counts remain fallback or

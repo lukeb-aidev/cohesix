@@ -30860,6 +30860,39 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_rx_frame_drain_clears_stale_source_asserted_irq_when_rframe_empty() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        test_cyw43_sdio_int_status_response(I_HMB_FRAME_IND | I_CHIPACTIVE);
+        test_sdio_cmd52_read_rframe_response(0);
+        reset_test_sdio_transfer_log();
+
+        cyw43_runtime_clear_rx_irq_source_after_frame_drain(&mut state);
+
+        assert_eq!(state.sdpcm_next_frame_len, 0);
+        assert_eq!(state.rx_irq_preserve_count, 0);
+        assert_eq!(
+            state.rx_irq_last_preserve_reason,
+            CYW43_RX_IRQ_PRESERVE_NONE
+        );
+        assert_eq!(
+            read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET),
+            I_HMB_FRAME_IND | I_CHIPACTIVE
+        );
+        let _ = cyw43_stage_rx_idle_trace(&state, 0, 0);
+        assert_eq!(read_ring_u32(DRIVER_TASK_RING_FRAME_OFFSET + 120), 0);
+        assert_eq!(
+            read_ring_u16(DRIVER_TASK_RING_FRAME_OFFSET + 124),
+            CYW43_RX_IRQ_PRESERVE_NONE
+        );
+        assert!(test_sdio_cmd53_write_addr_seen(
+            1,
+            CYW43_SDIO_CORE_BASE + SDIO_INT_STATUS
+        ));
+    }
+
+    #[test]
     fn sdio_descriptor_retry_covers_function1_backplane_and_function2_cmd53_writes() {
         let mut desc = DriverRuntimeSdioCommandDescriptor {
             op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,

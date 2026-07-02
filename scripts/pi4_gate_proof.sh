@@ -23,6 +23,8 @@ BOOT_WAIT_SECONDS=12
 CONSOLE_READY_TIMEOUT_SECONDS=60
 CAPTURE_SECONDS=10
 COMMAND_DELAY_SECONDS=2
+COMMAND_CHAR_DELAY_SECONDS="${COHESIX_PI4_COMMAND_CHAR_DELAY_SECONDS:-0.02}"
+COMMAND_PROMPT_TIMEOUT_SECONDS=30
 SKIP_BUILD=0
 NO_CAPTURE=0
 NORMALIZE_ONLY=0
@@ -90,6 +92,13 @@ Options:
                              (default: 10)
   --command-delay <seconds>  Delay between console commands
                              (default: 2)
+  --command-char-delay <seconds>
+                             Delay between characters while sending commands
+                             (default: 0.02)
+  --command-prompt-timeout <seconds>
+                             Maximum time to wait for the prompt after each
+                             command before sending the next command
+                             (default: 30)
   --skip-build               Reuse existing seL4 image while staging/flashing
   --no-capture               Do not open serial; normalize the existing log
   --normalize-only           Skip build, flash, and capture; normalize only
@@ -259,6 +268,20 @@ sys.exit(1)
 PY
 }
 
+console_prompt_count() {
+    "${PYTHON}" - "${LOG_PATH}" <<'PY'
+import pathlib
+import sys
+
+data = pathlib.Path(sys.argv[1]).read_bytes()
+count = 0
+for line in data.replace(b"\r", b"\n").split(b"\n"):
+    if line.startswith(b"cohesix>"):
+        count += 1
+print(count)
+PY
+}
+
 wait_for_console_ready() {
     local deadline
     local boot_options_advanced=0
@@ -278,6 +301,36 @@ wait_for_console_ready() {
         sleep 1
     done
     fail "Cohesix console prompt did not appear within ${CONSOLE_READY_TIMEOUT_SECONDS}s"
+}
+
+wait_for_prompt_after_command() {
+    local previous_count="$1"
+    local command="$2"
+    local deadline
+    local current_count
+
+    deadline=$((SECONDS + COMMAND_PROMPT_TIMEOUT_SECONDS))
+    while ((SECONDS <= deadline)); do
+        current_count="$(console_prompt_count)"
+        if ((current_count > previous_count)); then
+            return
+        fi
+        sleep 1
+    done
+    fail "Cohesix prompt did not return within ${COMMAND_PROMPT_TIMEOUT_SECONDS}s after command: ${command}"
+}
+
+send_console_line() {
+    local line="$1"
+    local index
+    local char
+
+    for ((index = 0; index < ${#line}; index++)); do
+        char="${line:index:1}"
+        printf '%s' "${char}" > "${SERIAL_DEVICE}"
+        sleep "${COMMAND_CHAR_DELAY_SECONDS}"
+    done
+    printf '\r' > "${SERIAL_DEVICE}"
 }
 
 run_capture() {
@@ -305,8 +358,11 @@ run_capture() {
     sleep "${BOOT_WAIT_SECONDS}"
     wait_for_console_ready
     for command in "${commands[@]}"; do
+        local prompt_count_before
+        prompt_count_before="$(console_prompt_count)"
         log "console command: ${command}"
-        printf '%s\r' "${command}" > "${SERIAL_DEVICE}"
+        send_console_line "${command}"
+        wait_for_prompt_after_command "${prompt_count_before}" "${command}"
         sleep "${COMMAND_DELAY_SECONDS}"
     done
     sleep "${CAPTURE_SECONDS}"
@@ -491,6 +547,10 @@ run_normalizer() {
     fi
     if [[ "${REQUIRE_USB_READY}" -eq 1 ]]; then
         args+=("--expect-min" "USB_GATE=10" "--expect" "USB_BLOCKER=none")
+        args+=("--expect" "USB_LOCAL_SEAT_STATE=ready")
+        args+=("--expect" "USB_COMMAND_READY=yes")
+        args+=("--expect" "USB_FIRST_REPORT_READY=yes")
+        args+=("--expect" "USB_BUSY_AFTER_READY=no")
         args+=("--expect" "USB_OLDGOOD_REPLAY=yes")
         args+=("--expect" "USB_OLDGOOD_MISSING=none")
     fi
@@ -679,6 +739,16 @@ while [[ $# -gt 0 ]]; do
             COMMAND_DELAY_SECONDS="$2"
             shift 2
             ;;
+        --command-char-delay)
+            require_arg "$1" "$#"
+            COMMAND_CHAR_DELAY_SECONDS="$2"
+            shift 2
+            ;;
+        --command-prompt-timeout)
+            require_arg "$1" "$#"
+            COMMAND_PROMPT_TIMEOUT_SECONDS="$2"
+            shift 2
+            ;;
         --skip-build)
             SKIP_BUILD=1
             shift
@@ -762,6 +832,7 @@ require_nonnegative_integer "--boot-wait" "${BOOT_WAIT_SECONDS}"
 require_nonnegative_integer "--console-ready-timeout" "${CONSOLE_READY_TIMEOUT_SECONDS}"
 require_nonnegative_integer "--capture-seconds" "${CAPTURE_SECONDS}"
 require_nonnegative_integer "--command-delay" "${COMMAND_DELAY_SECONDS}"
+require_nonnegative_integer "--command-prompt-timeout" "${COMMAND_PROMPT_TIMEOUT_SECONDS}"
 require_file "${PYTHON}"
 
 if [[ "${ALLOW_SUMMARY_ONLY}" -eq 1 ]] \

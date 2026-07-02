@@ -537,6 +537,8 @@ class GateSummary:
     net_active: str = "unknown"
     net_addr_src: str = "unknown"
     net_dhcp: str = "unknown"
+    net_tcp_ready: bool = False
+    nettest_proof: bool = False
     wifi_data_path_tx: int = 0
     wifi_data_path_rx_preserved: int = 0
     wifi_data_path_rx_delivered: int = 0
@@ -637,6 +639,8 @@ class GateSummary:
     usb_runtime_queued_reports: int = 0
     usb_runtime_transfer_events: int = 0
     usb_runtime_report_status: str = "unknown"
+    usb_runtime_queue_valid: str = "unknown"
+    usb_runtime_doorbell_pending: str = "unknown"
     usb_runtime_recovery_diag_valid: str = "unknown"
     usb_runtime_endpoint_recoveries: int = 0
     usb_runtime_endpoint_recovery_failures: int = 0
@@ -646,6 +650,16 @@ class GateSummary:
     usb_runtime_command_completion_blocked: int = 0
     usb_event_loop_runtime_skipped: int = 0
     usb_post_first_byte_blocker: str = "none"
+    usb_startup_blocker_seen: bool = False
+    usb_active_blocker_seen: bool = False
+    usb_recovered_from_blocker: bool = False
+    usb_recovery_state: str = "unknown"
+    usb_local_seat_state: str = "unknown"
+    usb_local_seat_reason: str = "unknown"
+    usb_command_ready: bool = False
+    usb_first_report_ready: bool = False
+    usb_first_byte_ready: bool = False
+    usb_busy_after_ready: bool = False
     serial_driver_accepted: bool = False
     serial_fallback_active: bool = False
     serial_runtime_frontier: str = "none"
@@ -715,6 +729,8 @@ class GateSummary:
             "NET_ACTIVE": self.net_active,
             "NET_ADDR_SRC": self.net_addr_src,
             "NET_DHCP": self.net_dhcp,
+            "NET_TCP_READY": "yes" if self.net_tcp_ready else "no",
+            "NETTEST_PROOF": "yes" if self.nettest_proof else "no",
             "WIFI_DATA_PATH_TX": self.wifi_data_path_tx,
             "WIFI_DATA_PATH_RX_PRESERVED": self.wifi_data_path_rx_preserved,
             "WIFI_DATA_PATH_RX_DELIVERED": self.wifi_data_path_rx_delivered,
@@ -865,6 +881,8 @@ class GateSummary:
             "USB_RUNTIME_QUEUED_REPORTS": self.usb_runtime_queued_reports,
             "USB_RUNTIME_TRANSFER_EVENTS": self.usb_runtime_transfer_events,
             "USB_RUNTIME_REPORT_STATUS": self.usb_runtime_report_status,
+            "USB_RUNTIME_QUEUE_VALID": self.usb_runtime_queue_valid,
+            "USB_RUNTIME_DOORBELL_PENDING": self.usb_runtime_doorbell_pending,
             "USB_RUNTIME_RECOVERY_DIAG_VALID": self.usb_runtime_recovery_diag_valid,
             "USB_RUNTIME_ENDPOINT_RECOVERIES": self.usb_runtime_endpoint_recoveries,
             "USB_RUNTIME_ENDPOINT_RECOVERY_FAILURES": (
@@ -880,6 +898,24 @@ class GateSummary:
             ),
             "USB_EVENT_LOOP_RUNTIME_SKIPPED": self.usb_event_loop_runtime_skipped,
             "USB_POST_FIRST_BYTE_BLOCKER": self.usb_post_first_byte_blocker,
+            "USB_STARTUP_BLOCKER_SEEN": (
+                "yes" if self.usb_startup_blocker_seen else "no"
+            ),
+            "USB_ACTIVE_BLOCKER_SEEN": (
+                "yes" if self.usb_active_blocker_seen else "no"
+            ),
+            "USB_RECOVERED_FROM_BLOCKER": (
+                "yes" if self.usb_recovered_from_blocker else "no"
+            ),
+            "USB_RECOVERY_STATE": self.usb_recovery_state,
+            "USB_LOCAL_SEAT_STATE": self.usb_local_seat_state,
+            "USB_LOCAL_SEAT_REASON": self.usb_local_seat_reason,
+            "USB_COMMAND_READY": "yes" if self.usb_command_ready else "no",
+            "USB_FIRST_REPORT_READY": (
+                "yes" if self.usb_first_report_ready else "no"
+            ),
+            "USB_FIRST_BYTE_READY": "yes" if self.usb_first_byte_ready else "no",
+            "USB_BUSY_AFTER_READY": "yes" if self.usb_busy_after_ready else "no",
             "SERIAL_DRIVER_ACCEPTED": (
                 "yes" if self.serial_driver_accepted else "no"
             ),
@@ -7105,6 +7141,7 @@ WIFI_RX_IRQ_PRESERVE_REASONS = {
     2: "rframe-pending",
     3: "rframe-unavailable",
     4: "rframe-invalid",
+    5: "deprecated-source-asserted",
 }
 
 
@@ -7266,6 +7303,8 @@ class UsbRuntimeQueueSummary:
     queued_reports: int = 0
     transfer_events: int = 0
     report_status: str = "unknown"
+    queue_valid: str = "unknown"
+    doorbell_pending: str = "unknown"
     recovery_diag_valid: str = "unknown"
     endpoint_recoveries: int = 0
     endpoint_recovery_failures: int = 0
@@ -7274,6 +7313,15 @@ class UsbRuntimeQueueSummary:
     recovery_reason: str = "unknown"
     command_completion_blocked: int = 0
     runtime_skipped: int = 0
+    startup_blocker_seen: bool = False
+    active_blocker_seen: bool = False
+    recovered_from_blocker: bool = False
+    recovery_state: str = "unknown"
+    command_ready: bool = False
+    first_report_ready: bool = False
+    first_byte_ready: bool = False
+    busy_after_ready: bool = False
+    local_seat_reason: str = "unknown"
 
 
 def update_usb_keyboard_pressure_field(
@@ -7287,6 +7335,54 @@ def update_usb_keyboard_pressure_field(
     parsed = parse_hex_int(fields.get(in_key))
     if parsed is not None:
         values[out_key] = parsed
+
+
+def usb_runtime_active_blocker_seen(raw: str, fields: Mapping[str, str]) -> bool:
+    """Return whether a USB runtime line is active degraded evidence."""
+
+    queue_valid = fields.get("queue_valid", "").lower()
+    if queue_valid == "no":
+        return True
+    doorbell_pending = fields.get("doorbell_pending", "").lower()
+    if doorbell_pending in {"1", "true", "yes"}:
+        return True
+    if fields.get("recovery_aux_pending", "").lower() == "yes":
+        return True
+    runtime_skipped = parse_hex_int(fields.get("runtime_skipped"))
+    if runtime_skipped is not None and runtime_skipped > 0:
+        return True
+
+    report_status = fields.get("report_status", "").lower().replace("_", "-")
+    if report_status in {
+        "queue-collapse",
+        "recovery-failed",
+        "unmatched-transfer",
+    }:
+        return True
+
+    action = fields.get("action", "").lower().replace("_", "-")
+    if raw.startswith("usb: recovery_request") and action in {"no-reply", "recover"}:
+        return True
+
+    blocker = normalize_usb_blocker(fields.get("blocker", "none"))
+    if blocker in {
+        "",
+        "none",
+        "hid-first-report",
+        "command-input-ready",
+        "keyboard-first-byte",
+        "first-console-byte",
+        "awaiting-physical-key",
+    }:
+        blocker = "none"
+    if blocker != "none":
+        return True
+
+    if raw.startswith("usb: runtime_gate"):
+        keyboard = fields.get("keyboard", "").lower()
+        if keyboard == "no":
+            return True
+    return False
 
 
 def summarize_usb_keyboard_pressure(
@@ -7330,9 +7426,44 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
 
     summary = UsbRuntimeQueueSummary()
     values = summary.__dict__.copy()
+    command_ready_seen = False
     for event in events:
         raw = event.raw.lower()
         fields = event.fields
+        active_blocker_seen = usb_runtime_active_blocker_seen(raw, fields)
+        if active_blocker_seen:
+            if command_ready_seen:
+                values["active_blocker_seen"] = True
+                values["recovery_state"] = "degraded-active"
+            else:
+                values["startup_blocker_seen"] = True
+        if usb_command_ready_step(event):
+            command_ready_seen = True
+            values["command_ready"] = True
+            if values["active_blocker_seen"]:
+                values["recovered_from_blocker"] = True
+                values["recovery_state"] = "ready-recovered"
+                values["local_seat_reason"] = "recovered-from-blocker"
+            else:
+                values["recovery_state"] = "ready-clean"
+                values["local_seat_reason"] = "command-ready"
+        if usb_first_report_step(event):
+            values["first_report_ready"] = True
+        if usb_first_byte_step(event):
+            values["first_byte_ready"] = True
+        if raw.startswith("usb: runtime_gate") or raw.startswith("usb: acceptance"):
+            if field_lower(event, "first_report") == "yes":
+                values["first_report_ready"] = True
+            if field_lower(event, "first_byte") == "yes":
+                values["first_byte_ready"] = True
+            if field_lower(event, "command_ready") == "yes":
+                values["command_ready"] = True
+        if command_ready_seen and (
+            "usb console busy" in raw
+            or "usb keyboard command-deferred" in raw
+            or active_blocker_seen
+        ):
+            values["busy_after_ready"] = True
         if (
             raw.startswith("usb: runtime_queue")
             or raw.startswith("usb: stall_telemetry")
@@ -7348,6 +7479,12 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
             report_status = field_lower(event, "report_status")
             if report_status:
                 values["report_status"] = report_status.replace("_", "-")
+            queue_valid = field_lower(event, "queue_valid")
+            if queue_valid:
+                values["queue_valid"] = queue_valid
+            doorbell_pending = field_lower(event, "doorbell_pending")
+            if doorbell_pending:
+                values["doorbell_pending"] = doorbell_pending
         if raw.startswith("usb: runtime_recovery"):
             diag_valid = field_lower(event, "diag_valid")
             if diag_valid == "unknown" and values["recovery_diag_valid"] == "yes":
@@ -7376,7 +7513,46 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
             runtime_skipped = parse_hex_int(fields.get("runtime_skipped"))
             if runtime_skipped is not None:
                 values["runtime_skipped"] = runtime_skipped
+    if values["recovery_state"] == "unknown" and values["active_blocker_seen"]:
+        values["recovery_state"] = "degraded-active"
+        values["local_seat_reason"] = values["report_status"]
+    if values["recovery_state"] == "unknown":
+        if values["command_ready"]:
+            values["recovery_state"] = "ready-clean"
+            values["local_seat_reason"] = "command-ready"
+        elif values["active_blocker_seen"]:
+            values["recovery_state"] = "degraded-active"
+        else:
+            values["recovery_state"] = "unknown"
     return UsbRuntimeQueueSummary(**values)
+
+
+def usb_local_seat_state_from_runtime(
+    usb_gate: int,
+    usb_blocker: str,
+    runtime: UsbRuntimeQueueSummary,
+    post_first_byte_blocker: str,
+) -> tuple[str, str, bool]:
+    """Return user-facing local-seat readiness state, reason, and busy-after-ready."""
+
+    busy_after_ready = runtime.busy_after_ready
+    if usb_gate < 10:
+        return "blocked", usb_blocker or "usb-gate-incomplete", busy_after_ready
+    if post_first_byte_blocker != "none":
+        return "degraded", post_first_byte_blocker, runtime.command_ready or busy_after_ready
+    if runtime.busy_after_ready:
+        return "degraded", "usb-post-ready-busy", True
+    if runtime.recovery_state == "degraded-active":
+        reason = runtime.local_seat_reason
+        if reason in {"", "unknown", "none"}:
+            reason = "usb-runtime-degraded"
+        return "degraded", reason, busy_after_ready
+    if runtime.recovered_from_blocker or runtime.recovery_state == "ready-recovered":
+        reason = runtime.local_seat_reason
+        if reason in {"", "unknown", "none"}:
+            reason = "recovered-from-blocker"
+        return "recovered", reason, busy_after_ready
+    return "ready", "command-ready", busy_after_ready
 
 
 def summarize_output_pressure(events: Iterable[TraceEvent]) -> OutputPressureSummary:
@@ -7535,15 +7711,24 @@ def summarize_driver_task_counters(
     )
 
 
-def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str]:
+def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bool, bool]:
     """Return the latest compact netstats/netstatus state."""
 
     active = "unknown"
     addr_src = "unknown"
     dhcp = "unknown"
     dhcp_interface = "unknown"
+    tcp_ready = False
+    nettest_proof = False
     for event in events:
         raw = event.raw.lower()
+        detail = field_lower(event, "detail")
+        if raw.startswith("ok nettest") and (detail == "pass" or "success" in raw):
+            tcp_ready = True
+            nettest_proof = True
+        if raw_has(event, "[net-selftest] result", "tx_ok=true", "console_ok=true"):
+            tcp_ready = True
+            nettest_proof = True
         if raw.startswith("[dhcp]") or "[dhcp]" in raw:
             interface = event.fields.get("interface")
             if interface:
@@ -7564,7 +7749,9 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str]:
         active = event.fields.get("active", active)
         addr_src = event.fields.get("addr_src", event.fields.get("src", addr_src))
         dhcp = event.fields.get("dhcp", dhcp)
-    return active, addr_src, dhcp
+        if field_lower(event, "tcp_ready") == "yes":
+            tcp_ready = True
+    return active, addr_src, dhcp, tcp_ready, nettest_proof
 
 
 def classify_driver_task_role(label: str) -> str | None:
@@ -9851,7 +10038,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     root_console_ready = (
         any(root_console_ready_evidence(event) for event in event_list) or root_prompt_seen
     )
-    net_active, net_addr_src, net_dhcp = summarize_net_state(event_list)
+    net_active, net_addr_src, net_dhcp, net_tcp_ready, nettest_proof = (
+        summarize_net_state(event_list)
+    )
     (
         wifi_data_path_tx,
         wifi_data_path_rx_preserved,
@@ -10011,6 +10200,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     usb_keyboard_pressure_summary = summarize_usb_keyboard_pressure(event_list)
     usb_runtime_queue_summary = summarize_usb_runtime_queue(event_list)
     usb_post_first_byte_blocker = summarize_usb_post_first_byte_blocker(event_list)
+    (
+        usb_local_seat_state,
+        usb_local_seat_reason,
+        usb_busy_after_ready,
+    ) = usb_local_seat_state_from_runtime(
+        usb_gate,
+        usb_blocker,
+        usb_runtime_queue_summary,
+        usb_post_first_byte_blocker,
+    )
     usb_driver_task_blocker = summarize_usb_driver_task_stall(event_list)
     net_driver_task_replay_events, net_driver_task_replay_blocker = (
         summarize_driver_task_replay_status(event_list, "net_driver_task_replay_status")
@@ -10223,6 +10422,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         net_active=net_active,
         net_addr_src=net_addr_src,
         net_dhcp=net_dhcp,
+        net_tcp_ready=net_tcp_ready,
+        nettest_proof=nettest_proof,
         wifi_data_path_tx=wifi_data_path_tx,
         wifi_data_path_rx_preserved=wifi_data_path_rx_preserved,
         wifi_data_path_rx_delivered=wifi_data_path_rx_delivered,
@@ -10327,6 +10528,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_runtime_queued_reports=usb_runtime_queue_summary.queued_reports,
         usb_runtime_transfer_events=usb_runtime_queue_summary.transfer_events,
         usb_runtime_report_status=usb_runtime_queue_summary.report_status,
+        usb_runtime_queue_valid=usb_runtime_queue_summary.queue_valid,
+        usb_runtime_doorbell_pending=(
+            usb_runtime_queue_summary.doorbell_pending
+        ),
         usb_runtime_recovery_diag_valid=(
             usb_runtime_queue_summary.recovery_diag_valid
         ),
@@ -10346,6 +10551,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         ),
         usb_event_loop_runtime_skipped=usb_runtime_queue_summary.runtime_skipped,
         usb_post_first_byte_blocker=usb_post_first_byte_blocker,
+        usb_startup_blocker_seen=usb_runtime_queue_summary.startup_blocker_seen,
+        usb_active_blocker_seen=usb_runtime_queue_summary.active_blocker_seen,
+        usb_recovered_from_blocker=usb_runtime_queue_summary.recovered_from_blocker,
+        usb_recovery_state=usb_runtime_queue_summary.recovery_state,
+        usb_local_seat_state=usb_local_seat_state,
+        usb_local_seat_reason=usb_local_seat_reason,
+        usb_command_ready=usb_runtime_queue_summary.command_ready,
+        usb_first_report_ready=usb_runtime_queue_summary.first_report_ready,
+        usb_first_byte_ready=usb_runtime_queue_summary.first_byte_ready,
+        usb_busy_after_ready=usb_busy_after_ready,
         serial_driver_accepted=driver_task_frontiers.serial_driver_accepted,
         serial_fallback_active=driver_task_frontiers.serial_fallback_active,
         serial_runtime_frontier=driver_task_frontiers.serial_runtime_frontier,
@@ -11328,6 +11543,79 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         blockers.append("root-console-not-ready")
     if record.get("ROOT_PROMPT_SEEN") != "yes":
         blockers.append("root-prompt-missing")
+    if record.get("TIMER_BACKEND") != "arch-counter":
+        blockers.append("timer-backend-not-arch-counter")
+    if record.get("TIMER_EL0_COUNTER") != "vct":
+        blockers.append("timer-vct-proof-missing")
+    if record.get("DUMMY_TIMER_SEEN") != "no":
+        blockers.append("dummy-timer-seen")
+    if record.get("DRIVER_TASK_DEFAULT_REQUESTED") != "yes":
+        blockers.append("driver-task-default-not-requested")
+    if record.get("DRIVER_TASK_LIVE_HOT_PATHS") != "yes":
+        blockers.append("driver-task-live-hot-paths-missing")
+    if (parse_hex_int(str(record.get("DRIVER_TASK_CONTRACTS", "0"))) or 0) < 5:
+        blockers.append("driver-task-contracts-incomplete")
+    if (parse_hex_int(str(record.get("DRIVER_TASK_DEDICATED", "0"))) or 0) < 5:
+        blockers.append("driver-task-dedicated-incomplete")
+    if record.get("DRIVER_TASK_DEDICATED_READY") != "yes":
+        blockers.append("driver-task-dedicated-not-ready")
+    for role, field in (
+        ("serial", "DRIVER_TASK_SERIAL_DEDICATED"),
+        ("usb", "DRIVER_TASK_USB_DEDICATED"),
+        ("display", "DRIVER_TASK_DISPLAY_DEDICATED"),
+        ("net", "DRIVER_TASK_NET_DEDICATED"),
+        ("pcie", "DRIVER_TASK_PCIE_DEDICATED"),
+    ):
+        if record.get(field) != "yes":
+            blockers.append(f"driver-task-{role}-not-dedicated")
+    if record.get("DRIVER_TASK_SUBSTRATE_READY") != "yes":
+        blockers.append("driver-task-substrate-not-ready")
+    if record.get("DRIVER_TASK_COMPATIBILITY") not in {0, "0"}:
+        blockers.append("driver-task-compatibility-present")
+    if (parse_hex_int(str(record.get("DRIVER_TASK_FAILED_COUNT", "0"))) or 0) > 0:
+        blockers.append("driver-task-failed")
+    if record.get("DRIVER_TASK_CAPSET_PROOF") != "yes":
+        blockers.append("driver-task-capset-proof-missing")
+    if record.get("DRIVER_TASK_FAULT_PROOF") != "yes":
+        blockers.append("driver-task-fault-proof-missing")
+    if record.get("DRIVER_TASK_REVOKE_PROOF") != "yes":
+        blockers.append("driver-task-revoke-proof-missing")
+    if record.get("DRIVER_TASK_SCHED_PROOF") != "yes":
+        blockers.append("driver-task-sched-proof-missing")
+    if record.get("DRIVER_TASK_AFFINITY_PROOF") != "yes":
+        blockers.append("driver-task-affinity-proof-missing")
+    if (parse_hex_int(str(record.get("DRIVER_TASK_AFFINITY_CONFIGURED", "0"))) or 0) < 5:
+        blockers.append("driver-task-affinity-config-incomplete")
+    if (parse_hex_int(str(record.get("DRIVER_TASK_AFFINITY_APPLIED", "0"))) or 0) < 5:
+        blockers.append("driver-task-affinity-applied-incomplete")
+    if record.get("DRIVER_TASK_AFFINITY_MANIFEST_PROOF") != "yes":
+        blockers.append("driver-task-affinity-manifest-proof-missing")
+    if (parse_hex_int(str(record.get("DRIVER_TASK_AFFINITY_MANIFEST_MATCHES", "0"))) or 0) < 5:
+        blockers.append("driver-task-affinity-manifest-matches-incomplete")
+    if record.get("DRIVER_TASK_AFFINITY_MANIFEST_MISSING") not in {0, "0"}:
+        blockers.append("driver-task-affinity-manifest-missing")
+    if record.get("DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES") not in {0, "0"}:
+        blockers.append("driver-task-affinity-manifest-mismatch")
+    if record.get("DRIVER_TASK_VSPACE_PROOF") != "yes":
+        blockers.append("driver-task-vspace-proof-missing")
+    if record.get("DRIVER_TASK_POINTER_FREE_IPC_PROOF") != "yes":
+        blockers.append("driver-task-pointer-free-ipc-missing")
+    if record.get("DRIVER_TASK_OWNER_STATE_PROOF") != "yes":
+        blockers.append("driver-task-owner-state-missing")
+    if (parse_hex_int(str(record.get("DRIVER_TASK_LATENCY_PROOFS", "0"))) or 0) < 5:
+        blockers.append("driver-task-latency-proof-incomplete")
+    if (
+        parse_hex_int(str(record.get("DRIVER_TASK_BOOTSTRAP_DEFERRED", "0")))
+        or 0
+    ) > 0:
+        blockers.append("driver-task-bootstrap-deferred")
+    min_dma_proofs = 6 if record.get("DRIVER_TASK_ACTIVE_NET") == "cyw43" else 5
+    if (parse_hex_int(str(record.get("DRIVER_TASK_DMA_PROOFS", "0"))) or 0) < min_dma_proofs:
+        blockers.append("driver-task-dma-proof-incomplete")
+    if record.get("DRIVER_TASK_DMA_BLOCKER") != "none":
+        blockers.append("driver-task-dma-blocked")
+    if record.get("PI4_RUNTIME_DMA_COUNTER_PROOF") != "counter-qualified":
+        blockers.append("driver-task-dma-counter-proof-missing")
     if (parse_hex_int(str(record.get("DRIVER_TASK_BUDGET_OVERRUNS", "0"))) or 0) > 0:
         blockers.append("driver-task-budget-overrun")
     if (parse_hex_int(str(record.get("DRIVER_TASK_RING_CALL_OUTSTANDING", "0"))) or 0) > 0:
@@ -11339,8 +11627,49 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         blockers.append("driver-task-ring-call-unresolved-timeout")
     if record.get("SERIAL_RESPONSIVE_PROOF") != "yes":
         blockers.append("serial-responsive-proof-missing")
+    if record.get("USB_BOOTLOADER_HANDOFF_SEEN") == "yes":
+        blockers.append("usb-bootloader-handoff")
+    if record.get("USB_COLD_BOOT_SEEN") != "yes":
+        blockers.append("usb-cold-boot-proof-missing")
+    net_active = str(record.get("NET_ACTIVE", "unknown"))
+    if net_active == "wifi":
+        if record.get("DRIVER_TASK_SDIO_DEDICATED") != "yes":
+            blockers.append("driver-task-sdio-not-dedicated")
+        if (parse_hex_int(str(record.get("WIFI_GATE", "0"))) or 0) < 10:
+            blockers.append("wifi-gate-incomplete")
+        if record.get("WIFI_BLOCKER") != "none":
+            blockers.append("wifi-blocked")
+        if record.get("WIFI_OLDGOOD_REPLAY") != "yes":
+            blockers.append("wifi-oldgood-replay-missing")
+        if record.get("WIFI_OLDGOOD_MISSING") != "none":
+            blockers.append("wifi-oldgood-incomplete")
+        if record.get("DRIVER_TASK_ACTIVE_NET") != "cyw43":
+            blockers.append("wifi-driver-task-not-active")
+    elif net_active == "wired":
+        if record.get("DRIVER_TASK_ACTIVE_NET") != "genet":
+            blockers.append("wired-driver-task-not-active")
+        if record.get("NET_ADDR_SRC") not in {"dhcp-lease", "static"}:
+            blockers.append("wired-address-proof-missing")
+        if record.get("NET_DHCP") not in {"bound", "off"}:
+            blockers.append("wired-address-not-ready")
+    else:
+        blockers.append("network-active-missing")
+    if record.get("NET_TCP_READY") != "yes" and record.get("NETTEST_PROOF") != "yes":
+        blockers.append("network-tcp-proof-missing")
     if (parse_hex_int(str(record.get("USB_GATE", "0"))) or 0) < 10:
         blockers.append("local-seat-usb-gate-incomplete")
+    if record.get("USB_COMMAND_READY") == "yes" and record.get("USB_FIRST_REPORT_READY") != "yes":
+        blockers.append("local-seat-usb-first-report-missing")
+    if record.get("USB_FIRST_BYTE_READY") != "yes":
+        blockers.append("local-seat-usb-first-byte-missing")
+    if record.get("USB_OLDGOOD_REPLAY") != "yes":
+        blockers.append("local-seat-usb-oldgood-replay-missing")
+    if record.get("USB_OLDGOOD_MISSING") != "none":
+        blockers.append("local-seat-usb-oldgood-incomplete")
+    if record.get("USB_LOCAL_SEAT_STATE") in {"recovered", "degraded"}:
+        blockers.append(f"local-seat-usb-{record.get('USB_LOCAL_SEAT_STATE')}")
+    if record.get("USB_BUSY_AFTER_READY") == "yes":
+        blockers.append("local-seat-usb-busy-after-ready")
     if record.get("USB_BURST_PROOF") != "yes":
         blockers.append("local-seat-usb-burst-proof-missing")
     return blockers
@@ -11483,5 +11812,18 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def run_cli(argv: list[str] | None = None) -> int:
+    """Run the CLI while treating closed output pipes as a normal consumer exit."""
+
+    try:
+        return main(argv)
+    except BrokenPipeError:
+        try:
+            sys.stdout.close()
+        except OSError:
+            pass
+        return 0
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run_cli())
