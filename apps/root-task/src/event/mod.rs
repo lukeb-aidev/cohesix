@@ -7149,10 +7149,10 @@ where
                 "inspect-xhci-reset-same-runtime-readback-drain"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN => {
-                "inspect-xhci-reset-clear-loop"
+                "replay-vl805-reset-preconditions"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN => {
-                "inspect-xhci-controller-not-ready-loop"
+                "replay-vl805-reset-preconditions"
             }
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE => {
                 "inspect-xhci-dma-and-scratchpad-layout"
@@ -8566,8 +8566,14 @@ where
                 "xhci-operational",
                 Self::usb_startup_gate_status(3, proof_gate, failing_gate),
                 format_args!(
-                    "linked_detail=0x{:04x} linked_gate={}",
-                    linked_detail, linked_gate,
+                    "linked_detail=0x{:04x} linked_gate={} blocker={} next_action={} progress_phase={}",
+                    linked_detail,
+                    linked_gate,
+                    active_blocker,
+                    linked_progress.map_or("inspect-xhci-operational", |progress| {
+                        Self::usb_runtime_next_action_for_progress_phase(progress.phase)
+                    }),
+                    linked_progress.map_or("none", |progress| progress.phase_name),
                 ),
                 "command-event-rings",
             );

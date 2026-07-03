@@ -455,6 +455,20 @@ def test_linux_brcmfmac_line_is_wifi_known_good_source() -> None:
     assert "brcmf_sdio_htclk" in event.message
 
 
+def test_uboot_wifi_policy_missing_line_is_wifi_policy_evidence() -> None:
+    event = normalizer.parse_line(
+        "[cohesix] U-Boot policy missing: cohesix.env has no saved Wi-Fi credentials",
+        21,
+    )
+
+    assert event is not None
+    assert event.domain == "wifi"
+    assert event.source == "uboot"
+    assert event.message == (
+        "U-Boot policy missing: cohesix.env has no saved Wi-Fi credentials"
+    )
+
+
 def test_parse_events_filters_unrelated_lines() -> None:
     lines = [
         "cohesix> nettest",
@@ -590,6 +604,40 @@ def test_cli_summary_uses_latest_boot_slice(
     assert result == 0
     assert summary["gates"]["USB_BLOCKER"] == "reset-pre-usbcmd-source"
     assert summary["gates"]["WIFI_BLOCKER"] == "ht-clock-timeout"
+
+
+def test_cli_gate_summary_labels_uboot_policy_missing(
+    tmp_path: pathlib.Path, capsys
+) -> None:
+    """Serial U-Boot Wi-Fi recovery is policy evidence, not hardware failure."""
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "U-Boot 2026.01-dirty",
+                "[cohesix] Cohesix boot options",
+                "[cohesix] U-Boot policy missing: "
+                "cohesix.env has no saved Wi-Fi credentials",
+                "[cohesix] Serial Wi-Fi password entry is disabled "
+                "because U-Boot echoes input",
+                "[cohesix] Recovery is file-based or local-USB only; "
+                "do not type PSK on serial",
+                "  0. Exit to U-Boot prompt for file-based policy recovery",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = normalizer.main([str(log_path), "--gate-summary"])
+    captured = capsys.readouterr()
+    gate_lines = dict(line.split("=", 1) for line in captured.out.splitlines())
+
+    assert result == 0
+    assert gate_lines["WIFI_GATE"] == "1"
+    assert gate_lines["WIFI_BLOCKER"] == "uboot-policy-missing"
+    assert gate_lines["WIFI_EXACT"] == "uboot-policy-missing"
+    assert gate_lines["WIFI_PHASE"] == "none"
 
 
 def test_cli_boot_summary_scores_each_boot_slice(
@@ -6942,14 +6990,15 @@ def test_gate_summary_degrades_command_ready_without_first_report() -> None:
     record = normalizer.summarize_gates(events).to_record()
     blockers = normalizer.boot_evidence_blockers(record)
 
-    assert record["USB_GATE"] == 10
-    assert record["USB_BLOCKER"] == "none"
-    assert record["USB_LOCAL_SEAT_STATE"] == "degraded"
-    assert record["USB_LOCAL_SEAT_REASON"] == "usb-first-report-missing"
-    assert record["USB_COMMAND_READY"] == "yes"
+    assert record["USB_GATE"] == 8
+    assert record["USB_BLOCKER"] == "usb-hid-interrupt-no-completion"
+    assert record["USB_LOCAL_SEAT_STATE"] == "blocked"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-hid-interrupt-no-completion"
+    assert record["USB_COMMAND_READY"] == "no"
     assert record["USB_FIRST_REPORT_READY"] == "no"
     assert record["USB_FIRST_BYTE_READY"] == "no"
-    assert "local-seat-usb-first-report-missing" in blockers
+    assert "local-seat-usb-gate-incomplete" in blockers
+    assert "local-seat-usb-first-byte-missing" in blockers
 
 
 def test_gate_summary_tracks_usb_startup_churn_without_marking_recovered() -> None:
@@ -6993,6 +7042,27 @@ def test_gate_summary_names_usb_hid_interrupt_no_completion() -> None:
     assert record["USB_BLOCKER"] == "usb-hid-interrupt-no-completion"
     assert record["USB_STARTUP_BLOCKER_SEEN"] == "yes"
     assert record["USB_ACTIVE_BLOCKER_SEEN"] == "no"
+
+
+def test_gate_summary_downgrades_command_ready_hid_no_completion() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready action=enable-command-input "
+            "clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_queue queue_valid=yes queued_reports=32 "
+            "doorbell_pending=no preserved_events=0 transfer_events=0 "
+            "report_status=decoded-empty",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 8
+    assert record["USB_BLOCKER"] == "usb-hid-interrupt-no-completion"
+    assert record["USB_COMMAND_READY"] == "no"
+    assert record["USB_LOCAL_SEAT_STATE"] == "blocked"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-hid-interrupt-no-completion"
+    assert record["USB_BUSY_AFTER_READY"] == "yes"
 
 
 def test_gate_summary_treats_post_ready_cumulative_usb_counters_as_historical() -> None:

@@ -17,7 +17,7 @@ import json
 import re
 import sys
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, TextIO
 
@@ -67,6 +67,12 @@ STARTUP_DIAG_GATE_RE = re.compile(
 )
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
 WIFI_HINTS = ("wifi", "wi-fi", "wlan", "cyw", "brcmf", "sdio", "sdhci", "mmc")
+UBOOT_WIFI_POLICY_MISSING_MARKERS = (
+    "u-boot policy missing",
+    "has no saved wi-fi credentials",
+    "serial wi-fi password entry is disabled because u-boot echoes input",
+    "file-based policy recovery",
+)
 BOOT_CHAIN_ROOT_MARKERS = (
     "u-boot ",
 )
@@ -1141,11 +1147,20 @@ def classify_source(line: str, domain: str) -> str:
     lower = line.lower()
     if "[cohesix:usb-trace]" in lower:
         return "uboot"
+    if line.startswith("[cohesix]") and uboot_wifi_policy_missing_line(line):
+        return "uboot"
     if "brcmfmac" in lower or "brcmf_" in lower:
         return "linux"
     if domain == "usb" and line.startswith("[cohesix]"):
         return "uboot"
     return "cohesix"
+
+
+def uboot_wifi_policy_missing_line(line: str) -> bool:
+    """Return true for U-Boot menu recovery text for missing Wi-Fi policy."""
+
+    lower = line.lower()
+    return any(marker in lower for marker in UBOOT_WIFI_POLICY_MISSING_MARKERS)
 
 
 def classify_domain(line: str) -> str | None:
@@ -1161,6 +1176,8 @@ def classify_domain(line: str) -> str | None:
         return "console"
 
     lower = line.lower()
+    if line.startswith("[cohesix]") and uboot_wifi_policy_missing_line(line):
+        return "wifi"
     if (
         line.startswith("BOOTINFO_SNAPSHOT_CORRUPTED")
         or "[panic]" in lower
@@ -2969,6 +2986,8 @@ def normalize_wifi_blocker(value: str) -> str:
     stripped = lower.strip()
     if stripped in {"none", "ok", "online", "ready", "success"}:
         return "none"
+    if uboot_wifi_policy_missing_line(value):
+        return "uboot-policy-missing"
     if "wifi-data-rx-admission-blocked" in lower or (
         "cyw43_driver_task_host_eapol_rx_admission" in lower
         and "status=error" in lower
@@ -5126,6 +5145,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 if normalized_value not in {"none", "unknown"}:
                     explicit_blocker = normalized_value
         raw_contract_blocker = normalize_wifi_blocker(raw)
+        if raw_contract_blocker == "uboot-policy-missing":
+            gate = max(gate, 1)
+            blocker = "uboot-policy-missing"
+            continue
         if raw_contract_blocker == "wifi-data-rx-admission-blocked":
             gate = max(gate, 9)
             post_f2_progress_seen = True
@@ -5805,12 +5828,15 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
             tcp_ok = fields.get("tcp_ok")
             console_ok = fields.get("console_ok")
             peer_assisted_ok = fields.get("peer_assisted_ok")
+            nettest_result = field_lower(event, "result")
             if {tx_ok, udp_ok, tcp_ok, console_ok} <= {"true", "1"}:
                 nettest_success_seen = True
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
                 blocker = "netstats-missing"
-            elif peer_assisted_ok in {"true", "1"} or (
+            elif nettest_result in {"pass", "peer-assisted-pass"} or (
+                peer_assisted_ok in {"true", "1"}
+            ) or (
                 tx_ok in {"true", "1"} and remote_cohsh_auth_seen
             ):
                 nettest_success_seen = True
@@ -7353,15 +7379,67 @@ def usb_hid_interrupt_no_completion_seen(fields: Mapping[str, str]) -> bool:
 
     queued_reports = parse_hex_int(fields.get("queued_reports"))
     transfer_events = parse_hex_int(fields.get("transfer_events"))
-    doorbell_pending = fields.get("doorbell_pending", "").lower()
+    doorbell_pending = (
+        fields.get("doorbell_pending") or fields.get("doorbell") or ""
+    ).lower()
     report_status = fields.get("report_status", "none").lower().replace("_", "-")
+    full_idle_queue = fields.get("full_idle_queue", "").lower() in {"1", "true", "yes"}
     return (
         queued_reports is not None
         and queued_reports >= 32
-        and transfer_events == 0
+        and (transfer_events == 0 or (transfer_events is None and full_idle_queue))
         and doorbell_pending in {"", "0", "false", "no"}
         and report_status in {"none", "idle", "decoded-empty"}
     )
+
+
+def usb_runtime_hid_interrupt_no_completion(
+    runtime: UsbRuntimeQueueSummary,
+) -> bool:
+    """Return true when latest runtime queue evidence proves a stuck HID IN path."""
+
+    return (
+        not runtime.first_byte_ready
+        and runtime.queued_reports >= 32
+        and runtime.transfer_events == 0
+        and runtime.doorbell_pending in {"unknown", "", "0", "false", "no"}
+        and runtime.report_status in {"unknown", "none", "idle", "decoded-empty"}
+    )
+
+
+def refine_usb_gate_for_runtime_truth(
+    usb_gate: int,
+    usb_blocker: str,
+    runtime: UsbRuntimeQueueSummary,
+) -> tuple[int, str, UsbRuntimeQueueSummary]:
+    """Downgrade impossible USB-ready combinations to the current blocker."""
+
+    if usb_runtime_hid_interrupt_no_completion(runtime):
+        active_after_ready = runtime.command_ready or runtime.active_blocker_seen
+        refined_runtime = replace(
+            runtime,
+            command_ready=False,
+            active_blocker_seen=active_after_ready,
+            recovery_state="degraded-active" if active_after_ready else runtime.recovery_state,
+            local_seat_reason="usb-hid-interrupt-no-completion",
+            busy_after_ready=active_after_ready or runtime.busy_after_ready,
+        )
+        return 8, "usb-hid-interrupt-no-completion", refined_runtime
+    if (
+        runtime.command_ready
+        and not runtime.first_report_ready
+        and not runtime.first_byte_ready
+    ):
+        refined_runtime = replace(
+            runtime,
+            command_ready=False,
+            active_blocker_seen=True,
+            recovery_state="degraded-active",
+            local_seat_reason="usb-first-report-missing",
+            busy_after_ready=True,
+        )
+        return min(usb_gate, 8), "usb-hid-interrupt-no-completion", refined_runtime
+    return usb_gate, usb_blocker, runtime
 
 
 def usb_runtime_active_blocker_seen(raw: str, fields: Mapping[str, str]) -> bool:
@@ -7465,6 +7543,12 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
         if usb_command_ready_step(event):
             command_ready_seen = True
             values["command_ready"] = True
+            if (
+                "pi4 keyboard runtime proof" in raw
+                and field_lower(event, "result") in {"online", "ready"}
+                and (parse_hex_int(event.fields.get("gate")) or 0) >= 10
+            ):
+                values["first_report_ready"] = True
             if values["active_blocker_seen"]:
                 values["recovered_from_blocker"] = True
                 values["recovery_state"] = "ready-recovered"
@@ -7757,7 +7841,10 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
         if raw.startswith("ok nettest") and (detail == "pass" or "success" in raw):
             tcp_ready = True
             nettest_proof = True
-        if raw_has(event, "[net-selftest] result", "tx_ok=true", "console_ok=true"):
+        if raw_has(event, "[net-selftest] result", "tx_ok=true", "console_ok=true") or (
+            "[net-selftest] result" in raw
+            and field_lower(event, "result") in {"pass", "peer-assisted-pass"}
+        ):
             tcp_ready = True
             nettest_proof = True
         if raw.startswith("[dhcp]") or "[dhcp]" in raw:
@@ -10240,6 +10327,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     usb_keyboard_pressure_summary = summarize_usb_keyboard_pressure(event_list)
     usb_runtime_queue_summary = summarize_usb_runtime_queue(event_list)
     usb_post_first_byte_blocker = summarize_usb_post_first_byte_blocker(event_list)
+    usb_gate, usb_blocker, usb_runtime_queue_summary = refine_usb_gate_for_runtime_truth(
+        usb_gate,
+        usb_blocker,
+        usb_runtime_queue_summary,
+    )
     (
         usb_local_seat_state,
         usb_local_seat_reason,

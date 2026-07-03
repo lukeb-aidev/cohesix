@@ -246,6 +246,7 @@ const CYW43_WPA2_AUTH_PSK: u32 = 0x0080;
 const CYW43_ETH_P_LINK_CTL: u16 = 0x886c;
 const CYW43_ETH_P_IPV4: u16 = 0x0800;
 const CYW43_ETH_P_ARP: u16 = 0x0806;
+const CYW43_ETH_P_IPV6: u16 = 0x86dd;
 const CYW43_IP_PROTO_TCP: u8 = 6;
 const CYW43_IP_PROTO_UDP: u8 = 17;
 const CYW43_DHCP_SERVER_PORT: u16 = 67;
@@ -367,6 +368,7 @@ const CYW43_TX_UNPROVEN_KNOWN: u32 = 1;
 const CYW43_TX_UNPROVEN_UNKNOWN: u32 = 2;
 static CYW43_TX_UNPROVEN_ACTIVE: AtomicU32 = AtomicU32::new(0);
 static CYW43_TX_UNPROVEN_SEQ: AtomicU32 = AtomicU32::new(0);
+static CYW43_TX_UNPROVEN_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_RUNTIME_QUEUE_COUNT: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_RUNTIME_QUEUE_HIGH_WATER: AtomicU32 = AtomicU32::new(0);
 static CYW43_RX_RUNTIME_QUEUE_OVERFLOW_SEEN: AtomicU32 = AtomicU32::new(0);
@@ -4039,7 +4041,7 @@ fn cyw43_apply_linux_prejoin_association_policy(
         &CYW43_LINUX_JOIN_PREF_DEFAULT,
         "cyw43-control-prejoin-join-pref",
     )?;
-    cyw43_enable_linux_if_event_message(contract)?;
+    cyw43_enable_join_event_messages(contract, "cyw43-control-prejoin-event-mask")?;
     cyw43_submit_bcdc_u32(
         contract,
         CYW43_WLC_SET_SCAN_CHANNEL_TIME,
@@ -4057,28 +4059,6 @@ fn cyw43_apply_linux_prejoin_association_policy(
         "txbf",
         1,
         "cyw43-control-prejoin-txbf",
-    )
-}
-
-#[cfg(feature = "kernel")]
-fn cyw43_enable_linux_if_event_message(
-    contract: DriverTaskContract,
-) -> Result<(), DriverTaskNetError> {
-    let mut mask = [0u8; CYW43_EVENT_MASK_LEN];
-    let response_len = cyw43_get_bcdc_iovar(
-        contract,
-        "event_msgs",
-        &mut mask,
-        "cyw43-control-prejoin-if-event-message",
-    )?;
-    cyw43_set_event_mask_bit(&mut mask, CYW43_EVENT_IF)?;
-    let required_len = usize::from(CYW43_EVENT_IF / 8).saturating_add(1);
-    let set_len = response_len.max(required_len).min(mask.len());
-    cyw43_submit_bcdc_iovar_bytes(
-        contract,
-        "event_msgs",
-        &mask[..set_len],
-        "cyw43-control-prejoin-if-event-message",
     )
 }
 
@@ -7954,7 +7934,10 @@ struct Cyw43HostEapolTxProof {
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43UnprovenTxWindow {
-    Known(Cyw43HostEapolTxProof),
+    Known {
+        proof: Cyw43HostEapolTxProof,
+        submitted_count: u32,
+    },
     Unknown,
 }
 
@@ -8069,6 +8052,7 @@ fn cyw43_data_tx_credit_proven(
 fn clear_cyw43_unproven_tx_window() {
     CYW43_TX_UNPROVEN_ACTIVE.store(CYW43_TX_UNPROVEN_NONE, Ordering::Release);
     CYW43_TX_UNPROVEN_SEQ.store(0, Ordering::Release);
+    CYW43_TX_UNPROVEN_COUNT.store(0, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -8076,9 +8060,14 @@ fn record_cyw43_unproven_tx_window(completion: Option<DriverTaskCompletionRecord
     CYW43_TX_CREDIT_UNPROVEN.fetch_add(1, Ordering::AcqRel);
     if let Some(proof) = completion.and_then(cyw43_tx_completion_proof) {
         CYW43_TX_UNPROVEN_SEQ.store(u32::from(proof.submitted_seq), Ordering::Release);
+        CYW43_TX_UNPROVEN_COUNT.store(
+            CYW43_TX_SUBMITTED.load(Ordering::Acquire),
+            Ordering::Release,
+        );
         CYW43_TX_UNPROVEN_ACTIVE.store(CYW43_TX_UNPROVEN_KNOWN, Ordering::Release);
     } else {
         CYW43_TX_UNPROVEN_SEQ.store(0, Ordering::Release);
+        CYW43_TX_UNPROVEN_COUNT.store(0, Ordering::Release);
         CYW43_TX_UNPROVEN_ACTIVE.store(CYW43_TX_UNPROVEN_UNKNOWN, Ordering::Release);
     }
 }
@@ -8086,9 +8075,12 @@ fn record_cyw43_unproven_tx_window(completion: Option<DriverTaskCompletionRecord
 #[cfg(feature = "kernel")]
 fn cyw43_unproven_tx_window() -> Option<Cyw43UnprovenTxWindow> {
     match CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire) {
-        CYW43_TX_UNPROVEN_KNOWN => Some(Cyw43UnprovenTxWindow::Known(Cyw43HostEapolTxProof {
-            submitted_seq: CYW43_TX_UNPROVEN_SEQ.load(Ordering::Acquire) as u8,
-        })),
+        CYW43_TX_UNPROVEN_KNOWN => Some(Cyw43UnprovenTxWindow::Known {
+            proof: Cyw43HostEapolTxProof {
+                submitted_seq: CYW43_TX_UNPROVEN_SEQ.load(Ordering::Acquire) as u8,
+            },
+            submitted_count: CYW43_TX_UNPROVEN_COUNT.load(Ordering::Acquire),
+        }),
         CYW43_TX_UNPROVEN_UNKNOWN => Some(Cyw43UnprovenTxWindow::Unknown),
         _ => None,
     }
@@ -8097,7 +8089,9 @@ fn cyw43_unproven_tx_window() -> Option<Cyw43UnprovenTxWindow> {
 #[cfg(feature = "kernel")]
 fn cyw43_frame_flags_credit_covers_window(flags: u16, window: Cyw43UnprovenTxWindow) -> bool {
     match window {
-        Cyw43UnprovenTxWindow::Known(proof) => cyw43_frame_flags_credit_covers_tx(flags, proof),
+        Cyw43UnprovenTxWindow::Known { proof, .. } => {
+            cyw43_frame_flags_credit_covers_tx(flags, proof)
+        }
         Cyw43UnprovenTxWindow::Unknown => cyw43_sdpcm_credit_from_flags(flags).is_some(),
     }
 }
@@ -8108,7 +8102,9 @@ fn cyw43_completion_credit_covers_window(
     window: Cyw43UnprovenTxWindow,
 ) -> bool {
     match window {
-        Cyw43UnprovenTxWindow::Known(proof) => cyw43_completion_credit_covers_tx(completion, proof),
+        Cyw43UnprovenTxWindow::Known { proof, .. } => {
+            cyw43_completion_credit_covers_tx(completion, proof)
+        }
         Cyw43UnprovenTxWindow::Unknown => cyw43_completion_sdpcm_credit(completion).is_some(),
     }
 }
@@ -8122,9 +8118,14 @@ fn cyw43_pending_rx_credit_covers_window(window: Cyw43UnprovenTxWindow) -> bool 
 }
 
 #[cfg(feature = "kernel")]
-fn mark_all_submitted_cyw43_tx_completed() {
+fn mark_cyw43_tx_completed_through(completed_through: u32) {
     let submitted = CYW43_TX_SUBMITTED.load(Ordering::Acquire);
-    update_atomic_u32_max(&CYW43_TX_CREDIT_COMPLETED, submitted);
+    update_atomic_u32_max(&CYW43_TX_CREDIT_COMPLETED, completed_through.min(submitted));
+}
+
+#[cfg(feature = "kernel")]
+fn mark_all_submitted_cyw43_tx_completed() {
+    mark_cyw43_tx_completed_through(CYW43_TX_SUBMITTED.load(Ordering::Acquire));
 }
 
 #[cfg(feature = "kernel")]
@@ -8148,7 +8149,9 @@ fn mark_one_cyw43_tx_completed() {
 #[cfg(feature = "kernel")]
 fn cyw43_complete_unproven_tx_window(window: Cyw43UnprovenTxWindow) {
     match window {
-        Cyw43UnprovenTxWindow::Known(_) => mark_all_submitted_cyw43_tx_completed(),
+        Cyw43UnprovenTxWindow::Known {
+            submitted_count, ..
+        } => mark_cyw43_tx_completed_through(submitted_count),
         Cyw43UnprovenTxWindow::Unknown => mark_one_cyw43_tx_completed(),
     }
     clear_cyw43_unproven_tx_window();
@@ -12156,7 +12159,7 @@ struct DriverTaskNetPendingRxToken {
 }
 
 #[cfg(feature = "kernel")]
-const CYW43_PENDING_RX_QUEUE_CAP: usize = 16;
+const CYW43_PENDING_RX_QUEUE_CAP: usize = 32;
 #[cfg(feature = "kernel")]
 static CYW43_PENDING_RX_QUEUE: Mutex<
     heapless::Deque<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>,
@@ -13388,9 +13391,7 @@ fn store_cyw43_pending_rx_token(flags: u16, token: DriverTaskNetRxToken) -> bool
         }
         Err(pending) => pending,
     };
-    if !cyw43_rx_token_preempts_post_secure_eapol(flags, &pending.token)
-        || !cyw43_evict_one_post_secure_eapol_from_pending_queue(&mut queue)
-    {
+    if !cyw43_evict_one_pending_rx_for(&mut queue, flags, &pending.token) {
         record_cyw43_pending_rx_drop();
         return false;
     }
@@ -13409,41 +13410,94 @@ fn store_cyw43_pending_rx_token(flags: u16, token: DriverTaskNetRxToken) -> bool
 fn cyw43_pending_rx_token_store_possible(flags: u16, token: &DriverTaskNetRxToken) -> bool {
     let queue = CYW43_PENDING_RX_QUEUE.lock();
     queue.len() < CYW43_PENDING_RX_QUEUE_CAP
-        || (cyw43_rx_token_preempts_post_secure_eapol(flags, token)
-            && cyw43_pending_rx_queue_contains_post_secure_eapol(&queue))
+        || cyw43_pending_rx_queue_contains_evictable_for(&queue, flags, token)
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_rx_token_preempts_post_secure_eapol(flags: u16, token: &DriverTaskNetRxToken) -> bool {
-    CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
-        && matches!(
-            cyw43_rx_token_ethertype(flags, token),
-            Some(CYW43_ETH_P_IPV4 | CYW43_ETH_P_ARP)
-        )
+fn cyw43_pending_rx_priority(flags: u16, token: &DriverTaskNetRxToken) -> u8 {
+    if cyw43_frame_channel(flags) != DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA {
+        return 7;
+    }
+    let frame = &token.buffer[..token.len];
+    let ethertype = cyw43_ethertype(frame);
+    if CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0 && ethertype == Some(ETH_P_EAPOL) {
+        return 0;
+    }
+    let runtime_mac = runtime_mac(DriverTaskHotPath::Cyw43Wifi)
+        .unwrap_or(CYW43_DRIVER_TASK_MAC)
+        .0;
+    let (dst, src) =
+        cyw43_ethernet_addrs(frame).unwrap_or(([0; ETHER_ADDR_LEN], [0; ETHER_ADDR_LEN]));
+    if let Some(info) = cyw43_data_path_info(frame) {
+        if info.dhcp != "none" {
+            return 6;
+        }
+        if info.ethertype == CYW43_ETH_P_ARP {
+            return if info.arp_tpa == [0; 4]
+                || matches!(cyw43_assigned_ipv4(), Some(ip) if info.arp_tpa == ip)
+                || dst == runtime_mac
+                || src == runtime_mac
+            {
+                5
+            } else {
+                2
+            };
+        }
+    }
+    if ethertype == Some(CYW43_ETH_P_IPV4) {
+        let ip_proto = frame.get(ETH_HEADER_LEN + 9).copied().unwrap_or(0);
+        if matches!(ip_proto, CYW43_IP_PROTO_TCP | CYW43_IP_PROTO_UDP)
+            && (dst == runtime_mac || src == runtime_mac)
+        {
+            return 5;
+        }
+        return 3;
+    }
+    if matches!(ethertype, Some(CYW43_ETH_P_IPV6)) && (dst[0] & 0x01) != 0 {
+        return 1;
+    }
+    if (dst[0] & 0x01) != 0 {
+        return 1;
+    }
+    3
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_pending_rx_is_post_secure_eapol(pending: &DriverTaskNetPendingRxToken) -> bool {
-    CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
-        && cyw43_rx_token_ethertype(pending.flags, &pending.token) == Some(ETH_P_EAPOL)
-}
-
-#[cfg(feature = "kernel")]
-fn cyw43_pending_rx_queue_contains_post_secure_eapol(
+fn cyw43_pending_rx_queue_contains_evictable_for(
     queue: &heapless::Deque<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>,
+    flags: u16,
+    token: &DriverTaskNetRxToken,
 ) -> bool {
+    let incoming_priority = cyw43_pending_rx_priority(flags, token);
     let (front, back) = queue.as_slices();
     front
         .iter()
         .chain(back.iter())
-        .any(cyw43_pending_rx_is_post_secure_eapol)
+        .any(|pending| cyw43_pending_rx_priority(pending.flags, &pending.token) < incoming_priority)
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_evict_one_post_secure_eapol_from_pending_queue(
+fn cyw43_evict_one_pending_rx_for(
     queue: &mut heapless::Deque<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>,
+    flags: u16,
+    token: &DriverTaskNetRxToken,
 ) -> bool {
     let original_len = queue.len();
+    let incoming_priority = cyw43_pending_rx_priority(flags, token);
+    let target_priority = {
+        let (front, back) = queue.as_slices();
+        front
+            .iter()
+            .chain(back.iter())
+            .filter_map(|pending| {
+                let priority = cyw43_pending_rx_priority(pending.flags, &pending.token);
+                (priority < incoming_priority).then_some(priority)
+            })
+            .min()
+    };
+    let Some(target_priority) = target_priority else {
+        return false;
+    };
     let mut retained =
         heapless::Deque::<DriverTaskNetPendingRxToken, CYW43_PENDING_RX_QUEUE_CAP>::new();
     let mut evicted = false;
@@ -13452,7 +13506,7 @@ fn cyw43_evict_one_post_secure_eapol_from_pending_queue(
         let Some(pending) = queue.pop_front() else {
             break;
         };
-        if !evicted && cyw43_pending_rx_is_post_secure_eapol(&pending) {
+        if !evicted && cyw43_pending_rx_priority(pending.flags, &pending.token) == target_priority {
             evicted = true;
             continue;
         }
@@ -14277,6 +14331,7 @@ mod tests {
         CYW43_TX_CREDIT_UNPROVEN.store(0, Ordering::Release);
         CYW43_TX_UNPROVEN_ACTIVE.store(0, Ordering::Release);
         CYW43_TX_UNPROVEN_SEQ.store(0, Ordering::Release);
+        CYW43_TX_UNPROVEN_COUNT.store(0, Ordering::Release);
         CYW43_RX_FRAMES.store(0, Ordering::Release);
         CYW43_PENDING_RX_HIGH_WATER.store(0, Ordering::Release);
         CYW43_PENDING_RX_DROPS.store(0, Ordering::Release);
@@ -14426,6 +14481,15 @@ mod tests {
         let tcp = ip + IPV4_HEADER_LEN;
         frame[tcp..tcp + 2].copy_from_slice(&31337u16.to_be_bytes());
         frame[tcp + 2..tcp + 4].copy_from_slice(&49152u16.to_be_bytes());
+        frame
+    }
+
+    fn test_cyw43_ipv6_multicast_frame() -> [u8; 86] {
+        let mut frame = [0u8; 86];
+        frame[..6].copy_from_slice(&[0x33, 0x33, 0x00, 0x00, 0x00, 0xfb]);
+        frame[6..12].copy_from_slice(&[0x3a, 0xca, 0x84, 0x66, 0x80, 0x2a]);
+        frame[12..14].copy_from_slice(&CYW43_ETH_P_IPV6.to_be_bytes());
+        frame[ETH_HEADER_LEN] = 0x60;
         frame
     }
 
@@ -20718,7 +20782,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
-        assert_eq!(CYW43_PENDING_RX_QUEUE_CAP, 16);
+        assert_eq!(CYW43_PENDING_RX_QUEUE_CAP, 32);
 
         let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
         let dhcp = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);
@@ -20737,6 +20801,79 @@ mod tests {
         assert_eq!(CYW43_PENDING_RX_DROPS.load(Ordering::Acquire), 1);
 
         while take_cyw43_pending_rx_token().is_some() {}
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_full_multicast_queue_yields_to_runtime_tcp() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_data_plane_ready_for_test();
+
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let multicast = test_cyw43_ipv6_multicast_frame();
+        let tcp = test_cyw43_tcp_frame();
+        for _ in 0..CYW43_PENDING_RX_QUEUE_CAP {
+            assert!(store_cyw43_pending_rx_token(
+                flags,
+                test_rx_token(&multicast)
+            ));
+        }
+
+        assert!(cyw43_pending_rx_token_store_possible(
+            flags,
+            &test_rx_token(&tcp)
+        ));
+        assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&tcp)));
+        assert_eq!(
+            cyw43_pending_rx_queue_len(),
+            CYW43_PENDING_RX_QUEUE_CAP as u64
+        );
+        assert_eq!(
+            CYW43_PENDING_RX_DROPS.load(Ordering::Acquire),
+            1,
+            "one multicast/noise frame is evicted for runtime TCP"
+        );
+
+        let mut dev = Cyw43DriverTaskDevice::default();
+        for _ in 0..CYW43_PENDING_RX_QUEUE_CAP {
+            let (rx, _) = dev
+                .receive(Instant::from_millis(0))
+                .expect("pending multicast queue eventually yields runtime TCP");
+            if rx.len == tcp.len() {
+                rx.consume(|bytes| assert_eq!(bytes, &tcp));
+                reset_cyw43_status_flags();
+                return;
+            }
+        }
+        panic!("runtime TCP was not preserved through multicast queue pressure");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_full_dhcp_queue_does_not_evict_dhcp_for_equal_priority_dhcp() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_data_plane_ready_for_test();
+
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let dhcp = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);
+        for _ in 0..CYW43_PENDING_RX_QUEUE_CAP {
+            assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&dhcp)));
+        }
+
+        assert!(!cyw43_pending_rx_token_store_possible(
+            flags,
+            &test_rx_token(&dhcp)
+        ));
+        assert!(!store_cyw43_pending_rx_token(flags, test_rx_token(&dhcp)));
+        assert_eq!(CYW43_PENDING_RX_DROPS.load(Ordering::Acquire), 1);
+
         reset_cyw43_status_flags();
     }
 

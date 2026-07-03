@@ -1663,6 +1663,16 @@ fn self_test_peer_assisted_ok(result: NetSelfTestResult, counters: NetCounters) 
         && (!result.udp_echo_ok || !result.tcp_ok || !result.console_ok)
 }
 
+const fn self_test_result_label(result: NetSelfTestResult) -> &'static str {
+    if result.tx_ok && result.udp_echo_ok && result.tcp_ok && result.console_ok {
+        "pass"
+    } else if result.peer_assisted_ok {
+        "peer-assisted-pass"
+    } else {
+        "fail"
+    }
+}
+
 fn self_test_failure_hint(
     result: NetSelfTestResult,
     counters: NetCounters,
@@ -4475,12 +4485,13 @@ impl<D: NetDevice> NetStack<D> {
     fn log_self_test_result(&self, result: NetSelfTestResult) {
         let counters = self.current_counters();
         info!(
-            "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={}",
+            "[net-selftest] result tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={} result={}",
             result.tx_ok,
             result.udp_echo_ok,
             result.tcp_ok,
             result.console_ok,
             result.peer_assisted_ok,
+            self_test_result_label(result),
         );
         if !result.udp_echo_ok {
             match self.self_test.udp_last_peer {
