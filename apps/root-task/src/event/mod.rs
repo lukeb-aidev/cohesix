@@ -226,6 +226,25 @@ const fn serial_prompt_refresh_after_console_ready(
 ) -> bool {
     local_seat_attached && local_seat_command_ready
 }
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+const fn local_seat_usb_service_pending_state(
+    enumeration_pending: bool,
+    first_byte_ready: bool,
+    recovery_aux_pending: bool,
+    no_reply_streak: u64,
+) -> bool {
+    enumeration_pending || (first_byte_ready && (recovery_aux_pending || no_reply_streak != 0))
+}
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+const fn local_seat_usb_input_pending_state(
+    enumeration_pending: bool,
+    keyboard_ready: bool,
+    first_report_ready: bool,
+) -> bool {
+    enumeration_pending || (keyboard_ready && !first_report_ready)
+}
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_KINDS: usize = 1;
 #[cfg(feature = "net-console")]
@@ -549,9 +568,7 @@ fn net_status_should_yield_to_physical_input(status: &NetStatusReport) -> bool {
 
 #[cfg(feature = "net-console")]
 fn net_status_needs_physical_pressure_service(status: &NetStatusReport) -> bool {
-    (net_status_active_interface_is_wired(status) && status.address_source == "dhcp-lease")
-        || net_status_cyw43_data_ready(status)
-        || net_status_cyw43_dhcp_pending(status)
+    net_status_cyw43_data_ready(status) || net_status_cyw43_dhcp_pending(status)
 }
 
 #[cfg(feature = "net-console")]
@@ -2266,7 +2283,7 @@ where
         }
 
         #[cfg(feature = "net-console")]
-        let local_seat_first_report_pending = self.linked_local_seat_first_report_pending();
+        let local_seat_usb_input_pending = self.linked_local_seat_usb_input_pending();
         #[cfg(feature = "net-console")]
         let net_poll = if let Some(net) = self.net.as_mut() {
             let status_before = net.status_report();
@@ -2276,7 +2293,7 @@ where
                 net_status_needs_physical_pressure_service(&status_before);
             let local_seat_input_pressure = net_physical_input_pressure_for_status(
                 physical_input_active,
-                local_seat_first_report_pending,
+                local_seat_usb_input_pending,
                 host_eapol_pending_before,
             );
             let net_contract = net.driver_task_contract();
@@ -3095,12 +3112,48 @@ where
         target_arch = "aarch64",
         target_os = "none"
     ))]
+    fn linked_local_seat_usb_service_pending(&self) -> bool {
+        let trace = self
+            .local_seat
+            .as_ref()
+            .map(|runtime| runtime.keyboard_trace())
+            .unwrap_or_default();
+        local_seat_usb_service_pending_state(
+            crate::local_seat::linked_local_seat_usb_enumeration_pending(),
+            crate::local_seat::linked_local_seat_usb_first_byte_ready(),
+            trace.recovery_aux_pending,
+            trace.driver_task_no_reply_streak,
+        )
+    }
+
+    #[cfg(not(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )))]
+    const fn linked_local_seat_usb_service_pending(&self) -> bool {
+        false
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
     fn linked_local_seat_usb_recovery_pending(&self) -> bool {
-        crate::local_seat::linked_local_seat_usb_first_byte_ready()
-            && self.local_seat.as_ref().is_some_and(|runtime| {
-                let trace = runtime.keyboard_trace();
-                trace.recovery_aux_pending || trace.driver_task_no_reply_streak != 0
-            })
+        let trace = self
+            .local_seat
+            .as_ref()
+            .map(|runtime| runtime.keyboard_trace())
+            .unwrap_or_default();
+        local_seat_usb_service_pending_state(
+            false,
+            crate::local_seat::linked_local_seat_usb_first_byte_ready(),
+            trace.recovery_aux_pending,
+            trace.driver_task_no_reply_streak,
+        )
     }
 
     #[cfg(not(all(
@@ -3119,9 +3172,12 @@ where
         target_arch = "aarch64",
         target_os = "none"
     ))]
-    fn linked_local_seat_first_report_pending(&self) -> bool {
-        crate::local_seat::linked_local_seat_usb_keyboard_ready()
-            && !crate::local_seat::linked_local_seat_usb_first_report_ready()
+    fn linked_local_seat_usb_input_pending(&self) -> bool {
+        local_seat_usb_input_pending_state(
+            crate::local_seat::linked_local_seat_usb_enumeration_pending(),
+            crate::local_seat::linked_local_seat_usb_keyboard_ready(),
+            crate::local_seat::linked_local_seat_usb_first_report_ready(),
+        )
     }
 
     #[cfg(not(all(
@@ -3130,7 +3186,7 @@ where
         target_arch = "aarch64",
         target_os = "none"
     )))]
-    const fn linked_local_seat_first_report_pending(&self) -> bool {
+    const fn linked_local_seat_usb_input_pending(&self) -> bool {
         false
     }
 
@@ -3226,7 +3282,7 @@ where
     }
 
     fn pump_local_seat_display_once(&mut self) {
-        if self.linked_local_seat_usb_recovery_pending() {
+        if self.linked_local_seat_usb_service_pending() {
             return;
         }
         let pass_limit = self.local_seat_hdmi_pump_pass_limit();
@@ -5526,7 +5582,7 @@ where
             local_trace.dropped_bytes,
         );
         let sustained_line = format_message(format_args!(
-            "usb: sustained_input queue_valid={} detail=0x{:04x} result=0x{:08x} queued_reports={} transfer_events={} report_status={} arming={} accepted={} drained={} echoed={} no_reply={} no_reply_streak={} recovery_aux_requests={} recovery_aux_pending={} runtime_skipped={} blocker={} usb_burst={} drops={}",
+            "usb: sustained_input queue_valid={} detail=0x{:04x} result=0x{:08x} queued_reports={} transfer_events={} report_status={} arming={} accepted={} drained={} echoed={} no_reply={} no_reply_streak={} enumeration_aux_requests={} recovery_aux_requests={} recovery_aux_pending={} runtime_skipped={} blocker={} usb_burst={} drops={}",
             Self::yes_no(queue_valid),
             linked_detail,
             linked_result,
@@ -5539,6 +5595,7 @@ where
             local_trace.echoed_bytes,
             local_trace.driver_task_no_replies,
             local_trace.driver_task_no_reply_streak,
+            local_trace.enumeration_aux_requests,
             local_trace.recovery_aux_requests,
             Self::yes_no(local_trace.recovery_aux_pending),
             self.metrics.local_seat_runtime_skipped_turns,
@@ -5672,17 +5729,13 @@ where
             } else {
                 "none"
             };
-            let proof_gate = if command_ready {
-                linked_gate.max(10)
-            } else if first_report {
-                linked_gate.max(9)
-            } else if keyboard_ready {
-                linked_gate.max(8)
-            } else if linked_controller_ready {
-                linked_gate.max(3)
-            } else {
-                linked_gate
-            };
+            let proof_gate = Self::usb_runtime_proof_gate_for_state(
+                linked_gate,
+                linked_controller_ready,
+                keyboard_ready,
+                first_report,
+                command_ready,
+            );
             let progress_next = linked_progress
                 .map(|progress| Self::usb_runtime_next_action_for_progress_phase(progress.phase));
             let next_step = if command_ready {
@@ -5853,7 +5906,7 @@ where
                 "local-seat-queue-diagnostic"
             };
             let keyboard_line = format_message(format_args!(
-                "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} arming={} accepted={} drained={} echoed={} dropped={} overruns={} no_reply={} recovery_aux={} recovery_pending={} cooldown={} cooldown_skips={}",
+                "usb: keyboard_trace source={} polls={} backend_bytes={} queued={} arming={} accepted={} drained={} echoed={} dropped={} overruns={} no_reply={} enumeration_aux={} recovery_aux={} recovery_pending={} cooldown={} cooldown_skips={}",
                 keyboard_trace_source,
                 local_trace.backend_poll_calls,
                 local_trace.backend_read_bytes,
@@ -5865,6 +5918,7 @@ where
                 local_trace.dropped_bytes,
                 local_trace.driver_task_budget_overruns,
                 local_trace.driver_task_no_replies,
+                local_trace.enumeration_aux_requests,
                 local_trace.recovery_aux_requests,
                 Self::yes_no(local_trace.recovery_aux_pending),
                 local_trace.poll_cooldown_turns,
@@ -5933,6 +5987,30 @@ where
             None if polling_enabled => ("probe-in-progress", "poll-keyboard"),
             None => ("no-controller-edge-yet", "probe-keyboard"),
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn usb_runtime_proof_gate_for_state(
+        linked_gate: u8,
+        linked_controller_ready: bool,
+        keyboard_ready: bool,
+        first_report: bool,
+        command_ready: bool,
+    ) -> u8 {
+        let mut proof_gate = linked_gate;
+        if linked_controller_ready && proof_gate < 3 {
+            proof_gate = 3;
+        }
+        if keyboard_ready && proof_gate < 8 {
+            proof_gate = 8;
+        }
+        if first_report && proof_gate < 9 {
+            proof_gate = 9;
+        }
+        if command_ready && proof_gate < 10 {
+            proof_gate = 10;
+        }
+        proof_gate
     }
 
     #[cfg(feature = "kernel")]
@@ -8419,19 +8497,13 @@ where
                 doorbell_pending,
                 report_status,
             );
-            let mut proof_gate = linked_gate;
-            if linked_controller_ready {
-                proof_gate = proof_gate.max(3);
-            }
-            if keyboard_ready {
-                proof_gate = proof_gate.max(8);
-            }
-            if first_report {
-                proof_gate = proof_gate.max(9);
-            }
-            if command_ready || first_byte {
-                proof_gate = proof_gate.max(10);
-            }
+            let proof_gate = Self::usb_runtime_proof_gate_for_state(
+                linked_gate,
+                linked_controller_ready,
+                keyboard_ready,
+                first_report,
+                command_ready,
+            );
             let active_blocker = if proof_gate >= 10 {
                 "none"
             } else if keyboard_ready && !first_report {
@@ -8484,7 +8556,7 @@ where
             if let Some(progress) = linked_progress {
                 let raw_progress_gate = Self::usb_runtime_gate_for_progress_phase(progress.phase);
                 let progress_superseded = Self::usb_runtime_progress_superseded_by_command_ready(
-                    command_ready || first_byte,
+                    command_ready,
                     proof_gate,
                     raw_progress_gate,
                 );
@@ -12948,24 +13020,26 @@ where
                             report.tcp_target,
                             report.last_result
                         ));
-                        self.emit_console_line(line_one.as_str());
-                        self.emit_console_line(line_two.as_str());
-                        self.emit_console_line(line_three.as_str());
-                        self.emit_console_line(line_flush.as_str());
-                        self.emit_console_line(line_local_seat.as_str());
-                        self.emit_console_line(line_four.as_str());
-                        self.emit_console_line(line_five.as_str());
-                        if net_status_active_interface_is_wifi(&status) {
-                            self.emit_console_line(line_wifi.as_str());
-                            self.emit_console_line(line_wifi_trace.as_str());
-                            self.emit_wifi_credential_warning_for_status(&status, &stats, true);
-                        }
-                        if net_status_active_interface_is_wired(&status) {
-                            self.emit_console_line(line_wired.as_str());
-                            self.emit_console_line(line_wired_rxq.as_str());
-                        }
-                        self.emit_console_line(line_six.as_str());
-                        self.emit_console_line(status_line.as_str());
+                        self.with_local_seat_mirror_suppressed(|this| {
+                            this.emit_console_line(line_one.as_str());
+                            this.emit_console_line(line_two.as_str());
+                            this.emit_console_line(line_three.as_str());
+                            this.emit_console_line(line_flush.as_str());
+                            this.emit_console_line(line_local_seat.as_str());
+                            this.emit_console_line(line_four.as_str());
+                            this.emit_console_line(line_five.as_str());
+                            if net_status_active_interface_is_wifi(&status) {
+                                this.emit_console_line(line_wifi.as_str());
+                                this.emit_console_line(line_wifi_trace.as_str());
+                                this.emit_wifi_credential_warning_for_status(&status, &stats, true);
+                            }
+                            if net_status_active_interface_is_wired(&status) {
+                                this.emit_console_line(line_wired.as_str());
+                                this.emit_console_line(line_wired_rxq.as_str());
+                            }
+                            this.emit_console_line(line_six.as_str());
+                            this.emit_console_line(status_line.as_str());
+                        });
                         self.metrics.accepted_commands += 1;
                         self.emit_ack_ok(verb_label, None);
                     } else {
@@ -18473,7 +18547,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn dhcp_lease_data_paths_need_physical_pressure_service() {
+    fn dhcp_lease_data_paths_need_physical_pressure_service_only_for_cyw43() {
         let mut wired = NetStatusReport::default();
         wired.profile_backend = "bcmgenet-v5";
         wired.backend = "bcmgenet-v5";
@@ -18481,7 +18555,7 @@ mod tests {
         wired.active_interface = "wired";
         wired.address_source = "dhcp-lease";
         wired.dhcp_phase = "bound";
-        assert!(net_status_needs_physical_pressure_service(&wired));
+        assert!(!net_status_needs_physical_pressure_service(&wired));
 
         let mut wifi = wired.clone();
         wifi.active_driver = "cyw43";
@@ -19188,6 +19262,49 @@ mod tests {
         assert!(
             rendered.contains("ERR NETTEST reason=policy detail=not-ready:ipc-buffer"),
             "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn netstats_suppresses_local_seat_mirror_for_bulk_serial_diagnostic() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.mode = "dhcp";
+        net.status.interface_policy = "wired";
+        net.status.active_interface = "wired";
+        net.status.standby_interface = "none";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.status.ip.push_str("192.168.10.50").unwrap();
+        net.status.gateway.push_str("192.168.10.1").unwrap();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        local_seat.mark_root_console_ready();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_network(&mut net)
+            .with_local_seat(&mut local_seat);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"netstats\n");
+
+        pump.poll();
+        drop(pump);
+
+        let mirrored = local_seat.mirrored_lines_snapshot();
+        assert!(
+            mirrored.iter().all(|line| !line.starts_with("netstats:")
+                && !line.starts_with("netstatus:")
+                && !line.starts_with("nettest:")),
+            "{mirrored:?}"
         );
     }
 
@@ -20819,6 +20936,36 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_step_label(10),
             "command-input-ready"
+        );
+    }
+
+    #[test]
+    fn usb_pending_enumeration_counts_as_service_and_input_pressure() {
+        assert!(local_seat_usb_service_pending_state(true, false, false, 0));
+        assert!(!local_seat_usb_service_pending_state(false, false, true, 8));
+        assert!(local_seat_usb_service_pending_state(false, true, true, 0));
+        assert!(local_seat_usb_service_pending_state(false, true, false, 1));
+
+        assert!(local_seat_usb_input_pending_state(true, false, false));
+        assert!(local_seat_usb_input_pending_state(false, true, false));
+        assert!(!local_seat_usb_input_pending_state(false, true, true));
+        assert!(!local_seat_usb_input_pending_state(false, false, false));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_startup_proof_gate_needs_command_ready_for_gate10() {
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_proof_gate_for_state(7, true, true, true, false),
+            9
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_proof_gate_for_state(7, true, true, true, true),
+            10
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_proof_gate_for_state(10, true, true, true, false),
+            10
         );
     }
 

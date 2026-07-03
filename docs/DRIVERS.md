@@ -2364,7 +2364,15 @@ Required Cohesix shape:
   `DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL` turns that decode the CDC header in
   root. A control-plane command is not accepted merely because the SDPCM frame
   was transmitted; root must observe the expected CDC command/ioctl id and zero
-  firmware status, or preserve a precise control fault.
+  firmware status, or preserve a precise control fault. Zero-response writes,
+  including host-EAPOL multicast, `allmulti`, and `WLC_SET_PROMISC` admission,
+  still require that matched CDC completion and must not use a runtime-private
+  combined exchange that hides nonmatching replies from root. Host-EAPOL RX
+  admission writes use a bounded extended split-control reply window so delayed
+  matched zero-response completions are not misclassified as control-plane idle
+  loops. Split `CONTROL_POLL` turns retain the old-good hintless first-read
+  cadence through polls 1, 4, 16, 64, 256, 1024, and 4096 for these admission
+  windows.
 - Each matched control exchange emits a bounded
   `CYW43_DRIVER_TASK_CONTROL_REQUEST` line before submission. For small
   non-secret iovar bodies such as `bus:txglomalign=8`, the line records the
@@ -2557,7 +2565,14 @@ cold-boot window and returns cached progress instead of holding the shell behind
 the full hub wait. Address command waits and hub-port status waits get finite
 same-request envelopes so root does not publish false-fresh requests while the
 child is still completing Address Device, descriptor status, or a long EP0
-hub-control turn.
+hub-control turn. `usb status` must expose prompt-side enumeration aux requests
+separately from post-first-byte recovery aux requests, because the former proves
+root is preserving an in-flight enumeration request while the latter is
+post-acceptance interrupt-IN recovery. Pending pre-keyboard enumeration is a
+physical-input pressure source: network data service and HDMI redraws must yield
+bounded turns to it just as they yield to post-first-byte USB recovery. USB gate
+10 is command-input readiness; first-byte proof alone remains gate-9 evidence
+until the local-seat command path is ready.
 
 After the first HID report and first console byte are proven, repeated
 root-task no-reply polls are treated as a post-acceptance interrupt-IN service

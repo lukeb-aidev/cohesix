@@ -1043,6 +1043,28 @@ pub(crate) const fn local_seat_keyboard_cooldown_should_show_busy(
             || no_reply_streak >= LINKED_LOCAL_SEAT_USB_VISIBLE_BUSY_NO_REPLY_THRESHOLD)
 }
 
+/// Return whether HDMI should show the USB-console busy line.
+#[must_use]
+pub(crate) const fn local_seat_hdmi_keyboard_busy_line_warranted_state(
+    command_ready: bool,
+    prompt_hard_blocked: bool,
+    keyboard_poll_reason: bool,
+    no_reply_streak: u64,
+    recovery_pending: bool,
+) -> bool {
+    if !command_ready || !prompt_hard_blocked {
+        return false;
+    }
+    if keyboard_poll_reason {
+        return local_seat_keyboard_cooldown_should_show_busy(
+            true,
+            no_reply_streak,
+            recovery_pending,
+        );
+    }
+    true
+}
+
 /// Return whether keyboard polling should be treated as prompt-visible recovery.
 #[must_use]
 pub(crate) const fn local_seat_keyboard_prompt_recovery_pending(
@@ -1166,8 +1188,14 @@ fn local_seat_hdmi_keyboard_wait_line_payload(
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const fn local_seat_keyboard_poll_aux(keyboard_ready: bool, request_recovery: bool) -> u32 {
-    if keyboard_ready && request_recovery {
+const fn local_seat_keyboard_poll_aux(
+    keyboard_ready: bool,
+    enumeration_pending: bool,
+    request_recovery: bool,
+) -> u32 {
+    if !keyboard_ready && enumeration_pending {
+        DRIVER_RUNTIME_USB_ENUMERATE_AUX
+    } else if keyboard_ready && request_recovery {
         DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
     } else {
         0
@@ -1547,6 +1575,8 @@ pub struct LocalSeatKeyboardTrace {
     pub driver_task_no_replies: u64,
     /// Consecutive no-reply polls since the last driver-task completion.
     pub driver_task_no_reply_streak: u64,
+    /// Prompt-side enumeration aux polls submitted by root before keyboard ready.
+    pub enumeration_aux_requests: u64,
     /// Post-first-byte recovery aux polls submitted by root.
     pub recovery_aux_requests: u64,
     /// Whether a recovery aux poll is still waiting for a reply or retry window.
@@ -1688,6 +1718,7 @@ pub struct LocalSeatRuntime {
     keyboard_poll_no_reply_streak: u64,
     keyboard_poll_no_reply_cooldown: u8,
     keyboard_poll_no_reply_backoff: u8,
+    keyboard_enumeration_aux_requests: u64,
     keyboard_recovery_aux_pending: bool,
     keyboard_recovery_aux_requests: u64,
     keyboard_post_first_byte_clean_polls: u8,
@@ -1860,6 +1891,7 @@ impl LocalSeatRuntime {
             keyboard_poll_no_reply_streak: 0,
             keyboard_poll_no_reply_cooldown: 0,
             keyboard_poll_no_reply_backoff: 0,
+            keyboard_enumeration_aux_requests: 0,
             keyboard_recovery_aux_pending: false,
             keyboard_recovery_aux_requests: 0,
             keyboard_post_first_byte_clean_polls: 0,
@@ -2550,19 +2582,15 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn linked_hdmi_keyboard_busy_line_warranted(&self, reason: &'static str) -> bool {
-        if self.linked_usb_command_input_ready() && !self.linked_usb_prompt_hard_blocked() {
-            return false;
-        }
-        if matches!(reason, "keyboard-poll-no-reply" | "keyboard-poll-cooldown")
-            && !local_seat_keyboard_cooldown_should_show_busy(
-                self.hdmi_keyboard_command_ready_latched || self.linked_usb_command_input_ready(),
-                self.keyboard_poll_no_reply_streak,
-                self.keyboard_recovery_aux_pending,
-            )
-        {
-            return false;
-        }
-        true
+        let command_ready =
+            self.hdmi_keyboard_command_ready_latched || self.linked_usb_command_input_ready();
+        local_seat_hdmi_keyboard_busy_line_warranted_state(
+            command_ready,
+            self.linked_usb_prompt_hard_blocked(),
+            matches!(reason, "keyboard-poll-no-reply" | "keyboard-poll-cooldown"),
+            self.keyboard_poll_no_reply_streak,
+            self.keyboard_recovery_aux_pending,
+        )
     }
 
     #[cfg(all(
@@ -3161,6 +3189,7 @@ impl LocalSeatRuntime {
             driver_task_budget_overruns: self.driver_task_budget_overruns,
             driver_task_no_replies: self.driver_task_no_replies,
             driver_task_no_reply_streak: self.keyboard_poll_no_reply_streak,
+            enumeration_aux_requests: self.keyboard_enumeration_aux_requests,
             recovery_aux_requests: self.keyboard_recovery_aux_requests,
             recovery_aux_pending: self.keyboard_recovery_aux_pending,
             poll_cooldown_turns: self.keyboard_poll_no_reply_cooldown,
@@ -3704,6 +3733,26 @@ impl LocalSeatRuntime {
         emit_usb_keyboard_recovery_request(action, self.keyboard_trace());
     }
 
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn record_keyboard_poll_aux_submission(&mut self, aux0: u32) -> bool {
+        if aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX {
+            self.keyboard_enumeration_aux_requests =
+                self.keyboard_enumeration_aux_requests.saturating_add(1);
+            false
+        } else if aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX {
+            #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+            self.reset_keyboard_post_first_byte_clean_proof();
+            self.keyboard_recovery_aux_pending = true;
+            self.keyboard_recovery_aux_requests =
+                self.keyboard_recovery_aux_requests.saturating_add(1);
+            #[cfg(all(target_arch = "aarch64", target_os = "none"))]
+            self.emit_keyboard_recovery_request("submit");
+            true
+        } else {
+            false
+        }
+    }
+
     fn keyboard_poll_fast_recovery_active(&self) -> bool {
         #[cfg(all(
             feature = "kernel",
@@ -3958,11 +4007,6 @@ impl LocalSeatRuntime {
                     );
                     return;
                 }
-                if LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire)
-                    && !LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
-                {
-                    return;
-                }
                 if LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire) {
                     self.mark_linked_hdmi_keyboard_command_ready_once();
                     self.release_pending_linked_hdmi_prompt_if_keyboard_ready();
@@ -3986,17 +4030,10 @@ impl LocalSeatRuntime {
                 );
                 command.aux0 = local_seat_keyboard_poll_aux(
                     LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire),
+                    LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire),
                     self.keyboard_poll_recovery_aux_requested(),
                 );
-                let submitted_recovery_aux =
-                    command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX;
-                if submitted_recovery_aux {
-                    self.reset_keyboard_post_first_byte_clean_proof();
-                    self.keyboard_recovery_aux_pending = true;
-                    self.keyboard_recovery_aux_requests =
-                        self.keyboard_recovery_aux_requests.saturating_add(1);
-                    self.emit_keyboard_recovery_request("submit");
-                }
+                let submitted_recovery_aux = self.record_keyboard_poll_aux_submission(command.aux0);
                 if let Some(completion) = run_local_seat_driver_task_ring_service(contract, command)
                 {
                     if linked_usb_keyboard_input_frame_valid(completion) {
@@ -6263,6 +6300,16 @@ pub(crate) fn linked_local_seat_usb_controller_ready() -> bool {
 ))]
 pub(crate) fn linked_local_seat_usb_first_report_ready() -> bool {
     LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED.load(Ordering::Acquire)
+}
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "usb",
+    target_arch = "aarch64",
+    target_os = "none"
+))]
+pub(crate) fn linked_local_seat_usb_enumeration_pending() -> bool {
+    LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire)
 }
 
 #[cfg(all(
@@ -9141,6 +9188,26 @@ mod tests {
     }
 
     #[test]
+    fn keyboard_busy_line_policy_is_never_visible_before_command_ready() {
+        assert!(!local_seat_hdmi_keyboard_busy_line_warranted_state(
+            false, true, false, 0, false
+        ));
+        assert!(!local_seat_hdmi_keyboard_busy_line_warranted_state(
+            false,
+            true,
+            true,
+            LINKED_LOCAL_SEAT_USB_VISIBLE_BUSY_NO_REPLY_THRESHOLD,
+            false
+        ));
+        assert!(!local_seat_hdmi_keyboard_busy_line_warranted_state(
+            true, false, false, 0, false
+        ));
+        assert!(local_seat_hdmi_keyboard_busy_line_warranted_state(
+            true, true, false, 0, false
+        ));
+    }
+
+    #[test]
     fn keyboard_prompt_recovery_does_not_revoke_command_ready_on_no_reply() {
         let threshold = LINKED_LOCAL_SEAT_USB_POST_FIRST_BYTE_IDLE_RECOVERY_NO_REPLY_THRESHOLD;
 
@@ -9910,13 +9977,62 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
     fn linked_usb_keyboard_poll_stays_nonblocking_until_keyboard_ready() {
-        assert_eq!(local_seat_keyboard_poll_aux(false, false), 0);
-        assert_eq!(local_seat_keyboard_poll_aux(true, false), 0);
-        assert_eq!(local_seat_keyboard_poll_aux(false, true), 0);
+        assert_eq!(local_seat_keyboard_poll_aux(false, false, false), 0);
         assert_eq!(
-            local_seat_keyboard_poll_aux(true, true),
+            local_seat_keyboard_poll_aux(false, true, false),
+            DRIVER_RUNTIME_USB_ENUMERATE_AUX
+        );
+        assert_eq!(local_seat_keyboard_poll_aux(true, false, false), 0);
+        assert_eq!(local_seat_keyboard_poll_aux(true, true, false), 0);
+        assert_eq!(local_seat_keyboard_poll_aux(false, false, true), 0);
+        assert_eq!(
+            local_seat_keyboard_poll_aux(true, false, true),
             DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn linked_usb_keyboard_aux_submission_counts_enumeration_separately() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        assert!(!runtime.record_keyboard_poll_aux_submission(DRIVER_RUNTIME_USB_ENUMERATE_AUX));
+        let after_enumerate = runtime.keyboard_trace();
+        assert_eq!(after_enumerate.enumeration_aux_requests, 1);
+        assert_eq!(after_enumerate.recovery_aux_requests, 0);
+        assert!(!after_enumerate.recovery_aux_pending);
+
+        assert!(
+            runtime.record_keyboard_poll_aux_submission(DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX)
+        );
+        let after_recovery = runtime.keyboard_trace();
+        assert_eq!(after_recovery.enumeration_aux_requests, 1);
+        assert_eq!(after_recovery.recovery_aux_requests, 1);
+        assert!(after_recovery.recovery_aux_pending);
+    }
+
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    #[test]
+    fn keyboard_busy_line_is_never_shown_before_command_ready() {
+        let runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 16,
+            buffer_lines: 4,
+        });
+
+        assert!(!runtime.linked_hdmi_keyboard_busy_line_warranted("post-first-byte-pressure"));
+        assert!(!runtime.linked_hdmi_keyboard_busy_line_warranted("keyboard-poll-no-reply"));
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

@@ -161,6 +161,8 @@ const CYW43_DATA_RX_STEADY_POLL_FLAGS: u16 = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLE
 const CYW43_HOST_EAPOL_TX_ATTEMPTS: usize = 8;
 const CYW43_HOST_EAPOL_TX_DRAIN_POLLS: usize = 2_000;
 const CYW43_HOST_EAPOL_TX_DRAIN_TIMEOUT_MS: u64 = 2_000;
+const CYW43_HOST_EAPOL_RX_ADMISSION_POLL_ATTEMPTS: usize = 4_096;
+const CYW43_HOST_EAPOL_RX_ADMISSION_REPLY_TIMEOUT_MS: u64 = 4_096;
 const CYW43_HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_POLLS: u32 = 1_024;
 const CYW43_HOST_EAPOL_RX_RESCUE_AFTER_POST_ASSOC_POLLS: u32 = 4_096;
 const CYW43_HOST_EAPOL_RX_REFRESH_AFTER_POST_ASSOC_MS: u64 = 1_024;
@@ -8884,8 +8886,8 @@ fn cyw43_submit_runtime_control_exchange(
 
 #[cfg(feature = "kernel")]
 fn cyw43_control_uses_runtime_exchange(stage: &'static str, control_iovar: &str) -> bool {
-    let _ = control_iovar;
-    cyw43_control_stage_is_host_eapol_promisc(stage)
+    let _ = (stage, control_iovar);
+    false
 }
 
 #[cfg(feature = "kernel")]
@@ -8895,6 +8897,25 @@ fn cyw43_control_stage_is_host_eapol_promisc(stage: &'static str) -> bool {
         "cyw43-host-eapol-promisc"
             | "cyw43-host-eapol-refresh-promisc"
             | "cyw43-host-eapol-rescue-promisc"
+            | "cyw43-host-eapol-restore-promisc"
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_stage_is_host_eapol_rx_admission(stage: &'static str) -> bool {
+    matches!(
+        stage,
+        "cyw43-host-eapol-mcast"
+            | "cyw43-host-eapol-allmulti"
+            | "cyw43-host-eapol-promisc"
+            | "cyw43-host-eapol-refresh-mcast"
+            | "cyw43-host-eapol-refresh-allmulti"
+            | "cyw43-host-eapol-refresh-promisc"
+            | "cyw43-host-eapol-rescue-mcast"
+            | "cyw43-host-eapol-rescue-allmulti"
+            | "cyw43-host-eapol-rescue-promisc"
+            | "cyw43-host-eapol-restore-mcast"
+            | "cyw43-host-eapol-restore-allmulti"
             | "cyw43-host-eapol-restore-promisc"
     )
 }
@@ -9499,7 +9520,7 @@ const fn cyw43_control_fault_completion(
 
 #[cfg(feature = "kernel")]
 const fn cyw43_control_split_poll_flags(poll: usize) -> u16 {
-    if matches!(poll, 1 | 4 | 16 | 64 | 256) {
+    if matches!(poll, 1 | 4 | 16 | 64 | 256 | 1024 | 4096) {
         DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
     } else {
         0
@@ -9512,6 +9533,8 @@ fn cyw43_control_exchange_poll_attempts(stage: &'static str, control_iovar: &str
         CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_POLL_ATTEMPTS
     } else if cyw43_control_uses_host_eapol_wsec_key_reply_window(stage, control_iovar) {
         CYW43_HOST_EAPOL_WSEC_KEY_POLL_ATTEMPTS
+    } else if cyw43_control_uses_host_eapol_rx_admission_reply_window(stage, control_iovar) {
+        CYW43_HOST_EAPOL_RX_ADMISSION_POLL_ATTEMPTS
     } else {
         CYW43_CONTROL_PLANE_POLL_ATTEMPTS
     }
@@ -9523,6 +9546,8 @@ fn cyw43_control_exchange_timeout_ms(stage: &'static str, control_iovar: &str) -
         CYW43_HOST_EAPOL_POST_SECURE_WSEC_KEY_REPLY_TIMEOUT_MS
     } else if cyw43_control_uses_host_eapol_wsec_key_reply_window(stage, control_iovar) {
         CYW43_HOST_EAPOL_WSEC_KEY_REPLY_TIMEOUT_MS
+    } else if cyw43_control_uses_host_eapol_rx_admission_reply_window(stage, control_iovar) {
+        CYW43_HOST_EAPOL_RX_ADMISSION_REPLY_TIMEOUT_MS
     } else {
         CYW43_CONTROL_PLANE_REPLY_TIMEOUT_MS
     }
@@ -9548,6 +9573,15 @@ fn cyw43_control_uses_post_secure_host_eapol_wsec_key_reply_window(
             stage,
             "cyw43-host-eapol-post-secure-ptk" | "cyw43-host-eapol-post-secure-gtk"
         )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_control_uses_host_eapol_rx_admission_reply_window(
+    stage: &'static str,
+    control_iovar: &str,
+) -> bool {
+    cyw43_control_stage_is_host_eapol_rx_admission(stage)
+        && matches!(control_iovar, "mcast_list" | "allmulti" | "none")
 }
 
 #[cfg(feature = "kernel")]
@@ -15259,16 +15293,14 @@ mod tests {
     }
 
     #[test]
-    fn host_eapol_promisc_uses_runtime_exchange_with_pre_tx_drain() {
-        let descriptor = cyw43_control_exchange_descriptor(
+    fn host_eapol_promisc_uses_split_control_frame_with_pre_tx_drain() {
+        let descriptor = cyw43_control_frame_descriptor(
             20,
-            CYW43_WLC_SET_PROMISC,
-            511,
             Cyw43ControlHeaderMode::Extended,
             CYW43_HOST_EAPOL_PROMISC_PRE_TX_DRAIN,
         );
 
-        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
         assert_eq!(
             descriptor.flags,
             DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
@@ -15276,21 +15308,82 @@ mod tests {
         );
         assert_eq!(descriptor.payload_len, 20);
         assert_eq!(descriptor.total_len, 20);
-        assert_eq!(descriptor.arg0, CYW43_WLC_SET_PROMISC);
-        assert_eq!(descriptor.arg1, 511);
+        assert_eq!(
+            cyw43_control_request_expected_response_len(CYW43_WLC_SET_PROMISC, None),
+            0
+        );
         for stage in [
             "cyw43-host-eapol-promisc",
             "cyw43-host-eapol-refresh-promisc",
             "cyw43-host-eapol-rescue-promisc",
             "cyw43-host-eapol-restore-promisc",
         ] {
-            assert!(cyw43_control_uses_runtime_exchange(stage, "none"));
+            assert!(!cyw43_control_uses_runtime_exchange(stage, "none"));
             assert!(cyw43_control_stage_is_host_eapol_promisc(stage));
         }
         assert!(!cyw43_control_uses_runtime_exchange(
             "cyw43-control-infra",
             "none"
         ));
+    }
+
+    #[test]
+    fn host_eapol_rx_admission_controls_use_split_extended_reply_window() {
+        for (stage, iovar) in [
+            ("cyw43-host-eapol-mcast", "mcast_list"),
+            ("cyw43-host-eapol-allmulti", "allmulti"),
+            ("cyw43-host-eapol-promisc", "none"),
+            ("cyw43-host-eapol-refresh-mcast", "mcast_list"),
+            ("cyw43-host-eapol-refresh-allmulti", "allmulti"),
+            ("cyw43-host-eapol-refresh-promisc", "none"),
+            ("cyw43-host-eapol-rescue-mcast", "mcast_list"),
+            ("cyw43-host-eapol-rescue-allmulti", "allmulti"),
+            ("cyw43-host-eapol-rescue-promisc", "none"),
+            ("cyw43-host-eapol-restore-mcast", "mcast_list"),
+            ("cyw43-host-eapol-restore-allmulti", "allmulti"),
+            ("cyw43-host-eapol-restore-promisc", "none"),
+        ] {
+            assert!(!cyw43_control_uses_runtime_exchange(stage, iovar));
+            assert!(cyw43_control_stage_is_host_eapol_rx_admission(stage));
+            assert!(cyw43_control_uses_host_eapol_rx_admission_reply_window(
+                stage, iovar
+            ));
+            assert_eq!(
+                cyw43_control_exchange_poll_attempts(stage, iovar),
+                CYW43_HOST_EAPOL_RX_ADMISSION_POLL_ATTEMPTS
+            );
+            assert_eq!(
+                cyw43_control_exchange_timeout_ms(stage, iovar),
+                CYW43_HOST_EAPOL_RX_ADMISSION_REPLY_TIMEOUT_MS
+            );
+        }
+
+        assert_eq!(
+            cyw43_control_request_expected_response_len(CYW43_WLC_SET_VAR, None),
+            0
+        );
+        assert_eq!(
+            cyw43_control_request_expected_response_len(CYW43_WLC_SET_PROMISC, None),
+            0
+        );
+        assert!(!cyw43_control_uses_host_eapol_rx_admission_reply_window(
+            "cyw43-control-auth",
+            "auth"
+        ));
+    }
+
+    #[test]
+    fn split_control_poll_keeps_oldgood_late_hintless_firstread_cadence() {
+        for poll in [1, 4, 16, 64, 256, 1024, 4096] {
+            assert_eq!(
+                cyw43_control_split_poll_flags(poll),
+                DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
+            );
+        }
+        for poll in [2, 8, 128, 512, 2048, 4095] {
+            assert_eq!(cyw43_control_split_poll_flags(poll), 0);
+        }
+        assert!(CYW43_HOST_EAPOL_RX_ADMISSION_POLL_ATTEMPTS >= 4096);
     }
 
     #[test]
