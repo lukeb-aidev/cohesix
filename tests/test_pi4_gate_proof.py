@@ -268,7 +268,8 @@ def _oldgood_usb_replay_lines() -> list[str]:
         "usb: phase=usb-hid-interrupt-queue-ready slot=2 ep=0x81 dci=3 queued=1",
         "[local-seat] usb hid first report source=linked-runtime-hid "
         "len=8 keys=0x17 transfer_event=yes",
-        "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
+        "[local-seat] usb keyboard command-ready source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no "
+        "clean_polls=2 no_reply=0 recovery_pending=no",
         "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
         "read=1 ascii=0x74 key=0x17",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
@@ -1090,7 +1091,7 @@ def test_gate_proof_requires_usb_first_report_for_ready(
             .replace("first_byte_source=linked-runtime-hid", "first_byte_source=none")
             for line in _strong_driver_task_proof_lines()
         ),
-        "[local-seat] usb keyboard command-ready source=linked-runtime-hid",
+        "[local-seat] usb keyboard command-ready source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no",
     ]
     log_path.write_text("\n".join(lines), encoding="utf-8")
 

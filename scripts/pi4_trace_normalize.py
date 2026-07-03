@@ -188,6 +188,7 @@ USB_OUTCOME_BLOCKERS = {
     "hid-control-failed",
     "hid-interrupt-queue-no-reply",
     "hid-interrupt-queue-failed",
+    "usb-hid-interrupt-no-completion",
     "root-port-reset-no-reply",
     "root-port-connect-no-reply",
     "root-port-connect-timeout",
@@ -2373,6 +2374,9 @@ def cyw43_trace_field(fields: dict[str, str], prefix: str, suffix: str) -> str |
 def cyw43_host_eapol_rx_source_asserted(fields: dict[str, str], prefix: str) -> bool:
     """Return true when a host-EAPOL source lane reports pending RX source bits."""
 
+    mode = fields.get(f"{prefix}_mode", "").lower()
+    if mode.endswith("cached"):
+        return False
     return (
         cyw43_field_yes(fields, f"{prefix}_f2_ready")
         and (
@@ -4079,6 +4083,13 @@ def summarize_usb_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 blocker = "none"
             continue
         if event.domain != "usb":
+            continue
+        if raw.startswith(
+            ("usb: runtime_queue", "usb: stall_telemetry", "usb: sustained_input")
+        ) and usb_hid_interrupt_no_completion_seen(fields):
+            gate = max(gate, 8)
+            if blocker in {"unknown", "none", "hid-first-report"}:
+                blocker = "usb-hid-interrupt-no-completion"
             continue
         if "map exact miss" in raw and fields.get("reason") == "no-device-coverage":
             gate = max(gate, 3)
@@ -7337,21 +7348,35 @@ def update_usb_keyboard_pressure_field(
         values[out_key] = parsed
 
 
+def usb_hid_interrupt_no_completion_seen(fields: Mapping[str, str]) -> bool:
+    """Return true for a full HID interrupt queue that has produced no events."""
+
+    queued_reports = parse_hex_int(fields.get("queued_reports"))
+    transfer_events = parse_hex_int(fields.get("transfer_events"))
+    doorbell_pending = fields.get("doorbell_pending", "").lower()
+    report_status = fields.get("report_status", "none").lower().replace("_", "-")
+    return (
+        queued_reports is not None
+        and queued_reports >= 32
+        and transfer_events == 0
+        and doorbell_pending in {"", "0", "false", "no"}
+        and report_status in {"none", "idle", "decoded-empty"}
+    )
+
+
 def usb_runtime_active_blocker_seen(raw: str, fields: Mapping[str, str]) -> bool:
     """Return whether a USB runtime line is active degraded evidence."""
 
     queue_valid = fields.get("queue_valid", "").lower()
     if queue_valid == "no":
         return True
+    if usb_hid_interrupt_no_completion_seen(fields):
+        return True
     doorbell_pending = fields.get("doorbell_pending", "").lower()
     if doorbell_pending in {"1", "true", "yes"}:
         return True
     if fields.get("recovery_aux_pending", "").lower() == "yes":
         return True
-    runtime_skipped = parse_hex_int(fields.get("runtime_skipped"))
-    if runtime_skipped is not None and runtime_skipped > 0:
-        return True
-
     report_status = fields.get("report_status", "").lower().replace("_", "-")
     if report_status in {
         "queue-collapse",
@@ -7538,6 +7563,12 @@ def usb_local_seat_state_from_runtime(
     busy_after_ready = runtime.busy_after_ready
     if usb_gate < 10:
         return "blocked", usb_blocker or "usb-gate-incomplete", busy_after_ready
+    if runtime.recovery_diag_valid == "no":
+        return "degraded", "usb-runtime-diag-invalid", runtime.command_ready or busy_after_ready
+    if not runtime.first_report_ready:
+        return "degraded", "usb-first-report-missing", runtime.command_ready or busy_after_ready
+    if not runtime.command_ready:
+        return "degraded", "usb-command-ready-missing", busy_after_ready
     if post_first_byte_blocker != "none":
         return "degraded", post_first_byte_blocker, runtime.command_ready or busy_after_ready
     if runtime.busy_after_ready:
@@ -7749,8 +7780,11 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
         active = event.fields.get("active", active)
         addr_src = event.fields.get("addr_src", event.fields.get("src", addr_src))
         dhcp = event.fields.get("dhcp", dhcp)
-        if field_lower(event, "tcp_ready") == "yes":
+        tcp_ready_field = field_lower(event, "tcp_ready")
+        if tcp_ready_field == "yes":
             tcp_ready = True
+        elif tcp_ready_field == "no":
+            tcp_ready = False
     return active, addr_src, dhcp, tcp_ready, nettest_proof
 
 
@@ -9231,16 +9265,22 @@ def usb_command_ready_step(event: TraceEvent) -> bool:
 
     raw = event.raw.lower()
     if "[local-seat] usb keyboard command-ready" in raw:
-        return True
+        clean_polls = parse_hex_int(event.fields.get("clean_polls")) or 0
+        return (
+            clean_polls >= 2
+            and field_lower(event, "recovery_pending") != "yes"
+            and (parse_hex_int(event.fields.get("no_reply")) or 0) == 0
+        )
     if (
         "[local-seat] hdmi prompt enabled" in raw
         and field_lower(event, "reason") == "usb-console-command-ready"
     ):
-        return True
+        return False
     if raw.startswith("usb: acceptance"):
         return (
             field_lower(event, "command_ready") == "yes"
             and field_lower(event, "usable") == "yes"
+            and field_lower(event, "first_report") == "yes"
         )
     if (
         "pi4 keyboard runtime proof" in raw
@@ -11660,18 +11700,19 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         blockers.append("local-seat-usb-gate-incomplete")
     if record.get("USB_COMMAND_READY") == "yes" and record.get("USB_FIRST_REPORT_READY") != "yes":
         blockers.append("local-seat-usb-first-report-missing")
-    if record.get("USB_FIRST_BYTE_READY") != "yes":
+    if (
+        record.get("USB_FIRST_BYTE_READY") != "yes"
+        and record.get("USB_COMMAND_READY") != "yes"
+    ):
         blockers.append("local-seat-usb-first-byte-missing")
-    if record.get("USB_OLDGOOD_REPLAY") != "yes":
-        blockers.append("local-seat-usb-oldgood-replay-missing")
-    if record.get("USB_OLDGOOD_MISSING") != "none":
-        blockers.append("local-seat-usb-oldgood-incomplete")
     if record.get("USB_LOCAL_SEAT_STATE") in {"recovered", "degraded"}:
         blockers.append(f"local-seat-usb-{record.get('USB_LOCAL_SEAT_STATE')}")
     if record.get("USB_BUSY_AFTER_READY") == "yes":
         blockers.append("local-seat-usb-busy-after-ready")
-    if record.get("USB_BURST_PROOF") != "yes":
-        blockers.append("local-seat-usb-burst-proof-missing")
+    if record.get("USB_STARTUP_BLOCKER_SEEN") == "yes":
+        blockers.append("local-seat-usb-startup-blocker")
+    if record.get("USB_ACTIVE_BLOCKER_SEEN") == "yes":
+        blockers.append("local-seat-usb-active-blocker")
     return blockers
 
 

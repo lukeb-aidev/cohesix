@@ -259,3 +259,21 @@ def test_pi4_image_build_enters_interactive_menu_after_marker_diagnostics() -> N
     assert generated_tail.index("run coh_report_fastboot_miss") < (
         generated_tail.index("run coh_prompt_root")
     )
+
+
+def test_pi4_image_build_normalizes_menu_choices_before_dispatch() -> None:
+    """Serial-paced U-Boot choices must dispatch after bounded normalization."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    boot_template = source[
+        source.index('echo "[cohesix] pi4 autoboot script"') : source.index(
+            '\nEOF\n    sed -i \'\' "s/__COH_IMAGE__/'
+        )
+    ]
+
+    assert "setenv coh_normalize_choice" in boot_template
+    assert 'askenv coh_choice "Select option [1]: " 4' in boot_template
+    assert 'test "${coh_choice}" = " 2"' in boot_template
+    assert "run coh_read_choice; if test" in boot_template
+    root_menu = boot_template[boot_template.index("setenv coh_prompt_root") :]
+    assert 'elif test "${coh_choice}" = "2"; then run coh_prompt_dhcp' in root_menu

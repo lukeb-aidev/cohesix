@@ -8782,6 +8782,21 @@ mod tests {
         };
 
         assert_eq!(
+            cyw43_status_blocker_for(
+                "cyw43",
+                "wifi",
+                NetCounters {
+                    tx_submit: 60,
+                    tx_complete: 60,
+                    tx_free: 1,
+                    tx_in_flight: 0,
+                    wifi_data_trace_tx_retries: 3,
+                    ..NetCounters::default()
+                }
+            ),
+            None
+        );
+        assert_eq!(
             cyw43_status_blocker_for("cyw43", "wifi", counters),
             Some(Cyw43StatusBlocker {
                 address_source: "wifi-tx-credit-anomaly",

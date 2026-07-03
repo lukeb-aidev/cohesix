@@ -91,6 +91,7 @@ const SHA1_DIGEST_LEN: usize = 20;
 const WPA_PTK_PRF_LABEL: &[u8] = b"Pairwise key expansion\0";
 const WPA_SNONCE_LABEL_PREFIX: &[u8] = b"Cohesix host WPA SNonce ";
 const HOST_EAPOL_KEY_DATA_MAX_LEN: usize = 256;
+const HOST_EAPOL_RSN_IE_MAX_LEN: usize = 64;
 const RSN_IE_ID: u8 = 48;
 const RSN_VERSION_1: u16 = 1;
 const RSN_SUITE_LEN: usize = 4;
@@ -189,12 +190,26 @@ pub struct HostEapolState {
     ptk_candidates: [HostPtkCandidate; HOST_EAPOL_PTK_CANDIDATES],
     ptk_candidate_count: usize,
     ptk_candidate_next: usize,
+    rsn_ie: [u8; HOST_EAPOL_RSN_IE_MAX_LEN],
+    rsn_ie_len: usize,
 }
 
 impl HostEapolState {
     pub fn new(ssid: &[u8], psk: &[u8]) -> Result<Self, &'static str> {
+        Self::new_with_rsn_ie(ssid, psk, &WPA2_PSK_CCMP_RSN_IE)
+    }
+
+    pub fn new_with_rsn_ie(ssid: &[u8], psk: &[u8], rsn_ie: &[u8]) -> Result<Self, &'static str> {
+        if rsn_ie.is_empty()
+            || rsn_ie.len() > HOST_EAPOL_RSN_IE_MAX_LEN
+            || !rsn_ie_is_wpa2_psk_ccmp_compatible(rsn_ie)
+        {
+            return Err("host-eapol-rsn-ie");
+        }
         let mut pmk = [0u8; WSEC_PMK_LEN];
         fill_wpa2_psk_pmk(ssid, psk, &mut pmk)?;
+        let mut stored_rsn_ie = [0u8; HOST_EAPOL_RSN_IE_MAX_LEN];
+        stored_rsn_ie[..rsn_ie.len()].copy_from_slice(rsn_ie);
         Ok(Self {
             pmk,
             ptk: [0; WPA_PTK_LEN],
@@ -218,6 +233,8 @@ impl HostEapolState {
             ptk_candidates: [HostPtkCandidate::empty(); HOST_EAPOL_PTK_CANDIDATES],
             ptk_candidate_count: 0,
             ptk_candidate_next: 0,
+            rsn_ie: stored_rsn_ie,
+            rsn_ie_len: rsn_ie.len(),
         })
     }
 
@@ -227,6 +244,10 @@ impl HostEapolState {
 
     pub const fn secure_complete(&self) -> bool {
         self.m2_sent && self.m4_sent && self.ptk_installed && self.gtk_installed
+    }
+
+    pub fn supplicant_rsn_ie(&self) -> &[u8] {
+        &self.rsn_ie[..self.rsn_ie_len]
     }
 
     pub fn handle_packet(
@@ -285,7 +306,7 @@ impl HostEapolState {
                 EAPOL_KEY_INFO_M2,
                 &replay_counter,
                 Some(&candidate.snonce),
-                &WPA2_PSK_CCMP_RSN_IE,
+                self.supplicant_rsn_ie(),
                 &candidate.ptk[..WPA_KCK_LEN],
             )?;
             self.m2_sent = true;
@@ -316,7 +337,7 @@ impl HostEapolState {
             EAPOL_KEY_INFO_M2,
             &self.m1_replay_counter,
             Some(&self.snonce),
-            &WPA2_PSK_CCMP_RSN_IE,
+            self.supplicant_rsn_ie(),
             &self.ptk[..WPA_KCK_LEN],
         )?;
         self.m2_sent = true;
@@ -1683,6 +1704,19 @@ mod tests {
         assert_eq!(
             EAPOL_KEY_INFO_GROUP_M2,
             EAPOL_KEY_VERSION_HMAC_SHA1_AES | EAPOL_KEY_INFO_MIC | EAPOL_KEY_INFO_SECURE
+        );
+    }
+
+    #[test]
+    fn host_eapol_state_carries_configured_rsn_ie_for_m2() {
+        let state =
+            HostEapolState::new_with_rsn_ie(b"cohesix", b"passphrase", &WPA2_PSK_CCMP_RSN_IE)
+                .expect("host eapol");
+
+        assert_eq!(state.supplicant_rsn_ie(), &WPA2_PSK_CCMP_RSN_IE);
+        assert_eq!(
+            HostEapolState::new_with_rsn_ie(b"cohesix", b"passphrase", &[RSN_IE_ID, 0]).err(),
+            Some("host-eapol-rsn-ie")
         );
     }
 

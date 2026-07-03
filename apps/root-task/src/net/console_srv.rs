@@ -778,9 +778,10 @@ impl TcpConsoleServer {
     fn log_outbound_drop(&mut self, line: &str) {
         self.outbound_drops = self.outbound_drops.saturating_add(1);
         if self.outbound_drops == 1 || self.outbound_drops.is_power_of_two() {
-            warn!(
-                "[cohsh-net] outbound queue saturated (drops={}) line='{}'",
-                self.outbound_drops, line
+            info!(
+                "[cohsh-net] verbose outbound suppressed (drops={} latest_len={})",
+                self.outbound_drops,
+                line.len()
             );
         }
     }

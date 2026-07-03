@@ -2811,8 +2811,13 @@ where
             );
         }
         if let Some(runtime) = self.local_seat.as_mut() {
+            let local_seat_command_ready = runtime.usb_keyboard_command_ready_latched();
             runtime.mark_root_console_ready();
-            runtime.mirror_line("Cohesix console ready");
+            if local_seat_command_ready {
+                runtime.mirror_line("Cohesix console ready");
+            } else {
+                runtime.mirror_line("Cohesix serial console ready");
+            }
             runtime.mirror_prompt(CONSOLE_PROMPT);
         }
         #[cfg(feature = "kernel")]
@@ -5584,11 +5589,11 @@ where
         );
         #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
         let diag_exact_issue = {
-            let command_ready = self
+            let local_command_ready = self
                 .local_seat
                 .as_ref()
                 .is_some_and(|local_seat| local_seat.usb_keyboard_command_ready_latched());
-            if command_ready {
+            if local_command_ready {
                 Some("command-input-ready")
             } else {
                 None

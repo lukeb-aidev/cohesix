@@ -68,7 +68,7 @@ pub const AUTH_TIMEOUT_MS: u64 = if cfg!(feature = "timers-arch-counter") {
 };
 
 /// Number of regular outbound console lines retained between pump cycles.
-pub const CONSOLE_QUEUE_DEPTH: usize = 8;
+pub const CONSOLE_QUEUE_DEPTH: usize = 16;
 /// Number of authenticated inbound console commands retained between pump cycles.
 pub const CONSOLE_INGEST_QUEUE_DEPTH: usize = 32;
 /// Maximum inbound console commands dispatched from the event pump in one turn.
