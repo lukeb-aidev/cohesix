@@ -1398,11 +1398,12 @@ const CYW43_POST_RELEASE_HT_TIMEOUT_MS: u64 = 1_600;
 const CYW43_POST_RELEASE_F2_READY_TIMEOUT_MS: u64 = 3_000;
 const CYW43_FUNCTION2_WRITE_READY_TIMEOUT_MS: u64 = 100;
 const CYW43_FUNCTION2_WRITE_READY_POLLS: usize = 128;
-const CYW43_FUNCTION2_RECOVERY_READY_TIMEOUT_MS: u64 = 100;
-const CYW43_FUNCTION2_RECOVERY_READY_POLLS: usize = 128;
+const CYW43_FUNCTION2_BOOT_CONTROL_WRITE_READY_TIMEOUT_MS: u64 = 500;
+const CYW43_FUNCTION2_BOOT_CONTROL_WRITE_READY_POLLS: usize = CYW43_FUNCTION2_WRITE_READY_POLLS * 5;
 const CYW43_TX_CREDIT_TIMEOUT_MS: u64 = 100;
 const CYW43_DATA_TX_CREDIT_TIMEOUT_MS: u64 = 100;
-const CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS: u64 = CYW43_TX_CREDIT_TIMEOUT_MS;
+const CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS: u64 = 500;
+const CYW43_DATA_TX_CONTROL_CREDIT_WAIT_LOOPS: usize = CYW43_TX_CREDIT_WAIT_LOOPS * 5;
 const CYW43_FUNCTION2_FIFO_WINDOW_ATTEMPTS: usize = 2;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_RETRY_READS: usize = 8;
 const CYW43_RX_SOURCE_ASSERTED_EMPTY_FIRSTREAD_RETRIES: usize = 8;
@@ -8875,36 +8876,16 @@ fn cyw43_function2_execute_transfer(
     )
 }
 
-fn cyw43_function2_execute_data_tx_transfer(
-    state: &mut Cyw43RuntimeState,
-    frame: DriverFrameDescriptor,
-    block_size: u16,
-    block_count: u16,
-) -> bool {
-    for attempt in 0..=CYW43_DATA_TX_FUNCTION2_RETRIES {
-        if cyw43_function2_execute_transfer(state, true, frame, block_size, block_count) {
-            return true;
-        }
-        if attempt == CYW43_DATA_TX_FUNCTION2_RETRIES {
-            return false;
-        }
-        let _ = cyw43_runtime_read_rframe_if_present(
-            state,
-            0,
-            Cyw43AssertedEmptyPolicy::RequestRetransmit,
-        );
-        runtime_poll_pause();
-    }
-    false
-}
-
-fn cyw43_function2_execute_transfer_with_policy(
+fn cyw43_function2_execute_transfer_with_write_window(
     state: &mut Cyw43RuntimeState,
     write: bool,
     frame: DriverFrameDescriptor,
     block_size: u16,
     block_count: u16,
     asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+    write_ready_timeout_ms: u64,
+    write_ready_polls: usize,
+    allow_function2_rearm: bool,
 ) -> bool {
     if !write && state.rx_retransmit_pending && !cyw43_runtime_wait_for_retransmit_handled(state) {
         return false;
@@ -8931,7 +8912,13 @@ fn cyw43_function2_execute_transfer_with_policy(
     if !cyw43_function2_prepare_fifo_window(state, trace_read) {
         return false;
     }
-    if write && !cyw43_runtime_wait_for_function2_ready_before_write() {
+    if write
+        && !cyw43_runtime_wait_for_function2_ready_for_write(
+            write_ready_timeout_ms,
+            write_ready_polls,
+            allow_function2_rearm,
+        )
+    {
         return false;
     }
     if let Some(result) =
@@ -8945,7 +8932,13 @@ fn cyw43_function2_execute_transfer_with_policy(
     if !write && asserted_empty_policy == Cyw43AssertedEmptyPolicy::PreserveForTx {
         return false;
     }
-    if !cyw43_runtime_recover_failed_function2_transfer(state, write) {
+    if !cyw43_runtime_recover_failed_function2_transfer_with_write_window(
+        state,
+        write,
+        write_ready_timeout_ms,
+        write_ready_polls,
+        allow_function2_rearm,
+    ) {
         return false;
     }
     if !write && !cyw43_runtime_wait_for_retransmit_handled(state) {
@@ -8954,7 +8947,13 @@ fn cyw43_function2_execute_transfer_with_policy(
     if !cyw43_function2_prepare_fifo_window(state, trace_read) {
         return false;
     }
-    if write && !cyw43_runtime_wait_for_function2_ready_before_write() {
+    if write
+        && !cyw43_runtime_wait_for_function2_ready_for_write(
+            write_ready_timeout_ms,
+            write_ready_polls,
+            allow_function2_rearm,
+        )
+    {
         return false;
     }
     if let Some(result) =
@@ -8967,6 +8966,72 @@ fn cyw43_function2_execute_transfer_with_policy(
     } else {
         false
     }
+}
+
+fn cyw43_function2_execute_data_tx_transfer(
+    state: &mut Cyw43RuntimeState,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+    boot_control_frame: bool,
+) -> bool {
+    let (write_ready_timeout_ms, write_ready_polls) = if boot_control_frame {
+        (
+            CYW43_FUNCTION2_BOOT_CONTROL_WRITE_READY_TIMEOUT_MS,
+            CYW43_FUNCTION2_BOOT_CONTROL_WRITE_READY_POLLS,
+        )
+    } else {
+        (
+            CYW43_FUNCTION2_WRITE_READY_TIMEOUT_MS,
+            CYW43_FUNCTION2_WRITE_READY_POLLS,
+        )
+    };
+    for attempt in 0..=CYW43_DATA_TX_FUNCTION2_RETRIES {
+        if cyw43_function2_execute_transfer_with_write_window(
+            state,
+            true,
+            frame,
+            block_size,
+            block_count,
+            Cyw43AssertedEmptyPolicy::RequestRetransmit,
+            write_ready_timeout_ms,
+            write_ready_polls,
+            boot_control_frame,
+        ) {
+            return true;
+        }
+        if attempt == CYW43_DATA_TX_FUNCTION2_RETRIES {
+            return false;
+        }
+        let _ = cyw43_runtime_read_rframe_if_present(
+            state,
+            0,
+            Cyw43AssertedEmptyPolicy::RequestRetransmit,
+        );
+        runtime_poll_pause();
+    }
+    false
+}
+
+fn cyw43_function2_execute_transfer_with_policy(
+    state: &mut Cyw43RuntimeState,
+    write: bool,
+    frame: DriverFrameDescriptor,
+    block_size: u16,
+    block_count: u16,
+    asserted_empty_policy: Cyw43AssertedEmptyPolicy,
+) -> bool {
+    cyw43_function2_execute_transfer_with_write_window(
+        state,
+        write,
+        frame,
+        block_size,
+        block_count,
+        asserted_empty_policy,
+        CYW43_FUNCTION2_WRITE_READY_TIMEOUT_MS,
+        CYW43_FUNCTION2_WRITE_READY_POLLS,
+        false,
+    )
 }
 
 fn cyw43_function2_prepare_fifo_window(state: &mut Cyw43RuntimeState, trace_read: bool) -> bool {
@@ -8996,9 +9061,12 @@ const fn cyw43_function2_fifo_window_attempts() -> usize {
     CYW43_FUNCTION2_FIFO_WINDOW_ATTEMPTS
 }
 
-fn cyw43_runtime_recover_failed_function2_transfer(
+fn cyw43_runtime_recover_failed_function2_transfer_with_write_window(
     state: &mut Cyw43RuntimeState,
     write: bool,
+    write_ready_timeout_ms: u64,
+    write_ready_polls: usize,
+    allow_function2_rearm: bool,
 ) -> bool {
     let framectrl = if write { SFC_WF_TERM } else { SFC_RF_TERM };
     let _ = cyw43_sdio_cmd52_write(0, SDIO_CCCR_ABORT, SDIO_FUNC_ENABLE_2);
@@ -9012,7 +9080,11 @@ fn cyw43_runtime_recover_failed_function2_transfer(
     if !write {
         return cyw43_runtime_request_rx_retransmit(state);
     }
-    cyw43_runtime_wait_for_function2_ready_after_write_recovery()
+    cyw43_runtime_wait_for_function2_ready_for_write(
+        write_ready_timeout_ms,
+        write_ready_polls,
+        allow_function2_rearm,
+    )
 }
 
 fn cyw43_runtime_request_rx_retransmit(state: &mut Cyw43RuntimeState) -> bool {
@@ -9025,18 +9097,30 @@ fn cyw43_runtime_request_rx_retransmit(state: &mut Cyw43RuntimeState) -> bool {
     retransmit_posted
 }
 
-fn cyw43_runtime_wait_for_function2_ready_before_write() -> bool {
-    cyw43_runtime_wait_for_function2_ready(
-        CYW43_FUNCTION2_WRITE_READY_TIMEOUT_MS,
-        CYW43_FUNCTION2_WRITE_READY_POLLS,
-    )
+fn cyw43_runtime_wait_for_function2_ready_for_write(
+    timeout_ms: u64,
+    max_polls: usize,
+    allow_function2_rearm: bool,
+) -> bool {
+    if cyw43_runtime_wait_for_function2_ready(timeout_ms, max_polls) {
+        return true;
+    }
+    if !allow_function2_rearm {
+        return false;
+    }
+    cyw43_clear_last_fault();
+    cyw43_runtime_rearm_function2_after_write_timeout()
 }
 
-fn cyw43_runtime_wait_for_function2_ready_after_write_recovery() -> bool {
-    cyw43_runtime_wait_for_function2_ready(
-        CYW43_FUNCTION2_RECOVERY_READY_TIMEOUT_MS,
-        CYW43_FUNCTION2_RECOVERY_READY_POLLS,
-    )
+fn cyw43_runtime_rearm_function2_after_write_timeout() -> bool {
+    #[cfg(any(target_os = "none", test))]
+    {
+        cyw43_enable_post_release_function2_poll().is_ok()
+    }
+    #[cfg(all(not(target_os = "none"), not(test)))]
+    {
+        true
+    }
 }
 
 fn cyw43_runtime_wait_for_function2_ready(timeout_ms: u64, max_polls: usize) -> bool {
@@ -9288,8 +9372,14 @@ fn cyw43_submit_sdpcm_frame(
     }
     let total_len = payload_len + header_len;
     let credit_timeout_ms = cyw43_tx_credit_timeout_ms(data_frame, frame);
+    let credit_wait_loops = cyw43_tx_credit_wait_loops(data_frame, frame);
     let reserve_control_credit = data_frame && !cyw43_data_tx_uses_control_credit_timeout(frame);
-    if !cyw43_wait_for_sdpcm_tx_credit(state, credit_timeout_ms, reserve_control_credit) {
+    if !cyw43_wait_for_sdpcm_tx_credit(
+        state,
+        credit_timeout_ms,
+        credit_wait_loops,
+        reserve_control_credit,
+    ) {
         return 0;
     }
     let seq = state.sdpcm_seq;
@@ -9362,7 +9452,13 @@ fn cyw43_submit_sdpcm_frame(
         flags: 0,
     };
     let tx_ok = if data_frame {
-        cyw43_function2_execute_data_tx_transfer(state, tx_frame, block_size, block_count)
+        cyw43_function2_execute_data_tx_transfer(
+            state,
+            tx_frame,
+            block_size,
+            block_count,
+            cyw43_data_tx_uses_control_credit_timeout(frame),
+        )
     } else {
         cyw43_function2_execute_transfer(state, true, tx_frame, block_size, block_count)
     };
@@ -9381,6 +9477,14 @@ fn cyw43_tx_credit_timeout_ms(data_frame: bool, frame: DriverFrameDescriptor) ->
         CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS
     } else {
         CYW43_DATA_TX_CREDIT_TIMEOUT_MS
+    }
+}
+
+fn cyw43_tx_credit_wait_loops(data_frame: bool, frame: DriverFrameDescriptor) -> usize {
+    if data_frame && cyw43_data_tx_uses_control_credit_timeout(frame) {
+        CYW43_DATA_TX_CONTROL_CREDIT_WAIT_LOOPS
+    } else {
+        CYW43_TX_CREDIT_WAIT_LOOPS
     }
 }
 
@@ -9426,12 +9530,12 @@ fn cyw43_ring_be_u16(offset: usize) -> u16 {
 fn cyw43_wait_for_sdpcm_tx_credit(
     state: &mut Cyw43RuntimeState,
     timeout_ms: u64,
+    max_polls: usize,
     reserve_control_credit: bool,
 ) -> bool {
     let mut polls = 0usize;
-    let mut deadline =
-        runtime_deadline_from_millis_or_iterations(timeout_ms, CYW43_TX_CREDIT_WAIT_LOOPS);
-    while !runtime_deadline_iteration_cap_reached(&deadline, polls, CYW43_TX_CREDIT_WAIT_LOOPS)
+    let mut deadline = runtime_deadline_from_millis_or_iterations(timeout_ms, max_polls);
+    while !runtime_deadline_iteration_cap_reached(&deadline, polls, max_polls)
         && !runtime_deadline_expired(&mut deadline)
     {
         if has_sdpcm_credit_for_frame(state.sdpcm_seq, state.sdpcm_seq_max, reserve_control_credit)
@@ -13634,11 +13738,7 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
                 sequence,
                 aux0,
             ));
-            if usb_keyboard_report_status_counts_as_valid_report(state.keyboard_last_report_status)
-            {
-                state.keyboard_valid_report_events =
-                    state.keyboard_valid_report_events.saturating_add(1);
-            }
+            let _ = usb_keyboard_note_valid_report_status(state);
             if !usb_keyboard_rearm_after_completed_interrupt_in(state, descriptor, recovery_aux) {
                 recovery_attempted = true;
                 break;
@@ -13733,6 +13833,14 @@ const fn usb_keyboard_report_status_counts_as_valid_report(status: u8) -> bool {
             | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE
             | DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY
     )
+}
+
+fn usb_keyboard_note_valid_report_status(state: &mut UsbRuntimeState) -> bool {
+    if !usb_keyboard_report_status_counts_as_valid_report(state.keyboard_last_report_status) {
+        return false;
+    }
+    state.keyboard_valid_report_events = state.keyboard_valid_report_events.saturating_add(1);
+    true
 }
 
 const fn usb_keyboard_post_first_report_unmatched(state: &UsbRuntimeState) -> bool {
@@ -19483,12 +19591,14 @@ fn usb_poll_keyboard_control_report(
     for (index, byte) in payload.iter_mut().take(bounded_len).enumerate() {
         *byte = read_dma_byte(data_vaddr + index);
     }
-    usb_keyboard_report_payload_to_frame_at_inner(
+    let bytes = usb_keyboard_report_payload_to_frame_at_inner(
         state,
         &payload[..bounded_len],
         0,
         Some((sequence, aux0)),
-    )
+    );
+    let _ = usb_keyboard_note_valid_report_status(state);
+    bytes
 }
 
 fn usb_set_hid_leds(
@@ -26125,10 +26235,15 @@ mod tests {
         state.firmware_released = true;
         state.sdpcm_seq = 7;
         state.sdpcm_seq_max = 7;
-        assert!(!cyw43_wait_for_sdpcm_tx_credit(&mut state, 14, true));
+        assert!(!cyw43_wait_for_sdpcm_tx_credit(
+            &mut state,
+            14,
+            CYW43_TX_CREDIT_WAIT_LOOPS,
+            true
+        ));
         state.sdpcm_seq_max = 8;
         assert!(
-            !cyw43_wait_for_sdpcm_tx_credit(&mut state, 14, true),
+            !cyw43_wait_for_sdpcm_tx_credit(&mut state, 14, CYW43_TX_CREDIT_WAIT_LOOPS, true),
             "data frames must not borrow the reserved final control credit"
         );
         let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
@@ -26151,9 +26266,15 @@ mod tests {
         reset_runtime_for_test();
         assert_eq!(CYW43_TX_CREDIT_TIMEOUT_MS, 100);
         assert_eq!(CYW43_DATA_TX_CREDIT_TIMEOUT_MS, 100);
+        assert_eq!(CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS, 500);
         assert_eq!(
-            CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS,
-            CYW43_TX_CREDIT_TIMEOUT_MS
+            CYW43_DATA_TX_CONTROL_CREDIT_WAIT_LOOPS,
+            CYW43_TX_CREDIT_WAIT_LOOPS * 5
+        );
+        assert_eq!(CYW43_FUNCTION2_BOOT_CONTROL_WRITE_READY_TIMEOUT_MS, 500);
+        assert_eq!(
+            CYW43_FUNCTION2_BOOT_CONTROL_WRITE_READY_POLLS,
+            CYW43_FUNCTION2_WRITE_READY_POLLS * 5
         );
         let payload_offset = DRIVER_TASK_RING_FRAME_OFFSET + 512;
         let mut ipv4_tcp = [0u8; 94];
@@ -26173,6 +26294,10 @@ mod tests {
         assert_eq!(
             cyw43_tx_credit_timeout_ms(true, frame),
             CYW43_DATA_TX_CREDIT_TIMEOUT_MS
+        );
+        assert_eq!(
+            cyw43_tx_credit_wait_loops(true, frame),
+            CYW43_TX_CREDIT_WAIT_LOOPS
         );
         let ipv4_tcp_total_len = CYW43_SDPCM_DATA_TX_OVERHEAD_BYTES + ipv4_tcp.len();
         let (ipv4_tcp_request_len, ipv4_tcp_block_mode) =
@@ -26203,6 +26328,10 @@ mod tests {
             cyw43_tx_credit_timeout_ms(true, frame),
             CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS
         );
+        assert_eq!(
+            cyw43_tx_credit_wait_loops(true, frame),
+            CYW43_DATA_TX_CONTROL_CREDIT_WAIT_LOOPS
+        );
 
         let mut arp = [0u8; 42];
         arp[12..14].copy_from_slice(&CYW43_ETH_P_ARP.to_be_bytes());
@@ -26215,6 +26344,10 @@ mod tests {
         assert_eq!(
             cyw43_tx_credit_timeout_ms(true, frame),
             CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS
+        );
+        assert_eq!(
+            cyw43_tx_credit_wait_loops(true, frame),
+            CYW43_DATA_TX_CONTROL_CREDIT_WAIT_LOOPS
         );
 
         let mut eapol = [0u8; CYW43_ETH_HEADER_BYTES];
@@ -26229,6 +26362,27 @@ mod tests {
             cyw43_tx_credit_timeout_ms(true, frame),
             CYW43_DATA_TX_CONTROL_CREDIT_TIMEOUT_MS
         );
+        assert_eq!(
+            cyw43_tx_credit_wait_loops(true, frame),
+            CYW43_DATA_TX_CONTROL_CREDIT_WAIT_LOOPS
+        );
+    }
+
+    #[test]
+    fn cyw43_boot_control_write_ready_uses_one_shot_function2_rearm() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        reset_test_sdio_transfer_log();
+        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_2);
+
+        assert!(cyw43_runtime_wait_for_function2_ready_for_write(1, 0, true));
+        assert!(test_sdio_cmd52_write_seen(
+            0,
+            SDIO_CCCR_IOEX,
+            SDIO_FUNC_ENABLE_2
+        ));
+        assert!(test_sdio_cmd52_read_count(0, SDIO_CCCR_IORX) >= 1);
+        assert_eq!(cyw43_take_last_fault_detail(), None);
     }
 
     #[test]
@@ -32318,6 +32472,23 @@ mod tests {
         state.keyboard_reports_queued = 0;
         state.keyboard_preserved_event_count = 1;
         assert!(!usb_keyboard_control_poll_allowed(&state));
+    }
+
+    #[test]
+    fn usb_control_report_idle_payload_counts_as_first_report_proof() {
+        let mut state = UsbRuntimeState::new();
+        let idle = [0u8; USB_BOOT_REPORT_BYTES];
+
+        assert_eq!(
+            usb_keyboard_report_payload_to_frame_at_inner(&mut state, &idle, 0, Some((1, 0))),
+            0
+        );
+        assert_eq!(
+            state.keyboard_last_report_status,
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
+        );
+        assert!(usb_keyboard_note_valid_report_status(&mut state));
+        assert!(usb_keyboard_has_first_valid_report(&state));
     }
 
     #[test]

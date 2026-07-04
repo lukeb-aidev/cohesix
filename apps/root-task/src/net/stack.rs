@@ -267,6 +267,36 @@ fn cyw43_tcp_data_path_proven(
         && (counters.tcp_accepts != 0 || counters.tcp_auth_sessions != 0)
 }
 
+fn physical_driver_tcp_data_path_required(
+    active_driver: &'static str,
+    active_interface: &'static str,
+) -> bool {
+    matches!(
+        (active_driver, active_interface),
+        ("cyw43", "wifi") | ("bcmgenet-v5", "wired")
+    )
+}
+
+fn physical_driver_tcp_data_path_proven(
+    active_driver: &'static str,
+    active_interface: &'static str,
+    counters: NetCounters,
+) -> bool {
+    physical_driver_tcp_data_path_required(active_driver, active_interface)
+        && (counters.tcp_accepts != 0 || counters.tcp_auth_sessions != 0)
+}
+
+fn net_status_tcp_ready(
+    listener_ready: bool,
+    active_driver: &'static str,
+    active_interface: &'static str,
+    counters: NetCounters,
+) -> bool {
+    listener_ready
+        && (!physical_driver_tcp_data_path_required(active_driver, active_interface)
+            || physical_driver_tcp_data_path_proven(active_driver, active_interface, counters))
+}
+
 fn cyw43_status_blocker_for(
     active_driver: &'static str,
     active_interface: &'static str,
@@ -7303,7 +7333,12 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             && self.listener_announced
             && self.listener_defer_reason.is_none()
             && !self.wifi_rx_admission_blocked;
-        let tcp_ready = listener_ready && cyw43_blocker.is_none();
+        let tcp_ready = net_status_tcp_ready(
+            listener_ready && cyw43_blocker.is_none(),
+            active_driver,
+            active_interface,
+            current_counters,
+        );
         NetStatusReport {
             profile_backend: self.backend.label(),
             backend: self.backend.label(),
@@ -8794,6 +8829,55 @@ mod tests {
             NetCounters {
                 tcp_accepts: 1,
                 ..counters
+            }
+        ));
+    }
+
+    #[test]
+    fn physical_pi_tcp_ready_requires_tcp_session_proof() {
+        assert!(!net_status_tcp_ready(
+            true,
+            "bcmgenet-v5",
+            "wired",
+            NetCounters {
+                arp_rx: 1,
+                arp_tx: 1,
+                ..NetCounters::default()
+            }
+        ));
+        assert!(net_status_tcp_ready(
+            true,
+            "bcmgenet-v5",
+            "wired",
+            NetCounters {
+                tcp_accepts: 1,
+                arp_rx: 1,
+                arp_tx: 1,
+                ..NetCounters::default()
+            }
+        ));
+        assert!(!net_status_tcp_ready(
+            true,
+            "cyw43",
+            "wifi",
+            NetCounters {
+                tx_submit: 8,
+                ..NetCounters::default()
+            }
+        ));
+        assert!(net_status_tcp_ready(
+            true,
+            "rtl8139",
+            "wired",
+            NetCounters::default()
+        ));
+        assert!(!net_status_tcp_ready(
+            false,
+            "rtl8139",
+            "wired",
+            NetCounters {
+                tcp_accepts: 1,
+                ..NetCounters::default()
             }
         ));
     }

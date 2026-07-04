@@ -7105,6 +7105,64 @@ def test_gate_summary_treats_post_ready_cumulative_usb_counters_as_historical() 
     assert "local-seat-usb-startup-blocker" in blockers
 
 
+def test_gate_summary_treats_missing_usb_recovery_diag_as_telemetry_for_idle_report() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_queue queue_valid=yes detail=0x0501 result=0x01000420 "
+            "queued_reports=32 doorbell_pending=no preserved_events=0 "
+            "transfer_events=1 report_status=idle-report",
+            "usb: runtime_recovery diag_valid=no recoveries=0 failures=0 "
+            "queue_collapse=0 stage=none stage_code=0 reason=none reason_code=0 "
+            "command_completion_blocked=0",
+            "usb: acceptance xhci=yes hid_keyboard=yes first_report=yes first_byte=no "
+            "command_ready=yes usable=yes prompt_polling=yes "
+            "input_observation=idle-report-no-key-byte",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "proof_gate=10 target_gate=10 next=command-input-ready blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_RUNTIME_RECOVERY_DIAG_VALID"] == "no"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+    assert record["USB_LOCAL_SEAT_REASON"] == "command-ready"
+    assert "local-seat-usb-degraded" not in blockers
+
+
+def test_gate_summary_keeps_missing_usb_recovery_diag_degraded_for_recovery_fault() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_queue queue_valid=yes detail=0x0501 result=0x37000420 "
+            "queued_reports=32 doorbell_pending=no preserved_events=0 "
+            "transfer_events=55 report_status=queue-collapse",
+            "usb: runtime_recovery diag_valid=no recoveries=1 failures=1 "
+            "queue_collapse=1 stage=ready stage_code=9 "
+            "reason=queue-collapse reason_code=4 command_completion_blocked=1",
+            "usb: acceptance xhci=yes hid_keyboard=yes first_report=yes first_byte=no "
+            "command_ready=yes usable=yes prompt_polling=yes "
+            "input_observation=idle-report-no-key-byte",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "proof_gate=10 target_gate=10 next=command-input-ready blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_RUNTIME_RECOVERY_DIAG_VALID"] == "no"
+    assert record["USB_LOCAL_SEAT_STATE"] == "degraded"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-runtime-diag-invalid"
+    assert "local-seat-usb-degraded" in blockers
+
+
 def test_gate_summary_marks_usb_degraded_after_post_ready_blocker() -> None:
     events = normalizer.parse_events(
         [

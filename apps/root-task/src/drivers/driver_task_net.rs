@@ -6659,12 +6659,33 @@ fn submit_cyw43_gratuitous_arp_announcement(
     contract: DriverTaskContract,
     assigned_ip: [u8; 4],
 ) -> bool {
-    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT || assigned_ip == [0; 4] {
+    submit_driver_task_gratuitous_arp_announcement(
+        contract,
+        DriverTaskHotPath::Cyw43Wifi,
+        assigned_ip,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn submit_driver_task_gratuitous_arp_announcement(
+    contract: DriverTaskContract,
+    hot_path: DriverTaskHotPath,
+    assigned_ip: [u8; 4],
+) -> bool {
+    let expected_contract = match hot_path {
+        DriverTaskHotPath::GenetNic => GENET_DRIVER_TASK_CONTRACT,
+        DriverTaskHotPath::Cyw43Wifi => CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        _ => return false,
+    };
+    if contract != expected_contract || assigned_ip == [0; 4] {
         return false;
     }
-    let station_mac = runtime_mac(DriverTaskHotPath::Cyw43Wifi)
-        .unwrap_or(CYW43_DRIVER_TASK_MAC)
-        .0;
+    let fallback_mac = match hot_path {
+        DriverTaskHotPath::GenetNic => GENET_DRIVER_TASK_MAC,
+        DriverTaskHotPath::Cyw43Wifi => CYW43_DRIVER_TASK_MAC,
+        _ => return false,
+    };
+    let station_mac = runtime_mac(hot_path).unwrap_or(fallback_mac).0;
     let request = cyw43_arp_frame(
         [0xff; ETHER_ADDR_LEN],
         station_mac,
@@ -6683,7 +6704,15 @@ fn submit_cyw43_gratuitous_arp_announcement(
         [0xff; ETHER_ADDR_LEN],
         assigned_ip,
     );
-    submit_cyw43_driver_task_eth_payload(&request) | submit_cyw43_driver_task_eth_payload(&reply)
+    let request_submitted = submit_driver_task_frame(contract, hot_path, &request);
+    if request_submitted {
+        record_driver_task_arp_tx(hot_path, &request);
+    }
+    let reply_submitted = submit_driver_task_frame(contract, hot_path, &reply);
+    if reply_submitted {
+        record_driver_task_arp_tx(hot_path, &reply);
+    }
+    request_submitted | reply_submitted
 }
 
 #[cfg(feature = "kernel")]
@@ -12475,6 +12504,7 @@ fn record_cyw43_runtime_completion(
     if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
         return;
     }
+    record_cyw43_completion_credit_accounting(completion);
     let Some(trace) = cyw43_completion_rx_idle_trace(contract, completion) else {
         return;
     };
@@ -12558,6 +12588,9 @@ pub(crate) fn preserve_driver_task_pre_poll_completion(
 ) -> bool {
     if hot_path == DriverTaskHotPath::GenetNic {
         record_genet_runtime_completion(completion);
+    }
+    if hot_path == DriverTaskHotPath::Cyw43Wifi {
+        record_cyw43_completion_credit_accounting(completion);
     }
     if completion.code == DriverTaskCompletionCode::Progress.as_u16() {
         return completion.result != 0;
@@ -13982,13 +14015,17 @@ macro_rules! driver_task_nic {
             }
 
             fn set_assigned_ipv4(&mut self, ip: Ipv4Address) {
+                #[cfg(feature = "kernel")]
+                {
+                    let _ = submit_driver_task_gratuitous_arp_announcement(
+                        $contract,
+                        DriverTaskHotPath::$hot_path,
+                        ip.octets(),
+                    );
+                }
                 if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
                     CYW43_ASSIGNED_IPV4_BE
                         .store(u32::from_be_bytes(ip.octets()), Ordering::Release);
-                    #[cfg(feature = "kernel")]
-                    {
-                        let _ = submit_cyw43_gratuitous_arp_announcement($contract, ip.octets());
-                    }
                 }
             }
 
@@ -20518,6 +20555,10 @@ mod tests {
     fn cyw43_runtime_idle_trace_updates_hardware_netstats() {
         use crate::hal::driver_task::{DriverTaskCompletionCode, DriverTaskCompletionRecord};
 
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
         let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
         crate::hal::driver_task::publish_driver_task_ring(
@@ -20558,12 +20599,39 @@ mod tests {
         assert_eq!(counters.wifi_rx_runtime_drain_budget_hit, 1);
         assert_eq!(counters.wifi_rx_runtime_max_drained_per_turn, 4);
 
+        CYW43_TX_SUBMITTED.store(1, Ordering::Release);
+        let mut tx_completion = DriverTaskCompletionRecord::progress(7, 64);
+        tx_completion.frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 1,
+            flags: 1,
+        };
+        record_cyw43_unproven_tx_window(Some(tx_completion));
+        let credit_completion = DriverTaskCompletionRecord {
+            sequence: 2,
+            code: DriverTaskCompletionCode::Idle.as_u16(),
+            detail: 0,
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 1,
+                flags: 2u16 << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT,
+            },
+        };
+        record_cyw43_runtime_completion(contract, credit_completion);
+        assert_eq!(
+            CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
+            CYW43_TX_UNPROVEN_NONE
+        );
+        assert_eq!(CYW43_TX_CREDIT_COMPLETED.load(Ordering::Acquire), 1);
+
         crate::hal::driver_task::publish_driver_task_ring(contract, 0);
         CYW43_RX_RUNTIME_QUEUE_COUNT.store(0, Ordering::Release);
         CYW43_RX_RUNTIME_QUEUE_HIGH_WATER.store(0, Ordering::Release);
         CYW43_RX_RUNTIME_QUEUE_OVERFLOW_SEEN.store(0, Ordering::Release);
         CYW43_RX_RUNTIME_DRAIN_BUDGET_HIT.store(0, Ordering::Release);
         CYW43_RX_RUNTIME_MAX_DRAINED_PER_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]
@@ -21168,6 +21236,49 @@ mod tests {
         assert_eq!(counters.tx_complete, 1);
         assert_eq!(counters.tx_free, 1);
         assert_eq!(counters.tx_in_flight, 0);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_pre_poll_progress_credit_reopens_deferred_tx_window() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_TX_SUBMITTED.store(1, Ordering::Release);
+
+        let mut tx_completion = DriverTaskCompletionRecord::progress(7, 64);
+        tx_completion.frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 1,
+            flags: 1,
+        };
+        record_cyw43_unproven_tx_window(Some(tx_completion));
+        assert_eq!(
+            CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
+            CYW43_TX_UNPROVEN_KNOWN
+        );
+        assert_eq!(CYW43_TX_CREDIT_COMPLETED.load(Ordering::Acquire), 0);
+
+        let mut credit_completion = DriverTaskCompletionRecord::progress(8, 1);
+        credit_completion.frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 1,
+            flags: 2u16 << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT,
+        };
+        assert!(preserve_driver_task_pre_poll_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            credit_completion
+        ));
+        assert_eq!(
+            CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
+            CYW43_TX_UNPROVEN_NONE,
+            "credit-bearing non-frame pre-poll completions must reopen CYW43 TX admission"
+        );
+        assert_eq!(CYW43_TX_CREDIT_COMPLETED.load(Ordering::Acquire), 1);
 
         reset_cyw43_status_flags();
     }

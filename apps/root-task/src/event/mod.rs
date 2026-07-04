@@ -230,11 +230,15 @@ const fn serial_prompt_refresh_after_console_ready(
 #[cfg(any(test, all(feature = "kernel", feature = "usb")))]
 const fn local_seat_usb_service_pending_state(
     enumeration_pending: bool,
+    keyboard_ready: bool,
+    first_report_ready: bool,
     first_byte_ready: bool,
     recovery_aux_pending: bool,
     no_reply_streak: u64,
 ) -> bool {
-    enumeration_pending || (first_byte_ready && (recovery_aux_pending || no_reply_streak != 0))
+    enumeration_pending
+        || (keyboard_ready && !first_report_ready)
+        || (first_byte_ready && (recovery_aux_pending || no_reply_streak != 0))
 }
 
 #[cfg(any(test, all(feature = "kernel", feature = "usb")))]
@@ -363,6 +367,25 @@ const fn post_prompt_local_seat_attach_retry_policy(
             POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS,
             "serial-safe-usb-progress",
         ))
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn post_prompt_local_seat_attach_probe_retry_policy(
+    keyboard_attached: bool,
+    keyboard_command_ready: bool,
+    keyboard_first_report_ready: bool,
+    usb_no_reply: bool,
+    usb_active: bool,
+) -> Option<(u64, u16, &'static str)> {
+    if keyboard_attached && keyboard_command_ready {
+        None
+    } else if keyboard_attached && !keyboard_first_report_ready {
+        post_prompt_local_seat_attach_retry_policy(false, true)
+    } else if keyboard_attached {
+        post_prompt_local_seat_attach_retry_policy(false, usb_active)
+    } else {
+        post_prompt_local_seat_attach_retry_policy(usb_no_reply, usb_active)
     }
 }
 
@@ -3120,6 +3143,8 @@ where
             .unwrap_or_default();
         local_seat_usb_service_pending_state(
             crate::local_seat::linked_local_seat_usb_enumeration_pending(),
+            crate::local_seat::linked_local_seat_usb_keyboard_ready(),
+            crate::local_seat::linked_local_seat_usb_first_report_ready(),
             crate::local_seat::linked_local_seat_usb_first_byte_ready(),
             trace.recovery_aux_pending,
             trace.driver_task_no_reply_streak,
@@ -3150,6 +3175,8 @@ where
             .unwrap_or_default();
         local_seat_usb_service_pending_state(
             false,
+            false,
+            true,
             crate::local_seat::linked_local_seat_usb_first_byte_ready(),
             trace.recovery_aux_pending,
             trace.driver_task_no_reply_streak,
@@ -3600,6 +3627,9 @@ where
                 let usb_active = crate::hal::driver_task::driver_task_ring_command_active(
                     crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
                 );
+                let keyboard_command_ready = runtime.usb_keyboard_command_ready_latched();
+                let keyboard_first_report_ready =
+                    crate::local_seat::linked_local_seat_usb_first_report_ready();
                 if verbose_attempt || keyboard_probe.attached() {
                     let usb_frontier = "[drivers] USB frontier: prompt-settle linked-runtime probe armed; xHCI/keyboard state preserved";
                     boot_log::force_log_buffer_line_or_uart_without_prompt_refresh(usb_frontier);
@@ -3638,11 +3668,13 @@ where
                         probe_line.as_str(),
                     );
                 }
-                let retry_policy = if keyboard_probe.attached() {
-                    None
-                } else {
-                    post_prompt_local_seat_attach_retry_policy(usb_no_reply, usb_active)
-                };
+                let retry_policy = post_prompt_local_seat_attach_probe_retry_policy(
+                    keyboard_probe.attached(),
+                    keyboard_command_ready,
+                    keyboard_first_report_ready,
+                    usb_no_reply,
+                    usb_active,
+                );
                 if let Some((retry_ms, retry_turns, retry_action)) = retry_policy {
                     self.post_prompt_local_seat_attach_pending = true;
                     self.post_prompt_local_seat_attach_idle_turns = 0;
@@ -16176,6 +16208,39 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
+    fn post_prompt_local_seat_attach_keeps_retry_until_usb_command_ready() {
+        assert_eq!(
+            post_prompt_local_seat_attach_probe_retry_policy(true, true, true, false, false),
+            None
+        );
+        assert_eq!(
+            post_prompt_local_seat_attach_probe_retry_policy(true, false, false, false, false),
+            Some((
+                POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS,
+                POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS,
+                "serial-safe-active-usb-progress"
+            ))
+        );
+        assert_eq!(
+            post_prompt_local_seat_attach_probe_retry_policy(true, false, true, false, false),
+            Some((
+                POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS,
+                POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS,
+                "serial-safe-usb-progress"
+            ))
+        );
+        assert_eq!(
+            post_prompt_local_seat_attach_probe_retry_policy(false, false, false, true, false),
+            Some((
+                POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS,
+                POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS,
+                "serial-safe-usb-no-reply"
+            ))
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
     fn post_prompt_local_seat_attach_arms_while_usb_runtime_is_active() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -20941,10 +21006,21 @@ mod tests {
 
     #[test]
     fn usb_pending_enumeration_counts_as_service_and_input_pressure() {
-        assert!(local_seat_usb_service_pending_state(true, false, false, 0));
-        assert!(!local_seat_usb_service_pending_state(false, false, true, 8));
-        assert!(local_seat_usb_service_pending_state(false, true, true, 0));
-        assert!(local_seat_usb_service_pending_state(false, true, false, 1));
+        assert!(local_seat_usb_service_pending_state(
+            true, false, false, false, false, 0
+        ));
+        assert!(local_seat_usb_service_pending_state(
+            false, true, false, false, false, 0
+        ));
+        assert!(!local_seat_usb_service_pending_state(
+            false, false, false, false, true, 8
+        ));
+        assert!(local_seat_usb_service_pending_state(
+            false, false, true, true, true, 0
+        ));
+        assert!(local_seat_usb_service_pending_state(
+            false, false, true, true, false, 1
+        ));
 
         assert!(local_seat_usb_input_pending_state(true, false, false));
         assert!(local_seat_usb_input_pending_state(false, true, false));

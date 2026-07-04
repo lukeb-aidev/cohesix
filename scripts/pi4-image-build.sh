@@ -44,6 +44,7 @@ CLEAN_BUILD=0
 PI4_TOTAL_MEM_MB=2048
 PI4_UBOOT_IMAGE_START_ADDR=0x10000000
 RESTORE_CANONICAL_CODEGEN=0
+PRESERVED_POLICY_TEMP=""
 PI4_DTB_PADDED_SIZE=$((128 * 1024))
 U_BOOT_CROSS_COMPILE="aarch64-linux-gnu-"
 U_BOOT_MENU_INPUT="${COHESIX_UBOOT_MENU_INPUT:-usb}"
@@ -985,6 +986,10 @@ restore_canonical_codegen() {
 cleanup() {
     local status=$?
     trap - EXIT
+    if [[ -n "${PRESERVED_POLICY_TEMP:-}" ]]; then
+        rm -f "$PRESERVED_POLICY_TEMP"
+        PRESERVED_POLICY_TEMP=""
+    fi
     if ! restore_canonical_codegen; then
         status=1
     fi
@@ -1569,12 +1574,22 @@ EOF
 flash_sd_card() {
     local disk="$1"
     local wait_attempts=45
+    local policy_file="cohesix.env"
+    local preserved_policy=""
 
     command -v diskutil >/dev/null 2>&1 || fail "diskutil not found"
     command -v rsync >/dev/null 2>&1 || fail "rsync not found"
 
     [[ "$disk" == /dev/disk* ]] || fail "--flash-disk must look like /dev/diskN"
     diskutil info "$disk" >/dev/null 2>&1 || fail "disk not found: ${disk}"
+
+    if [[ -f "/Volumes/${DISK_LABEL}/${policy_file}" && -s "/Volumes/${DISK_LABEL}/${policy_file}" ]]; then
+        preserved_policy="$(mktemp "${TMPDIR:-/tmp}/cohesix-policy.XXXXXX")"
+        chmod 600 "$preserved_policy"
+        cp -f "/Volumes/${DISK_LABEL}/${policy_file}" "$preserved_policy"
+        PRESERVED_POLICY_TEMP="$preserved_policy"
+        log "Preserving existing Cohesix U-Boot policy file ${policy_file} across flash"
+    fi
 
     log "Flashing ${disk} (this erases the target disk)"
     diskutil unmountDisk force "$disk" >/dev/null 2>&1 || true
@@ -1606,6 +1621,15 @@ flash_sd_card() {
       --exclude=".metadata_never_index" \
       --exclude="._*" \
       "${STAGE_DIR}/" "${volume}/"
+
+    if [[ -n "$preserved_policy" && -f "$preserved_policy" ]]; then
+        cp -f "$preserved_policy" "${volume}/${policy_file}"
+        chmod 600 "${volume}/${policy_file}" 2>/dev/null || true
+        rm -f "$preserved_policy"
+        preserved_policy=""
+        PRESERVED_POLICY_TEMP=""
+        log "Restored preserved Cohesix U-Boot policy file ${policy_file}"
+    fi
 
     disable_spotlight_for_flash_volume "$volume"
     find "${volume}" -xdev -name '._*' -type f -delete 2>/dev/null || true

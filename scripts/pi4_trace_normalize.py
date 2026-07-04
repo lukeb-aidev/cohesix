@@ -7647,7 +7647,7 @@ def usb_local_seat_state_from_runtime(
     busy_after_ready = runtime.busy_after_ready
     if usb_gate < 10:
         return "blocked", usb_blocker or "usb-gate-incomplete", busy_after_ready
-    if runtime.recovery_diag_valid == "no":
+    if usb_runtime_recovery_diag_invalid_degrades(runtime):
         return "degraded", "usb-runtime-diag-invalid", runtime.command_ready or busy_after_ready
     if not runtime.first_report_ready:
         return "degraded", "usb-first-report-missing", runtime.command_ready or busy_after_ready
@@ -7668,6 +7668,33 @@ def usb_local_seat_state_from_runtime(
             reason = "recovered-from-blocker"
         return "recovered", reason, busy_after_ready
     return "ready", "command-ready", busy_after_ready
+
+
+def usb_runtime_recovery_diag_invalid_degrades(runtime: UsbRuntimeQueueSummary) -> bool:
+    """Return whether a missing recovery diagnostic invalidates local-seat proof."""
+
+    if runtime.recovery_diag_valid != "no":
+        return False
+    healthy_report_status = {
+        "idle-report",
+        "decoded-empty",
+        "produced-byte",
+        "filtered-key",
+        "flexible-fallback",
+    }
+    if (
+        runtime.command_ready
+        and runtime.first_report_ready
+        and runtime.transfer_events != 0
+        and runtime.report_status in healthy_report_status
+        and runtime.endpoint_recovery_failures == 0
+        and runtime.queue_collapse_recoveries == 0
+        and runtime.command_completion_blocked == 0
+        and runtime.recovery_stage in {"unknown", "none", "ready"}
+        and runtime.recovery_reason in {"unknown", "none"}
+    ):
+        return False
+    return True
 
 
 def summarize_output_pressure(events: Iterable[TraceEvent]) -> OutputPressureSummary:
