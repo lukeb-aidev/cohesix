@@ -1432,6 +1432,18 @@ const fn budgeted_cyw43_smoltcp_poll_after_tcp_borrow(phase: BudgetedNetPhase) -
 }
 
 #[cfg(feature = "kernel")]
+const fn budgeted_genet_smoltcp_poll_after_tcp_borrow(phase: BudgetedNetPhase) -> bool {
+    matches!(
+        phase,
+        BudgetedNetPhase::Interface | BudgetedNetPhase::InterfaceFlush
+    )
+}
+
+const fn udp_beacon_bind_endpoint(port: u16) -> IpListenEndpoint {
+    IpListenEndpoint { addr: None, port }
+}
+
+#[cfg(feature = "kernel")]
 fn budgeted_outer_pre_poll_allowed(
     hot_path: crate::hal::driver_task::DriverTaskHotPath,
     cyw43_inner_pre_poll_owner: bool,
@@ -3174,10 +3186,7 @@ impl<D: NetDevice> NetStack<D> {
                 &mut UDP_BEACON_TX_STORAGE[..],
             );
             let mut beacon_socket = UdpSocket::new(rx_buffer, tx_buffer);
-            let beacon_endpoint = IpListenEndpoint {
-                addr: Some(IpAddress::Ipv4(self.ip)),
-                port: UDP_BEACON_PORT,
-            };
+            let beacon_endpoint = udp_beacon_bind_endpoint(UDP_BEACON_PORT);
             if let Err(err) = beacon_socket.bind(beacon_endpoint) {
                 warn!(
                     "[net-selftest] failed to bind UDP beacon socket port={}: {:?}",
@@ -3829,6 +3838,10 @@ impl<D: NetDevice> NetStack<D> {
         let cyw43_tcp_phase_borrow =
             cyw43_tcp_fast_path && budgeted_cyw43_tcp_phase_borrow_allowed(phase);
         let tcp_phase_borrow = genet_tcp_fast_path || cyw43_tcp_phase_borrow;
+        let genet_smoltcp_after_tcp_borrow =
+            genet_tcp_fast_path && budgeted_genet_smoltcp_poll_after_tcp_borrow(phase);
+        let cyw43_smoltcp_after_tcp_borrow =
+            cyw43_tcp_phase_borrow && budgeted_cyw43_smoltcp_poll_after_tcp_borrow(phase);
         #[cfg(feature = "kernel")]
         let cyw43_selftest_tcp_defer = self.budgeted_cyw43_selftest_defers_to_tcp(phase);
         #[cfg(not(feature = "kernel"))]
@@ -3915,17 +3928,17 @@ impl<D: NetDevice> NetStack<D> {
             );
         }
         activity |= match phase {
-            BudgetedNetPhase::Interface
-                if cyw43_tcp_phase_borrow
-                    && budgeted_cyw43_smoltcp_poll_after_tcp_borrow(phase) =>
-            {
+            BudgetedNetPhase::Interface if genet_smoltcp_after_tcp_borrow => {
+                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-genet-main-after-tcp-borrow")
+            }
+            BudgetedNetPhase::Interface if cyw43_smoltcp_after_tcp_borrow => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-cyw43-main-after-tcp-borrow")
             }
             BudgetedNetPhase::Interface if tcp_phase_borrow => false,
             BudgetedNetPhase::Interface => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-main")
             }
-            BudgetedNetPhase::Dhcp if cyw43_tcp_phase_borrow && !dhcp_service_required => {
+            BudgetedNetPhase::Dhcp if cyw43_smoltcp_after_tcp_borrow && !dhcp_service_required => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-cyw43-dhcp-after-tcp-borrow")
             }
             BudgetedNetPhase::Dhcp => self.service_budgeted_dhcp_turn(timestamp, now_ms),
@@ -3935,10 +3948,10 @@ impl<D: NetDevice> NetStack<D> {
                 "budgeted-tcp-pre",
                 "budgeted-post-tcp",
             ),
-            BudgetedNetPhase::InterfaceFlush
-                if cyw43_tcp_phase_borrow
-                    && budgeted_cyw43_smoltcp_poll_after_tcp_borrow(phase) =>
-            {
+            BudgetedNetPhase::InterfaceFlush if genet_smoltcp_after_tcp_borrow => {
+                self.poll_smoltcp_once(timestamp, now_ms, "budgeted-genet-flush-after-tcp-borrow")
+            }
+            BudgetedNetPhase::InterfaceFlush if cyw43_smoltcp_after_tcp_borrow => {
                 self.poll_smoltcp_once(timestamp, now_ms, "budgeted-cyw43-flush-after-tcp-borrow")
             }
             BudgetedNetPhase::InterfaceFlush if tcp_phase_borrow => false,
@@ -8132,6 +8145,10 @@ mod tests {
         let pre_poll_frames = GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u16;
         let pre_poll_bytes = (GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT as u32)
             .saturating_mul(DRIVER_TASK_PRE_POLL_TURN_BYTES);
+        let base_ops = 1u16;
+        let interface_ops = 2u16;
+        let interface_frames = 1u16;
+        let interface_bytes = 2048u32;
         let tcp_ops = 64u16;
         let tcp_frames = MAX_CONSOLE_FRAMES_PER_POLL as u16;
         let tcp_bytes = TCP_SERVICE_BYTES_PER_TURN;
@@ -8149,6 +8166,25 @@ mod tests {
         );
         assert!(
             (1u32 + GENET_TCP_POST_DISPATCH_EXTRA_TURNS as u32).saturating_mul(tcp_bytes)
+                <= contract.budget.max_bytes_per_turn
+        );
+        assert!(
+            base_ops
+                .saturating_add(pre_poll_ops)
+                .saturating_add(tcp_ops)
+                .saturating_add(interface_ops)
+                <= contract.budget.max_ops_per_turn
+        );
+        assert!(
+            pre_poll_frames
+                .saturating_add(tcp_frames)
+                .saturating_add(interface_frames)
+                <= contract.budget.max_frames_per_turn
+        );
+        assert!(
+            pre_poll_bytes
+                .saturating_add(tcp_bytes)
+                .saturating_add(interface_bytes)
                 <= contract.budget.max_bytes_per_turn
         );
     }
@@ -8563,6 +8599,21 @@ mod tests {
             crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
             tcp_policy,
             None
+        ));
+        assert!(budgeted_genet_smoltcp_poll_after_tcp_borrow(
+            BudgetedNetPhase::Interface
+        ));
+        assert!(budgeted_genet_smoltcp_poll_after_tcp_borrow(
+            BudgetedNetPhase::InterfaceFlush
+        ));
+        assert!(!budgeted_genet_smoltcp_poll_after_tcp_borrow(
+            BudgetedNetPhase::Dhcp
+        ));
+        assert!(!budgeted_genet_smoltcp_poll_after_tcp_borrow(
+            BudgetedNetPhase::Tcp
+        ));
+        assert!(!budgeted_genet_smoltcp_poll_after_tcp_borrow(
+            BudgetedNetPhase::SelfTest
         ));
     }
 
@@ -9073,6 +9124,14 @@ mod tests {
             udp_beacon_send_failure_log_severity(false, 2),
             SelfTestLogSeverity::Debug
         );
+    }
+
+    #[test]
+    fn self_test_udp_beacon_bind_is_lease_agnostic() {
+        let endpoint = udp_beacon_bind_endpoint(UDP_BEACON_PORT);
+
+        assert_eq!(endpoint.port, UDP_BEACON_PORT);
+        assert!(endpoint.addr.is_none());
     }
 
     #[test]

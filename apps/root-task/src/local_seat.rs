@@ -658,6 +658,10 @@ const LINKED_LOCAL_SEAT_USB_COLD_BOOT_ENUM_RESUME_ATTEMPTS: usize = 128;
 // Explicit prompt-side probes must remain responsive; long hub/control waits
 // continue through the pre-root cold-boot budget and cached progress evidence.
 const LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS: usize = 16;
+#[cfg(all(feature = "kernel", feature = "usb"))]
+// Hub reset and port-change settle can report the same progress token for a
+// few nonblocking turns. Keep that prompt-side settle bounded and token-gated.
+const LINKED_LOCAL_SEAT_USB_PROBE_STALLED_PROGRESS_BURST_ATTEMPTS: usize = 4;
 
 #[cfg(all(
     feature = "kernel",
@@ -3318,18 +3322,34 @@ impl LocalSeatRuntime {
             };
             let was_enabled = self.backend_keyboard_polling_enabled;
             let mut previous_progress = latest_usb_enumeration_progress_token();
+            let mut stalled_progress_bursts = 0usize;
             local_seat_driver_runtime_arm_prompt_safe_probe(self.root_console_ready);
             self.backend_keyboard_polling_enabled = true;
             self.clear_keyboard_poll_no_reply_backoff();
             self.poll_backend_keyboard();
             for _ in 0..LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS {
                 let current_progress = latest_usb_enumeration_progress_token();
-                if !usb_enumeration_progress_token_allows_probe_burst(
+                let active_request = crate::hal::driver_task::driver_task_ring_command_active(
+                    driver_task_contract(),
+                );
+                let progress_allows_probe = usb_enumeration_progress_token_allows_probe_burst(
                     previous_progress,
                     current_progress,
-                    crate::hal::driver_task::driver_task_ring_command_active(driver_task_contract()),
-                ) {
+                    active_request,
+                );
+                let stalled_progress_allows_probe = self.root_console_ready
+                    && usb_enumeration_stalled_progress_token_allows_probe_burst(
+                        previous_progress,
+                        current_progress,
+                        stalled_progress_bursts,
+                    );
+                if !progress_allows_probe && !stalled_progress_allows_probe {
                     break;
+                }
+                if stalled_progress_allows_probe && !progress_allows_probe {
+                    stalled_progress_bursts = stalled_progress_bursts.saturating_add(1);
+                } else {
+                    stalled_progress_bursts = 0;
                 }
                 if !LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.load(Ordering::Acquire)
                     || LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire)
@@ -5363,6 +5383,17 @@ fn usb_enumeration_progress_token_allows_probe_burst(
 ) -> bool {
     usb_enumeration_progress_token_advanced(previous, current)
         || (active_request && current.is_some())
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn usb_enumeration_stalled_progress_token_allows_probe_burst(
+    previous: Option<(u32, u32, u32)>,
+    current: Option<(u32, u32, u32)>,
+    stalled_bursts: usize,
+) -> bool {
+    previous.is_some()
+        && previous == current
+        && stalled_bursts < LINKED_LOCAL_SEAT_USB_PROBE_STALLED_PROGRESS_BURST_ATTEMPTS
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -10118,6 +10149,7 @@ mod tests {
     #[test]
     fn linked_usb_probe_progress_burst_is_progress_bounded() {
         assert!((1..=16).contains(&LINKED_LOCAL_SEAT_USB_PROBE_STABLE_PROGRESS_BURST_ATTEMPTS));
+        assert!((1..=4).contains(&LINKED_LOCAL_SEAT_USB_PROBE_STALLED_PROGRESS_BURST_ATTEMPTS));
         assert!(!usb_enumeration_progress_token_advanced(None, None));
         assert!(usb_enumeration_progress_token_advanced(
             None,
@@ -10148,6 +10180,24 @@ mod tests {
             Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
             Some((8, 236, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
             false
+        ));
+        assert!(usb_enumeration_stalled_progress_token_allows_probe_burst(
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            0
+        ));
+        assert!(!usb_enumeration_stalled_progress_token_allows_probe_burst(
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            LINKED_LOCAL_SEAT_USB_PROBE_STALLED_PROGRESS_BURST_ATTEMPTS
+        ));
+        assert!(!usb_enumeration_stalled_progress_token_allows_probe_burst(
+            None, None, 0
+        ));
+        assert!(!usb_enumeration_stalled_progress_token_allows_probe_burst(
+            Some((8, 190, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            Some((8, 236, DRIVER_RUNTIME_USB_ENUMERATE_AUX)),
+            0
         ));
     }
 
