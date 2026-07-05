@@ -2000,7 +2000,11 @@ fn run_driver_task_net_engine_init_service(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
 ) -> Option<DriverTaskCompletionRecord> {
-    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+    if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+        crate::hal::driver_task::run_driver_task_ring_service_nonblocking(contract, command)
+    } else {
+        crate::hal::driver_task::run_driver_task_ring_service(contract, command)
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -4032,13 +4036,12 @@ fn cyw43_prepare_runtime_control_plane(
     contract: DriverTaskContract,
     clm_blob: Option<&[u8]>,
 ) -> Result<EthernetAddress, DriverTaskNetError> {
-    cyw43_submit_bcdc_iovar_u32_with_options(
+    cyw43_submit_bcdc_iovar_u32_with_header_mode(
         contract,
         "bus:txglomalign",
         8,
         "cyw43-control-txglomalign",
         Cyw43ControlHeaderMode::Plain,
-        true,
     )?;
     cyw43_get_bcdc_iovar_optional_unsupported_with_header_mode(
         contract,
@@ -9109,10 +9112,8 @@ fn cyw43_submit_runtime_control_exchange(
 
 #[cfg(feature = "kernel")]
 fn cyw43_control_uses_runtime_exchange(stage: &'static str, control_iovar: &str) -> bool {
-    matches!(
-        (stage, control_iovar),
-        ("cyw43-control-txglomalign", "bus:txglomalign") | ("cyw43-control-rxglom", "bus:rxglom")
-    )
+    let _ = (stage, control_iovar);
+    false
 }
 
 #[cfg(feature = "kernel")]
@@ -16042,31 +16043,22 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_glom_control_uses_runtime_exchange_with_startup_drain() {
-        let descriptor = cyw43_control_exchange_descriptor(
-            36,
-            CYW43_WLC_SET_VAR,
-            1,
-            Cyw43ControlHeaderMode::Plain,
-            true,
-        );
+    fn cyw43_glom_control_uses_split_frame_without_startup_drain() {
+        let descriptor = cyw43_control_frame_descriptor(36, Cyw43ControlHeaderMode::Plain, false);
 
-        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
-        assert_eq!(
-            descriptor.flags,
-            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
-        );
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME);
+        assert_eq!(descriptor.flags, 0);
         assert_eq!(descriptor.payload_len, 36);
         assert_eq!(descriptor.total_len, 36);
         assert_eq!(
-            cyw43_control_runtime_flags(Cyw43ControlHeaderMode::Plain, true),
+            cyw43_control_runtime_flags(Cyw43ControlHeaderMode::Plain, false),
             descriptor.flags
         );
-        assert!(cyw43_control_uses_runtime_exchange(
+        assert!(!cyw43_control_uses_runtime_exchange(
             "cyw43-control-txglomalign",
             "bus:txglomalign"
         ));
-        assert!(cyw43_control_uses_runtime_exchange(
+        assert!(!cyw43_control_uses_runtime_exchange(
             "cyw43-control-rxglom",
             "bus:rxglom"
         ));

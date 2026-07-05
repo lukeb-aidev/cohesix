@@ -818,9 +818,9 @@ pub(crate) fn usb_runtime_command_replay_ready(
 #[must_use]
 pub(crate) const fn local_seat_pre_root_runtime_init_allowed(
     physical_pi_owner_state: bool,
-    _pointer_free_ipc_proof: bool,
+    pointer_free_ipc_proof: bool,
 ) -> bool {
-    !physical_pi_owner_state
+    !physical_pi_owner_state || pointer_free_ipc_proof
 }
 
 /// Return whether display mirroring may submit a linked-runtime service turn.
@@ -8304,9 +8304,9 @@ mod tests {
     }
 
     #[test]
-    fn local_seat_pre_root_runtime_init_defers_until_prompt_on_physical_pi() {
+    fn local_seat_pre_root_runtime_init_requires_pointer_free_proof_on_physical_pi() {
         assert!(!local_seat_pre_root_runtime_init_allowed(true, false));
-        assert!(!local_seat_pre_root_runtime_init_allowed(true, true));
+        assert!(local_seat_pre_root_runtime_init_allowed(true, true));
         assert!(local_seat_pre_root_runtime_init_allowed(false, false));
     }
 

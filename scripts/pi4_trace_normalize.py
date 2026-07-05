@@ -6559,8 +6559,12 @@ def wifi_failure_detail_from_fields(event: TraceEvent) -> tuple[str, str]:
         phase = (
             event.fields.get("stage")
             or event.fields.get("phase")
-            or event.stage
-            or "cyw43-control-tx"
+            or (
+                event.stage
+                if event.stage not in {"boundary", "evidence", "next_action"}
+                else ""
+            )
+            or "none"
         )
         return failure_domain, phase
     if (
@@ -10751,8 +10755,21 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         replay_gate, replay_blocker, replay_exact_default, replay_phase_default = (
             classify_net_replay_gate(net_driver_task_replay_blocker)
         )
-        if wifi_replay_should_refine(wifi_blocker) or replay_gate > wifi_gate:
-            wifi_gate = max(wifi_gate, replay_gate)
+        replay_precedes_generic_control_summary = (
+            replay_blocker == "cyw43-firmware-runtime-replay"
+            and wifi_blocker == "control-plane-reply-idle-loop"
+            and replay_gate < wifi_gate
+        )
+        if (
+            wifi_replay_should_refine(wifi_blocker)
+            or replay_gate > wifi_gate
+            or replay_precedes_generic_control_summary
+        ):
+            wifi_gate = (
+                replay_gate
+                if replay_precedes_generic_control_summary
+                else max(wifi_gate, replay_gate)
+            )
             wifi_blocker = replay_blocker
             replay_exact, replay_phase, replay_line = summarize_wifi_failure_detail(
                 event_list, wifi_blocker
