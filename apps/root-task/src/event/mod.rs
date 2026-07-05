@@ -5836,6 +5836,10 @@ where
                 .is_some_and(|local_seat| local_seat.usb_keyboard_command_ready_latched());
             if local_command_ready {
                 Some("command-input-ready")
+            } else if crate::local_seat::linked_local_seat_usb_keyboard_ready() {
+                Some("linked-keyboard-ready")
+            } else if crate::local_seat::linked_local_seat_usb_controller_ready() {
+                Some("linked-controller-ready")
             } else {
                 None
             }
@@ -6166,6 +6170,8 @@ where
                 ("run-transition-edge", "usbcmd-run")
             }
             Some("command-input-ready") => ("acceptance-complete", "command-input-ready"),
+            Some("linked-keyboard-ready") => ("linked-keyboard-ready", "command-input-ready"),
+            Some("linked-controller-ready") => ("linked-runtime-active", "keyboard-readiness"),
             Some(_) => ("xhci-diagnostic-edge", "controller-transition"),
             None if !backend_attached => ("backend-not-attached", "probe-controller"),
             None if polling_enabled => ("probe-in-progress", "poll-keyboard"),

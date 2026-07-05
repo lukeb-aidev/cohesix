@@ -10115,6 +10115,7 @@ fn record_cyw43_control_split_failure(
             nonmatching_frames,
             malformed_frames,
         );
+        emit_cyw43_sdio_owner_fault_snapshot(contract, stage, descriptor, completion, None);
     }
 }
 

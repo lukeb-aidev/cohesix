@@ -1323,7 +1323,7 @@ const fn local_seat_keyboard_steady_queue_stalled(queued_reports: u32, report_st
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const fn local_seat_keyboard_pre_first_report_full_queue_stalled(result: u32) -> bool {
     let queued_reports = result & 0xff;
-    queued_reports >= LINKED_LOCAL_SEAT_USB_FIRST_REPORT_MIN_QUEUED_REPORTS
+    queued_reports >= LINKED_LOCAL_SEAT_USB_READY_IDLE_MIN_QUEUED_REPORTS
         && local_seat_keyboard_pre_first_report_no_event_queue_stalled(result)
 }
 
@@ -1341,13 +1341,31 @@ const fn local_seat_keyboard_pre_first_report_no_event_queue_stalled(result: u32
     let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
         & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
     let transfer_events = (result >> 24) & 0xff;
-    queued_reports != 0
+    queued_reports >= LINKED_LOCAL_SEAT_USB_READY_IDLE_MIN_QUEUED_REPORTS
         && transfer_events == 0
         && !doorbell_pending
         && (report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE as u32
             || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE as u32
             || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY as u32
             || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS as u32)
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn local_seat_keyboard_pre_first_report_endpoint_armed(result: u32) -> bool {
+    let queued_reports = result & 0xff;
+    let doorbell_pending = (result & (1 << 8)) != 0;
+    let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+        & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
+    let transfer_events = (result >> 24) & 0xff;
+    queued_reports >= LINKED_LOCAL_SEAT_USB_FIRST_REPORT_MIN_QUEUED_REPORTS
+        && queued_reports <= LINKED_LOCAL_SEAT_USB_READY_MAX_QUEUED_REPORTS
+        && transfer_events == 0
+        && !doorbell_pending
+        && (report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE as u32
+            || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE as u32
+            || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY as u32
+            || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS as u32
+            || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT as u32)
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -1438,6 +1456,9 @@ const fn local_seat_keyboard_first_report_fresh(
     }
     if !first_report_ready || local_seat_keyboard_pre_first_report_no_event_queue_stalled(result) {
         return false;
+    }
+    if local_seat_keyboard_pre_first_report_endpoint_armed(result) {
+        return true;
     }
     let transfer_events = (result >> 24) & 0xff;
     let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
@@ -4299,6 +4320,7 @@ impl LocalSeatRuntime {
                             return;
                         }
                         if completion.detail == DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+                            || local_seat_usb_first_report_pending_endpoint_armed(completion)
                         {
                             record_linked_local_seat_usb_detail(Some(completion));
                             LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
@@ -4901,6 +4923,15 @@ fn local_seat_usb_first_report_requires_reenumeration_with_first_byte(
     }
     local_seat_usb_completion_progress(completion)
         && linked_local_seat_usb_detail_warrants_recovery(completion.detail)
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+fn local_seat_usb_first_report_pending_endpoint_armed(
+    completion: crate::hal::driver_task::DriverTaskCompletionRecord,
+) -> bool {
+    completion.code == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+        && completion.detail == DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
+        && local_seat_keyboard_pre_first_report_endpoint_armed(completion.result)
 }
 
 #[cfg(all(
@@ -10114,18 +10145,16 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
-    fn physical_pi_usb_command_ready_rejects_one_queued_report_without_transfer_events() {
+    fn physical_pi_usb_command_ready_accepts_armed_first_report_queue_without_keypress() {
         let one_queue_no_event = 1
             | (u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE)
                 << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT);
 
-        assert!(local_seat_keyboard_pre_first_report_full_queue_stalled(
+        assert!(!local_seat_keyboard_pre_first_report_full_queue_stalled(
             one_queue_no_event
         ));
-        assert!(local_seat_keyboard_pre_first_report_no_event_queue_stalled(
-            one_queue_no_event
-        ));
-        assert!(local_seat_keyboard_pre_first_report_recovery_due(
+        assert!(!local_seat_keyboard_pre_first_report_no_event_queue_stalled(one_queue_no_event));
+        assert!(!local_seat_keyboard_pre_first_report_recovery_due(
             false,
             one_queue_no_event
         ));
@@ -10136,20 +10165,20 @@ mod tests {
         assert!(
             !local_seat_keyboard_pre_first_report_steady_full_queue_stalled(one_queue_no_event)
         );
-        assert!(local_seat_keyboard_result_blocks_prompt_ready(
+        assert!(!local_seat_keyboard_result_blocks_prompt_ready(
             one_queue_no_event,
             false,
         ));
-        assert!(!local_seat_keyboard_first_report_fresh(
+        assert!(local_seat_keyboard_first_report_fresh(
             one_queue_no_event,
             true,
             false
         ));
-        assert!(!local_seat_usb_command_ready_state(
+        assert!(local_seat_usb_command_ready_state(
             LocalSeatUsbCommandReadyState {
                 prompt_safe_ready: true,
                 first_report_ready: true,
-                first_report_fresh: false,
+                first_report_fresh: true,
                 first_byte_ready: false,
                 clean_polls: LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
                 post_first_byte_pressure: false,
@@ -10404,8 +10433,28 @@ mod tests {
             pending_failed
         ));
 
-        let ready = crate::hal::driver_task::DriverTaskCompletionRecord {
+        let pending_armed = crate::hal::driver_task::DriverTaskCompletionRecord {
             sequence: 9,
+            code: crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16(),
+            detail: DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
+            result: 1
+                | (u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE)
+                    << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT),
+            frame: crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+        assert!(local_seat_usb_first_report_pending_endpoint_armed(
+            pending_armed
+        ));
+        assert!(!local_seat_usb_first_report_requires_reenumeration(
+            pending_armed
+        ));
+
+        let ready = crate::hal::driver_task::DriverTaskCompletionRecord {
+            sequence: 10,
             code: crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16(),
             detail: DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
             result: 1
@@ -10422,7 +10471,7 @@ mod tests {
 
         let pending_recovery_success_no_event =
             crate::hal::driver_task::DriverTaskCompletionRecord {
-                sequence: 10,
+                sequence: 11,
                 code: crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16(),
                 detail: DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
                 result: 1
@@ -10434,12 +10483,15 @@ mod tests {
                     flags: 0,
                 },
             };
-        assert!(local_seat_usb_first_report_requires_reenumeration(
+        assert!(local_seat_usb_first_report_pending_endpoint_armed(
+            pending_recovery_success_no_event
+        ));
+        assert!(!local_seat_usb_first_report_requires_reenumeration(
             pending_recovery_success_no_event
         ));
 
         let ready_recovery_success_no_event = crate::hal::driver_task::DriverTaskCompletionRecord {
-            sequence: 11,
+            sequence: 12,
             code: crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16(),
             detail: DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
             result: 1
@@ -10451,7 +10503,7 @@ mod tests {
                 flags: 0,
             },
         };
-        assert!(local_seat_usb_first_report_requires_reenumeration(
+        assert!(!local_seat_usb_first_report_requires_reenumeration(
             ready_recovery_success_no_event
         ));
     }
