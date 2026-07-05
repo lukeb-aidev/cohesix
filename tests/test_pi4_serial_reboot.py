@@ -156,11 +156,10 @@ def test_serial_commands_use_cr_line_ending() -> None:
 
 
 def test_diagnostics_reinforce_root_command_terminators() -> None:
-    """Root diagnostics resend a guarded CR so commands cannot remain buffered."""
+    """Root diagnostics use guarded terminators without injecting a blank command."""
 
     controller = FakeController(
         [
-            b"cohesix>",
             b"OK NETSTATS\n",
             b"OK NETTEST\n",
             b"OK WIFI\n",
@@ -174,7 +173,6 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
     pi4_serial_reboot.run_diagnostics(controller, "wifi", prompt_ready=True)
 
     assert controller.sent == [
-        "",
         "netstats",
         "nettest",
         "wifi diag",
@@ -183,8 +181,8 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "usb probe-kbd",
         "smp activity",
     ]
-    assert controller.public_sent[0] == "<diagnostic-prime>"
-    assert controller.reinforced == [False, True, True, True, True, True, True, True]
+    assert controller.public_sent[0] == "netstats"
+    assert controller.reinforced == [True, True, True, True, True, True, True]
     assert controller.drains == [(1.0, "post-root-prompt-before-diagnostics")]
 
 
@@ -193,7 +191,6 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
 
     controller = FakeController(
         [
-            b"cohesix>",
             b"OK NETSTATS\ncohesix>",
             b"OK NETTEST\ncohesix>",
             b"OK USB\ncohesix>",
@@ -205,7 +202,6 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
     pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
 
     assert controller.sent == [
-        "",
         "netstats",
         "nettest",
         "usb diag",
@@ -221,7 +217,6 @@ def test_diagnostics_require_command_specific_result_marker() -> None:
 
     controller = FakeController(
         [
-            b"cohesix>",
             b"OK WIFI\ncohesix>",
         ]
     )

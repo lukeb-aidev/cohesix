@@ -47,6 +47,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_KEYBOARD_FRAME_FLAG_INPUT, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE, DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE,
+    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS,
@@ -1319,6 +1320,11 @@ const fn local_seat_keyboard_hard_recovery_report_status(report_status: u32) -> 
         || report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED as u32
 }
 
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn local_seat_keyboard_no_idle_report_status(report_status: u32) -> bool {
+    report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT as u32
+}
+
 #[cfg(all(
     feature = "kernel",
     feature = "usb",
@@ -1340,6 +1346,8 @@ const fn local_seat_keyboard_report_status_name(report_status: u32) -> &'static 
         "recovery-success"
     } else if report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED as u32 {
         "recovery-failed"
+    } else if report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT as u32 {
+        "no-idle-report"
     } else {
         "other"
     }
@@ -1385,7 +1393,8 @@ const fn local_seat_keyboard_first_report_fresh(
     let transfer_events = (result >> 24) & 0xff;
     let report_status = (result >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
         & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK;
-    transfer_events != 0 && !local_seat_keyboard_hard_recovery_report_status(report_status)
+    local_seat_keyboard_no_idle_report_status(report_status)
+        || (transfer_events != 0 && !local_seat_keyboard_hard_recovery_report_status(report_status))
 }
 
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -10020,6 +10029,40 @@ mod tests {
         assert!(local_seat_keyboard_first_report_fresh(
             fresh_idle_report,
             true,
+            false
+        ));
+        assert!(local_seat_usb_command_ready_state(
+            LocalSeatUsbCommandReadyState {
+                prompt_safe_ready: true,
+                first_report_ready: true,
+                first_report_fresh: true,
+                first_byte_ready: false,
+                clean_polls: LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
+                post_first_byte_pressure: false,
+            },
+        ));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn physical_pi_usb_command_ready_accepts_no_idle_report_without_keypress() {
+        let no_idle_report = u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT)
+            << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT;
+
+        assert!(!local_seat_keyboard_pre_first_report_full_queue_stalled(
+            no_idle_report
+        ));
+        assert!(!local_seat_keyboard_result_blocks_prompt_ready(
+            no_idle_report
+        ));
+        assert!(local_seat_keyboard_first_report_fresh(
+            no_idle_report,
+            true,
+            false
+        ));
+        assert!(!local_seat_keyboard_first_report_fresh(
+            no_idle_report,
+            false,
             false
         ));
         assert!(local_seat_usb_command_ready_state(

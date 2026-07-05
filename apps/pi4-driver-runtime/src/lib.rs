@@ -479,6 +479,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FLEXIBLE_FALLBACK,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE, DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE,
+    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_PRODUCED_BYTE,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED,
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS,
@@ -916,9 +917,13 @@ const USB_ENUM_MAX_DEPTH: u8 = 3;
 const USB_CONFIG_BUFFER_BYTES: usize = 512;
 const USB_HUB_DESCRIPTOR_BYTES: usize = 16;
 const USB_HUB_BLIND_PREPARE_PORT_LIMIT: u8 = 4;
+const USB_HUB_PORT_INDEX_CANDIDATES_MAX: usize = 5;
+const USB_VENDOR_ID_APPLE: u16 = 0x05ac;
+const USB_VENDOR_ID_KEYCHRON: u16 = 0x3434;
+const USB_DEVICE_ID_APPLE_KEYBOARD_HUB: u16 = 0x1006;
 const USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH: usize = 128;
 const USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH: usize = 32;
-const USB_KEYBOARD_FIRST_REPORT_QUEUE_DEPTH: usize = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH;
+const USB_KEYBOARD_FIRST_REPORT_QUEUE_DEPTH: usize = 1;
 const USB_KEYBOARD_HARD_RECOVERY_UNMATCHED_THRESHOLD: u8 = 16;
 const USB_KEYBOARD_STEADY_UNMATCHED_RECOVERY_THRESHOLD: u8 = 1;
 const USB_KEYBOARD_QUEUE_COLLAPSE_RECOVERY_DEPTH: usize = 8;
@@ -1052,6 +1057,7 @@ const USB_FULL_SPEED_DESCRIPTOR_SETTLE_SPINS: usize = 50_000;
 const USB_FULL_SPEED_DESCRIPTOR_PRIME_LEN: usize = 64;
 const USB_FULL_SPEED_DESCRIPTOR_PRIME_EXPECT_MIN: usize = 8;
 const USB_DEVICE_DESCRIPTOR_BYTES: usize = 18;
+const USB_DESCRIPTOR_TYPE_DEVICE: u8 = 1;
 const USB_DEVICE_DESCRIPTOR_RETRY_ATTEMPTS: usize = 2;
 const USB_CONFIGURATION_DESCRIPTOR_HEADER_BYTES: usize = 9;
 const USB_CONFIGURATION_DESCRIPTOR_RETRY_ATTEMPTS: usize = 3;
@@ -1727,6 +1733,7 @@ struct UsbRuntimeState {
     keyboard_valid_report_events: u32,
     keyboard_last_report_status: u8,
     keyboard_attach_awaiting_idle: bool,
+    keyboard_first_report_optional: bool,
     keyboard_unmatched_streak: u8,
     keyboard_endpoint_recoveries: u8,
     keyboard_endpoint_recovery_failures: u8,
@@ -1813,6 +1820,7 @@ impl UsbRuntimeState {
             keyboard_valid_report_events: 0,
             keyboard_last_report_status: DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE,
             keyboard_attach_awaiting_idle: false,
+            keyboard_first_report_optional: false,
             keyboard_unmatched_streak: 0,
             keyboard_endpoint_recoveries: 0,
             keyboard_endpoint_recovery_failures: 0,
@@ -1859,6 +1867,8 @@ impl UsbRuntimeState {
 struct UsbEnumerationDevice {
     slot: u8,
     root_port: u8,
+    vendor_id: u16,
+    product_id: u16,
     route: u32,
     speed: u32,
     depth: u8,
@@ -1877,6 +1887,8 @@ impl UsbEnumerationDevice {
         Self {
             slot: 0,
             root_port: 0,
+            vendor_id: 0,
+            product_id: 0,
             route: 0,
             speed: 0,
             depth: 0,
@@ -1897,6 +1909,8 @@ impl UsbEnumerationDevice {
         Self {
             slot: 0,
             root_port: self.root_port,
+            vendor_id: 0,
+            product_id: 0,
             route,
             speed,
             depth: self.depth.saturating_add(1),
@@ -4734,7 +4748,7 @@ fn sdio_descriptor_transfer_retryable(
 ) -> bool {
     cmd == SDIO_CMD53
         && desc.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
-        && matches!(desc.function, 1 | 2)
+        && desc.function == 1
         && flags & (DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_WRITE)
             == (DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_WRITE)
 }
@@ -13475,6 +13489,7 @@ fn usb_reset_keyboard_interrupt_queue(state: &mut UsbRuntimeState) {
     state.keyboard_valid_report_events = 0;
     state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
     state.keyboard_attach_awaiting_idle = true;
+    state.keyboard_first_report_optional = false;
     state.keyboard_unmatched_streak = 0;
     state.keyboard_endpoint_recoveries = 0;
     state.keyboard_endpoint_recovery_failures = 0;
@@ -13516,6 +13531,9 @@ fn usb_keyboard_interrupt_queue_underfilled(state: &UsbRuntimeState) -> bool {
 }
 
 fn usb_keyboard_control_poll_allowed(state: &UsbRuntimeState) -> bool {
+    if state.keyboard_first_report_optional && state.keyboard_valid_report_events == 0 {
+        return false;
+    }
     if state.keyboard_preserved_event_count != 0 {
         return false;
     }
@@ -13851,21 +13869,26 @@ fn usb_keyboard_diagnostic_frame(state: &UsbRuntimeState) -> DriverFrameDescript
 }
 
 fn usb_keyboard_pending_result(state: &mut UsbRuntimeState) -> u32 {
+    let report_status =
+        if state.keyboard_first_report_optional && state.keyboard_valid_report_events == 0 {
+            DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT
+        } else {
+            state.keyboard_last_report_status
+        };
     u32::from(state.keyboard_reports_queued)
         | if state.keyboard_doorbell_pending {
             1 << 8
         } else {
             0
         }
-        | ((u32::from(state.keyboard_last_report_status)
-            & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK)
+        | ((u32::from(report_status) & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK)
             << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
         | (u32::from(state.keyboard_preserved_event_count) << 16)
         | ((state.keyboard_transfer_events.min(0xff) & 0xff) << 24)
 }
 
 const fn usb_keyboard_has_first_valid_report(state: &UsbRuntimeState) -> bool {
-    state.keyboard_valid_report_events != 0
+    state.keyboard_valid_report_events != 0 || state.keyboard_first_report_optional
 }
 
 const fn usb_keyboard_report_status_counts_as_valid_report(status: u8) -> bool {
@@ -14065,7 +14088,15 @@ fn usb_reset_enumeration_cursor(state: &mut UsbRuntimeState) {
 }
 
 const fn usb_detail_warrants_cold_reinit(detail: u16) -> bool {
-    matches!(detail, DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED)
+    matches!(
+        detail,
+        DRIVER_RUNTIME_USB_INIT_DETAIL_ENABLE_SLOT_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
+            | DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
+    )
 }
 
 const fn usb_detail_warrants_deep_cold_reinit(detail: u16) -> bool {
@@ -19427,6 +19458,7 @@ fn usb_read_device_descriptor(
                 status_timeout: DRIVER_RUNTIME_RING_PROGRESS_USB_DEVICE_DESCRIPTOR_STATUS_TIMEOUT,
             },
         ) {
+            usb_record_device_identity_from_descriptor(descriptor, device, transferred);
             return Some(transferred);
         }
         xhci_drain_events_preserving_port_changes(state, descriptor);
@@ -19434,6 +19466,33 @@ fn usb_read_device_descriptor(
         attempts = attempts.saturating_add(1);
     }
     None
+}
+
+fn usb_record_device_identity_from_descriptor(
+    descriptor: &DriverRuntimeInitDescriptor,
+    device: &mut UsbEnumerationDevice,
+    transferred: usize,
+) {
+    if transferred < 12 {
+        return;
+    }
+    let Some(range) = runtime_resource_range(
+        descriptor,
+        DRIVER_RUNTIME_RESOURCE_KIND_DMA,
+        DRIVER_RUNTIME_RESOURCE_TAG_DMA_ARENA,
+    ) else {
+        return;
+    };
+    let base = range.vaddr as usize + XHCI_DMA_CONTROL_BUFFER_OFFSET;
+    if read_dma_byte(base) < USB_DEVICE_DESCRIPTOR_BYTES as u8
+        || read_dma_byte(base + 1) != USB_DESCRIPTOR_TYPE_DEVICE
+    {
+        return;
+    }
+    device.vendor_id =
+        u16::from(read_dma_byte(base + 8)) | (u16::from(read_dma_byte(base + 9)) << 8);
+    device.product_id =
+        u16::from(read_dma_byte(base + 10)) | (u16::from(read_dma_byte(base + 11)) << 8);
 }
 
 fn usb_set_configuration(
@@ -19572,6 +19631,8 @@ fn usb_keyboard_control_device(state: &UsbRuntimeState) -> Option<UsbEnumeration
     Some(UsbEnumerationDevice {
         slot: state.keyboard_slot,
         root_port: state.keyboard_port,
+        vendor_id: 0,
+        product_id: 0,
         route: 0,
         speed: 0,
         depth: 0,
@@ -20084,8 +20145,24 @@ fn usb_hub_class_transfer_with_progress_outcome(
     )
 }
 
-fn usb_hub_control_should_try_fallback(outcome: XhciControlTransferOutcome) -> bool {
-    !matches!(outcome, XhciControlTransferOutcome::Complete(_))
+const fn usb_device_is_apple_keyboard_hub(device: &UsbEnumerationDevice) -> bool {
+    device.vendor_id == USB_VENDOR_ID_APPLE && device.product_id == USB_DEVICE_ID_APPLE_KEYBOARD_HUB
+}
+
+const fn usb_device_keyboard_first_report_optional(device: &UsbEnumerationDevice) -> bool {
+    device.vendor_id == USB_VENDOR_ID_APPLE || device.vendor_id == USB_VENDOR_ID_KEYCHRON
+}
+
+const fn usb_hub_control_should_try_fallback(
+    device: &UsbEnumerationDevice,
+    outcome: XhciControlTransferOutcome,
+) -> bool {
+    matches!(
+        outcome,
+        XhciControlTransferOutcome::Failed {
+            code: XHCI_COMPLETION_STALL_ERROR
+        }
+    ) && usb_device_is_apple_keyboard_hub(device)
 }
 
 const fn usb_hub_port_status_progress(sequence: u32, aux0: u32) -> XhciControlProgress {
@@ -20102,11 +20179,36 @@ const fn usb_hub_port_status_progress(sequence: u32, aux0: u32) -> XhciControlPr
     }
 }
 
-fn usb_hub_port_index_candidates(interface: u8, port: u8) -> [u16; 2] {
-    [
-        u16::from(port),
-        (u16::from(interface) << 8) | u16::from(port),
-    ]
+const fn usb_hub_port_index_candidates(
+    interface: u8,
+    port: u8,
+) -> ([u16; USB_HUB_PORT_INDEX_CANDIDATES_MAX], usize) {
+    let mut candidates = [0u16; USB_HUB_PORT_INDEX_CANDIDATES_MAX];
+    let mut count = 0usize;
+    candidates[count] = port as u16;
+    count += 1;
+    if interface != 0 && count < USB_HUB_PORT_INDEX_CANDIDATES_MAX {
+        candidates[count] = ((interface as u16) << 8) | port as u16;
+        count += 1;
+    }
+    let mut alt_interface = 1u8;
+    while alt_interface <= 3 && count < USB_HUB_PORT_INDEX_CANDIDATES_MAX {
+        let candidate = ((alt_interface as u16) << 8) | port as u16;
+        let mut seen = false;
+        let mut index = 0usize;
+        while index < count {
+            if candidates[index] == candidate {
+                seen = true;
+            }
+            index += 1;
+        }
+        if !seen {
+            candidates[count] = candidate;
+            count += 1;
+        }
+        alt_interface += 1;
+    }
+    (candidates, count)
 }
 
 fn usb_hub_set_feature(
@@ -20117,11 +20219,10 @@ fn usb_hub_set_feature(
     port: u8,
     feature: u16,
 ) -> bool {
-    let [primary, fallback] = usb_hub_port_index_candidates(interface, port);
-    for (attempt, index) in [primary, fallback].iter().copied().enumerate() {
-        if attempt != 0 && index == primary {
-            continue;
-        }
+    let (candidates, count) = usb_hub_port_index_candidates(interface, port);
+    let mut attempt = 0usize;
+    while attempt < count {
+        let index = candidates[attempt];
         let setup = [
             0x23,
             XHCI_SETUP_SET_FEATURE,
@@ -20144,9 +20245,10 @@ fn usb_hub_set_feature(
         );
         match outcome {
             XhciControlTransferOutcome::Complete(_) => return true,
-            _ if usb_hub_control_should_try_fallback(outcome) => {}
+            _ if usb_hub_control_should_try_fallback(device, outcome) => {}
             _ => return false,
         }
+        attempt += 1;
     }
     false
 }
@@ -20159,11 +20261,10 @@ fn usb_hub_clear_feature(
     port: u8,
     feature: u16,
 ) -> bool {
-    let [primary, fallback] = usb_hub_port_index_candidates(interface, port);
-    for (attempt, index) in [primary, fallback].iter().copied().enumerate() {
-        if attempt != 0 && index == primary {
-            continue;
-        }
+    let (candidates, count) = usb_hub_port_index_candidates(interface, port);
+    let mut attempt = 0usize;
+    while attempt < count {
+        let index = candidates[attempt];
         let setup = [
             0x23,
             XHCI_SETUP_CLEAR_FEATURE,
@@ -20186,9 +20287,10 @@ fn usb_hub_clear_feature(
         );
         match outcome {
             XhciControlTransferOutcome::Complete(_) => return true,
-            _ if usb_hub_control_should_try_fallback(outcome) => {}
+            _ if usb_hub_control_should_try_fallback(device, outcome) => {}
             _ => return false,
         }
+        attempt += 1;
     }
     false
 }
@@ -20201,11 +20303,10 @@ fn usb_hub_get_port_status_with_progress(
     port: u8,
     progress: Option<XhciControlProgress>,
 ) -> Option<UsbHubPortStatus> {
-    let [primary, fallback] = usb_hub_port_index_candidates(interface, port);
-    for (attempt, index) in [primary, fallback].iter().copied().enumerate() {
-        if attempt != 0 && index == primary {
-            continue;
-        }
+    let (candidates, count) = usb_hub_port_index_candidates(interface, port);
+    let mut attempt = 0usize;
+    while attempt < count {
+        let index = candidates[attempt];
         let setup = [
             0xa3,
             XHCI_SETUP_GET_STATUS,
@@ -20252,9 +20353,10 @@ fn usb_hub_get_port_status_with_progress(
                     w_index: index,
                 });
             }
-            _ if usb_hub_control_should_try_fallback(outcome) => {}
+            _ if usb_hub_control_should_try_fallback(device, outcome) => {}
             _ => return None,
         }
+        attempt += 1;
     }
     None
 }
@@ -20360,8 +20462,15 @@ const fn usb_hub_recovery_port_power_enabled(power_mode: u8) -> bool {
     usb_hub_supports_port_power(power_mode)
 }
 
-const fn usb_hub_eager_port_power_enabled(power_mode: u8) -> bool {
-    usb_hub_supports_port_power(power_mode)
+const fn usb_hub_should_defer_port_power(hub: &UsbEnumerationDevice, power_mode: u8) -> bool {
+    if !usb_hub_supports_port_power(power_mode) {
+        return false;
+    }
+    power_mode == USB_HUB_POWER_MODE_INDIVIDUAL || usb_device_is_apple_keyboard_hub(hub)
+}
+
+const fn usb_hub_eager_port_power_enabled(hub: &UsbEnumerationDevice, power_mode: u8) -> bool {
+    usb_hub_supports_port_power(power_mode) && !usb_hub_should_defer_port_power(hub, power_mode)
 }
 
 fn usb_hub_port_connected(status: UsbHubPortStatus) -> bool {
@@ -20882,7 +20991,7 @@ fn usb_prepare_hub_port(
     hub_info: UsbHubInfo,
     port: u8,
 ) -> Option<u32> {
-    if usb_hub_eager_port_power_enabled(hub_info.power_mode) {
+    if usb_hub_eager_port_power_enabled(hub, hub_info.power_mode) {
         publish_runtime_progress(
             sequence,
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN,
@@ -21553,6 +21662,13 @@ fn usb_probe_device_for_keyboard(
         let ready = configured && endpoint_ready && protocol_ready && interrupt_ready;
         state.ep0_enqueue = device.ep0_enqueue;
         state.ep0_cycle = device.ep0_cycle;
+        if ready && usb_device_keyboard_first_report_optional(&device) {
+            state.keyboard_first_report_optional = true;
+            if state.keyboard_last_report_status == DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE {
+                state.keyboard_last_report_status =
+                    DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT;
+            }
+        }
         if !ready {
             usb_mark_enumeration_fault(state, DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED);
         }
@@ -31428,7 +31544,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_descriptor_retry_covers_function1_backplane_and_function2_cmd53_writes() {
+    fn sdio_descriptor_retry_stays_below_cyw43_function2() {
         let mut desc = DriverRuntimeSdioCommandDescriptor {
             op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
             function: 1,
@@ -31450,7 +31566,7 @@ mod tests {
                 | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
         ));
         desc.function = 2;
-        assert!(sdio_descriptor_transfer_retryable(
+        assert!(!sdio_descriptor_transfer_retryable(
             desc,
             SDIO_CMD53,
             DRIVER_RUNTIME_SDIO_FLAG_DATA
@@ -32758,6 +32874,48 @@ mod tests {
     }
 
     #[test]
+    fn usb_keyboard_no_idle_report_quirk_counts_as_readiness_not_report() {
+        let mut state = UsbRuntimeState::new();
+        let apple_keyboard = UsbEnumerationDevice {
+            vendor_id: USB_VENDOR_ID_APPLE,
+            product_id: 0x029c,
+            ..UsbEnumerationDevice::empty()
+        };
+        let keychron_keyboard = UsbEnumerationDevice {
+            vendor_id: USB_VENDOR_ID_KEYCHRON,
+            product_id: 1,
+            ..UsbEnumerationDevice::empty()
+        };
+
+        assert!(usb_device_keyboard_first_report_optional(&apple_keyboard));
+        assert!(usb_device_keyboard_first_report_optional(
+            &keychron_keyboard
+        ));
+        assert!(usb_keyboard_control_poll_allowed(&state));
+
+        state.keyboard_first_report_optional = true;
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
+        assert!(usb_keyboard_has_first_valid_report(&state));
+        assert!(!usb_keyboard_control_poll_allowed(&state));
+        assert_eq!(state.keyboard_valid_report_events, 0);
+        assert_eq!(
+            (usb_keyboard_pending_result(&mut state)
+                >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
+            u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT)
+        );
+
+        state.keyboard_valid_report_events = 1;
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+        assert_eq!(
+            (usb_keyboard_pending_result(&mut state)
+                >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                & DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
+            u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE)
+        );
+    }
+
+    #[test]
     fn usb_keyboard_report_to_frame_emits_arrow_escape_sequences() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -33150,27 +33308,51 @@ mod tests {
             xhci_control_packet_candidates(XHCI_SPEED_SUPER),
             ([512, 64, 0], 2)
         );
-        assert_eq!(usb_hub_port_index_candidates(7, 4), [0x0004, 0x0704]);
-        assert_eq!(usb_hub_port_index_candidates(0, 4), [0x0004, 0x0004]);
+        assert_eq!(
+            usb_hub_port_index_candidates(7, 4),
+            ([0x0004, 0x0704, 0x0104, 0x0204, 0x0304], 5)
+        );
+        assert_eq!(
+            usb_hub_port_index_candidates(0, 4),
+            ([0x0004, 0x0104, 0x0204, 0x0304, 0x0000], 4)
+        );
     }
 
     #[test]
-    fn usb_hub_port_control_fallback_covers_all_noncomplete_outcomes() {
+    fn usb_hub_port_control_fallback_matches_uboot_apple_stall_policy() {
+        let apple_keyboard_hub = UsbEnumerationDevice {
+            vendor_id: USB_VENDOR_ID_APPLE,
+            product_id: USB_DEVICE_ID_APPLE_KEYBOARD_HUB,
+            ..UsbEnumerationDevice::empty()
+        };
+        let generic_hub = UsbEnumerationDevice::empty();
+
         assert!(usb_hub_control_should_try_fallback(
+            &apple_keyboard_hub,
             XhciControlTransferOutcome::Failed {
                 code: XHCI_COMPLETION_STALL_ERROR
             }
         ));
-        assert!(usb_hub_control_should_try_fallback(
+        assert!(!usb_hub_control_should_try_fallback(
+            &generic_hub,
+            XhciControlTransferOutcome::Failed {
+                code: XHCI_COMPLETION_STALL_ERROR
+            }
+        ));
+        assert!(!usb_hub_control_should_try_fallback(
+            &apple_keyboard_hub,
             XhciControlTransferOutcome::Failed { code: 4 }
         ));
-        assert!(usb_hub_control_should_try_fallback(
+        assert!(!usb_hub_control_should_try_fallback(
+            &apple_keyboard_hub,
             XhciControlTransferOutcome::PendingData
         ));
-        assert!(usb_hub_control_should_try_fallback(
+        assert!(!usb_hub_control_should_try_fallback(
+            &apple_keyboard_hub,
             XhciControlTransferOutcome::PendingStatus
         ));
         assert!(!usb_hub_control_should_try_fallback(
+            &apple_keyboard_hub,
             XhciControlTransferOutcome::Complete(4)
         ));
     }
@@ -33360,6 +33542,7 @@ mod tests {
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED,
             11
         );
+        assert_eq!(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT, 12);
         assert_eq!(
             XHCI_COMMAND_RING_BYTES,
             XHCI_COMMAND_RING_TRBS * XHCI_TRB_BYTES
@@ -33479,15 +33662,32 @@ mod tests {
     }
 
     #[test]
-    fn usb_hub_port_power_policy_matches_status_first_shape() {
+    fn usb_hub_port_power_policy_matches_uboot_defer_shape() {
+        let generic_hub = UsbEnumerationDevice::empty();
+        let apple_keyboard_hub = UsbEnumerationDevice {
+            vendor_id: USB_VENDOR_ID_APPLE,
+            product_id: USB_DEVICE_ID_APPLE_KEYBOARD_HUB,
+            ..UsbEnumerationDevice::empty()
+        };
         assert!(usb_hub_supports_port_power(USB_HUB_POWER_MODE_GANGED));
         assert!(usb_hub_supports_port_power(USB_HUB_POWER_MODE_INDIVIDUAL));
         assert!(!usb_hub_supports_port_power(USB_HUB_POWER_MODE_NONE));
-        assert!(usb_hub_eager_port_power_enabled(USB_HUB_POWER_MODE_GANGED));
         assert!(usb_hub_eager_port_power_enabled(
+            &generic_hub,
+            USB_HUB_POWER_MODE_GANGED
+        ));
+        assert!(!usb_hub_eager_port_power_enabled(
+            &generic_hub,
             USB_HUB_POWER_MODE_INDIVIDUAL
         ));
-        assert!(!usb_hub_eager_port_power_enabled(USB_HUB_POWER_MODE_NONE));
+        assert!(!usb_hub_eager_port_power_enabled(
+            &generic_hub,
+            USB_HUB_POWER_MODE_NONE
+        ));
+        assert!(!usb_hub_eager_port_power_enabled(
+            &apple_keyboard_hub,
+            USB_HUB_POWER_MODE_GANGED
+        ));
         assert!(usb_hub_recovery_port_power_enabled(
             USB_HUB_POWER_MODE_GANGED
         ));
@@ -34273,31 +34473,31 @@ mod tests {
         assert!(usb_detail_warrants_deep_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_ADDRESS_DEVICE_FAILED
         ));
-        assert!(!usb_detail_warrants_cold_reinit(
+        assert!(usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
         ));
         assert!(usb_detail_warrants_deep_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED
         ));
-        assert!(!usb_detail_warrants_cold_reinit(
+        assert!(usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
         ));
         assert!(usb_detail_warrants_deep_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
         ));
-        assert!(!usb_detail_warrants_cold_reinit(
+        assert!(usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
         ));
         assert!(usb_detail_warrants_deep_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_SET_CONFIG_FAILED
         ));
-        assert!(!usb_detail_warrants_cold_reinit(
+        assert!(usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
         ));
         assert!(usb_detail_warrants_deep_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_DESCRIPTOR_FAILED
         ));
-        assert!(!usb_detail_warrants_cold_reinit(
+        assert!(usb_detail_warrants_cold_reinit(
             DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_CONTEXT_FAILED
         ));
         assert!(usb_detail_warrants_deep_cold_reinit(
@@ -34568,7 +34768,7 @@ mod tests {
         state.keyboard_endpoint_id = 3;
 
         assert_eq!(USB_KEYBOARD_INTERRUPT_QUEUE_DEPTH, 128);
-        assert_eq!(USB_KEYBOARD_FIRST_REPORT_QUEUE_DEPTH, 32);
+        assert_eq!(USB_KEYBOARD_FIRST_REPORT_QUEUE_DEPTH, 1);
         assert_eq!(USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH, 32);
         assert!(xhci_arm_keyboard_interrupt_queue(&mut state, &descriptor));
         assert_eq!(
@@ -34927,10 +35127,8 @@ mod tests {
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
         state.keyboard_slot = 4;
         state.keyboard_endpoint_id = 3;
-        state.keyboard_reports_queued = 1;
-        state.keyboard_report_in_use[0] = true;
-        state.keyboard_report_trb_indices[0] = 0;
-        state.kbd_enqueue = 1;
+        state.keyboard_reports_queued = 0;
+        state.kbd_enqueue = 0;
         state.event_dequeue = 0;
         state.event_cycle = true;
 
@@ -35593,6 +35791,7 @@ mod tests {
         ));
 
         state.keyboard_valid_report_events = 0;
+        state.keyboard_reports_queued = 0;
         assert!(!usb_keyboard_recovery_aux_unmatched_recovery_due(
             &state, true
         ));
@@ -36396,7 +36595,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_deep_enumeration_failure_resumes_same_controller() {
+    fn usb_hub_attach_failure_reinitializes_controller_before_retry() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -36443,20 +36642,18 @@ mod tests {
             service_command(0, enumerate),
             DriverTaskCompletionRecord::progress_with_detail(
                 95,
-                DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED,
-                USB_ENUM_RESULT_SNAPSHOT
-                    | USB_ENUM_RESULT_ROOT_POWERED
-                    | (3 << USB_ENUM_RESULT_SCAN_PASS_SHIFT)
+                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY,
+                USB_ENUM_RESULT_SNAPSHOT | USB_ENUM_RESULT_ROOT_POWERED
             )
         );
         USB_RUNTIME_STATE.with_mut(|state| {
-            assert_eq!(state.enumeration_cold_reinit_attempts, 0);
+            assert_eq!(state.enumeration_cold_reinit_attempts, 1);
             assert!(state.enumeration_root_powered);
-            assert_eq!(state.enumeration_root_scan_pass, 3);
-            assert_eq!(state.enumeration_root_next_port, 4);
+            assert_eq!(state.enumeration_root_scan_pass, 0);
+            assert_eq!(state.enumeration_root_next_port, 1);
             assert_eq!(
                 state.enumeration_best_detail,
-                DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_ATTACH_FAILED
+                DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
             );
         });
     }

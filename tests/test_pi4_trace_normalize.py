@@ -7274,6 +7274,38 @@ def test_gate_summary_treats_post_ready_cumulative_usb_counters_as_historical() 
     assert "local-seat-usb-startup-blocker" in blockers
 
 
+def test_gate_summary_treats_no_idle_report_as_usb_ready() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready "
+            "action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_queue queue_valid=yes detail=0x0501 result=0x00001801 "
+            "queued_reports=1 doorbell_pending=no preserved_events=0 "
+            "transfer_events=0 report_status=no-idle-report",
+            "usb: runtime_recovery diag_valid=no recoveries=0 failures=0 "
+            "queue_collapse=0 stage=none stage_code=0 reason=none reason_code=0 "
+            "command_completion_blocked=0",
+            "usb: acceptance xhci=yes hid_keyboard=yes first_report=yes first_byte=no "
+            "command_ready=yes usable=yes prompt_polling=yes "
+            "input_observation=endpoint-armed-no-idle-report",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "proof_gate=10 target_gate=10 next=command-input-ready blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    blockers = normalizer.boot_evidence_blockers(record)
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_COMMAND_READY"] == "yes"
+    assert record["USB_RUNTIME_RECOVERY_DIAG_VALID"] == "no"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+    assert record["USB_BUSY_AFTER_READY"] == "no"
+    assert "local-seat-usb-degraded" not in blockers
+    assert "local-seat-usb-first-byte-missing" not in blockers
+
+
 def test_gate_summary_treats_missing_usb_recovery_diag_as_telemetry_for_idle_report() -> None:
     events = normalizer.parse_events(
         [
@@ -10304,6 +10336,7 @@ def test_gate_summary_keeps_live_txglomalign_descriptor_fault_after_deferred_err
     assert gates.wifi_blocker == "cyw43-sdio-descriptor-transfer-failed"
     assert gates.wifi_exact == "cyw43-sdio-descriptor-transfer-failed"
     assert gates.wifi_phase == "cyw43-control-txglomalign"
+    assert gates.wifi_subgate == "none"
 
 
 def test_gate_summary_refines_cyw43_revinfo_badarg_status() -> None:

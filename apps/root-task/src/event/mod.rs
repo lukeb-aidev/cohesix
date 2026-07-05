@@ -314,9 +314,9 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_MS: u64 = 500;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_RETRY_IDLE_TURNS: u16 = 8;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS: u64 = 0;
+const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_MS: u64 = 250;
 #[cfg(all(feature = "kernel", feature = "usb"))]
-const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS: u16 = 0;
+const POST_PROMPT_LOCAL_SEAT_ATTACH_ACTIVE_USB_RETRY_IDLE_TURNS: u16 = 4;
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_VERBOSE_ATTEMPTS: u16 = 1;
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -2168,6 +2168,9 @@ where
     pub fn with_local_seat(mut self, runtime: &'a mut LocalSeatRuntime) -> Self {
         runtime.register_boot_progress_backend();
         self.local_seat = Some(runtime);
+        if self.console_ready_announced && !self.post_prompt_local_seat_attach_pending {
+            self.schedule_post_prompt_local_seat_attach();
+        }
         self
     }
 
@@ -3749,6 +3752,7 @@ where
             let wifi_detail = self.net_disabled_refusal_detail();
             #[cfg(feature = "net-console")]
             let wifi_debug_enabled = self.wifi_debug_commands_enabled();
+            let usb_active = self.post_prompt_local_seat_attach_usb_runtime_active();
             if let Some(runtime) = self.local_seat.as_mut() {
                 let attempt = self.post_prompt_local_seat_attach_attempts;
                 self.post_prompt_local_seat_attach_attempts = self
@@ -3766,9 +3770,6 @@ where
                 let keyboard_probe = runtime.probe_backend_keyboard_once();
                 let usb_no_reply = !keyboard_probe.attached()
                     && runtime.keyboard_trace().driver_task_budget_overruns > usb_overruns_before;
-                let usb_active = crate::hal::driver_task::driver_task_ring_command_active(
-                    crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
-                );
                 let keyboard_command_ready = runtime.usb_keyboard_command_ready_latched();
                 let keyboard_first_report_ready =
                     crate::local_seat::linked_local_seat_usb_first_report_ready();
@@ -8375,6 +8376,9 @@ where
             pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED => {
                 "recovery-failed"
             }
+            pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT => {
+                "no-idle-report"
+            }
             _ => "unknown",
         }
     }
@@ -8418,6 +8422,9 @@ where
                 }
                 pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED => {
                     "recovery-failed"
+                }
+                pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT => {
+                    "endpoint-armed-no-idle-report"
                 }
                 pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE => {
                     "armed-awaiting-report"
@@ -16455,6 +16462,32 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
+    fn local_seat_attach_after_console_ready_schedules_prompt_settle() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1_000);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+
+        pump.announce_console_ready();
+        assert!(!pump.post_prompt_local_seat_attach_pending_for_test());
+
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 32,
+            buffer_lines: 4,
+        });
+        let pump = pump.with_local_seat(&mut local_seat);
+
+        assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
     fn post_prompt_local_seat_attach_marks_retry_exhaustion_without_stopping_recovery() {
         let driver = LoopbackSerial::<8192>::new();
         let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -21833,6 +21866,10 @@ mod tests {
             KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(11),
             "recovery-failed"
         );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_report_status_label(12),
+            "no-idle-report"
+        );
         let diag_frame = crate::hal::driver_task::DriverFrameDescriptor {
             offset: (u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_DIAG_MAGIC) << 16)
                 | u32::from(pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_SET_DEQUEUE)
@@ -21890,6 +21927,12 @@ mod tests {
                 false, false, true, 4, false, 11
             ),
             "recovery-failed"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_keyboard_input_observation(
+                false, false, true, 1, false, 12
+            ),
+            "endpoint-armed-no-idle-report"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 4, 255, 6, 6, 97),

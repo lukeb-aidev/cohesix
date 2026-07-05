@@ -470,11 +470,6 @@ def run_diagnostics(
         commands.extend(["wifi diag", "wifi probe-ht"])
     commands.extend(["usb diag", "usb probe-kbd", "smp activity"])
     if prompt_ready:
-        controller.send_line("", public_line="<diagnostic-prime>")
-        try:
-            controller.read_until((ROOT_PROMPT,), 5, label="prompt after diagnostic prime")
-        except SerialMarkerTimeout as exc:
-            controller.note(f"diagnostic prime prompt not observed; continuing error={exc}")
         controller.drain_for(1.0, label="post-root-prompt-before-diagnostics")
     for command in commands:
         if prompt_ready:

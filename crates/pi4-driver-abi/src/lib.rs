@@ -858,6 +858,8 @@ pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_QUEUE_COLLAPSE: u8 = 9;
 pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_SUCCESS: u8 = 10;
 /// USB keyboard report status: endpoint recovery failed before the interrupt-IN queue was rearmed.
 pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED: u8 = 11;
+/// USB keyboard report status: endpoint is armed and this keyboard does not emit idle reports.
+pub const DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT: u8 = 12;
 /// USB keyboard service aux: request post-first-byte interrupt-IN endpoint recovery.
 pub const DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX: u32 = 0x5553_4252;
 /// USB keyboard diagnostic frame magic packed into `DriverFrameDescriptor.offset[31:16]`.

@@ -2365,6 +2365,8 @@ def summarize_wifi_gate7_subgate_detail(
         return latest
     if wifi_gate != 7:
         return WifiGate7Subgate("none", "none")
+    if wifi_blocker == "cyw43-sdio-descriptor-transfer-failed":
+        return WifiGate7Subgate("none", "none", reason=wifi_blocker)
     if wifi_blocker in {
         "cyw43-association-event-missing",
         "cyw43-association-not-associated",
@@ -7501,7 +7503,7 @@ def usb_hid_interrupt_no_completion_seen(fields: Mapping[str, str]) -> bool:
         and queued_reports >= 32
         and (transfer_events == 0 or (transfer_events is None and full_idle_queue))
         and doorbell_pending in {"", "0", "false", "no"}
-        and report_status in {"none", "idle", "decoded-empty"}
+        and report_status in {"none", "idle", "idle-report", "decoded-empty"}
     )
 
 
@@ -7515,7 +7517,7 @@ def usb_runtime_hid_interrupt_no_completion(
         and runtime.queued_reports >= 32
         and runtime.transfer_events == 0
         and runtime.doorbell_pending in {"unknown", "", "0", "false", "no"}
-        and runtime.report_status in {"unknown", "none", "idle", "decoded-empty"}
+        and runtime.report_status in {"unknown", "none", "idle", "idle-report", "decoded-empty"}
     )
 
 
@@ -7789,6 +7791,7 @@ def usb_runtime_recovery_diag_invalid_degrades(runtime: UsbRuntimeQueueSummary) 
         return False
     healthy_report_status = {
         "idle-report",
+        "no-idle-report",
         "decoded-empty",
         "produced-byte",
         "filtered-key",
@@ -7797,8 +7800,8 @@ def usb_runtime_recovery_diag_invalid_degrades(runtime: UsbRuntimeQueueSummary) 
     if (
         runtime.command_ready
         and runtime.first_report_ready
-        and runtime.transfer_events != 0
         and runtime.report_status in healthy_report_status
+        and (runtime.transfer_events != 0 or runtime.report_status == "no-idle-report")
         and runtime.endpoint_recovery_failures == 0
         and runtime.queue_collapse_recoveries == 0
         and runtime.command_completion_blocked == 0
@@ -8591,7 +8594,7 @@ def sustained_input_progress_proof(raw: str, fields: dict[str, str]) -> bool:
     if blocker and blocker != "none":
         return False
     report_status = fields.get("report_status", "").lower().replace("_", "-")
-    if report_status not in {"", "none", "idle-report", "produced-byte"}:
+    if report_status not in {"", "none", "idle-report", "no-idle-report", "produced-byte"}:
         return False
     accepted = parse_hex_int(fields.get("accepted"))
     drained = parse_hex_int(fields.get("drained"))
